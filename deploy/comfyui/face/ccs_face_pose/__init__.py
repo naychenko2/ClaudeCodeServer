@@ -138,8 +138,11 @@ class CcsFacePose:
         if not (os.path.isfile(family["python"]) and os.path.isfile(family["script"])):
             return _safe_none("python или скрипт воркера не найдены на диске")
 
-        # 2. Безопасный разбор путей эталонов
+        # 2. Безопасный разбор путей эталонов. Параллельно держим имя файла
+        # (то, что человек ввёл в references — оно и становится ключом в JSON-ответе)
+        # и реальный путь в input/ ComfyUI (его читает воркер).
         in_paths = []
+        in_names = []
         for line in (references or "").splitlines():
             try:
                 p = _safe_input(line)
@@ -148,6 +151,7 @@ class CcsFacePose:
                 continue
             if p is not None:
                 in_paths.append(p)
+                in_names.append(line.strip())
 
         # 3. PNG варианта во временной папке и job.json рядом. Воркеру передаём
         # все картинки единым списком (variant первым, дальше references);
@@ -268,9 +272,14 @@ class CcsFacePose:
                  stats.get("used", "?"), len(in_paths) + (1 if has_variant else 0),
                  elapsed, stats)
 
+        # Контракт ответа: ключ — имя файла, как его ввёл человек в references
+        # (или подкласса path в input ComfyUI); значение — {yaw, pitch, roll} или
+        # {yaw:null, pitch:null, roll:null}, если лицо не найдено. Это согласуется
+        # с швом ILocalImageMedia.FacePoseAsync и контрактом, который Денис разбирает
+        # на стороне Llm/ImageEditor (см. ComfyWorkflows.FacePose.cs).
         out = {}
         offset = 1 if has_variant else 0
-        for idx, path in enumerate(in_paths):
+        for idx, name in enumerate(in_names):
             pose_idx = idx + offset
             entry = {"yaw": None, "pitch": None, "roll": None}
             if pose_idx < len(poses) and poses[pose_idx] is not None:
@@ -279,7 +288,7 @@ class CcsFacePose:
                     log.warning("ccs_face_pose: путь #%d без числовых углов, пропускаю", idx)
                 else:
                     entry = {"yaw": p["yaw"], "pitch": p["pitch"], "roll": p["roll"]}
-            out[path] = entry
+            out[name] = entry
 
         text = json.dumps(out, ensure_ascii=False, sort_keys=True)
         return {"ui": {"text": [f"{TEXT_KEY}={text}"]}}

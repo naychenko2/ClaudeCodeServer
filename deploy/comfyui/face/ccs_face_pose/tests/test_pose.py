@@ -464,8 +464,10 @@ class TestNode(unittest.TestCase):
 
     def test_node_worker_returns_named_pose_per_reference(self):
         """Воркер вернул poses = [variant, ref1] с двумя позами → ui.text содержит JSON
-        с ref_path в качестве ключа и {yaw, pitch, roll} как значением. variant из
-        текста исключён: он служебный, в карточке графа виден через SaveImage."""
+        с именем файла из references в качестве ключа (как человек ввёл его в
+        ComfyUI) и {yaw, pitch, roll} как значением. variant из текста исключён:
+        он служебный, его позу человек видит через SaveImage. Это контракт, который
+        разбирает Денис в ComfyWorkflows.FacePose.cs и в шве ILocalImageMedia.FacePoseAsync."""
         with tempfile.TemporaryDirectory() as tmp:
             in_root, ref_path = self._setup_input(tmp)
             family = {"python": _touch(os.path.join(tmp, "_p")),
@@ -489,18 +491,21 @@ class TestNode(unittest.TestCase):
         text = out["ui"]["text"][0]
         self.assertTrue(text.startswith("ccs_face_pose="))
         data = json.loads(text[len("ccs_face_pose="):])
-        # в JSON только ref (variant не идёт в выдачу)
+        # в JSON только ref (variant не идёт в выдачу); ключ — имя, как ввёл человек
         self.assertEqual(len(data), 1)
-        self.assertIn(ref_path, data)
-        v = data[ref_path]
+        self.assertIn("test_ref.png", data)
+        self.assertNotIn(ref_path, data)
+        v = data["test_ref.png"]
         self.assertEqual(set(v.keys()), {"yaw", "pitch", "roll"})
-        # ref_path получил позу ИЗ ВТОРОГО элемента poses (poses[1] — ref)
+        # ref получил позу ИЗ ВТОРОГО элемента poses (poses[1] — ref)
         self.assertAlmostEqual(v["yaw"], 0.5, places=6)
         self.assertAlmostEqual(v["pitch"], -3.0, places=6)
         self.assertAlmostEqual(v["roll"], 0.0, places=6)
 
     def test_node_worker_returns_null_pose_keeps_null(self):
-        """Воркер вернул null в позе (лицо не найдено) → в JSON остаётся запись с null."""
+        """Воркер вернул null в позе (лицо не найдено) → в JSON остаётся запись с
+        {yaw:null, pitch:null, roll:null} для этого файла (Денис разбирает это как
+        «лица нет»)."""
         with tempfile.TemporaryDirectory() as tmp:
             in_root, ref_path = self._setup_input(tmp)
             family = {"python": _touch(os.path.join(tmp, "_p")),
@@ -522,7 +527,8 @@ class TestNode(unittest.TestCase):
         text = out["ui"]["text"][0]
         data = json.loads(text[len("ccs_face_pose="):])
         self.assertEqual(len(data), 1)
-        self.assertEqual(data[ref_path], {"yaw": None, "pitch": None, "roll": None})
+        # ключ — имя файла из references, а не реальный путь
+        self.assertEqual(data["test_ref.png"], {"yaw": None, "pitch": None, "roll": None})
 
     def test_node_uses_references_only_when_no_references(self):
         """Узел без references (только variant) → в ui.text пустой JSON {}."""
@@ -571,7 +577,8 @@ class TestNode(unittest.TestCase):
         text = out["ui"]["text"][0]
         data = json.loads(text[len("ccs_face_pose="):])
         self.assertEqual(len(data), 1)
-        self.assertAlmostEqual(data[ref_path]["yaw"], 11.0, places=6)
+        # ключ — имя файла из references, а не реальный путь
+        self.assertAlmostEqual(data["test_ref.png"]["yaw"], 11.0, places=6)
         # _save_variant_png не должен вызываться, когда image=None
         # (это побочный эффект mock.patch.object как side_effect; но мы только
         # проверяем выдачу; реальное поведение проверяется на стенде)

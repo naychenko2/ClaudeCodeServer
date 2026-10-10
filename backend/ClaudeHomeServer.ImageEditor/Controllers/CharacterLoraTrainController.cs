@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -23,9 +24,10 @@ public class CharacterLoraTrainController(
 {
     private const int MaxFilesPerRequest = 10;
     private const long MaxBodyBytes = 100L * 1024 * 1024;
-    private const int EtaSteps = 2000;
-    private const double EtaSecondsPerStep = 2.35;
     private const int DefaultStartSeconds = 150;
+
+    // Блокировка старта по (владелец, персонаж): проверки, запуск и запись версии — один атомарный путь
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> StartLocks = new();
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -52,23 +54,24 @@ public class CharacterLoraTrainController(
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 $"Нужно от 1 до {MaxFilesPerRequest} файлов за запрос");
         var uploads = new List<PhotoUpload>(files.Count);
+        var tooBig = new List<TrainingPhotoRejection>();
         foreach (var file in files)
         {
-            // Крупнее потолка не читаем в память: фото отклонит хранилище по размеру
+            // Крупнее потолка байты не читаем: сразу в rejected с причиной too_big
             if (file.Length > CharacterTrainingPhotos.MaxPhotoMb * 1024L * 1024)
             {
-                uploads.Add(new PhotoUpload(file.FileName, []));
+                tooBig.Add(new TrainingPhotoRejection(file.FileName, "too_big"));
                 continue;
             }
             using var ms = new MemoryStream();
             await file.CopyToAsync(ms, ct);
             uploads.Add(new PhotoUpload(file.FileName, ms.ToArray()));
         }
-        var result = photos.Add(UserId, projectId, slug, uploads);
+        var result = uploads.Count > 0 ? photos.Add(UserId, projectId, slug, uploads) : null;
         return Ok(new
         {
             photos = PhotosDto(projectId, slug),
-            rejected = result.Rejected.Select(r => new { r.FileName, r.Reason }),
+            rejected = tooBig.Concat(result?.Rejected ?? []).Select(r => new { r.FileName, r.Reason }),
         });
     }
 
@@ -151,6 +154,10 @@ public class CharacterLoraTrainController(
         var trigger = string.IsNullOrWhiteSpace(req.Trigger) ? DefaultTrigger(slug) : req.Trigger.Trim();
         if (!LoraTrigger.IsValid(trigger))
             return Error(StatusCodes.Status400BadRequest, "bad_trigger", "Триггерное слово: латиница, цифры и «_», 3–24 символа, первая буква");
+        using var startLock = await AcquireStartLockAsync($"{UserId}|{projectId}|{slug}", ct);
+        // Идущее обучение этого персонажа видно по записи training — не полагаемся на ответ сервиса
+        if (runs.List(project.RootPath, slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
+            return Error(StatusCodes.Status409Conflict, "owner_busy", "У вас уже идёт обучение");
         if (runs.CountTowardsLimit(project.RootPath, slug) >= CharacterLoraRuns.MaxVersions)
             return Error(StatusCodes.Status409Conflict, "version_limit",
                 $"У персонажа уже {CharacterLoraRuns.MaxVersions} версий LoRA — удалите лишнюю");
@@ -190,6 +197,18 @@ public class CharacterLoraTrainController(
     }
 
     // ── Общее ──────────────────────────────────────────────────────────────────────
+
+    private static async Task<IDisposable> AcquireStartLockAsync(string key, CancellationToken ct)
+    {
+        var sem = StartLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(ct);
+        return new Releaser(sem);
+    }
+
+    private sealed class Releaser(SemaphoreSlim sem) : IDisposable
+    {
+        public void Dispose() => sem.Release();
+    }
 
     private IActionResult MapStartError(LoraTrainErrorCode error, LoraTrainStartResult started)
     {
@@ -232,9 +251,8 @@ public class CharacterLoraTrainController(
         return raw.Length > 24 ? raw[..24] : raw;
     }
 
-    // Полное время обучения «standard»: шаги × время шага + старт (та же формула, что у LocalMediaService.LoraTrainEta)
     private int PresetEta() =>
-        (int)Math.Round(EtaSteps * EtaSecondsPerStep) + config.GetValue("LocalMedia:LoraTrainStartSeconds", DefaultStartSeconds);
+        LoraTrainPresets.Eta(LoraTrainPresets.Standard, config.GetValue("LocalMedia:LoraTrainStartSeconds", DefaultStartSeconds))!.Value;
 
     private bool Character(string projectId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out IActionResult? denied)

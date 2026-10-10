@@ -43,6 +43,18 @@ public static class LoraTrainPresets
 {
     public const string Standard = "standard";
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Standard };
+
+    // Шаги и скорость обучения пресета standard (ADR-026 §3): 2000 шагов, ≈2,35 с на шаг
+    public const int Steps = 2000;
+    public const double SecondsPerStep = 2.35;
+
+    // Полное время обучения по пресету: шаги × время шага + старт; неизвестный пресет — null
+    public static int? Eta(string preset, int startSeconds) =>
+        preset == Standard ? Remaining(0, Steps) + startSeconds : null;
+
+    // Остаток по известному шагу
+    public static int Remaining(int step, int totalSteps) =>
+        (int)Math.Ceiling(Math.Max(0, totalSteps - step) * SecondsPerStep);
 }
 
 // HostPath — абсолютный путь файла в data/lora-training; Name — имя по регэкспу контракта,

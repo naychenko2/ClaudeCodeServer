@@ -454,7 +454,7 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
 | 409 | `queue_full` | `MaxQueuedPerOwner` / `MaxComfyQueue` |
 
 **`DELETE characters/{slug}/lora-train`** — отменить своё идущее обучение этого персонажа.
-- 204 — отменено; запись станет `cancelled` на ближайшем `SettleAsync`.
+- 204 — отменено; запись станет `cancelled` на ближайшем `SettleAsync`. Отмена уже завершённого обучения тоже 204 (идемпотентна; фронт после отмены перечитывает статус).
 - 404 `not_training` — у персонажа нет записи `training`.
 - 503 `no_seam`.
 
@@ -495,7 +495,7 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
 | Метод и путь | Кто | Ответ |
 |---|---|---|
 | `GET api/image-editor/lora-train/active` | любой | 200 `{ "busy": true, "mine": false, "busyUntil": "…" }`; у админа ещё `jobId` |
-| `DELETE api/image-editor/lora-train/active` | только `admin`, иначе 403 `forbidden` | 204 — отменено; 404 `not_training` — обучения нет |
+| `DELETE api/image-editor/lora-train/active` | только `admin`, иначе 403 `forbidden` | 204 — отменено (в том числе уже завершённое — идемпотентно); 404 `not_training` — обучения нет |
 
 ## 8. Фронт: типы
 

@@ -6,19 +6,6 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
 public sealed partial class LocalMediaService
 {
-    // Шаги и скорость обучения пресета standard (ADR-026 §3): 2000 шагов, ≈2,35 с на шаг
-    public const int LoraTrainSteps = 2000;
-    public const double LoraTrainSecondsPerStep = 2.35;
-
-    // Полное время обучения по пресету: шаги × время шага + старт (LocalMediaOptions.LoraTrainStartSeconds);
-    // неизвестный пресет — null. Пробные картинки ai-toolkit в продукте выключены (ADR-026)
-    public static int? LoraTrainEta(string preset, int startSeconds) =>
-        preset == LoraTrainPresets.Standard ? LoraTrainRemaining(0, LoraTrainSteps) + startSeconds : null;
-
-    // Остаток по известному шагу
-    public static int LoraTrainRemaining(int step, int totalSteps) =>
-        (int)Math.Ceiling(Math.Max(0, totalSteps - step) * LoraTrainSecondsPerStep);
-
     public const int LoraMinPhotos = 20;
     public const int LoraMaxPhotos = 50;
 
@@ -102,7 +89,7 @@ public sealed partial class LocalMediaService
                 return LoraRefusal(LoraTrainErrorCode.Unavailable, "Не удалось прочитать обучающее фото на сервере.");
             }
 
-            var eta = LoraTrainEta(request.Preset, options.LoraTrainStartSeconds);
+            var eta = LoraTrainPresets.Eta(request.Preset, options.LoraTrainStartSeconds);
             var job = new LocalMediaJob
             {
                 Id = jobId,
@@ -409,7 +396,7 @@ public sealed partial class LocalMediaService
 
         int? eta = status switch
         {
-            LoraTrainStatus.Running when step is { } s => LoraTrainRemaining(s, LoraTrainSteps),
+            LoraTrainStatus.Running when step is { } s => LoraTrainPresets.Remaining(s, LoraTrainPresets.Steps),
             LoraTrainStatus.Running when job.StartedAt is { } started && job.EtaSeconds is { } total =>
                 Math.Max(60, (int)(started.AddSeconds(total) - DateTime.UtcNow).TotalSeconds),
             LoraTrainStatus.Running or LoraTrainStatus.Queued => job.EtaSeconds,
@@ -418,7 +405,7 @@ public sealed partial class LocalMediaService
 
         return new LoraTrainState(job.Id, job.OwnerId, job.ProjectId, job.LoraSlug ?? "", job.LoraRunId ?? "",
             job.LoraPreset ?? LoraTrainPresets.Standard, status, status == LoraTrainStatus.Queued ? position : null,
-            step, LoraTrainSteps, eta, job.CreatedAt, job.StartedAt, job.FinishedAt,
+            step, LoraTrainPresets.Steps, eta, job.CreatedAt, job.StartedAt, job.FinishedAt,
             status == LoraTrainStatus.Completed ? job.LoraFile : null,
             status == LoraTrainStatus.Failed ? new LoraTrainFailure(job.ErrorCode ?? LoraErrorCodes.WorkerError, job.Error ?? "") : null,
             job.LoraPhotosKept,
@@ -441,7 +428,7 @@ public sealed partial class LocalMediaService
                     {
                         await listen(job.PromptId, f =>
                         {
-                            lock (_loraProgressLock) _loraSteps[job.Id] = (int)Math.Round(f * LoraTrainSteps);
+                            lock (_loraProgressLock) _loraSteps[job.Id] = (int)Math.Round(f * LoraTrainPresets.Steps);
                         }, cts.Token);
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)

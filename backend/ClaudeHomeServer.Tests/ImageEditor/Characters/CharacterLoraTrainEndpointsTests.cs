@@ -34,10 +34,13 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
         public LoraTrainBusy? Busy(string ownerId) =>
             BusyNow is null ? null : BusyNow with { Mine = BusyNow.Mine };
 
-        public Task<LoraTrainStartResult> StartAsync(LoraTrainStart request, CancellationToken ct)
+        public TimeSpan StartDelay { get; set; }
+
+        public async Task<LoraTrainStartResult> StartAsync(LoraTrainStart request, CancellationToken ct)
         {
             Starts.Add(request);
-            return Task.FromResult(StartResult);
+            if (StartDelay > TimeSpan.Zero) await Task.Delay(StartDelay, ct);
+            return StartResult;
         }
 
         public Task<LoraTrainState?> GetAsync(string ownerId, string jobId, CancellationToken ct) =>
@@ -417,8 +420,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
 
         var seenByUser = await Json(await user.GetAsync("/api/image-editor/lora-train/active"));
         seenByUser.GetProperty("busy").GetBoolean().Should().BeTrue();
-        seenByUser.TryGetProperty("jobId", out var hidden).Should().BeTrue();
-        hidden.ValueKind.Should().Be(JsonValueKind.Null);
+        seenByUser.TryGetProperty("jobId", out _).Should().BeFalse("не-админу ключа jobId нет вовсе");
         (await Json(await admin.GetAsync("/api/image-editor/lora-train/active")))
             .GetProperty("jobId").GetString().Should().Be("lm_other");
 
@@ -429,5 +431,55 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
         var idle = await admin.DeleteAsync("/api/image-editor/lora-train/active");
         idle.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await Code(idle)).Should().Be("not_training");
+    }
+    [Fact]
+    public async Task Два_параллельных_старта_одного_персонажа_дают_одну_запись_training()
+    {
+        var trainer = new FakeTrainer { StartDelay = TimeSpan.FromMilliseconds(300) };
+        var factory = Factory(trainer);
+        var (id, root) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        await UploadAsync(client, id, 20);
+
+        var responses = await Task.WhenAll(
+            client.PostAsync($"{Api(id)}/{Train}", Start()),
+            client.PostAsync($"{Api(id)}/{Train}", Start()));
+
+        responses.Select(r => r.StatusCode).Should().BeEquivalentTo([HttpStatusCode.Accepted, HttpStatusCode.Conflict]);
+        (await Code(responses.Single(r => r.StatusCode == HttpStatusCode.Conflict))).Should().Be("owner_busy");
+        trainer.Starts.Should().ContainSingle();
+        factory.Services.GetRequiredService<CharacterLoraRuns>().List(root, "anya")
+            .Count(r => r.Status == CharacterLoraRuns.Status.Training).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Отмена_уже_завершённого_обучения_идемпотентна_204()
+    {
+        var trainer = new FakeTrainer { CancelResult = LoraCancelResult.AlreadyFinished };
+        var factory = Factory(trainer);
+        var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        await UploadAsync(client, id, 20);
+        (await client.PostAsync($"{Api(id)}/{Train}", Start())).StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        (await client.DeleteAsync($"{Api(id)}/{Train}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    }
+
+    [Fact]
+    public async Task Фото_крупнее_восьми_мегабайт_отклоняется_как_too_big()
+    {
+        var factory = Factory(new FakeTrainer());
+        var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        var form = new MultipartFormDataContent();
+        var big = new ByteArrayContent(new byte[9 * 1024 * 1024]);
+        big.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        form.Add(big, "files", "big.png");
+
+        var resp = await client.PostAsync($"{Api(id)}/{Photos}", form);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var rejected = (await Json(resp)).GetProperty("rejected");
+        rejected.GetArrayLength().Should().Be(1);
+        rejected[0].GetProperty("reason").GetString().Should().Be("too_big");
     }
 }

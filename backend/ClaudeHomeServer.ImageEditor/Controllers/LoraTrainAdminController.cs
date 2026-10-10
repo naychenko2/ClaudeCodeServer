@@ -22,13 +22,12 @@ public class LoraTrainAdminController(ILocalLoraTrainer? trainer = null) : Contr
         if (trainer is null) return NoSeam();
         var busy = trainer.Busy(UserId);
         var admin = User.IsInRole("admin");
-        return Ok(new
-        {
-            busy = busy is not null,
-            mine = busy?.Mine ?? false,
-            busyUntil = busy?.BusyUntil,
-            jobId = admin ? busy?.JobId : null,
-        });
+        var isBusy = busy is not null;
+        var mine = busy?.Mine ?? false;
+        // Не-админу ключа jobId в JSON нет вовсе
+        return admin
+            ? Ok(new { busy = isBusy, mine, busyUntil = busy?.BusyUntil, jobId = busy?.JobId })
+            : Ok(new { busy = isBusy, mine, busyUntil = busy?.BusyUntil });
     }
 
     [HttpDelete]

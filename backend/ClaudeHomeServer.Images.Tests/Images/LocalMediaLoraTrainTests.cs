@@ -484,7 +484,7 @@ public class LocalMediaLoraTrainTests : IDisposable
         var state = (await service.GetLoraTrainAsync(Owner, id, default))!;
         state.Status.Should().Be(LoraTrainStatus.Running);
         state.Step.Should().Be(1000);
-        state.EtaSeconds.Should().Be(LocalMediaService.LoraTrainRemaining(1000, 2000));
+        state.EtaSeconds.Should().Be(LoraTrainPresets.Remaining(1000, 2000));
     }
 
     [Fact]

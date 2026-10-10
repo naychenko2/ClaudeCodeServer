@@ -4,10 +4,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, ArrowUpCircle, ExternalLink } from 'lucide-react';
-import type { ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
+import type { ClaudeBilling, ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, GROUP_COLORS, R, SP } from '../../lib/design';
-import { Button, Dot, Notice } from '../../components/ui';
+import { Button, Dot, InlineSegmented, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import {
@@ -584,6 +584,22 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
 
+  // Режим оплаты Claude — серверная настройка на всех (PUT /api/settings закрыт ролью):
+  // влияет на подачу стоимости в шапке чата. Раньше переключалась в поповере пилюли чата
+  const [billing, setBilling] = useState<ClaudeBilling | null>(null);
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.settings.get().then(s => setBilling(s?.claudeBilling ?? 'subscription')).catch(() => {});
+  }, [isAdmin]);
+  const changeBilling = useCallback((b: ClaudeBilling) => {
+    const prev = billing;
+    setBilling(b);
+    // Шлём только своё поле — остальные настройки сервер не трогает (PUT работает как патч)
+    api.settings.save({ claudeBilling: b })
+      .then(() => window.dispatchEvent(new CustomEvent<ClaudeBilling>('cc-claude-billing-changed', { detail: b })))
+      .catch(() => { setBilling(prev); showToast('Не удалось сменить оплату', 'Сервер не ответил — попробуйте ещё раз', 'error'); });
+  }, [billing]);
+
   // costUsd нужен только админу — грузим, когда роль известна
   useEffect(() => { if (isAdmin) loadSpend(); }, [isAdmin, loadSpend]);
 
@@ -866,6 +882,18 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
         </div>
         <span style={{ flexShrink: 0, fontSize: FS.sm, color: C.accent, fontWeight: 600 }}>Подробная аналитика →</span>
       </button>
+
+      {/* Оплата Claude (админ): подписка — стоимость в чатах лишь справочная, ключ — реальные деньги */}
+      {isAdmin && billing && (
+        <Lane title="Оплата Claude"
+          hint={billing === 'subscription'
+            ? 'Расход в чатах — справочный эквивалент API-тарифа, покрыт подпиской'
+            : 'Расход в чатах — реальные деньги по API-ключу'}
+          right={
+            <InlineSegmented<ClaudeBilling> value={billing} onChange={changeBilling} isMobile={isMobile}
+              options={[{ value: 'subscription', label: 'Подписка' }, { value: 'api', label: 'API-ключ' }]} />
+          } />
+      )}
 
       {/* Квоты подписок — карточки-индикаторы */}
       {quotaCards.length > 0 && (

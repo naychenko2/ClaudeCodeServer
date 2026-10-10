@@ -764,16 +764,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // Тип оплаты Claude (подписка/api) — глобальная настройка; влияет на подачу стоимости Claude
   const [claudeBilling, setClaudeBilling] = useState<ClaudeBilling>('subscription');
+  // Переключатель живёт в «Модели и расход» (только админ); оттуда же приходит событие
+  // смены, чтобы открытые чаты не ждали перезагрузки
   useEffect(() => {
     api.settings.get().then(s => { if (s?.claudeBilling) setClaudeBilling(s.claudeBilling); }).catch(() => {});
-  }, []);
-  // Настройка серверная и общая для всех — менять её вправе только админ (PUT /api/settings
-  // закрыт ролью). Обычному пользователю показываем режим, но без переключателя.
-  const canEditBilling = (localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role')) === 'admin';
-  const changeBilling = useCallback((b: ClaudeBilling) => {
-    setClaudeBilling(b);
-    // Шлём только своё поле — остальные настройки сервер не трогает (PUT работает как патч)
-    api.settings.save({ claudeBilling: b }).catch(() => {});
+    const onChange = (e: Event) => setClaudeBilling((e as CustomEvent<ClaudeBilling>).detail);
+    window.addEventListener('cc-claude-billing-changed', onChange);
+    return () => window.removeEventListener('cc-claude-billing-changed', onChange);
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
@@ -2597,7 +2594,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       falCost={falCostStats}
       glifCost={glifGenStats}
       billing={claudeBilling}
-      onBillingChange={canEditBilling ? changeBilling : undefined}
       rateWindows={rateWindows}
       isMobile={isMobile}
       onBack={onBack}

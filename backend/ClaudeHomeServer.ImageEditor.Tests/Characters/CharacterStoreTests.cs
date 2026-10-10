@@ -27,6 +27,8 @@ public class CharacterStoreTests : IDisposable
 
     internal static byte[] Jpeg(byte tag) => TestImages.Jpeg(tag);
 
+    internal static string Hex(byte[] bytes) => Convert.ToHexString(bytes);
+
     internal static CharacterPhotoUpload[] Photos(int count) =>
         [.. Enumerable.Range(1, count).Select(i => new CharacterPhotoUpload(Jpeg((byte)i), i == 1 ? "front" : null))];
 
@@ -313,6 +315,86 @@ public class CharacterStoreTests : IDisposable
         File.WriteAllText(ManifestPath(m), json.ToJsonString());
 
         CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.FacePhotos.Should().HaveCount(10);
+    }
+
+    [Fact]
+    public void Явный_список_берёт_ровно_эти_фото_в_этом_порядке()
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+        var chosen = new[] { files[2], files[1] };
+
+        var found = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: chosen)!;
+
+        found.Photos.Select(p => Convert.ToHexString(p.Bytes)).Should().Equal(Hex(Jpeg(3)), Hex(Jpeg(2)));
+    }
+
+    [Fact]
+    public void Эталон_facePhotos_не_зависит_от_явного_списка()
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+        var byDefault = CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.FacePhotos;
+
+        var explicitOne = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[2]])!;
+
+        explicitOne.Photos.Should().ContainSingle();
+        explicitOne.Ref.FacePhotos.Should().HaveCount(3).And.Subject.Select(Hex).Should().Equal(byDefault.Select(Hex));
+    }
+
+    [Fact]
+    public void Без_явного_списка_образцы_как_раньше()
+    {
+        var m = Create("Аня");
+        var byDefault = CharacterStore.ForRequest(_root, Owner, m.Slug)!;
+        var withNull = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: null)!;
+
+        withNull.Photos.Select(p => Hex(p.Bytes)).Should().Equal(byDefault.Photos.Select(p => Hex(p.Bytes)));
+    }
+
+    [Theory]
+    [InlineData("other.jpg")]
+    [InlineData("../x.png")]
+    [InlineData("/etc/passwd")]
+    [InlineData("character.json")]
+    public void Явный_список_с_файлом_вне_манифеста_отклоняется_целиком(string bad)
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+        File.WriteAllBytes(Path.Combine(_root, CharacterStore.Folder, m.Slug, "other.jpg"), Jpeg(8));
+        File.WriteAllBytes(Path.Combine(_root, "x.png"), Jpeg(8));
+
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[0], bad]).Should().BeNull();
+    }
+
+    [Fact]
+    public void Явный_список_с_символической_ссылкой_отклоняется()
+    {
+        var m = Create("Аня");
+        var dir = Path.Combine(_root, CharacterStore.Folder, m.Slug);
+        var files = m.Photos.Select(p => p.File).ToList();
+        var target = Path.Combine(_base, "outside.jpg");
+        File.WriteAllBytes(target, Jpeg(7));
+        File.Delete(Path.Combine(dir, files[2]));
+        try { File.CreateSymbolicLink(Path.Combine(dir, files[2]), target); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            return; // Windows без прав на ссылки — проверка идёт в CI на Linux
+        }
+
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[0], files[2]]).Should().BeNull();
+    }
+
+    [Fact]
+    public void Явный_список_с_дублем_пустой_или_длиннее_лимита_отклоняется()
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[0], files[0]]).Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: []).Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: files).Should().NotBeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug, maxPhotos: 2, explicitPhotos: files).Should().BeNull();
     }
 
     private string ManifestPath(CharacterManifest m) =>

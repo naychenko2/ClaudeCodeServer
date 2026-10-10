@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -31,7 +32,8 @@ public sealed class ImageEditLaunchAssembler(
     IImageRaster? raster = null,
     ImageThreadService? threads = null,
     ImageEditSteps? steps = null,
-    ImageContextLaunch? context = null)
+    ImageContextLaunch? context = null,
+    IFeatureFlagGate? flags = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -144,9 +146,19 @@ public sealed class ImageEditLaunchAssembler(
         {
             var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug);
             if (found is null) return Invalid("Персонаж не найден");
+            // Явный список — только при включённом флаге; любое нарушение отказывает целиком
+            if (req.CharacterPhotos is { } chosen)
+            {
+                found = flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) == true
+                    ? CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, explicitPhotos: chosen)
+                    : null;
+                if (found is null) return PhotosInvalid();
+            }
             character = found.Ref;
             references.InsertRange(0, found.Photos);
         }
+        else if (req.CharacterPhotos is not null)
+            return PhotosInvalid();
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
 
@@ -239,6 +251,9 @@ public sealed class ImageEditLaunchAssembler(
             new ImageBytes(await File.ReadAllBytesAsync(full, ct), ContentTypeByExtension(full)));
     }
 
+    private static ImageEditCallResult<ImageEditJobInput> PhotosInvalid() =>
+        Fail<ImageEditJobInput>(ImageEditErrorCodes.CharacterPhotosInvalid, "Выбранные фото не подходят этому персонажу");
+
     private static ImageEditCallResult<ImageEditJobInput> Invalid(string error) =>
         Fail<ImageEditJobInput>(ImageEditErrorCodes.InvalidRequest, error);
 
@@ -279,4 +294,6 @@ public sealed record ImageEditLaunchRequest(
     string? ThreadId = null,
     string? VersionId = null,
     // Ревизия контекста чата, на которой человек видел цену (ADR-023 §Д2.1); null — запуск без контекста
-    long? ContextRevision = null);
+    long? ContextRevision = null,
+    // Явный список фото персонажа (имена файлов манифеста, порядок значим); null — подбор как обычно
+    IReadOnlyList<string>? CharacterPhotos = null);

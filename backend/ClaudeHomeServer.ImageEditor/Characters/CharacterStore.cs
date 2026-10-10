@@ -300,8 +300,12 @@ public static partial class CharacterStore
     }
 
     // Персонаж для запроса: primary первым, затем остальные в порядке манифеста;
-    // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже)
-    public static CharacterForRequest? ForRequest(string root, string ownerId, string slug, int maxPhotos = PhotosPerRequest)
+    // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже).
+    // explicitPhotos (ADR-027 §8) — явный выбор человека: образцами уходят ровно эти файлы манифеста
+    // в этом порядке; любое нарушение (чужое имя, дубль, лишние, ссылка, не картинка) — null целиком.
+    // Эталон facePhotos от явного списка не зависит
+    public static CharacterForRequest? ForRequest(string root, string ownerId, string slug,
+        int maxPhotos = PhotosPerRequest, IReadOnlyList<string>? explicitPhotos = null)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
@@ -312,15 +316,29 @@ public static partial class CharacterStore
         var facePhotos = new List<byte[]>();
         foreach (var photo in ordered)
         {
-            if (photos.Count >= maxPhotos && facePhotos.Count >= MaxPhotos) break;
+            if ((explicitPhotos is not null || photos.Count >= maxPhotos) && facePhotos.Count >= MaxPhotos) break;
             var full = PhotoPath(dir, photo.File);
             if (full is null || !File.Exists(full) || IsLink(full)) continue;
             var bytes = File.ReadAllBytes(full);
             var ext = ImageFormatSniffer.DetectExtension(bytes);
             if (ext is null) continue;
-            if (photos.Count < maxPhotos)
+            if (explicitPhotos is null && photos.Count < maxPhotos)
                 photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
             if (facePhotos.Count < MaxPhotos) facePhotos.Add(bytes);
+        }
+        if (explicitPhotos is not null)
+        {
+            if (explicitPhotos.Count == 0 || explicitPhotos.Count > maxPhotos
+                || explicitPhotos.Distinct().Count() != explicitPhotos.Count) return null;
+            foreach (var file in explicitPhotos)
+            {
+                if (manifest.Photos.All(p => p.File != file)) return null;
+                var full = PhotoPath(dir, file);
+                if (full is null || !File.Exists(full) || IsLink(full)) return null;
+                var bytes = File.ReadAllBytes(full);
+                if (ImageFormatSniffer.DetectExtension(bytes) is not { } ext) return null;
+                photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
+            }
         }
         if (photos.Count == 0) return null;
         var lora = manifest.ReadLora();

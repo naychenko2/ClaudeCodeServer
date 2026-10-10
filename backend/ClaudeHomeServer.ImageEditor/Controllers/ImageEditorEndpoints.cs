@@ -186,7 +186,8 @@ public abstract class ImageEditorEndpoints(
             ThreadSessionId: form.SessionId,
             ThreadId: form.ThreadId,
             VersionId: form.VersionId,
-            ContextRevision: form.ContextRevision);
+            ContextRevision: form.ContextRevision,
+            CharacterPhotos: form.CharacterPhotos);
 
         var started = await launcher.LaunchAsync(UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -282,6 +283,8 @@ public abstract class ImageEditorEndpoints(
         public List<string>? ReferencePathRoles { get; set; }
         // Подключённый персонаж проекта (characters/<slug>/)
         public string? CharacterSlug { get; set; }
+        // Явный список фото персонажа (ADR-027 §8): имена файлов манифеста, порядок значим
+        public List<string>? CharacterPhotos { get; set; }
         // Возврат размера оригинала после скачивания; не передано — true (ADR-018 §9)
         public bool? MatchSourceSize { get; set; }
         // Шаг истории, с которого запущена правка: родитель шагов из её вариантов

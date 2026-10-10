@@ -248,6 +248,8 @@ public static class ImageEditErrorCodes
     public const string LoraNotVisible = "lora_not_visible";
     // 404: персонажа нет в проекте (или slug не проходит белый список)
     public const string CharacterNotFound = "character_not_found";
+    // 400: явный список фото персонажа не прошёл проверку (чужое имя, дубль, ссылка) или флаг выключен
+    public const string CharacterPhotosInvalid = "character_photos_invalid";
     // 404: чата нет, он чужой или из другого проекта — неотличимо
     public const string ChatNotFound = "chat_not_found";
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)

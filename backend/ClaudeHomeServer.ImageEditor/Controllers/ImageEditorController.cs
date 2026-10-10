@@ -34,7 +34,8 @@ public class ImageEditorController(
     ImageThreadService? threads = null,
     ImageContextLaunch? context = null,
     ILocalImageMedia? localMedia = null,
-    CharacterTrainingPhotos? trainingPhotos = null)
+    CharacterTrainingPhotos? trainingPhotos = null,
+    CharacterLoraRuns? loraRuns = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
@@ -206,10 +207,14 @@ public class ImageEditorController(
     [HttpGet("loras")]
     public async Task<IActionResult> Loras(string projectId, CancellationToken ct)
     {
-        if (!ProjectGate(projectId, out _, out var denied)) return denied;
+        if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var items = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
         var own = items?.Where(n => LoraNamespace.VisibleTo(UserId, n)).ToList();
-        return Ok(new { available = own is not null, items = own ?? [] });
+        // Даты обучения — только для имён, прошедших фильтр видимости: чужие не утекают
+        var trained = own is null ? [] : loraRuns?.TrainedDates(project.RootPath)
+            .Where(kv => own.Contains(kv.Key, StringComparer.Ordinal))
+            .ToDictionary(kv => kv.Key, kv => kv.Value) ?? [];
+        return Ok(new { available = own is not null, items = own ?? [], trained });
     }
 
     [HttpGet("characters/{slug}")]

@@ -30,7 +30,11 @@ public class CharacterLoraVersionsController(
         if (!Character(projectId, slug, out var project, out var manifest, out var denied)) return denied;
         var all = runs.List(project.RootPath, slug);
         var active = manifest.ReadLora()?.Name;
-        var own = active is not null && !all.Any(r => CharacterLoraRuns.IsConnected(r, active)) ? new { lora = active } : null;
+        // Своя LoRA, обученная у другого персонажа проекта, несёт дату обучения (аддитивно: поле trainedAt внутри own)
+        DateTimeOffset? ownTrained = null;
+        if (active is not null && runs.TrainedDates(project.RootPath).TryGetValue(active, out var at)) ownTrained = at;
+        var own = active is not null && !all.Any(r => CharacterLoraRuns.IsConnected(r, active))
+            ? new { lora = active, trainedAt = ownTrained } : null;
         return Ok(new
         {
             items = all.Select(r => Dto(r, active)),

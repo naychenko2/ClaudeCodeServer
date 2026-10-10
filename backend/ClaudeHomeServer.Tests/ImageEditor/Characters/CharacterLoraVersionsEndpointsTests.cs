@@ -151,6 +151,35 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Своя_LoRA_несёт_дату_обучения_если_обучена_у_другого_персонажа_проекта()
+    {
+        var m = new LoraMedia([]);
+        var f = Factory(m);
+        var lora = OwnerLora(f, "boris.safetensors");
+        m.Loras = [lora];
+        var (id, root) = await ProjectWithCharacter(f);
+        var c = f.CreateAuthenticatedClient();
+        var boris = new MultipartFormDataContent { { new StringContent("Борис"), "name" } };
+        for (var i = 1; i <= 3; i++)
+        {
+            var photo = new ByteArrayContent(TestImages.Jpeg((byte)i));
+            photo.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+            boris.Add(photo, "photos", $"IMG_{i}.jpg");
+        }
+        var created = await c.PostAsync($"/api/projects/{id}/image-editor/characters", boris);
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var borisSlug = (await Json(created)).GetProperty("slug").GetString()!;
+        var at = new DateTimeOffset(2026, 10, 9, 12, 0, 0, TimeSpan.Zero);
+        Runs(f).Create(root, borisSlug, Run(Ready, "ready", lora) with { TrainedAt = at });
+        var form2 = new MultipartFormDataContent { { new StringContent(lora), "loraName" }, { new StringContent("hand"), "loraTrigger" } };
+        (await c.PutAsync($"/api/projects/{id}/image-editor/characters/anya", form2)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var own = (await Json(await c.GetAsync(Api(id)))).GetProperty("own");
+        own.GetProperty("lora").GetString().Should().Be(lora);
+        own.GetProperty("trainedAt").GetDateTimeOffset().Should().Be(at);
+    }
+
+    [Fact]
     public async Task Подключение_пишет_LoRA_в_манифест_и_список_отмечает_connected()
     {
         var m = new LoraMedia([]);

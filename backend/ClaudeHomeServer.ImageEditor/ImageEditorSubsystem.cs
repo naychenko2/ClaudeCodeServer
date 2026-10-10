@@ -71,6 +71,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             : null!);
         // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
         services.AddSingleton<ChatContext.ImageContextLaunch>();
+        // Разбор сюжета для подбора фото персонажа: без дешёвого раннера его нет, подбор тогда не работает
+        services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
+            ? new CharacterSceneParser(runner)
+            : null!);
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();

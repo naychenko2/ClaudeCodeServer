@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 namespace ClaudeHomeServer.Services.ImageEditor;
 
 // REST-контракт редактора картинок (ADR-017, разделы 2, 4, 5, 7). Маршруты —
@@ -129,7 +130,13 @@ public record ImageEditJobInput(
     // Нить картинки чата ChatSessionId (ADR-019): её варианты станут версиями; null — запуск вне нити
     string? ThreadId = null,
     // Версия нити, от которой запущена правка (изменение 27.09 к ADR-019); null — вне нити
-    string? BaseVersionId = null);
+    string? BaseVersionId = null,
+    // Подбор фото персонажа под сюжет (ADR-027 §7): выполняется в задаче перед драйвером, а не в
+    // запуске; null — флаг выключен или персонажа нет
+    Func<CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null);
+
+// Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
+public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);
 
 public record ImageEditJobCreatedDto(string JobId);
 

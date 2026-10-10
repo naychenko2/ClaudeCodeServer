@@ -5,6 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Spend;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -77,6 +78,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // папке и в job.Variants. Слушатель — нити картинок: вариант становится версией сразу. Для
     // последнего варианта приходит раньше Finished. Сбой слушателя задачу не роняет
     public event Func<string, ImageEditJobDto, Task>? VariantReady;
+
+    // Фото персонажа выбраны для задачи (подбор идёт в ней, после ответа «запустить»): слушатель —
+    // нити картинок, выбор ложится в запись запуска. Сбой слушателя задачу не роняет
+    public event Func<string, ImageEditJobDto, ImageThreadCharacter, Task>? CharacterPicked;
 
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
@@ -260,19 +265,21 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 Initiator = input.Initiator,
             };
             _jobs[job.Id] = job;
-            job.Completion = Task.Run(() => RunAsync(job, editor, request));
+            job.Completion = Task.Run(() => RunAsync(job, editor, request, input.CharacterPicker));
         }
 
         _workspace.Sweep(Now());
         return ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto(job.Id));
     }
 
-    private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request)
+    private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request,
+        Func<CancellationToken, Task<CharacterPickOutcome>>? picker)
     {
         ImageEditResult result;
         var cancelled = false;
         try
         {
+            if (picker is not null) request = await PickCharacterAsync(job, request, picker);
             result = await editor.RunAsync(request, new JobProgress(this, job), job.Cts.Token);
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
@@ -310,6 +317,52 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             }
             await NotifyFinishedAsync(job);
         }
+    }
+
+    // Подбор фото персонажа под сюжет: любой сбой оставляет запрос как есть (порядок «главное, затем
+    // манифест»), отмена пробрасывается. Новые фото ужимаются под лимиты модели, как и прежние
+    private async Task<ImageEditRequest> PickCharacterAsync(Job job, ImageEditRequest request,
+        Func<CancellationToken, Task<CharacterPickOutcome>> picker)
+    {
+        CharacterPickOutcome outcome;
+        try
+        {
+            outcome = await picker(job.Cts.Token);
+        }
+        catch (OperationCanceledException) when (job.Cts.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Редактор картинок: подбор фото персонажа для задачи {JobId} не удался", job.Id);
+            return request;
+        }
+
+        if (CharacterPicked is { } handlers)
+        {
+            var dto = ToDto(job);
+            foreach (var listener in handlers.GetInvocationList().Cast<Func<string, ImageEditJobDto, ImageThreadCharacter, Task>>())
+            {
+                try { await listener(job.OwnerId, dto, outcome.Launch); }
+                catch (Exception ex) { _log.LogWarning(ex, "Редактор картинок: слушатель подбора задачи {JobId} упал", job.Id); }
+            }
+        }
+        if (outcome.Photos is not { Count: > 0 } picked) return request;
+
+        if (_fitter is not null)
+        {
+            var fitted = await _fitter.FitAsync(
+                new ImageEditJobInput("", "", null, null, null, null, picked, null),
+                ImageEditCatalog.WithInputLimits(job.Quote.Model).Caps, job.Cts.Token);
+            if (fitted.Value is not { } fit) return request;
+            picked = fit.Input.References;
+        }
+
+        // Фото персонажа в запросе стоят подряд-или-нет, но по порядку: меняем их по месту,
+        // число и позиции остаются прежними — текст ролей в промпте не расходится с картинками
+        var index = 0;
+        var references = request.References
+            .Select(r => r.Role == ReferenceRole.Character && index < picked.Count ? picked[index++] : r)
+            .ToList();
+        return request with { References = references };
     }
 
     private Task NotifyFinishedAsync(Job job) => NotifyAsync(Finished, job, "завершения");

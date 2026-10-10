@@ -106,7 +106,8 @@ public sealed record ImageThreadVersion(
 
 // Запуск ИИ в нить: его якорь в ленте (image_launch_versions) — по JobId. BaseVersionId и BaseStepId —
 // откуда запустили; Status — ImageThreadLaunchStatus.*; Initiator — human | agent; Prompt — для
-// блока хвоста хода («версия 3 — вариант 1 запуска «синий фон»»)
+// блока хвоста хода («версия 3 — вариант 1 запуска «синий фон»»). Character — какие фото персонажа
+// ушли драйверу и почему (ADR-027 §8); null — подбор не работал, старые нити читаются так же
 public sealed record ImageThreadLaunch(
     string JobId,
     string? BaseVersionId,
@@ -114,7 +115,13 @@ public sealed record ImageThreadLaunch(
     DateTime At,
     string Status,
     string Initiator,
-    string? Prompt);
+    string? Prompt,
+    ImageThreadCharacter? Character = null);
+
+// Photos — имена файлов манифеста в порядке отправки драйверу, байтов не храним.
+// Pick: auto — подобрано по сцене; manual — явный список человека; fallback — нынешний порядок
+public sealed record ImageThreadCharacter(
+    string Slug, IReadOnlyList<string> Photos, string Pick, CharacterScene? Scene);
 
 public static class ImageThreadLaunchStatus
 {

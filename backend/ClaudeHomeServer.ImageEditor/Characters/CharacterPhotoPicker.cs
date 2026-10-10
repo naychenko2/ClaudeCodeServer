@@ -13,6 +13,7 @@ public sealed record CharacterPhotoPick(IReadOnlyList<CharacterPhoto> Photos, st
 {
     public const string Auto = "auto";
     public const string Fallback = "fallback";
+    public const string Manual = "manual";
 }
 
 // Ранжирование фото персонажа под сюжет (ADR-027, §7). Чистая функция: файлов и сети нет.

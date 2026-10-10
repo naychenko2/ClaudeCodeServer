@@ -488,6 +488,7 @@ public sealed class ImageThreadService(
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
                     $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;
+            ApplyPick(ownerId, sessionId, threadId, jobId);
 
             await RecordAsync(sessionId, RecordTypes.LaunchVersions,
                 $"{(agent ? "Claude запустил" : "Вы запустили")}: «{prompt.Trim()}» · {model}{variants}",
@@ -668,6 +669,30 @@ public sealed class ImageThreadService(
     {
         jobs.VariantReady += OnVariantReadyAsync;
         jobs.Finished += OnJobFinishedAsync;
+        jobs.CharacterPicked += OnCharacterPickedAsync;
+    }
+
+    // Выбор фото персонажа приходит из задачи, а запуск ложится в нить после ответа «запустить»:
+    // кто из двоих позже, тот и записывает. Сначала кладём в ожидающие, потом пробуем записать;
+    // OnLaunchedAsync делает наоборот — хотя бы один из двоих увидит другого
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ImageThreadCharacter> _pendingPicks = new();
+
+    public Task OnCharacterPickedAsync(string ownerId, ImageEditJobDto job, ImageThreadCharacter character)
+    {
+        if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId }) return Task.CompletedTask;
+        _pendingPicks[job.JobId] = character;
+        ApplyPick(ownerId, sessionId, threadId, job.JobId);
+        return Task.CompletedTask;
+    }
+
+    private void ApplyPick(string ownerId, string sessionId, string threadId, string jobId)
+    {
+        if (!_pendingPicks.TryGetValue(jobId, out var character)) return;
+        var written = store.SetLaunchCharacter(ownerId, sessionId, threadId, jobId, character);
+        if (written.Status == ImageThreadWriteStatus.Ok
+            && store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId)
+                ?.Launches.Any(l => l.JobId == jobId && l.Character is not null) == true)
+            _pendingPicks.TryRemove(jobId, out _);
     }
 
     // Человек сохранил картинку нити: нить идёт за новым файлом, в ленте тихая строка

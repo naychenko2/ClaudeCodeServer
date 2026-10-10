@@ -75,6 +75,17 @@ public class CharacterPhotosLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task Файл_в_манифесте_но_не_картинка_на_диске_отклоняет_список()
+    {
+        File.WriteAllText(Path.Combine(_root, CharacterStore.Folder, "anya", _files[1]), "это не картинка");
+
+        var result = await Assembler(true).AssembleAsync(Owner, _scope, Request("anya", [_files[0], _files[1]]), default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.CharacterPhotosInvalid);
+    }
+
+    [Fact]
     public async Task Список_без_персонажа_отклоняется()
     {
         var result = await Assembler(true).AssembleAsync(Owner, _scope, Request(null, [_files[0]]), default);

@@ -5,7 +5,7 @@ public sealed record CharacterScene(string? Angle, string? Pitch, string? Emotio
 {
     public bool IsEmpty => IsKnown(Angle) is false && IsKnown(Pitch) is false && IsKnown(Emotion) is false;
 
-    internal static bool IsKnown(string? value) => !string.IsNullOrEmpty(value) && value != PhotoLabelValues.Unknown;
+    public static bool IsKnown(string? value) => !string.IsNullOrEmpty(value) && value != PhotoLabelValues.Unknown;
 }
 
 // Pick: auto — подбор сработал; fallback — нынешний порядок «главное, затем манифест»

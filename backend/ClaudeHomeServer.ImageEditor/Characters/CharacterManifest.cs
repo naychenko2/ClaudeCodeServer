@@ -120,13 +120,30 @@ public sealed record CharacterDto(
     string Name,
     string? Description,
     string Path,
-    IReadOnlyList<CharacterPhoto> Photos,
+    IReadOnlyList<CharacterPhotoDto> Photos,
     DateTime CreatedAt,
     CharacterLocalDto? Local = null)
 {
-    public static CharacterDto From(CharacterManifest m) =>
-        new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}", m.Photos, m.CreatedAt,
+    // withLabels (ADR-027 §10) — флаг character-smart-photos у владельца: без него фото отдаются как до фичи
+    // (file, primary, angle), без pitch/emotion/labelSource
+    public static CharacterDto From(CharacterManifest m, bool withLabels = false) =>
+        new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}",
+            [.. m.Photos.Select(p => CharacterPhotoDto.From(p, withLabels))], m.CreatedAt,
             m.ReadLora() is { } lora ? new CharacterLocalDto(lora.Name, lora.Trigger, lora.Strength) : null);
+}
+
+// Фото персонажа для фронта: Extra манифеста наружу не идёт. Pitch/Emotion/LabelSource у фото без метки
+// (и при выключенном флаге) в JSON отсутствуют, а не null
+public sealed record CharacterPhotoDto(
+    string File,
+    bool Primary,
+    string? Angle,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Pitch = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Emotion = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LabelSource = null)
+{
+    public static CharacterPhotoDto From(CharacterPhoto p, bool withLabels) =>
+        withLabels ? new(p.File, p.Primary, p.Angle, p.Pitch, p.Emotion, p.LabelSource) : new(p.File, p.Primary, p.Angle);
 }
 
 // LoRA персонажа для фронта: из providers.local наружу уходят только эти три поля

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatTreeRows, collectDescendants, formatGroupCount, rootChatForSection, splitChatTreeByRoots, withAncestors } from '../chatTree';
+import {
+  buildChatTreeRows, collapsedBranchHint, collapsedSignal, collectDescendants,
+  formatGroupCount, rootChatForSection, splitChatTreeByRoots, withAncestors,
+} from '../chatTree';
 import type { Session } from '../../types';
 
 // Фабрика минимальной сессии: важны только id/parentSessionId/updatedAt/origin/isPinned
@@ -193,6 +196,72 @@ describe('buildChatTreeRows', () => {
 
     expect(r.rows[0].groupCount).toBe(1);
     expect(r.rows[0].groupRunningCount).toBe(1);
+  });
+
+  it('сигналы свёрнутой ветки: ждут ответа, ошибки и непрочитанные — по всему поддереву', () => {
+    // Будущий updatedAt новее любого baseline стора прочтения — чат непрочитан, пока
+    // серверная отметка lastReadAt не накрыла его (сценарий «прочитан на другом устройстве»)
+    const fresh = '2099-01-01T10:00:00Z';
+    const chats = [
+      mk('p', { status: 'error', updatedAt: fresh }),
+      mk('c1', { parentSessionId: 'p', status: 'waiting' }),
+      mk('c2', { parentSessionId: 'p', status: 'orphaned' }),
+      mk('g1', { parentSessionId: 'c1', status: 'error', updatedAt: fresh }),
+      mk('g2', { parentSessionId: 'c1', status: 'waiting', updatedAt: fresh, lastReadAt: '2099-02-01T10:00:00Z' }),
+      mk('g3', { parentSessionId: 'c2', status: 'working' }),
+    ];
+    const r = build(chats, { collapsedIds: new Set(['p']) });
+    const root = r.rows[0];
+
+    expect(root.groupWaitingCount).toBe(2);
+    // error и orphaned — оба «с ошибкой»; сам узел p в свои счётчики не входит
+    expect(root.groupErrorCount).toBe(2);
+    // g2 прочитан серверной отметкой, p — сам узел
+    expect(root.groupUnreadCount).toBe(1);
+    // Ждущие входят в «живые», но у пилюли свой сигнал важнее
+    expect(root.groupRunningCount).toBe(3);
+    // Счётчики промежуточного узла — только его поддерево
+    const c1 = r.rows.find(x => x.chat.id === 'c1')!;
+    expect([c1.groupWaitingCount, c1.groupErrorCount, c1.groupUnreadCount]).toEqual([1, 1, 1]);
+  });
+
+  it('сигналы пересчитываются по отфильтрованному составу', () => {
+    const chats = [
+      mk('p'),
+      mk('c1', { parentSessionId: 'p', status: 'error', origin: 'task' }),
+      mk('c2', { parentSessionId: 'p', status: 'waiting' }),
+    ];
+    const r = build(chats, { isVisible: c => c.origin === 'manual', collapsedIds: new Set(['p']) });
+    expect(r.rows[0].groupErrorCount).toBe(0);
+    expect(r.rows[0].groupWaitingCount).toBe(1);
+  });
+
+  it('выполненная задача в статусе waiting — не «ждёт ответа» (как у чипа фильтра)', () => {
+    const chats = [
+      mk('p'),
+      mk('c1', { parentSessionId: 'p', status: 'waiting', taskDone: true }),
+    ];
+    const r = build(chats, { collapsedIds: new Set(['p']) });
+    expect(r.rows[0].groupWaitingCount).toBe(0);
+  });
+
+  it('приоритет сигнала: ошибка → ждёт ответа → работает → непрочитано', () => {
+    const base = { groupCount: 9, groupRunningCount: 0, groupWaitingCount: 0, groupErrorCount: 0, groupUnreadCount: 0 };
+    expect(collapsedSignal(base)).toBe('none');
+    expect(collapsedSignal({ ...base, groupUnreadCount: 1 })).toBe('unread');
+    expect(collapsedSignal({ ...base, groupUnreadCount: 1, groupRunningCount: 1 })).toBe('running');
+    // Ждущий чат входит в groupRunningCount, но это «ждёт ответа», а не «работает»
+    expect(collapsedSignal({ ...base, groupRunningCount: 1, groupWaitingCount: 1 })).toBe('waiting');
+    expect(collapsedSignal({ ...base, groupRunningCount: 2, groupWaitingCount: 1, groupErrorCount: 1 })).toBe('error');
+  });
+
+  it('подсказка свёрнутой ветки перечисляет все сигналы', () => {
+    expect(collapsedBranchHint({
+      groupCount: 7, groupRunningCount: 3, groupWaitingCount: 1, groupErrorCount: 2, groupUnreadCount: 4,
+    })).toBe('Развернуть: вложенных чатов 7, с ошибкой 2, ждут ответа 1, в работе 2, непрочитанных 4');
+    expect(collapsedBranchHint({
+      groupCount: 2, groupRunningCount: 0, groupWaitingCount: 0, groupErrorCount: 0, groupUnreadCount: 0,
+    })).toBe('Развернуть: вложенных чатов 2');
   });
 
   it('закреплённый корень поднимается выше более активного', () => {

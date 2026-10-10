@@ -170,6 +170,13 @@ export function useHasUnread(updatedAt: string, chatId: string, lastReadAt?: str
   return hasUnread(updatedAt, chatId, lastReadAt);
 }
 
+// Версия стора для мемоизированных сборок, которые сами зовут hasUnread (счётчик
+// непрочитанных в свёрнутой ветке дерева чатов): зависимость useMemo от неё
+// пересобирает результат, когда чат отметили прочитанным
+export function useReadStateVersion(): number {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 // Очистка состояния прочтённости (напр. при logout).
 export function clearAllChatReadState(): void {
   cache = null;

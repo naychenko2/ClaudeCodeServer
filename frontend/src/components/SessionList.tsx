@@ -42,6 +42,7 @@ import { groupChats, groupByTags, groupBySubjects, sortChatsFlat, chatTagsSorted
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
 import { WALL_DRAG_TYPE } from '../features/wall/WallDock';
+import { useReadStateVersion } from '../lib/chatReadState';
 
 interface Props {
   project: Project;
@@ -657,12 +658,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
   // исходные данные покрывает зависимость filters
   const activeSessionId = activeSession?.id ?? null;
+  // readVersion — пересчёт счётчика непрочитанных свёрнутых веток при отметке прочтения
+  const readVersion = useReadStateVersion();
   const tree = useMemo(
     () => hierarchy
       ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, bgWorkIds],
+    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, bgWorkIds, readVersion, archiveShownIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = scoped.length - filteredSessions.length;

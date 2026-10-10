@@ -3,7 +3,8 @@
 // 'global' и каждый projectId. Спецификация — docs/design/mockups/chat-list-tree-spec.md.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
-import { sortKeyOf, type ChatSortOrder } from './chatFilters';
+import { chatStatusOf, sortKeyOf, type ChatSortOrder } from './chatFilters';
+import { hasUnread } from './chatReadState';
 
 const COLLAPSE_KEY_PREFIX = 'cc_chat_tree_collapsed:';
 
@@ -51,6 +52,11 @@ interface TreeNode {
   // спрятаны и внуки, счётчик обязан их учитывать.
   groupCount: number;
   groupRunningCount: number;
+  // Сигналы свёрнутой ветки по тому же поддереву: ждут ответа (waiting — входят и в
+  // groupRunningCount), с ошибкой (error/orphaned) и непрочитанные (стор chatReadState)
+  groupWaitingCount: number;
+  groupErrorCount: number;
+  groupUnreadCount: number;
 }
 
 // Готовая строка для рендера ChatTreeRow: глубина, геометрия связей, accent-путь
@@ -69,6 +75,10 @@ export interface ChatTreeRowData {
   // детям — свёрнутый узел прячет и внуков.
   groupCount: number;
   groupRunningCount: number;
+  // Сигналы поддерева для пилюли свёрнутой ветки — см. TreeNode
+  groupWaitingCount: number;
+  groupErrorCount: number;
+  groupUnreadCount: number;
   // Строка лежит на пути корень→активный чат (сам активный или его предок)
   onActivePath: boolean;
   // Вертикаль-связь к родителю подсвечена accent (путь к активному чату проходит здесь)
@@ -105,6 +115,33 @@ export const isChatRunning = (c: Session, bgWorkIds?: ReadonlySet<string>) =>
 // Потолок числа в бейдже свёрнутой ветки: бейдж вылезает из своей gutter-колонки поверх
 // карточки, и «128/12» накрыл бы точку статуса вместе с началом названия чата
 export const formatGroupCount = (n: number) => (n > 99 ? '99+' : String(n));
+
+// Главный сигнал свёрнутой ветки — им красится пилюля со счётчиком. Приоритет:
+// ошибка → ждёт ответа → работает → непрочитано. «Работает» — живые чаты БЕЗ ждущих:
+// waiting входит в groupRunningCount, но у него свой, более срочный сигнал
+export type CollapsedSignal = 'error' | 'waiting' | 'running' | 'unread' | 'none';
+
+type SignalCounts = Pick<ChatTreeRowData,
+  'groupCount' | 'groupRunningCount' | 'groupWaitingCount' | 'groupErrorCount' | 'groupUnreadCount'>;
+
+export function collapsedSignal(r: SignalCounts): CollapsedSignal {
+  if (r.groupErrorCount > 0) return 'error';
+  if (r.groupWaitingCount > 0) return 'waiting';
+  if (r.groupRunningCount - r.groupWaitingCount > 0) return 'running';
+  if (r.groupUnreadCount > 0) return 'unread';
+  return 'none';
+}
+
+// Подсказка свёрнутой ветки: цвет пилюли несёт один сигнал, а здесь — все сразу
+export function collapsedBranchHint(r: SignalCounts): string {
+  const parts = [`вложенных чатов ${r.groupCount}`];
+  if (r.groupErrorCount > 0) parts.push(`с ошибкой ${r.groupErrorCount}`);
+  if (r.groupWaitingCount > 0) parts.push(`ждут ответа ${r.groupWaitingCount}`);
+  const working = r.groupRunningCount - r.groupWaitingCount;
+  if (working > 0) parts.push(`в работе ${working}`);
+  if (r.groupUnreadCount > 0) parts.push(`непрочитанных ${r.groupUnreadCount}`);
+  return `Развернуть: ${parts.join(', ')}`;
+}
 
 /**
  * Исходное множество ПЛЮС все предки его участников — наследование признака вверх по
@@ -225,6 +262,23 @@ export function buildChatTreeRows(
     }
   }
 
+  // Узел с метриками поддерева — одна формула и для сырого леса, и для отфильтрованного.
+  // Счётчики суммируются по детям: сам узел в свои счётчики не входит
+  const sum = (kids: TreeNode[], own: (c: Session) => boolean, sub: (k: TreeNode) => number) =>
+    kids.reduce((n, k) => n + (own(k.chat) ? 1 : 0) + sub(k), 0);
+  const makeNode = (chat: Session, kids: TreeNode[]): TreeNode => ({
+    chat,
+    children: kids,
+    maxActivity: Math.max(activity(chat), ...kids.map(k => k.maxActivity)),
+    groupCount: sum(kids, () => true, k => k.groupCount),
+    groupRunningCount: sum(kids, c => isChatRunning(c, opts.bgWorkIds), k => k.groupRunningCount),
+    // Ждущие и ошибки — тем же chatStatusOf, что у чипов фильтра: иначе пилюля
+    // считала бы «ждёт ответа» чат, который фильтр относит к выполненным
+    groupWaitingCount: sum(kids, c => chatStatusOf(c) === 'waiting', k => k.groupWaitingCount),
+    groupErrorCount: sum(kids, c => chatStatusOf(c) === 'error', k => k.groupErrorCount),
+    groupUnreadCount: sum(kids, c => hasUnread(c.updatedAt, c.id, c.lastReadAt), k => k.groupUnreadCount),
+  });
+
   // Сборка узлов DFS от кандидатов в корни; visited защищает от циклов parentSessionId
   const visited = new Set<string>();
   const buildNode = (chat: Session): TreeNode => {
@@ -233,14 +287,7 @@ export function buildChatTreeRows(
       .filter(k => !visited.has(k.id))
       .sort((a, b) => dir * (chatTs(a) - chatTs(b)))
       .map(buildNode);
-    return {
-      chat,
-      children: kids,
-      maxActivity: Math.max(activity(chat), ...kids.map(k => k.maxActivity)),
-      groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
-      groupRunningCount: kids.reduce(
-        (n, k) => n + (isChatRunning(k.chat, opts.bgWorkIds) ? 1 : 0) + k.groupRunningCount, 0),
-    };
+    return makeNode(chat, kids);
   };
   const topNodes = topCandidates.map(buildNode);
   // Чаты, не достижимые из кандидатов (цикл ссылок) — разрываем, поднимая в корни
@@ -258,14 +305,7 @@ export function buildChatTreeRows(
       const kids: TreeNode[] = [];
       for (const k of node.children) visit(k, kids);
       if (opts.isVisible(node.chat)) {
-        sink.push({
-          chat: node.chat,
-          children: kids,
-          maxActivity: Math.max(activity(node.chat), ...kids.map(k => k.maxActivity)),
-          groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
-          groupRunningCount: kids.reduce(
-            (n, k) => n + (isChatRunning(k.chat, opts.bgWorkIds) ? 1 : 0) + k.groupRunningCount, 0),
-        });
+        sink.push(makeNode(node.chat, kids));
       } else {
         // узел скрыт фильтром — прокол: его видимые дети уходят уровнем выше
         for (const k of kids) sink.push(k);
@@ -328,6 +368,9 @@ export function buildChatTreeRows(
       collapsed,
       groupCount: node.groupCount,
       groupRunningCount: node.groupRunningCount,
+      groupWaitingCount: node.groupWaitingCount,
+      groupErrorCount: node.groupErrorCount,
+      groupUnreadCount: node.groupUnreadCount,
       onActivePath: onPath(node.chat.id),
       segAccent,
       elbowAccent: onPath(node.chat.id),

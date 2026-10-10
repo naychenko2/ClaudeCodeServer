@@ -7,6 +7,7 @@ import { useOnline } from '../hooks/useOnline';
 import { C, ISLAND, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
+import { useReadStateVersion } from '../lib/chatReadState';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
@@ -97,12 +98,14 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // чатов совпадает с плоским списком. Сборка леса мемоизирована — hover по карточке
   // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
   // исходные данные покрывает зависимость filters
+  // readVersion — пересчёт счётчика непрочитанных свёрнутых веток при отметке прочтения
+  const readVersion = useReadStateVersion();
   const tree = useMemo(
     () => hierarchy
       ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, bgWorkIds],
+    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, bgWorkIds, readVersion],
   );
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому

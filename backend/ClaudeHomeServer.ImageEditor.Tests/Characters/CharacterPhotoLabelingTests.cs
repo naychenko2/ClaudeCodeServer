@@ -35,10 +35,10 @@ public class CharacterPhotoLabelingTests : IDisposable
         return root;
     }
 
-    private static CharacterManifest MakeCharacter(string root, string name = "Anya")
+    private static CharacterManifest MakeCharacter(string root, string name = "Anya", int photos = 3)
     {
         var r = CharacterStore.Create(root,
-            new CharacterDraft(name, null, [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(CharacterStoreTests.Jpeg((byte)i), null))]), DateTime.UtcNow);
+            new CharacterDraft(name, null, [.. Enumerable.Range(1, photos).Select(i => new CharacterPhotoUpload(CharacterStoreTests.Jpeg((byte)i), null))]), DateTime.UtcNow);
         r.Error.Should().BeNull();
         return r.Value!.Manifest;
     }
@@ -146,6 +146,50 @@ public class CharacterPhotoLabelingTests : IDisposable
 
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
             p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+    }
+
+    // Поведение осознанное, не «улучшать» без ревью: при глобальном сбое провайдера «провалились» все фото пачки,
+    // поэтому после трёх Failed подряд unknown получают все десять; битое фото в нормальном ответе
+    // получает unknown отдельно и без счётчика
+    [Fact]
+    public async Task Failed_трижды_на_пачку_из_десяти_даёт_unknown_всем()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        var root = Root();
+        var m = MakeCharacter(root, photos: CharacterPhotoLabeling.BatchSize);
+        var svc = Service();
+
+        for (var round = 0; round < CharacterPhotoLabeling.MaxFailures; round++)
+            await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        var photos = CharacterStore.Get(root, m.Slug)!.Photos;
+        photos.Should().HaveCount(10);
+        photos.Should().OnlyContain(p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "auto");
+    }
+
+    [Fact]
+    public async Task Счётчики_Failed_удалённого_фото_выбрасываются()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        var root = Root();
+        var m = MakeCharacter(root, photos: 4);
+        var svc = Service();
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        var before = svc.FailureCount;
+        before.Should().BeGreaterThan(0);
+
+        CharacterStore.Update(root, Owner, m.Slug,
+            new CharacterPatch(null, null, [], [m.Photos[3].File], null)).Should().NotBeNull();
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        // Остались 3 фото с третьей неудачей → unknown и ключи сняты; ключ удалённого фото не должен висеть
+        svc.FailureCount.Should().Be(0);
     }
 
     [Theory]

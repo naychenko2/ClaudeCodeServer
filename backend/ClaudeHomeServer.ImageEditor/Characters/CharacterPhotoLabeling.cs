@@ -68,6 +68,7 @@ public sealed class CharacterPhotoLabeling(
 
         var manifest = CharacterStore.Get(job.Root, job.Slug);
         if (manifest is null) return;
+        PruneFailures(job, manifest);
 
         var angleFiles = Candidates(manifest, p => p.Angle is null);
         if (angleFiles.Count > 0)
@@ -198,6 +199,19 @@ public sealed class CharacterPhotoLabeling(
         }
         if (exhausted.Count > 0) await WriteAsync(job, exhausted, ct);
     }
+
+    // Счётчики фото, которых в манифесте уже нет, выбрасываем: иначе они копятся до рестарта
+    private void PruneFailures(Job job, CharacterManifest manifest)
+    {
+        var files = manifest.Photos.Select(p => p.File).ToHashSet(StringComparer.Ordinal);
+        lock (_failures)
+            foreach (var key in _failures.Keys
+                         .Where(k => k.Owner == job.OwnerId && k.Root == job.Root && k.Slug == job.Slug && !files.Contains(k.File))
+                         .ToList())
+                _failures.Remove(key);
+    }
+
+    internal int FailureCount { get { lock (_failures) return _failures.Count; } }
 
     private void ResetFailures(Job job, string place, List<string> files)
     {

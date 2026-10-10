@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, Layers, List, ListTree, Check,
+  Plus, CalendarDays, Tags, Layers, List, Check,
   ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
   SlidersHorizontal, Archive,
 } from 'lucide-react';
@@ -13,7 +13,7 @@ import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder
 
 // === Однострочный тулбар списка чатов (макет chat-unified-view, вариант А) ===
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
-// иерархия → архив. Поиска здесь нет — он первой секцией поповера фильтров.
+// архив. Список всегда деревом — переключателя иерархии нет. Поиска здесь нет — он первой секцией поповера фильтров.
 // «Архивные» — не фильтр, а РЕЖИМ списка (ось filters.archivedOnly): включён — видно
 // только архивные чаты, поэтому переключатель стоит рядом с осями вида, а не в поповере.
 // Ступени по ширине панели (ResizeObserver):
@@ -167,7 +167,7 @@ export function ChatListToolbar({
   const tier: Tier = width >= 400 ? 'comfort' : width >= 260 ? 'cozy' : 'compact';
   const iconBtnSize = tier === 'comfort' ? 'md' : 'sm';
 
-  const { groupBy, sortOrder, hierarchy, archivedOnly } = filters;
+  const { groupBy, sortOrder, archivedOnly } = filters;
   // groupBy из хранилища может отсутствовать в groupByOptions (напр. 'tags' у
   // глобального списка после переезда чата) — PillSwitch без активного сегмента
   // не рисует пилюлю, это валидное состояние; первый же выбор всё чинит.
@@ -207,7 +207,7 @@ export function ChatListToolbar({
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} isMobile triggerSize="lg"
         />
-        <IconButton size="lg" title="Вид: группировка, сортировка, иерархия, архивные"
+        <IconButton size="lg" title="Вид: группировка, сортировка, архивные"
           onClick={() => setViewSheet(true)}>
           <SlidersHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </IconButton>
@@ -249,17 +249,6 @@ export function ChatListToolbar({
               onChange={v => patch({ sortOrder: v })}
               fill isMobile autoCompact
             />
-            <SheetSec>Структура</SheetSec>
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              minHeight: 48, gap: SP.sm,
-            }}>
-              <span style={{ fontSize: FS.md, color: C.textPrimary, fontFamily: FONT.sans }}>
-                Иерархия (вложенные чаты)
-              </span>
-              <Toggle checked={hierarchy} onChange={v => patch({ hierarchy: v })}
-                ariaLabel="Иерархия (вложенные чаты)" />
-            </div>
             <SheetSec>Архив</SheetSec>
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -277,7 +266,7 @@ export function ChatListToolbar({
     );
   }
 
-  // === Контролы в шапке карточки: [фильтр] [сортировка] [группировка] [иерархия] [архив] [+ Чат] ===
+  // === Контролы в шапке карточки: [фильтр] [сортировка] [группировка] [архив] [+ Чат] ===
   // Ряд нейтральных иконок 24px, главное действие последним и залитым — общий
   // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает —
   // вместо неё та же кнопка-меню, что на compact-ступени (иконка = текущий режим),
@@ -303,14 +292,6 @@ export function ChatListToolbar({
         </IconButton>
         <GroupByMenuButton size="xs" value={groupBy} options={groupByOptions}
           onChange={v => patch({ groupBy: v })} />
-        <IconButton
-          size="xs"
-          active={hierarchy}
-          title={`Иерархия: ${hierarchy ? 'вкл' : 'выкл'}`}
-          onClick={() => patch({ hierarchy: !hierarchy })}
-        >
-          <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
         <IconButton
           size="xs"
           active={archivedOnly}
@@ -380,14 +361,6 @@ export function ChatListToolbar({
         onClick={() => patch({ sortOrder: nextSortOrder(sortOrder) })}
       >
         <sort.Icon size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      </IconButton>
-      <IconButton
-        size={iconBtnSize}
-        active={hierarchy}
-        title={`Иерархия: ${hierarchy ? 'вкл' : 'выкл'}`}
-        onClick={() => patch({ hierarchy: !hierarchy })}
-      >
-        <ListTree size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
       <IconButton
         size={iconBtnSize}

@@ -41,7 +41,6 @@ import { ListDateDivider } from './ListDateDivider';
 import { groupChats, groupByTags, groupBySubjects, sortChatsFlat, chatTagsSorted, NO_SUBJECT_KEY, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
-import { WALL_DRAG_TYPE } from '../features/wall/WallDock';
 import { useReadStateVersion } from '../lib/chatReadState';
 
 interface Props {
@@ -604,10 +603,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   // === Фильтры и оси списка чатов ===
-  // Фильтры + оси вида (groupBy/sortOrder/hierarchy) — единый state, персистится
-  // в localStorage отдельно для каждого проекта (scope = project.id)
+  // Фильтры + оси вида (groupBy/sortOrder) — единый state, персистится в localStorage
+  // отдельно для каждого проекта (scope = project.id). Список всегда деревом: ось
+  // hierarchy в сторе осталась ради совместимости записей и здесь не читается
   const { filters, patch } = useChatFilters(project.id);
-  const { sortOrder, hierarchy } = filters;
+  const { sortOrder } = filters;
   const groupBy: ChatGroupBy = filters.groupBy;
   const subjectsMode = groupBy === 'subjects';
   const subjectRun = useSubjectRun(project.id, subjectsMode);
@@ -655,7 +655,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const isVisible = archiveShownIds
     ? (s: Session) => matchesFilters(s) && archiveShownIds.has(s.id)
     : matchesFilters;
-  const shownSessions = archiveShownIds ? filteredSessions.filter(s => archiveShownIds.has(s.id)) : filteredSessions;
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
   // подмножеству: в режиме архива бейдж иначе врал бы на весь список проекта,
@@ -670,11 +669,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // readVersion — пересчёт счётчика непрочитанных свёрнутых веток при отметке прочтения
   const readVersion = useReadStateVersion();
   const tree = useMemo(
-    () => hierarchy
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, expandedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
-      : null,
+    () => buildChatTreeRows(sessions, { isVisible, collapsedIds, expandedIds, activeId: activeSessionId, sortOrder, bgWorkIds }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, expandedIds, activeSessionId, filters, bgWorkIds, readVersion, archiveShownIds],
+    [sessions, sortOrder, collapsedIds, expandedIds, activeSessionId, filters, bgWorkIds, readVersion, archiveShownIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = scoped.length - filteredSessions.length;
@@ -683,35 +680,30 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
   const numberById = new Map(sessions.map((s, i) => [s.id, i + 1]));
 
-  // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
+  // === Композиция списка по осям (groupBy × sortOrder) ===
   // Сегменты дерева по корням (корень + его видимые строки-потомки). Ключ секции
   // корня — maxActivity поддерева: корень с живым ребёнком не тонет в старых днях.
-  const treeSegments = useMemo(() => {
-    if (!tree) return null;
-    // Чем представлен корень для секционеров — одна точка на оба списка (rootChatForSection)
-    return splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) }));
-  }, [tree, sortOrder]);
+  // Чем представлен корень для секционеров — одна точка на оба списка (rootChatForSection)
+  const treeSegments = useMemo(
+    () => splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) })),
+    [tree, sortOrder],
+  );
   const segByRootId = useMemo(
-    () => treeSegments ? new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])) : null,
+    () => new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])),
     [treeSegments],
   );
+  const treeRoots = treeSegments.map(x => x.rootChat);
 
-  // Секции: плоский список — из отфильтрованных чатов; дерево — из корней
-  const dayGroups = treeSegments
-    ? (groupBy === 'days' ? groupChats(treeSegments.map(x => x.rootChat), sortOrder) : [])
-    : (groupBy === 'days' ? groupChats(shownSessions, sortOrder) : []);
+  // Секции строятся из корней дерева
+  const dayGroups = groupBy === 'days' ? groupChats(treeRoots, sortOrder) : [];
   // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»); корень дерева
   // с несколькими тегами дублируется в каждой своей секции
-  const tagGroups = groupBy === 'tags'
-    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : shownSessions, registry, sortOrder)
-    : null;
-  // Режим «Темы»: чат ровно в одной секции, секцию задаёт корень ветки. В дереве на вход
-  // идут корни; в плоском списке корень ищется по полному списку (rootResolver)
+  const tagGroups = groupBy === 'tags' ? groupByTags(treeRoots, registry, sortOrder) : null;
+  // Режим «Темы»: чат ровно в одной секции, секцию задаёт корень ветки — на вход идут корни.
+  // rootOf (по полному списку) нужен карточке: пункт выбора темы есть только у корня
   const rootOf = useMemo(() => rootResolver(sessions), [sessions]);
   const subjectGroups: SubjectChatGroup[] | null = subjectsMode
-    ? (treeSegments
-      ? groupBySubjects(treeSegments.map(x => x.rootChat), subjects, sortOrder)
-      : groupBySubjects(shownSessions, subjects, sortOrder, rootOf))
+    ? groupBySubjects(treeRoots, subjects, sortOrder)
     : null;
   // Подсказка про залежи: чаты «без темы» старше нижней границы фона модель сама не тронет
   const sweepSince = project.subjectsSweepSince ? new Date(project.subjectsSweepSince).getTime() : null;
@@ -761,14 +753,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       </div>
     );
   };
-  // Без группировки: единый список (порядок дерева — pin+maxActivity, плоского — pin+дата)
-  const flatList = groupBy === 'none' && !treeSegments
-    ? sortChatsFlat(shownSessions, sortOrder)
-    : null;
-
-  // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
-  const renderCard = (s: Session, leadingInset = 0) => {
-    const card = (
+  // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
+  // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
+  // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
+  const renderCard = (s: Session, leadingInset = 0) => (
       <ChatCard
         key={s.id}
         session={s}
@@ -806,23 +794,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
       />
-    );
-    // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
-    // держит dnd-kit (ChatTreeRow.useDraggable), и нативный drag глушил бы вложение
-    if (!onAddToWall || hierarchy) return card;
-    return (
-      <div
-        key={s.id}
-        draggable
-        onDragStart={e => {
-          e.dataTransfer.setData(WALL_DRAG_TYPE, JSON.stringify(s));
-          e.dataTransfer.effectAllowed = 'copy';
-        }}
-      >
-        {card}
-      </div>
-    );
-  };
+  );
 
   // Заголовок секции режима «Теги»: цветовая точка, имя, счётчик чатов, кнопки
   // порядка ▲▼ (только у реестровых тегов; сироты и «Без тегов» неупорядочены)
@@ -925,7 +897,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             subtitle="Начните первый чат по этому проекту."
           />
         )}
-        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && scoped.length > 0 && (
+        {tree.rows.length === 0 && scoped.length > 0 && (
           <EmptyState
             compact
             icon={<FilterX size={20} strokeWidth={2} />}
@@ -941,11 +913,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             }
           />
         )}
-        {treeSegments ? (
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
             {subjectGroups ? (
               subjectGroups.map(g => renderSubjectSection(g,
-                g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                   <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                 ))),
               ))
@@ -953,7 +924,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               tagGroups.map(g => (
                 <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
                   {renderTagSectionHeader(g)}
-                  {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                  {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                     // Корень с несколькими тегами дублируется в каждой своей секции —
                     // key несёт тег, иначе React сочтёт ветки одним узлом между секциями
                     <ChatTreeBranch key={`${g.tag ?? '__untagged__'}:${node.row.chat.id}`} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
@@ -968,35 +939,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               dayGroups.map(g => (
                 <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
                   <ListDateDivider title={g.title} plain />
-                  {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                  {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                     <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                   )))}
                 </div>
               ))
             )}
           </ChatGroupingDnd>
-        ) : subjectGroups ? (
-          subjectGroups.map(g => renderSubjectSection(g, g.items.map(c => renderCard(c))))
-        ) : tagGroups ? (
-          // display:flow-root у секций — иначе marginBottom последней карточки
-          // схлопывался бы с отступом секции, и высота плоского списка отличалась
-          // бы от «Иерархии» на 5px за каждую секцию (там последняя строка —
-          // flex-контейнер ChatTreeRow, её margin наружу не выходит). Панель
-          // растёт по контенту, и переключение иерархии дёргало её на эту разницу
-          tagGroups.map(g => (
-            <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
-              {renderTagSectionHeader(g)}
-              {g.items.map(c => renderCard(c))}
-            </div>
-          ))
-        ) : flatList ? (
-          flatList.map(c => renderCard(c))
-        ) : dayGroups.map(g => (
-          <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-            <ListDateDivider title={g.title} plain />
-            {g.items.map(c => renderCard(c))}
-          </div>
-        ))}
         {archiveRest > 0 && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 2px' }}>
             <Button variant="ghost" size="sm" onClick={() => setArchiveLimit(n => n + ARCHIVE_PAGE)}>

@@ -93,7 +93,8 @@ public static partial class ComfyWorkflows
     // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере)
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
         long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
-        IReadOnlyList<string>? faceReferences = null)
+        IReadOnlyList<string>? faceReferences = null,
+        IReadOnlyList<string>? faceAngles = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
@@ -149,6 +150,17 @@ public static partial class ComfyWorkflows
             {
                 ["image"] = wf["save"]!["inputs"]!["images"]!.DeepClone(),
                 ["references"] = string.Join("\n", faceReferences),
+            });
+        }
+        if (faceAngles is { Count: > 0 })
+        {
+            // Ракурс лица эталона (именованные оси): та же картинка, что и в SaveImage, плюс
+            // список эталонов. Узел CcsFacePose возвращает JSON {path: {yaw,pitch,roll}|null};
+            // контракт и порядок осей проверяются в воркере (worker_pose._verify_pose_order).
+            wf["pose"] = Node("CcsFacePose", new JsonObject
+            {
+                ["image"] = wf["save"]!["inputs"]!["images"]!.DeepClone(),
+                ["references"] = string.Join("\n", faceAngles),
             });
         }
         return wf;

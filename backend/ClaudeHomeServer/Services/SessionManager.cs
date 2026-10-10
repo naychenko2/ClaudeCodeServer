@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChatSubjects;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
@@ -1420,10 +1421,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             });
     }
 
+    // Счётчик вызовов SaveSessions — для тестов «пачка пишет файл один раз» (ApplySubjects)
+    private int _saveSessionsCalls;
+    internal int SaveSessionsCalls => Volatile.Read(ref _saveSessionsCalls);
+
     // Публичный (волна В): TeamPlanService сохраняет каталог сессий после правки PlanCardId/
     // PlanVersion/Replanning — через тот же канал, что и TeamWaveService.
     public void SaveSessions()
     {
+        Interlocked.Increment(ref _saveSessionsCalls);
         lock (_saveLock)
         {
             try
@@ -1734,6 +1740,149 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         entry.Info.ParentDetached = false;
         SaveSessions();
         return entry.Info;
+    }
+
+    // --- Темы чатов проекта ---
+    // Замок записи тем: CAS «снимок прохода → запись» против ручного переноса держится здесь
+    private readonly Lock _subjectsLock = new();
+
+    // Единственная точка записи Session.Subject* (и модель, и человек). Как SetPinned/SetParent,
+    // UpdatedAt НЕ двигает и из архива не выводит: тема — настройка, а не активность, иначе
+    // разбор поднимал бы чаты наверх списка и метил непрочитанными. Чат чужого проекта
+    // пропускается. Запись модели (Ai) идёт по CAS: чат не закреплён человеком, SubjectId
+    // равен снимку прохода, тема ещё есть в реестре (её могли удалить посреди прохода). Ручной
+    // перенос в тему ПЕРВЫМ делом переводит тему в human под замком реестра (MarkSubjectHuman
+    // проверяет и существование): уборка пустых тем либо уже не снесёт её, либо успела снести
+    // раньше — тогда перенос отбивается KeyNotFoundException, и ни одна сессия не тронута.
+    // sessions.json пишется ОДИН раз на вызов, а не на каждую запись. Возвращает id чатов,
+    // у которых что-то поменялось.
+    public IReadOnlyList<string> ApplySubjects(string projectId, IReadOnlyList<SubjectWrite> writes, DateTime nowUtc)
+    {
+        var changed = new List<string>();
+        lock (_subjectsLock)
+        {
+            foreach (var w in writes)
+            {
+                if (w.Kind != SubjectWriteKind.Human || w.SubjectId is not { } subjectId) continue;
+                if (!_sessions.TryGetValue(w.SessionId, out var target) || target.Info.ProjectId != projectId) continue;
+                if (!_projects.MarkSubjectHuman(projectId, subjectId))
+                    throw new KeyNotFoundException("Тема не найдена");
+            }
+            foreach (var w in writes)
+            {
+                if (!_sessions.TryGetValue(w.SessionId, out var entry)) continue;
+                var s = entry.Info;
+                if (s.ProjectId != projectId) continue;
+                if (ApplySubjectWrite(s, w, projectId, nowUtc)) changed.Add(s.Id);
+            }
+        }
+        if (changed.Count > 0) SaveSessions();
+        return changed;
+    }
+
+    // Человек удалил тему, в которую сам переносил чаты: закрепление за несуществующей темой
+    // бессмысленно — чат молча висел бы в «Без темы», недоступный автоматике навсегда. Такие
+    // чаты возвращаются автоматике (как кнопкой «Вернуть автоматике»). «Убрал из темы»
+    // (human при SubjectId == null) — осознанный выбор, его не трогаем. Реестр читается ПОД
+    // замком тем: перенос в тему, заведённую между PUT реестра и этим вызовом, не снимется.
+    // Зовётся после замены реестра; заодно лечит висячие закрепления, оставшиеся из прошлого.
+    public IReadOnlyList<string> ReleaseOrphanedHumanSubjects(string projectId)
+    {
+        var changed = new List<string>();
+        lock (_subjectsLock)
+        {
+            var registry = _projects.GetSubjects(projectId).Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var entry in _sessions.Values)
+            {
+                var s = entry.Info;
+                if (s.ProjectId != projectId || s.SubjectSource != SubjectSources.Human
+                    || s.SubjectId is not { } id || registry.Contains(id))
+                    continue;
+                ApplySubjectWrite(s, new SubjectWrite(s.Id, SubjectWriteKind.Release), projectId, DateTime.UtcNow);
+                changed.Add(s.Id);
+            }
+        }
+        if (changed.Count > 0) SaveSessions();
+        return changed;
+    }
+
+    private bool ApplySubjectWrite(Session s, SubjectWrite w, string projectId, DateTime nowUtc)
+    {
+        switch (w.Kind)
+        {
+            case SubjectWriteKind.Ai:
+                if (s.SubjectSource == SubjectSources.Human) return false;
+                var accepted = w.SubjectId is { } aiId
+                    && s.SubjectId == w.ExpectedSubjectId
+                    && _projects.HasSubject(projectId, aiId);
+                if (accepted)
+                {
+                    s.SubjectId = w.SubjectId;
+                    s.SubjectSource = SubjectSources.Ai;
+                    s.SubjectAssignedAt = nowUtc;
+                }
+                // Модель ответила по чату — попытка засчитана, даже если запись не прошла CAS
+                s.SubjectTriedAt = nowUtc;
+                return true;
+
+            case SubjectWriteKind.Tried:
+                if (s.SubjectSource == SubjectSources.Human) return false;
+                s.SubjectTriedAt = nowUtc;
+                return true;
+
+            case SubjectWriteKind.Human:
+                // Тема проверена и переведена в human до цикла записи (ApplySubjects)
+                s.SubjectId = w.SubjectId;
+                s.SubjectSource = SubjectSources.Human;
+                s.SubjectAssignedAt = nowUtc;
+                return true;
+
+            case SubjectWriteKind.Release:
+                s.SubjectId = null;
+                s.SubjectSource = null;
+                s.SubjectAssignedAt = null;
+                s.SubjectTriedAt = null;
+                return true;
+
+            case SubjectWriteKind.ResetAi:
+                if (s.SubjectSource == SubjectSources.Human) return false;
+                s.SubjectId = null;
+                s.SubjectSource = null;
+                s.SubjectAssignedAt = null;
+                s.SubjectTriedAt = null;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    // Отбор чатов проекта для разбора по темам — единая точка для фонового тика и кнопки.
+    // Кандидат: корневой чат проекта (дочерний — нет; ставший корнем — сам кандидат), не в
+    // архиве, сейчас не идёт ход, не закреплён человеком, без темы или с висячей темой (её нет
+    // в реестре). Фон дополнительно требует: была активность после прошлой попытки модели,
+    // чат остыл (idle) и дорос до minMessages, активность не раньше нижней границы since
+    // (залежи — только кнопкой). Кнопка (manual) снимает эти три условия.
+    public IReadOnlyList<Session> GetSubjectCandidates(string projectId, DateTime nowUtc, bool manual,
+        DateTime? since = null, TimeSpan? idle = null, int minMessages = 0)
+    {
+        var registry = _projects.GetSubjects(projectId).Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        var cutoff = nowUtc - (idle ?? TimeSpan.Zero);
+        return _sessions.Values
+            .Select(e => e.Info)
+            .Where(s => s.ProjectId == projectId
+                && !s.IsArchived
+                && s.Status is not (SessionStatus.Working or SessionStatus.Waiting)
+                && SessionTaskLinks.ParentSessionId(s, _taskLookup) is null
+                && s.SubjectSource != SubjectSources.Human
+                && (s.SubjectId is null || !registry.Contains(s.SubjectId))
+                && (manual
+                    || ((s.SubjectTriedAt is null || s.UpdatedAt > s.SubjectTriedAt)
+                        && s.UpdatedAt <= cutoff
+                        && s.MessageCount >= minMessages
+                        && (since is null || s.UpdatedAt >= since))))
+            .OrderByDescending(s => s.UpdatedAt)
+            .ToList();
     }
 
     // Является ли candidate потомком ancestor по эффективной иерархии (ParentSessionId,

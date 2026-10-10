@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.ChatSubjects;
 
 namespace ClaudeHomeServer.Services;
 
@@ -576,6 +577,196 @@ public class ProjectManager : IProjectManager
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;
+    }
+
+    // --- Темы чатов проекта ---
+    // Реестр меняется копией списка под _subjectsLock: читатели (группировка, проход) держат
+    // старый экземпляр и не ловят «коллекция изменена». Удаление темы чатов не трогает —
+    // висячий SubjectId везде читается как «без темы», каскада нет (и цикла DI тоже:
+    // ProjectManager про сессии не знает).
+    private readonly Lock _subjectsLock = new();
+
+    public IReadOnlyList<ProjectSubject> GetSubjects(string projectId) =>
+        _projects.GetValueOrDefault(projectId)?.SubjectRegistry.OrderBy(s => s.Order).ToList() ?? [];
+
+    public bool HasSubject(string projectId, string subjectId) =>
+        _projects.GetValueOrDefault(projectId)?.SubjectRegistry.Any(s => s.Id == subjectId) == true;
+
+    // Ручной PUT реестра целиком. Тема с известным Id — правка существующей: изменение имени,
+    // цвета или места среди прежних тем у темы модели переводит её в human (уборка пустых тем
+    // такую больше не удалит). Место сравнивается ОТНОСИТЕЛЬНОЕ: абсолютный Order съезжает сам
+    // (удалили соседа, клиент не прислал order), и это не правка темы человеком. Цвет клиент
+    // обязан присылать всегда — пропущенный color читается как «цвет снят». Без Id или с
+    // неизвестным Id — новая тема человека. Тем нет в запросе — удалены. Имена чистит
+    // санитайзер; дубли по ключу имени и повтор Id — отказ.
+    public IReadOnlyList<ProjectSubject> ReplaceSubjects(string projectId, IReadOnlyList<ProjectSubjectEdit> edits)
+    {
+        if (edits.Count > ChatSubjectRules.MaxSubjectsHuman)
+            throw new ArgumentException($"Тем не больше {ChatSubjectRules.MaxSubjectsHuman}");
+        lock (_subjectsLock)
+        {
+            var project = _projects.GetValueOrDefault(projectId)
+                ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
+            var current = project.SubjectRegistry.ToDictionary(s => s.Id);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var rows = new List<(ProjectSubjectEdit Edit, string Name, int Order, ProjectSubject? Old)>(edits.Count);
+            for (var i = 0; i < edits.Count; i++)
+            {
+                var edit = edits[i];
+                var name = ChatSubjectRules.SanitizeName(edit.Name)
+                    ?? throw new ArgumentException(
+                        $"Недопустимое имя темы «{edit.Name}»: 2–{ChatSubjectRules.MaxNameLength} символов, буквы, цифры, пробел и дефис");
+                if (!keys.Add(ChatSubjectRules.NameKey(name)))
+                    throw new ArgumentException($"Тема «{name}» указана дважды");
+                // Две строки с одним Id дали бы две темы с одним ключом — следующий PUT
+                // падал бы на ToDictionary, и реестр через API больше не правился бы
+                if (edit.Id is { } eid && !ids.Add(eid))
+                    throw new ArgumentException($"Тема с id «{eid}» указана дважды");
+                rows.Add((edit, name, edit.Order ?? i,
+                    edit.Id is { } id && current.TryGetValue(id, out var old) ? old : null));
+            }
+
+            // Место прежней темы среди прежних тем, переживших правку: до и после
+            var survivors = rows.Where(r => r.Old is not null).Select(r => r.Old!.Id).ToHashSet(StringComparer.Ordinal);
+            var rankBefore = project.SubjectRegistry.Where(s => survivors.Contains(s.Id)).OrderBy(s => s.Order)
+                .Select((s, idx) => (s.Id, idx)).ToDictionary(x => x.Id, x => x.idx, StringComparer.Ordinal);
+            var rankAfter = rows.Select((r, pos) => (r, pos)).Where(x => x.r.Old is not null)
+                .OrderBy(x => x.r.Order).ThenBy(x => x.pos)
+                .Select((x, idx) => (x.r.Old!.Id, idx)).ToDictionary(x => x.Id, x => x.idx, StringComparer.Ordinal);
+
+            var next = new List<ProjectSubject>(rows.Count);
+            foreach (var (edit, name, order, old) in rows)
+            {
+                if (old is not null)
+                {
+                    var touched = old.Name != name || old.Color != edit.Color
+                        || rankBefore[old.Id] != rankAfter[old.Id];
+                    next.Add(new ProjectSubject
+                    {
+                        Id = old.Id, Name = name, Order = order, Color = edit.Color, CreatedAt = old.CreatedAt,
+                        CreatedBy = touched ? SubjectSources.Human : old.CreatedBy,
+                    });
+                }
+                else
+                {
+                    next.Add(new ProjectSubject
+                    {
+                        Name = name, Order = order, Color = edit.Color, CreatedBy = SubjectSources.Human,
+                    });
+                }
+            }
+            project.SubjectRegistry = next;
+            project.UpdatedAt = DateTime.UtcNow;
+            Save();
+            return GetSubjects(projectId);
+        }
+    }
+
+    // Новые темы от модели. Под замком ещё раз сверяет ключи имён с реестром (между снимком
+    // прохода и записью человек мог завести такую же тему) и потолки MaxSubjectsPerProject
+    // (на темы модели) и MaxSubjectsHuman (на реестр целиком).
+    // Возвращает ключ имени → id темы (существующей или новой); имя, не влезшее в потолок,
+    // в словарь не попадает — его чаты остаются «без темы». UpdatedAt проекта не двигает:
+    // фоновая работа — не правка проекта человеком.
+    public IReadOnlyDictionary<string, string> AddAiSubjects(string projectId, IReadOnlyList<string> names, DateTime nowUtc)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (names.Count == 0) return result;
+        lock (_subjectsLock)
+        {
+            if (_projects.GetValueOrDefault(projectId) is not { } project) return result;
+            var next = project.SubjectRegistry.ToList();
+            var byKey = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var s in next) byKey.TryAdd(ChatSubjectRules.NameKey(s.Name), s.Id);
+            var added = false;
+            foreach (var raw in names)
+            {
+                if (ChatSubjectRules.SanitizeName(raw) is not { } name) continue;
+                var key = ChatSubjectRules.NameKey(name);
+                if (byKey.TryGetValue(key, out var existing)) { result[key] = existing; continue; }
+                // Потолок модели считает только ЕЁ темы (темы человека его не съедают), общий
+                // потолок реестра — все
+                if (next.Count(s => s.CreatedBy == SubjectSources.Ai) >= ChatSubjectRules.MaxSubjectsPerProject
+                    || next.Count >= ChatSubjectRules.MaxSubjectsHuman) continue;
+                var subject = new ProjectSubject
+                {
+                    Name = name,
+                    Order = next.Count == 0 ? 0 : next.Max(s => s.Order) + 1,
+                    CreatedBy = SubjectSources.Ai,
+                    CreatedAt = nowUtc,
+                };
+                next.Add(subject);
+                byKey[key] = subject.Id;
+                result[key] = subject.Id;
+                added = true;
+            }
+            if (added)
+            {
+                project.SubjectRegistry = next;
+                Save();
+            }
+        }
+        return result;
+    }
+
+    // Человек кладёт чат в тему — тема становится его (замечание Н-5 повторного ревью): иначе
+    // уборка пустых AI-тем в конце прохода могла бы снести тему, в которую он только что
+    // перенёс чат. Зовётся ДО записи сессии: проверка «тема есть» и перевод в human — одно
+    // действие под замком реестра, уборка (тот же замок) больше не вклинится между ними.
+    // false — темы нет (удалена или чужая), запись сессии не делается.
+    public bool MarkSubjectHuman(string projectId, string subjectId)
+    {
+        lock (_subjectsLock)
+        {
+            if (_projects.GetValueOrDefault(projectId) is not { } project) return false;
+            var subject = project.SubjectRegistry.FirstOrDefault(s => s.Id == subjectId);
+            if (subject is null) return false;
+            if (subject.CreatedBy == SubjectSources.Human) return true;
+            project.SubjectRegistry = project.SubjectRegistry
+                .Select(s => s.Id == subjectId
+                    ? new ProjectSubject
+                    {
+                        Id = s.Id, Name = s.Name, Order = s.Order, Color = s.Color, CreatedAt = s.CreatedAt,
+                        CreatedBy = SubjectSources.Human,
+                    }
+                    : s)
+                .ToList();
+            Save();
+            return true;
+        }
+    }
+
+    // Уборка в конце прохода: тема модели без единого чата удаляется. Темы человека — никогда.
+    // used — id тем, на которые сейчас ссылается хоть один чат проекта.
+    public int RemoveEmptyAiSubjects(string projectId, IReadOnlySet<string> used)
+    {
+        lock (_subjectsLock)
+        {
+            if (_projects.GetValueOrDefault(projectId) is not { } project) return 0;
+            var next = project.SubjectRegistry
+                .Where(s => s.CreatedBy != SubjectSources.Ai || used.Contains(s.Id))
+                .ToList();
+            var removed = project.SubjectRegistry.Count - next.Count;
+            if (removed == 0) return 0;
+            project.SubjectRegistry = next;
+            Save();
+            return removed;
+        }
+    }
+
+    // Нижняя граница фонового разбора: ставится один раз, на первом тике фона по проекту.
+    // Возвращает действующее значение.
+    public DateTime EnsureSubjectsSweepSince(string projectId, DateTime nowUtc)
+    {
+        lock (_subjectsLock)
+        {
+            if (_projects.GetValueOrDefault(projectId) is not { } project) return nowUtc;
+            if (project.SubjectsSweepSince is { } since) return since;
+            project.SubjectsSweepSince = nowUtc;
+            Save();
+            return nowUtc;
+        }
     }
 
     // Все проекты, чей RootPath указывает на ту же папку (датасет знаний общий per-RootPath):

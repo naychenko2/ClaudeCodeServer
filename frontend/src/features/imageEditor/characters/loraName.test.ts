@@ -57,6 +57,14 @@ describe('ownLoraLabel', () => {
     const t = { [A]: at(10, 9, 5), [B]: at(10, 14, 32) };
     expect(ownLoraLabel(B, t[B], list([A, B], t))).toBe('andreyk_qwen21_v1_000001750 · 10 октября, 14:32');
   });
+  it('дата обучения из own подставляется, когда в trained записи нет', () => {
+    expect(ownLoraLabel(A, at(10), list([A]))).toBe('andreyk_qwen21_v1_000001750 · 10 октября');
+  });
+  it('own нет в списке (ручная LoRA, пропала из ComfyUI) — подпись всё равно есть и тёзки различаются', () => {
+    const gone = 'other/face.safetensors';
+    expect(ownLoraLabel(gone, undefined, list(['face.safetensors']))).toBe('face · other');
+    expect(ownLoraLabel(gone, undefined, list([]))).toBe('face');
+  });
   it('список недоступен — одно имя без пути', () => {
     expect(ownLoraLabel('other/face.safetensors', undefined, { available: false, items: [] })).toBe('face');
     expect(ownLoraLabel('other/face.safetensors', undefined, null)).toBe('face');

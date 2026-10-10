@@ -1,24 +1,23 @@
 // Раздел «LoRA для локальной модели» в форме персонажа. Сворачиваемый, раскрыт сам,
-// если LoRA уже задана. Список файлов грузится при раскрытии. Наружу отдаёт ввод
+// если LoRA уже задана. Список файлов приходит от формы персонажа. Наружу отдаёт ввод
 // (или 'remove') только после того, как человек что-то тронул, — иначе LoRA не трогаем.
 
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { loraLabels } from './loraName';
-import { useLoraList } from './useLoraList';
-import type { ImageEditCharacter, ImageEditorApi } from '../api';
+import type { ImageEditCharacter, ImageEditLoras } from '../api';
 
 type Lora = NonNullable<ImageEditCharacter['local']>;
 export type LoraInput = { name: string; trigger: string; strength: number } | 'remove';
 
 const DEFAULT_STRENGTH = 0.8;
-// Узкий экран: в свёрнутом селекте режется имя, а дата и папка остаются видны
+// Узкий экран: в свёрнутом селекте режется имя, а дата и папка остаются видны; подпись под селектом — полная
 const SELECT_NAME_MAX = 12;
 
-export function CharacterLoraSection({ api, projectId, current, disabled, onChange }: {
-  api: ImageEditorApi;
-  projectId: string;
+export function CharacterLoraSection({ list, current, disabled, onChange }: {
+  // общий список ComfyUI, загруженный формой; null — ещё грузится
+  list: ImageEditLoras | null;
   current: Lora | null | undefined;
   disabled?: boolean;
   // undefined — человек ничего не менял
@@ -29,8 +28,6 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   const [trigger, setTrigger] = useState(current?.trigger ?? '');
   const [strength, setStrength] = useState(current?.strength ?? DEFAULT_STRENGTH);
   const [removed, setRemoved] = useState(false);
-
-  const list = useLoraList(api, projectId, open);
 
   const touch = (n: string, t: string, s: number) => {
     // правка триггера или силы после «Убрать» отмену удаления не снимает
@@ -49,8 +46,10 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   const options = [...(list?.items ?? [])];
   // текущее имя, которого нет в списке, не теряем
   const missing = !!name && list?.available && !options.includes(name);
-  const labels = loraLabels(missing ? [name, ...options] : options, list?.trained, SELECT_NAME_MAX);
-  const short = (n: string) => labels.get(n) ?? n;
+  const allNames = missing ? [name, ...options] : options;
+  const shortLabels = loraLabels(allNames, list?.trained, SELECT_NAME_MAX);
+  const fullLabels = loraLabels(allNames, list?.trained);
+  const short = (n: string) => shortLabels.get(n) ?? n;
   const selectOptions = options.map(o => ({ value: o, label: short(o) }));
   if (missing) selectOptions.unshift({ value: name, label: `${short(name)} (нет в ComfyUI)` });
 
@@ -101,7 +100,7 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
           )}
           {list && !list.available && has && (
             <div style={{ fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
-              Файл: {loraLabels([name]).get(name)}, {trigger}, {strength.toFixed(2).replace('.', ',')}
+              Файл: {fullLabels.get(name) ?? name}, {trigger}, {strength.toFixed(2).replace('.', ',')}
             </div>
           )}
           {has && (

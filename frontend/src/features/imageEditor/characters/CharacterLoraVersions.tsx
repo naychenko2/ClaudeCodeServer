@@ -6,14 +6,13 @@ import { AlertCircle, Check, Cpu, Info, Layers, Pencil, Plug, Trash2 } from 'luc
 import {
   Badge, Button, ConfirmDialog, Field, IconButton, Notice, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
-import type { ImageEditorApi, LoraVersionDto } from '../api';
+import type { ImageEditLoras, LoraVersionDto } from '../api';
 import { useIsMobile } from '../../../lib/breakpoints';
 import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
 } from './loraTrainTexts';
 import { ownLoraLabel } from './loraName';
-import { useLoraList } from './useLoraList';
 import { failureText, versionFailureText } from './loraTrainView';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
@@ -21,9 +20,9 @@ import {
 
 const ico = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE } as const;
 
-export function CharacterLoraVersions({ api, projectId, versions, disabled }: {
-  api: ImageEditorApi;
-  projectId: string;
+export function CharacterLoraVersions({ loraList, versions, disabled }: {
+  // общий список ComfyUI из формы; null — ещё грузится
+  loraList: ImageEditLoras | null;
   versions: LoraVersionsHandle;
   disabled?: boolean;
 }) {
@@ -34,7 +33,6 @@ export function CharacterLoraVersions({ api, projectId, versions, disabled }: {
   const [flash, setFlash] = useState<string | null>(null);
 
   const items = data?.items ?? [];
-  const loraList = useLoraList(api, projectId, !!data?.own);
   const nameOf = (v: LoraVersionDto) => versionTitle(v, items);
   const target = modal ? items.find(v => v.runId === modal.runId) ?? null : null;
 

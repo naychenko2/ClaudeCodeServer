@@ -2196,7 +2196,7 @@ export function Composer({
       style={{
         ...iconBtnGuard,
         width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
-        background: C.textHeading, color: C.bgMain, cursor: 'pointer',
+        background: C.navActive, color: C.onNavActive, boxShadow: `inset 0 0 0 1px ${C.navActiveEdge}`, cursor: 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}
     >
@@ -2242,8 +2242,10 @@ export function Composer({
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,
         border: 'none',
-        background: C.textHeading,
-        color: C.bgMain,
+        // Пара активной вкладки хаба: в светлой — чернильный круг, в тёмной — приподнятый, а не белое пятно
+        background: C.navActive,
+        color: C.onNavActive,
+        boxShadow: `inset 0 0 0 1px ${C.navActiveEdge}`,
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',

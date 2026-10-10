@@ -42,12 +42,50 @@ public sealed class PhasePipeline
     {
         var key = Path.GetFullPath(workingDirectory)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return _running.TryAdd(key, 0) ? new TreeLock(_running, key) : null;
+        if (!_running.TryAdd(key, 0)) return null;
+        var marker = Path.Combine(key, BusyMarker);
+        PutBusyMarker(key, marker);
+        return new TreeLock(_running, key, marker);
     }
 
-    private sealed class TreeLock(ConcurrentDictionary<string, byte> running, string key) : IDisposable
+    // Файл-маркер «дерево занято»: блокировка живёт в памяти, а ждать её конца агенту нужно
+    // серверным сторожем (watch_start), которому видна только файловая система
+    public const string BusyMarker = TreeExcludes.AttachmentsDir + "/tree-busy";
+
+    // Хвост отказа «дерево занято»: ждать петлёй в ходе нельзя — ход кончается, а ожившие
+    // после него вызовы гасит предохранитель ClaudeSession (инцидент 10.10.2026)
+    public const string BusyWaitHint =
+        " Не жди петлёй и паузами: поставь сторожа watch_start, который дождётся исчезновения файла "
+        + BusyMarker + " в корне этого рабочего дерева (сторож опрашивает из корня проекта — путь пиши полный), "
+        + "timeout_minutes 15, и закончи ход; по будильнику повтори вызов. Пример poll_command: "
+        + "cmd — if exist <полный путь> (exit 1) else (exit 0); bash — test ! -e <полный путь>.";
+
+    // Маркер — best effort: не вышло (ссылка по пути, диск) — прогон идёт без него. Оставшийся
+    // от упавшего хоста маркер ложный (блокировка уже наша), поэтому сносится перед записью
+    private static void PutBusyMarker(string root, string marker)
     {
-        public void Dispose() => running.TryRemove(key, out _);
+        try
+        {
+            var dir = Path.GetDirectoryName(marker)!;
+            if (!TreeFiles.NoLinksUnder(root, dir)) return;
+            Directory.CreateDirectory(dir);
+            if (TreeFiles.NoLinksUnder(root, marker) && File.Exists(marker)) File.Delete(marker);
+            TreeFiles.CreateNewInTree(root, marker)?.Dispose();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    private sealed class TreeLock(ConcurrentDictionary<string, byte> running, string key, string marker) : IDisposable
+    {
+        public void Dispose()
+        {
+            try
+            {
+                if (TreeFiles.NoLinksUnder(key, marker)) File.Delete(marker);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            running.TryRemove(key, out _);
+        }
     }
 
     public const string LogName = "console.log";

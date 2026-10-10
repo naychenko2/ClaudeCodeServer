@@ -168,6 +168,26 @@ public class DotnetBuildServiceTests : IDisposable
         }
     }
 
+    // Ждать занятое дерево агенту надо сторожем: маркер виден снаружи ровно пока идёт прогон,
+    // а отказ подсказывает, чего ждать
+    [Fact]
+    public async Task ЗанятоеДерево_МаркерДляСторожа_ИПодсказкаВОтказе()
+    {
+        var service = Service(new FakeLauncher(_processes, "dotnet-build-noop.txt"), new BuildConcurrencyGate(1));
+        var marker = Path.Combine(_root, PhasePipeline.BusyMarker);
+        // Маркер от упавшего хоста не мешает новой блокировке
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        await File.WriteAllTextAsync(marker, "stale");
+
+        using (service.Pipeline.TryLockTree(_root))
+        {
+            File.Exists(marker).Should().BeTrue();
+            var refused = await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+            refused.Refusal.Should().Contain("watch_start").And.Contain(PhasePipeline.BusyMarker);
+        }
+        File.Exists(marker).Should().BeFalse();
+    }
+
     [Fact]
     public async Task ПервыйПрогон_ОценкаПоXml_ВторойПоПамяти()
     {

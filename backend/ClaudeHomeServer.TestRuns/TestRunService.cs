@@ -266,7 +266,7 @@ public sealed partial class TestRunService
         using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);
         if (treeLock is null)
             return Refused(request, "В этом дереве уже идёт прогон тестов или сборка — дождись его конца: "
-                + "два процесса подерутся за obj/bin.");
+                + "два процесса подерутся за obj/bin." + PhasePipeline.BusyWaitHint);
 
         var launcher = _launchers.ForProject(request.Project);
         // Стенд из webServer конфига Playwright поднимает сам — проверять заранее нечего

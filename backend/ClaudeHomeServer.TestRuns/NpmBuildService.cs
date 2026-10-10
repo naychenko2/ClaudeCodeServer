@@ -125,7 +125,7 @@ public sealed partial class NpmBuildService
         using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);
         if (treeLock is null)
             return BuildRunResult.Refused("В этом дереве уже идёт сборка или прогон тестов — дождись его конца: "
-                + "два процесса подерутся за артефакты сборки.");
+                + "два процесса подерутся за артефакты сборки." + PhasePipeline.BusyWaitHint);
 
         var launcher = _launchers.ForProject(request.Project);
         var (artifacts, log) = await PhasePipeline.CreateArtifactsAsync(request.WorkingDirectory,

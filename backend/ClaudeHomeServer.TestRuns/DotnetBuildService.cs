@@ -92,7 +92,7 @@ public sealed class DotnetBuildService
         using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);
         if (treeLock is null)
             return BuildRunResult.Refused("В этом дереве уже идёт сборка или прогон тестов — дождись его конца: "
-                + "два процесса подерутся за obj/bin.");
+                + "два процесса подерутся за obj/bin." + PhasePipeline.BusyWaitHint);
 
         var launcher = _launchers.ForProject(request.Project);
         var memoryPath = _options.MemoryDirectory is { } memoryDir

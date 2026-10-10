@@ -26,9 +26,6 @@ public class CharacterLoraTrainController(
     private const long MaxBodyBytes = 100L * 1024 * 1024;
     private const int DefaultStartSeconds = 150;
 
-    // Блокировка старта по (владелец, персонаж): проверки, запуск и запись версии — один атомарный путь
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> StartLocks = new();
-
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     // ── Обучающие фото ─────────────────────────────────────────────────────────────
@@ -154,7 +151,7 @@ public class CharacterLoraTrainController(
         var trigger = string.IsNullOrWhiteSpace(req.Trigger) ? DefaultTrigger(slug) : req.Trigger.Trim();
         if (!LoraTrigger.IsValid(trigger))
             return Error(StatusCodes.Status400BadRequest, "bad_trigger", "Триггерное слово: латиница, цифры и «_», 3–24 символа, первая буква");
-        using var startLock = await AcquireStartLockAsync($"{UserId}|{projectId}|{slug}", ct);
+        using var startLock = await runs.LockKeyAsync($"{UserId}|{projectId}|{slug}", ct);
         // Идущее обучение этого персонажа видно по записи training — не полагаемся на ответ сервиса
         if (runs.List(project.RootPath, slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
             return Error(StatusCodes.Status409Conflict, "owner_busy", "У вас уже идёт обучение");
@@ -197,18 +194,6 @@ public class CharacterLoraTrainController(
     }
 
     // ── Общее ──────────────────────────────────────────────────────────────────────
-
-    private static async Task<IDisposable> AcquireStartLockAsync(string key, CancellationToken ct)
-    {
-        var sem = StartLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-        await sem.WaitAsync(ct);
-        return new Releaser(sem);
-    }
-
-    private sealed class Releaser(SemaphoreSlim sem) : IDisposable
-    {
-        public void Dispose() => sem.Release();
-    }
 
     private IActionResult MapStartError(LoraTrainErrorCode error, LoraTrainStartResult started)
     {

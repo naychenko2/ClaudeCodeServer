@@ -108,6 +108,7 @@ public sealed class LoraTrainingFinisher(
 
     private async Task FinishAsync(Project project, string slug, CharacterLoraRun run, LoraTrainState state, CancellationToken ct)
     {
+        if (project.OwnerId is null) return;
         switch (state.Status)
         {
             case LoraTrainStatus.Completed when state.LoraFile is { Length: > 0 } loraFile:
@@ -150,11 +151,12 @@ public sealed class LoraTrainingFinisher(
     // и записью человек мог подключить свою
     private async Task ConnectIfFirstAsync(Project project, string slug, CharacterLoraRun run, IReadOnlyList<string>? known, CancellationToken ct)
     {
+        if (project.OwnerId is not { } ownerId) return;
         using var _ = await runs.LockCharacterAsync(project.RootPath, slug, ct);
         if (CharacterStore.Get(project.RootPath, slug) is not { } manifest || manifest.ReadLora() is not null) return;
         var patch = new CharacterPatch(null, null, [], [], null,
             CharacterLoraPatch.Set(run.LoraFile, run.Trigger, null, known));
-        var result = CharacterStore.Update(project.RootPath, project.OwnerId, slug, patch);
+        var result = CharacterStore.Update(project.RootPath, ownerId, slug, patch);
         if (result?.Value is not { } change)
         {
             log.LogWarning("Доводчик обучения LoRA: версия {Run} не подключена автоматически: {Error}", run.RunId, result?.Error);
@@ -167,7 +169,7 @@ public sealed class LoraTrainingFinisher(
     // Стираем запись, когда воркер подтвердил удаление каталога прогона; «занято» и отказ — на следующий круг
     private async Task DeleteMarkedAsync(Project project, string slug, CancellationToken ct)
     {
-        if (trainer is null) return;
+        if (trainer is null || project.OwnerId is null) return;
         foreach (var run in runs.ListDeleting(project.RootPath, slug))
         {
             ct.ThrowIfCancellationRequested();

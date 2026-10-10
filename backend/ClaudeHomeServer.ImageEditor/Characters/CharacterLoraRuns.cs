@@ -28,26 +28,16 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
     };
 
     private readonly object _lock = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _characterLocks = new();
+    private readonly KeyedLocks _locks = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Root, string Slug), byte> _deletingIndex = new();
 
     // Одна блокировка на персонажа: пару «прочитать манифест → записать» берут и доводчик, и ручки версий,
     // иначе автоподключение перезатирает выбор человека. Ключ — корень проекта без регистра разделителей.
-    public async Task<IDisposable> LockCharacterAsync(string projectRoot, string slug, CancellationToken ct = default)
-    {
-        var gate = _characterLocks.GetOrAdd(Path.GetFullPath(projectRoot) + "|" + slug, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
-        return new Releaser(gate);
-    }
+    public Task<IDisposable> LockCharacterAsync(string projectRoot, string slug, CancellationToken ct = default) =>
+        _locks.AcquireAsync(Path.GetFullPath(projectRoot) + "|" + slug, ct);
 
-    private sealed class Releaser(SemaphoreSlim gate) : IDisposable
-    {
-        private int _released;
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 0) gate.Release();
-        }
-    }
+    // Тот же компонент для блокировок старта обучения: ключи другого вида (owner|project|slug), пересечения нет
+    public Task<IDisposable> LockKeyAsync(string key, CancellationToken ct = default) => _locks.AcquireAsync(key, ct);
 
     // Персонажи, у которых есть записи «deleting»: доводчик обходит только их (плюс один полный проход при старте)
     public IReadOnlyList<(string Root, string Slug)> CharactersWithDeleting() => [.. _deletingIndex.Keys];

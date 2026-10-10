@@ -183,6 +183,33 @@ public sealed class LoraTrainingFinisherTests : IDisposable
     }
 
     [Fact]
+    public async Task ManualConnect_HoldingCharacterLock_FinisherWaitsAndKeepsHumanChoice()
+    {
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+        var listed = new TaskCompletionSource();
+        _media.Setup(m => m.ListLorasAsync(It.IsAny<CancellationToken>())).Returns(() =>
+        {
+            listed.TrySetResult();
+            return Task.FromResult<IReadOnlyList<string>?>([File(1), "manual.safetensors"]);
+        });
+
+        // Ручка подключения держит блокировку персонажа; доводчик дошёл до записи и обязан ждать
+        var handler = await _runs.LockCharacterAsync(_root, Slug);
+        var finishing = _sut.RunOnceAsync(default);
+        await listed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        (await Task.WhenAny(finishing, Task.Delay(300))).Should().NotBeSameAs(finishing, "доводчик ждёт блокировку персонажа");
+        ActiveLora().Should().BeNull("пока ручка держит блокировку, доводчик ничего не записал");
+
+        WriteCharacter("manual.safetensors");
+        handler.Dispose();
+        await finishing.WaitAsync(TimeSpan.FromSeconds(5));
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Ready);
+        ActiveLora().Should().Be("manual.safetensors");
+    }
+
+    [Fact]
     public async Task ComfyUnavailable_KeepsTraining_ThenReadyAndConnectedAfterRecovery()
     {
         Training(1);

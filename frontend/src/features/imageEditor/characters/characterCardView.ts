@@ -34,7 +34,10 @@ export interface MeterStop {
   value: number;
   tone: 'success' | 'accent';
   estimate: boolean;
-  titleKey: keyof typeof METER.stops;
+  // running — заголовок «Обучается · N %» собирается из percent (METER.running), а не берётся из METER.stops
+  titleKey: keyof typeof METER.stops | 'running';
+  // Только для running: null — процент ещё не известен
+  percent?: number | null;
   titleColor: string;
   hint: string;
 }
@@ -91,7 +94,9 @@ function sayFor(state: CardState, i: CardViewInput, connected: LoraVersionDto | 
     const v = connected ?? (view.kind === 'done' ? view.version : undefined);
     return { key: 'trained', title: v ? versionTitle(v, i.versions) : '' };
   }
-  const left = TRAIN_MIN - (i.train ?? 0);
+  // Число фото для обучения ещё грузится — «нужно ещё N» было бы неправдой, фраза без числа
+  if (i.train === null) return { key: 'ready' };
+  const left = TRAIN_MIN - i.train;
   return left > 0 ? { key: 'needTrain', n: left } : { key: 'ready' };
 }
 
@@ -121,8 +126,8 @@ function resultStop(state: CardState, i: CardViewInput, connected: LoraVersionDt
   }
   if (view.kind === 'running') {
     return {
-      value: view.percent ?? 8, tone: 'accent', estimate: view.percent === null, titleKey: 'similar',
-      titleColor: C.accent, hint: view.etaText ? METER.eta(view.etaText) : '',
+      value: view.percent ?? 8, tone: 'accent', estimate: view.percent === null, titleKey: 'running',
+      percent: view.percent, titleColor: C.accent, hint: view.etaText ? METER.eta(view.etaText) : '',
     };
   }
   if (state === 5) {

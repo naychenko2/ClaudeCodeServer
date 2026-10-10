@@ -2,6 +2,7 @@
 // плашка или переключатель, когда объект уже в контексте. Окружение node — рисуем в строку.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
+import { C } from '../../lib/design';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 vi.stubGlobal('window', Object.assign(new EventTarget(), {
@@ -82,6 +83,15 @@ describe('размер lg', () => {
     expect(inside).toContain('В контексте');
     expect(inside).toContain('lucide-check');
     expect(inside).toContain('Убрать из контекста');
+  });
+
+  it('«В контексте» — secondary (приглушённо), «В контекст чата» — primary с акцентом', () => {
+    put(primary);
+    expect(html(false, 'lg')).toContain(`background:${C.accent}`);
+    put(primary, [inCtx]);
+    const inside = html(true, 'lg');
+    expect(inside).toContain(`background:${C.bgPanel}`);
+    expect(inside).not.toContain(`background:${C.accent}`);
   });
 
   it('те же причины отказа: disabled', () => {

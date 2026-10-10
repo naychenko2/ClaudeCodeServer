@@ -24,6 +24,10 @@ describe('состояния §4', () => {
     expect(r.action).toEqual({ kind: 'train', disabled: false, fixTrigger: false });
     expect(r.stops[2]).toMatchObject({ value: 0, titleKey: 'similar', hint: METER.afterTrain });
   });
+  it('2: число фото для обучения ещё грузится — фраза без числа', () => {
+    const r = characterCardView(input({ train: null, view: form({ reason: 'photos' }) }));
+    expect(r.say).toEqual({ key: 'ready' });
+  });
   it('2: не хватает фото для обучения', () => {
     const r = characterCardView(input({ train: 14, view: form({ reason: 'photos' }) }));
     expect(r.say).toEqual({ key: 'needTrain', n: 6 });
@@ -53,6 +57,12 @@ describe('состояния §4', () => {
     expect(a.stops[2]).toMatchObject({ value: 40, estimate: false, hint: METER.eta('10 мин'), titleColor: C.accent });
     const b = characterCardView(input({ view: running(null) }));
     expect(b.stops[2]).toMatchObject({ value: 8, estimate: true, hint: '' });
+  });
+  it('3: подпись деления — «Обучается · N %», а не «Заметно похож»', () => {
+    const a = characterCardView(input({ view: running(40) })).stops[2];
+    expect(a).toMatchObject({ titleKey: 'running', percent: 40 });
+    const b = characterCardView(input({ view: running(null) })).stops[2];
+    expect(b).toMatchObject({ titleKey: 'running', percent: null });
   });
   it('3: идущее обучение важнее подключённой версии', () => {
     expect(characterCardView(input({ view: running(10), versions: [ver({ connected: true })] })).state).toBe(3);

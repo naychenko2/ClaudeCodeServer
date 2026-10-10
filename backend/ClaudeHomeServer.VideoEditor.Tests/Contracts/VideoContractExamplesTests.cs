@@ -88,7 +88,8 @@ public sealed class VideoContractExamplesTests
 
     private static Dictionary<string, string> ReadExamples()
     {
-        var text = File.ReadAllText(FindAdr());
+        // на Windows git выдаёт ADR с CRLF (autocrlf), а разбор ниже ждёт голый \n
+        var text = File.ReadAllText(FindAdr()).Replace("\r\n", "\n");
         var section = text[text.IndexOf("## Контракты", StringComparison.Ordinal)..];
         var result = new Dictionary<string, string>();
         foreach (Match m in Regex.Matches(section, @"####\s+(?<name>[^\n]+)\n+```json\n(?<json>.*?)\n```", RegexOptions.Singleline))

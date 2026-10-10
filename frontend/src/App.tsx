@@ -15,6 +15,7 @@ import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
+import { DeployHost } from './components/DeployHost'
 import { ProductHistory } from './components/ProductHistory'
 import { GlobalSearch } from './components/GlobalSearch'
 import { AiLauncher } from './components/ai/AiLauncher'
@@ -35,6 +36,7 @@ import { resetAgentHubs } from './lib/agentHub'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
+import { pendingChatOnPop } from './lib/pendingProjectChat'
 import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
@@ -314,11 +316,11 @@ export default function App() {
   }
 
   // Уход в раздел из «глубокого» места (открытый проект, заметка, файл, задача, персона,
-  // база знаний) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
+  // база знаний, чат) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
   // ушли, пропадает и Back уводит мимо. Латеральные переходы с плоского экрана — replace.
   const navToSection = (dest: NavSnapshot) => {
     const cur = getNav()
-    const deep = !!cur && (cur.screen === 'project' || !!cur.note || !!cur.file || !!cur.task || !!cur.persona || !!cur.knowledge)
+    const deep = !!cur && (cur.screen === 'project' || !!cur.note || !!cur.file || !!cur.task || !!cur.persona || !!cur.knowledge || !!cur.chatId)
     if (deep) navPush(dest)
     else navReplace(dest)
   }
@@ -363,7 +365,9 @@ export default function App() {
     localStorage.setItem('cc_open_chat', chatId)
     localStorage.setItem(HUB_TAB_KEY, 'chats')
     setHubTab('chats')
-    navToSection({ screen: 'chats', chatId })
+    // Раздел «Чаты» уже на экране — запись чата кладёт сам ChatsPage (тот же cc-open-chat):
+    // вторая запись отсюда перезаписала бы прежний чат, и «назад» проскакивал бы его
+    if (getNav()?.screen !== 'chats') navToSection({ screen: 'chats', chatId })
   }
 
   // Форк чата от лица другой персоны (кнопка «Сменить персону» в чате) для глобальной
@@ -625,7 +629,12 @@ export default function App() {
         setWallReturn(hubTab === 'wall' ? 'wall' : project ? 'workspace' : 'list')
       }
       if (s?.screen === 'project' && s.project) {
-        // Возврат в открытый проект
+        // Возврат в открытый проект. WorkspacePage смонтируется заново (другой проект или
+        // проект «спал» в другом разделе) и снимок истории не увидит: его popstate уже
+        // прошёл. Чат снимка передаём через pending — его заберёт монтирование, а запись
+        // с тем же chatId перезапишется, а не продублируется (consumePendingProjectChat)
+        const pendingChat = pendingChatOnPop(s, project?.id, hubTab)
+        if (pendingChat) sessionStorage.setItem('cc_pending_project_chat', pendingChat)
         if (project?.id !== s.project.id) {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(s.project))
           setProject(s.project)
@@ -807,6 +816,14 @@ export default function App() {
       if (target.history || target.intro) return
       // #/models — модалка поверх текущего экрана, раздел не меняем
       if (target.modelsSpend) { requestOpenModelsSpend('quotas'); return }
+      if (target.screen === 'project' && target.projectId && target.chatId) {
+        // Чат проекта — тем же каналом, что диплинк уведомления (openNotificationUrl):
+        // он кладёт pending и открывает сам чат, а не список чатов проекта. Запись со
+        // снимком — наш же переход «назад/вперёд», его уже восстановил popstate
+        if (getNav()) return
+        window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: window.location.hash } }))
+        return
+      }
       if (target.screen === 'project' && target.projectId) {
         // Диплинк на проект из внешнего источника (вставка URL в адресную строку).
         // Уже открытый этот же проект — выходим, чтобы не гонять api.projects.list.
@@ -852,10 +869,14 @@ export default function App() {
     // switchHubTab/openProjectFromHome зовутся через зеркала-рефы и сюда не попадают
   }, [hubTab, project]);
 
-  const openProject = (p: Project) => {
+  // chatId — сразу запись чата, а не списка проекта: переход в чат чужого проекта кладёт
+  // в историю одну запись, и «назад» из него возвращает в прежний чат
+  const openProject = (p: Project, chatId?: string) => {
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
-    navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
+    navPush(chatId
+      ? { screen: 'project', project: p, view: 'chat', file: null, chatId }
+      : { screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
   }
   // Открыть проект с дашборда «Домой»: переключаем раздел на «Проекты» + открываем проект.
@@ -972,12 +993,12 @@ export default function App() {
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
       : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === NOTES_TAB ? 'notes' : t === SPEND_TAB ? 'spend' : t === 'personas' ? 'personas' : t === 'specialties' ? 'specialties' : t === 'knowledge' ? 'knowledge' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
-    // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
+    // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база/чат) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
     // Остальные латеральные переключения табов — replace (без разрастания истории).
     const cur = getNav()
-    if (cur && (cur.note || cur.file || cur.task || cur.persona || cur.knowledge)) navPush(dest)
+    if (cur && (cur.note || cur.file || cur.task || cur.persona || cur.knowledge || cur.chatId)) navPush(dest)
     else if (cur?.screen === 'home' && t !== 'home') navPush(dest)
     else navReplace(dest)
   }
@@ -1062,7 +1083,7 @@ export default function App() {
             if (p) {
               localStorage.setItem(HUB_TAB_KEY, 'projects')
               setHubTab('projects')
-              openProject(p)
+              openProject(p, target.chatId)
             }
           })
           .catch(() => {})
@@ -1197,7 +1218,8 @@ export default function App() {
           if (p) {
             localStorage.setItem(HUB_TAB_KEY, 'projects')
             setHubTab('projects')
-            openProject(p)
+            // chatId — в ту же запись: иначе «назад» из чата проходит лишний шаг через сайдбар
+            openProject(p, chatId)
           }
         })
         .catch(() => {})
@@ -1279,6 +1301,9 @@ export default function App() {
     <>
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
+      {/* Окно выкатки на бой — тоже над страницами: слежение за выкаткой переживает переход
+          между разделами, а после перезагрузки идущая выкатка подхватывается плашкой в углу */}
+      {auth?.role === 'admin' && !authChecking && <DeployHost />}
       {/* Плавающее окно с видео живёт НАД страницами: только так кадр переживает
           переход между проектами и разделами — панель и центр этого не умеют,
           они часть страницы и размонтируются вместе с ней. */}

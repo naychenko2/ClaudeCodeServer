@@ -773,6 +773,11 @@ function ServiceHoverCard({ anchorRef, svc, cmd, statusText, port, note, externa
       }}>
         {cmd}
       </div>
+      {svc.origin && (
+        <div style={{ fontFamily: FONT.sans, fontSize: FS.xs, marginTop: SP.xs, color: C.textMuted }}>
+          Поднят агентом: {svc.origin.label}
+        </div>
+      )}
       {note && (
         <div style={{
           fontFamily: FONT.sans, fontSize: FS.xs, marginTop: SP.xs,

@@ -44,6 +44,20 @@ public class OneShotClaudeRunnerArgsTests
         args.Should().NotContain("--safe-mode");
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MCPСерверыОтсечены_ВОбеихСредах(bool safeMode)
+    {
+        // В песочнице safe-mode нет, и без strict-режима CLI подхватил бы MCP-серверы
+        // пользователя из домашней папки песочницы (например, personas, если окажется в
+        // user-конфиге, — это дало бы рекурсию persona_ask)
+        var args = Build(safeMode: safeMode);
+
+        args.Should().Contain("--strict-mcp-config");
+        args.Should().NotContain("--mcp-config");
+    }
+
     [Fact]
     public void PrintРежим_Обязателен()
     {

@@ -49,6 +49,9 @@ internal sealed class SessionJsonConverter(IServiceProvider services) : JsonConv
         var json = (JsonObject)JsonSerializer.SerializeToNode(value, OptionsWithoutSelf(options))!;
         json["parentSessionId"] = SessionTaskLinks.ParentSessionId(value, tasks);
         json["taskDone"] = SessionTaskLinks.IsTaskDone(value, tasks);
+        // Пометки «зафиксировано в git» — серверная кухня атрибуции правок, фронт их не
+        // читает, а в списке чатов они давали около трети веса ответа
+        json.Remove("committedFilePaths");
         json.WriteTo(writer);
     }
 

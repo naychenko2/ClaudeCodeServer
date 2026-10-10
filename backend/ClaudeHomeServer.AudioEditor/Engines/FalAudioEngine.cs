@@ -334,9 +334,16 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
             var (files, error) = await FalOutputs.CollectAsync(Downloader, MaxDownloadBytes, model.Output, output, timeout.Token);
             if (error is not null)
                 return Cached(new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + error), created);
-            return Cached(files.Count == 0
-                ? new AudioResult(AudioOutcome.Failed, [], null, null, requestId, "fal.ai не вернул файлов")
-                : new AudioResult(AudioOutcome.Ok, files, null, true, requestId, null), created);
+            if (files.Count == 0)
+            {
+                // Тело пустого ответа — в лог, человеку — причина, если fal её назвал
+                _log.LogWarning("fal.ai: задача {RequestId} ({Model}) без файлов, ответ: {Body}",
+                    requestId, model.Info.Id, FalEmptyResult.LogBody(output));
+                var why = FalEmptyResult.Explain(output);
+                return Cached(new AudioResult(why is { Rejected: true } ? AudioOutcome.Rejected : AudioOutcome.Failed, [], null, null,
+                    requestId, why is { } w ? "fal.ai не вернул файлов — " + w.Reason : "fal.ai не вернул файлов"), created);
+            }
+            return Cached(new AudioResult(AudioOutcome.Ok, files, null, true, requestId, null), created);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

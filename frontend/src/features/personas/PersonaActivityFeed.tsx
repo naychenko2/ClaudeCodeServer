@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { MessageSquare, CheckCircle2, Brain, Plus, ChevronRight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Persona, Session } from '../../types';
-import { C, FONT, R, SP } from '../../lib/design';
+import { C, FONT, R, SP, FAB_CLEAR_PAD } from '../../lib/design';
 import { getPersonaById, personaLabel } from '../../lib/personas';
 import { relativeTime } from '../projects/projectUtil';
 import { openTaskInSection } from '../../lib/tasks';
@@ -100,7 +100,7 @@ export function PersonaActivityFeed({ personas, items, loading, expanded, onTogg
         // переезжает к нам от родителя — родительский .cc-hide-scrollbar тут не помогает,
         // рамка и потолок дают явный потолок + стандартный scrollbar.
         <div style={scrollMaxHeight ? {
-          maxHeight: scrollMaxHeight, overflowY: 'auto', paddingRight: 4,
+          maxHeight: scrollMaxHeight, overflowY: 'auto', paddingRight: 4, paddingBottom: FAB_CLEAR_PAD,
         } : undefined}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             {grouped.map(g => (

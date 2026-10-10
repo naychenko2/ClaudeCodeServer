@@ -228,6 +228,11 @@ public class ProjectIconMigrationTests : IDisposable
                 Glyph = new ProjectGlyph { Name = "wallet" },
             },
         }));
+        // Загруженная картинка — выбор владельца: подобранный значок поверх неё не ставится
+        Assert.False(ProjectIconMigration.IsCandidate(new Project
+        {
+            Icon = new ProjectIcon { Kind = ProjectIconKind.Image, ImageFile = "icon-a.png" },
+        }));
     }
 
     // Ответ модели решается по ТЕКСТУ ПРОМПТА (null = модель «недоступна»); считает вызовы.

@@ -187,14 +187,14 @@ body {
 /* Базовый нижний край FAB. Отдельно от бокового (--cc-fab-inset): в компактном режиме
    кнопка прижимается к правому краю (6px), но снизу должна стоять на одной линии с
    островами — PanelZone ставит туда ISLAND.pad (16px). Регистрируем как длину — смена
-   плавная. Подъём над композером — отдельный канал (--cc-fab-composer). */
+   плавная. Подъём над композером — отдельный канал (--cc-fab-raise). */
 @property --cc-fab-bottom {
   syntax: '<length>';
   inherits: true;
   initial-value: 20px;
 }
-/* Подъём FAB над плашкой «Вернуть» полосы генерации (ReleaseNotice raiseFab): плашка
-   висит над композером вне его высоты. Регистрируем как длину — подъём плавный. */
+/* Подъём FAB над препятствием (пишет только AiLauncher, см. useFabPlacement).
+   Регистрируем как длину — подъём плавный. */
 @property --cc-fab-raise {
   syntax: '<length>';
   inherits: true;
@@ -226,6 +226,10 @@ body {
   caret-color: var(--c-accent);
 }
 .cc-composer-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* Нативную подсказку однострочного поля прячем — её рисует слой Composer с многоточием:
+   у подсказки textarea Chromium не умеет text-overflow, и длинная обрезалась по слову
+   («Написать исполнителю задачи «Чинить» — и конец). Атрибут остаётся для скринридеров */
+.cc-composer-input.cc-ph-overlay::placeholder { color: transparent; }
 
 /* Ползунок усилия рассуждения в композере. Берём нативный input[type=range] ради
    бесплатных клавиатуры, драга и доступности — трек рисуем сами (точки ступеней
@@ -300,6 +304,27 @@ body {
   border-top-color: var(--c-accent);
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
+}
+
+/* === Неопределённая полоса ProgressBar (indeterminate): отрезок бежит по дорожке === */
+@keyframes cc-progress-run {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+.cc-progress-run { animation: cc-progress-run 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-progress-run { animation: none; width: 100% !important; opacity: 0.5; }
+}
+
+/* === Живая точка LiveDot: идёт, а сколько осталось — неизвестно. Медленно и бледно:
+   движение заметно краем глаза, но не тянет взгляд, как бегущая полоса === */
+@keyframes cc-live-dot {
+  0%, 100% { opacity: .3; }
+  50%      { opacity: 1; }
+}
+.cc-live-dot { animation: cc-live-dot 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-live-dot { animation: none; opacity: .7; }
 }
 
 /* === Индикатор ожидания ответа (WaitingIndicator) === */
@@ -916,6 +941,16 @@ body {
    иначе мышь кольцо не рисует, как и у других контролов. */
 .cc-role-card:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 .cc-tools-row-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+/* === Переключатель чатов (мобильная шапка и шторка «Чаты») ===
+   Отклик на нажатие подложкой C.bgSelected (как у строк стены), открытый чат —
+   той же подложкой; hover — только там, где он есть, иначе на таче подложка
+   «залипает» после тапа. Кольцо фокуса — общее, на :focus-visible.
+   .cc-pressable — тот же отклик у примитива PressableArea (флаг feedback) */
+.cc-chat-switch, .cc-pressable { background: none; }
+.cc-chat-switch[aria-current="true"], .cc-chat-switch:active, .cc-pressable:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-chat-switch:hover, .cc-pressable:hover { background: var(--c-bg-selected); } }
+.cc-chat-switch:focus-visible, .cc-pressable:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 @media (prefers-reduced-motion: reduce) {
   .cc-role-card, .cc-tools-row-btn { transition: none; }
 }

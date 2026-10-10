@@ -1875,6 +1875,47 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
     }
 
+    [Fact]
+    public async Task RespondPermission_КарточкаФоновогоАгентаПослеКонцаХода_ЧатСвободен()
+    {
+        // Дефект 8ebd5bec: ход отдал «агент запущен» и закончился (Active), Bash фонового агента
+        // запросил разрешение — Waiting. Ответ ставил Working, а result хода-продолжения
+        // ClaudeSession отбрасывает как «между ходами» — снять Working было некому, чат висел
+        // в «Концентрируюсь…» до «Стопа». Вне хода ответ возвращает чат в свободный Active.
+        var (session, adapter) = await MkRunningTurnAsync("bg-perm-after-turn", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var acc = GetAccumulator(entry);
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new PermissionRequestMessage("req-bg", "Bash", new { command = "sleep 60" }), TestRunId);
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Waiting, "карточка ждёт человека");
+
+        _sut.RespondPermission(session.Id, "req-bg", "allow");
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status != SessionStatus.Waiting,
+            TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.RespondPermission("req-bg", "allow"), Times.Once());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active,
+            "хода нет — result продолжения до SessionManager не дойдёт, Working стал бы вечным");
+        GetLastTurnEndedAt(entry).Should().NotBeNull("sweep должен суметь довести чат до Finished");
+    }
+
+    [Fact]
+    public async Task RespondPermission_КарточкаВнутриХода_ЧатОстаётсяВРаботе()
+    {
+        // Контроль: карточка посреди пользовательского хода — после ответа ход идёт дальше
+        var (session, adapter) = await MkRunningTurnAsync("perm-in-turn");
+        var acc = GetAccumulator(GetEntry(session.Id));
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new PermissionRequestMessage("req-1", "Bash", new { command = "dotnet build" }), TestRunId);
+        _sut.RespondPermission(session.Id, "req-1", "allow");
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status != SessionStatus.Waiting,
+            TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+    }
+
     // --- Ответ на карточку гасит её на ОСТАЛЬНЫХ устройствах чата ---
     // Отвечающий клиент гасит свою копию оптимистично, остальным нужно событие: без него
     // форма висела активной до перезагрузки страницы (перезагрузка истории не помогает —

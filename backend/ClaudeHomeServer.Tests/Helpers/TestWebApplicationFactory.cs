@@ -122,6 +122,9 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 // при недоступности — кратно замедляет старт каждого тестового хоста
                 ["ModelCatalog:QueryProviderApis"] = "false",
                 ["Ollama:Model"] = "", // отключить прогрев и локальные фоновые задачи в тестах
+                // пустой ключ fal сильнее FAL_KEY из окружения машины: иначе настоящий
+                // драйвер fal оживает в тестах и ломает каталоги редактора картинок
+                ["Fal:ApiKey"] = "",
                 // не опрашивать api/oauth/usage: тест не должен ходить в сеть с реальным
                 // токеном ~/.claude машины
                 ["ClaudeSubscriptions:UsagePollMinutes"] = "0",

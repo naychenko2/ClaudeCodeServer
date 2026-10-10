@@ -41,7 +41,7 @@ import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
-import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
+import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
@@ -57,6 +57,8 @@ import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
+import { chatToRestore, createLatestGuard, encodePendingChat, parsePendingChat } from '../lib/pendingProjectChat';
+import { afterChatSwitcherClosed } from '../features/home/chatSwitcherHistory';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
@@ -1074,7 +1076,9 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
-  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
+  // replaceNav — перезаписать текущую запись истории вместо новой: её уже положил переход
+  // в проект с chatId (openProject из диплинка), вторая запись сломала бы «назад»
+  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
     // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
@@ -1105,13 +1109,34 @@ const windowWidth = useWindowWidth();
       // снимке: popstate восстанавливает file и chatId независимо, иначе «назад»
       // вернул бы чат без файла, который с экрана не уходил.
       const file = keepSplitFile ? openFile : null;
+      const nav = replaceNav ? navReplace : navPush;
       if (isMobile) {
         setMobileView('chat');
-        navPush({ screen: 'project', project, view: 'chat', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'chat', file, chatId: session.id });
       } else {
-        navPush({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
       }
     }
+  };
+
+  // Открытый чат ушёл (архив, удаление) — центр и запись истории переводим на соседа,
+  // null — в пустое состояние. Открытая шторка чатов лежит в истории своей записью
+  // поверх записи этого чата: navReplace затёр бы её флаг, и запись ушедшего чата
+  // осталась бы под соседом. Сперва снимаем запись шторки, перезаписываем — ту, что
+  // под ней. Соседа выбираем тоже после: popstate снятия видит в снимке ушедший чат,
+  // и при уже выбранном соседе кинулся бы его восстанавливать (а удалённого нет —
+  // увёл бы на список проекта)
+  const leaveActiveChat = (neighbor: Session | null) => {
+    afterChatSwitcherClosed(() => {
+      if (neighbor) {
+        handleSelectSession(neighbor, undefined, true);
+        navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
+      } else {
+        handleClearSession();
+        if (isMobile) setMobileView('sidebar');
+        navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+      }
+    });
   };
 
   // ЕДИНСТВЕННАЯ точка реакции на обновление сессии: обновляем activeSession и —
@@ -1141,14 +1166,7 @@ const windowWidth = useWindowWidth();
         // отсутствует, и центр открыл бы ещё одного призрака. Фильтры живут в SessionList
         // (scope project.id) — читаем ту же персистентную копию.
         const neighbor = chatNeighborForArchive(list, updated.id, matchChatFilter(loadChatFilters(project.id)));
-        if (neighbor) {
-          handleSelectSession(neighbor, undefined, true);
-          navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
-        } else {
-          handleClearSession();
-          if (isMobile) setMobileView('sidebar');
-          navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
-        }
+        leaveActiveChat(neighbor ?? null);
         showArchivedToast(updated, handleSessionUpdated);
       }).catch(() => { /* офлайн — без соседа, без тоста; карточка в SessionList подтянется */ });
     }
@@ -1181,26 +1199,68 @@ const windowWidth = useWindowWidth();
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   useEffect(() => {
+    // Список чатов грузится асинхронно: ответ на устаревшее событие или пришедший после
+    // размонтирования (переход в другой проект) не должен ни открывать чат, ни писать историю
+    const guard = createLatestGuard();
+    // Диплинк, чей список чатов ещё летит, — его возвращаем на размонтировании (ниже)
+    let inFlight: string | null = null;
     const consumePendingProjectChat = async () => {
       const raw = sessionStorage.getItem('cc_pending_project_chat');
       if (!raw) return;
-      const sep = raw.indexOf('|');
-      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      const { pid, chatId, view } = parsePendingChat(raw, project.id);
       if (pid !== project.id) return;
       sessionStorage.removeItem('cc_pending_project_chat');
+      const gen = guard.next();
+      inFlight = raw;
       try {
         const sessions = await api.sessions.list(project.id);
+        if (!guard.isCurrent(gen)) return;
+        inFlight = null;
         const s = sessions.find(x => x.id === chatId);
-        if (s) {
+        if (!s) {
+          // Чата нет (удалён, нет доступа) — запись истории не должна обещать его
+          setMobileView('sidebar');
+          navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+        } else {
           setLeftTab('sessions');
-          handleSelectSession(s);
+          // Переход из чужого проекта уже положил запись с этим chatId (openProject) —
+          // перезаписываем её. Диплинк внутри того же проекта пишет новую, «назад» вернёт в прежний чат
+          const replace = getNav()?.chatId === s.id;
+          handleSelectSession(s, undefined, false, replace);
+          if (view) {
+            // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из
+            // снимка, а не из сохранённого состояния проекта или замыкания первого рендера.
+            // Запись, только что записанную выбором чата, перезаписываем — новой не кладём.
+            // Снимок «чат + файл» бывает только из сплита — полноэкранный файл снимаем всегда
+            setOpenFile(view.file);
+            setOpenFileDiffMode(false);
+            setFileFullscreen(false);
+            setSelectedTaskId(view.task);
+            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id });
+          }
         }
-      } catch { /* офлайн — остаёмся как есть */ }
+      } catch {
+        // офлайн — остаёмся как есть
+        if (guard.isCurrent(gen)) inFlight = null;
+      }
     };
     consumePendingProjectChat();
     window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер; функция свежая на момент события (эффект после её объявления)
+    return () => {
+      guard.dispose();
+      window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
+      // Перемонтаж StrictMode снимает эффект посреди запроса — незавершённый диплинк
+      // возвращаем, его заберёт повторный прогон тут же. При настоящем уходе из проекта
+      // его никто не заберёт — гасим через тик, чтобы не всплыл при следующем входе
+      const raw = inFlight;
+      if (raw && !sessionStorage.getItem('cc_pending_project_chat')) {
+        sessionStorage.setItem('cc_pending_project_chat', raw);
+        setTimeout(() => {
+          if (sessionStorage.getItem('cc_pending_project_chat') === raw) sessionStorage.removeItem('cc_pending_project_chat');
+        }, 0);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер. Обработчик держит замыкание первого рендера (openFile, isMobile, fileFullscreen — устаревшие), поэтому вид снимка приезжает в pending и дотягивается веткой view
   }, [project.id]);
 
   // Переход из карточки задачи в связанный диалог
@@ -1437,9 +1497,14 @@ const windowWidth = useWindowWidth();
         setPersonaCreating(false);
         setPendingPersonaView(null);
       }
-      // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие)
-      if (s.chatId) {
-        sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${s.chatId}`);
+      // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие).
+      // Снимок с уже открытым чатом пропускаем: так «назад» снимает запись шторки чатов,
+      // и восстановление гонялось бы с переходом, который шторка запускает следом.
+      // Файл и задача снимка едут вместе с чатом: обработчик pending держит замыкание
+      // первого рендера, и выбор чата там закрыл бы файл, восстановленный выше
+      const restoreChatId = chatToRestore(s.chatId, activeSessionRef.current?.id);
+      if (restoreChatId) {
+        sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restoreChatId, { file: f, task: s.task ?? null }));
         window.dispatchEvent(new Event('cc-pending-project-chat'));
       }
     };
@@ -1637,6 +1702,18 @@ const windowWidth = useWindowWidth();
     }
   };
 
+  // «Показать изменения» из меню ветки в строке контекста: на мобиле рельсы панелей нет,
+  // поэтому открываем вкладку «Изменения». Через ref — подписка не пересоздаётся на каждый рендер
+  const tabSwitchRef = useRef(handleTabSwitch);
+  tabSwitchRef.current = handleTabSwitch;
+  useEffect(() => {
+    const open = (e: Event) => {
+      if ((e as CustomEvent<{ projectId?: string }>).detail?.projectId === project.id) tabSwitchRef.current('changes');
+    };
+    window.addEventListener('cc-open-changes-tab', open);
+    return () => window.removeEventListener('cc-open-changes-tab', open);
+  }, [project.id]);
+
   const handleAddToKnowledge = useCallback(async (relativePath: string) => {
     setIndexingFiles(prev => new Set([...prev, relativePath]));
     try {
@@ -1784,7 +1861,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} onActiveDeleted={leaveActiveChat} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа

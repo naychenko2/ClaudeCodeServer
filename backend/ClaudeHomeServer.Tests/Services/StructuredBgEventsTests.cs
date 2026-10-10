@@ -78,6 +78,52 @@ public class StructuredBgEventsTests : IDisposable
         r.Value.Aborted.Should().Be(expectedAborted);
     }
 
+    // task_progress сабагента — живой образец CLI 2.1.287 (docs/research/tool-progress-2026-10.md):
+    // раньше событие молча выбрасывалось, теперь это живой прогресс карточки агента
+    [Fact]
+    public void ParseTaskProgress_РеальныйОбразец_ВПрогрессКарточки()
+    {
+        var root = El("""
+            {"type":"system","subtype":"task_progress","task_id":"af1ee0d973d0567d1","tool_use_id":"toolu_01VsCAWteTMQdmaaK59twFAC","description":"Running Sleep 4 seconds and echo a","subagent_type":"general-purpose","usage":{"total_tokens":35532,"tool_uses":1,"duration_ms":4522},"last_tool_name":"Bash"}
+            """);
+
+        var p = ClaudeSession.ParseTaskProgress(root);
+
+        p.Should().NotBeNull();
+        p!.Type.Should().Be("tool_progress");
+        p.ToolUseId.Should().Be("toolu_01VsCAWteTMQdmaaK59twFAC");
+        p.Stage.Should().Be("working");
+        p.Label.Should().Be("Running Sleep 4 seconds and echo a");
+        p.LastTool.Should().Be("Bash");
+        p.ToolUses.Should().Be(1);
+        p.DurationMs.Should().Be(4522);
+        p.Percent.Should().BeNull("процента у сабагента нет — не выдумываем");
+    }
+
+    [Fact]
+    public void ParseTaskProgress_БезToolUseId_ВозвращаетNull_БезUsage_ПоляПустые()
+    {
+        ClaudeSession.ParseTaskProgress(El("""{"task_id":"a","usage":{"tool_uses":2}}""")).Should().BeNull();
+
+        var p = ClaudeSession.ParseTaskProgress(El("""{"tool_use_id":"toolu_1","description":" "}"""))!;
+        p.Label.Should().BeNull();
+        p.ToolUses.Should().BeNull();
+        p.DurationMs.Should().BeNull();
+    }
+
+    // Регресс: TryGetInt32/TryGetInt64 на Null/String кидают InvalidOperationException —
+    // такой usage ронял цикл чтения прогона. Мусор в полях = полей нет, а не исключение
+    [Fact]
+    public void ParseTaskProgress_UsageСNullИСтрокой_НеКидает_ПоляПустые()
+    {
+        var p = ClaudeSession.ParseTaskProgress(El(
+            """{"tool_use_id":"toolu_1","usage":{"tool_uses":null,"duration_ms":"x"}}"""))!;
+
+        p.Should().NotBeNull();
+        p.ToolUses.Should().BeNull();
+        p.DurationMs.Should().BeNull();
+    }
+
     [Fact]
     public void ParseTaskNotification_БезTaskId_ВозвращаетNull()
     {

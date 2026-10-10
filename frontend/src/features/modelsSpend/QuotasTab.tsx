@@ -245,6 +245,15 @@ function subFreshness(sub: SubscriptionUsage, pollStatus: string | undefined, la
       copyCommand: sub.loginCommand ?? null,
     };
   }
+  // 429 на продлении access-токена: вход в профиле живой, повтор идёт сам — команду
+  // входа не предлагаем, иначе вкладка гоняла бы человека логиниться впустую
+  if (pollStatus === 'refresh_rate_limited') {
+    return {
+      corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
+      detail: <>Продление токена профиля упёрлось в ограничение частоты — повторим автоматически. Показаны последние снимки.</>,
+      copyCommand: null,
+    };
+  }
   if (pollStatus === 'error') {
     return {
       corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
@@ -365,7 +374,9 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
         ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
         : pollStatus === 'rate_limited'
           ? 'Опрос лимитов упёрся в ограничение частоты — повторим позже'
-          : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
+          : pollStatus === 'refresh_rate_limited'
+            ? 'Продление токена упёрлось в ограничение частоты — повторим автоматически'
+            : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
       hasExhausted: false,
       unavailableModels,
       onRecheckModel,

@@ -669,8 +669,11 @@ Cloud sessions, IDE) скрыты, считается только их числ
   легаси `ClaudeSubscriptions:UsagePollMinutes`, дефолт 10), рефреш протухших
   access-токенов профилей по refresh-токену, backoff по 429. Роль в связке с идл-пингом
   не изменилась (best-effort источник, идл-таймер не трогает) — уточнилась только с
-  появлением поля `Source`. Статус опроса per-аккаунт (`ok`/`unauthorized`/`error`) —
-  блок `pollStatuses` в `/api/usage`.
+  появлением поля `Source`. Статус опроса per-аккаунт (`ok`/`unauthorized`/`rate_limited`/
+  `refresh_rate_limited`/`error`) — блок `pollStatuses` в `/api/usage`. Рефреш ходит как сам
+  CLI: `POST platform.claude.com/v1/oauth/token` с UA `axios/…` — с UA `claude-code/…`
+  token-эндпоинт отвечает вечным 429 (продление молча стояло 2026-10-02..06); 429 продления —
+  статус `refresh_rate_limited` и строка в логе, команду входа вкладка при нём не предлагает.
 - **`LoginCommandFor(key)`** — готовая PowerShell-команда
   `$env:CLAUDE_CONFIG_DIR = "…"; claude login` в изолированный профиль аккаунта пула
   (`{ProfilesDir}/sub-{key}`), поле `loginCommand` у `SubscriptionUsage` в `/api/usage`.

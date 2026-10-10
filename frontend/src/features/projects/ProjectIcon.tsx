@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { Project } from '../../types';
+import { api } from '../../lib/api';
 import { C, FONT } from '../../lib/design';
 import { GlyphIcon, isLucideIconName } from '../../lib/projectGlyphs';
 import { projectInitials, projectMainColor } from './projectUtil';
@@ -44,8 +46,42 @@ function ProjectGlyph({ project, size }: { project: Project; size: number }) {
   );
 }
 
+// Загруженная владельцем картинка: занимает плитку целиком и обрезается её скруглением,
+// без своей подложки и полей — у иконок приложений подложка уже нарисована, и вторая
+// давала рамку в рамке. Вписана как есть (contain, родные цвета, без кропа). Только
+// <img> — разметку SVG в DOM не вставляем никогда: скрипты внутри картинки так не
+// выполнятся. Не загрузилась (файл пропал, офлайн) — инициалы (ADR-009 §7).
+function ProjectImageTile({ project, src, base, size, radius, muted }: {
+  project: Project; src: string; base: React.CSSProperties; size: number; radius: number; muted?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return <ProjectIcon project={{ ...project, icon: { ...project.icon!, kind: 'initials' } }}
+      size={size} radius={radius} muted={muted} />;
+  }
+  return (
+    <div
+      aria-hidden
+      style={{
+        ...base,
+        overflow: 'hidden',
+        // Спящий ряд — монохром, как у инициалов и значка: цветной логотип не должен пестрить
+        ...(muted ? { filter: 'grayscale(1)', opacity: 0.6 } : null),
+      }}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        onError={() => setFailed(true)}
+        style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+      />
+    </div>
+  );
+}
+
 // Единая иконка проекта (по образцу PersonaAvatar, но КВАДРАТНАЯ со скруглением —
-// чтобы отличаться от круглых персон). Три состояния:
+// чтобы отличаться от круглых персон). Состояния (плюс картинка — ветка kind === 'image'):
 //   1. kind === 'glyph' и glyph валидный (name из карты)
 //      → плитка projectMainColor + белый штриховой глиф (currentColor, значок сам
 //      перекрашивается при смене цвета/темы, регенерации не нужно).
@@ -58,6 +94,14 @@ export function ProjectIcon({ project, size = 40, radius, muted }: { project: Pr
     width: size, height: size, borderRadius: br, flexShrink: 0, userSelect: 'none',
     position: 'relative',
   };
+
+  // Картинка — тоже строго положительная проверка: kind === 'image' и файл в записи есть
+  const imageSrc = project.icon?.kind === 'image' ? api.projects.iconImageUrl(project) : null;
+  // key по src: новая загрузка сбрасывает флаг «не загрузилась» у прежней картинки
+  if (imageSrc) {
+    return <ProjectImageTile key={imageSrc} project={project} src={imageSrc} base={base}
+      size={size} radius={br} muted={muted} />;
+  }
 
   // Условие показа значка — положительное (kind === 'glyph' И имя есть в наборе lucide).
   // НИКОГДА !== 'initials': старая запись с числовым Kind = 1 (бывший Image) должна

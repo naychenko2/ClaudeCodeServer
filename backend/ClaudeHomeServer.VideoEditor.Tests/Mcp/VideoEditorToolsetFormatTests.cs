@@ -52,12 +52,12 @@ public sealed class VideoEditorToolsetFormatTests
     }
 
     [Fact]
-    public void Describe_state_lists_format_rule_and_h3_max_note_without_changing_tool_schemas()
+    public async Task Describe_state_lists_format_rule_and_h3_max_note_without_changing_tool_schemas()
     {
         using var w = new AgentWorld();
         var before = string.Join("\n", w.Toolset.ToolsFor(w.Ctx()).Select(t => t.InputSchema.ToJsonString()));
 
-        var state = AgentWorld.Parse(w.Call(ToolState).Result);
+        var state = AgentWorld.Parse(await w.Call(ToolState));
         var rule = state["humanChoice"]!["format"]!.GetValue<string>();
 
         rule.Should().Contain("MiniMax H3").And.Contain("1440p").And.Contain("увеличение").And.Contain("resolution");

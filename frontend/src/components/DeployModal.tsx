@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LoadingOverlay, Modal } from './ui';
-import { api, type DeployState, type DeployStatusFile } from '../lib/api';
-import { C, MODAL_W } from '../lib/design';
+import { Button, LoadingOverlay, Modal, ProgressBar } from './ui';
+import { api, type DeployProgressFile, type DeployState, type DeployStatusFile } from '../lib/api';
+import { C, FONT, FS, MODAL_W, R, SHADOW, SP, Z } from '../lib/design';
+import { useIsMobile } from '../lib/breakpoints';
 import { applyUpdateAndReload } from '../lib/swUpdate';
 import { setDeployInProgress } from '../lib/deployState';
 
 interface Props {
   onClose: () => void;
+  // Подхват выкатки, которая уже идёт (страницу перезагрузили): сразу следим, минуя «Выкатить»
+  resume?: boolean;
+  // Свёрнуто в плашку в углу: слежение продолжается, окно не закрывает интерфейс
+  minimized?: boolean;
+  onMinimize?: () => void;
+  onExpand?: () => void;
 }
 
 // Фазы окна. Разделение не косметическое: пока идёт выкатка, сервер лежит, и «ошибка сети»
@@ -32,6 +39,8 @@ const AWAIT_POLL_MS = 400;
 // или «выкатка уже идёт», когда файл статуса не перезаписывается вовсе.
 const AWAIT_LIMIT_MS = 30_000;
 const RUN_POLL_MS = 2500;
+// Пока продукт жив и раннер пишет ход выкатки, опрашиваем чаще — полоса должна двигаться
+const PROGRESS_POLL_MS = 1500;
 // Потолок ожидания результата. Штатная публикация «как есть» — пара минут; берём с запасом
 // на медленную сборку фронта и возможный откат.
 const RUN_LIMIT_MS = 15 * 60_000;
@@ -53,10 +62,13 @@ const OVERLAY_HINT: Partial<Record<Phase, string>> = {
   updating: 'Перехожу на новую версию',
 };
 
-export function DeployModal({ onClose }: Props) {
-  const [phase, setPhase] = useState<Phase>('loading');
+export function DeployModal({ onClose, resume, minimized, onMinimize, onExpand }: Props) {
+  const [phase, setPhase] = useState<Phase>(resume ? 'running' : 'loading');
   const [state, setState] = useState<DeployState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Ход выкатки из последнего удачного опроса. Сбрасывается при обрыве связи: тогда продукт
+  // уже остановлен на подмену, и полосу сменяет заставка.
+  const [progress, setProgress] = useState<DeployProgressFile | null>(null);
 
   // Время начала ПРОШЛОЙ выкатки. Это опорная точка всей логики ожидания: пока оно не
   // изменилось, любой лежащий в файле итог относится к прошлому запуску, а не к нашему.
@@ -86,15 +98,16 @@ export function DeployModal({ onClose }: Props) {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
-
   // Ожидание после нажатия. Возвращает фазу, в которую перешли.
-  const watch = useCallback(async () => {
+  // from = 'running' — подхват уже идущей выкатки: базис пуст, и любой итог с временем
+  // начала считается своим (иного запуска, кроме подхваченного, тут не было).
+  const watch = useCallback(async (from: Phase = 'awaiting') => {
     const awaitUntil = Date.now() + AWAIT_LIMIT_MS;
-    let phaseNow: Phase = 'awaiting';
+    let phaseNow: Phase = from;
+    let hasProgress = false;
 
     while (!stopped.current) {
-      await sleep(phaseNow === 'awaiting' ? AWAIT_POLL_MS : RUN_POLL_MS);
+      await sleep(phaseNow === 'awaiting' ? AWAIT_POLL_MS : hasProgress ? PROGRESS_POLL_MS : RUN_POLL_MS);
       if (stopped.current) return;
 
       // Без начального значения: catch уходит на continue, поэтому ниже fresh всегда присвоен
@@ -104,6 +117,8 @@ export function DeployModal({ onClose }: Props) {
       } catch {
         // Продукт не отвечает. В фазе ожидания это ДОКАЗАТЕЛЬСТВО того, что команда принята:
         // сам себя сервер не гасит, значит его погасил трей. В фазе выкатки — просто норма.
+        hasProgress = false;
+        setProgress(null);
         if (phaseNow === 'awaiting') {
           phaseNow = 'running';
           setPhase('running');
@@ -112,6 +127,8 @@ export function DeployModal({ onClose }: Props) {
       }
 
       setState(fresh);
+      hasProgress = !!fresh.progress;
+      setProgress(fresh.progress ?? null);
       const started = fresh.status?.startedAt ?? null;
       const result = fresh.status?.result ?? null;
       const isOurs = started !== baseline.current;
@@ -138,6 +155,13 @@ export function DeployModal({ onClose }: Props) {
       }
       if (Date.now() > awaitUntil + RUN_LIMIT_MS) { setPhase('timeout'); return; }
     }
+  }, []);
+
+  // Базис при подхвате остаётся null, а фаза сразу 'running' (см. useState выше)
+  useEffect(() => {
+    void (resume ? watch('running') : load());
+    // Только при монтировании: смена resume у смонтированного окна ничего не перезапускает
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const launch = useCallback(async () => {
@@ -169,6 +193,22 @@ export function DeployModal({ onClose }: Props) {
   // Пока идёт выкатка, приложение всё равно нерабочее: продукт остановлен, любой запрос падает.
   // Показывать в это время окно поверх мёртвого интерфейса — врать про доступность, поэтому
   // берём ту же заставку, что и при старте приложения.
+  // Исключение — сборка: раннер собирает на ЖИВОМ продукте и пишет ход выкатки, так что окно
+  // честно показывает полосу. Заставка остаётся на короткую подмену бинарей и на старый раннер,
+  // который хода не пишет и гасит продукт сразу.
+  // Свёрнутое окно — плашка в углу: слежение идёт дальше, интерфейс под ней живой
+  if (minimized) {
+    return <DeployCornerPill phase={phase} progress={progress} result={s?.result ?? null} onExpand={onExpand} />;
+  }
+  if (phase === 'running' && progress) {
+    // Крестик тут сворачивает, а не закрывает: закрытие бросило бы слежение посреди выкатки
+    return (
+      <Modal width={MODAL_W.form} title="Выкатить на бой" onClose={onMinimize ?? onClose} closeOnBackdrop={false}
+        footer={onMinimize && <Button variant="secondary" onClick={onMinimize}>Свернуть в угол</Button>}>
+        <DeployProgressView progress={progress} />
+      </Modal>
+    );
+  }
   if (phase === 'awaiting' || phase === 'running' || phase === 'updating') {
     return <LoadingOverlay hint={OVERLAY_HINT[phase]} />;
   }
@@ -189,9 +229,10 @@ export function DeployModal({ onClose }: Props) {
                 <>
                   <div style={{ color: C.textMuted, lineHeight: 1.5 }}>
                     Публикуется рабочее дерево репозитория <b>как есть</b>, вместе с незакоммиченными
-                    правками. Продукт будет остановлен: активные чаты и сессии оборвутся, веб-морда
-                    будет недоступна пару минут. Если новая сборка не поднимется, раннер сам вернёт
-                    предыдущую.
+                    правками. Пока идёт сборка, продукт работает, а здесь виден ход выкатки. Потом он
+                    остановится на подмену: активные чаты и сессии оборвутся, веб-морда будет
+                    недоступна, пока продукт не поднимется. Если новая сборка не поднимется, раннер
+                    сам вернёт предыдущую.
                   </div>
                   <button onClick={() => void launch()} style={primaryButton}>Выкатить</button>
                 </>
@@ -257,6 +298,79 @@ export function DeployModal({ onClose }: Props) {
   );
 }
 
+
+const STAGE_TEXT: Record<string, string> = {
+  checking: 'Готовлю выкатку',
+  building: 'Собираю — продукт пока работает',
+  publishing: 'Останавливаю продукт и публикую',
+  restarting: 'Запускаю продукт',
+  done: 'Готово',
+};
+
+// Ход выкатки, пока продукт жив: этап, полоса и последняя строка вывода раннера
+function DeployProgressView({ progress }: { progress: DeployProgressFile }) {
+  const percent = Math.max(0, Math.min(100, progress.percent));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, fontSize: FS.base, color: C.textPrimary }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: SP.md }}>
+        <b>{STAGE_TEXT[progress.stage ?? ''] ?? 'Выкатка идёт'}</b>
+        <span style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>{percent}%</span>
+      </div>
+      <ProgressBar value={percent} label="Ход выкатки" />
+      {progress.step && <div style={{ color: C.textMuted }}>{progress.step}</div>}
+      {progress.line && (
+        <div style={{
+          color: C.textMuted, fontSize: FS.sm, fontFamily: FONT.mono,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }} title={progress.line}>
+          {progress.line}
+        </div>
+      )}
+      <div style={{ color: C.textMuted, fontSize: FS.sm, lineHeight: 1.5 }}>
+        Окно можно свернуть — выкатка продолжится, а ход останется в углу экрана. На время подмены
+        продукт ненадолго пропадёт.
+      </div>
+    </div>
+  );
+}
+
+// Плашка свёрнутой выкатки в углу экрана: этап и процент, по клику окно разворачивается.
+// На мобиле — сверху по центру: снизу там композер, и плашка закрыла бы кнопку отправки.
+function DeployCornerPill({ phase, progress, result, onExpand }: {
+  phase: Phase;
+  progress: DeployProgressFile | null;
+  result: string | null;
+  onExpand?: () => void;
+}) {
+  const isMobile = useIsMobile();
+  const finished = phase !== 'awaiting' && phase !== 'running' && phase !== 'loading';
+  const known = finished ? RESULT_TEXT[result ?? ''] : undefined;
+  const label = finished
+    ? (phase === 'done' ? (known?.title ?? 'Выкатка завершена') : 'Выкатка: нужен взгляд')
+    : progress
+      ? `${STAGE_TEXT[progress.stage ?? ''] ?? 'Выкатка идёт'} · ${Math.round(progress.percent)}%`
+      : 'Выкатка: продукт перезапускается';
+
+  return (
+    <div style={{
+      position: 'fixed', zIndex: Z.floatWindow,
+      ...(isMobile
+        ? { top: SP.sm, left: '50%', transform: 'translateX(-50%)', maxWidth: `calc(100vw - ${SP.lg * 2}px)` }
+        : { right: SP.lg, bottom: SP.lg, maxWidth: 360 }),
+      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      boxShadow: SHADOW.island, padding: SP.sm,
+      display: 'flex', flexDirection: 'column', gap: SP.xs,
+    }}>
+      <Button variant="ghost" size="sm" onClick={onExpand} title="Развернуть окно выкатки"
+        style={{ justifyContent: 'flex-start', color: known?.tone ?? C.textPrimary, minWidth: 0 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      </Button>
+      {!finished && (
+        <ProgressBar value={progress?.percent ?? 0} indeterminate={!progress} size="thin" label="Ход выкатки" />
+      )}
+    </div>
+  );
+}
 
 // Карточка итога. Показывает всё, по чему потом восстанавливают «что за код на бою»:
 // режим, ветку, коммит и сколько было незакоммиченных файлов.

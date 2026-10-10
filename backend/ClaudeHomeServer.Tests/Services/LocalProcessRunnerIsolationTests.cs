@@ -107,6 +107,80 @@ public class LocalProcessRunnerIsolationTests
             "dummy", "--print", "a b");
     }
 
+    // Сборка инструмента (dev build, run_tests) вне scope: узлы MSBuild и компилятор — только
+    // свои. Иначе узлы /nodeReuse:true и VBCSCompiler переживали сборку, следующая сборка
+    // цеплялась к ним, а «Стоп» гасил их вместе с чужой работой (замечание Киры, этап 4)
+    private static ProcessSpec ToolBuild(IReadOnlyDictionary<string, string>? env = null) =>
+        Spec(env: env) with { PrivateBuildNodes = true };
+
+    public static TheoryData<string, bool, bool, bool> OutsideScope => new()
+    {
+        // название, Windows, изоляция включена, user-шина есть
+        { "Windows-хост", true, true, true },
+        { "изоляция выключена", false, false, true },
+        { "fail-open: нет user-шины", false, true, false },
+    };
+
+    [Theory]
+    [MemberData(nameof(OutsideScope))]
+    public void PrivateBuildNodes_ВнеScope_ЗапретыРеюзаИОбщегоКомпилятора(
+        string _, bool windows, bool enabled, bool bus)
+    {
+        using var b = Bus(present: bus);
+        var prev = Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE");
+        // Унаследованный «0» хоста перебивается: иначе запрет молча не работал бы
+        Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", "0");
+        try
+        {
+            var (psi, reason) = Build(ToolBuild(), enabled ? On() : new IsolationOptions { Enabled = false }, windows);
+
+            reason.Should().NotBeNull("обёртки scope нет");
+            psi.Environment["MSBUILDDISABLENODEREUSE"].Should().Be("1");
+            psi.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"].Should().Be("0");
+            psi.Environment["UseSharedCompilation"].Should().Be("false");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", prev);
+        }
+    }
+
+    [Fact]
+    public void PrivateBuildNodes_ВнеScope_ЯвныйSpecEnvСильнее()
+    {
+        var (psi, _) = Build(ToolBuild(new Dictionary<string, string> { ["UseSharedCompilation"] = "true" }),
+            new IsolationOptions { Enabled = false }, windows: true);
+
+        psi.Environment["UseSharedCompilation"].Should().Be("true");
+        psi.Environment["MSBUILDDISABLENODEREUSE"].Should().Be("1");
+    }
+
+    [Fact]
+    public void PrivateBuildNodes_ВнутриScope_РеюзПриватенИНеВыключается()
+    {
+        using var _ = Bus(present: true);
+        using var noAmbient = NoAmbientBuildEnv();
+
+        var (psi, reason) = Build(ToolBuild(), On(reuse: true));
+
+        reason.Should().BeNull();
+        psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE", "инвариант реюза внутри scope");
+        psi.Environment.Should().NotContainKey("UseSharedCompilation");
+        psi.Environment["MSBUILDNODEHANDSHAKESALT"].Should().Be(Unit);
+        psi.Environment["SharedCompilationId"].Should().Be(Unit);
+    }
+
+    [Fact]
+    public void БезМеткиPrivateBuildNodes_ВнеScope_ОкружениеНеТрогается()
+    {
+        using var noAmbient = NoAmbientBuildEnv();
+
+        var (psi, _) = Build(Spec(), new IsolationOptions { Enabled = false }, windows: true);
+
+        psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE");
+        psi.Environment.Should().NotContainKey("UseSharedCompilation");
+    }
+
     [Fact]
     public void ПределыПамятиНеЗаданы_СвойстваНеСтавятся()
     {

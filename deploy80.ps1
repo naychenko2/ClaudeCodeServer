@@ -18,6 +18,8 @@
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -NoAutostart    # не трогать ярлык автозапуска
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -IgnoreRunner   # деплоить при живом Runner (свой трей не поднимать)
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -SkipBackup     # выкатиться без предделойного снимка данных
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1 -BuildOnly      # только шаги 0.5-1.5 на живом сервере, без остановки
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1 -SkipBuild      # только шаги 2-9 (сборка уже сделана -BuildOnly)
       ... -PublishDir 'D:\deploy\claude' -AppUrl 'https://naychenko.me' -Port 80
 #>
 param(
@@ -29,6 +31,12 @@ param(
     [switch]$NoAutostart,      # не создавать/обновлять ярлык автозапуска трея
     [switch]$IgnoreRunner,     # не прерываться из-за запущенного ClaudeCodeServerRunner
     [switch]$SkipBackup,       # выкатываться без предделойного снимка данных (осознанно)
+    # Две половины одного деплоя для внешнего супервизора (ClaudeCodeServerRunner): он гоняет
+    # -BuildOnly на ЖИВОМ продукте, сам гасит его и снимает свою копию для отката, затем
+    # -SkipBuild публикует. Так продукт лежит секунды копирования, а не всю сборку, и всё это
+    # время может показывать ход выкатки. Без флагов скрипт работает целиком, как раньше.
+    [switch]$BuildOnly,        # бэкап + сборка фронта и бэка, сервер не трогаем, выходим
+    [switch]$SkipBuild,        # пропустить бэкап и сборку — начать с остановки и публикации
     [string]$PublishDir  = 'C:\deploy\claude',
     [string]$Environment = 'Production80',
     [string]$AppUrl      = 'https://naychenko.me',
@@ -45,6 +53,7 @@ $frontendDir = Join-Path $repo 'frontend'
 $csproj      = Join-Path $repo 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj'
 $trayproj    = Join-Path $repo 'backend\ClaudeHomeServer.Tray\ClaudeHomeServer.Tray.csproj'
 $env:ASPNETCORE_ENVIRONMENT = $Environment
+if ($BuildOnly -and $SkipBuild) { throw '-BuildOnly и -SkipBuild вместе не имеют смысла' }
 
 Write-Host "=== Деплой ClaudeCodeServer -> $PublishDir (env $Environment) ===" -ForegroundColor Cyan
 
@@ -85,7 +94,9 @@ if ($runnerActive) {
 # минуты (до Kill по таймауту) — и деплой спокойно продолжился без единого архива.
 # Нужна выкатка любой ценой — это осознанный -SkipBackup, а не молчаливый обход.
 $serverExe = Join-Path $PublishDir 'ClaudeHomeServer.exe'
-if ($SkipBackup) {
+if ($SkipBuild) {
+    Write-Host '[0.5/9] Бэкап пропущен (-SkipBuild: сделан в фазе сборки)' -ForegroundColor DarkGray
+} elseif ($SkipBackup) {
     Write-Host '[0.5/9] Бэкап пропущен (-SkipBackup)' -ForegroundColor DarkYellow
 } elseif (Test-Path $serverExe) {
     Write-Host '[0.5/9] Бэкап данных перед деплоем...' -ForegroundColor Yellow
@@ -143,7 +154,9 @@ if ($SkipBackup) {
 # Бэк собираем ПРОБНЫМ `dotnet build` — publish писать в $PublishDir нельзя, там файлы держит
 # живой сервер. Зато build ловит ровно те же ошибки компиляции, а publish после него проходит
 # по прогретому obj/ за секунды.
-if (-not $SkipFrontend) {
+if ($SkipBuild) {
+    Write-Host '[1/9] Сборка пропущена (-SkipBuild)' -ForegroundColor DarkGray
+} elseif (-not $SkipFrontend) {
     Write-Host '[1/9] Сборка фронта (npm run build)...' -ForegroundColor Yellow
     Push-Location $frontendDir
     if (-not (Test-Path 'node_modules')) { npm ci }
@@ -158,9 +171,17 @@ if (-not $SkipFrontend) {
     Write-Host '[1/9] Фронт пропущен (-SkipFrontend)' -ForegroundColor DarkGray
 }
 
-Write-Host '[1.5/9] Проверочная сборка бэка (dotnet build -c Release)...' -ForegroundColor Yellow
-dotnet build $csproj -c Release --nologo -v quiet
-if ($LASTEXITCODE -ne 0) { throw "Сборка бэка упала (exit $LASTEXITCODE) — сервер не тронут" }
+if (-not $SkipBuild) {
+    Write-Host '[1.5/9] Проверочная сборка бэка (dotnet build -c Release)...' -ForegroundColor Yellow
+    dotnet build $csproj -c Release --nologo -v quiet
+    if ($LASTEXITCODE -ne 0) { throw "Сборка бэка упала (exit $LASTEXITCODE) — сервер не тронут" }
+}
+
+if ($BuildOnly) {
+    Write-Host ''
+    Write-Host 'Сборка готова (-BuildOnly). Сервер не тронут, публикация — следующим запуском с -SkipBuild.' -ForegroundColor Green
+    exit 0
+}
 
 # --- 2. Остановка запущенных процессов (снять локи файлов ДО публикации) ---
 # Трей глушим ПЕРВЫМ, чтобы его супервизор не перезапустил сервер, пока мы его убиваем.

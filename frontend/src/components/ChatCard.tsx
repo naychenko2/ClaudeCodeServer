@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
@@ -20,13 +20,13 @@ import { ChatOriginBadge } from './ChatOriginBadge';
 import { TagChip } from './TagChip';
 import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
 import { useHasUnread } from '../lib/chatReadState';
-import { getPersonaById } from '../lib/personas';
+import { getPersonaById, usePersonasVersion } from '../lib/personas';
 import { useTasks } from '../lib/tasks';
 import { agentDotColor } from './AgentSelector';
 import { PersonaBackdrop } from '../features/personas/PersonaFace';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
-import { teamTurnPreview } from '../features/team/teamMechanics';
-import { getLastMechanic } from '../lib/lastMechanic';
+import { ChatPreviewLine } from './ChatPreviewLine';
+import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
@@ -202,13 +202,62 @@ interface Props {
  * и превью последнего сообщения во всю ширину. Высота — не меньше двух текстовых
  * строк, поэтому карточки в списке стоят единой сеткой. Действия всплывают по
  * наведению вертикальным столбиком на стыке текста и лица собеседника.
+ *
+ * Списки на каждой перерисовке (опрос, события хода, наведение) создают новые
+ * колбэки и новый массив tags — простой memo карточку бы не спас. Поэтому обёртка
+ * подменяет обработчики стабильными прокси, которые зовут свежую версию из ref:
+ * сама карточка перерисовывается, только когда поменялись данные или набор действий.
  */
-export function ChatCard({
+export function ChatCard(props: Props) {
+  return (
+    <ChatCardMemo
+      {...props}
+      onSelect={useStableHandler(props.onSelect)!}
+      onHover={useStableHandler(props.onHover)!}
+      onDelete={useStableHandler(props.onDelete)!}
+      onTogglePin={useStableHandler(props.onTogglePin)}
+      onAssignTags={useStableHandler(props.onAssignTags)}
+      onRename={useStableHandler(props.onRename)}
+      onAddToWall={useStableHandler(props.onAddToWall)}
+      onArchive={useStableHandler(props.onArchive)}
+      onSaveAsNote={useStableHandler(props.onSaveAsNote)}
+      onEdited={useStableHandler(props.onEdited)}
+      onSwipeToggle={useStableHandler(props.onSwipeToggle)}
+    />
+  );
+}
+
+// Стабильная ссылка, которая зовёт свежую версию колбэка. Наличие обработчика значимо
+// (нет onRename — нет пункта меню), поэтому без колбэка отдаём undefined, а не заглушку
+function useStableHandler<A extends unknown[], R>(fn: ((...args: A) => R) | undefined) {
+  const ref = useRef(fn);
+  useLayoutEffect(() => { ref.current = fn; });
+  const stable = useCallback((...args: A) => ref.current?.(...args) as R, []);
+  return fn ? stable : undefined;
+}
+
+// Теги приходят новым массивом на каждую перерисовку списка — сравниваем по содержимому
+function sameCardProps(a: Props, b: Props): boolean {
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof Props>) {
+    if (key === 'tags') {
+      if (JSON.stringify(a.tags) !== JSON.stringify(b.tags)) return false;
+    } else if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+const ChatCardMemo = memo(ChatCardView, sameCardProps);
+
+function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
   onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
+  // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
+  // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
+  usePersonasVersion();
+  useLastMechanicVersion();
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
   // Групповой чат: стек мини-аватаров участников вместо одиночного + подпись «Групповой»
@@ -993,7 +1042,7 @@ export function ChatCard({
                 minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
-                {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
+                <ChatPreviewLine text={s.lastMessage} />
               </div>
             )}
 
@@ -1070,11 +1119,11 @@ export function ChatCard({
 
       {menu && !editing && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
-          // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
-          // Высота меню решает, куда его раскрыть; в счёт входят и строки-тумблеры
-          // видимости быстрых кнопок (cardActions) с разделителем перед ними
-          // Меню = ровно доступные действия каталога, по строке на каждое
-          maxHeight={cardActions.length * 34 + 20}
+          // maxHeight в anchor-режиме — и направление раскрытия, и потолок высоты:
+          // заниженная оценка даёт скролл. Строка с глазиком-спутником — ~38px на
+          // desktop и 44 на тач-раскладке; в счёт идут доступные действия каталога
+          // плюс «Сохранить в заметки» у архивного чата (вне каталога)
+          maxHeight={(cardActions.length + (isArchivedChat(s) && onSaveAsNote ? 1 : 0)) * (isMobile ? 44 : 38) + 20}
           gap={4}>
           {canRename && (
             <MenuItem

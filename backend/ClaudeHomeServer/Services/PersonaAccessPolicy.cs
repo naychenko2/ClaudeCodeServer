@@ -53,6 +53,13 @@ public static class PersonaAccessPolicy
         "mcp__video-editor__video_cancel",
     ];
 
+    // Может ли персона запускать произвольный код (Bash не запрещён целиком). Инструменты,
+    // которые исполняют код проекта мимо Bash (run_tests), обязаны спрашивать именно это,
+    // а не один ReadOnly: у Custom-персоны Bash бывает снят точечно. Шаблоны вида
+    // «Bash(git:*)» — частичный запрет и запуском кода не считаются.
+    public static bool AllowsBash(Persona? persona) =>
+        BuildExtraDisallowed(persona)?.Contains("Bash", StringComparer.Ordinal) != true;
+
     // Итоговый список дополнительных запретов сессии персоны:
     // выключенный «web» + профиль доступа (ReadOnly-список или пользовательский
     // список при Custom). null — запретов нет (или персоны нет).

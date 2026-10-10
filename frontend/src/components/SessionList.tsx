@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
+import { idbGet } from '../lib/idb';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
+import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
@@ -43,6 +45,10 @@ interface Props {
   // Список опустел (удалён последний чат) — центр показывает пустое состояние,
   // а не автосоздаёт новый чат. Владелец сбрасывает activeSession в null.
   onCleared?: () => void;
+  // Открытый чат удалён на сервере (другая вкладка, авто-удаление временного) — владелец
+  // сам уводит центр на соседа (null — соседа нет) и переписывает историю. Задан —
+  // onSelect/onCleared на этом пути не зовутся
+  onActiveDeleted?: (next: Session | null) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
   // Реестр общих тегов изменён (reorder ▲▼, создание тега из меню маркировки) —
@@ -63,7 +69,20 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
   background: 'transparent', color: disabled ? C.border : C.textMuted,
 });
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
+// Порция архива: столько карточек рисуется при входе в «Архивные» и добавляется кнопкой
+const ARCHIVE_PAGE = 40;
+
+// Опрос и рефетч после переподключения отдают весь список заново, обычно без изменений.
+// Новый массив перерисовал бы панель целиком — оставляем прежний, если по содержимому совпало.
+function keepIfSame(prev: Session[], next: Session[]): Session[] {
+  if (prev.length !== next.length) return next;
+  for (let i = 0; i < next.length; i++) {
+    if (JSON.stringify(prev[i]) !== JSON.stringify(next[i])) return next;
+  }
+  return prev;
+}
+
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, onActiveDeleted, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   // «Сохранить в заметки» доступно только при включённой подсистеме заметок — иначе
   // кнопка/пункт в ChatCard уйдёт в архив не сохранённой, а карточка не получит
   // ссылку SummaryNoteId (часть пункта меню «Сохранить в заметки» в ChatCard).
@@ -95,6 +114,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSelectRef.current = onSelect; });
   const onClearedRef = useRef(onCleared);
   useEffect(() => { onClearedRef.current = onCleared; });
+  const onActiveDeletedRef = useRef(onActiveDeleted);
+  useEffect(() => { onActiveDeletedRef.current = onActiveDeleted; });
 
   // Значок «правки чата не зафиксированы в git». Стор подключаем сами: список живёт не
   // только в мастерской (WorkspacePage уже зовёт ensureGit), но и на Стене, где git
@@ -200,11 +221,25 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Загрузка и поллинг сессий
   useEffect(() => {
     initializedRef.current = false;
+    // Ответ ушедшего проекта не должен лечь в список нового
+    let cancelled = false;
+    let freshArrived = false;
+
+    // Прошлый ответ из офлайн-кэша рисуем сразу, не дожидаясь сервера: иначе при входе в
+    // проект список стоял с одним открытым чатом, пока свежий ответ ехал по сети. Свежий
+    // список заменяет кэш целиком; empty-состояния и автовыбор ждут именно его (loaded)
+    idbGet<Session[]>(`/projects/${project.id}/sessions`).then(cached => {
+      if (cancelled || freshArrived || !Array.isArray(cached?.data)) return;
+      const fromCache = cached.data;
+      // Чат, подложенный до кэша (открытый, в т.ч. только что созданный), не теряем
+      setSessions(prev => [...prev.filter(p => !fromCache.some(c => c.id === p.id)), ...fromCache]);
+    }).catch(() => { /* кэш недоступен — ждём сервер */ });
 
     const init = async () => {
       // Офлайн без кэша — список недоступен, выходим без выбора
       const list = await api.sessions.list(project.id).catch(() => null);
-      if (!list) return;
+      if (!list || cancelled) return;
+      freshArrived = true;
       setSessions(list);
       setLoaded(true);
       if (!initializedRef.current) {
@@ -226,9 +261,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
     init();
     const interval = setInterval(() => {
-      api.sessions.list(project.id).then(setSessions).catch(() => {});
+      api.sessions.list(project.id).then(list => setSessions(prev => keepIfSame(prev, list))).catch(() => {});
     }, 5000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [project.id]);
 
   // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.
@@ -239,20 +274,29 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     onReconnected(() => {
       if (!mounted) return;
       api.sessions.list(project.id).then(list => {
-        if (mounted) setSessions(list);
+        if (mounted) setSessions(prev => keepIfSame(prev, list));
       }).catch(() => {});
     });
 
     const unsub = onMessage(msg => {
       if (!mounted) return;
       // Сессия удалена на сервере (в т.ч. авто-удаление временной) — убираем из списка;
-      // если была открыта — переключаемся на первую оставшуюся
+      // если была открыта — переключаемся на первую оставшуюся ВИДИМУЮ: те же фильтры,
+      // что у соседа при архивации — архивный или скрытый фильтром чат открылся бы призраком
       if (msg.type === 'chat_deleted') {
         forgetChatContextOnDeleted(msg);
+        // Обновитель под StrictMode вызывается дважды с тем же prev — реакцию на
+        // удаление активного чата ставим в очередь один раз на событие
+        let reacted = false;
         setSessions(prev => {
           const updated = prev.filter(s => s.id !== msg.sessionId);
-          if (activeRef.current?.id === msg.sessionId) {
-            if (updated.length > 0) queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
+          if (!reacted && activeRef.current?.id === msg.sessionId) {
+            reacted = true;
+            const handler = onActiveDeletedRef.current;
+            // Удалённого в updated уже нет — chatNeighborForArchive отдаёт первый живой видимый
+            const neighbor = chatNeighborForArchive(updated, msg.sessionId, matchChatFilter(loadChatFilters(project.id)));
+            if (handler) queueMicrotask(() => handler(neighbor));
+            else if (neighbor) queueMicrotask(() => onSelectRef.current(neighbor, undefined, true));
             // Удалён последний активный чат — сбрасываем в пустое состояние
             else queueMicrotask(() => onClearedRef.current?.());
           }
@@ -419,8 +463,27 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useSanitizePersonaFilter(filters, patch, personaIdsInList, sessions.length > 0);
 
   // Применение фильтров (единый предикат — общий с глобальным списком чатов)
-  const isVisible = matchChatFilter(filters);
-  const filteredSessions = sessions.filter(isVisible);
+  const matchesFilters = matchChatFilter(filters);
+  const filteredSessions = sessions.filter(matchesFilters);
+  // Архив рисуется порциями: в большом проекте там полторы сотни чатов, и монтирование
+  // всех карточек разом подвешивало переключение «Архивные». Порция — первые по
+  // текущей сортировке; счётчики «скрыто фильтрами» считаются по полному набору
+  const [archiveLimit, setArchiveLimit] = useState(ARCHIVE_PAGE);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс порции при входе в архив и смене проекта
+  useEffect(() => { setArchiveLimit(ARCHIVE_PAGE); }, [filters.archivedOnly, project.id]);
+  const archiveRest = filters.archivedOnly ? Math.max(0, filteredSessions.length - archiveLimit) : 0;
+  const archiveCut = archiveRest > 0;
+  const archiveShownIds = useMemo(
+    () => archiveCut
+      ? new Set(sortChatsFlat(filteredSessions, sortOrder).slice(0, archiveLimit).map(s => s.id))
+      : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filteredSessions пересобирается каждый рендер, его исходные данные покрывают sessions и filters
+    [archiveCut, archiveLimit, sessions, filters, sortOrder],
+  );
+  const isVisible = archiveShownIds
+    ? (s: Session) => matchesFilters(s) && archiveShownIds.has(s.id)
+    : matchesFilters;
+  const shownSessions = archiveShownIds ? filteredSessions.filter(s => archiveShownIds.has(s.id)) : filteredSessions;
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
   // подмножеству: в режиме архива бейдж иначе врал бы на весь список проекта,
@@ -462,15 +525,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Секции: плоский список — из отфильтрованных чатов; дерево — из корней
   const dayGroups = treeSegments
     ? (groupBy === 'days' ? groupChats(treeSegments.map(x => x.rootChat), sortOrder) : [])
-    : (groupBy === 'days' ? groupChats(filteredSessions, sortOrder) : []);
+    : (groupBy === 'days' ? groupChats(shownSessions, sortOrder) : []);
   // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»); корень дерева
   // с несколькими тегами дублируется в каждой своей секции
   const tagGroups = groupBy === 'tags'
-    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : filteredSessions, registry, sortOrder)
+    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : shownSessions, registry, sortOrder)
     : null;
   // Без группировки: единый список (порядок дерева — pin+maxActivity, плоского — pin+дата)
   const flatList = groupBy === 'none' && !treeSegments
-    ? sortChatsFlat(filteredSessions, sortOrder)
+    ? sortChatsFlat(shownSessions, sortOrder)
     : null;
 
   // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
@@ -709,6 +772,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             {g.items.map(c => renderCard(c))}
           </div>
         ))}
+        {archiveRest > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 2px' }}>
+            <Button variant="ghost" size="sm" onClick={() => setArchiveLimit(n => n + ARCHIVE_PAGE)}>
+              Показать ещё {Math.min(archiveRest, ARCHIVE_PAGE)} из {archiveRest}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Меню маркировки чата общими тегами (fixed по якорю кнопки на карточке) */}

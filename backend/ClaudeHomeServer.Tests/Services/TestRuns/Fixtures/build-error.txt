@@ -1,0 +1,42 @@
+  Determining projects to restore...
+  Restored C:\src\fix\B.Tests\B.Tests.csproj (in 901 ms).
+  Restored C:\src\fix\A.Tests\A.Tests.csproj (in 901 ms).
+C:\src\fix\A.Tests\T.cs(4,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(4,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(5,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(5,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(6,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(6,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,6): error CS0246: The type or namespace name 'TheoryAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,6): error CS0246: The type or namespace name 'Theory' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,14): error CS0246: The type or namespace name 'InlineDataAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,14): error CS0246: The type or namespace name 'InlineData' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,29): error CS0246: The type or namespace name 'InlineDataAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,29): error CS0246: The type or namespace name 'InlineData' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(4,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(4,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(5,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(5,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+
+Build FAILED.
+
+C:\src\fix\A.Tests\T.cs(4,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(4,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(5,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(5,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(6,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(6,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,6): error CS0246: The type or namespace name 'TheoryAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,6): error CS0246: The type or namespace name 'Theory' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,14): error CS0246: The type or namespace name 'InlineDataAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,14): error CS0246: The type or namespace name 'InlineData' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,29): error CS0246: The type or namespace name 'InlineDataAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\A.Tests\T.cs(7,29): error CS0246: The type or namespace name 'InlineData' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\A.Tests\A.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(4,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(4,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(5,6): error CS0246: The type or namespace name 'FactAttribute' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+C:\src\fix\B.Tests\T.cs(5,6): error CS0246: The type or namespace name 'Fact' could not be found (are you missing a using directive or an assembly reference?) [C:\src\fix\B.Tests\B.Tests.csproj]
+    0 Warning(s)
+    16 Error(s)
+
+Time Elapsed 00:00:04.85

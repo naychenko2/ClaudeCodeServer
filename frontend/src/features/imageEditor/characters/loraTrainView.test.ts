@@ -35,7 +35,7 @@ describe('граница 20 фото', () => {
 
 describe('слово-метка', () => {
   it.each([['abc', true], ['a_1', true], ['a'.repeat(24), true], ['a'.repeat(25), false], ['ab', false],
-    ['1abc', false], ['Abc', false], ['аня_1', false], ['a-bc', false]])('%s → %s', (t, ok) => {
+    ['1abc', false], ['_abc', false], ['abc', true], ['abc1', true], ['Abc', false], ['аня_1', false], ['a-bc', false]])('%s → %s', (t, ok) => {
     expect(isValidTrigger(t)).toBe(ok);
   });
   it('неверная метка блокирует старт, фото при этом достаточно', () => {
@@ -86,9 +86,18 @@ describe('выбор состояния', () => {
     expect(isAllRejected(ver({ photosCount: 2, photosKept: undefined, rejected: [
       { name: 'a', reason: 'no_face' }, { name: 'b', reason: 'many_faces' }] }))).toBe(true);
   });
-  it('отмена: форма с пометкой «остановлено»', () => {
-    expect(trainSectionView(input({ view: { kind: 'cancelled', version: ver({ status: 'cancelled' }) } })))
-      .toMatchObject({ kind: 'form', stopped: true });
+  it('отмена: форма «Обучить» (не «заново») с пометкой «остановлено»', () => {
+    const cancelled = { kind: 'cancelled' as const, version: ver({ status: 'cancelled' }) };
+    expect(trainSectionView(input({ view: cancelled })))
+      .toMatchObject({ kind: 'form', stopped: true, label: TRAIN_TEXT.start });
+    // закрытый прогон на отменённую форму не влияет
+    expect(trainSectionView(input({ view: cancelled, dismissedRunId: 'r1' })))
+      .toMatchObject({ kind: 'form', stopped: true, label: TRAIN_TEXT.start });
+  });
+  it('отмена при изменённых фото: «Обучить заново»', () => {
+    const cancelled = { kind: 'cancelled' as const, version: ver({ status: 'cancelled' }) };
+    expect(trainSectionView(input({ view: cancelled, state: { ...state, photosChanged: true } })))
+      .toMatchObject({ stopped: true, label: TRAIN_TEXT.restart });
   });
   it('карта занята чужим: время освобождения и кнопка админа', () => {
     const busy = { ...state, gpu: { busy: true, mine: false, busyUntil: '2026-10-10T11:20:00Z' } };
@@ -129,6 +138,9 @@ describe('тексты и бейджи', () => {
     expect(badgeFor({ kind: 'running', text: '', percent: 62, etaText: null })).toMatchObject({ text: '62 %' });
     expect(badgeFor({ kind: 'running', text: '', percent: null, etaText: null })).toMatchObject({ text: 'Идёт' });
     expect(badgeFor({ kind: 'off' })).toBeNull();
+    const form = { kind: 'form' as const, label: '', disabled: false, reason: null, photosChanged: false };
+    expect(badgeFor({ ...form, stopped: true })).toMatchObject({ text: 'Остановлено' });
+    expect(badgeFor({ ...form, stopped: false })).toBeNull();
   });
   it('отказы действий', () => {
     expect(failureText({ reason: 'bad_trigger' })).toBe(TRAIN_TEXT.triggerError);

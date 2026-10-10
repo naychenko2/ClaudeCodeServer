@@ -33,6 +33,7 @@ export type { TrainingPhotoRejectReason };
 
 export const TRAIN_TEXT = {
   title: 'Обучить персонажа',
+  loading: 'Проверяем, идёт ли обучение…',
   intro: 'После обучения персонаж будет заметно точнее похож на ваши фото. Работает с локальной моделью.',
   start: 'Обучить',
   restart: 'Обучить заново',
@@ -82,9 +83,11 @@ export const TRAIN_BUSY_OTHER_NOTIME = 'Видеокарта сейчас зан
 export const TRAIN_STOP_FOREIGN_CONFIRM = (name?: string) =>
   `Остановить обучение, которое запустил ${name ?? 'другой пользователь'}?`;
 
-// Бейджи шапки секции (текстов в заметке нет — взяты из предложения Майи)
-export const TRAIN_BADGE = { queued: 'В очереди', running: 'Идёт', done: 'Обучен', failed: 'Ошибка' } as const;
+// Бейджи шапки секции
+export const TRAIN_BADGE = {
+  queued: 'В очереди', running: 'Идёт', done: 'Обучен', failed: 'Ошибка', cancelled: 'Остановлено',
+} as const;
 
 // Отказ действия (старт/подключение) — в заметке нет текстов, кроме перечисленных выше
 export const TRAIN_ACTION_FAILED = 'Не получилось выполнить действие. Попробуйте ещё раз.';
-export const TRAIN_VERSION_LIMIT = 'Достигнут предел версий. Удалите ненужную и начните снова.';
+export const TRAIN_VERSION_LIMIT = 'У персонажа уже пять версий. Удалите ненужную — и можно обучать дальше.';

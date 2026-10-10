@@ -124,6 +124,7 @@ export function trainSectionView(i: TrainViewInput): TrainSectionView {
 
   const count = i.photoCount ?? 0;
   const photosChanged = !!state?.photosChanged;
+  // «Обучить заново» — только когда уже есть готовая версия или фото изменились; после отмены — обычный старт
   const retrain = photosChanged || view.kind === 'done';
   const base = { stopped: view.kind === 'cancelled', photosChanged };
   if (count < min) {
@@ -163,6 +164,7 @@ export function badgeFor(v: TrainSectionView): { text: string; tone: 'neutral' |
     case 'running': return { text: v.percent != null ? `${v.percent} %` : TRAIN_BADGE.running, tone: 'accent' };
     case 'done': return { text: TRAIN_BADGE.done, tone: 'success' };
     case 'failed': return { text: TRAIN_BADGE.failed, tone: 'danger' };
+    case 'form': return v.stopped ? { text: TRAIN_BADGE.cancelled, tone: 'neutral' } : null;
     default: return null;
   }
 }

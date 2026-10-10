@@ -37,11 +37,12 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
   const trigger = edited ?? training.state?.defaultTrigger ?? '';
   const foreignBusy = !!training.state?.gpu.busy && !training.state.gpu.mine;
   useEffect(() => {
+    setIsAdmin(false);
     if (!foreignBusy) return;
     let alive = true;
     loraTrainApi.active().then(a => { if (alive) setIsAdmin(!!a.jobId); }).catch(() => {});
     return () => { alive = false; };
-  }, [foreignBusy]);
+  }, [foreignBusy, projectId, slug]);
 
   const view = trainSectionView({
     view: training.view, state: training.state, error: training.error, photoCount,
@@ -73,7 +74,7 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
   let body: React.ReactNode = null;
   switch (view.kind) {
     case 'loading':
-      body = <div style={{ fontSize: FS.sm, color: C.textMuted }}>Загружаю состояние…</div>;
+      body = <div style={{ fontSize: FS.sm, color: C.textMuted }}>{TRAIN_TEXT.loading}</div>;
       break;
     case 'off': body = note(TRAIN_TEXT.disabled, 'info', Info); break;
     case 'noLocal': body = note(TRAIN_TEXT.noLocal, 'warning', AlertCircle); break;

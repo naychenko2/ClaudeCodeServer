@@ -374,6 +374,8 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
 
 Манифест в двух последних случаях не трогается.
 
+`Completed`, когда подключать есть что (`ReadLora() == null`), а список LoRA ComfyUI не получен: запись **остаётся `training`**, следующий круг доведёт её после восстановления (ADR-026, §13).
+
 Для каждой записи `deleting` вызывается `DeleteRunAsync`. `Deleted` → `Erase`, `Pending` → ждём, `Failed` → повтор на следующем круге.
 
 ## 7. Маршруты

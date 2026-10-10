@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
-import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader } from './ui';
+import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader, usePanelElement, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FilterBar } from './FilterBar';
 import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder } from '../lib/chatFilters';
@@ -91,17 +91,29 @@ function GroupByMenuButton({ size, value, options, onChange }: {
   onChange: (v: ChatGroupBy) => void;
 }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Рамка карточки на момент открытия: меню кнопки справа в узкой панели иначе
+  // свисало за её левую кромку
+  const [boundary, setBoundary] = useState<DOMRect | null>(null);
+  const panel = usePanelElement();
+  // Меню живёт порталом в body: курсор уходит с карточки, и шапка гасила бы кнопку
+  // вместе с остальными значками — меню повисало без якоря
+  usePanelHeaderHold(!!anchor);
   const meta = GROUP_BY_META[value] ?? GROUP_BY_META.days;
   return (
     <>
       <IconButton size={size}
+        active={!!anchor} expanded={!!anchor}
         title={`Группировка: ${value === 'none' ? 'без группировки' : meta.label} (сменить)`}
-        onClick={e => setAnchor(e.currentTarget.getBoundingClientRect())}>
+        onClick={e => {
+          setBoundary(panel?.getBoundingClientRect() ?? null);
+          setAnchor(e.currentTarget.getBoundingClientRect());
+        }}>
         <meta.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
       {anchor && (
         // Высота — от числа режимов: строка 38 + заголовок; четыре в 180 не влезали
-        <Menu anchor={anchor} minWidth={230} maxHeight={options.length * 38 + 40} onClose={() => setAnchor(null)}>
+        <Menu anchor={anchor} boundary={boundary} minWidth={230} maxHeight={options.length * 38 + 40}
+          onClose={() => setAnchor(null)}>
           <div style={{
             padding: '7px 10px 3px', fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
             textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,

@@ -4,7 +4,8 @@ import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal, IconButton, Chip } from './ui';
+import { Modal, IconButton, Chip, usePanelElement, usePanelHeaderHold } from './ui';
+import { clampPopupLeft } from './ui/Menu';
 import { personaLabel } from '../lib/personas';
 import { useCanHover } from '../lib/pointer';
 import { useListAutoFocus } from '../lib/listAutoFocus';
@@ -336,9 +337,17 @@ export function FilterBar({
   // Рамка триггера на момент открытия: поповер живёт в портале и позиционируется
   // по ней — с клампом к окну, чтобы не вылезал за край на узких ширинах
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Рамка карточки панели (если фильтр в её шапке): поповер держится в ней, а не
+  // только в окне
+  const panel = usePanelElement();
+  const [boundary, setBoundary] = useState<DOMRect | null>(null);
+  // Поповер в портале: курсор уходит с карточки, и без удержания шапка гасила бы
+  // кнопку фильтра под открытым поповером
+  usePanelHeaderHold(open);
 
   const toggleOpen = () => {
     setAnchor(rootRef.current?.getBoundingClientRect() ?? null);
+    if (!open) setBoundary(panel?.getBoundingClientRect() ?? null);
     setOpen(o => !o);
   };
 
@@ -402,7 +411,8 @@ export function FilterBar({
     <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
       <IconButton
         size={triggerSize}
-        active={hasFilters}
+        active={hasFilters || open}
+        expanded={open}
         title={hasFilters ? `Фильтры: ${summary}` : 'Фильтры и поиск'}
         onClick={toggleOpen}
       >
@@ -459,7 +469,7 @@ export function FilterBar({
         <div ref={popRef} style={{
           position: 'fixed',
           top: anchor.bottom + 4,
-          left: Math.max(8, Math.min(anchor.left, window.innerWidth - POPOVER_W - 8)),
+          left: clampPopupLeft(anchor.left, POPOVER_W, window.innerWidth, boundary),
           width: POPOVER_W, boxSizing: 'border-box',
           maxHeight: `calc(100vh - ${anchor.bottom + 16}px)`, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`,

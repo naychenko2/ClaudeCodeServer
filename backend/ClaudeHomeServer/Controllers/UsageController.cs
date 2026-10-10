@@ -124,6 +124,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     },
                     RequiresStrong: !a.DefaultLocal,
                     Agentic: a.Agentic,
+                    Input: a.Input.ToString().ToLowerInvariant(),
+                    FacePose: a.FacePose,
                     // Та же логика, что в LocalActionsAdminController.Describe — без дубля:
                     // preset раскрывается по сырому значению стора и общим пресетам.
                     Preset: LocalActionsAdminController.DescribePreset(localActions.TryGet(a.Key), globalPresets));

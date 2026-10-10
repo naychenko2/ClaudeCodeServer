@@ -71,6 +71,10 @@ public class LocalActionsAdminController(
                 || CloudCheapClient.IsDirectRoute(route)))
             return BadRequest(new { error = "Этому месту нужна агентная модель — локальная и direct-модели не подходят" });
 
+        // Места с картинками на входе: слепой маршрут «разметил» бы фото вслепую (ADR-027 §2)
+        if (action.Input == ActionInput.Images && ValidateImageRoute(route, providers) is { } imageError)
+            return BadRequest(new { error = imageError });
+
         // preset:{id} — ссылка на пресет-цепочку (ADR-007 §3): допустимое значение места
         // каталога. Место назначения общее для всех, поэтому пресет обязан быть общим
         // (глобальным) — личный пресет у других пользователей стал бы битой ссылкой.
@@ -122,12 +126,27 @@ public class LocalActionsAdminController(
         return null;
     }
 
+    // null — маршрут годится месту с картинками. Слот (tier:*) допустим: зрение слота проверяется
+    // в рантайме по владельцу. Модель вне провайдеров — родной Claude, он картинки видит.
+    internal static string? ValidateImageRoute(string route, LlmProviderRegistry providers)
+    {
+        if (route == LocalActionOverridesStore.LocalRoute
+            || CloudCheapClient.IsDirectRoute(route)
+            || LocalActionOverridesStore.IsPresetRoute(route)
+            || providers.ResolveByModel(route) is { SupportsImages: false })
+            return "Эта модель не видит картинки — для разметки фото не подойдёт.";
+        return null;
+    }
+
     private object Describe(string key)
     {
         var route = router.Resolve(key);
+        var action = LocalActionCatalog.Find(key);
         return new
         {
             key,
+            input = (action?.Input ?? ActionInput.Text).ToString().ToLowerInvariant(),
+            facePose = action?.FacePose ?? false,
             route = route.Kind switch
             {
                 RouteKind.Local => LocalActionOverridesStore.LocalRoute,

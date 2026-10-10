@@ -31,6 +31,10 @@ public sealed record CheapProfileSpec(
 // Agentic — место запускает агентную сессию claude CLI (не one-shot): локаль и
 // direct:-модели ему недоступны, маршрут резолвится ModelAssignmentResolver'ом,
 // а не CheapTextRunner'ом.
+// Input — что место получает на вход: текст или ещё и картинки (ADR-027 §2). Для мест с
+// картинками локаль, direct:-модели, пресеты и модели без зрения недоступны — как Agentic.
+// FacePose — место умеет считать ракурс лица не LLM-ом (значение стора face-pose; его
+// форма — шаг 12б, сейчас признак только описывает место).
 // Tier — слот по умолчанию, когда админ ничего не выбирал; null = вычислить из Profile
 // (Small/Text → слабая, Large → средняя): см. EffectiveDefaultTier.
 // CloudTimeoutMs — пер-местный потолок ожидания ОБЛАЧНОГО шага вместо потолка профиля:
@@ -42,7 +46,10 @@ public sealed record CheapProfileSpec(
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
-    int? CloudNumPredict = null);
+    int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false);
+
+// Вход места каталога: только текст или текст плюс картинки (разметка фото персонажа)
+public enum ActionInput { Text, Images }
 
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
@@ -100,6 +107,9 @@ public static class LocalActionCatalog
     // Умный подбор фото персонажа (ADR-027, §6): ракурс и эмоция из текста запроса.
     // Только бесплатная цепочка (RunFreeAsync), платный claude не используется
     public const string CharacterSceneParse = "character-scene-parse";
+    // Разметка фото персонажа (ADR-027, §2): модель смотрит на картинки, поэтому Input = Images
+    public const string CharacterPhotoAngle = "character-photo-angle";
+    public const string CharacterPhotoEmotion = "character-photo-emotion";
     // Карта плана («Визуальный разворот плана», часть B): структурный слепок markdown-плана
     // по кнопке «Собрать схему», кэш в data/plan-maps.json
     public const string PlanMap = "plan-map";
@@ -238,6 +248,12 @@ public static class LocalActionCatalog
         // профилем за три строки незачем
         new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
         new(CharacterSceneParse, "Разбор сюжета для подбора фото", "Персонажи", CheapProfile.Small, DefaultLocal: true),
+        // Места с картинками на входе: локаль слепая, поэтому DefaultLocal: false, Tier — слабая
+        // (Small → weak по умолчанию). CheapTextRunner их не обслуживает
+        new(CharacterPhotoAngle, "Ракурс фото персонажа", "Персонажи", CheapProfile.Small,
+            DefaultLocal: false, Input: ActionInput.Images, FacePose: true),
+        new(CharacterPhotoEmotion, "Выражение лица на фото", "Персонажи", CheapProfile.Small,
+            DefaultLocal: false, Input: ActionInput.Images),
         // Карта плана: вход — markdown-план до 35 КБ, выход — структурный JSON, тот же класс
         // задачи, что у планировщика (прецедент в шапке профиля Large: потолок вывода на
         // облаке обрывал JSON плана на полуслове). DefaultLocal: false — разметка крупного

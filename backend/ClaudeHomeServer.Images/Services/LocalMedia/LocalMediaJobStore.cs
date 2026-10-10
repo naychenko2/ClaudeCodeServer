@@ -170,6 +170,20 @@ public sealed class LocalMediaJobStore
             return _jobs.Count(j => j.OwnerId == ownerId && j.Heavy && !LocalMediaStatuses.IsTerminal(j.Status));
     }
 
+    // Активные обучения LoRA на инстансе (карта одна на всех) и у владельца; считаются по стору, переживают рестарт
+    public int ActiveLoraTrainCount()
+    {
+        lock (_writeLock)
+            return _jobs.Count(j => j.Op == LocalMediaOps.LoraTrain && !LocalMediaStatuses.IsTerminal(j.Status));
+    }
+
+    public int ActiveLoraTrainCount(string ownerId)
+    {
+        lock (_writeLock)
+            return _jobs.Count(j => j.OwnerId == ownerId && j.Op == LocalMediaOps.LoraTrain
+                && !LocalMediaStatuses.IsTerminal(j.Status));
+    }
+
     public IReadOnlyList<LocalMediaJob> Active()
     {
         lock (_writeLock)
@@ -248,9 +262,10 @@ public sealed class LocalMediaJobStore
                 FileName, file.Version, FormatVersion);
             return;
         }
+        // Задачи обучения LoRA в IsKnown не входят (их ставит только адаптер шва), но рестарт переживать обязаны
         _jobs = (file.Jobs ?? [])
             .Where(j => !string.IsNullOrWhiteSpace(j.Id) && !string.IsNullOrWhiteSpace(j.OwnerId)
-                && LocalMediaOps.IsKnown(j.Op))
+                && (LocalMediaOps.IsKnown(j.Op) || j.Op is LocalMediaOps.LoraTrain or LocalMediaOps.LoraDelete))
             .ToList();
     }
 }

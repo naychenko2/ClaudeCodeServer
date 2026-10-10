@@ -1,18 +1,16 @@
 // Секция «Обучить персонажа» в карточке сохранённого персонажа (ADR-026 §7.2, макет character-lora-train).
 // Вид выбирает чистая trainSectionView; здесь только разметка и действия.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AlertCircle, Check, Clock, Cpu, Info, RefreshCw, Sparkles, Square } from 'lucide-react';
 import {
   Badge, Button, ConfirmDialog, Field, Notice, ProgressBar, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
 import { loraTrainApi } from '../api';
-import { reloadCharacters } from './useCharacters';
-import { useLoraTraining } from './useLoraTraining';
+import { useCharacterTrain } from './useCharacterTrain';
 import type { LoraVersionsHandle } from './useLoraVersions';
 import { TRAIN_STOP_FOREIGN_CONFIRM, TRAIN_TEXT } from './loraTrainTexts';
-import { badgeFor, confirmParts, failureText, isValidTrigger, trainSectionView } from './loraTrainView';
-import { TRAIN_MIN } from './trainingPhotos';
+import { badgeFor, confirmParts, isValidTrigger } from './loraTrainView';
 
 const ico = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE } as const;
 
@@ -27,34 +25,12 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
   photoCount: number | null;
   disabled?: boolean;
 }) {
-  const training = useLoraTraining(projectId, slug);
-  const [edited, setEdited] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState<string | null>(null);
+  const {
+    view, training, trigger, edited, setTrigger, dismiss, actionError: err, connectError: connectErr,
+  } = useCharacterTrain(projectId, slug, photoCount, versions);
   const [modal, setModal] = useState<'start' | 'cancel' | 'foreign' | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  const trigger = edited ?? training.state?.defaultTrigger ?? '';
-  const foreignBusy = !!training.state?.gpu.busy && !training.state.gpu.mine;
-  useEffect(() => {
-    setIsAdmin(false);
-    if (!foreignBusy) return;
-    let alive = true;
-    loraTrainApi.active().then(a => { if (alive) setIsAdmin(!!a.jobId); }).catch(() => {});
-    return () => { alive = false; };
-  }, [foreignBusy, projectId, slug]);
-
-  const view = trainSectionView({
-    view: training.view, state: training.state, error: training.error, photoCount,
-    minPhotos: TRAIN_MIN, trigger, isAdmin, dismissedRunId: dismissed,
-  });
-
-  // Первое обучение сервер подключает само — подтягиваем персонажа, чтобы раздел LoRA показал новую
-  const doneRun = view.kind === 'done' && view.first ? view.version.runId : null;
-  useEffect(() => { if (doneRun) void reloadCharacters(projectId); }, [doneRun, projectId]);
 
   const badge = badgeFor(view);
-  const err = training.error ? failureText(training.error) : null;
-  const connectErr = versions.error ? failureText(versions.error) : null;
   const locked = disabled || training.busy;
 
   const startBtn = (label: string, isDisabled: boolean, icon = <Sparkles {...ico} />) => (
@@ -119,17 +95,17 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
               <>
                 <Button variant="primary" size="sm" loading={versions.pending.includes(view.version.runId)} disabled={disabled}
                   onClick={() => { void versions.ctl?.connect(view.version.runId).then(ok => {
-                    if (ok) setDismissed(view.version.runId);
+                    if (ok) dismiss(view.version.runId);
                   }); }}>
                   {TRAIN_TEXT.connect}
                 </Button>
-                <Button variant="secondary" size="sm" disabled={disabled} onClick={() => setDismissed(view.version.runId)}>
+                <Button variant="secondary" size="sm" disabled={disabled} onClick={() => dismiss(view.version.runId)}>
                   {TRAIN_TEXT.keepOld}
                 </Button>
               </>
             )}
             {view.first && (
-              <Button variant="secondary" size="sm" disabled={locked} onClick={() => setDismissed(view.version.runId)}>
+              <Button variant="secondary" size="sm" disabled={locked} onClick={() => dismiss(view.version.runId)}>
                 <RefreshCw {...ico} />{TRAIN_TEXT.restart}
               </Button>
             )}
@@ -173,7 +149,7 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
           <Field label={TRAIN_TEXT.triggerLabel}
             hint={isValidTrigger(trigger) ? TRAIN_TEXT.triggerHint : undefined}
             error={isValidTrigger(trigger) ? undefined : TRAIN_TEXT.triggerError}>
-            <TextField value={trigger} onChange={setEdited} mono invalid={!isValidTrigger(trigger)} disabled={locked} />
+            <TextField value={trigger} onChange={setTrigger} mono invalid={!isValidTrigger(trigger)} disabled={locked} />
           </Field>
           {err && <ErrorLine text={err} />}
           {startBtn(view.label, view.disabled, view.photosChanged ? <RefreshCw {...ico} /> : <Sparkles {...ico} />)}

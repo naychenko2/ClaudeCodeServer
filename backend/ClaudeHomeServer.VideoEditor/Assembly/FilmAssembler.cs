@@ -138,7 +138,7 @@ public sealed class FilmAssembler(
 
             // Хеш входов — на момент плана: правка за время сборки сделает фильм устаревшим, а не «собранным»
             var hash = FilmStaleness.SourceHash(film.Project.RootPath, doc);
-            var progress = new Progress<VideoAssembleProgress>(p => OnProgress(ownerId, scope, film, entry, p));
+            var progress = new BuildProgress(p => OnProgress(ownerId, scope, film, entry, p));
             var result = await dsp!.AssembleAsync(planned.Plan!, tmp, progress, entry.Cts.Token);
             if (!result.Ok) { error = result.Error; return; }
 
@@ -227,7 +227,7 @@ public sealed class FilmAssembler(
     private void OnProgress(string ownerId, VideoEditScope scope, FilmService.Resolved film, FilmBuildRegistry.Entry entry,
         VideoAssembleProgress p)
     {
-        // Progress<T> доставляет отчёты с запозданием: после завершения сборки поздний отчёт не должен вернуть «идёт»
+        // Страховка: после завершения сборки поздний отчёт не должен вернуть «идёт»
         if (!entry.Active) return;
         var state = p.Stage == VideoAssembleProgress.Waiting ? FilmBuildStates.Waiting : FilmBuildStates.Running;
         var before = entry.Status;
@@ -235,6 +235,13 @@ public sealed class FilmAssembler(
         if (before.State == state && (int)(before.Progress * 100) == (int)(p.Fraction * 100)) return;
         registry.Set(entry, before with { State = state, Progress = Math.Max(before.Progress, p.Fraction) });
         _ = PublishAsync(ownerId, scope, film);
+    }
+
+    // Отчёты сборки — синхронно и по порядку: Progress<T> без контекста шлёт каждый в пул
+    // потоков, и поздний «ждёт слот» перетирал уже пришедшее «идёт»
+    private sealed class BuildProgress(Action<VideoAssembleProgress> report) : IProgress<VideoAssembleProgress>
+    {
+        public void Report(VideoAssembleProgress value) => report(value);
     }
 
     private async Task PublishAsync(string ownerId, VideoEditScope scope, FilmService.Resolved film)

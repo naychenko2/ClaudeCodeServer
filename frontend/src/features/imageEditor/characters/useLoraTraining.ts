@@ -1,7 +1,7 @@
 // Статус обучения LoRA персонажа: опрос раз в 15 с, пока обучение идёт (ADR-026 §8).
 // Логика — в контроллере без React (тестируется в node), хук — тонкая обёртка.
 
-import { useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { loraTrainApi, type LoraTrainApi, type LoraTrainStateDto, type LoraVersionDto } from '../api';
 import { loraFailure, type LoraFailure } from './loraErrors';
 
@@ -57,6 +57,8 @@ export function createLoraTrainController(
   // Прогон, за которым следим: нужен, чтобы после исчезновения current узнать исход
   let watchedRunId: string | null = null;
   let epoch = 0;
+  // Первая загрузка — один раз на контроллер, переподписка её не повторяет
+  let started = false;
 
   const set = (patch: Partial<LoraTrainSnapshot>) => {
     snap = { ...snap, ...patch };
@@ -143,10 +145,12 @@ export function createLoraTrainController(
     getSnapshot: () => snap,
     subscribe(fn) {
       listeners.add(fn);
-      if (listeners.size === 1) void refresh();
+      if (!started) { started = true; void refresh(); }
+      // Вернулись после паузы: опрос возобновляем без нового запроса, если он не идёт
+      else if (listeners.size === 1 && !timer) schedule();
       return () => {
         listeners.delete(fn);
-        if (listeners.size === 0) { epoch++; stopTimer(); }
+        if (listeners.size === 0) stopTimer();
       };
     },
     refresh,
@@ -165,10 +169,8 @@ export function useLoraTraining(projectId: string | null, slug: string | null) {
     () => (projectId && slug ? createLoraTrainController(projectId, slug) : null), [projectId, slug]);
   const none: LoraTrainSnapshot = useMemo(
     () => ({ view: { kind: 'idle' }, state: null, error: null, busy: false }), []);
-  const snap = useSyncExternalStore(
-    fn => (ctl ? ctl.subscribe(fn) : () => {}),
-    () => (ctl ? ctl.getSnapshot() : none),
-    () => (ctl ? ctl.getSnapshot() : none),
-  );
+  const subscribe = useCallback((fn: () => void) => (ctl ? ctl.subscribe(fn) : () => {}), [ctl]);
+  const getSnapshot = useCallback(() => (ctl ? ctl.getSnapshot() : none), [ctl, none]);
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return { ...snap, start: ctl?.start, cancel: ctl?.cancel, refresh: ctl?.refresh };
 }

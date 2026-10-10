@@ -3,6 +3,7 @@ import type { LoraVersionDto, LoraRunStatus } from '../api';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
 } from './loraVersionsView';
+import { VERSIONS_TEXT } from './loraTrainTexts';
 
 const v = (p: Partial<LoraVersionDto> & { runId: string }): LoraVersionDto => ({
   status: 'ready', photosCount: 34, connected: false, trainedAt: '2026-10-10T09:00:00Z', ...p,
@@ -34,6 +35,9 @@ describe('versionMark', () => {
 });
 
 describe('versionTitle', () => {
+  it('идущее обучение без своего названия — подсказка, а не «Обучено…»', () => {
+    expect(versionTitle(v({ runId: 'a', status: 'training' }), [])).toBe(VERSIONS_TEXT.trainingHint);
+  });
   it('своё название важнее шаблона, пробелы обрезаются', () => {
     expect(versionTitle(v({ runId: 'a', title: '  Для открыток ' }), [])).toBe('Для открыток');
   });

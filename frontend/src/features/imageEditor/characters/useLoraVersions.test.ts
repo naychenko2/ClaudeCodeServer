@@ -158,3 +158,18 @@ describe('контроллер версий LoRA', () => {
     expect(ctl.getSnapshot().data!.items.find(x => x.connected)?.runId).toBe('b');
   });
 });
+
+describe('шторм запросов (критическое: переподписка не грузит заново)', () => {
+  // React StrictMode и смена ссылки подписки: subscribe → unsubscribe → subscribe, getSnapshot подряд
+  it('N переподписок и getSnapshot → один запрос, снимок стабилен по ссылке', async () => {
+    const api = makeApi({ items: [v('a')], used: 1, limit: 5, own: null } as LoraVersionsDto);
+    const ctl = createLoraVersionsController('p', 's', api);
+    for (let i = 0; i < 20; i++) { ctl.subscribe(() => {})(); }
+    ctl.subscribe(() => {});
+    await Promise.resolve();
+    expect(api.versions).toHaveBeenCalledTimes(1);
+    const a = ctl.getSnapshot();
+    expect(ctl.getSnapshot()).toBe(a);
+    expect(ctl.getSnapshot()).toBe(a);
+  });
+});

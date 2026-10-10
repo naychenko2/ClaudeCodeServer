@@ -71,6 +71,13 @@ export function isLost(v: LoraVersionDto): boolean {
   return loraFailure({ body: { code: v.error?.code } }).reason === 'lost';
 }
 
+// Текст отказа версии для человека: только из loraTrainTexts по коду, сырой error.message (stderr воркера) не показываем
+export function versionFailureText(v: LoraVersionDto): string {
+  if (isLost(v)) return TRAIN_TEXT.failedLost;
+  if (isAllRejected(v)) return TRAIN_TEXT.failedAllRejected;
+  return TRAIN_TEXT.failedBody;
+}
+
 export function isAllRejected(v: LoraVersionDto): boolean {
   if (v.photosKept === 0) return true;
   return v.photosCount > 0 && (v.rejected?.length ?? 0) >= v.photosCount;

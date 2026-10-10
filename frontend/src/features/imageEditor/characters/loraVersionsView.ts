@@ -22,6 +22,7 @@ const timeOf = (iso: string | undefined) => {
 export function versionTitle(v: LoraVersionDto, all: LoraVersionDto[]): string {
   const own = v.title?.trim();
   if (own) return own;
+  if (v.status === 'training') return VERSIONS_TEXT.trainingHint;
   const day = dayKey(when(v));
   const sameDay = !!day && all.some(x => x.runId !== v.runId && dayKey(when(x)) === day);
   const date = formatTrainedDate(when(v));

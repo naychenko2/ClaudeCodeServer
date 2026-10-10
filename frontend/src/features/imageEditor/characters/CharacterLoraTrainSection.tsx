@@ -140,7 +140,7 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
     case 'failed':
       body = (
         <>
-          {note(view.allRejected ? TRAIN_TEXT.failedAllRejected : TRAIN_TEXT.failedBody, 'danger', AlertCircle, TRAIN_TEXT.failedTitle)}
+          {note(view.allRejected ? TRAIN_TEXT.failedAllRejected : view.lost ? TRAIN_TEXT.failedLost : TRAIN_TEXT.failedBody, 'danger', AlertCircle, TRAIN_TEXT.failedTitle)}
           {!view.allRejected && startBtn(TRAIN_TEXT.retry, false, <RefreshCw {...ico} />)}
         </>
       );

@@ -114,7 +114,8 @@ public class CharacterLoraVersionsController(
 
     private static VersionDto Dto(CharacterLoraRun r, string? active) => new(
         r.RunId, r.Status, r.Title, r.CreatedAt, r.TrainedAt, r.PhotosCount, r.PhotosKept, r.Trigger,
-        CharacterLoraRuns.IsConnected(r, active), r.Rejected, r.Error);
+        CharacterLoraRuns.IsConnected(r, active), r.Rejected, r.Error,
+        r.Status == CharacterLoraRuns.Status.Ready ? r.LoraFile : null);
 
     private void Notify(string root, CharacterChange change)
     {
@@ -158,5 +159,6 @@ public class CharacterLoraVersionsController(
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? PhotosKept,
         string Trigger, bool Connected,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<LoraRunRejection>? Rejected,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] LoraRunError? Error);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] LoraRunError? Error,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LoraFile);
 }

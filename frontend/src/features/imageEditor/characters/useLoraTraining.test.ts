@@ -214,7 +214,7 @@ describe('контроллер обучения LoRA', () => {
     expect(ctl2.getSnapshot().busy).toBe(false);
   });
 
-  it('устаревший ответ после отписки не меняет снимок', async () => {
+  it('ответ после отписки (StrictMode) не теряется, но опрос без подписчиков не заводится', async () => {
     let release!: (s: LoraTrainStateDto) => void;
     const api = makeApi([baseState]);
     api.trainState.mockImplementationOnce(() => new Promise<LoraTrainStateDto>(r => { release = r; }));
@@ -223,7 +223,9 @@ describe('контроллер обучения LoRA', () => {
     off();
     release(running(7));
     await flush();
-    expect(ctl.getSnapshot().view).toEqual({ kind: 'loading' });
+    expect(ctl.getSnapshot().view.kind).toBe('running');
+    await vi.advanceTimersByTimeAsync(LORA_POLL_MS * 3);
+    expect(api.trainState).toHaveBeenCalledTimes(1);
   });
 
   it('более новый refresh вытесняет медленный старый', async () => {
@@ -275,5 +277,18 @@ describe('loraFailure', () => {
     expect(loraFailure(new OfflineError()).reason).toBe('network');
     expect(loraFailure(new RequestTimeoutError(30000)).reason).toBe('network');
     expect(loraFailure(new TypeError('fetch failed')).reason).toBe('network');
+  });
+});
+
+describe('шторм запросов (критическое: переподписка не грузит заново)', () => {
+  it('N переподписок и getSnapshot → один запрос, снимок стабилен по ссылке', async () => {
+    const api = makeApi([baseState]);
+    const ctl = createLoraTrainController('p', 's', api);
+    for (let i = 0; i < 20; i++) { ctl.subscribe(() => {})(); }
+    ctl.subscribe(() => {});
+    await flush();
+    expect(api.trainState).toHaveBeenCalledTimes(1);
+    const a = ctl.getSnapshot();
+    expect(ctl.getSnapshot()).toBe(a);
   });
 });

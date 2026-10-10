@@ -2,7 +2,7 @@
 // Вход — данные хука статуса, число фото и роль; React здесь нет, тестируется в node.
 
 import type { LoraTrainStateDto, LoraVersionDto } from '../api';
-import type { LoraFailure } from './loraErrors';
+import { loraFailure, type LoraFailure } from './loraErrors';
 import type { LoraTrainView } from './useLoraTraining';
 import {
   TRAIN_ACTION_FAILED, TRAIN_BLOCKED, TRAIN_BUSY_OTHER, TRAIN_BUSY_OTHER_NOTIME, TRAIN_ETA, TRAIN_ETA_UNKNOWN,
@@ -55,7 +55,7 @@ export type TrainSectionView =
   | { kind: 'queued' }
   | { kind: 'running'; text: string; percent: number | null; etaText: string | null }
   | { kind: 'done'; version: LoraVersionDto; first: boolean; meta: string; photosChanged: boolean }
-  | { kind: 'failed'; version: LoraVersionDto; allRejected: boolean }
+  | { kind: 'failed'; version: LoraVersionDto; allRejected: boolean; lost: boolean }
   | {
     kind: 'form';
     // Подпись и блокировка кнопки старта
@@ -65,6 +65,18 @@ export type TrainSectionView =
     stopped: boolean;
     photosChanged: boolean;
   };
+
+// Бэкенд пометил упавшее обучение кодом lost (задача пропала после отката или потери очереди)
+export function isLost(v: LoraVersionDto): boolean {
+  return loraFailure({ body: { code: v.error?.code } }).reason === 'lost';
+}
+
+// Текст отказа версии для человека: только из loraTrainTexts по коду, сырой error.message (stderr воркера) не показываем
+export function versionFailureText(v: LoraVersionDto): string {
+  if (isLost(v)) return TRAIN_TEXT.failedLost;
+  if (isAllRejected(v)) return TRAIN_TEXT.failedAllRejected;
+  return TRAIN_TEXT.failedBody;
+}
 
 export function isAllRejected(v: LoraVersionDto): boolean {
   if (v.photosKept === 0) return true;
@@ -112,7 +124,7 @@ export function trainSectionView(i: TrainViewInput): TrainSectionView {
       photosChanged: !!state?.photosChanged,
     };
   }
-  if (view.kind === 'failed') return { kind: 'failed', version: view.version, allRejected: isAllRejected(view.version) };
+  if (view.kind === 'failed') return { kind: 'failed', version: view.version, allRejected: isAllRejected(view.version), lost: isLost(view.version) };
 
   // idle / cancelled / закрытое done: занятость карты, затем форма старта
   if (i.error?.reason === 'gpu_busy' || (state?.gpu.busy && !state.gpu.mine && !state.current)) {

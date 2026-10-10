@@ -110,6 +110,7 @@ public sealed partial class LocalMediaService
             catch (ComfyException ex)
             {
                 log.LogWarning("ComfyUI не принял обучение LoRA: {Error}", ex.Message);
+                await CleanupPartialUploadAsync(request, uploaded.Count, ct);
                 return LoraRefusal(LoraTrainErrorCode.Unavailable, ex.Message);
             }
 

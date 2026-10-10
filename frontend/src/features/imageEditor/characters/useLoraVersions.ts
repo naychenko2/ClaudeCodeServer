@@ -1,7 +1,7 @@
 // Версии LoRA персонажа: список, подключение, переименование, удаление (ADR-026 §7.3).
 // Логика — в контроллере без React, хук — тонкая обёртка.
 
-import { useMemo, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { loraTrainApi, type ImageEditCharacter, type LoraTrainApi, type LoraVersionsDto } from '../api';
 import { loraFailure, type LoraFailure } from './loraErrors';
 
@@ -29,6 +29,8 @@ export function createLoraVersionsController(
 ): LoraVersionsController {
   let snap: LoraVersionsSnapshot = { data: null, loading: true, error: null, pending: [] };
   const listeners = new Set<() => void>();
+  // Загрузка стартует один раз на контроллер: переподписка (StrictMode, смена ссылки) её не повторяет
+  let started = false;
   const set = (patch: Partial<LoraVersionsSnapshot>) => {
     snap = { ...snap, ...patch };
     listeners.forEach(fn => fn());
@@ -63,7 +65,7 @@ export function createLoraVersionsController(
     getSnapshot: () => snap,
     subscribe(fn) {
       listeners.add(fn);
-      if (listeners.size === 1) void refresh();
+      if (!started) { started = true; void refresh(); }
       return () => { listeners.delete(fn); };
     },
     refresh,
@@ -103,10 +105,9 @@ export function useLoraVersions(
     [projectId, slug]);
   const none: LoraVersionsSnapshot = useMemo(
     () => ({ data: null, loading: false, error: null, pending: [] }), []);
-  const snap = useSyncExternalStore(
-    fn => (ctl ? ctl.subscribe(fn) : () => {}),
-    () => (ctl ? ctl.getSnapshot() : none),
-    () => (ctl ? ctl.getSnapshot() : none),
-  );
+  // Ссылки стабильны по контроллеру: инлайновая подписка переподписывалась на каждом рендере
+  const subscribe = useCallback((fn: () => void) => (ctl ? ctl.subscribe(fn) : () => {}), [ctl]);
+  const getSnapshot = useCallback(() => (ctl ? ctl.getSnapshot() : none), [ctl, none]);
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return { ...snap, ctl };
 }

@@ -19,9 +19,11 @@ public sealed class LoraTrainingFinisher(
     TimeProvider? time = null) : BackgroundService
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
+    // Запись training моложе этого срока «потерянной» не считаем: задача шва заводится до записи, но запас дешевле гонки
+    public static readonly TimeSpan LostGrace = TimeSpan.FromMinutes(2);
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
-    // Полный обход проектов нужен один раз за жизнь процесса: подобрать «deleting» после падения; дальше — по индексу
+    // Полный обход проектов нужен один раз за жизнь процесса: наполнить индексы «training» и «deleting»; дальше — по ним
     private bool _fullScanDone;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -61,6 +63,17 @@ public sealed class LoraTrainingFinisher(
 
         if (!_fullScanDone)
         {
+            // Записи training без задачи в сторе (откат кода, потеря jobs.json) группой из ListAll не находятся:
+            // первичное наполнение индекса, дальше его ведёт CharacterLoraRuns
+            foreach (var project in projects.GetAll())
+            {
+                ct.ThrowIfCancellationRequested();
+                if (project.OwnerId is null || !ProjectCapabilities.FilesOnServer(project) || !Directory.Exists(project.RootPath)) continue;
+                foreach (var character in CharacterStore.List(project.RootPath))
+                    if (runs.List(project.RootPath, character.Slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
+                        runs.RegisterTraining(project.RootPath, character.Slug);
+            }
+
             foreach (var project in projects.GetAll())
             {
                 ct.ThrowIfCancellationRequested();
@@ -71,6 +84,20 @@ public sealed class LoraTrainingFinisher(
                         runs.RegisterDeleting(project.RootPath, character.Slug);
             }
             _fullScanDone = true;
+        }
+
+        // Каждый круг: персонажи с идущим обучением, которых не покрыли группы шва (задача могла пропасть из стора)
+        var trainingPending = runs.CharactersWithTraining().Where(k => !settled.Contains(k)).ToList();
+        if (trainingPending.Count > 0)
+        {
+            var roots = projects.GetAll().Where(ProjectCapabilities.FilesOnServer)
+                .GroupBy(p => p.RootPath).ToDictionary(g => g.Key, g => g.First());
+            foreach (var (root, slug) in trainingPending)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (roots.TryGetValue(root, out var tp) && tp.OwnerId is { } owner) await SettleAsync(owner, tp.Id, slug, ct);
+                runs.UnregisterTrainingIfEmpty(root, slug);
+            }
         }
 
         var pending = runs.CharactersWithDeleting().Where(k => !settled.Contains(k)).ToList();
@@ -92,7 +119,10 @@ public sealed class LoraTrainingFinisher(
         if (projects.GetById(projectId) is not { } project || project.OwnerId != ownerId || !ProjectCapabilities.FilesOnServer(project)) return;
         if (CharacterStore.Get(project.RootPath, slug) is null) return;
 
-        foreach (var state in trainer.ListAll().Where(s => s.OwnerId == ownerId && s.ProjectId == projectId && s.Slug == slug))
+        // Записи читаем ДО снимка задач: задача шва заводится раньше записи, обратный порядок дал бы ложный «lost»
+        var training = runs.List(project.RootPath, slug).Where(r => r.Status == CharacterLoraRuns.Status.Training).ToList();
+        var states = trainer.ListAll().Where(s => s.OwnerId == ownerId && s.ProjectId == projectId && s.Slug == slug).ToList();
+        foreach (var state in states)
         {
             ct.ThrowIfCancellationRequested();
             if (runs.Get(project.RootPath, slug, state.RunId) is not { Status: CharacterLoraRuns.Status.Training } run) continue;
@@ -103,7 +133,27 @@ public sealed class LoraTrainingFinisher(
                 log.LogWarning(ex, "Доводчик обучения LoRA: версия {Run} персонажа {Slug} не обновлена", state.RunId, slug);
             }
         }
+        MarkLost(project, slug, training, states);
         await DeleteMarkedAsync(project, slug, ct);
+    }
+
+    // Запись training, для которой шов отвечает «задачи нет», навсегда заблокировала бы старт, удаление и отмену.
+    // Шов выключен — ответ ничего не значит, записи не трогаем
+    private void MarkLost(Project project, string slug, List<CharacterLoraRun> training, List<LoraTrainState> states)
+    {
+        if (trainer is null || !trainer.Enabled) return;
+        var now = _time.GetUtcNow();
+        foreach (var run in training)
+        {
+            if (now - run.CreatedAt < LostGrace) continue;
+            if (states.Any(s => s.RunId == run.RunId && (run.JobId is null || run.JobId == s.JobId))) continue;
+            runs.Update(project.RootPath, slug, run.RunId, r => r.Status != CharacterLoraRuns.Status.Training ? r : r with
+            {
+                Status = CharacterLoraRuns.Status.Failed,
+                Error = new LoraRunError("lost", "Задача обучения пропала"),
+            });
+            log.LogWarning("Доводчик обучения LoRA: задача версии {Run} персонажа {Slug} не найдена, версия помечена failed lost", run.RunId, slug);
+        }
     }
 
     private async Task FinishAsync(Project project, string slug, CharacterLoraRun run, LoraTrainState state, CancellationToken ct)

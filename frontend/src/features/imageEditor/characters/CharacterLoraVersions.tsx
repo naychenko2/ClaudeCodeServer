@@ -12,7 +12,7 @@ import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
 } from './loraTrainTexts';
-import { failureText } from './loraTrainView';
+import { failureText, versionFailureText } from './loraTrainView';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
 } from './loraVersionsView';
@@ -99,13 +99,13 @@ export function CharacterLoraVersions({ versions, disabled }: {
                   {v.connected && <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}{mark.text}
                 </Badge>
               </div>
-              {v.status === 'training' && (
+              {v.status === 'training' && v.title?.trim() && (
                 <div style={{ display: 'flex', gap: SP.xs, alignItems: 'center', fontSize: FS.sm, color: C.textMuted }}>
                   <Cpu {...ico} />{VERSIONS_TEXT.trainingHint}
                 </div>
               )}
-              {v.status === 'failed' && v.error?.message && (
-                <div style={{ fontSize: FS.sm, color: C.textMuted, overflowWrap: 'anywhere' }}>{v.error.message}</div>
+              {v.status === 'failed' && (
+                <div style={{ fontSize: FS.sm, color: C.textMuted, overflowWrap: 'anywhere' }}>{versionFailureText(v)}</div>
               )}
               {acts.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>

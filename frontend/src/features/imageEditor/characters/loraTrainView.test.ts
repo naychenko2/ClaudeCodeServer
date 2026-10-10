@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LoraTrainStateDto, LoraVersionDto } from '../api';
 import { TRAIN_BLOCKED, TRAIN_TEXT } from './loraTrainTexts';
 import {
-  badgeFor, confirmParts, failureText, formatDuration, isAllRejected, isValidTrigger, trainSectionView,
+  badgeFor, confirmParts, failureText, formatDuration, isAllRejected, isLost, versionFailureText, isValidTrigger, trainSectionView,
   type TrainViewInput,
 } from './loraTrainView';
 
@@ -86,6 +86,14 @@ describe('выбор состояния', () => {
     expect(isAllRejected(ver({ photosCount: 2, photosKept: undefined, rejected: [
       { name: 'a', reason: 'no_face' }, { name: 'b', reason: 'many_faces' }] }))).toBe(true);
   });
+  it('текст отказа версии: сырой stderr воркера не показывается, только тексты по коду', () => {
+    const raw = 'Albumentations CPUExecutionProvider Traceback';
+    expect(versionFailureText(ver({ status: 'failed', error: { code: 'worker_error', message: raw } }))).toBe(TRAIN_TEXT.failedBody);
+    expect(versionFailureText(ver({ status: 'failed', error: { code: 'strange_new', message: raw } }))).toBe(TRAIN_TEXT.failedBody);
+    expect(versionFailureText(ver({ status: 'failed', error: { code: 'lost', message: raw } }))).toBe(TRAIN_TEXT.failedLost);
+    expect(versionFailureText(ver({ status: 'failed', photosCount: 22, photosKept: 0, error: { code: 'worker_error', message: raw } })))
+      .toBe(TRAIN_TEXT.failedAllRejected);
+  });
   it('отмена: форма «Обучить» (не «заново») с пометкой «остановлено»', () => {
     const cancelled = { kind: 'cancelled' as const, version: ver({ status: 'cancelled' }) };
     expect(trainSectionView(input({ view: cancelled })))
@@ -146,5 +154,15 @@ describe('тексты и бейджи', () => {
     expect(failureText({ reason: 'bad_trigger' })).toBe(TRAIN_TEXT.triggerError);
     expect(failureText({ reason: 'gpu_busy' })).toBeNull();
     expect(failureText({ reason: 'network' })).toBeTruthy();
+  });
+});
+
+describe('код ошибки lost', () => {
+  const lost = ver({ status: 'failed', error: { code: 'lost', message: 'x' } });
+  it('распознаётся и даёт утверждённый текст в виде «не получилось»', () => {
+    expect(isLost(lost)).toBe(true);
+    expect(isLost(ver({ status: 'failed', error: { code: 'worker_error', message: 'x' } }))).toBe(false);
+    expect(trainSectionView(input({ view: { kind: 'failed', version: lost } }))).toMatchObject({ kind: 'failed', lost: true });
+    expect(TRAIN_TEXT.failedLost).toBe('Обучение прервалось: видеокарта его потеряла. Фото на месте — можно начать заново.');
   });
 });

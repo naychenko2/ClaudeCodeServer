@@ -312,6 +312,20 @@ public class LocalMediaLoraTrainTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_ComfyRejectsPrompt_AfterUploads_TriesCleanupOfRunFolder()
+    {
+        var (service, store) = Build();
+        _comfy.RejectPrompt = """{"error":{"message":"Prompt outputs failed validation"}}""";
+
+        (await service.StartLoraTrainAsync(Start(), default)).Error.Should().Be(LoraTrainErrorCode.Unavailable);
+
+        _comfy.Uploads.Should().NotBeEmpty();
+        store.ActiveLoraTrainCount().Should().Be(0);
+        _comfy.Prompts.Should().HaveCount(2, "обучение и следом попытка уборки загруженных фото");
+        _comfy.Prompts[1]["prompt"]!["worker"]!["inputs"]!["op"]!.GetValue<string>().Should().Be("lora_delete");
+    }
+
+    [Fact]
     public async Task Start_FailureBeforeAnyUpload_QueuesNoCleanup()
     {
         var (service, store) = Build();

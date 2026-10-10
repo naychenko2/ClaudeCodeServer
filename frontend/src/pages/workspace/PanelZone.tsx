@@ -1383,6 +1383,9 @@ export function PanelZone({
           position: 'absolute', top: GAP, maxHeight: `calc(100% - ${GAP * 2}px)`, zIndex: 15,
           ...(isLeft ? { left: RAIL_W + GAP } : { right: RAIL_W + GAP }),
           width: 'min(85vw, 380px)', display: 'flex', flexDirection: 'column', boxShadow: SHADOW.modal,
+          // Растянутая панель (делит высоту либо просит её сама) имеет flex-basis 0: у drawer'а
+          // с высотой «по контенту» она схлопывалась до PANEL_MIN_H. Нужна определённая высота.
+          ...(multiInCol || tabletKeys.some(k => !!fillWanted[k]) ? { height: `calc(100% - ${GAP * 2}px)` } : {}),
         }}>
           {stack}
         </div>

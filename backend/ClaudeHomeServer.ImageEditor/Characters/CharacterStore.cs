@@ -213,15 +213,19 @@ public static partial class CharacterStore
         return null;
     }
 
-    // Ручная правка: поля меняются только переданные, источник становится human
+    // Ручная правка: поля меняются только переданные, источник становится human.
+    // Запись из одних null — сброс ручной разметки: метки и источник стираются, фото снова доступно авторазметке
     private static void ApplyHumanLabels(CharacterManifest manifest, IReadOnlyDictionary<string, CharacterPhotoLabels> labels)
     {
         for (var i = 0; i < manifest.Photos.Count; i++)
         {
             var photo = manifest.Photos[i];
             if (!labels.TryGetValue(photo.File, out var l)) continue;
-            // Пустая запись не правка: фото не блокируем от авторазметки
-            if (l.Angle is null && l.Pitch is null && l.Emotion is null) continue;
+            if (l.Angle is null && l.Pitch is null && l.Emotion is null)
+            {
+                manifest.Photos[i] = photo with { Angle = null, Pitch = null, Emotion = null, LabelSource = null };
+                continue;
+            }
             manifest.Photos[i] = photo with
             {
                 Angle = l.Angle ?? photo.Angle,

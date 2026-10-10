@@ -48,8 +48,11 @@ public class CharacterSceneParserTests
     [InlineData("серьёзный взгляд", null, null, "serious")]
     [InlineData("грустная девушка", null, null, "sad")]
     [InlineData("удивлённое лицо", null, null, "surprised")]
-    [InlineData("снимок сверху", null, "up", null)]
-    [InlineData("снято снизу", null, "down", null)]
+    [InlineData("снято сверху", null, null, null)]
+    [InlineData("снимок снизу", null, null, null)]
+    // допустимо: подбор мягко штрафует, фиксируем текущее поведение подстрочного поиска
+    [InlineData("профиль компании", "profile", null, null)]
+    [InlineData("серьёзный бизнес", null, null, "serious")]
     [InlineData("кот на диване", null, null, null)]
     [InlineData("", null, null, null)]
     [InlineData("   ", null, null, null)]

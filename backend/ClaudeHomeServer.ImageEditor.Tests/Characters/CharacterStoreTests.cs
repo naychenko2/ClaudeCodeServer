@@ -692,18 +692,24 @@ public class CharacterStoreTests : IDisposable
     }
 
     [Fact]
-    public void Ручная_правка_без_меток_не_ставит_источник_human()
+    public void Ручная_запись_из_одних_null_сбрасывает_разметку_и_открывает_фото_авторазметке()
     {
         var m = Create("Аня");
         var file = m.Photos[0].File;
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            Labels(file, "profile", "laugh")))!.Error.Should().BeNull();
         var empty = new Dictionary<string, CharacterPhotoLabels> { [file] = new(null, null, null) };
 
         CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, empty))!
             .Error.Should().BeNull();
 
-        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().BeNull();
-        // и фото по-прежнему открыто для авторазметки
+        var photo = CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file);
+        photo.Angle.Should().BeNull();
+        photo.Pitch.Should().BeNull();
+        photo.Emotion.Should().BeNull();
+        photo.LabelSource.Should().BeNull();
         CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "front", "smile"))!.Should().Equal(file);
+        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().Be("auto");
     }
 
     [Fact]

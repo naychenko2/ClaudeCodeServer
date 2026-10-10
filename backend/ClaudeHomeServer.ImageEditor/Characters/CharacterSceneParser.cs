@@ -48,14 +48,14 @@ public sealed class CharacterSceneParser
     {
         try
         {
-            // Раннер может не уважать токен, поэтому потолок держим ещё и ожиданием снаружи
+            // Контракт: раннер обязан уважать токен; потолок 3 с — страховка на случай, если не уважает.
+            // WaitAsync не оставляет у нас ссылки на брошенный вызов после таймаута
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(_timeout);
-            var call = _runner.RunFreeAsync(LocalActionCatalog.CharacterSceneParse,
-                $"{Instruction}\n\nТЕКСТ ЗАПРОСА:\n{prompt}", jsonFormat: "json", cts.Token);
-            var done = await Task.WhenAny(call, Task.Delay(_timeout, ct));
-            if (done != call) return null;
-            return ParseModelAnswer(await call);
+            var raw = await _runner.RunFreeAsync(LocalActionCatalog.CharacterSceneParse,
+                $"{Instruction}\n\nТЕКСТ ЗАПРОСА:\n{prompt}", jsonFormat: "json", cts.Token)
+                .WaitAsync(_timeout, ct);
+            return ParseModelAnswer(raw);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception) { return null; }
@@ -84,8 +84,9 @@ public sealed class CharacterSceneParser
         return value is not null && value != PhotoLabelValues.Unknown && dictionary.Contains(value) ? value : null;
     }
 
-    // Знак pitch у фото (ADR-027, §5) не сверен: «сверху» — лицо запрокинуто (up),
-    // «снизу» — опущено (down). Пересмотреть вместе с результатом повторной пробы
+    // Наклон головы правилами не угадать («снято сверху» — ракурс камеры, а не поза): pitch из сюжета
+    // берётся только из ответа модели. Подстрочный поиск даёт редкие ложные срабатывания
+    // («профиль компании», «серьёзный бизнес») — допустимо: подбор мягко штрафует несовпадение
     public static CharacterScene ParseByRules(string? prompt)
     {
         if (string.IsNullOrWhiteSpace(prompt)) return new CharacterScene(null, null, null);
@@ -94,7 +95,7 @@ public sealed class CharacterSceneParser
             First(text, ("profile", ["в профиль", "профиль"]),
                 ("three-quarter", ["вполоборота", "в пол-оборота", "три четверти", "трех четвертей"]),
                 ("front", ["анфас", "в камеру"])),
-            First(text, ("up", ["сверху"]), ("down", ["снизу"])),
+            null,
             First(text, ("laugh", ["смеется", "смех"]), ("smile", ["улыбается", "улыбк"]),
                 ("serious", ["серьезн"]), ("sad", ["грустн"]), ("surprised", ["удивл"])));
     }

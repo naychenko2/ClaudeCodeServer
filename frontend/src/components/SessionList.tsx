@@ -9,7 +9,7 @@ import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
-import { C, FONT, FS, GROUP_COLORS, MODAL_W } from '../lib/design';
+import { C, FONT, FS, GROUP_COLORS, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
@@ -34,7 +34,7 @@ import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolv
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
-import { ChatCard } from './ChatCard';
+import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
@@ -74,6 +74,9 @@ interface Props {
 
 // Режимы группировки списка проекта: «Темы» есть только здесь, у глобального списка их нет
 const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'tags', 'subjects', 'none'];
+// Зазор под секцией группы (дни, теги, темы). Нижний padding списка его вычитает
+// (не больше SP.sm − ROW_GAP, иначе padding уйдёт в минус)
+const GROUP_GAP = SP.xs + SP.xxs;
 // Дебаунс перечитывания реестра тем по неизвестному subjectId из опроса
 const SUBJECT_RELOAD_DEBOUNCE_MS = 1000;
 
@@ -645,6 +648,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { setArchiveLimit(ARCHIVE_PAGE); }, [filters.archivedOnly, project.id]);
   const archiveRest = filters.archivedOnly ? Math.max(0, filteredSessions.length - archiveLimit) : 0;
   const archiveCut = archiveRest > 0;
+  // Хвост под последней карточкой (её ROW_GAP и GROUP_GAP секции), который нижний
+  // padding списка вычитает. Под кнопкой «Показать ещё» хвоста нет — там полный SP.sm
+  const listTail = archiveCut ? 0 : ROW_GAP + (groupBy === 'none' ? 0 : GROUP_GAP);
   const archiveShownIds = useMemo(
     () => archiveCut
       ? new Set(sortChatsFlat(filteredSessions, sortOrder).slice(0, archiveLimit).map(s => s.id))
@@ -714,7 +720,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const hasOld = !g.subject && !registryEmpty && sweepSince !== null
       && g.items.some(c => new Date(c.updatedAt).getTime() < sweepSince);
     return (
-      <div key={key} className={flashSubject === key ? LIST_FLASH_CLASS : undefined} style={{ marginBottom: 6, display: 'flow-root' }}>
+      <div key={key} className={flashSubject === key ? LIST_FLASH_CLASS : undefined} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
         {!g.subject && registryEmpty && online && (
           <EmptyState
             compact
@@ -854,7 +860,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
         // Фон явный — по той же причине, что в ChatList: прозрачные строки и липкая
         // подпись группы держатся на том, что под ними именно bgWhite
-        style={{ flex: 1, overflowY: 'auto', background: C.bgWhite, padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+        // Снизу — то же поле, что сбоку (SP.sm), считая от края последней карточки:
+        // её marginBottom и хвостовой отступ последней группы уже лежат под ней, и
+        // поверх полного padding'а они давали низ вдвое шире боковых полей
+        style={{
+          flex: 1, overflowY: 'auto', background: C.bgWhite,
+          padding: `${groupBy === 'none' ? SP.sm : SP.xxs}px ${SP.sm}px ${SP.sm - listTail}px`,
+        }}>
         {/* Все чаты проекта в архиве — то же состояние, что у глобального списка:
             иное пустое состояние молчит (чаты есть), и панель без этого блока
             оставалась бы белой дырой. Кнопки создания нет — «Новый» в тулбаре панели */}
@@ -922,7 +934,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               ))
             ) : tagGroups ? (
               tagGroups.map(g => (
-                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
+                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
                   {renderTagSectionHeader(g)}
                   {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                     // Корень с несколькими тегами дублируется в каждой своей секции —
@@ -937,7 +949,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               )))
             ) : (
               dayGroups.map(g => (
-                <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
+                <div key={g.title} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
                   <ListDateDivider title={g.title} plain />
                   {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                     <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
@@ -947,7 +959,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             )}
           </ChatGroupingDnd>
         {archiveRest > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 2px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: `${SP.xs + SP.xxs}px 0 0` }}>
             <Button variant="ghost" size="sm" onClick={() => setArchiveLimit(n => n + ARCHIVE_PAGE)}>
               Показать ещё {Math.min(archiveRest, ARCHIVE_PAGE)} из {archiveRest}
             </Button>

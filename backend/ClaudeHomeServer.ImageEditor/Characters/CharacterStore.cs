@@ -131,6 +131,7 @@ public static partial class CharacterStore
         if ((remove.Count > 0 || patch.AddPhotos.Count > 0) && remaining is < MinPhotos or > MaxPhotos)
             return Invalid($"Нужно от {MinPhotos} до {MaxPhotos} фото");
         if (CheckPhotos(patch.AddPhotos) is { } bad) return Invalid(bad);
+        if (CheckPhotoLabels(manifest, remove, patch.PhotoLabels) is { } labelError) return Invalid(labelError);
         if (patch.PrimaryPhoto is { } primary
             && (remove.Contains(primary) || manifest.Photos.All(p => p.File != primary)))
             return Invalid("Главное фото не найдено");
@@ -148,6 +149,7 @@ public static partial class CharacterStore
         if (patch.PrimaryPhoto is { } chosen)
             manifest.Photos = [.. manifest.Photos.Select(p => p with { Primary = p.File == chosen })];
         EnsurePrimary(manifest);
+        if (patch.PhotoLabels is { Count: > 0 } labels) ApplyHumanLabels(manifest, labels);
         if (patch.Lora is { } lora) ApplyLora(manifest, lora);
 
         // Манифест перезаписывается целиком через временный файл: оборванная запись не
@@ -158,6 +160,72 @@ public static partial class CharacterStore
         File.Move(temp, target, overwrite: true);
         written.Add(Rel(slug, ManifestFile));
         return ImageEditCallResult<CharacterChange>.Ok(new CharacterChange(manifest, written, deleted));
+    }
+
+    // Слияние меток авторазметки (ADR-027, §1). Вызывать под блокировкой персонажа
+    // (CharacterLoraRuns.LockCharacterAsync), как Update: метки считались долго, манифест за это
+    // время мог поменяться, поэтому он читается заново. Фото с LabelSource=human не трогаем целиком,
+    // метка удалённого фото отбрасывается, прочие поля манифеста остаются как есть.
+    // null — персонажа нет; иначе имена файлов, чьи метки записаны.
+    public static IReadOnlyList<string>? MergeAutoLabels(
+        string root, string slug, IReadOnlyDictionary<string, CharacterPhotoLabels> labels)
+    {
+        var manifest = Get(root, slug);
+        var dir = CharacterDir(root, slug);
+        if (manifest is null || dir is null) return null;
+
+        var applied = new List<string>();
+        for (var i = 0; i < manifest.Photos.Count; i++)
+        {
+            var photo = manifest.Photos[i];
+            if (photo.LabelSource == PhotoLabelValues.Human || !labels.TryGetValue(photo.File, out var found)) continue;
+            manifest.Photos[i] = photo with
+            {
+                Angle = found.Angle ?? photo.Angle,
+                Pitch = found.Pitch ?? photo.Pitch,
+                Emotion = found.Emotion ?? photo.Emotion,
+                LabelSource = PhotoLabelValues.Auto,
+            };
+            applied.Add(photo.File);
+        }
+        if (applied.Count == 0) return applied;
+
+        var target = Path.Combine(dir, ManifestFile);
+        var temp = target + ".tmp";
+        File.WriteAllText(temp, manifest.Serialize());
+        File.Move(temp, target, overwrite: true);
+        return applied;
+    }
+
+    private static string? CheckPhotoLabels(
+        CharacterManifest manifest, HashSet<string> remove, IReadOnlyDictionary<string, CharacterPhotoLabels>? labels)
+    {
+        if (labels is null) return null;
+        foreach (var (file, l) in labels)
+        {
+            if (remove.Contains(file) || manifest.Photos.All(p => p.File != file)) return "Такого фото у персонажа нет";
+            if (l.Angle is not null && !PhotoLabelValues.Angles.Contains(l.Angle)) return "Неизвестный ракурс";
+            if (l.Pitch is not null && !PhotoLabelValues.Pitches.Contains(l.Pitch)) return "Неизвестный наклон головы";
+            if (l.Emotion is not null && !PhotoLabelValues.Emotions.Contains(l.Emotion)) return "Неизвестная эмоция";
+        }
+        return null;
+    }
+
+    // Ручная правка: поля меняются только переданные, источник становится human
+    private static void ApplyHumanLabels(CharacterManifest manifest, IReadOnlyDictionary<string, CharacterPhotoLabels> labels)
+    {
+        for (var i = 0; i < manifest.Photos.Count; i++)
+        {
+            var photo = manifest.Photos[i];
+            if (!labels.TryGetValue(photo.File, out var l)) continue;
+            manifest.Photos[i] = photo with
+            {
+                Angle = l.Angle ?? photo.Angle,
+                Pitch = l.Pitch ?? photo.Pitch,
+                Emotion = l.Emotion ?? photo.Emotion,
+                LabelSource = PhotoLabelValues.Human,
+            };
+        }
     }
 
     // Проверка «задать LoRA»: null — всё в порядке, иначе отказ. Зовёт и Update, и контроллер

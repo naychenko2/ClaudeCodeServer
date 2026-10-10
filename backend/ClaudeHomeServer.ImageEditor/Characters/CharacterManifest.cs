@@ -87,7 +87,32 @@ public sealed class CharacterManifest
 public sealed record CharacterLora(string Name, string Trigger, double Strength);
 
 // File — только имя файла внутри папки персонажа, без каталогов
-public sealed record CharacterPhoto(string File, bool Primary = false, string? Angle = null);
+// Метки (ADR-027, §1): null — разметка не пробовалась, "unknown" — пробовали, ответа нет.
+// Extra переносит незнакомые поля фото как есть, чтобы откат кода не стёр их при правке.
+public sealed record CharacterPhoto(
+    string File, bool Primary = false,
+    string? Angle = null, string? Pitch = null, string? Emotion = null, string? LabelSource = null)
+{
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; init; }
+}
+
+// Словари меток фото и источник метки
+public static class PhotoLabelValues
+{
+    public const string Unknown = "unknown";
+    public const string Auto = "auto";
+    public const string Human = "human";
+
+    public static readonly IReadOnlySet<string> Angles =
+        new HashSet<string> { "front", "three-quarter", "profile", Unknown };
+    public static readonly IReadOnlySet<string> Pitches =
+        new HashSet<string> { "level", "up", "down", Unknown };
+    public static readonly IReadOnlySet<string> Emotions =
+        new HashSet<string> { "neutral", "smile", "laugh", "serious", "sad", "surprised", Unknown };
+}
+
+// Метки одного фото; null в поле — не менять
+public sealed record CharacterPhotoLabels(string? Angle = null, string? Pitch = null, string? Emotion = null);
 
 // То, что видит фронт. Providers наружу не отдаём: там привязки к аккаунту поставщика.
 public sealed record CharacterDto(
@@ -119,7 +144,8 @@ public sealed record CharacterPatch(
     IReadOnlyList<CharacterPhotoUpload> AddPhotos,
     IReadOnlyList<string> RemovePhotos,
     string? PrimaryPhoto,
-    CharacterLoraPatch? Lora = null);
+    CharacterLoraPatch? Lora = null,
+    IReadOnlyDictionary<string, CharacterPhotoLabels>? PhotoLabels = null);
 
 // Три состояния LoRA в патче: Lora == null у CharacterPatch — не трогать; Remove — убрать;
 // иначе задать Name/Trigger/Strength. Known — список LoRA ComfyUI от контроллера

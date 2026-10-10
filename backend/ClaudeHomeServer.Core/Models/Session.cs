@@ -525,6 +525,21 @@ public class Session
     // Теги сессии (из реестра проекта) — per-owner изоляция
     public List<string> Tags { get; set; } = [];
 
+    // --- Тема чата проекта. Не путать с Topic — это значок чата.
+    // Однозначная ссылка на Project.SubjectRegistry; менять поля — ТОЛЬКО через
+    // SessionManager.ApplySubjects (CAS против ручного переноса, сверка с реестром, UpdatedAt
+    // не двигается). Id, которого нет в реестре (тему удалили), везде читается как «без темы».
+    // Все поля nullable: старые записи sessions.json читаются штатно, BackupSchema.Version
+    // не двигается.
+    public string? SubjectId { get; set; }
+    // Кто назначил: SubjectSources.Ai (модель) | SubjectSources.Human (закреплено человеком,
+    // в том числе «убрал из темы» при SubjectId == null) | null (никто).
+    public string? SubjectSource { get; set; }
+    public DateTime? SubjectAssignedAt { get; set; }
+    // Когда модель последний раз видела чат: повторно он кандидат, только если после этого
+    // была активность (UpdatedAt > SubjectTriedAt) — иначе вечный повтор того же вызова.
+    public DateTime? SubjectTriedAt { get; set; }
+
     // Тип происхождения чата — производный от TaskId/AutomationRuleId, единая точка истины.
     public ChatOrigin Origin => TaskId != null ? ChatOrigin.Task
         : AutomationRuleId != null ? ChatOrigin.Automation

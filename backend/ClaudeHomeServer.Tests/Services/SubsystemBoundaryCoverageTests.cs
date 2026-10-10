@@ -259,6 +259,7 @@ public class SubsystemBoundaryCoverageTests
             "ClaudeHomeServer.Services.Media",        // ProjectLinkGuard
             "ClaudeHomeServer.Services.ChatContext",  // ADR-023: стор и контракты контекста чата
             "ClaudeHomeServer.Services.Spheres",      // ISphereDirectory: справочник членства для зон персон
+            "ClaudeHomeServer.Services.ChatSubjects", // темы чатов: чистая часть в Core, склейка — ядро сессий Main
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

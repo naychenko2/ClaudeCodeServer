@@ -1770,6 +1770,11 @@ public class SubsystemBoundaryTests
         // знает только строки Kind и не ссылается на вертикали.
         "ClaudeHomeServer.Services.ChatContext",
         "ClaudeHomeServer.Services.Spheres",      // ISphereDirectory и событие членства — спина зон персон
+        // Темы чатов проекта: чистая часть без зависимостей — санитайзер
+        // имён, планировщик пачки, промпт и разбор ответа модели. Склейка с ядром сессий
+        // (ChatSubjectSweeper, SessionManager.ApplySubjects) живёт в Main рядом с
+        // ChatArchiveService: вертикали у фичи нет, шва к ядру сессий тоже (долг — ADR-014).
+        "ClaudeHomeServer.Services.ChatSubjects",
         // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
         // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes

@@ -27,13 +27,15 @@ public static partial class CharacterStore
     public const int PhotosPerRequest = 3;
     private const int MaxSlugChars = 48;
 
-    [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
+    [GeneratedRegex(@"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\z")]
     private static partial Regex SlugPattern();
 
-    [GeneratedRegex(@"^[\p{L}\p{N}_]+$")]
+    [GeneratedRegex(@"^[\p{L}\p{N}_]+\z")]
     private static partial Regex TriggerPattern();
 
     public static bool IsValidSlug(string? slug) => slug is not null && SlugPattern().IsMatch(slug);
+
+    public static bool IsValidTrigger(string? trigger) => trigger is not null && TriggerPattern().IsMatch(trigger);
 
     public static string SlugFromName(string name)
     {
@@ -172,7 +174,7 @@ public static partial class CharacterStore
         if (!set.Known.Contains(name, StringComparer.Ordinal))
             return Invalid("Такой LoRA нет в ComfyUI. Выберите файл из списка.");
         var trigger = set.Trigger?.Trim() ?? "";
-        if (!TriggerPattern().IsMatch(trigger))
+        if (!IsValidTrigger(trigger))
             return Invalid("Укажите слово-триггер: одно слово из букв, цифр и «_», без пробелов.");
         if (set.Strength is { } strength && !(strength >= 0 && strength <= 2))
             return Invalid("Сила должна быть числом от 0 до 2.");

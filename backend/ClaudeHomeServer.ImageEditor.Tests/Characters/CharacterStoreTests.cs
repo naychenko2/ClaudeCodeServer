@@ -38,6 +38,24 @@ public class CharacterStoreTests : IDisposable
     }
 
     [Theory]
+    [InlineData("anya\n")]
+    [InlineData("a\n")]
+    public void Slug_с_переводом_строки_на_конце_отклоняется(string slug)
+    {
+        CharacterStore.IsValidSlug(slug).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("ccsandrey\n")]
+    [InlineData("ccs andrey")]
+    [InlineData("")]
+    public void Триггер_с_переводом_строки_или_пробелом_отклоняется(string trigger)
+    {
+        CharacterStore.IsValidTrigger(trigger).Should().BeFalse();
+        CharacterStore.IsValidTrigger("ccsandrey_1").Should().BeTrue();
+    }
+
+    [Theory]
     [InlineData("../x")]
     [InlineData("..")]
     [InlineData("a/../../x")]

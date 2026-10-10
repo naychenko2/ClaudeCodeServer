@@ -1,5 +1,5 @@
 // Карточка персонажа: какая шторка открывается с чипа или пункта меню, раскладка коллажа, точка «нужны фото»,
-// тексты удаления (прежние из CharacterForm).
+// тексты удаления (прежние из старой формы).
 import { describe, expect, it } from 'vitest';
 import {
   chipKeys, collageLayout, deleteConfirmTexts, menuKeys, orderedPhotos, photosNeedDot, sheetForChip, sheetForMenu,

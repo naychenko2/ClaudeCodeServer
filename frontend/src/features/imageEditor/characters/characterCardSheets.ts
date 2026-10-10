@@ -56,7 +56,7 @@ export function orderedPhotos<T extends { primary?: boolean | null }>(photos: re
   return main ? [main, ...photos.filter(p => p !== main)] : [];
 }
 
-// Подтверждение удаления — прежние тексты из CharacterForm
+// Подтверждение удаления — прежние тексты старой формы
 export function deleteConfirmTexts(name: string, path: string) {
   return {
     title: `Удалить «${name}»?`,

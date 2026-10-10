@@ -1,5 +1,5 @@
 // Список персонажей проекта панели «Персонажи» (слот workspace-panel-def, записка v3): аватар, число
-// фото, «В контекст» / «В контексте ✓» по контексту чата, «Изменить». Форму открывает хозяин через
+// фото, «В контекст» / «В контексте ✓» по контексту чата, «Изменить». Карточку и создание открывает хозяин через
 // editing/onEditing: «＋ Персонаж» живёт в закреплённом низу панели.
 
 import { useMemo } from 'react';
@@ -9,7 +9,10 @@ import {
 } from 'aihome_shell/kit';
 import { imageEditorApi } from '../api';
 import { setPrefs, usePrefs } from '../thread/prefs';
-import { CharacterForm } from './CharacterForm';
+import { CharacterCard } from './CharacterCard';
+import { CharacterCreate } from './CharacterCreate';
+import { listStatus } from './characterListView';
+import { LIST_STATUS } from './characterTexts';
 import { dropCharacter, putCharacter, reloadCharacters, useCharacters } from './useCharacters';
 
 const ic = (I: typeof Users, size: number = ICON_SIZE.sm) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -28,18 +31,26 @@ export function CharactersPanel({ projectId, editing, onEditing, contextSessionI
   const setEditing = onEditing;
 
   const current = editing?.kind === 'edit' ? list?.find(c => c.slug === editing.slug) ?? null : null;
-  if (editing && (editing.kind === 'new' || current)) {
+  if (editing?.kind === 'new') {
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <CharacterForm key={editing.kind === 'edit' ? editing.slug : 'new'} api={api} projectId={projectId}
-          character={current}
-          onSaved={c => { putCharacter(projectId, c); setEditing(null); }}
+        <CharacterCreate api={api} projectId={projectId}
+          onCreated={c => { putCharacter(projectId, c); setEditing({ kind: 'edit', slug: c.slug }); }}
+          onClose={() => setEditing(null)} />
+      </div>
+    );
+  }
+  if (editing?.kind === 'edit' && current) {
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <CharacterCard key={current.slug} api={api} projectId={projectId} character={current}
+          contextSessionId={contextSessionId}
+          onBack={() => setEditing(null)}
           onDeleted={slug => {
             dropCharacter(projectId, slug);
             if (prefs.characterSlug === slug) setPrefs(projectId, { characterSlug: null });
             setEditing(null);
-          }}
-          onClose={() => setEditing(null)} />
+          }} />
       </div>
     );
   }
@@ -52,7 +63,7 @@ export function CharactersPanel({ projectId, editing, onEditing, contextSessionI
           ? <EmptyState compact icon={ic(Users)} title="Не удалось загрузить персонажей"
               action={<Button size="sm" variant="secondary" onClick={() => { void reloadCharacters(projectId); }}>Повторить</Button>} />
           : <EmptyState compact icon={ic(Users)} title="Персонажей пока нет"
-              subtitle="Персонаж — 3–10 фото лица. Положите его «В контекст» — он уйдёт в запрос." />)}
+              subtitle={LIST_STATUS.emptySubtitle} />)}
         {list?.map(c => {
           const candidate = { kind: 'image-character', ref: { slug: c.slug } };
           const on = !!contextSessionId && !!refOf(ctx, candidate);
@@ -72,7 +83,7 @@ export function CharactersPanel({ projectId, editing, onEditing, contextSessionI
               </span>
               <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-                <span style={{ fontSize: FS.xs, color: C.textMuted }}>{c.photos.length} фото{on ? ' · в контексте · персонаж' : ''}</span>
+                <span style={{ fontSize: FS.xs, color: C.textMuted }}>{listStatus(c.photos.length, c.local?.lora)}{on ? ' · в контексте · персонаж' : ''}</span>
               </span>
               {contextSessionId && <ContextAddButton sessionId={contextSessionId} projectId={projectId} candidate={candidate} size="sm" toggle />}
               <IconButton size="sm" title="Изменить" ariaLabel={`Изменить «${c.name}»`} onClick={() => setEditing({ kind: 'edit', slug: c.slug })}>

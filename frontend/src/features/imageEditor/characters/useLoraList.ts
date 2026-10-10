@@ -1,4 +1,4 @@
-// Список LoRA из ComfyUI с датами обучения. Грузится один раз на карточку персонажа (в CharacterForm)
+// Список LoRA из ComfyUI с датами обучения. Грузится один раз на карточку персонажа (в CharacterCard)
 // и отдаётся пропсом и в селект, и в строку «своя LoRA»; reload перечитывает его после обучения/удаления версии.
 
 import { useCallback, useEffect, useState } from 'react';

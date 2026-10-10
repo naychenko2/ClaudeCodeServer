@@ -381,6 +381,113 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         return null;
     }
 
+    // Потолок ожидания расчёта — как у воркера сходства
+    private static readonly TimeSpan FacePoseTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan FacePosePollInterval = TimeSpan.FromMilliseconds(500);
+    internal TimeSpan FacePoseTimeoutOverride { get; set; } = FacePoseTimeout;
+
+    public async Task<LocalFacePoseResult> FacePoseAsync(IReadOnlyList<byte[]> images, CancellationToken ct)
+    {
+        var options = LocalMediaOptions.Read(config);
+        if (!options.Enabled) return LocalFacePoseResult.Fail("Локальные модели выключены на этом сервере.");
+        if (images.Count is < 1 or > ComfyWorkflows.MaxFacePoseImages)
+            return LocalFacePoseResult.Fail($"Для ракурса нужно от 1 до {ComfyWorkflows.MaxFacePoseImages} фото.");
+
+        // Фоновая разметка не задерживает генерации человека: подаём только в пустую очередь
+        var length = await QueueLengthAsync(ct);
+        if (length is null) return LocalFacePoseResult.Fail("ComfyUI не ответил. Попробуйте позже.", busy: true);
+        if (length > 0) return LocalFacePoseResult.Fail("Очередь локальной видеокарты занята. Попробуйте позже.", busy: true);
+
+        var id = Guid.NewGuid().ToString("N");
+        string ticket;
+        var names = new List<string>();
+        try
+        {
+            for (var k = 0; k < images.Count; k++)
+            {
+                var ext = ImageFormatSniffer.DetectExtension(images[k]);
+                if (ext is null) return LocalFacePoseResult.Fail($"Фото {k + 1} — не PNG, JPEG или WebP.");
+                if (images[k].Length > LocalMediaService.MaxInputBytes)
+                    return LocalFacePoseResult.Fail($"Фото {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+                names.Add(await comfy.UploadImageAsync(images[k], $"{OutputStem}{id}-pose{k + 1}{ext}", ct));
+            }
+            ticket = (await comfy.QueuePromptAsync(ComfyWorkflows.FacePose(names), ct)).PromptId;
+        }
+        catch (ComfyException ex)
+        {
+            Remember(alive: false);
+            log.LogWarning("ComfyUI не принял задачу ракурса: {Error}", ex.Message);
+            return LocalFacePoseResult.Fail(ex.Message, busy: true);
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(FacePoseTimeoutOverride);
+        try
+        {
+            while (true)
+            {
+                var history = await comfy.GetHistoryAsync(ticket, timeout.Token);
+                if (history is { Failed: true })
+                    return LocalFacePoseResult.Fail(history.Error ?? "ComfyUI завершил задачу ошибкой.");
+                if (history is { Completed: true })
+                    return ParseFacePoses(history.Texts, names) is { } poses
+                        ? new LocalFacePoseResult(poses, null)
+                        : LocalFacePoseResult.Fail("Узел ракурса вернул неожиданный ответ.");
+                await Task.Delay(FacePosePollInterval, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return LocalFacePoseResult.Fail("Расчёт ракурса не уложился в отведённое время.", busy: true);
+        }
+        catch (ComfyException ex)
+        {
+            Remember(alive: false);
+            return LocalFacePoseResult.Fail(ex.Message, busy: true);
+        }
+    }
+
+    private const string FacePoseKey = "ccs_face_pose=";
+
+    // Строка узла: ccs_face_pose={"файл.png": {"yaw":..,"pitch":..,"roll":..}, ...}. Лицо не найдено —
+    // все три поля null; ccs_face_pose=error — сбой воркера. Оси читаются по именам полей, порядок
+    // ключей и лишние поля значения не имеют. Ключ файла — имя из graph («подпапка/файл») либо путь к нему: сверяем по имени файла.
+    // Ответ без записи для фото, с полуполным или нечисловым углом негоден (null) — это не «лица нет»
+    internal static IReadOnlyList<LocalFacePose?>? ParseFacePoses(IReadOnlyList<string> texts, IReadOnlyList<string> names)
+    {
+        foreach (var text in texts)
+        {
+            var line = text.Trim();
+            if (!line.StartsWith(FacePoseKey, StringComparison.Ordinal)) continue;
+            try
+            {
+                if (System.Text.Json.Nodes.JsonNode.Parse(line[FacePoseKey.Length..]) is not System.Text.Json.Nodes.JsonObject answer)
+                    return null;
+                var poses = new List<LocalFacePose?>(names.Count);
+                foreach (var name in names)
+                {
+                    var entry = answer.FirstOrDefault(kv => kv.Key == name || Path.GetFileName(kv.Key) == Path.GetFileName(name)).Value;
+                    if (entry is not System.Text.Json.Nodes.JsonObject o) return null;
+                    var yaw = Angle(o, "yaw");
+                    var pitch = Angle(o, "pitch");
+                    var roll = Angle(o, "roll");
+                    if (yaw is not null && pitch is not null && roll is not null) poses.Add(new LocalFacePose(yaw.Value, pitch.Value, roll.Value));
+                    else if (o["yaw"] is null && o["pitch"] is null && o["roll"] is null) poses.Add(null);
+                    else return null;
+                }
+                return poses;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;
+            }
+        }
+        return null;
+
+        static double? Angle(System.Text.Json.Nodes.JsonObject o, string name) =>
+            o[name] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<double>(out var d) && double.IsFinite(d) ? d : null;
+    }
+
     public async Task<bool> CancelAsync(string ticket, CancellationToken ct)
     {
         try

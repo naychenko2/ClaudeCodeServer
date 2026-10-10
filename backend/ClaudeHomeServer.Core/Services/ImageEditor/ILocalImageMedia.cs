@@ -34,6 +34,13 @@ public interface ILocalImageMedia
     // Снять задачу из ОЖИДАЮЩИХ очереди; идущую не прерываем (interrupt ComfyUI бьёт по
     // любому текущему прогону, в том числе чужому) — тогда false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
+
+    // Углы головы по фото (ADR-027, §3): узел ComfyUI CcsFacePose, расчёт на CPU. Poses — по одному
+    // на вход в том же порядке, null — лица нет. Подаётся только при пустой очереди ComfyUI;
+    // занятая очередь, недоступный ComfyUI и потолок ожидания — Busy, а не исключение. Реализация
+    // по умолчанию — «не поддерживается»: подсистема images ещё не подключена
+    Task<LocalFacePoseResult> FacePoseAsync(IReadOnlyList<byte[]> images, CancellationToken ct) =>
+        Task.FromResult(new LocalFacePoseResult(null, "Определение ракурса здесь не поддерживается."));
 }
 
 public enum LocalImageOp { Generate, Edit, FaceDetail }
@@ -86,3 +93,13 @@ public sealed record LocalImagePoll(
 
 // Similarity — сходство лица с эталоном (0..1); null — не считалось или лицо не найдено
 public sealed record LocalImageFile(byte[] Bytes, string ContentType, double? Similarity = null);
+
+// Poses — по одному на вход, в том же порядке; null — лицо не найдено.
+// Busy — очередь занята или ComfyUI не ответил: «попробуй позже», фото не помечаются
+public sealed record LocalFacePoseResult(IReadOnlyList<LocalFacePose?>? Poses, string? Error, bool Busy = false)
+{
+    public static LocalFacePoseResult Fail(string error, bool busy = false) => new(null, error, busy);
+}
+
+// Углы головы в градусах; осям соответствуют имена полей, а не позиции
+public sealed record LocalFacePose(double Yaw, double Pitch, double Roll);

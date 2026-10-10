@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Шов обучения LoRA персонажа (ADR-026): реализация живёт в Images, потребители берут его
@@ -27,6 +29,14 @@ public interface ILocalLoraTrainer
     // Идемпотентно: первый вызов ставит op lora_delete, следующие отдают его исход.
     // Deleted — каталога прогона на GPU нет (в том числе «и не было»)
     Task<LoraDeleteState> DeleteRunAsync(string ownerId, string projectId, string slug, string runId, CancellationToken ct);
+}
+
+// Триггерное слово обученной версии (ADR-026-contracts §1); конец строки — `\z`, не `$`
+public static class LoraTrigger
+{
+    private static readonly Regex Pattern = new(@"^[a-z][a-z0-9_]{2,23}\z", RegexOptions.Compiled);
+
+    public static bool IsValid(string? trigger) => trigger is not null && Pattern.IsMatch(trigger);
 }
 
 public static class LoraTrainPresets

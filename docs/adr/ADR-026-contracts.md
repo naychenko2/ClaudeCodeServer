@@ -12,10 +12,10 @@
 | Что | Значение | Где живёт |
 |---|---|---|
 | `ownerKey`, `projectKey` | `^[0-9a-f]{32}$` | `LoraNamespace.OwnerKey(string id)` (Core) — из Guid-строки; не Guid → `ArgumentException` |
-| `slug` | `^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$` | уже есть: `CharacterStore.IsValidSlug` |
-| `runId` | `^[0-9a-f]{12}$` | `LoraNamespace.IsValidRunId`; генерирует сервер: `Guid.NewGuid().ToString("N")[..12]` |
-| триггер обученной версии | `^[a-z][a-z0-9_]{2,23}$` | `LoraTrigger.IsValid` (ImageEditor) |
-| имя обучающего фото | `^[0-9a-f]{16}\.(jpg\|png\|webp)$` | `CharacterTrainingPhotos.IsValidName` |
+| `slug` | `^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\z` | уже есть: `CharacterStore.IsValidSlug` |
+| `runId` | `^[0-9a-f]{12}\z` | `LoraNamespace.IsValidRunId`; генерирует сервер: `Guid.NewGuid().ToString("N")[..12]` |
+| триггер обученной версии | `^[a-z][a-z0-9_]{2,23}\z` | `LoraTrigger.IsValid` (Core, рядом с `LoraTrainPresets`) |
+| имя обучающего фото | `^[0-9a-f]{16}\.(jpg\|png\|webp)\z` | `CharacterTrainingPhotos.IsValidName` |
 | пресет | `standard` (срез 1 — единственный) | `LoraTrainPresets` (Core) |
 | `title` версии | после `Trim()`: пусто → `null` (шаблон); 1–60 символов; > 60 → `400 bad_title` | ImageEditor |
 | фото для обучения | мин. 20, макс. 50, ≤ 8 МБ, короткая сторона ≥ 512 px, `jpg/png/webp` по сигнатуре | `CharacterTrainingPhotos` |
@@ -160,7 +160,7 @@ public enum LoraDeleteState { Pending, Deleted, Failed }
   9. загрузка фото;
   10. постановка графа.
 - **Сбой загрузки** любого фото — задача не ставится, `Unavailable`. Уже загруженные удалит `lora_delete` при уборке версии (`failed` → удаление).
-- **ETA при постановке** — `LocalMediaService.LoraTrainEta(preset)`: таблица по пресету. Значение `standard` — из замера 1г: старт + 2000 шагов без пробных картинок. До замера — 6660 с: 1 ч 51 мин ручного прогона с пробными картинками и остановленным ComfyUI. Это верхняя оценка, а не замер продукта.
+- **ETA при постановке** — `LocalMediaService.LoraTrainEta(preset, startSeconds)`: таблица по пресету. Значение `standard` = 2000 шагов × 2,35 с + `LocalMedia:LoraTrainStartSeconds` (дефолт 300, уточнить после замера 1г) = 5000 с. Пробные картинки ai-toolkit в продукте выключены (ADR-026), поэтому прежние 6660 с ручного прогона к продукту не относятся. Концы регэкспов — `\z`, а не `$`: `$` пропускает финальный `\n`.
 - **Остаток в `LoraTrainState.EtaSeconds`:**
   - `Running` с известным шагом — `(TotalSteps − Step) × секунд/шаг` из той же таблицы;
   - без шага — `StartedAt + EtaSeconds − now`, не меньше 60;
@@ -416,7 +416,7 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
     "startedAt": "2026-10-10T08:01:30Z"
   },
   "defaultTrigger": "ccsandrey",
-  "presets": [{ "key": "standard", "etaSeconds": 6660 }],
+  "presets": [{ "key": "standard", "etaSeconds": 5000 }],
   "photosChanged": false
 }
 ```
@@ -433,7 +433,7 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
 `trigger` необязателен (по умолчанию `defaultTrigger`). Успех — 202:
 
 ```json
-{ "runId": "3f9a1c2b7d10", "jobId": "lm_5d0c…", "queuePosition": 0, "etaSeconds": 6660 }
+{ "runId": "3f9a1c2b7d10", "jobId": "lm_5d0c…", "queuePosition": 0, "etaSeconds": 5000 }
 ```
 
 Запись `training` создаётся **после** успешного `StartAsync`; сбой старта записи не оставляет.

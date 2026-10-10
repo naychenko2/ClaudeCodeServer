@@ -90,10 +90,36 @@ public class ComfyWorkflowsLoraTests
     [Fact]
     public void Оценка_по_пресету_и_остаток_по_шагу()
     {
-        LocalMediaService.LoraTrainEta("standard").Should().Be(6660);
-        LocalMediaService.LoraTrainEta("huge").Should().BeNull();
+        LocalMediaService.LoraTrainEta("standard", 300).Should().Be(5000);
+        LocalMediaService.LoraTrainEta("huge", 300).Should().BeNull();
+        new LocalMediaOptions().LoraTrainStartSeconds.Should().Be(300);
         LocalMediaService.LoraTrainRemaining(0, 2000).Should().Be(4700);
         LocalMediaService.LoraTrainRemaining(2000, 2000).Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(-5, 2000, 4712)]
+    [InlineData(2500, 2000, 0)]
+    [InlineData(0, 0, 0)]
+    [InlineData(10, 0, 0)]
+    public void Остаток_на_краях_не_делит_на_ноль_и_не_уходит_в_минус(int step, int total, int expected) =>
+        LocalMediaService.LoraTrainRemaining(step, total).Should().Be(expected);
+
+    [Theory]
+    [InlineData("0a1b2c3d4e5f6a7b.jpg\n")]
+    [InlineData("0a1b2c3d4e5f6a7b.jpg\n..\\..\\etc\\passwd")]
+    public void Имя_фото_с_переводом_строки_отказ(string name) =>
+        Invoking(() => ComfyWorkflows.LoraTrain(Owner, "andrey", Run, "ccsandrey", "standard", [Folder + name], "j"));
+
+    [Fact]
+    public void Триггер_слаг_и_runId_с_переводом_строки_отказ()
+    {
+        Invoking(() => ComfyWorkflows.LoraTrain(Owner, "andrey", Run, "ccsandrey\n", "standard", [Folder + Photo], "j"));
+        Invoking(() => ComfyWorkflows.LoraTrain(Owner, "andrey\n", Run, "ccsandrey", "standard", [Folder + Photo], "j"));
+        Invoking(() => ComfyWorkflows.LoraTrain(Owner, "andrey", Run + "\n", "ccsandrey", "standard", [Folder + Photo], "j"));
+        LoraTrigger.IsValid("ccsandrey\n").Should().BeFalse();
+        LoraNamespace.IsValidSlug("andrey\n").Should().BeFalse();
+        LoraNamespace.IsValidRunId(Run + "\n").Should().BeFalse();
     }
 
     [Fact]

@@ -9,17 +9,13 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // результата строит воркер. Путей, yaml, шагов, rank и lr на проводе нет никогда.
 public static partial class ComfyWorkflows
 {
-    private static readonly Regex LoraTriggerRegex = new("^[a-z][a-z0-9_]{2,23}$", RegexOptions.Compiled);
-
-    public static bool IsValidLoraTrigger(string? trigger) => trigger is not null && LoraTriggerRegex.IsMatch(trigger);
-
     // inputs — имена, которые вернул UploadInputAsync: "ccs/<ownerKey>/<runId>/<sha16>.jpg"
     public static JsonObject LoraTrain(string ownerId, string slug, string runId, string trigger, string preset,
         IReadOnlyList<string> inputs, string jobId)
     {
         var owner = LoraNamespace.OwnerKey(ownerId);
-        _ = LoraNamespace.RunDirectory(ownerId, slug, runId);
-        if (!IsValidLoraTrigger(trigger)) throw new ArgumentException("Недопустимый триггер", nameof(trigger));
+        LoraNamespace.EnsureRunValid(slug, runId);
+        if (!LoraTrigger.IsValid(trigger)) throw new ArgumentException("Недопустимый триггер", nameof(trigger));
         if (!LoraTrainPresets.All.Contains(preset)) throw new ArgumentException("Неизвестный пресет", nameof(preset));
         if (inputs.Count == 0) throw new ArgumentException("Нет фото для обучения", nameof(inputs));
 
@@ -43,7 +39,7 @@ public static partial class ComfyWorkflows
 
     public static JsonObject LoraDelete(string ownerId, string slug, string runId, string jobId)
     {
-        _ = LoraNamespace.RunDirectory(ownerId, slug, runId);
+        LoraNamespace.EnsureRunValid(slug, runId);
         return AudioWorker(LocalMediaOps.LoraDelete, new JsonObject
         {
             ["owner"] = LoraNamespace.OwnerKey(ownerId),
@@ -52,6 +48,6 @@ public static partial class ComfyWorkflows
         }, [], jobId, 1);
     }
 
-    // Имя обучающего фото: хеш (16 hex) и расширение; без путей и «..»
-    private static readonly Regex LoraPhotoNameRegex = new(@"^[0-9a-f]{16}\.(jpg|png|webp)$", RegexOptions.Compiled);
+    // Имя обучающего фото: хеш (16 hex) и расширение; без путей и «..»; конец строки — `\z`, не `$`
+    private static readonly Regex LoraPhotoNameRegex = new(@"^[0-9a-f]{16}\.(jpg|png|webp)\z", RegexOptions.Compiled);
 }

@@ -57,6 +57,9 @@ public sealed class LocalMediaOptions
     // Выключено по умолчанию — карта на ≈2 ч уходит одному владельцу
     public bool LoraTrainEnabled { get; set; }
 
+    // Старт обучения до первого шага (загрузка моделей, кэш латентов), с. Уточнить после замера 1г
+    public int LoraTrainStartSeconds { get; set; } = 300;
+
     public bool CleanupEnabled => !string.IsNullOrWhiteSpace(ComfyInputDir) && !string.IsNullOrWhiteSpace(ComfyOutputDir);
 
     public static LocalMediaOptions Read(IConfiguration config)

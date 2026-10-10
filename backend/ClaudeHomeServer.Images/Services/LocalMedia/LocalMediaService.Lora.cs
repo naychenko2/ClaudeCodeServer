@@ -8,11 +8,10 @@ public sealed partial class LocalMediaService
     public const int LoraTrainSteps = 2000;
     public const double LoraTrainSecondsPerStep = 2.35;
 
-    // Верхняя оценка до замера 1г: 1 ч 51 мин ручного прогона с пробными картинками и остановленным ComfyUI
-    private const int LoraTrainStandardEta = 6660;
-
-    // Полное время обучения по пресету; неизвестный пресет — null
-    public static int? LoraTrainEta(string preset) => preset == LoraTrainPresets.Standard ? LoraTrainStandardEta : null;
+    // Полное время обучения по пресету: шаги × время шага + старт (LocalMediaOptions.LoraTrainStartSeconds);
+    // неизвестный пресет — null. Пробные картинки ai-toolkit в продукте выключены (ADR-026)
+    public static int? LoraTrainEta(string preset, int startSeconds) =>
+        preset == LoraTrainPresets.Standard ? LoraTrainRemaining(0, LoraTrainSteps) + startSeconds : null;
 
     // Остаток по известному шагу
     public static int LoraTrainRemaining(int step, int totalSteps) =>

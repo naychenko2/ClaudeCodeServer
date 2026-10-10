@@ -41,8 +41,9 @@ public static class LoraNamespace
         return true;
     }
 
-    private static readonly Regex RunIdRegex = new("^[0-9a-f]{12}$", RegexOptions.Compiled);
-    private static readonly Regex SlugRegex = new("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$", RegexOptions.Compiled);
+    // Конец строки — `\z`, а не `$`: `$` совпадает и перед финальным «\n», а значения едут на провод строкой
+    private static readonly Regex RunIdRegex = new(@"^[0-9a-f]{12}\z", RegexOptions.Compiled);
+    private static readonly Regex SlugRegex = new(@"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\z", RegexOptions.Compiled);
 
     // Ключ владельца/проекта: Guid без дефисов, нижний регистр (32 hex); не Guid — отказ
     public static string OwnerKey(string id) =>
@@ -71,6 +72,9 @@ public static class LoraNamespace
         if (!IsValidRunId(runId)) throw new ArgumentException("Недопустимый runId", nameof(runId));
         return $"ccs/{OwnerKey(ownerId)}/{runId}";
     }
+
+    // Явная проверка пары slug/runId: бросает ArgumentException при невалидных
+    public static void EnsureRunValid(string slug, string runId) => Check(slug, runId);
 
     private static void Check(string slug, string runId)
     {

@@ -178,7 +178,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
       </div>
       {character && <CharacterTrainingPhotos key={character.slug} projectId={projectId} slug={character.slug} disabled={busy} onCount={setTrainPhotos} />}
       {character && <CharacterLoraTrainSection key={character.slug} projectId={projectId} slug={character.slug} versions={versions} hasConnected={!!character.local?.lora} photoCount={trainPhotos} disabled={busy} />}
-      {character && <CharacterLoraVersions key={character.slug} versions={versions} disabled={busy} />}
+      {character && <CharacterLoraVersions key={character.slug} api={api} projectId={projectId} versions={versions} disabled={busy} />}
       <CharacterLoraSection key={`${character?.slug ?? 'new'}|${character?.local?.lora ?? ''}|${character?.local?.trigger ?? ''}|${character?.local?.strength ?? ''}`} api={api} projectId={projectId} current={character?.local} disabled={busy} onChange={setLora} />
       <div style={{
         display: 'flex', gap: SP.sm, alignItems: 'flex-start', fontSize: FS.sm, lineHeight: 1.45,

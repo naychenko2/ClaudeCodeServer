@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loraDisplayName, loraLabels } from './loraName';
+import { loraDisplayName, loraLabels, ownLoraLabel } from './loraName';
 
 const at = (d: number, h = 12, m = 0) => new Date(2026, 9, d, h, m).toISOString();
 const A = 'ccs/a300cc8f/andreyk/andreyk_qwen21_v1_000001750.safetensors';
@@ -42,5 +42,23 @@ describe('loraLabels', () => {
   it('все подписи уникальны', () => {
     const names = [A, B, 'face.safetensors', 'a/face.safetensors', 'b/face.safetensors'];
     expect(new Set(loraLabels(names).values()).size).toBe(names.length);
+  });
+});
+
+describe('ownLoraLabel', () => {
+  const list = (items: string[], trained?: Record<string, string>) => ({ available: true, items, trained });
+  it('тёзка из другой папки различается так же, как в селекте', () => {
+    const items = ['face.safetensors', 'other/face.safetensors'];
+    const label = ownLoraLabel('other/face.safetensors', undefined, list(items));
+    expect(label).toBe(loraLabels(items).get('other/face.safetensors'));
+    expect(label).toBe('face · other');
+  });
+  it('обученные тёзки одной даты — со временем', () => {
+    const t = { [A]: at(10, 9, 5), [B]: at(10, 14, 32) };
+    expect(ownLoraLabel(B, t[B], list([A, B], t))).toBe('andreyk_qwen21_v1_000001750 · 10 октября, 14:32');
+  });
+  it('список недоступен — одно имя без пути', () => {
+    expect(ownLoraLabel('other/face.safetensors', undefined, { available: false, items: [] })).toBe('face');
+    expect(ownLoraLabel('other/face.safetensors', undefined, null)).toBe('face');
   });
 });

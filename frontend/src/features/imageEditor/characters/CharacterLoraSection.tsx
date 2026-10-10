@@ -2,11 +2,12 @@
 // если LoRA уже задана. Список файлов грузится при раскрытии. Наружу отдаёт ввод
 // (или 'remove') только после того, как человек что-то тронул, — иначе LoRA не трогаем.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { loraLabels } from './loraName';
-import type { ImageEditCharacter, ImageEditLoras, ImageEditorApi } from '../api';
+import { useLoraList } from './useLoraList';
+import type { ImageEditCharacter, ImageEditorApi } from '../api';
 
 type Lora = NonNullable<ImageEditCharacter['local']>;
 export type LoraInput = { name: string; trigger: string; strength: number } | 'remove';
@@ -22,18 +23,12 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   onChange: (lora: LoraInput | undefined) => void;
 }) {
   const [open, setOpen] = useState(!!current);
-  const [list, setList] = useState<ImageEditLoras | null>(null);
   const [name, setName] = useState(current?.lora ?? '');
   const [trigger, setTrigger] = useState(current?.trigger ?? '');
   const [strength, setStrength] = useState(current?.strength ?? DEFAULT_STRENGTH);
   const [removed, setRemoved] = useState(false);
 
-  useEffect(() => {
-    if (!open || list) return;
-    let alive = true;
-    api.loras(projectId).then(r => { if (alive) setList(r); }).catch(() => { if (alive) setList({ available: false, items: [] }); });
-    return () => { alive = false; };
-  }, [open, list, api, projectId]);
+  const list = useLoraList(api, projectId, open);
 
   const touch = (n: string, t: string, s: number) => {
     // правка триггера или силы после «Убрать» отмену удаления не снимает
@@ -83,8 +78,14 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
           {list?.available && (list.items.length > 0 || has) && (
             <>
               <Field label="Файл LoRA" hint="Выберите из списка: AI Home берёт файлы, которые лежат в ComfyUI.">
-                <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}><Select value={removed ? '' : name} options={selectOptions} placeholder="Не выбрана" disabled={disabled}
-                  onChange={v => { setName(v); touch(v, trigger, strength); }} /></div>
+                <Select value={removed ? '' : name} options={selectOptions} placeholder="Не выбрана" disabled={disabled}
+                  onChange={v => { setName(v); touch(v, trigger, strength); }} />
+                {has && (
+                  // нативный select не переносит строки: полная подпись целиком — под ним
+                  <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45, marginTop: SP.xs, overflowWrap: 'anywhere' }}>
+                    {short(name)}
+                  </div>
+                )}
               </Field>
               <Field label="Слово-триггер" hint="Одно слово: буквы, цифры и «_». Оно попадёт в запрос, чтобы модель включила LoRA. Возьмите то, что указано при обучении LoRA.">
                 <TextField value={trigger} placeholder="например, anna_face" disabled={disabled}

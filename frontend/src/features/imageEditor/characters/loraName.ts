@@ -60,3 +60,14 @@ export function loraLabels(names: string[], trained?: Record<string, string>): M
   for (const n of pending) result.set(n, n);
   return result;
 }
+
+// Подпись подключённой «своей» LoRA — та же, что в селекте: считается по полному списку.
+// Список недоступен — по одному имени, без пути.
+export function ownLoraLabel(
+  own: string, ownTrainedAt: string | null | undefined, list: { available: boolean; items: string[]; trained?: Record<string, string> } | null,
+): string {
+  const trained = { ...(list?.trained ?? {}) };
+  if (ownTrainedAt && !trained[own]) trained[own] = ownTrainedAt;
+  const names = list?.available ? [own, ...list.items.filter(i => i !== own)] : [own];
+  return loraLabels(names, trained).get(own) ?? own;
+}

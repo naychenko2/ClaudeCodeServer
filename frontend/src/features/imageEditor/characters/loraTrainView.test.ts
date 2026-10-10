@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LoraTrainStateDto, LoraVersionDto } from '../api';
 import { TRAIN_BLOCKED, TRAIN_TEXT } from './loraTrainTexts';
 import {
-  badgeFor, confirmParts, failureText, formatDuration, isAllRejected, isValidTrigger, trainSectionView,
+  badgeFor, confirmParts, failureText, formatDuration, isAllRejected, isLost, isValidTrigger, trainSectionView,
   type TrainViewInput,
 } from './loraTrainView';
 
@@ -146,5 +146,15 @@ describe('тексты и бейджи', () => {
     expect(failureText({ reason: 'bad_trigger' })).toBe(TRAIN_TEXT.triggerError);
     expect(failureText({ reason: 'gpu_busy' })).toBeNull();
     expect(failureText({ reason: 'network' })).toBeTruthy();
+  });
+});
+
+describe('код ошибки lost', () => {
+  const lost = ver({ status: 'failed', error: { code: 'lost', message: 'x' } });
+  it('распознаётся и даёт утверждённый текст в виде «не получилось»', () => {
+    expect(isLost(lost)).toBe(true);
+    expect(isLost(ver({ status: 'failed', error: { code: 'worker_error', message: 'x' } }))).toBe(false);
+    expect(trainSectionView(input({ view: { kind: 'failed', version: lost } }))).toMatchObject({ kind: 'failed', lost: true });
+    expect(TRAIN_TEXT.failedLost).toBe('Обучение прервалось: видеокарта его потеряла. Фото на месте — можно начать заново.');
   });
 });

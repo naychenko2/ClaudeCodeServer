@@ -10,9 +10,9 @@ import type { LoraVersionDto } from '../api';
 import { useIsMobile } from '../../../lib/breakpoints';
 import type { LoraVersionsHandle } from './useLoraVersions';
 import {
-  VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
+  VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT, TRAIN_TEXT,
 } from './loraTrainTexts';
-import { failureText } from './loraTrainView';
+import { failureText, isLost } from './loraTrainView';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
 } from './loraVersionsView';
@@ -104,8 +104,8 @@ export function CharacterLoraVersions({ versions, disabled }: {
                   <Cpu {...ico} />{VERSIONS_TEXT.trainingHint}
                 </div>
               )}
-              {v.status === 'failed' && v.error?.message && (
-                <div style={{ fontSize: FS.sm, color: C.textMuted, overflowWrap: 'anywhere' }}>{v.error.message}</div>
+              {v.status === 'failed' && (isLost(v) || v.error?.message) && (
+                <div style={{ fontSize: FS.sm, color: C.textMuted, overflowWrap: 'anywhere' }}>{isLost(v) ? TRAIN_TEXT.failedLost : v.error?.message}</div>
               )}
               {acts.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>

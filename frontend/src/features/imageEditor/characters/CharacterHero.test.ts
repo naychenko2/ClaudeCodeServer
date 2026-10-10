@@ -1,14 +1,21 @@
 // Главная кнопка карточки: для каждого вида ровно одна главная кнопка или блок хода, тексты подтверждений
 // прежние, отмена чужого обучения — только админу.
-import { describe, expect, it } from 'vitest';
-import { createElement } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { createElement, isValidElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CharacterHero } from './CharacterHero';
+import { HERO } from './characterTexts';
+import { TRAIN_ETA_UNKNOWN } from './loraTrainTexts';
+import { Notice } from 'aihome_shell/kit';
 import { characterCardView } from './characterCardView';
 import type { TrainSectionView } from './loraTrainView';
 import { TRAIN_TEXT } from './loraTrainTexts';
 import { confirmParts } from './loraTrainView';
 import type { useCharacterTrain } from './useCharacterTrain';
+
+// Для проверки обработчиков без DOM: единственный useState героя (модалка) подменяем шпионом
+const setModal = vi.fn();
+vi.mock('react', async orig => ({ ...(await orig<typeof import('react')>()), useState: (init: unknown) => [init, setModal] }));
 
 const ver = { runId: 'r1' } as never;
 const form = (o: object = {}) => ({ kind: 'form', label: '', disabled: false, reason: null, stopped: false, photosChanged: false, ...o }) as TrainSectionView;
@@ -91,5 +98,80 @@ describe('CharacterHero', () => {
       note: null,
     });
     expect(confirmParts(true).note).toBe(TRAIN_TEXT.confirmConnected);
+  });
+});
+
+// Разбор дерева элементов без рендера: CharacterHero вызывается как функция
+type El = { type: unknown; props: Record<string, unknown> };
+const walk = (node: ReactNode, out: El[] = []): El[] => {
+  if (Array.isArray(node)) node.forEach(n => walk(n, out));
+  else if (isValidElement(node)) {
+    const el = node as unknown as El;
+    out.push(el);
+    walk(el.props.children as ReactNode, out);
+    walk(el.props.action as ReactNode, out);
+  }
+  return out;
+};
+const text = (n: ReactNode): string => Array.isArray(n) ? n.map(text).join('') : typeof n === 'string' ? n : isValidElement(n) ? text((n.props as { children?: ReactNode }).children) : '';
+const tree = (view: TrainSectionView, o: { dismiss?: () => void; session?: string | null; connect?: () => Promise<boolean> } = {}) => {
+  const { action } = characterCardView({ photos: 5, train: 25, view, versions: [], own: null });
+  const train = { ...mkTrain(view), dismiss: o.dismiss ?? (() => {}) } as unknown as ReturnType<typeof useCharacterTrain>;
+  const versions = { pending: [], ctl: o.connect ? { connect: o.connect } : null, error: null } as never;
+  return walk(CharacterHero({
+    action, train, versions, slug: 'a', projectId: 'p', hasConnected: false,
+    contextSessionId: o.session === undefined ? null : o.session, onOpenPhotos: () => {}, onOpenTune: () => {},
+  }));
+};
+const byText = (els: El[], label: string) => els.find(e => e.props.onClick !== undefined || e.props.disabled !== undefined ? text(e.props.children as ReactNode).includes(label) : false);
+
+describe('CharacterHero: поведение кнопок', () => {
+  it('«Отменить обучение» в блоке хода открывает подтверждение отмены', () => {
+    setModal.mockClear();
+    const btn = byText(tree({ kind: 'running', text: 'Обучаем', percent: 10, etaText: 'Осталось' }), HERO.cancel);
+    expect(btn).toBeDefined();
+    (btn!.props.onClick as () => void)();
+    expect(setModal).toHaveBeenCalledWith('cancel');
+  });
+
+  it('очередь без срока показывает строку «срок неизвестен», как running', () => {
+    expect(render({ kind: 'queued' })).toContain('Идёт обучение, оно займёт около');
+    expect(TRAIN_ETA_UNKNOWN('2 часа')).toContain('около 2 часа');
+  });
+
+  it('без чата «В контекст чата» disabled', () => {
+    const btn = byText(tree({ kind: 'done', version: ver, first: true, meta: '', photosChanged: false }), HERO.toChatContext);
+    expect(btn!.props.disabled).toBe(true);
+  });
+
+  it('крестик у первой версии вызывает dismiss(runId)', () => {
+    const dismiss = vi.fn();
+    const x = tree({ kind: 'done', version: ver, first: true, meta: '', photosChanged: false }, { dismiss })
+      .find(e => e.props.ariaLabel === 'Закрыть');
+    (x!.props.onClick as () => void)();
+    expect(dismiss).toHaveBeenCalledWith('r1');
+  });
+
+  it('«Подключить» у не первой версии подключает runId и после успеха закрывает плашку', async () => {
+    const dismiss = vi.fn();
+    const connect = vi.fn(async () => true);
+    const btn = byText(tree({ kind: 'done', version: ver, first: false, meta: '', photosChanged: false }, { dismiss, connect }), TRAIN_TEXT.connect);
+    (btn!.props.onClick as () => void)();
+    await Promise.resolve(); await Promise.resolve();
+    expect(connect).toHaveBeenCalledWith('r1');
+    expect(dismiss).toHaveBeenCalledWith('r1');
+  });
+
+  it('«Подключить» при неудаче плашку не закрывает', async () => {
+    const dismiss = vi.fn();
+    const btn = byText(tree({ kind: 'done', version: ver, first: false, meta: '', photosChanged: false }, { dismiss, connect: async () => false }), TRAIN_TEXT.connect);
+    (btn!.props.onClick as () => void)();
+    await Promise.resolve(); await Promise.resolve();
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it('busyOther — Notice тона info', () => {
+    const n = tree({ kind: 'busyOther', text: 'Занято', canStopForeign: false }).find(e => e.type === Notice);
+    expect(n!.props.tone).toBe('info');
   });
 });

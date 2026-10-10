@@ -182,7 +182,8 @@ public sealed class TestsToolset(
         }
         try
         {
-            full = SafePath.Join(root, raw);
+            // модель пишет пути и через «\»: на Linux это не разделитель, а часть имени
+            full = SafePath.Join(root, raw.Replace('\\', '/'));
         }
         catch (Exception e) when (e is UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

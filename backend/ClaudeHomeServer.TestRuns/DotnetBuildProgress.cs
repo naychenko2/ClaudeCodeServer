@@ -314,7 +314,8 @@ public sealed record BuildRunMemory(int Total, double Seconds, IReadOnlyDictiona
         try
         {
             var root = Path.GetFullPath(workingDirectory);
-            relative = Path.GetRelativePath(root, SafePath.Join(root, target.Trim()));
+            // «\» — разделитель и на Linux: иначе `.\a\b\` там одно имя файла, а не путь
+            relative = Path.GetRelativePath(root, SafePath.Join(root, target.Trim().Replace('\\', '/')));
         }
         catch (Exception e) when (e is ArgumentException or UnauthorizedAccessException or NotSupportedException)
         {

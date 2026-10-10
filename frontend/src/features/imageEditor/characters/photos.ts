@@ -60,3 +60,19 @@ export async function uploadWithConsent<T>(
   resetConsent();
   return true;
 }
+
+// Что делать с пришедшими файлами (выбор, перетаскивание): без галочки согласия не грузим ничего —
+// ни кнопкой, ни перетаскиванием. Единственная точка решения для обоих путей.
+export function addGate(consent: boolean, count: number): 'consent' | 'empty' | 'ok' {
+  if (!consent) return 'consent';
+  return count > 0 ? 'ok' : 'empty';
+}
+
+// Строка «Не хватает: …» под кнопкой сохранения/создания; пустая — всё на месте.
+export function missingText(name: string, photoCount: number, consent: boolean): string {
+  return [
+    !name.trim() && 'имя',
+    photoCount < MIN_PHOTOS && `ещё ${MIN_PHOTOS - photoCount} фото`,
+    !consent && 'галочка согласия',
+  ].filter(Boolean).join(', ');
+}

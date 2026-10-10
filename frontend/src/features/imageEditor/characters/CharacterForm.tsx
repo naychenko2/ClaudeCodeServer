@@ -15,7 +15,7 @@ import { CharacterLoraTrainSection } from './CharacterLoraTrainSection';
 import { CharacterLoraVersions } from './CharacterLoraVersions';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
 import { CHARACTER_PHOTOS_NOTICE } from './characterTexts';
-import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
+import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, missingText, photosCountText, shrinkPhoto } from './photos';
 
 type Photo = { key: string; url: string } & ({ kind: 'kept'; file: string } | { kind: 'new'; blob: Blob });
 
@@ -89,11 +89,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
   };
 
   const valid = !!name.trim() && photos.length >= MIN_PHOTOS && consent;
-  const missing = [
-    !name.trim() && 'имя',
-    photos.length < MIN_PHOTOS && `ещё ${MIN_PHOTOS - photos.length} фото`,
-    !consent && 'галочка согласия',
-  ].filter(Boolean).join(', ');
+  const missing = missingText(name, photos.length, consent);
   const slug = character?.slug ?? characterSlug(name || 'имя');
 
   const submit = async () => {

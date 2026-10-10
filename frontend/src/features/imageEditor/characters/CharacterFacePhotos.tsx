@@ -2,15 +2,15 @@
 // перед каждой загрузкой, удаление с подтверждением. Управляемый: на сервер сам не ходит,
 // загрузку и удаление выполняет родитель (onAdd / onRemove).
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { ShieldAlert, Upload, X } from 'lucide-react';
 import { Button, Checkbox, ConfirmDialog, IconButton, Notice, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { CHARACTER_PHOTOS_NOTICE, FACES, REMOVE_PHOTO } from './characterTexts';
-import { MAX_PHOTOS, MIN_PHOTOS, photoSizeError, pickFaceFiles, shrinkPhoto, uploadWithConsent } from './photos';
+import { MAX_PHOTOS, MIN_PHOTOS, addGate, photoSizeError, pickFaceFiles, shrinkPhoto, uploadWithConsent } from './photos';
 
 export type FacePhoto = { key: string; url: string; primary: boolean };
 
-export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, isMobile, renderCaption, onSelectPhoto, labelsEditor }: {
+export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, isMobile, renderCaption, onSelectPhoto, labelsEditor, addRef }: {
   photos: FacePhoto[];
   onAdd: (files: File[]) => Promise<void>;
   onRemove: (key: string) => Promise<void>;
@@ -21,6 +21,8 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
   renderCaption?: (photo: FacePhoto) => ReactNode;
   onSelectPhoto?: (photo: FacePhoto) => void;
   labelsEditor?: ReactNode;
+  // Вход для файлов извне (зона перетаскивания создания): идёт через тот же путь с проверкой согласия
+  addRef?: MutableRefObject<((files: File[]) => Promise<void>) | null>;
 }) {
   const [consent, setConsent] = useState(false);
   const [pending, setPending] = useState(0);
@@ -33,10 +35,12 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
   const busy = !!disabled || !!uploading || pending > 0;
   const atMin = photos.length <= MIN_PHOTOS;
 
-  const addFiles = async (list: FileList | null) => {
-    if (!list?.length || !consent) return;
+  const addFiles = async (list: File[]) => {
+    const gate = addGate(consent, list.length);
+    if (gate === 'consent') { setError(FACES.consentFirst); return; }
+    if (gate === 'empty') return;
     setError(null);
-    const { picked, error: pickError } = pickFaceFiles(Array.from(list), photos.length);
+    const { picked, error: pickError } = pickFaceFiles(list, photos.length);
     if (!picked.length) { setError(pickError); return; }
     setPending(picked.length);
     const ready: File[] = [];
@@ -69,6 +73,9 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
       setError((e as Error).message);
     }
   };
+
+  if (addRef) addRef.current = addFiles;
+  useEffect(() => () => { if (addRef) addRef.current = null; }, [addRef]);
 
   const placeholders = pending || (uploading ? 1 : 0);
   const cell: React.CSSProperties = {
@@ -132,7 +139,7 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
         )}
       </div>
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden
-        onChange={e => { void addFiles(e.target.files); e.target.value = ''; }} />
+        onChange={e => { void addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
       {labelsEditor}
       {error && <div style={{ fontSize: FS.sm, color: C.dangerText, overflowWrap: 'anywhere' }}>{error}</div>}
       <Notice tone="warning" icon={ShieldAlert}>{CHARACTER_PHOTOS_NOTICE}</Notice>

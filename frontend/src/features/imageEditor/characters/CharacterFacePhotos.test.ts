@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CharacterFacePhotos } from './CharacterFacePhotos';
 import { FACES } from './characterTexts';
-import { MAX_PHOTOS, MAX_PHOTO_MB, photoSizeError, pickFaceFiles, uploadWithConsent } from './photos';
+import { MAX_PHOTOS, MAX_PHOTO_MB, MIN_PHOTOS, addGate, missingText, photoSizeError, pickFaceFiles, uploadWithConsent } from './photos';
 
 const img = (name: string) => ({ name, type: 'image/jpeg' });
 
@@ -65,5 +65,24 @@ describe('CharacterFacePhotos (разметка)', () => {
     const three = Array.from({ length: 3 }, (_, i) => ({ key: `k${i}`, url: `/${i}.jpg`, primary: i === 0 }));
     const h = renderToStaticMarkup(createElement(CharacterFacePhotos, { ...props, photos: three }));
     expect(h).toContain(FACES.minReached);
+  });
+});
+
+describe('addGate', () => {
+  it('без согласия не грузит ни выбор, ни перетаскивание', () => {
+    expect(addGate(false, 3)).toBe('consent');
+  });
+  it('с согласием и файлами — можно, без файлов — пусто', () => {
+    expect(addGate(true, 2)).toBe('ok');
+    expect(addGate(true, 0)).toBe('empty');
+  });
+});
+
+describe('missingText', () => {
+  it('перечисляет всё недостающее', () => {
+    expect(missingText(' ', 1, false)).toBe('имя, ещё 2 фото, галочка согласия');
+  });
+  it('пусто, когда всё есть', () => {
+    expect(missingText('Аня', MIN_PHOTOS, true)).toBe('');
   });
 });

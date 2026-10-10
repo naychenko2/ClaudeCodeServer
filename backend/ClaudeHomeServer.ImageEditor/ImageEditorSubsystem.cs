@@ -44,6 +44,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
+        // Фоновая разметка ракурса и эмоции фото персонажей (ADR-027 §9); нет шва IImageLabeler или флага —
+        // очередь живёт вхолостую, поводы ничего не ставят
+        services.AddSingleton<CharacterPhotoLabeling>();
+        services.AddHostedService(sp => sp.GetRequiredService<CharacterPhotoLabeling>());
         services.AddSingleton<CharacterTrainingPhotos>();
         services.AddSingleton<IProjectTrainingPhotoCleaner>(sp => sp.GetRequiredService<CharacterTrainingPhotos>());
         services.AddSingleton<CharacterLoraRuns>();

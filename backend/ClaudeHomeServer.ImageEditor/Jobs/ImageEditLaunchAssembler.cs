@@ -34,7 +34,8 @@ public sealed class ImageEditLaunchAssembler(
     ImageEditSteps? steps = null,
     ImageContextLaunch? context = null,
     IFeatureFlagGate? flags = null,
-    CharacterSceneParser? sceneParser = null)
+    CharacterSceneParser? sceneParser = null,
+    CharacterPhotoLabeling? labeling = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -148,6 +149,7 @@ public sealed class ImageEditLaunchAssembler(
         {
             var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug);
             if (found is null) return Invalid("Персонаж не найден");
+            labeling?.Enqueue(ownerId, scope.Project!.RootPath, slug);
             // Явный список — только при включённом флаге; любое нарушение отказывает целиком
             if (req.CharacterPhotos is { } chosen)
             {

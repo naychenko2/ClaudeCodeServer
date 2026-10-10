@@ -35,7 +35,8 @@ public class ImageEditorController(
     ImageContextLaunch? context = null,
     ILocalImageMedia? localMedia = null,
     CharacterTrainingPhotos? trainingPhotos = null,
-    IFeatureFlagGate? flags = null)
+    IFeatureFlagGate? flags = null,
+    CharacterPhotoLabeling? labeling = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
@@ -202,7 +203,9 @@ public class ImageEditorController(
     public IActionResult Characters(string projectId)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
-        return Ok(CharacterStore.List(project.RootPath).Select(m => CharacterDto.From(m, SmartPhotos)));
+        var list = CharacterStore.List(project.RootPath);
+        foreach (var m in list) labeling?.Enqueue(UserId, project.RootPath, m.Slug);
+        return Ok(list.Select(m => CharacterDto.From(m, SmartPhotos)));
     }
 
     // Список LoRA ComfyUI для формы персонажа. Нет шва или ComfyUI не ответил — не ошибка:
@@ -221,6 +224,7 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var manifest = CharacterStore.Get(project.RootPath, slug);
+        if (manifest is not null) labeling?.Enqueue(UserId, project.RootPath, manifest.Slug);
         return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest, SmartPhotos));
     }
 
@@ -247,6 +251,7 @@ public class ImageEditorController(
             if (withLora?.Value is { } loraChange) Notify(project.RootPath, loraChange, FileMutationKind.Write);
             created = withLora ?? created;
         }
+        if (created.Value is { } born) labeling?.Enqueue(UserId, project.RootPath, born.Manifest.Slug);
         return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest, SmartPhotos)));
     }
 
@@ -265,6 +270,7 @@ public class ImageEditorController(
         var updated = CharacterStore.Update(project.RootPath, UserId, slug, patch);
         if (updated is null) return CharacterNotFound();
         if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
+        if (photos.Count > 0) labeling?.Enqueue(UserId, project.RootPath, slug);
         return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest, SmartPhotos)));
     }
 

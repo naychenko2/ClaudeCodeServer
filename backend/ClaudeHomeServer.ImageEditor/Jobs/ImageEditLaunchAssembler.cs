@@ -145,7 +145,7 @@ public sealed class ImageEditLaunchAssembler(
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");
 
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
-            req.QuoteId.Trim(),
+            req.QuoteId!.Trim(),
             req.Prompt ?? "",
             req.MarksJson,
             source,

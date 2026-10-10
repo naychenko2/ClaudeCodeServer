@@ -535,7 +535,7 @@ public class TestRunParsersTests
     }
 
     [Fact]
-    public void Подсказка_БезСервераTests_СекцииНет_ТекстПостоянный()
+    public async Task Подсказка_БезСервераTests_СекцииНет_ТекстПостоянный()
     {
         var contributor = new TestRunsHintContributor();
         var session = new Session { OwnerId = "u1", ProjectId = "p1" };
@@ -543,10 +543,10 @@ public class TestRunParsersTests
         contributor.IsEnabled(new PromptSessionContext(session, "u1", null, "/r", HasTestsMcp: false)).Should().BeFalse();
         contributor.IsEnabled(new PromptSessionContext(session, "u1", null, "/r", HasTestsMcp: true)).Should().BeTrue();
 
-        var first = contributor.BuildAsync(new PromptSessionContext(session, "u1", null, "/r", HasTestsMcp: true), "прогони тесты")
-            .GetAwaiter().GetResult()!.Sections.Single();
-        var second = contributor.BuildAsync(new PromptSessionContext(session, "u1", null, "/r", HasTestsMcp: true), null)
-            .GetAwaiter().GetResult()!.Sections.Single();
+        var first = (await contributor.BuildAsync(new PromptSessionContext(session, "u1", null, "/r", HasTestsMcp: true), "прогони тесты"))!
+            .Sections.Single();
+        var second = (await contributor.BuildAsync(new PromptSessionContext(session, "u1", null, "/r", HasTestsMcp: true), null))!
+            .Sections.Single();
         first.Should().Be(second, "текст от хода не зависит — системный блок стабилен");
         first.InTurnTail.Should().BeFalse("постоянная подсказка едет системным блоком, а не хвостом хода");
         first.Text.Should().Contain("mcp__tests__run_tests").And.Contain("select:mcp__tests__run_tests")

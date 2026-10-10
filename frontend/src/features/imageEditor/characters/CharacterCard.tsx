@@ -78,16 +78,20 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
   const [error, setError] = useState<string | null>(null);
   // Кто вызвал шторку — туда возвращаем фокус при закрытии
   const opener = useRef<HTMLElement | null>(null);
+  const remember = () => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; };
+  // Из меню «Ещё» вызывающий — его кнопка (запомнена при открытии меню), а не уже исчезающий пункт
   const open = (kind: CardSheet, focus?: 'face' | 'train') => {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!menu) remember();
     setSheet({ kind, focus });
   };
-  const closeSheet = () => {
-    setSheet(null);
+  const restoreFocus = () => {
     const el = opener.current;
     opener.current = null;
     if (el?.isConnected) requestAnimationFrame(() => el.focus());
   };
+  const closeSheet = () => { setSheet(null); restoreFocus(); };
+  const closeRestart = () => { setConfirmRestart(false); restoreFocus(); };
+  const closeDelete = () => { setConfirmDelete(false); restoreFocus(); };
 
   const cv = characterCardView({
     photos: character.photos.length, train: trainCount.count, view: train.view, versions: items, own: character.local?.lora,
@@ -112,7 +116,7 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
       onDeleted(slug);
     } catch (e) {
       setError((e as Error).message);
-      setConfirmDelete(false);
+      closeDelete();
     }
   };
   const restart = confirmParts(!!character.local?.lora);
@@ -122,7 +126,7 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
     ? loraLabelParts(ownLoraLabel(character.local.lora, versions.data?.own?.trainedAt, loraList)) : null;
 
   const chip = (key: CardChipKey) => (
-    <Chip key={key} variant="soft" touch={isMobile} onClick={() => open(sheetForChip(key))}
+    <Chip key={key} variant="soft" touch={isMobile} keyboard onClick={() => open(sheetForChip(key))}
       title={key === 'photos' && need ? CHIPS.photosNeed : undefined}>
       {key === 'photos' && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
@@ -143,7 +147,7 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
           <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>Все персонажи</span>
         </BackButton>
         <div style={{ position: 'relative' }}>
-          <IconButton size="sm" ariaLabel="Ещё" title="Ещё" active={menu} onClick={() => setMenu(v => !v)}>
+          <IconButton size="sm" ariaLabel="Ещё" title="Ещё" active={menu} onClick={() => { if (!menu) remember(); setMenu(v => !v); }}>
             <MoreHorizontal {...ico} />
           </IconButton>
           {menu && (
@@ -236,12 +240,12 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
         <ConfirmDialog title={TRAIN_TEXT.confirmTitle}
           subtitle={<>{restart.before}<strong>{restart.bold}</strong>{restart.after}{restart.note && <><br /><br />{restart.note}</>}</>}
           confirmLabel={TRAIN_TEXT.confirmOk} cancelLabel={TRAIN_TEXT.confirmCancel}
-          onCancel={() => setConfirmRestart(false)}
-          onConfirm={async () => { await train.training.start?.(train.edited ?? undefined); setConfirmRestart(false); }} />
+          onCancel={closeRestart}
+          onConfirm={async () => { await train.training.start?.(train.edited ?? undefined); closeRestart(); }} />
       )}
       {confirmDelete && (
         <ConfirmDialog title={del.title} subtitle={del.subtitle} confirmLabel={del.confirmLabel} confirmVariant="danger"
-          onConfirm={remove} onCancel={() => setConfirmDelete(false)} />
+          onConfirm={remove} onCancel={closeDelete} />
       )}
     </div>
   );

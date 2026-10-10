@@ -24,7 +24,10 @@ TI="--index-url https://download.pytorch.org/whl/cu130 --extra-index-url https:/
 TORCH="torch==2.13.0 torchvision==0.28.0 torchaudio==2.11.0"
 
 echo "== узел CcsAudioWorker и общий код воркеров (штатная выкатка аудио)"
-AUDIO_ROOT="$AUDIO_ROOT" COMFY_ROOT="$COMFY_ROOT" bash "$HERE/../audio/install.sh" --link-only
+# audio/install.sh после первой установки лежит в $AUDIO_ROOT/ccs/install.sh (rsync сливает
+# $HERE/audio/ в $AUDIO_ROOT/ccs/), и на машине ссылаться на каталог исходников нельзя —
+# копия вне git-дерева нарочно. Источник истины в репо — deploy/comfyui/audio/install.sh.
+AUDIO_ROOT="$AUDIO_ROOT" COMFY_ROOT="$COMFY_ROOT" bash "$AUDIO_ROOT/ccs/install.sh" --link-only
 mkdir -p "$DEPLOY" "$ROOT"
 rsync -a --delete --exclude '__pycache__' "$HERE/" "$DEPLOY/"
 

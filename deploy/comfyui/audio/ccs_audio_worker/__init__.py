@@ -65,6 +65,16 @@ RESULT_MARK = "CCS_RESULT "
 TAIL_LINES = 40
 
 
+# Хвост лога воркера для исключения: последние TAIL_LINES строк без префикса RESULT/PROGRESS,
+# с абсолютными путями заменены на «<path>» — чтобы исключение не утекало внутренние пути наружу.
+# Утечка не критична (всё своё), но в логах бэкенда и на экране пользователя абсолютные
+# пути машины не нужны и могут мешать диагностике.
+def _tail_no_paths(lines, limit=2000):
+    cleaned = [l for l in lines if not l.startswith(RESULT_MARK)]
+    cleaned = cleaned[-limit:]
+    return re.sub(r"/[\w./-]{6,}", "<path>", "\n".join(cleaned))
+
+
 def _config():
     path = os.environ.get("CCS_AUDIO_WORKERS") or os.path.expanduser("~/ai-data/audio-workers/workers.json")
     with open(path, encoding="utf-8") as f:
@@ -216,12 +226,20 @@ class CcsAudioWorker:
                 result = json.loads(line[len(RESULT_MARK):])
                 break
         if proc.returncode != 0 or result is None:
-            tail = "\n".join(l for l in lines if not l.startswith(RESULT_MARK))[-2000:]
-            # бюджет оказался мал — повтор с полной выгрузкой, как было до бюджетов
-            if need_mb and "out of memory" in tail.lower():
+            # воркер мог упасть до того, как успел напечатать CCS_RESULT — тогда result=None;
+            # или мог напечатать {"error": "..."} и выйти с кодом 2. Маркер ccs_error=<код>
+            # нужен бэкенду, чтобы отличить too_few_faces/oom от прочих сбоев воркера (ADR-026 §5.1)
+            err = (result or {}).get("error")
+            tail = _tail_no_paths(lines)
+            if need_mb and ("out of memory" in tail.lower() or err == "oom"):
                 log.warning("аудио-воркер %s: OOM при бюджете %d МБ — повтор с полной выгрузкой", op, need_mb)
                 return self._run(op, params_json, inputs, filename_prefix, timeout_minutes, soft=False)
+            if err:
+                raise RuntimeError(f"воркер {op} ccs_error={err}: {tail}")
             raise RuntimeError(f"воркер {op} завершился с кодом {proc.returncode}: {tail}")
+        if result.get("error"):
+            tail = _tail_no_paths(lines)
+            raise RuntimeError(f"воркер {op} ccs_error={result['error']}: {tail}")
 
         files = []
         for name in result.get("files", []):
@@ -300,10 +318,12 @@ class CcsAudioWorker:
 
         # 5) job.json с out_dir, указывающим на каталог в loras_root (не OUTPUT_SUBFOLDER).
         # Воркеру нужен input_dir для очистки in_dir — прокидываем явно, чтобы он не лазил в
-        # folder_paths (это ComfyUI-окружение, в воркере недоступно)
+        # folder_paths (это ComfyUI-окружение, в воркере недоступно). loras_root нужен воркеру
+        # для повторной проверки: realpath(out_dir) обязан лежать внутри realpath(loras_root),
+        # иначе shutil.rmtree может удалить данные за пределами через симлинк в ccs/<owner>.
         input_dir = folder_paths.get_input_directory()
         job = {"op": op, "params": params, "inputs": in_paths, "out_dir": out_dir,
-               "input_dir": input_dir, "prefix": prefix}
+               "input_dir": input_dir, "loras_root": loras_root, "prefix": prefix}
         fd, job_path = tempfile.mkstemp(prefix="ccs-audio-", suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(job, f, ensure_ascii=False)
@@ -406,8 +426,18 @@ class CcsAudioWorker:
                 break
 
         if proc.returncode != 0 or result is None:
-            tail = "\n".join(l for l in log_tail if not l.startswith(RESULT_MARK))[-2000:]
+            # воркер мог упасть до того, как успел напечатать CCS_RESULT — тогда result=None;
+            # или мог напечатать {"error": "..."} и выйти с кодом 2. Маркер ccs_error=<код>
+            # нужен бэкенду, чтобы отличить too_few_faces/oom от прочих сбоев воркера (ADR-026 §5.1)
+            err = (result or {}).get("error")
+            tail = _tail_no_paths(log_tail)
+            if err:
+                raise RuntimeError(f"lora-воркер {op} ccs_error={err}: {tail}")
             raise RuntimeError(f"lora-воркер {op} завершился с кодом {proc.returncode}: {tail}")
+        if result.get("error"):
+            err = result["error"]
+            tail = _tail_no_paths(log_tail)
+            raise RuntimeError(f"lora-воркер {op} ccs_error={err}: {tail}")
 
         stats = result.get("stats", {})
         # Успех: ccs_lora + ccs_stats. Воркер не возвращает files — узел сам проверяет артефакт

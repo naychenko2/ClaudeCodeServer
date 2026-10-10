@@ -65,9 +65,14 @@ def _run_dirs(job):
     run_id = _check(p.get("run_id"), _RE_RUN, "run_id")
     if not job.input_dir:
         fail("узел не передал input_dir")
+    loras_root = getattr(job, "loras_root", "") or ""
+    if not loras_root:
+        fail("узел не передал loras_root")
     in_dir = os.path.join(job.input_dir, "ccs", owner, run_id)
     if not _inside(in_dir, job.input_dir):
         fail("каталог фото вне input")
+    if not _inside(job.out_dir, loras_root):
+        fail("out_dir вне loras_root")
     if not os.path.normpath(job.out_dir).endswith(os.sep + os.path.join("ccs", owner, f"{slug}-{run_id}")):
         fail("out_dir не каталог этого прогона")
     for d in (in_dir, job.out_dir):
@@ -188,7 +193,10 @@ def _train(job):
 
         name = f"ccs-{slug}-{run_id}"
         config = os.path.join(work, "config.yaml")
-        _render(os.path.join(HERE, "templates", f"{job.params['preset']}.yaml"), config, {
+        # шаблон лежит рядом с этим скриптом — install.sh копирует воркер и templates/ в один каталог,
+        # а HERE может указывать на левый путь (например, если воркер симлинкнут); абсолютный путь от файла надёжнее
+        template_dir = os.path.dirname(os.path.abspath(__file__))
+        _render(os.path.join(template_dir, "templates", f"{job.params['preset']}.yaml"), config, {
             "name": name, "training_folder": os.path.join(work, "out"), "dataset_dir": dataset,
             "steps": steps, "base_weights": base_weights, "extras_dir": extras,
         })

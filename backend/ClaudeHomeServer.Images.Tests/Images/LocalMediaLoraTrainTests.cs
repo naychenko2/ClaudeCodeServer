@@ -36,12 +36,12 @@ public class LocalMediaLoraTrainTests : IDisposable
             ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
         }).Build();
 
-    private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool loraEnabled = true)
+    private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool loraEnabled = true, TimeProvider? time = null)
     {
         var config = Config(loraEnabled);
         var store = new LocalMediaJobStore(config);
         var service = new LocalMediaService(new ComfyClient(new FakeComfyFactory(_comfy), config), store,
-            new FakeProjectAccess(), config, NullLogger<LocalMediaService>.Instance)
+            new FakeProjectAccess(), config, NullLogger<LocalMediaService>.Instance, null, time)
         {
             // Сокет ComfyUI в тестах не открываем
             LoraProgressListener = (_, _, ct) => Task.Delay(Timeout.Infinite, ct),
@@ -175,6 +175,110 @@ public class LocalMediaLoraTrainTests : IDisposable
 
         (await service.CancelLoraTrainAsync(Other, id, asAdmin: true, default)).Should().Be(LoraCancelResult.Cancelled);
         _comfy.Interrupted.Should().Equal(prompt);
+    }
+
+    // Состояние очереди меняется ровно между опросом отмены и снятием: ждущая стала идущей
+    [Fact]
+    public async Task Cancel_QueuedBecomesRunningDuringCancel_StillInterrupts()
+    {
+        var (service, store) = Build();
+        _comfy.Running.Add("foreign-prompt");
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+        _comfy.AfterQueueRead = () =>
+        {
+            _comfy.AfterQueueRead = null;
+            _comfy.Pending.Remove(prompt);
+            _comfy.Running.Add(prompt);
+        };
+
+        (await service.CancelLoraTrainAsync(Owner, id, asAdmin: false, default)).Should().Be(LoraCancelResult.Cancelled);
+
+        _comfy.Interrupted.Should().Contain(prompt);
+        store.ActiveLoraTrainCount().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Cancel_ComfyUnreachable_StillCancelsWithoutThrowing()
+    {
+        var (service, store) = Build();
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        _comfy.Down = true;
+
+        (await service.CancelLoraTrainAsync(Owner, id, asAdmin: false, default)).Should().Be(LoraCancelResult.Cancelled);
+        store.ActiveLoraTrainCount().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Start_PartialUploadFailure_QueuesCleanupOfRunFolder()
+    {
+        var (service, store) = Build();
+        _comfy.FailUploadsAfter = 5;
+
+        var result = await service.StartLoraTrainAsync(Start(), default);
+
+        result.Error.Should().Be(LoraTrainErrorCode.Unavailable);
+        _comfy.Uploads.Should().HaveCount(5);
+        store.ActiveLoraTrainCount().Should().Be(0);
+        var cleanup = store.ListByOp(LocalMediaOps.LoraDelete, Owner).Should().ContainSingle().Subject;
+        cleanup.LoraRunId.Should().Be(RunId);
+        _comfy.Prompts.Single()["prompt"]!["worker"]!["inputs"]!["op"]!.GetValue<string>().Should().Be("lora_delete");
+    }
+
+    [Fact]
+    public async Task Start_FailureBeforeAnyUpload_QueuesNoCleanup()
+    {
+        var (service, store) = Build();
+        _comfy.FailUploadsAfter = 0;
+
+        (await service.StartLoraTrainAsync(Start(), default)).Error.Should().Be(LoraTrainErrorCode.Unavailable);
+        store.ListByOp(LocalMediaOps.LoraDelete, Owner).Should().BeEmpty();
+    }
+
+    private sealed class FakeClock(DateTime now) : TimeProvider
+    {
+        public DateTime Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => new(DateTime.SpecifyKind(Now, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task Sweep_HungTrainBeyondCeiling_InterruptsAndFailsWithTimeout()
+    {
+        var clock = new FakeClock(DateTime.UtcNow);
+        var (service, store) = Build(time: clock);
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+        _comfy.Pending.Clear();
+        _comfy.Running.Add(prompt);
+        await service.GetLoraTrainAsync(Owner, id, default); // фиксирует StartedAt
+
+        clock.Now = clock.Now.AddMinutes(269);
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(0);
+        store.ActiveLoraTrainCount().Should().Be(1);
+
+        clock.Now = clock.Now.AddMinutes(2);
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(1);
+
+        _comfy.Interrupted.Should().Equal(prompt);
+        store.ActiveLoraTrainCount().Should().Be(0);
+        var state = (await service.GetLoraTrainAsync(Owner, id, default))!;
+        state.Status.Should().Be(LoraTrainStatus.Failed);
+        state.Error!.Code.Should().Be("timeout");
+    }
+
+    [Fact]
+    public async Task DeleteRun_AfterFailure_QueuesNewTask()
+    {
+        var (service, _) = Build();
+        await service.DeleteLoraRunAsync(Owner, "proj-1", Slug, RunId, default);
+        _comfy.Fail(_comfy.Pending.Single(), "boom");
+
+        (await service.DeleteLoraRunAsync(Owner, "proj-1", Slug, RunId, default)).Should().Be(LoraDeleteState.Pending);
+        _comfy.Prompts.Should().HaveCount(2);
+
+        _comfy.Complete(_comfy.Pending.Single());
+        (await service.DeleteLoraRunAsync(Owner, "proj-1", Slug, RunId, default)).Should().Be(LoraDeleteState.Deleted);
+        _comfy.Prompts.Should().HaveCount(2);
     }
 
     [Fact]

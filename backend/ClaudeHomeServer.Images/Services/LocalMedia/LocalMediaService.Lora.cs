@@ -92,11 +92,14 @@ public sealed partial class LocalMediaService
             }
             catch (ComfyException ex)
             {
+                await CleanupPartialUploadAsync(request, uploaded.Count, ct);
                 return LoraRefusal(LoraTrainErrorCode.Unavailable, ex.Message);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return LoraRefusal(LoraTrainErrorCode.BadRequest, "Обучающее фото недоступно на диске.");
+                log.LogError(ex, "Обучающее фото прогона {Run} не прочиталось с диска", request.RunId);
+                await CleanupPartialUploadAsync(request, uploaded.Count, ct);
+                return LoraRefusal(LoraTrainErrorCode.Unavailable, "Не удалось прочитать обучающее фото на сервере.");
             }
 
             var eta = LoraTrainEta(request.Preset, options.LoraTrainStartSeconds);
@@ -132,6 +135,40 @@ public sealed partial class LocalMediaService
         }
     }
 
+    // Часть фото уже на GPU, а записи версии ещё нет: lora_delete чистит и in_dir прогона (ADR-026 §6.4),
+    // так что ставим его сами. Не вышло (ComfyUI лежит) — остаток подберёт только ручная уборка
+    private async Task CleanupPartialUploadAsync(LoraTrainStart request, int uploadedCount, CancellationToken ct)
+    {
+        if (uploadedCount == 0) return;
+        if (await QueueLoraDeleteAsync(request.OwnerId, request.ProjectId, request.Slug, request.RunId, ct) is null)
+            log.LogWarning("Не удалось поставить уборку {Count} загруженных фото прогона {Run}", uploadedCount, request.RunId);
+    }
+
+    // Под _submitGate вызывающего. Удаление — лёгкая задача воркера (без GPU), в LoraBusy не учитывается
+    private async Task<LocalMediaJob?> QueueLoraDeleteAsync(string ownerId, string projectId, string slug, string runId, CancellationToken ct)
+    {
+        var job = new LocalMediaJob
+        {
+            Id = JobIdPrefix + Guid.NewGuid().ToString("N"),
+            OwnerId = ownerId,
+            ProjectId = projectId,
+            Op = LocalMediaOps.LoraDelete,
+            LoraSlug = slug,
+            LoraRunId = runId,
+        };
+        try
+        {
+            job.PromptId = (await comfy.QueuePromptAsync(ComfyWorkflows.LoraDelete(ownerId, slug, runId, job.Id), ct)).PromptId;
+        }
+        catch (ComfyException ex)
+        {
+            log.LogWarning("ComfyUI не принял удаление прогона LoRA: {Error}", ex.Message);
+            return null;
+        }
+        store.Add(job);
+        return job;
+    }
+
     private static LoraTrainStartResult LoraRefusal(LoraTrainErrorCode code, string message, LoraTrainBusy? busy = null) =>
         new(null, null, null, code, message, busy);
 
@@ -153,11 +190,20 @@ public sealed partial class LocalMediaService
         if (job is null) return LoraCancelResult.NotFound;
         if (LocalMediaStatuses.IsTerminal(job.Status)) return LoraCancelResult.AlreadyFinished;
 
-        // Статус могли не обновить с прошлого опроса: ждущую снимаем из очереди, идущую прерываем адресно
+        // Статус могли не обновить с прошлого опроса, а ждущая задача могла стать идущей между опросом и снятием.
+        // Поэтому всегда оба шага по СВОЕМУ prompt_id: снятие из очереди, затем прерывание (для не идущей — no-op).
+        // Так гонка Queued→Running закрыта без _submitGate: постановку отмена не затрагивает
         var view = await RefreshAsync(job, ct);
         if (LocalMediaStatuses.IsTerminal(view.Job.Status)) return LoraCancelResult.AlreadyFinished;
-        if (view.Job.Status == LocalMediaStatuses.Running) await comfy.InterruptAsync(job.PromptId, ct);
-        else await comfy.DeletePendingAsync(job.PromptId, ct);
+        try
+        {
+            await comfy.DeletePendingAsync(job.PromptId, ct);
+            await comfy.InterruptAsync(job.PromptId, ct);
+        }
+        catch (ComfyException ex)
+        {
+            log.LogWarning("ComfyUI не подтвердил отмену обучения LoRA {Job}: {Error}", job.Id, ex.Message);
+        }
 
         store.Update(job.Id, job.OwnerId, j =>
         {
@@ -167,6 +213,42 @@ public sealed partial class LocalMediaService
         });
         StopLoraProgress(job.Id);
         return LoraCancelResult.Cancelled;
+    }
+
+    // Сторож зависшего обучения: потолок узла 240 мин + запас (LoraTrainTimeoutMinutes); иначе Running держит карту вечно
+    public async Task<int> SweepLoraTimeoutsAsync(CancellationToken ct)
+    {
+        var now = (time ?? TimeProvider.System).GetUtcNow().UtcDateTime;
+        var limit = TimeSpan.FromMinutes(Options.LoraTrainTimeoutMinutes);
+        var swept = 0;
+        foreach (var job in store.ListByOp(LocalMediaOps.LoraTrain))
+        {
+            if (LocalMediaStatuses.IsTerminal(job.Status) || now - (job.StartedAt ?? job.CreatedAt) <= limit) continue;
+            await _collectGate.WaitAsync(ct);
+            try
+            {
+                // Успели завершить, пока ждали гейт, — не трогаем
+                var current = store.Get(job.Id, job.OwnerId) ?? job;
+                if (LocalMediaStatuses.IsTerminal(current.Status)) continue;
+                try
+                {
+                    await comfy.DeletePendingAsync(current.PromptId, ct);
+                    await comfy.InterruptAsync(current.PromptId, ct);
+                }
+                catch (ComfyException ex)
+                {
+                    log.LogWarning("ComfyUI не подтвердил прерывание зависшего обучения LoRA {Job}: {Error}", current.Id, ex.Message);
+                }
+                Fail(current, $"Обучение превысило потолок {Options.LoraTrainTimeoutMinutes} мин (timeout).", code: LoraErrorCodes.Timeout);
+                StopLoraProgress(current.Id);
+                swept++;
+            }
+            finally
+            {
+                _collectGate.Release();
+            }
+        }
+        return swept;
     }
 
     // Идемпотентно: первый вызов ставит lora_delete, следующие отдают исход этой задачи
@@ -179,39 +261,20 @@ public sealed partial class LocalMediaService
         await _submitGate.WaitAsync(ct);
         try
         {
+            // Последняя задача этого прогона; упавшая не терминальна для уборки: ставим новую (ADR-026 §6.4)
             var existing = store.ListByOp(LocalMediaOps.LoraDelete, ownerId)
-                .FirstOrDefault(j => j.LoraSlug == slug && j.LoraRunId == runId);
+                .Where(j => j.LoraSlug == slug && j.LoraRunId == runId)
+                .OrderBy(j => j.CreatedAt).LastOrDefault();
             if (existing is not null)
             {
                 var current = (await RefreshAsync(existing, ct)).Job;
-                return current.Status switch
-                {
-                    LocalMediaStatuses.Completed => LoraDeleteState.Deleted,
-                    LocalMediaStatuses.Failed => LoraDeleteState.Failed,
-                    _ => LoraDeleteState.Pending,
-                };
+                if (current.Status != LocalMediaStatuses.Failed)
+                    return current.Status == LocalMediaStatuses.Completed ? LoraDeleteState.Deleted : LoraDeleteState.Pending;
             }
 
-            var job = new LocalMediaJob
-            {
-                Id = JobIdPrefix + Guid.NewGuid().ToString("N"),
-                OwnerId = ownerId,
-                ProjectId = projectId,
-                Op = LocalMediaOps.LoraDelete,
-                LoraSlug = slug,
-                LoraRunId = runId,
-            };
-            try
-            {
-                job.PromptId = (await comfy.QueuePromptAsync(ComfyWorkflows.LoraDelete(ownerId, slug, runId, job.Id), ct)).PromptId;
-            }
-            catch (ComfyException ex)
-            {
-                log.LogWarning("ComfyUI не принял удаление прогона LoRA: {Error}", ex.Message);
-                return LoraDeleteState.Failed;
-            }
-            store.Add(job);
-            return LoraDeleteState.Pending;
+            return await QueueLoraDeleteAsync(ownerId, projectId, slug, runId, ct) is null
+                ? LoraDeleteState.Failed
+                : LoraDeleteState.Pending;
         }
         finally
         {

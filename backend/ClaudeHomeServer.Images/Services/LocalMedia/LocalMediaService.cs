@@ -58,7 +58,8 @@ public sealed partial class LocalMediaService(
     IConfiguration config,
     ILogger<LocalMediaService> log,
     // Усыновители результата (карточка в ленте у модулей «Звук» и «Картинки»); без них — как раньше
-    IEnumerable<ClaudeHomeServer.Services.Media.ILocalMediaAdopter>? adopters = null)
+    IEnumerable<ClaudeHomeServer.Services.Media.ILocalMediaAdopter>? adopters = null,
+    TimeProvider? time = null)
 {
     // Папка результатов в проекте: скрыта из дерева, из синка знаний и из git
     public const string ResultsFolder = ".cc-attachments/local-media";

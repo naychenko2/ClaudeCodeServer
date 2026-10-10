@@ -147,7 +147,11 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                         {
                             var text = data?["exception_message"]?.GetValue<string>();
                             var node = data?["node_type"]?.GetValue<string>();
-                            error = Trim($"{node}: {text}".Trim(' ', ':'), 400);
+                            var full = $"{node}: {text}".Trim(' ', ':');
+                            error = Trim(full, 400);
+                            // Маркер воркера (ccs_error=код) не должен потеряться в обрезанном хвосте
+                            if (CcsErrorMarker.Match(full) is { Success: true } marker && !error.Contains(marker.Value, StringComparison.Ordinal))
+                                error = $"{Trim(full, 400 - marker.Length - 1)} {marker.Value}";
                         }
                         break;
                 }
@@ -391,6 +395,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             return Trim(body, 300);
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex CcsErrorMarker = new(@"ccs_error=[a-z_]+", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static string Trim(string text, int max) => text.Length <= max ? text : text[..max] + "…";
 }

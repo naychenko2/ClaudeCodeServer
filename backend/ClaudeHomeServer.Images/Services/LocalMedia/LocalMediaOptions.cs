@@ -59,6 +59,8 @@ public sealed class LocalMediaOptions
 
     // Старт обучения до первого шага (загрузка моделей, кэш латентов), с. Уточнить после замера 1г
     public int LoraTrainStartSeconds { get; set; } = 300;
+    // Потолок обучения: потолок узла воркера 240 мин + запас; дольше — прерываем и помечаем timeout
+    public int LoraTrainTimeoutMinutes { get; set; } = 270;
 
     public bool CleanupEnabled => !string.IsNullOrWhiteSpace(ComfyInputDir) && !string.IsNullOrWhiteSpace(ComfyOutputDir);
 

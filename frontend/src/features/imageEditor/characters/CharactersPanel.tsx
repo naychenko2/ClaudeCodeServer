@@ -11,7 +11,7 @@ import { imageEditorApi } from '../api';
 import { setPrefs, usePrefs } from '../thread/prefs';
 import { CharacterCard } from './CharacterCard';
 import { CharacterCreate } from './CharacterCreate';
-import { listStatus } from './characterListView';
+import { listStatus, resetSelectionOnDelete } from './characterListView';
 import { LIST_STATUS } from './characterTexts';
 import { dropCharacter, putCharacter, reloadCharacters, useCharacters } from './useCharacters';
 
@@ -48,7 +48,7 @@ export function CharactersPanel({ projectId, editing, onEditing, contextSessionI
           onBack={() => setEditing(null)}
           onDeleted={slug => {
             dropCharacter(projectId, slug);
-            if (prefs.characterSlug === slug) setPrefs(projectId, { characterSlug: null });
+            resetSelectionOnDelete(prefs.characterSlug, slug, () => setPrefs(projectId, { characterSlug: null }));
             setEditing(null);
           }} />
       </div>

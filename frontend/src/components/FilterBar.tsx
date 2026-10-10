@@ -12,7 +12,7 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS,
   chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
-  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter, type ChatGroupBy,
+  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
 } from '../lib/chatFilters';
 
 // === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
@@ -63,14 +63,6 @@ interface FilterBarProps {
   // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле,
   // xs в шапке панели: там весь ряд контролов высотой 24)
   triggerSize?: 'xs' | 'sm' | 'md' | 'lg';
-  // Секция «Группировка» внутри поповера. Нужна, когда тулбар уехал в шапку
-  // панели: там на пилюлю группировки места нет, а из трёх осей вида она самая
-  // редкая. В мобильной шторке не показывается — группировка там своя, в «Виде».
-  grouping?: {
-    value: ChatGroupBy;
-    options: { value: ChatGroupBy; label: string; icon: ReactNode }[];
-    onChange: (v: ChatGroupBy) => void;
-  };
 }
 
 // Маркер-точка статуса: на активном чипе — onAccent, иначе — цвет статуса
@@ -335,7 +327,7 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 }
 
 export function FilterBar({
-  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm', grouping,
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm',
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -475,19 +467,6 @@ export function FilterBar({
           padding: SP.md, zIndex: Z.dropdown,
         }}>
           <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} />
-          {grouping && (
-            <div style={{ marginTop: SP.md }}>
-              <SectionTitle>Группировка</SectionTitle>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-                {grouping.options.map(o => (
-                  <Chip variant="toggle" key={o.value} selected={o.value === grouping.value} onClick={() => grouping.onChange(o.value)}>
-                    {o.icon}
-                    {o.label}
-                  </Chip>
-                ))}
-              </div>
-            </div>
-          )}
           <div style={{
             marginTop: SP.xs, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
           }}>

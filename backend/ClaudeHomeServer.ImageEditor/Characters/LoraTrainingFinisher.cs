@@ -23,7 +23,7 @@ public sealed class LoraTrainingFinisher(
     public static readonly TimeSpan LostGrace = TimeSpan.FromMinutes(2);
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
-    // Полный обход проектов нужен один раз за жизнь процесса: подобрать «deleting» после падения; дальше — по индексу
+    // Полный обход проектов нужен один раз за жизнь процесса: наполнить индексы «training» и «deleting»; дальше — по ним
     private bool _fullScanDone;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -63,15 +63,15 @@ public sealed class LoraTrainingFinisher(
 
         if (!_fullScanDone)
         {
-            // Записи training без задачи в сторе (откат кода, потеря jobs.json) группой из ListAll не находятся
+            // Записи training без задачи в сторе (откат кода, потеря jobs.json) группой из ListAll не находятся:
+            // первичное наполнение индекса, дальше его ведёт CharacterLoraRuns
             foreach (var project in projects.GetAll())
             {
                 ct.ThrowIfCancellationRequested();
-                if (project.OwnerId is not { } owner || !ProjectCapabilities.FilesOnServer(project) || !Directory.Exists(project.RootPath)) continue;
+                if (project.OwnerId is null || !ProjectCapabilities.FilesOnServer(project) || !Directory.Exists(project.RootPath)) continue;
                 foreach (var character in CharacterStore.List(project.RootPath))
-                    if (!settled.Contains((project.RootPath, character.Slug))
-                        && runs.List(project.RootPath, character.Slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
-                        await SettleAsync(owner, project.Id, character.Slug, ct);
+                    if (runs.List(project.RootPath, character.Slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
+                        runs.RegisterTraining(project.RootPath, character.Slug);
             }
 
             foreach (var project in projects.GetAll())
@@ -84,6 +84,20 @@ public sealed class LoraTrainingFinisher(
                         runs.RegisterDeleting(project.RootPath, character.Slug);
             }
             _fullScanDone = true;
+        }
+
+        // Каждый круг: персонажи с идущим обучением, которых не покрыли группы шва (задача могла пропасть из стора)
+        var trainingPending = runs.CharactersWithTraining().Where(k => !settled.Contains(k)).ToList();
+        if (trainingPending.Count > 0)
+        {
+            var roots = projects.GetAll().Where(ProjectCapabilities.FilesOnServer)
+                .GroupBy(p => p.RootPath).ToDictionary(g => g.Key, g => g.First());
+            foreach (var (root, slug) in trainingPending)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (roots.TryGetValue(root, out var tp) && tp.OwnerId is { } owner) await SettleAsync(owner, tp.Id, slug, ct);
+                runs.UnregisterTrainingIfEmpty(root, slug);
+            }
         }
 
         var pending = runs.CharactersWithDeleting().Where(k => !settled.Contains(k)).ToList();

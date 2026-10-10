@@ -30,6 +30,7 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
     private readonly object _lock = new();
     private readonly KeyedLocks _locks = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Root, string Slug), byte> _deletingIndex = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Root, string Slug), byte> _trainingIndex = new();
 
     // Одна блокировка на персонажа: пару «прочитать манифест → записать» берут и доводчик, и ручки версий,
     // иначе автоподключение перезатирает выбор человека. Ключ — корень проекта без регистра разделителей.
@@ -50,6 +51,20 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
         lock (_lock)
         {
             if (ReadAll(projectRoot, slug).All(r => r.Status != Status.Deleting)) _deletingIndex.TryRemove((projectRoot, slug), out _);
+        }
+    }
+
+    // Персонажи, у которых есть записи «training»: доводчик каждый круг проверяет только их (плюс один полный проход при старте)
+    public IReadOnlyList<(string Root, string Slug)> CharactersWithTraining() => [.. _trainingIndex.Keys];
+
+    public void RegisterTraining(string projectRoot, string slug) => _trainingIndex[(projectRoot, slug)] = 0;
+
+    // Снимает персонажа с индекса, если «training» больше нет; под тем же замком, что и регистрация
+    public void UnregisterTrainingIfEmpty(string projectRoot, string slug)
+    {
+        lock (_lock)
+        {
+            if (ReadAll(projectRoot, slug).All(r => r.Status != Status.Training)) _trainingIndex.TryRemove((projectRoot, slug), out _);
         }
     }
 
@@ -75,6 +90,7 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
         {
             if (File.Exists(path)) return false;
             Write(path, run);
+            if (run.Status == Status.Training) RegisterTraining(projectRoot, slug);
             return true;
         }
     }
@@ -90,6 +106,8 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
             var updated = change(current) with { RunId = runId };
             Write(path, updated);
             if (updated.Status == Status.Deleting) RegisterDeleting(projectRoot, slug);
+            if (updated.Status == Status.Training) RegisterTraining(projectRoot, slug);
+            else if (current.Status == Status.Training) UnregisterTrainingIfEmpty(projectRoot, slug);
             return updated;
         }
     }

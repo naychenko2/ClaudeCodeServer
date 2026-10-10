@@ -77,6 +77,21 @@ public sealed class LoraTrainingFinisherTests : IDisposable
     }
 
     [Fact]
+    public async Task JobVanishesAfterFirstRound_LongLivedProcess_BecomesFailedLost()
+    {
+        Training(1, LoraTrainingFinisher.LostGrace + TimeSpan.FromMinutes(1));
+        Job(1, LoraTrainStatus.Running);
+        await _sut.RunOnceAsync(default);
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+
+        _trainer.States.Clear();
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Error!.Code.Should().Be("lost");
+        _runs.CharactersWithTraining().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SettleAsync_TrainingWithoutJob_BecomesFailedLost()
     {
         Training(1, LoraTrainingFinisher.LostGrace + TimeSpan.FromMinutes(1));

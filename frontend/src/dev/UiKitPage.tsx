@@ -3406,9 +3406,9 @@ function HeadersSection() {
             </div>
 
             {/* HubTabs по центру — 5 постоянных вкладок DEFAULT_TABS.
-                Реальный активный фон — C.navInk (тёмный, «чернильный»), текст C.onNavInk.
+                Реальный активный фон — C.navActive (в светлой — чернильный, в тёмной — приподнятый), текст C.onNavActive.
                 Вне HubHeader (variant="default") активная — на белом, но HubHeader
-                использует variant="hub" → navInk. */}
+                использует variant="hub" → navActive. */}
             <div style={{
               flex: 1, display: 'flex', justifyContent: 'center',
               background: 'transparent',
@@ -3429,10 +3429,10 @@ function HeadersSection() {
                     display: 'flex', alignItems: 'center', gap: SP.xs,
                     padding: `${SP.xs}px ${SP.sm}px`,
                     borderRadius: R.sm,
-                    background: t.active ? C.navInk : 'transparent',
-                    boxShadow: t.active ? SHADOW.card : 'none',
+                    background: t.active ? C.navActive : 'transparent',
+                    boxShadow: t.active ? `${SHADOW.card}, inset 0 0 0 1px ${C.navActiveEdge}` : 'none',
                     fontSize: FS.sm,
-                    color: t.active ? C.onNavInk : C.textSecondary,
+                    color: t.active ? C.onNavActive : C.textSecondary,
                     fontWeight: t.active ? 600 : 400,
                     cursor: 'pointer',
                   }}>

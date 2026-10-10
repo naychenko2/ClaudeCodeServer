@@ -37,7 +37,7 @@ const COLOR_GROUPS: { name: string; keys: string[] }[] = [
   { name: 'План',     keys: ['plan', 'planLight', 'planText', 'planBorder'] },
   { name: 'Diff',     keys: ['diffAddBg', 'diffAddText', 'diffRemBg', 'diffRemText'] },
   { name: 'Терминал', keys: ['termBg', 'termText', 'termError', 'outputBg', 'outputBorder'] },
-  { name: 'Прочее',   keys: ['overlay', 'glass', 'msgBg', 'navInk', 'onNavInk'] },
+  { name: 'Прочее',   keys: ['overlay', 'glass', 'msgBg', 'navInk', 'onNavInk', 'navActive', 'onNavActive', 'navActiveEdge'] },
 ];
 
 // Мапа «ключ → имя группы» — для O(1) поиска при обходе Object.entries(C).

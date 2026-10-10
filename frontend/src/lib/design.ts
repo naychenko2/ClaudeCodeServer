@@ -101,6 +101,9 @@ export const C = {
   // Хаб-навигатор верхнего уровня — «чернильная» гамма мимо accent
   navInk:      'var(--c-nav-ink)',      // заливка активного раздела (тёмная плашка/светлая в dark)
   onNavInk:    'var(--c-on-nav-ink)',   // текст/иконка на активной плашке
+  navActive:   'var(--c-nav-active)',   // активная вкладка таббара хаба (в dark — приподнятая, не инверсия)
+  onNavActive: 'var(--c-on-nav-active)', // текст/иконка на активной вкладке хаба
+  navActiveEdge: 'var(--c-nav-active-edge)', // кромка приподнятой плашки (inset 1px)
 
   // Diff
   diffAddBg:   'var(--c-diff-add-bg)',

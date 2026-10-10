@@ -53,6 +53,13 @@ public enum FallbackErrorClass
     //     в Classify ниже) — кредиты могут пополнить в любой момент, TTL короткий (час).
     ModelNoAccess,
     ModelOutOfCredits,
+    // Процесс CLI убит сигналом ОС на нашей стороне (exit 137 / SIGKILL — systemd-oomd или
+    // oom-kill cgroup по нехватке памяти на машине). Сбой не в провайдере: соседняя пара пойдёт
+    // тем же процессом на той же машине, подмена только сжигает цепочку и уводит чат на чужую
+    // модель (инцидент 2026-10-10: три oom-kill подряд → MiniMax → opus → deepseek при живых
+    // провайдерах). Фолбэк не запускается, ход завершается честной ошибкой, модель не меняется.
+    // Маркер ставит ClaudeSession первым токеном Details (ProcessKilledMarker).
+    ProcessKilled,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -118,6 +125,11 @@ public static class TurnErrorClassifier
     // токеном Details, когда раннер устройства отказал в запуске (офлайн, нет exec, харнес не готов)
     public const string DeviceRefusedMarker = "[Device:refused]";
 
+    // Маркер гибели процесса CLI от сигнала (exit 137): ClaudeSession ставит его первым токеном
+    // Details ошибки обрыва хода. Классификатор работает с СЫРЫМ текстом — по русской
+    // формулировке в Text гибель не опознать
+    public const string ProcessKilledMarker = "[Process:killed]";
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -161,6 +173,11 @@ public static class TurnErrorClassifier
         // фолбэк лишь сжёг бы цепочку. Честная ошибка хода с текстом отказа
         if (outcome.ErrorText?.StartsWith(DeviceRefusedMarker, StringComparison.Ordinal) == true)
             return FallbackErrorClass.None;
+
+        // Процесс убит сигналом ОС (oom-kill) — тоже ДО ветки "без result → Unreachable":
+        // эндпоинт ни при чём, а смена пары не лечит нехватку памяти на нашей машине
+        if (outcome.ErrorText?.StartsWith(ProcessKilledMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.ProcessKilled;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;
@@ -258,6 +275,7 @@ public static class TurnErrorClassifier
         // подсказки («нет доступа» — свойство тарифа; «нет кредитов» — пополнить кошелёк).
         FallbackErrorClass.ModelNoAccess => "model_no_access",
         FallbackErrorClass.ModelOutOfCredits => "model_out_of_credits",
+        FallbackErrorClass.ProcessKilled => "process_killed",
         _ => null,
     };
 

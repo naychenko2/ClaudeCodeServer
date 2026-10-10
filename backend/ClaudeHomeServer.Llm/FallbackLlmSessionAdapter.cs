@@ -461,6 +461,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return text[(end + 1)..];
     }
 
+    // Снимает служебный маркер гибели процесса из видимых «Подробностей» (классификатор уже отработал)
+    private static string? StripProcessKilledMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.ProcessKilledMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.ProcessKilledMarker.Length..].TrimStart()
+            : text;
+
     // Сырые тексты задержанных ошибок попытки — в «Подробности» маркера подмены.
     // null — гасить было нечего (ошибка не приходила).
     private static string? HeldErrorDetails(IEnumerable<ServerMessage> held)
@@ -590,6 +596,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // из реестра кулдауна, у нативного — из пула подписок. Внешнее условие про
                     // ТЕКУЩИЙ провайдер остаётся прежним: стартовая подмена задумана для стороннего.
                     var k = ProviderKeyFor(sm);
+                    if (!StepConfigured(k)) continue;
                     if (!StepUnavailable(k)) { stepIdx = i; stepKeyFound = k; break; }
                 }
                 if (stepIdx > 0)
@@ -667,6 +674,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // разруливает ничью подписок через Pick (случайно), и второй вызов мог бы
                     // отдать ДРУГУЮ подписку — проверили одну, поехали на другую.
                     var k = ProviderKeyFor(sm);
+                    if (!StepConfigured(k)) continue;
                     if (StepUnavailable(k))
                     {
                         if (cooledWinIdx < 0) { cooledWinIdx = i; cooledWinKey = k; }
@@ -841,7 +849,20 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (cls == FallbackErrorClass.PromptOverflow)
                 {
                     turnOutcome = "failed";
-                    await FailPromptOverflowAsync(turn, end);
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.PromptOverflow);
+                    return;
+                }
+
+                // Процесс CLI убит сигналом ОС (oom-kill, exit 137): причина локальная, на нашей
+                // машине, и соседняя пара пойдёт тем же процессом на той же памяти. Подмена здесь
+                // только уводит чат на чужую модель (инцидент 2026-10-10: три oom-kill подряд →
+                // MiniMax → opus → deepseek при живых провайдерах). Честная ошибка, пара не меняется,
+                // кулдаун провайдеру не ставим (вендор ни при чём).
+                if (cls == FallbackErrorClass.ProcessKilled)
+                {
+                    LogWarn($"Процесс CLI убит сигналом ОС ({Info.Id}, «{currentModel}» × «{currentKey}»): фолбэк не запускаем, пара не меняется");
+                    turnOutcome = "failed";
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.ProcessKilled);
                     return;
                 }
 
@@ -1322,6 +1343,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 var stepModel = chain[scan];
                 var stepKey = ProviderKeyFor(stepModel);
                 if (attempted.Contains((stepModel, stepKey))) continue;
+                // Провайдер без ключа не обслужит ход — пропуск жёсткий, без fail-open остывших
+                if (!StepConfigured(stepKey)) continue;
                 // Окно кандидата не вместит текущий контекст — пропускаем ЖЁСТКО, без fail-open:
                 // это уверенный отказ (модель точно упадёт с тем же «Prompt is too long»), а не
                 // наблюдение о живости (кулдаун). Какие источники сверять, WouldFit решает по
@@ -1409,6 +1432,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // провайдера — ProviderHealthRegistry, у подписки пула Claude — сам пул (дублировать
     // нельзя, инвариант ADR-007 §4.3). Без этой развилки нативный шаг цепочки считался бы
     // «всегда живым»: реестр кулдауна подписок пула не ведёт вовсе.
+    // Шаг цепочки настроен? Сторонний провайдер без ключа/эндпоинта (Enabled=false) не может
+    // обслужить ход вовсе: попытка на нём падает исключением «Провайдер не настроен» посреди
+    // хода (инцидент 2026-10-10: цепочка дошла до DeepSeek без ключа). Это не кулдаун-наблюдение
+    // с fail-open, а уверенный отказ — шаг пропускается ЖЁСТКО при обходе цепочки.
+    private bool StepConfigured(string stepKey) =>
+        _providers?.GetByKey(stepKey) is not { Enabled: false };
+
     private bool StepUnavailable(string stepKey) =>
         IsExternalProvider(stepKey)
             ? _health?.IsUnavailable(stepKey) is true
@@ -1727,8 +1757,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     /// иначе пользователь пошёл бы менять модель. Сменить пару бесполезно — длина
     /// промпта от выбора пары не зависит, и попытка N+1 упадёт так же.
     /// attempts остаётся 1, substitutions не растёт (фолбэк не запускается).
+    /// Тот же финал у гибели процесса от сигнала ОС (ProcessKilled): отличается лишь текст.
     /// </summary>
-    private async Task FailPromptOverflowAsync(FallbackTurn turn, AttemptEnd end)
+    private async Task FailLocalCauseAsync(FallbackTurn turn, AttemptEnd end, string humanText)
     {
         List<ServerMessage> held;
         lock (turn.Sync)
@@ -1743,8 +1774,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // Сам маркер НЕ теряем — ExtractWin32Code выше уже положил 206 в Win32ErrorCode
         // для классификатора; здесь просто снимаем первые байты "[Win32:206]" из видимого
         // текста. Осмысленная формулировка — TurnFailureText.PromptOverflow в Text.
-        var raw = StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held));
-        await _downstream(new ErrorMessage(TurnFailureText.PromptOverflow,
+        var raw = StripProcessKilledMarker(StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held)));
+        await _downstream(new ErrorMessage(humanText,
             ExpectResultFollows: true, Details: raw));
 
         // Финальный result — ошибочный: ход не состоялся, и статус чата обязан это показать
@@ -1907,6 +1938,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         FallbackErrorClass.ProviderError => "поставщик вернул ошибку",
         FallbackErrorClass.Unreachable => "сервис не отвечает",
         FallbackErrorClass.AuthFailure => "не удалось авторизоваться",
+        FallbackErrorClass.ProcessKilled => "процесс остановлен системой",
         _ => "не удалось выполнить",
     };
 

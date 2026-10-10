@@ -4591,10 +4591,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // P30: pending control_response завис бы карточкой до 60-минутного таймаута
                     if (pendingControlResponse) CancelPendingControlResponses();
-                    var message = pendingControlResponse
-                        ? "Процесс модели завершился во время ожидания разрешения — ход прерван"
-                        : "Процесс модели завершился во время хода — ответ не был получен";
-                    try { await _onMessage(new ErrorMessage(message)); }
+                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode)); }
                     catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
                 }
             }
@@ -4615,6 +4612,23 @@ public class ClaudeSession : ILlmSessionAdapter
         // Пустая смерть same-process хода наружу не идёт (SuppressExited выше) — её поглотит ретрай.
         if (!run.SuppressExited)
             await _onMessage(new ExitedMessage(Interlocked.Read(ref run.LastTurnSeq)));
+    }
+
+    // exit 137 = 128 + SIGKILL: процесс убит сигналом ОС (systemd-oomd / oom-kill cgroup), а не
+    // упал сам. Свой Kill (watchdog, «Стоп») сюда не попадает — DeathDiagnosed/_interruptedByUser
+    // гасят ветку раньше.
+    private const int SigKillExitCode = 137;
+
+    // Ошибка обрыва активного хода по смерти процесса. Гибель от сигнала несёт маркер в Details
+    // (классификатор фолбэка работает с сырым текстом): фолбэк такой ход не подменяет, модель не меняется.
+    private static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode)
+    {
+        if (pendingControlResponse)
+            return new ErrorMessage("Процесс модели завершился во время ожидания разрешения — ход прерван");
+        if (exitCode == SigKillExitCode)
+            return new ErrorMessage(TurnFailureText.ProcessKilled,
+                Details: $"{TurnErrorClassifier.ProcessKilledMarker} процесс CLI убит сигналом (exit={exitCode})");
+        return new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен");
     }
 
     // Смерть процесса CLI по событию ОС (Exited). До фикса P27 смерть детектировалась только по
@@ -4677,13 +4691,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // рядом с ним лжёт. Pending control при этом чистит сам Interrupt.
         if (!willRetry && !_interruptedByUser)
         {
-            var message = pendingControlResponse
-                ? "Процесс модели завершился во время ожидания разрешения — ход прерван"
-                : "Процесс модели завершился во время хода — ответ не был получен";
+            var message = ProcessDeathMessage(pendingControlResponse, exitCode);
             // Отменяем ожидающие control_response: иначе DecidePermissionAsync держит граф до
             // 60-минутного таймаута, карточка в ленте «Claude ждёт ответа» зависает навсегда (P30).
             if (pendingControlResponse) CancelPendingControlResponses();
-            try { await _onMessage(new ErrorMessage(message)); }
+            try { await _onMessage(message); }
             catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
         }
 

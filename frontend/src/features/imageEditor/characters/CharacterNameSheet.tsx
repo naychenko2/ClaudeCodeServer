@@ -16,10 +16,23 @@ export async function saveNameDescription(o: {
   onChanged: (c: ImageEditCharacter) => void; onClose: () => void;
 }) {
   const updated = await o.api.updateCharacter(o.projectId, o.character.slug, {
-    name: o.name.trim(), description: o.description.trim() || undefined, photos: [],
+    name: o.name.trim(), description: o.description.trim(), photos: [],
   });
   o.onChanged(updated);
   o.onClose();
+}
+
+type SaveArgs = Parameters<typeof saveNameDescription>[0];
+
+// Обработка сохранения: при ошибке шторка не закрывается, ошибка показывается, введённое остаётся в полях
+export async function submitNameSheet(o: SaveArgs, ui: { setBusy: (b: boolean) => void; setError: (e: string | null) => void }) {
+  ui.setBusy(true); ui.setError(null);
+  try {
+    await saveNameDescription(o);
+  } catch (e) {
+    ui.setError(e instanceof Error && e.message ? e.message : 'Не удалось сохранить. Попробуйте ещё раз.');
+    ui.setBusy(false);
+  }
 }
 
 export function CharacterNameSheet({ api, projectId, character, onChanged, onClose }: {
@@ -34,15 +47,7 @@ export function CharacterNameSheet({ api, projectId, character, onChanged, onClo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const save = async () => {
-    setBusy(true); setError(null);
-    try {
-      await saveNameDescription({ api, projectId, character, name, description, onChanged, onClose });
-    } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : 'Не удалось сохранить. Попробуйте ещё раз.');
-      setBusy(false);
-    }
-  };
+  const save = () => submitNameSheet({ api, projectId, character, name, description, onChanged, onClose }, { setBusy, setError });
 
   return (
     <Modal title={NAME_SHEET_TITLE} width={MODAL_W.form} onClose={onClose}

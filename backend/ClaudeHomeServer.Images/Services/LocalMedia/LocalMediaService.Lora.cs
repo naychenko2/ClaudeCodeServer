@@ -227,6 +227,20 @@ public sealed partial class LocalMediaService
         }
     }
 
+    // true — ComfyUI ответил и задачи среди идущих нет; недоступен или ещё идёт — false (карту не освобождаем)
+    private async Task<bool> IsLoraPromptConfirmedIdleAsync(string promptId, CancellationToken ct)
+    {
+        try
+        {
+            return !(await comfy.GetQueueAsync(ct)).Running.Contains(promptId);
+        }
+        catch (ComfyException ex)
+        {
+            log.LogWarning("ComfyUI не отдал очередь при отмене обучения LoRA: {Error}", ex.Message);
+            return false;
+        }
+    }
+
     private void MarkLoraCancelled(LocalMediaJob job)
     {
         store.Update(job.Id, job.OwnerId, j =>
@@ -249,13 +263,25 @@ public sealed partial class LocalMediaService
             if (LocalMediaStatuses.IsTerminal(job.Status)) continue;
             if (job.CancelRequested)
             {
-                // Повтор отмены, которую ComfyUI не подтвердил при запросе
-                if (await TryStopLoraPromptAsync(job, ct) && store.Get(job.Id, job.OwnerId) is { } pending
-                    && !LocalMediaStatuses.IsTerminal(pending.Status))
+                // Повтор отмены, которую ComfyUI не подтвердил при запросе. ComfyUI недоступен — карту
+                // не освобождаем сколько бы ни прошло: прогон мог продолжиться, отмену довершим после его возврата
+                if (!await TryStopLoraPromptAsync(job, ct)) continue;
+                if (store.Get(job.Id, job.OwnerId) is not { } pending || LocalMediaStatuses.IsTerminal(pending.Status)) continue;
+                if (job.CancelRequestedAt is { } requestedAt
+                    && now - requestedAt > TimeSpan.FromMinutes(Options.LoraCancelTimeoutMinutes))
+                {
+                    // Отмена висит дольше потолка: ломаем «отменено» в «упало» только когда ComfyUI сам
+                    // подтверждает, что задача не идёт; иначе карта занята, остаёмся активными
+                    if (!await IsLoraPromptConfirmedIdleAsync(pending.PromptId, ct)) continue;
+                    Fail(pending, $"Отмена не дошла до воркера за {Options.LoraCancelTimeoutMinutes} мин (cancel_timeout).",
+                        code: LoraErrorCodes.CancelTimeout);
+                    StopLoraProgress(pending.Id);
+                }
+                else
                 {
                     MarkLoraCancelled(pending);
-                    swept++;
                 }
+                swept++;
                 continue;
             }
             // Считаем от старта выполнения: задача могла долго стоять в очереди за чужими прогонами
@@ -449,6 +475,7 @@ public static class LoraErrorCodes
     public const string TooFewFaces = "too_few_faces";
     public const string Oom = "oom";
     public const string Timeout = "timeout";
+    public const string CancelTimeout = "cancel_timeout";
     public const string ComfyRestart = "comfy_restart";
     public const string BadResult = "bad_result";
     public const string WorkerError = "worker_error";

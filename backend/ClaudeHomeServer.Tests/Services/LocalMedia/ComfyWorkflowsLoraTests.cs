@@ -90,9 +90,9 @@ public class ComfyWorkflowsLoraTests
     [Fact]
     public void Оценка_по_пресету_и_остаток_по_шагу()
     {
-        LocalMediaService.LoraTrainEta("standard", 300).Should().Be(5000);
-        LocalMediaService.LoraTrainEta("huge", 300).Should().BeNull();
-        new LocalMediaOptions().LoraTrainStartSeconds.Should().Be(300);
+        LocalMediaService.LoraTrainEta("standard", 150).Should().Be(4850);
+        LocalMediaService.LoraTrainEta("huge", 150).Should().BeNull();
+        new LocalMediaOptions().LoraTrainStartSeconds.Should().Be(150);
         LocalMediaService.LoraTrainRemaining(0, 2000).Should().Be(4700);
         LocalMediaService.LoraTrainRemaining(2000, 2000).Should().Be(0);
     }

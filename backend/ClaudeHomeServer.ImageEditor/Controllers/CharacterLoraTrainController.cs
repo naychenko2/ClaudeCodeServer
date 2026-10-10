@@ -18,13 +18,14 @@ public class CharacterLoraTrainController(
     CharacterTrainingPhotos photos,
     CharacterLoraRuns runs,
     IConfiguration config,
-    ILocalLoraTrainer? trainer = null) : ControllerBase
+    ILocalLoraTrainer? trainer = null,
+    LoraTrainingFinisher? finisher = null) : ControllerBase
 {
     private const int MaxFilesPerRequest = 10;
     private const long MaxBodyBytes = 100L * 1024 * 1024;
     private const int EtaSteps = 2000;
     private const double EtaSecondsPerStep = 2.35;
-    private const int DefaultStartSeconds = 300;
+    private const int DefaultStartSeconds = 150;
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -99,6 +100,8 @@ public class CharacterLoraTrainController(
     {
         if (!Character(projectId, slug, out var project, out var denied)) return denied;
         if (trainer is null) return NoSeam();
+        // Итог обучения, завершившегося между кругами доводчика, подбираем до ответа
+        if (finisher is not null) await finisher.SettleAsync(UserId, projectId, slug, ct);
         var busy = trainer.Busy(UserId);
         var all = runs.List(project.RootPath, slug);
         var training = all.FirstOrDefault(r => r.Status == CharacterLoraRuns.Status.Training);

@@ -133,7 +133,7 @@ public class LocalMediaLoraTrainTests : IDisposable
         var result = await service.StartLoraTrainAsync(Start(), default);
 
         result.Error.Should().BeNull();
-        result.EtaSeconds.Should().Be(5000);
+        result.EtaSeconds.Should().Be(4850);
         var folder = LoraNamespace.RunInputFolder(Owner, RunId) + "/";
         _comfy.UploadPaths.Should().HaveCount(20).And.OnlyContain(p => p.StartsWith(folder));
         var worker = _comfy.Prompts.Single()["prompt"]!["worker"]!["inputs"]!.AsObject();
@@ -224,6 +224,47 @@ public class LocalMediaLoraTrainTests : IDisposable
         _comfy.Interrupted.Should().Contain(prompt);
         store.ActiveLoraTrainCount().Should().Be(0);
         (await service.GetLoraTrainAsync(Owner, id, default))!.Status.Should().Be(LoraTrainStatus.Cancelled);
+    }
+
+    // Отмена запрошена при лежащем ComfyUI; возвращает сервис, часы и id задачи
+    private async Task<(LocalMediaService Service, LocalMediaJobStore Store, FakeClock Clock, string Id, string Prompt)> CancelRequestedWhileDownAsync()
+    {
+        var clock = new FakeClock(DateTime.UtcNow);
+        var (service, store) = Build(time: clock);
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+        _comfy.Pending.Clear();
+        _comfy.Running.Add(prompt);
+        _comfy.Down = true;
+        await service.CancelLoraTrainAsync(Owner, id, asAdmin: false, default);
+        _comfy.Down = false;
+        return (service, store, clock, id, prompt);
+    }
+
+    [Fact]
+    public async Task Sweep_CancelRequestedBeyondCeiling_ComfyConfirmsNotRunning_FailsWithCancelTimeout()
+    {
+        var (service, store, clock, id, prompt) = await CancelRequestedWhileDownAsync();
+        clock.Now = clock.Now.AddMinutes(31);
+
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(1);
+
+        store.ActiveLoraTrainCount().Should().Be(0);
+        var state = (await service.GetLoraTrainAsync(Owner, id, default))!;
+        state.Status.Should().Be(LoraTrainStatus.Failed);
+        state.Error!.Code.Should().Be("cancel_timeout");
+    }
+
+    [Fact]
+    public async Task Sweep_CancelRequestedBeyondCeiling_ComfyDown_KeepsCardBusy()
+    {
+        var (service, store, clock, _, _) = await CancelRequestedWhileDownAsync();
+        _comfy.Down = true;
+        clock.Now = clock.Now.AddMinutes(600);
+
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(0);
+
+        store.ActiveLoraTrainCount().Should().Be(1);
     }
 
     [Fact]

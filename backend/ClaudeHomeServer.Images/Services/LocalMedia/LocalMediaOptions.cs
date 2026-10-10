@@ -57,8 +57,11 @@ public sealed class LocalMediaOptions
     // Выключено по умолчанию — карта на ≈2 ч уходит одному владельцу
     public bool LoraTrainEnabled { get; set; }
 
-    // Старт обучения до первого шага (загрузка моделей, кэш латентов), с. Уточнить после замера 1г
-    public int LoraTrainStartSeconds { get; set; } = 300;
+    // Старт обучения до первого шага (загрузка моделей, кэш латентов), с: замер 1г — 97–125 с (ADR-026)
+    public int LoraTrainStartSeconds { get; set; } = 150;
+    // Потолок «отмена запрошена, но не подтверждена», мин: дальше задача переводится в Failed cancel_timeout,
+    // но только если ComfyUI доступен и подтверждает, что она не идёт
+    public int LoraCancelTimeoutMinutes { get; set; } = 30;
     // Потолок обучения: потолок узла воркера 240 мин + запас; дольше — прерываем и помечаем timeout
     public int LoraTrainTimeoutMinutes { get; set; } = 270;
 

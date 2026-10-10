@@ -26,7 +26,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     {
         public bool Enabled { get; set; } = true;
         public LoraTrainBusy? BusyNow { get; set; }
-        public LoraTrainStartResult StartResult { get; set; } = new("lm_job1", 0, 5000);
+        public LoraTrainStartResult StartResult { get; set; } = new("lm_job1", 0, 4850);
         public LoraCancelResult CancelResult { get; set; } = LoraCancelResult.Cancelled;
         public List<LoraTrainStart> Starts { get; } = [];
         public List<(string Owner, string Job, bool Admin)> Cancels { get; } = [];
@@ -262,7 +262,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
         state.GetProperty("current").ValueKind.Should().Be(JsonValueKind.Null);
         state.GetProperty("defaultTrigger").GetString().Should().Be("ccsanya");
         state.GetProperty("presets")[0].GetProperty("key").GetString().Should().Be("standard");
-        state.GetProperty("presets")[0].GetProperty("etaSeconds").GetInt32().Should().Be(5000);
+        state.GetProperty("presets")[0].GetProperty("etaSeconds").GetInt32().Should().Be(4850);
         state.GetProperty("photosChanged").GetBoolean().Should().BeFalse();
     }
 
@@ -280,7 +280,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var body = await Json(resp);
         body.GetProperty("jobId").GetString().Should().Be("lm_job1");
-        body.GetProperty("etaSeconds").GetInt32().Should().Be(5000);
+        body.GetProperty("etaSeconds").GetInt32().Should().Be(4850);
         var runId = body.GetProperty("runId").GetString()!;
 
         trainer.Starts.Should().ContainSingle().Which.Should().Match<LoraTrainStart>(s =>

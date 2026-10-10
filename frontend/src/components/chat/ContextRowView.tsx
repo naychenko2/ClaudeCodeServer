@@ -612,7 +612,7 @@ export function ContextRowView(props: ContextRowViewProps) {
     <PrimaryChip p={primary} form={f.o} icon={iconOf(primary.kind)} onOpen={props.onOpenPrimary}
       onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
   );
-  const execNode = primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />;
+  const execNode = primary && exec && <ExecChip e={exec} form={f.e} bare={isMobile && !!format} onOpen={open('exec')} />;
   const refsNodes = (
     <>
       <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />

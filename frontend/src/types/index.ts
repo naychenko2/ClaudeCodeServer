@@ -15,6 +15,39 @@ export interface ProjectTag {
   color?: string;
 }
 
+// Тема чатов проекта (docs/features/chat-subjects.md). В коде корень
+// Subject: слово Topic занято значком чата (Session.topic). color в v1 в UI не выставляется.
+export interface ProjectSubject {
+  id: string;
+  name: string;
+  order: number;
+  color?: string | null;
+  createdBy: 'ai' | 'human';
+  createdAt: string;
+}
+
+// Строка PUT /api/projects/{id}/subjects: id известной темы — правка, без id — новая тема
+// человека. order не передан — порядок по позиции в запросе (бэк сравнивает его со старым,
+// и у темы модели любое изменение переводит её в human)
+export interface ProjectSubjectEdit {
+  id?: string;
+  name: string;
+  order?: number;
+  color?: string | null;
+}
+
+// Состояние разбора чатов по темам (GET/POST /api/projects/{id}/subjects/run).
+// started есть только у ответа POST: false — проход уже шёл, второй не запущен
+export interface SubjectRunState {
+  // busy — только в ответе запуска: идёт разбор другого проекта, этот не запущен
+  state: 'idle' | 'running' | 'busy';
+  done: number;
+  total: number;
+  lastError?: string | null;
+  finishedAt?: string | null;
+  started?: boolean | null;
+}
+
 // Фон рабочего пространства проекта (ADR-008). Wire-формат совпадает
 // с ProjectBackgroundView бэка: kind — lowercase-строка, tileVersion — имя файла
 // тайла (оно же cache-buster у GET tile.svg, только при generated), failReason — класс
@@ -134,6 +167,10 @@ export interface Project {
   builtInSystemPrompt?: string;
   icon?: ProjectIcon;             // иконка проекта: инициалы+цвет или картинка
   tagRegistry?: ProjectTag[];     // реестр общих тегов проекта (имя, порядок, цвет)
+  // Реестр тем чатов и нижняя граница фонового разбора: чаты старше
+  // неё фон не трогает, их раскладывает кнопка. null — фон у проекта ещё не проходил
+  subjectRegistry?: ProjectSubject[];
+  subjectsSweepSince?: string | null;
   // Ключи серверов личного MCP-реестра, ВКЛЮЧЁННЫХ в этом проекте (allow-list):
   // сервер едет в ход только там, где явно включён. Пусто/нет — не включён никто
   mcpServersOn?: string[] | null;
@@ -884,6 +921,13 @@ export interface Session {
   // побеждает авто-связь по задаче (TaskId → Task.SourceSessionId).
   // null — корневой чат: обычный, вынесенный вручную либо с удалённой задачей
   parentSessionId?: string | null;
+  // Тема чата: id из Project.subjectRegistry. Висячий id (тему
+  // удалили) читается как «без темы». subjectSource: 'ai' — разложила модель, 'human' —
+  // закрепил человек (в т.ч. «убрал из темы» при subjectId = null), null — никто
+  subjectId?: string | null;
+  subjectSource?: 'ai' | 'human' | null;
+  subjectAssignedAt?: string | null;
+  subjectTriedAt?: string | null;
   // Тип происхождения чата — производный от taskId/automationRuleId на бэке
   origin: 'manual' | 'task' | 'automation';
   // Признак «Готово» для фильтра чатов: у чата есть taskId и связанная задача в статусе Done.

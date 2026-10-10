@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -163,6 +163,12 @@ interface Props {
   // Снять тег с чата (hover-крестик на чипе; на тач удаление — через меню маркировки)
   // Открыть меню маркировки тегами (кнопка в действиях; якорь — rect кнопки для fixed-позиции)
   onAssignTags?: (anchor: DOMRect) => void;
+  // Выбор темы чата: список проекта задаёт его только корневому
+  // чату и онлайн. Не задан — действия «Тема» нет. subjectHint — вторая строка пункта
+  // меню («Деплой ✦» / «закреплена» / «без темы»), subjectTitle — подсказка кнопки
+  onPickSubject?: (anchor: DOMRect) => void;
+  subjectHint?: string;
+  subjectTitle?: string;
   // Переименование чата прямо в карточке (пункт меню «Переименовать»). Не задан —
   // пункта нет. Отклонённый промис оставляет карточку в режиме правки с набранным
   // текстом: имя не сохранилось, и молча выкидывать пользователя из ввода нельзя
@@ -217,6 +223,7 @@ export function ChatCard(props: Props) {
       onDelete={useStableHandler(props.onDelete)!}
       onTogglePin={useStableHandler(props.onTogglePin)}
       onAssignTags={useStableHandler(props.onAssignTags)}
+      onPickSubject={useStableHandler(props.onPickSubject)}
       onRename={useStableHandler(props.onRename)}
       onAddToWall={useStableHandler(props.onAddToWall)}
       onArchive={useStableHandler(props.onArchive)}
@@ -251,8 +258,8 @@ const ChatCardMemo = memo(ChatCardView, sameCardProps);
 function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
-  onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
-  onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
+  onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
+  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -413,6 +420,7 @@ function ChatCardView({
     rename: canRename,
     pin: !!onTogglePin,
     tags: !!onAssignTags,
+    subject: !!onPickSubject,
     wall: !!onAddToWall,
     notify: canMute,
     dossier: canEditChat && !!s.projectId,
@@ -497,6 +505,10 @@ function ChatCardView({
       case 'tags': return {
         icon: <Tags size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Теги',
         onClick: e => { e.stopPropagation(); onAssignTags?.((e.currentTarget as HTMLElement).getBoundingClientRect()); },
+      };
+      case 'subject': return {
+        icon: <Layers size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: subjectTitle ?? 'Выбрать тему',
+        onClick: e => { e.stopPropagation(); onPickSubject?.((e.currentTarget as HTMLElement).getBoundingClientRect()); },
       };
       case 'wall': return {
         icon: <Columns3 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'На стену',
@@ -1152,6 +1164,17 @@ function ChatCardView({
               // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
               // исчезнет вместе с этим меню, и её rect брать будет неоткуда
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); onAssignTags(anchor); }}
+            />
+          )}
+          {onPickSubject && (
+            <MenuItem
+              icon={<Layers size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label="Тема"
+              hint={subjectHint}
+              isMobile={isMobile}
+              action={visAction('subject')}
+              // Якорь — у закрывающегося меню, как у тегов
+              onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); onPickSubject(anchor); }}
             />
           )}
           {onAddToWall && (

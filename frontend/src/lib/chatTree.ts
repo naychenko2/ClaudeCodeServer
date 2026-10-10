@@ -136,6 +136,29 @@ export function withAncestors(chats: Session[], ids: ReadonlySet<string>): Set<s
 }
 
 /**
+ * Корень ветки чата — по той же связи parentSessionId, что у дерева: подъём к предку,
+ * которого нет в списке или у которого нет родителя. Нужен секционерам плоского списка,
+ * которым секцию задаёт корень (режим «Темы»: тема — у корня, вложенные чаты её не
+ * несут). Список — ПОЛНЫЙ: предок, скрытый фильтром, остаётся звеном к корню. Цикл в
+ * данных обрывается на месте — чат считается корнем сам себе.
+ */
+export function rootResolver(chats: Session[]): (s: Session) => Session {
+  const byId = new Map(chats.map(c => [c.id, c]));
+  return s => {
+    const seen = new Set<string>([s.id]);
+    let cur = s;
+    for (;;) {
+      const pid = cur.parentSessionId;
+      const parent = pid && pid !== cur.id ? byId.get(pid) : undefined;
+      if (!parent) return cur;
+      if (seen.has(parent.id)) return s;
+      seen.add(parent.id);
+      cur = parent;
+    }
+  };
+}
+
+/**
  * Все потомки чата (без него самого) — запретные цели при перетаскивании: вложить
  * чат в собственного потомка значило бы замкнуть кольцо. Бэкенд это тоже отклоняет
  * (SessionManager.SetParent), здесь — чтобы drop-зона просто не подсвечивалась.

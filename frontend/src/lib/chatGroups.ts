@@ -1,4 +1,4 @@
-import type { ProjectTag, Session } from '../types';
+import type { ProjectSubject, ProjectTag, Session } from '../types';
 import { sortTagsByRegistry } from './tagRegistry';
 import { sortKeyOf, type ChatSortOrder } from './chatFilters';
 
@@ -132,6 +132,44 @@ export function groupByTags(chats: Session[], registry: ProjectTag[], sortOrder:
   for (const k of orphans) groups.push({ title: k, tag: k, items: byTag.get(k)! });
   // Хвост
   if (untagged.length) groups.push({ title: 'Без тегов', tag: null, items: untagged });
+  return groups;
+}
+
+// Секция режима «Темы»: subject — тема реестра, null — хвост «Без темы»
+export interface SubjectChatGroup extends ChatGroup {
+  subject: ProjectSubject | null;
+}
+
+export const NO_SUBJECT_KEY = '__no_subject__';
+
+// Группировка чатов для режима «Темы»: секции тем в порядке реестра
+// (order), затем хвост «Без темы». В отличие от тегов чат ровно в одной секции; висячий
+// subjectId (темы нет в реестре) — «Без темы»; тема без чатов секцией не рисуется.
+// Секцию задаёт КОРЕНЬ ветки (rootOf): тема живёт у корня, а вложенный чат иначе забил бы
+// хвост «Без темы» — классификатор вложенные не трогает. Для дерева, где на вход идут
+// одни корни, rootOf — тождество.
+// Внутри секции закреплённые — первыми, дальше по дате из sortKeyOf (как sortChatsFlat):
+// отдельной секции «Закреплённые» нет, иначе раскладка перестала бы быть однозначной.
+export function groupBySubjects(
+  chats: Session[], registry: ProjectSubject[], sortOrder: ChatSortOrder = 'newest',
+  rootOf: (s: Session) => Session = s => s,
+): SubjectChatGroup[] {
+  const ordered = [...registry].sort((a, b) => a.order - b.order);
+  const known = new Set(ordered.map(s => s.id));
+  const bySubject = new Map<string, Session[]>();
+  const rest: Session[] = [];
+  for (const c of sortChatsFlat(chats, sortOrder)) {
+    const sid = rootOf(c).subjectId;
+    if (!sid || !known.has(sid)) { rest.push(c); continue; }
+    const bucket = bySubject.get(sid);
+    if (bucket) bucket.push(c); else bySubject.set(sid, [c]);
+  }
+  const groups: SubjectChatGroup[] = [];
+  for (const s of ordered) {
+    const items = bySubject.get(s.id);
+    if (items) groups.push({ title: s.name, subject: s, items });
+  }
+  if (rest.length) groups.push({ title: 'Без темы', subject: null, items: rest });
   return groups;
 }
 

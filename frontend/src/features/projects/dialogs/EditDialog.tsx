@@ -22,6 +22,7 @@ import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { DeviceSection } from '../../desktop/DeviceSection';
 import { LocalHandsSection } from '../../localHands/LocalHandsSection';
 import { ProjectMapSection } from './ProjectMapSection';
+import { ChatSubjectsSection } from './ChatSubjectsSection';
 import { BackgroundSection } from './BackgroundSection';
 import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
 import { ArchiveSettings } from '../../../components/ArchiveSettings';
@@ -589,6 +590,8 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
           локального проекта нет вовсе. Пустая секция с ошибкой загрузки — хуже, чем никакой */}
       {gitAvail && <GitHistorySection project={project} />}
       {mapHygieneEnabled && mapAvail && <ProjectMapSection project={project} />}
+      {/* Темы чатов: бэк отдаёт 404 чужому проекту, поэтому секция — только владельцу */}
+      {isOwner && <ChatSubjectsSection project={project} online={online} />}
       {isOwner && (
         <BackgroundSection
           project={project}

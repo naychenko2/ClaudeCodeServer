@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, List, ListTree, Check,
+  Plus, CalendarDays, Tags, Layers, List, ListTree, Check,
   ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
   SlidersHorizontal, Archive,
 } from 'lucide-react';
@@ -27,6 +27,8 @@ import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder
 const GROUP_BY_META: Record<ChatGroupBy, { label: string; title: string; Icon: typeof CalendarDays }> = {
   days: { label: 'Дни', title: 'Группировка по дням', Icon: CalendarDays },
   tags: { label: 'Теги', title: 'Группировка по тегам', Icon: Tags },
+  // Темы чатов: опцию в groupByOptions передаёт только список проекта
+  subjects: { label: 'Темы', title: 'Группировка по темам', Icon: Layers },
   none: { label: 'Без', title: 'Без группировки', Icon: List },
 };
 
@@ -160,11 +162,13 @@ export function ChatListToolbar({
             }
           >
             <SheetSec>Группировка</SheetSec>
+            {/* Четыре режима (с «Темами» в списке проекта) на 320 CSS подписями не влезают —
+                autoCompact, как у сортировки */}
             <PillSwitch
               value={groupBy}
               options={pillOptions}
               onChange={v => patch({ groupBy: v })}
-              fill isMobile
+              fill isMobile autoCompact={pillOptions.length > 3}
             />
             <SheetSec>Сортировка</SheetSec>
             {/* Четыре пункта в строку: autoCompact оставляет подпись активному,
@@ -307,7 +311,8 @@ export function ChatListToolbar({
             <groupByMeta.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
           {groupMenu && (
-            <Menu anchor={groupMenu} minWidth={230} maxHeight={180} onClose={() => setGroupMenu(null)}>
+            // Высота — от числа режимов: строка 38 + заголовок; четыре в 180 не влезали
+            <Menu anchor={groupMenu} minWidth={230} maxHeight={groupByOptions.length * 38 + 40} onClose={() => setGroupMenu(null)}>
               <div style={{
                 padding: '7px 10px 3px', fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
                 textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,

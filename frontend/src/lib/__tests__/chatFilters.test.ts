@@ -19,6 +19,13 @@ globalThis.localStorage = {
 
 beforeEach(() => store.clear());
 
+describe('loadChatFilters: groupBy=subjects (темы чатов)', () => {
+  it('значение переживает запись и чтение — оно в белом списке normalize', () => {
+    persistChatFilters('p-subj', { ...loadChatFilters('p-subj'), groupBy: 'subjects' });
+    expect(loadChatFilters('p-subj').groupBy).toBe('subjects');
+  });
+});
+
 describe('loadChatFilters: оси вида и миграция cc_chat_view', () => {
   it('дефолт: groupBy=days, sortOrder=newest, hierarchy=false', () => {
     const f = loadChatFilters('p1');

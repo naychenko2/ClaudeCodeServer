@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
@@ -1537,6 +1537,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     rename: online,
     pin: online && !session.projectId,
     tags: canTag,
+    // Тема чата в v1 меняется только из списка проекта (спека «Темы», §4)
+    subject: false,
     wall: !!onAddToWall,
     notify: online && isNotifySupported(),
     dossier: !!project && online,
@@ -1622,6 +1624,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         label: session.isPinned ? 'Открепить' : 'Закрепить',
       };
       case 'tags': return { icon: <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Теги чата', active: !!tagMenu };
+      // В шапке действие недоступно (headerActionAvailable.subject = false) — ветка для полноты switch
+      case 'subject': return { icon: <Layers size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Тема' };
       case 'wall': return { icon: <Columns3 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'На стену' };
       case 'notify': return {
         icon: notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,

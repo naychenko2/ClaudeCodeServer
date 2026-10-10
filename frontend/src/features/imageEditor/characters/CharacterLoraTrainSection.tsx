@@ -7,7 +7,7 @@ import {
   Badge, Button, ConfirmDialog, Field, Notice, ProgressBar, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
 import { loraTrainApi } from '../api';
-import { reloadCharacters } from './useCharacters';
+import { putCharacter, reloadCharacters } from './useCharacters';
 import { useLoraTraining } from './useLoraTraining';
 import { useLoraVersions } from './useLoraVersions';
 import { TRAIN_STOP_FOREIGN_CONFIRM, TRAIN_TEXT } from './loraTrainTexts';
@@ -26,7 +26,9 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
   disabled?: boolean;
 }) {
   const training = useLoraTraining(projectId, slug);
-  const versions = useLoraVersions(projectId, slug);
+  const versions = useLoraVersions(projectId, slug, c => {
+    if (c) putCharacter(projectId, c); else void reloadCharacters(projectId);
+  });
   const [edited, setEdited] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [modal, setModal] = useState<'start' | 'cancel' | 'foreign' | null>(null);
@@ -115,9 +117,9 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
           <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
             {!view.first && (
               <>
-                <Button variant="primary" size="sm" loading={versions.pending === view.version.runId} disabled={disabled}
+                <Button variant="primary" size="sm" loading={versions.pending.includes(view.version.runId)} disabled={disabled}
                   onClick={() => { void versions.ctl?.connect(view.version.runId).then(ok => {
-                    if (ok) { setDismissed(view.version.runId); void reloadCharacters(projectId); }
+                    if (ok) setDismissed(view.version.runId);
                   }); }}>
                   {TRAIN_TEXT.connect}
                 </Button>

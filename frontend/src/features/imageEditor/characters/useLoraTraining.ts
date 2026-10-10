@@ -37,10 +37,13 @@ export interface LoraTrainController {
 const TERMINAL = new Set<LoraTrainView['kind']>(['done', 'failed', 'cancelled']);
 
 function viewOf(s: LoraTrainStateDto): LoraTrainView {
-  if (!s.enabled) return { kind: 'unavailable', reason: 'disabled' };
-  if (!s.available) return { kind: 'unavailable', reason: 'unavailable' };
   const c = s.current;
-  if (!c) return { kind: 'idle' };
+  // Идущий прогон важнее флагов: они дают причину, только когда обучения нет
+  if (!c) {
+    if (!s.enabled) return { kind: 'unavailable', reason: 'disabled' };
+    if (!s.available) return { kind: 'unavailable', reason: 'unavailable' };
+    return { kind: 'idle' };
+  }
   if (c.status === 'queued') return { kind: 'queued', position: c.queuePosition ?? null };
   return { kind: 'running', step: c.step ?? 0, totalSteps: c.totalSteps ?? null, etaSeconds: c.etaSeconds ?? null };
 }
@@ -62,7 +65,8 @@ export function createLoraTrainController(
   const stopTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
   const schedule = () => {
     stopTimer();
-    if (listeners.size === 0 || !(snap.view.kind === 'queued' || snap.view.kind === 'running')) return;
+    const polled = snap.view.kind === 'queued' || snap.view.kind === 'running' || snap.view.kind === 'loading';
+    if (listeners.size === 0 || !polled) return;
     timer = setTimeout(() => { void refresh(); }, intervalMs);
   };
 
@@ -75,10 +79,11 @@ export function createLoraTrainController(
     } catch (e) {
       if (my !== epoch) return;
       const f = loraFailure(e);
-      // Сбой опроса не стирает известный статус: идущее обучение продолжаем опрашивать
-      const view: LoraTrainView = f.reason === 'no_seam' || f.reason === 'disabled' || f.reason === 'unavailable'
+      // Сбой опроса не стирает известный статус: идущее обучение (и ещё не узнанное — loading) продолжаем опрашивать
+      const live = snap.view.kind === 'queued' || snap.view.kind === 'running';
+      const view: LoraTrainView = !live && (f.reason === 'no_seam' || f.reason === 'disabled' || f.reason === 'unavailable')
         ? { kind: 'unavailable', reason: f.reason }
-        : snap.view.kind === 'loading' ? { kind: 'idle' } : snap.view;
+        : snap.view;
       set({ view, error: f });
       schedule();
       return;
@@ -91,10 +96,21 @@ export function createLoraTrainController(
     if (!state.current && watchedRunId) {
       const runId = watchedRunId;
       let version: LoraVersionDto | undefined;
+      // Список ответил, но версии нет (удалили из другой вкладки) — ждать нечего
+      let gone = false;
       try {
         version = (await api.versions(projectId, slug)).items.find(v => v.runId === runId);
-      } catch { /* исход узнаем следующим кругом */ }
+        gone = !version;
+      } catch (e) {
+        const r = loraFailure(e).reason;
+        gone = r === 'version_not_found' || r === 'character_not_found';
+      }
       if (my !== epoch) return;
+      if (gone) {
+        watchedRunId = null;
+        set({ state, view: { kind: 'idle' }, error: { reason: 'version_not_found' } });
+        return;
+      }
       if (version && version.status !== 'training') {
         watchedRunId = null;
         const kind = version.status === 'ready' ? 'done' : version.status === 'failed' ? 'failed' : 'cancelled';

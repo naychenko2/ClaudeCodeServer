@@ -33,12 +33,21 @@ export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: 
   const [busyName, setBusyName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  // Поколение персонажа: ответы, пришедшие после смены slug, отбрасываются
+  const epoch = useRef(0);
 
   const reload = useCallback(() => {
+    const my = epoch.current;
     setLoadError(false);
-    loraTrainApi.photos(projectId, slug).then(setDto).catch(() => setLoadError(true));
+    loraTrainApi.photos(projectId, slug)
+      .then(d => { if (my === epoch.current) setDto(d); })
+      .catch(() => { if (my === epoch.current) setLoadError(true); });
   }, [projectId, slug]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    epoch.current++;
+    setDto(null); setRejected([]); setError(null); setUpload(null); setBusyName(null); setShowAll(false);
+    reload();
+  }, [reload]);
 
   useEffect(() => { if (dto) onCount?.(dto.count); }, [dto, onCount]);
 
@@ -53,6 +62,7 @@ export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: 
 
   const addFiles = async (files: FileList | null) => {
     if (!files?.length || upload) return;
+    const my = epoch.current;
     setError(null);
     const { accepted, overflow } = splitByRoom(Array.from(files), count, max);
     if (overflow.length) addRejected(overflow.map(f => ({ fileName: f.name, reason: 'limit' as const })));
@@ -62,34 +72,40 @@ export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: 
     try {
       for (const f of accepted) {
         try { prepared.push(await shrinkPhoto(f) as File); } catch { local.push({ fileName: f.name, reason: 'format' }); }
+        if (my !== epoch.current) return;
       }
       if (local.length) addRejected(local);
       let done = local.length;
       for (const part of chunk(prepared)) {
         const r = await loraTrainApi.addPhotos(projectId, slug, part);
+        if (my !== epoch.current) return;
         setDto(r.photos);
         if (r.rejected.length) addRejected(r.rejected);
         done += part.length;
         setUpload({ done, total: accepted.length });
       }
     } catch (e) {
+      if (my !== epoch.current) return;
       setError((e as Error).message);
       reload();
     } finally {
-      setUpload(null);
+      if (my === epoch.current) setUpload(null);
     }
   };
 
   const remove = async (name: string) => {
+    const my = epoch.current;
     setBusyName(name); setError(null);
     try {
       await loraTrainApi.deletePhoto(projectId, slug, name);
+      if (my !== epoch.current) return;
       setDto(d => d && { ...d, items: d.items.filter(p => p.name !== name), count: Math.max(0, d.count - 1) });
       reload();
     } catch (e) {
+      if (my !== epoch.current) return;
       setError((e as Error).message);
     } finally {
-      setBusyName(null);
+      if (my === epoch.current) setBusyName(null);
     }
   };
 
@@ -155,7 +171,7 @@ export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: 
                     }} />
                     <div style={{ position: 'absolute', top: -SP.sm, right: -SP.sm }}>
                       <IconButton size="xs" variant="media" title={TRAIN_PHOTOS_TEXT.remove} ariaLabel={TRAIN_PHOTOS_TEXT.remove}
-                        disabled={disabled || !!upload || busyName === p.name} onClick={() => void remove(p.name)}>
+                        disabled={disabled || !!upload || !!busyName} onClick={() => void remove(p.name)}>
                         <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                       </IconButton>
                     </div>

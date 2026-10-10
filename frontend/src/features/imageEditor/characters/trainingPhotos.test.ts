@@ -17,8 +17,8 @@ describe('состояние секции фото обучения', () => {
   it('тексты статуса — дословно из заметки', () => {
     expect(photosCounter(12)).toBe('12 из 50 · нужно минимум 20');
     expect(photosStatus('low', 12)).toEqual({ text: 'Нужно ещё 8 фото, чтобы начать.', tone: 'warning' });
-    expect(photosStatus('enough', 34)?.text).toBe('Фото достаточно. Можно обучать.');
-    expect(photosStatus('limit', 50)?.text).toBe('Достигнут предел — 50 фото.');
+    expect(photosStatus('enough', 34)).toEqual({ text: 'Фото достаточно. Можно обучать.', tone: 'success' });
+    expect(photosStatus('limit', 50)).toEqual({ text: 'Достигнут предел — 50 фото.', tone: 'muted' });
     expect(photosStatus('empty', 0)).toBeNull();
   });
 

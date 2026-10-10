@@ -1,16 +1,16 @@
 // Версии LoRA персонажа: список, подключение, переименование, удаление (ADR-026 §7.3).
 // Логика — в контроллере без React, хук — тонкая обёртка.
 
-import { useMemo, useSyncExternalStore } from 'react';
-import { loraTrainApi, type LoraTrainApi, type LoraVersionsDto } from '../api';
+import { useMemo, useRef, useSyncExternalStore } from 'react';
+import { loraTrainApi, type ImageEditCharacter, type LoraTrainApi, type LoraVersionsDto } from '../api';
 import { loraFailure, type LoraFailure } from './loraErrors';
 
 export interface LoraVersionsSnapshot {
   data: LoraVersionsDto | null;
   loading: boolean;
   error: LoraFailure | null;
-  // runId версии, над которой идёт действие
-  pending: string | null;
+  // runId версий, над которыми идёт действие (строк может быть несколько сразу)
+  pending: string[];
 }
 
 export interface LoraVersionsController {
@@ -24,8 +24,10 @@ export interface LoraVersionsController {
 
 export function createLoraVersionsController(
   projectId: string, slug: string, api: LoraTrainApi = loraTrainApi,
+  // Подключение и удаление подключённой версии меняют LoRA персонажа: null — «перечитай сам»
+  onCharacterChanged?: (c: ImageEditCharacter | null) => void,
 ): LoraVersionsController {
-  let snap: LoraVersionsSnapshot = { data: null, loading: true, error: null, pending: null };
+  let snap: LoraVersionsSnapshot = { data: null, loading: true, error: null, pending: [] };
   const listeners = new Set<() => void>();
   const set = (patch: Partial<LoraVersionsSnapshot>) => {
     snap = { ...snap, ...patch };
@@ -41,14 +43,15 @@ export function createLoraVersionsController(
   }
 
   async function act(runId: string, run: () => Promise<void>): Promise<boolean> {
-    set({ pending: runId, error: null });
+    set({ pending: [...snap.pending, runId], error: null });
+    const done = () => snap.pending.filter(x => x !== runId);
     try {
       await run();
     } catch (e) {
-      set({ pending: null, error: loraFailure(e) });
+      set({ pending: done(), error: loraFailure(e) });
       return false;
     }
-    set({ pending: null });
+    set({ pending: done() });
     return true;
   }
 
@@ -66,7 +69,8 @@ export function createLoraVersionsController(
     refresh,
     // Подключённость и «своя LoRA» зависят от всего списка — после подключения перечитываем его
     connect: runId => act(runId, async () => {
-      await api.connectVersion(projectId, slug, runId);
+      const c = await api.connectVersion(projectId, slug, runId);
+      onCharacterChanged?.(c);
       await refresh();
     }),
     rename: (runId, title) => act(runId, async () => {
@@ -76,6 +80,7 @@ export function createLoraVersionsController(
     // Строка уходит сразу: на сервере она станет deleting и из списка исчезает; подключённая снимается
     remove: runId => act(runId, async () => {
       const r = await api.deleteVersion(projectId, slug, runId);
+      if (r.disconnected) onCharacterChanged?.(null);
       patchData(d => ({
         ...d,
         items: d.items.filter(v => v.runId !== runId).map(v => (r.disconnected ? { ...v, connected: false } : v)),
@@ -85,11 +90,17 @@ export function createLoraVersionsController(
   };
 }
 
-export function useLoraVersions(projectId: string | null, slug: string | null) {
+export function useLoraVersions(
+  projectId: string | null, slug: string | null, onCharacterChanged?: (c: ImageEditCharacter | null) => void,
+) {
+  // Колбэк читается в момент вызова: контроллер от смены его ссылки не пересоздаётся
+  const cb = useRef(onCharacterChanged);
+  cb.current = onCharacterChanged;
   const ctl = useMemo(
-    () => (projectId && slug ? createLoraVersionsController(projectId, slug) : null), [projectId, slug]);
+    () => (projectId && slug ? createLoraVersionsController(projectId, slug, undefined, c => cb.current?.(c)) : null),
+    [projectId, slug]);
   const none: LoraVersionsSnapshot = useMemo(
-    () => ({ data: null, loading: false, error: null, pending: null }), []);
+    () => ({ data: null, loading: false, error: null, pending: [] }), []);
   const snap = useSyncExternalStore(
     fn => (ctl ? ctl.subscribe(fn) : () => {}),
     () => (ctl ? ctl.getSnapshot() : none),

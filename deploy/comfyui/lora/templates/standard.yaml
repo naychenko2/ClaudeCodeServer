@@ -9,7 +9,7 @@ config:
     - type: "sd_trainer"
       training_folder: "<training_folder>"
       device: cuda:0
-      # триггер уже в подписях («photo of <trigger>, head shot»), trigger_word не нужен — как в v1
+      # триггер уже в подписях («photo of ТРИГГЕР, head shot»), trigger_word не нужен — как в v1
       network:
         type: "lora"
         linear: 16

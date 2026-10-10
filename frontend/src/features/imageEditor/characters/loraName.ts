@@ -77,6 +77,11 @@ function shortenNames(labels: Map<string, string>, max: number): Map<string, str
   return short;
 }
 
+// Подпись из набора; нет в наборе (ComfyUI недоступен) — короткое имя, а не сырой путь.
+export function labelOrShortName(labels: Map<string, string>, name: string): string {
+  return labels.get(name) ?? loraDisplayName(name);
+}
+
 // Подпись подключённой «своей» LoRA — та же, что в селекте: считается по полному списку.
 // Список недоступен — по одному имени, без пути.
 export function ownLoraLabel(

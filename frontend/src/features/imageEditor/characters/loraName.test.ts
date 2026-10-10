@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loraDisplayName, loraLabels, ownLoraLabel } from './loraName';
+import { loraDisplayName, loraLabels, ownLoraLabel, labelOrShortName } from './loraName';
 
 const at = (d: number, h = 12, m = 0) => new Date(2026, 9, d, h, m).toISOString();
 const A = 'ccs/a300cc8f/andreyk/andreyk_qwen21_v1_000001750.safetensors';
@@ -83,5 +83,17 @@ describe('сокращение имени в селекте', () => {
     const a = 'aaaaaaaaaaaaaaaaaa_x.safetensors', b = 'aaaaaaaaaaaaaaaaaa_y.safetensors';
     const l = loraLabels([a, b], undefined, 12);
     expect(l.get(a)).not.toBe(l.get(b));
+  });
+});
+
+describe('labelOrShortName', () => {
+  it('без подписи (ComfyUI недоступен) — короткое имя без ccs/ и .safetensors', () => {
+    const label = labelOrShortName(loraLabels([]), 'ccs/75b93/two/face.safetensors');
+    expect(label).toBe('face');
+    expect(label).not.toContain('ccs/');
+    expect(label).not.toContain('.safetensors');
+  });
+  it('подпись из набора приоритетнее', () => {
+    expect(labelOrShortName(new Map([[A, 'метка']]), A)).toBe('метка');
   });
 });

@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
-import { loraLabels } from './loraName';
+import { labelOrShortName, loraLabels } from './loraName';
 import type { ImageEditCharacter, ImageEditLoras } from '../api';
 
 type Lora = NonNullable<ImageEditCharacter['local']>;
@@ -49,7 +49,7 @@ export function CharacterLoraSection({ list, current, disabled, onChange }: {
   const allNames = missing ? [name, ...options] : options;
   const shortLabels = loraLabels(allNames, list?.trained, SELECT_NAME_MAX);
   const fullLabels = loraLabels(allNames, list?.trained);
-  const short = (n: string) => shortLabels.get(n) ?? n;
+  const short = (n: string) => labelOrShortName(shortLabels, n);
   const selectOptions = options.map(o => ({ value: o, label: short(o) }));
   if (missing) selectOptions.unshift({ value: name, label: `${short(name)} (нет в ComfyUI)` });
 
@@ -100,7 +100,7 @@ export function CharacterLoraSection({ list, current, disabled, onChange }: {
           )}
           {list && !list.available && has && (
             <div style={{ fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
-              Файл: {fullLabels.get(name) ?? name}, {trigger}, {strength.toFixed(2).replace('.', ',')}
+              Файл: {labelOrShortName(fullLabels, name)}, {trigger}, {strength.toFixed(2).replace('.', ',')}
             </div>
           )}
           {has && (

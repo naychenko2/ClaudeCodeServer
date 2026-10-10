@@ -82,6 +82,57 @@ function SheetSec({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Кнопка-меню группировки: иконка = текущий режим, клик — меню режимов с галкой.
+// Одна реализация на compact-ступень сайдбара и на шапку карточки.
+function GroupByMenuButton({ size, value, options, onChange }: {
+  size: 'xs' | 'sm';
+  value: ChatGroupBy;
+  options: ChatGroupBy[];
+  onChange: (v: ChatGroupBy) => void;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const meta = GROUP_BY_META[value] ?? GROUP_BY_META.days;
+  return (
+    <>
+      <IconButton size={size}
+        title={`Группировка: ${value === 'none' ? 'без группировки' : meta.label} (сменить)`}
+        onClick={e => setAnchor(e.currentTarget.getBoundingClientRect())}>
+        <meta.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      {anchor && (
+        // Высота — от числа режимов: строка 38 + заголовок; четыре в 180 не влезали
+        <Menu anchor={anchor} minWidth={230} maxHeight={options.length * 38 + 40} onClose={() => setAnchor(null)}>
+          <div style={{
+            padding: '7px 10px 3px', fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+          }}>
+            Группировка
+          </div>
+          {options.map(v => {
+            const m = GROUP_BY_META[v];
+            return (
+              <MenuItem
+                key={v}
+                icon={<m.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                onClick={() => { onChange(v); setAnchor(null); }}
+                label={
+                  <span style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    flex: 1, gap: SP.sm,
+                  }}>
+                    {v === 'none' ? 'Без группировки' : m.label}
+                    {v === value && <Check size={ICON_SIZE.xs} strokeWidth={2.4} style={{ color: C.accent, flexShrink: 0 }} />}
+                  </span>
+                }
+              />
+            );
+          })}
+        </Menu>
+      )}
+    </>
+  );
+}
+
 export function ChatListToolbar({
   onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
   isMobile = false, groupByOptions = ['days', 'tags', 'none'],
@@ -119,8 +170,6 @@ export function ChatListToolbar({
     };
   });
 
-  // Меню группировки на compact-ступени (иконка кнопки = текущий режим)
-  const [groupMenu, setGroupMenu] = useState<DOMRect | null>(null);
   // Мобильная шторка «Вид»
   const [viewSheet, setViewSheet] = useState(false);
 
@@ -216,11 +265,13 @@ export function ChatListToolbar({
     );
   }
 
-  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [архив] [+ Чат] ===
+  // === Контролы в шапке карточки: [фильтр] [сортировка] [группировка] [иерархия] [архив] [+ Чат] ===
   // Ряд нейтральных иконок 24px, главное действие последним и залитым — общий
-  // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает и
-  // уехала секцией в поповер фильтров: из трёх осей вида она самая редкая, а
-  // фильтр, сортировка и иерархия остаются на виду одним кликом.
+  // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает —
+  // вместо неё та же кнопка-меню, что на compact-ступени (иконка = текущий режим);
+  // в поповере фильтров группировка остаётся секцией.
+  // Кнопка стоит и в списке вне проекта: там два режима (Дни / Без), но без неё
+  // группировка в шапке пряталась бы только в поповере.
   // «+ Чат» — в закреплённом слоте (pinned): нейтральные иконки проявляются по
   // наведению, а главное действие видно всегда.
   if (inHeader) {
@@ -251,6 +302,8 @@ export function ChatListToolbar({
         >
           <sort.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
+        <GroupByMenuButton size="xs" value={groupBy} options={groupByOptions}
+          onChange={v => patch({ groupBy: v })} />
         <IconButton
           size="xs"
           active={hierarchy}
@@ -284,7 +337,6 @@ export function ChatListToolbar({
   }
 
   // === Десктопные ступени (без шапки: сайдбар раздела «Чаты», dev-витрина) ===
-  const groupByMeta = GROUP_BY_META[groupBy] ?? GROUP_BY_META.days;
   return (
     <div ref={rootRef} style={{
       display: 'flex', alignItems: 'center', gap: tier === 'compact' ? 4 : 6,
@@ -305,43 +357,8 @@ export function ChatListToolbar({
 
       {/* Группировка: PillSwitch только иконками (comfort/cozy) или кнопка-меню на compact */}
       {tier === 'compact' ? (
-        <>
-          <IconButton size="sm" title={`Группировка: ${groupByMeta.label} (сменить)`}
-            onClick={e => setGroupMenu(e.currentTarget.getBoundingClientRect())}>
-            <groupByMeta.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          {groupMenu && (
-            // Высота — от числа режимов: строка 38 + заголовок; четыре в 180 не влезали
-            <Menu anchor={groupMenu} minWidth={230} maxHeight={groupByOptions.length * 38 + 40} onClose={() => setGroupMenu(null)}>
-              <div style={{
-                padding: '7px 10px 3px', fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
-                textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
-              }}>
-                Группировка
-              </div>
-              {groupByOptions.map(v => {
-                const m = GROUP_BY_META[v];
-                const active = v === groupBy;
-                return (
-                  <MenuItem
-                    key={v}
-                    icon={<m.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-                    onClick={() => { patch({ groupBy: v }); setGroupMenu(null); }}
-                    label={
-                      <span style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        flex: 1, gap: SP.sm,
-                      }}>
-                        {v === 'none' ? 'Без группировки' : m.label}
-                        {active && <Check size={ICON_SIZE.xs} strokeWidth={2.4} style={{ color: C.accent, flexShrink: 0 }} />}
-                      </span>
-                    }
-                  />
-                );
-              })}
-            </Menu>
-          )}
-        </>
+        <GroupByMenuButton size="sm" value={groupBy} options={groupByOptions}
+          onChange={v => patch({ groupBy: v })} />
       ) : (
         <PillSwitch
           value={groupBy}

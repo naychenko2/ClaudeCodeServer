@@ -68,7 +68,6 @@ import { TurnPlanPill } from './chat/TurnPlanPill';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
-import { AttachPicker } from './chat/AttachPicker';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
 import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
@@ -831,7 +830,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [autoAllowTools, session.id, onSessionUpdated]);
 
-  const [showAttachPicker, setShowAttachPicker] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
@@ -3007,7 +3005,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             type="file"
             multiple
             style={{ display: 'none' }}
-            onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) handleChatUpload(fs); }}
+            onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleComposerFiles(fs); }}
           />
           {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
               открытая карточка эскалации, человек видит её над композером, даже если
@@ -3033,8 +3031,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             offline={!online}
             onSend={handleSend}
             onStop={interrupt}
-            // В проекте — пикер файлов проекта; вне проекта — загрузка файла с устройства
-            onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
+            // Скрепка — сразу загрузка с устройства: файлы проекта агент и так видит, путь
+            // пишут текстом, а пикер с галочками был лишним шагом перед галереей
+            onAttach={() => chatFileInputRef.current?.click()}
             isGenerating={isWaiting}
             mode={mode}
             onModeChange={changeMode}
@@ -3102,19 +3101,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           </div>
         </div>
       </div>
-
-      {/* Пикер вложений — только при наличии проекта */}
-      {project && showAttachPicker && (
-        <AttachPicker
-          projectId={project.id}
-          selected={attachedFiles}
-          onToggle={path => onAttachedFilesChange(
-            attachedFiles.includes(path) ? attachedFiles.filter(p => p !== path) : [...attachedFiles, path]
-          )}
-          onClose={() => setShowAttachPicker(false)}
-          onUpload={handleComposerFiles}
-        />
-      )}
 
       {/* Предупреждение перед сменой дерева: что именно произойдёт с чатом и файлами */}
       {worktreeConfirm && (

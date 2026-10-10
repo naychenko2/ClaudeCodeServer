@@ -18,12 +18,15 @@ type Upload = { done: number; total: number };
 let rejectSeq = 0;
 const STATUS_COLOR = { muted: C.textMuted, warning: C.warningText, success: C.successText } as const;
 
-export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: {
+export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount, title, hint }: {
   projectId: string;
   slug: string;
   disabled?: boolean;
   // Сколько фото сейчас в наборе — нужно разделу обучения
   onCount?: (n: number) => void;
+  // Заголовок и подсказка шторки «Фото»; без них — тексты секции обучения
+  title?: string;
+  hint?: string;
 }) {
   const [dto, setDto] = useState<TrainingPhotosDto | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -123,11 +126,11 @@ export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: 
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px` }}>
-        <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{TRAIN_PHOTOS_TEXT.title}</span>
+        <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{title ?? TRAIN_PHOTOS_TEXT.title}</span>
         <Badge tone={tone} size="sm">{upload ? `${count}+${upload.total}` : count} из {max}</Badge>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: `0 ${SP.md}px ${SP.md}px`, minWidth: 0 }}>
-        <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{TRAIN_PHOTOS_TEXT.hint}</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{hint ?? TRAIN_PHOTOS_TEXT.hint}</div>
         {!dto && !loadError && <div style={{ fontSize: FS.sm, color: C.textMuted }}>Загружаю список…</div>}
         {loadError && (
           <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', flexWrap: 'wrap', fontSize: FS.sm, color: C.dangerText }}>

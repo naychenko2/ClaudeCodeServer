@@ -31,3 +31,32 @@ export async function shrinkPhoto(file: File): Promise<Blob> {
 
 export const photosCountText = (n: number) =>
   n >= MIN_PHOTOS ? `${n} фото из ${MAX_PHOTOS}` : `${n} из ${MAX_PHOTOS} · нужно ещё ${MIN_PHOTOS - n}`;
+
+// Отбор файлов для фото лица: не-картинки отбрасываются молча, лишние сверх предела — с подсказкой.
+// Размер проверяется отдельно, после ужатия (photoSizeError): до него файл с телефона легко за 8 МБ.
+export function pickFaceFiles<T extends { name: string; type: string }>(
+  files: T[], existing: number,
+): { picked: T[]; error: string | null } {
+  const room = MAX_PHOTOS - existing;
+  if (room <= 0) return { picked: [], error: `Можно не больше ${MAX_PHOTOS} фото. Уберите лишние и загрузите заново.` };
+  const images = files.filter(f => f.type.startsWith('image/'));
+  const picked = images.slice(0, room);
+  const error = files.length > room
+    ? `Добавлено не всё: в форме не больше ${MAX_PHOTOS} фото. Уберите лишние, если хотите добавить другие.`
+    : null;
+  return { picked, error };
+}
+
+export const photoSizeError = (name: string, size: number): string | null =>
+  size > MAX_PHOTO_MB * 1024 * 1024 ? `${name} больше ${MAX_PHOTO_MB} МБ` : null;
+
+// Загрузка фото лица допускается только с галочкой согласия, и после неё галочка сбрасывается:
+// согласие даётся перед каждой загрузкой, а не один раз. Сбой загрузки галочку не трогает.
+export async function uploadWithConsent<T>(
+  consent: boolean, files: T[], onAdd: (files: T[]) => Promise<void>, resetConsent: () => void,
+): Promise<boolean> {
+  if (!consent || !files.length) return false;
+  await onAdd(files);
+  resetConsent();
+  return true;
+}

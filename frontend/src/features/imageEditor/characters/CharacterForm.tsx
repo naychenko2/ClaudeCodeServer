@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import { BackButton, Button, Checkbox, ConfirmDialog, Field, IconButton, TextArea, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../api';
+import { putCharacter, reloadCharacters } from './useCharacters';
+import { useLoraVersions } from './useLoraVersions';
 import { CharacterLoraSection, type LoraInput } from './CharacterLoraSection';
 import { CharacterLoraTrainSection } from './CharacterLoraTrainSection';
 import { CharacterLoraVersions } from './CharacterLoraVersions';
@@ -29,6 +31,10 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
   onDeleted: (slug: string) => void;
   onClose: () => void;
 }) {
+  // Один контроллер версий на обе секции: подключение из «Обучения» сразу виден в списке версий
+  const versions = useLoraVersions(character ? projectId : null, character?.slug ?? null, c => {
+    if (c) putCharacter(projectId, c); else void reloadCharacters(projectId);
+  });
   const [name, setName] = useState(character?.name ?? '');
   const [trainPhotos, setTrainPhotos] = useState<number | null>(null);
   const [description, setDescription] = useState(character?.description ?? '');
@@ -171,8 +177,8 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
         <span style={{ color: C.textMuted, overflowWrap: 'anywhere' }}>Папка: characters/{slug}/</span>
       </div>
       {character && <CharacterTrainingPhotos key={character.slug} projectId={projectId} slug={character.slug} disabled={busy} onCount={setTrainPhotos} />}
-      {character && <CharacterLoraTrainSection key={character.slug} projectId={projectId} slug={character.slug} hasConnected={!!character.local?.lora} photoCount={trainPhotos} disabled={busy} />}
-      {character && <CharacterLoraVersions key={character.slug} projectId={projectId} slug={character.slug} disabled={busy} />}
+      {character && <CharacterLoraTrainSection key={character.slug} projectId={projectId} slug={character.slug} versions={versions} hasConnected={!!character.local?.lora} photoCount={trainPhotos} disabled={busy} />}
+      {character && <CharacterLoraVersions key={character.slug} versions={versions} disabled={busy} />}
       <CharacterLoraSection key={`${character?.slug ?? 'new'}|${character?.local?.lora ?? ''}|${character?.local?.trigger ?? ''}|${character?.local?.strength ?? ''}`} api={api} projectId={projectId} current={character?.local} disabled={busy} onChange={setLora} />
       <div style={{
         display: 'flex', gap: SP.sm, alignItems: 'flex-start', fontSize: FS.sm, lineHeight: 1.45,

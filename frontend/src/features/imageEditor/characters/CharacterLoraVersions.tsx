@@ -8,8 +8,7 @@ import {
 } from 'aihome_shell/kit';
 import type { LoraVersionDto } from '../api';
 import { useIsMobile } from '../../../lib/breakpoints';
-import { putCharacter, reloadCharacters } from './useCharacters';
-import { useLoraVersions } from './useLoraVersions';
+import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
 } from './loraTrainTexts';
@@ -20,15 +19,11 @@ import {
 
 const ico = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE } as const;
 
-export function CharacterLoraVersions({ projectId, slug, disabled }: {
-  projectId: string;
-  slug: string;
+export function CharacterLoraVersions({ versions, disabled }: {
+  versions: LoraVersionsHandle;
   disabled?: boolean;
 }) {
   const isMobile = useIsMobile();
-  const versions = useLoraVersions(projectId, slug, c => {
-    if (c) putCharacter(projectId, c); else void reloadCharacters(projectId);
-  });
   const { data, ctl, pending } = versions;
   const [renaming, setRenaming] = useState<{ runId: string; draft: string; error: string | null } | null>(null);
   const [modal, setModal] = useState<{ kind: 'revert' | 'delete'; runId: string } | null>(null);

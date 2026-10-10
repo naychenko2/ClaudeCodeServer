@@ -90,6 +90,8 @@ export function createLoraVersionsController(
   };
 }
 
+export type LoraVersionsHandle = ReturnType<typeof useLoraVersions>;
+
 export function useLoraVersions(
   projectId: string | null, slug: string | null, onCharacterChanged?: (c: ImageEditCharacter | null) => void,
 ) {

@@ -139,7 +139,7 @@ describe('тексты и бейджи', () => {
     expect(badgeFor({ kind: 'running', text: '', percent: null, etaText: null })).toMatchObject({ text: 'Идёт' });
     expect(badgeFor({ kind: 'off' })).toBeNull();
     const form = { kind: 'form' as const, label: '', disabled: false, reason: null, photosChanged: false };
-    expect(badgeFor({ ...form, stopped: true })).toMatchObject({ text: 'Остановлено' });
+    expect(badgeFor({ ...form, stopped: true })).toMatchObject({ text: 'Остановлено', tone: 'neutral' });
     expect(badgeFor({ ...form, stopped: false })).toBeNull();
   });
   it('отказы действий', () => {

@@ -144,4 +144,17 @@ describe('контроллер версий LoRA', () => {
     expect(ctl.getSnapshot().data!.items).toHaveLength(1);
     expect(ctl.getSnapshot().error?.reason).toBe('version_training');
   });
+
+  it('подключение через общий контроллер видят все подписчики (секции обучения и версий)', async () => {
+    const api = makeApi({ items: [v('a', { connected: true }), v('b')], own: null, limit: 5, used: 2 });
+    const ctl = createLoraVersionsController('p', 's', api);
+    const seenByVersions = vi.fn();
+    ctl.subscribe(() => {});
+    ctl.subscribe(seenByVersions);
+    await ctl.refresh();
+    seenByVersions.mockClear();
+    expect(await ctl.connect('b')).toBe(true);
+    expect(seenByVersions).toHaveBeenCalled();
+    expect(ctl.getSnapshot().data!.items.find(x => x.connected)?.runId).toBe('b');
+  });
 });

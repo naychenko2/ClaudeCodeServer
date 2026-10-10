@@ -7,17 +7,19 @@ import {
   Badge, Button, ConfirmDialog, Field, Notice, ProgressBar, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
 import { loraTrainApi } from '../api';
-import { putCharacter, reloadCharacters } from './useCharacters';
+import { reloadCharacters } from './useCharacters';
 import { useLoraTraining } from './useLoraTraining';
-import { useLoraVersions } from './useLoraVersions';
+import type { LoraVersionsHandle } from './useLoraVersions';
 import { TRAIN_STOP_FOREIGN_CONFIRM, TRAIN_TEXT } from './loraTrainTexts';
 import { badgeFor, confirmParts, failureText, isValidTrigger, trainSectionView } from './loraTrainView';
 import { TRAIN_MIN } from './trainingPhotos';
 
 const ico = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE } as const;
 
-export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photoCount, disabled }: {
+export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photoCount, disabled, versions }: {
   projectId: string;
+  // Общий с «Версиями персонажа» контроллер: подключение отсюда сразу обновляет тот список
+  versions: LoraVersionsHandle;
   slug: string;
   // У персонажа уже есть подключённая LoRA
   hasConnected: boolean;
@@ -26,9 +28,6 @@ export function CharacterLoraTrainSection({ projectId, slug, hasConnected, photo
   disabled?: boolean;
 }) {
   const training = useLoraTraining(projectId, slug);
-  const versions = useLoraVersions(projectId, slug, c => {
-    if (c) putCharacter(projectId, c); else void reloadCharacters(projectId);
-  });
   const [edited, setEdited] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [modal, setModal] = useState<'start' | 'cancel' | 'foreign' | null>(null);

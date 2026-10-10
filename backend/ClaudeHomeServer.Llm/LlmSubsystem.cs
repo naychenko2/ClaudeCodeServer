@@ -208,6 +208,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LocalActionOverridesStore>();
         services.AddSingleton<LocalActionRouter>();
         services.AddSingleton<ICheapTextRunner, CheapTextRunner>();
+        // Шов разметки картинок моделью со зрением (ADR-027 §4): ImageEditor видит только интерфейс.
+        services.AddSingleton<IImageLabeler, ImageLabeler>();
 
         // Резолвер моделей агентных мест (явная модель → назначение админа →
         // слот тира).

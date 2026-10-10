@@ -386,7 +386,7 @@ public sealed partial class LocalMediaService(
     }
 
     public static bool IsHeavy(LocalMediaRequest request) =>
-        request.Op is LocalMediaOps.VideoUpscale or LocalMediaOps.VideoInpaint
+        request.Op is LocalMediaOps.VideoUpscale or LocalMediaOps.VideoInpaint or LocalMediaOps.LoraTrain
         || (request.Op == LocalMediaOps.ReferenceToVideo
             && string.Equals(request.Identity?.Trim(), "max", StringComparison.OrdinalIgnoreCase));
 
@@ -634,7 +634,8 @@ public sealed partial class LocalMediaService(
                     // Могла закончиться между двумя запросами — история решает
                     history = await comfy.GetHistoryAsync(job.PromptId, ct);
                     if (history is null)
-                        return new LocalMediaJobView(Fail(job, "Задача пропала из очереди ComfyUI (перезапуск или отмена на стенде)."));
+                        return new LocalMediaJobView(Fail(job, "Задача пропала из очереди ComfyUI (перезапуск или отмена на стенде).",
+                            code: LoraErrorCodes.ComfyRestart));
                 }
                 else
                 {
@@ -672,6 +673,7 @@ public sealed partial class LocalMediaService(
     // записи Completed не оставляет задачу без карточки (повторно её уже никто не соберёт)
     private async Task<LocalMediaJob> CollectAsync(LocalMediaJob job, ComfyHistoryEntry history, CancellationToken ct)
     {
+        if (LocalMediaOps.IsLora(job.Op)) return await CollectLoraAsync(job, history, ct);
         var (result, collected) = await CollectUnderGateAsync(job, history, ct);
         if (collected) await AdoptAsync(result, CancellationToken.None);
         return result;
@@ -828,11 +830,12 @@ public sealed partial class LocalMediaService(
         files.Select(f => f.Subfolder.Length == 0 ? f.FileName : $"{f.Subfolder}/{f.FileName}").ToList();
 
     // history.Files — что ComfyUI успел положить в output: их убирает чистка
-    private LocalMediaJob Fail(LocalMediaJob job, string error, ComfyHistoryEntry? history = null) =>
+    private LocalMediaJob Fail(LocalMediaJob job, string error, ComfyHistoryEntry? history = null, string? code = null) =>
         store.Update(job.Id, job.OwnerId, j =>
         {
             j.Status = LocalMediaStatuses.Failed;
             j.Error = error;
+            if (LocalMediaOps.IsLora(j.Op)) j.ErrorCode = code ?? LoraErrorCodes.Classify(error);
             j.FinishedAt = DateTime.UtcNow;
             if (history is not null)
             {

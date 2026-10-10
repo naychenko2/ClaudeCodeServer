@@ -25,6 +25,9 @@ public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Erro
     public IReadOnlyList<string> CachedNodes { get; init; } = [];
     // Текстовые выходы нод (PreviewAny: outputs.{node}.text) — партитура ABC у YuE2
     public IReadOnlyList<string> Texts { get; init; } = [];
+    // Выходы узла CcsAudioWorker при обучении LoRA (ADR-026): имя весов и статистика прогона
+    public JsonArray? CcsLora { get; init; }
+    public JsonArray? CcsStats { get; init; }
 
     // Длительность прогона по меткам ComfyUI; null — меток нет или они несостоятельны
     public double? RunSeconds => StartedAtMs is { } start && FinishedAtMs is { } end && end >= start
@@ -175,6 +178,14 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                     texts.AddRange(list.OfType<JsonValue>().Select(v => v.TryGetValue<string>(out var t) ? t : null)
                         .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!));
 
+        JsonArray? ccsLora = null, ccsStats = null;
+        if (entry["outputs"] is JsonObject ccsOutputs)
+            foreach (var (_, output) in ccsOutputs)
+            {
+                ccsLora ??= (output?["ccs_lora"] as JsonArray)?.DeepClone() as JsonArray;
+                ccsStats ??= (output?["ccs_stats"] as JsonArray)?.DeepClone() as JsonArray;
+            }
+
         return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null),
             files, latents)
         {
@@ -182,6 +193,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             FinishedAtMs = finishedAt,
             CachedNodes = cached,
             Texts = texts,
+            CcsLora = ccsLora,
+            CcsStats = ccsStats,
         };
 
         // Метка сообщения — миллисекунды эпохи; число бывает и целым, и дробным

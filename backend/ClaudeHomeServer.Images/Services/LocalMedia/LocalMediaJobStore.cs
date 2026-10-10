@@ -28,6 +28,8 @@ public static class LocalMediaOps
     public const string LoraTrain = "lora_train";
     public const string LoraDelete = "lora_delete";
 
+    public static bool IsLora(string? op) => op is LoraTrain or LoraDelete;
+
     public static bool IsAudio(string? op) => op is MusicGenerate or MusicEdit or Speech or VoiceConvert or VoiceTrain
         or AudioSeparate or AudioToMidi or AudioEnhance or Transcribe;
 
@@ -104,6 +106,22 @@ public sealed class LocalMediaJob
     // Аудио: движок (ace, yue2, qwen, rvc…) и длина входного звука, с — для статистики и ETA
     public string? Engine { get; set; }
     public double? InputSeconds { get; set; }
+    // Обучение LoRA (ADR-026), поля аддитивные. Отмена: Status = failed и Cancelled = true;
+    // ErrorCode — код сбоя по §6.3, Error — его текст
+    public string? LoraSlug { get; set; }
+    public string? LoraRunId { get; set; }
+    public string? LoraPreset { get; set; }
+    public string? LoraFile { get; set; }
+    public int? LoraPhotosKept { get; set; }
+    public List<LoraPhotoRejectionDto>? LoraRejected { get; set; }
+    public string? ErrorCode { get; set; }
+    public bool Cancelled { get; set; }
+}
+
+public sealed class LoraPhotoRejectionDto
+{
+    public string Name { get; set; } = "";
+    public string Reason { get; set; } = "";
 }
 
 // Задачи локальной генерации: data/local-media-jobs.json. Переживает рестарт бэкенда, пока
@@ -182,6 +200,14 @@ public sealed class LocalMediaJobStore
         lock (_writeLock)
             return _jobs.Count(j => j.OwnerId == ownerId && j.Op == LocalMediaOps.LoraTrain
                 && !LocalMediaStatuses.IsTerminal(j.Status));
+    }
+
+    // Задачи операции, новые сверху; ownerId null — любых владельцев (доводчик, отмена админом)
+    public IReadOnlyList<LocalMediaJob> ListByOp(string op, string? ownerId = null)
+    {
+        lock (_writeLock)
+            return _jobs.Where(j => j.Op == op && (ownerId is null || j.OwnerId == ownerId))
+                .OrderByDescending(j => j.CreatedAt).Select(Clone).ToList();
     }
 
     public IReadOnlyList<LocalMediaJob> Active()

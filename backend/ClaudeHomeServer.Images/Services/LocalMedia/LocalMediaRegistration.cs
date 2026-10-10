@@ -28,6 +28,8 @@ public static class LocalMediaRegistration
         // Шов локальной съёмки видео для модуля «Видео» (ADR-022)
         services.AddSingleton<LocalVideoMediaAdapter>();
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalVideoMedia>(sp => sp.GetRequiredService<LocalVideoMediaAdapter>());
+        // Шов обучения LoRA персонажа (ADR-026): потребитель берёт его необязательным параметром, без Images он null
+        services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.ILocalLoraTrainer, LocalLoraTrainerAdapter>();
         // Шов обработки звука без ИИ (ffmpeg на хосте) для модуля «Звук» (ADR-021)
         services.AddSingleton<ClaudeHomeServer.Services.Media.IAudioDsp, FfmpegAudioDsp>();
         // Шов обработки видео без ИИ для модуля «Видео» (ADR-022 §4): сборка фильма — тяжёлый запуск под общим

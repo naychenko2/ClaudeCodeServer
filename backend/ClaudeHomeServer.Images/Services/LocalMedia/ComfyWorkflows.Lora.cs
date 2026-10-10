@@ -23,7 +23,7 @@ public static partial class ComfyWorkflows
         foreach (var input in inputs)
         {
             if (!input.StartsWith(folder, StringComparison.Ordinal)
-                || !LoraPhotoNameRegex.IsMatch(input[folder.Length..]))
+                || !IsLoraPhotoName(input[folder.Length..]))
                 throw new ArgumentException("Недопустимое имя фото", nameof(inputs));
         }
 
@@ -47,6 +47,8 @@ public static partial class ComfyWorkflows
             ["run_id"] = runId,
         }, [], jobId, 1);
     }
+
+    internal static bool IsLoraPhotoName(string name) => LoraPhotoNameRegex.IsMatch(name);
 
     // Имя обучающего фото: хеш (16 hex) и расширение; без путей и «..»; конец строки — `\z`, не `$`
     private static readonly Regex LoraPhotoNameRegex = new(@"^[0-9a-f]{16}\.(jpg|png|webp)\z", RegexOptions.Compiled);

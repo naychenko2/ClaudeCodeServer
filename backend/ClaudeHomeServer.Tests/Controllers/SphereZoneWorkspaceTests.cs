@@ -3,6 +3,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,9 +69,11 @@ public class SphereZoneWorkspaceTests : IDisposable
         var bindings = Svc<PersonaBindingsService>();
         var personas = Svc<PersonaManager>();
         var scopes = bindings.BuildExternalTaskScopes(OwnerId, persona);
+        // без справочника сфер валидатор отказывает всегда (fail-closed) — передаём, как контроллер
+        var spheres = Svc<ISphereDirectory>();
 
-        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, in1, scopes).Should().BeNull();
-        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, outside, scopes).Should().NotBeNull();
+        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, in1, scopes, spheres).Should().BeNull();
+        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, outside, scopes, spheres).Should().NotBeNull();
         TaskPersonaValidator.Error(personas, OwnerId, persona.Id, null).Should().NotBeNull();
     }
 

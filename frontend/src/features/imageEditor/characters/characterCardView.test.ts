@@ -34,6 +34,12 @@ describe('состояния §4', () => {
     expect(r.action).toEqual({ kind: 'addTrainPhotos', count: 14 });
     expect(r.stops[1].hint).toBe(METER.trainNeed(14, 20));
   });
+  it('2: обучение недоступно (off/noLocal) — фраза ready, без «нужно ещё N»', () => {
+    for (const kind of ['off', 'noLocal'] as const) {
+      const r = characterCardView(input({ train: 5, view: { kind } as TrainSectionView }));
+      expect(r.say).toEqual({ key: 'ready' });
+    }
+  });
   it('2: слово-метка не подходит — кнопка выключена', () => {
     expect(characterCardView(input({ view: form({ reason: 'trigger' }) })).action)
       .toEqual({ kind: 'train', disabled: true, fixTrigger: true });
@@ -124,6 +130,13 @@ describe('шкала', () => {
     const r = characterCardView(input({ photos: 2, train: 5 }));
     expect(r.stops[0]).toMatchObject({ value: 0, titleColor: C.textSecondary });
     expect(r.stops[1].titleColor).toBe(C.textSecondary);
+  });
+  it('обучение недоступно (off/noLocal) — деление 2 не подсвечено, даже если деление 1 есть', () => {
+    for (const kind of ['off', 'noLocal'] as const) {
+      const r = characterCardView(input({ photos: 3, train: 5, view: { kind } as TrainSectionView }));
+      expect(r.stops[0]).toMatchObject({ value: 100, titleColor: C.successText });
+      expect(r.stops[1].titleColor).toBe(C.textSecondary);
+    }
   });
   it('оба деления заполнены', () => {
     const r = characterCardView(input({ photos: 3, train: 20 }));

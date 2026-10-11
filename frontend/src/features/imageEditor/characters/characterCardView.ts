@@ -77,7 +77,7 @@ export function characterCardView(i: CardViewInput): CardView {
     state,
     say: sayFor(state, i, connected),
     badge: state === 4 ? { text: 'done', tone: 'success' } : state === 5 ? { text: 'failed', tone: 'danger' } : null,
-    stops: [faceStop(photos), trainStop(photos, train), resultStop(state, i, connected)],
+    stops: [faceStop(photos), trainStop(photos, train, view), resultStop(state, i, connected)],
     action: actionFor(state, i),
   };
 }
@@ -96,6 +96,8 @@ function sayFor(state: CardState, i: CardViewInput, connected: LoraVersionDto | 
   }
   // Число фото для обучения ещё грузится — «нужно ещё N» было бы неправдой, фраза без числа
   if (i.train === null) return { key: 'ready' };
+  // Обучение недоступно (off/noLocal) — не зовём к шагу, которого нет: фраза без призыва «нужно ещё N фото»
+  if (view.kind === 'off' || view.kind === 'noLocal') return { key: 'ready' };
   const left = TRAIN_MIN - i.train;
   return left > 0 ? { key: 'needTrain', n: left } : { key: 'ready' };
 }
@@ -108,10 +110,12 @@ function faceStop(photos: number): MeterStop {
   };
 }
 
-function trainStop(photos: number, train: number | null): MeterStop {
+function trainStop(photos: number, train: number | null, view: TrainSectionView): MeterStop {
   const full = (train ?? 0) >= TRAIN_MIN;
-  // Деление 1 есть, 2 нет — это следующий шаг, подсвечиваем accent
-  const next = !full && photos >= MIN_PHOTOS;
+  // Деление 1 есть, 2 нет — это следующий шаг, подсвечиваем accent;
+  // если обучение недоступно (off/noLocal) — шага нет, заголовок приглушён
+  const available = view.kind !== 'off' && view.kind !== 'noLocal';
+  const next = available && !full && photos >= MIN_PHOTOS;
   return {
     value: full ? 100 : 0, tone: 'success', estimate: false, titleKey: 'canTrain',
     titleColor: full ? C.successText : next ? C.accent : C.textSecondary,

@@ -1,6 +1,6 @@
 // Строка контекста хода: связка стора контекста (lib/chatContext) и git-чипа с отрисовкой
 // ContextRowView. Открытость правой панели сюда не приходит: строка от неё не зависит.
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
@@ -40,14 +40,17 @@ interface Props {
 const iconOf = (kind: string): ReactNode =>
   getKindApi(kind)?.icon(kind) ?? <FileIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
-export function ContextRow(props: Props) {
+// memo: пропсы (session, project, turnTree, onCommit*) держат стабильные ссылки, пока
+// содержимое не изменилось (ChatPanel: turnTree — стабильный ref, commit-обработчики —
+// useCallback) — строка не перерисовывается на дельты ленты, а только на смену контекста.
+export const ContextRow = memo(function ContextRow(props: Props) {
   return (
     <>
       <ContextRowBody {...props} />
       <ContextSheet session={props.session} project={props.project} />
     </>
   );
-}
+});
 
 function ContextRowBody(props: Props) {
   const { session, onCommitOwn, onCommitAll } = props;

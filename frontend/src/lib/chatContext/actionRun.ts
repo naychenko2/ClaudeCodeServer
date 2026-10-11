@@ -60,9 +60,16 @@ export function runEntry(sessionId: string, scope: string): RunEntry {
   return next;
 }
 
+// Не эмитим без фактического изменения: тикеры прогресса (500 мс) и повторы тех же
+// значений не должны будить подписчиков (строку контекста/композер) на каждый тик.
 const patch = (sessionId: string, p: Partial<RunEntry>) => {
   const e = _runs.get(sessionId);
   if (!e) return;
+  let changed = false;
+  for (const k of Object.keys(p) as (keyof RunEntry)[]) {
+    if (e[k] !== p[k]) { changed = true; break; }
+  }
+  if (!changed) return;
   Object.assign(e, p);
   emit();
 };

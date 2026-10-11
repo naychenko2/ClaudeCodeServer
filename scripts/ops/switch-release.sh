@@ -12,6 +12,29 @@
 # Внутри неё живёт то, чего нет в staging и что потерять нельзя:
 # appsettings.Local.json (там DataPath и ключи), backups-secrets, .mcp.json,
 # mcp-dify, pty-bridge. Полная подмена каталога унесла бы их вместе со сборкой.
+#
+# Расширения для выкатки из чата (ADR-010, карточка хода):
+#   - CCS_DEPLOY_JOURNAL=<путь к deploy-journal.py>
+#     CCS_DEPLOY_STATE_PATH=<путь к deploy-state.json>
+#     включают журналирование: функции step / journal_phase пишут фазы и шаги.
+#     Без них скрипт ведёт себя как раньше (ручной запуск).
+#   - APP / STAGING / RELEASES — переопределение жёстких путей для прогона
+#     на временном каталоге.
+#   - CCS_SYSTEMCTL — переопределение команды systemctl (для прогона с подставным
+#     бинарником в тестах).
+#   - HEALTH_URL — адрес health-гейта (по умолчанию http://127.0.0.1/api/health).
+#   - HEALTH_TRIES / HEALTH_SLEEP — параметры health-гейта (по умолчанию 18×5 с).
+#
+# Контракт с оркестратором deploy-linux.sh: скрипт НЕ закрывает result журнала
+# сам — он только пишет шаги и переключает фазу (switching → verifying). Финальный
+# status (succeeded/rolled_back/failed) по коду выхода ставит оркестратор.
+#
+# Коды выхода:
+#   0 — health прошёл, прод переключён
+#   1 — health провален, автооткат выполнен
+#   2 — staging неполный, прод не тронут
+#   3 — не удалось сохранить текущий билд, прод не тронут
+#   4 — flock на deploy.lock не получен (другая выкатка идёт)
 set -uo pipefail
 
 # Сколько последних снимков держать в /opt/ccs/releases: снимок ≈ 170 МБ, диск
@@ -82,19 +105,55 @@ if [ -z "${CCS_SWITCH_DETACHED:-}" ]; then
     --setenv=CCS_SWITCH_DETACHED=1 "$(readlink -f "$0")" "$@"
 fi
 
-APP=/opt/ccs/app
-STAGING=/opt/ccs/staging
-RELEASES=/opt/ccs/releases
-STAMP=$(date +%Y%m%d-%H%M%S)
+# Журналирование фазы. Без CCS_DEPLOY_JOURNAL — no-op (ручной запуск).
+journal_phase() {
+  if [ -n "${CCS_DEPLOY_JOURNAL:-}" ] && [ -n "${CCS_DEPLOY_STATE_PATH:-}" ]; then
+    "$CCS_DEPLOY_JOURNAL" "$CCS_DEPLOY_STATE_PATH" set-phase "$1" || true
+  fi
+}
+
+# Журналирование шага. step <name> <status>. Тот же name переписывается, а не плодит дубль —
+# удобно, если шаг временно выставил промежуточный статус (например, stop ok, потом health fail).
+step() {
+  if [ -n "${CCS_DEPLOY_JOURNAL:-}" ] && [ -n "${CCS_DEPLOY_STATE_PATH:-}" ]; then
+    "$CCS_DEPLOY_JOURNAL" "$CCS_DEPLOY_STATE_PATH" set-step "$1" "$2" || true
+  fi
+}
+
+# Конфигурация путей и команд — через env для прогона на временном каталоге.
+APP="${APP:-/opt/ccs/app}"
+STAGING="${STAGING:-/opt/ccs/staging}"
+RELEASES="${RELEASES:-/opt/ccs/releases}"
+SYSTEMCTL_CMD="${CCS_SYSTEMCTL:-systemctl --user}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
+HEALTH_HOST="${HEALTH_HOST:-localhost}"
+HEALTH_TRIES="${HEALTH_TRIES:-18}"          # 18 × 5 c = 90 секунд, как в ADR-010
+HEALTH_SLEEP="${HEALTH_SLEEP:-5}"
+STAMP="${STAMP:-$(date +%Y%m%d-%H%M%S)}"
 PREV="$RELEASES/$STAMP"
-LOG=/opt/ccs/deploy-$STAMP.log
-# Прод слушает 80/443 (Kestrel:Endpoints), а НЕ 5000, и требует разрешённый Host
-# (AllowedHosts). Пути /api/auth/ping не существует вовсе — старая проба давала 000
-# на живом сервере и откатила УДАВШУЮСЯ выкатку (прод 2026-09-22, лог 162323).
-HEALTH_URL=http://127.0.0.1/api/health
-HEALTH_HOST=localhost
-HEALTH_TRIES=18          # 18 × 5 c = 90 секунд, как в ADR-010
-HEALTH_SLEEP=5
+LOG="${LOG:-/opt/ccs/deploy-$STAMP.log}"
+
+# Лок на тот же файл, что держит deploy-linux.sh. Ручной запуск не должен пересечься
+# с выкаткой из чата: тогда либо этот скрипт не возьмёт лок (exit 4), либо оркестратор
+# дождётся завершения ручного прогона через свой flock.
+#
+# При вызове из deploy-linux.sh родитель уже держит flock — иначе тот же OFD дважды
+# залочить нельзя (flock реентерабелен через fork, но второй flock на том же fd после
+# exec 9>file получает EAGAIN: bash считает redirect на тот же файл noop'ом). В этом
+# случае CCS_DEPLOY_LOCK_FD приходит через env и flock не переоткрывается.
+if [ -n "${CCS_DEPLOY_LOCK_FD:-}" ]; then
+  # Родитель (deploy-linux.sh) уже держит flock — нам остаётся только пользоваться тем же
+  # OFD. Здесь дополнительной проверки не делаем: родитель при выходе снимет блокировку.
+  :
+else
+  LOCK="${RELEASES}/deploy.lock"
+  exec 9>"$LOCK"
+  if ! flock -x -n 9; then
+    # Лог ещё не настроен — пишем в stderr, оркестратор увидит в своём журнале.
+    echo "switch-release: deploy.lock занят — выкатка уже идёт, выход" >&2
+    exit 4
+  fi
+fi
 
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOG"; }
 
@@ -111,14 +170,18 @@ for must in ClaudeHomeServer.dll wwwroot modules modules/notes modules/spend; do
 done
 log "staging проверен: dll, wwwroot, modules/notes, modules/spend на месте"
 
+journal_phase switching
+
 mkdir -p "$RELEASES"
 log "сохраняю текущий билд целиком в $PREV"
 cp -a "$APP" "$PREV" || { log "ОТКАЗ: не удалось сохранить текущий билд"; exit 3; }
 log "сохранено: $(du -sh "$PREV" | cut -f1)"
+step snapshot ok
 
 log "останавливаю ccs.service (здесь умирает вызывающий агент)"
-systemctl --user stop ccs.service
+$SYSTEMCTL_CMD stop ccs.service
 sleep 2
+step stop ok
 
 # wwwroot чистим отдельно: старые ассеты с хешами в именах иначе копятся вечно,
 # а index.html ссылается только на новые.
@@ -128,12 +191,16 @@ cp -a "$STAGING/wwwroot" "$APP/wwwroot"
 
 log "копирую файлы сборки поверх (конфиги и данные не трогаю)"
 cp -a "$STAGING"/. "$APP"/
+step swap ok
 
 log "поднимаю ccs.service"
-systemctl --user start ccs.service
+$SYSTEMCTL_CMD start ccs.service
+step start ok
 
 # Health-гейт: юнит может подняться, а приложение упасть на старте —
 # поэтому спрашиваем именно HTTP, а не systemctl is-active.
+journal_phase verifying
+
 ok=0
 for i in $(seq 1 $HEALTH_TRIES); do
   sleep $HEALTH_SLEEP
@@ -144,6 +211,7 @@ for i in $(seq 1 $HEALTH_TRIES); do
 done
 
 if [ "$ok" = "1" ]; then
+  step health ok
   # build-id.txt НЕ перезаписываем: он приезжает из publish-linux.sh вместе с sha/ref/builtAt,
   # а голая метка времени стирала привязку выкатки к коммиту (прод 2026-09-22)
   log "=== ГОТОВО: $(head -2 "$APP/build-id.txt" | tr '\n' ' ') отвечает. Предыдущая — $PREV ==="
@@ -153,12 +221,13 @@ if [ "$ok" = "1" ]; then
   exit 0
 fi
 
-log "!!! health не прошёл за 90 с — возвращаю предыдущую сборку"
-systemctl --user stop ccs.service
+step health fail
+log "!!! health не прошёл за ${HEALTH_TRIES}×${HEALTH_SLEEP} с — возвращаю предыдущую сборку"
+$SYSTEMCTL_CMD stop ccs.service
 sleep 2
 rm -rf "$APP"
 cp -a "$PREV" "$APP"
-systemctl --user start ccs.service
+$SYSTEMCTL_CMD start ccs.service
 sleep $HEALTH_SLEEP
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "$HEALTH_URL" || echo 000)
 log "=== ОТКАЧЕНО на $STAMP, health после отката: $code ==="

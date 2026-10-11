@@ -179,6 +179,79 @@ cd C:\Sources\ClaudeCodeServer\scripts\ops
 
 ---
 
+## Linux: выкатка через `deploy_start` (ADR-010, вариант A)
+
+На Linux-инстансе у `deploy_start` отдельный путь: оркестратор `deploy-linux.sh`,
+поднятый `systemd-run --user --collect` в собственном юните, ведёт журнал
+`$CCS_RELEASES_DIR/deploy-state.json` по контракту ADR-010. Шов с бэкендом — журнал:
+заявку пишет сервер (`current` целиком, кроме `phase`/`sha`/`steps`/`result`), а агент
+поправляет `phase`/`sha`/`steps`/`result` атомарным rename через python3-хелпер.
+
+### Скрипты
+
+| Скрипт | Что делает |
+|---|---|
+| `deploy-linux.sh` | оркестратор: flock → читает заявку → проверяет relcheck → `git checkout --detach` → `publish-linux.sh` → `switch-release.sh` → finalize. Самоexec: на старте копирует себя в `/tmp` и делает `exec` — git checkout не должен затереть код посреди bash. |
+| `deploy-journal.py` | единственный писатель журнала со стороны оркестратора. Команды: `set-phase`, `set-step`, `set-sha`, `finalize [message]`. Атомарная запись через tmp + os.replace. Запускается через `python3 -I`, чтобы не подхватить site-packages и user-site — это граница привилегий. |
+| `switch-release.sh` | фазовый сценарий: snapshot → stop → swap → start → health → succeeded/rolled_back. Функция `step <name> <status>` пишет шаг в журнал через хелпер; без `CCS_DEPLOY_JOURNAL` ничего не делает. Поддерживает ручной запуск без журнала для отладки и идёт с самоотвязкой в свой юнит systemd-run, если не выставлен `CCS_SWITCH_DETACHED=1` (оркестратор его уже поднял). |
+| `publish-linux.sh` | сборка фронта (`BUILD_FRONTEND=1`) + бэкенда + mcp-dify + релиз агента устройства. Используется оркестратором и людьми; в журнал не пишет (только в stdout/журналы). |
+
+### Побудка с сервера
+
+`systemd-run --user --collect --quiet --unit=ccs-deploy-<id> \
+   -p ManagedOOMPreference=avoid \
+   --setenv=CCS_RELEASES_DIR=<dir> \
+   <AgentDir>/scripts/ops/deploy-linux.sh`
+
+- argv фиксированный: ни одного параметра заявки, никаких полей `current.request` в командной
+  строке. Заявка едет журналом.
+- `<id>` — UTC-штамп вида `20261012-131230`, прошёл `IsValidBuildId` на стороне сервера.
+- `<AgentDir>` — каталог агента (например `/home/an/Sources/ClaudeCodeServer`).
+- `ManagedOOMPreference=avoid` — вытаскиваем сборку из-под systemd-oomd: на пике тяжёлой
+  сборки она соседствует с vLLM и не должна быть первой жертвой.
+
+### Журнал `$CCS_RELEASES_DIR/deploy-state.json`
+
+Формат — ADR-010, имена camelCase, история лимитом 30 записей, `releases` снимков релизов
+живёт отдельно. Фазы `queued → building → switching → verifying → succeeded | rolled_back | failed`.
+Шаги `build / snapshot / stop / swap / start / health` пишутся оркестратором и `switch-release.sh`
+по ходу работы.
+
+`current` пишет сервер ДО побудки: `id`, `kind`, `phase=queued`, `ref`, `sha` (от snapshot),
+`dirty`, `dirtyFiles`, `request`, `initiatedBy`, `startedAt`. Агент поправляет только
+`phase`, `sha` (фактический после checkout), `steps[]`, `result` (закрытие на любом выходе).
+
+### Лок `$CCS_RELEASES_DIR/deploy.lock`
+
+`flock -x` держит оркестратор всё время работы. `switch-release.sh` при вызове из оркестратора
+пользуется унаследованным fd (номер передаётся через `CCS_DEPLOY_LOCK_FD` — иначе bash при
+`exec 9>file` на уже открытый fd считает redirect noop'ом и второй `flock -n` получает
+`EAGAIN`). При ручном запуске `switch-release.sh` сам берёт flock — выкатка из чата не
+пересечётся с ручным прогоном.
+
+### Локальная разработка и тесты
+
+Прогон на временном каталоге с подставными `publish-linux.sh` и `systemctl` — основной
+способ проверить три ключевых сценария: `succeeded`, `rolled_back` (health провален),
+`failed` (publish упал). Каждый журнал проходит `python3 -m json.tool`, `result` закрыт,
+запись лежит в `history`. Второй запуск при занятом `deploy.lock` сразу выходит и журнал
+не трогает.
+
+```bash
+# Локальный прогон (подставные пути через переменные окружения, никаких /opt/ccs)
+CCS_RELEASES_DIR=/tmp/ccs-test/releases \
+CCS_REPO_DIR=/tmp/ccs-test/relcheck \
+CCS_APP_DIR=/tmp/ccs-test/app \
+CCS_STAGING_DIR=/tmp/ccs-test/staging \
+PATH=/tmp/ccs-test/fakebin:$PATH \
+HEALTH_URL=http://127.0.0.1:19999/ HEALTH_TRIES=3 HEALTH_SLEEP=1 \
+scripts/ops/deploy-linux.sh
+```
+
+Реальный `/opt/ccs` этим скриптом не трогается — только подставленные пути через env.
+
+---
+
 ## ПОЛИГОН: тестовый контур выкатки
 
 **Отлаживать механизм на боевом инстансе нельзя** — половина сценариев это «сервер лёг»:

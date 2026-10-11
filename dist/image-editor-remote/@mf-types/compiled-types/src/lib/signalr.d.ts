@@ -1,0 +1,34 @@
+import * as signalR from '@microsoft/signalr';
+import type { ServerMessage, TeamPlanDecision } from '../types';
+export declare function getConnection(): signalR.HubConnection;
+export declare function resetConnection(): Promise<void>;
+export declare function ensureConnected(): Promise<signalR.HubConnection>;
+export declare function joinSession(sessionId: string): Promise<void>;
+export declare function leaveSession(sessionId: string): Promise<void>;
+export type SendOutcome = 'started' | 'queued' | 'queued-preempted';
+export declare function sendMessage(sessionId: string, text: string, attachedPaths?: string[], mode?: string, auto?: boolean): Promise<SendOutcome>;
+export declare function respondPermission(sessionId: string, requestId: string, behavior: 'allow' | 'deny' | 'allow_always'): Promise<void>;
+export declare function interruptSession(sessionId: string): Promise<void>;
+export declare function setMode(sessionId: string, mode: string): Promise<void>;
+export declare function compactSession(sessionId: string): Promise<void>;
+export declare function answerQuestion(sessionId: string, toolUseId: string, answerText: string): Promise<void>;
+export declare function respondPlan(sessionId: string, requestId: string, approve: boolean, feedback?: string): Promise<void>;
+export declare function respondTeamPlan(sessionId: string, planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string, feedback?: string): Promise<void>;
+export declare function respondTeamEscalation(sessionId: string, escalationId: string, actionId?: string, comment?: string): Promise<void>;
+export declare function onMessage(handler: (msg: ServerMessage) => void): () => void;
+export declare function onPreviewMessage(projectId: string, handler: (msg: ServerMessage) => void): () => void;
+export declare function onFilesChanged(handler: (data: {
+    projectId: string;
+    paths: string[];
+    full?: boolean;
+}) => void): () => void;
+export declare function onGitStatusChanged(handler: (data: {
+    projectId: string;
+}) => void): () => void;
+export declare function joinProject(projectId: string): Promise<void>;
+export declare function leaveProject(projectId: string): Promise<void>;
+export declare function joinPreviewLog(projectId: string, serviceId: string): Promise<string | null>;
+export declare function leavePreviewLog(projectId: string, serviceId: string): Promise<void>;
+export declare function joinUser(userId: string): Promise<void>;
+export declare function leaveUser(userId: string): Promise<void>;
+export declare function onReconnected(callback: () => void): () => void;

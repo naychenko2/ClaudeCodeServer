@@ -27,6 +27,10 @@ export const SAY = {
     { text: 'Обучите', bold: true },
     { text: ' — и сходство на картинках станет заметно точнее.' },
   ],
+  // Обучение недоступно (off/noLocal) — без призыва, только первая часть
+  readyNoTrain: (): SayPart[] => [
+    { text: 'Узнаётся по фото.' },
+  ],
   needTrain: (k: number): SayPart[] => [
     { text: 'Узнаётся по фото. Чтобы обучить, нужно ещё ' },
     { text: `${k} фото`, bold: true },

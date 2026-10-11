@@ -24,7 +24,7 @@ export interface CardViewInput {
 export type CardState = 2 | 3 | 4 | 5;
 
 export type CardSay =
-  | { key: 'ready' | 'running' | 'queued' | 'trainedOwn' | 'failed' | 'failedLost' | 'failedAllRejected' }
+  | { key: 'ready' | 'readyNoTrain' | 'running' | 'queued' | 'trainedOwn' | 'failed' | 'failedLost' | 'failedAllRejected' }
   | { key: 'needTrain'; n: number }
   | { key: 'trained'; title: string };
 
@@ -96,8 +96,8 @@ function sayFor(state: CardState, i: CardViewInput, connected: LoraVersionDto | 
   }
   // Число фото для обучения ещё грузится — «нужно ещё N» было бы неправдой, фраза без числа
   if (i.train === null) return { key: 'ready' };
-  // Обучение недоступно (off/noLocal) — не зовём к шагу, которого нет: фраза без призыва «нужно ещё N фото»
-  if (view.kind === 'off' || view.kind === 'noLocal') return { key: 'ready' };
+  // Обучение недоступно (off/noLocal) — не зовём к шагу, которого нет: фраза без призыва
+  if (view.kind === 'off' || view.kind === 'noLocal') return { key: 'readyNoTrain' };
   const left = TRAIN_MIN - i.train;
   return left > 0 ? { key: 'needTrain', n: left } : { key: 'ready' };
 }

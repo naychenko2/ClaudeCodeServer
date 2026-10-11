@@ -80,13 +80,13 @@ export function Modal({
       {title && (
         <h2 style={{
           fontFamily: FONT.serif, fontWeight: 500, fontSize: isMobile ? 21 : 22, margin: 0,
-          color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25,
+          color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflowWrap: 'anywhere',
         }}>
           {title}
         </h2>
       )}
       {subtitle && (
-        <div style={{ fontSize: 13.5, lineHeight: 1.5, color: C.textSecondary }}>
+        <div style={{ fontSize: 13.5, lineHeight: 1.5, color: C.textSecondary, overflowWrap: 'anywhere' }}>
           {subtitle}
         </div>
       )}

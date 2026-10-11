@@ -34,10 +34,10 @@ describe('состояния §4', () => {
     expect(r.action).toEqual({ kind: 'addTrainPhotos', count: 14 });
     expect(r.stops[1].hint).toBe(METER.trainNeed(14, 20));
   });
-  it('2: обучение недоступно (off/noLocal) — фраза ready, без «нужно ещё N»', () => {
+  it('2: обучение недоступно (off/noLocal) — фраза без призыва, не ready', () => {
     for (const kind of ['off', 'noLocal'] as const) {
       const r = characterCardView(input({ train: 5, view: { kind } as TrainSectionView }));
-      expect(r.say).toEqual({ key: 'ready' });
+      expect(r.say).toEqual({ key: 'readyNoTrain' });
     }
   });
   it('2: слово-метка не подходит — кнопка выключена', () => {

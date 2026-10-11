@@ -1,0 +1,1 @@
+import{t as e}from"./virtual_mf-exposes___mfe_internal__aihome_image_editor__remoteEntry_js-CDIZNE9m.js";export{e as default};

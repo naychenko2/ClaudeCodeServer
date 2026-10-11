@@ -47,6 +47,7 @@ function sayText(say: CardSay): ReactNode {
   switch (say.key) {
     case 'needTrain': return renderSayParts(SAY.needTrain(say.n));
     case 'ready': return renderSayParts(SAY.ready());
+    case 'readyNoTrain': return renderSayParts(SAY.readyNoTrain());
     case 'trained': return SAY.trained(say.title);
     default: return SAY[say.key];
   }

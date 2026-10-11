@@ -11,6 +11,7 @@ import { useSyncExternalStore } from 'react';
 import type { HomeSessionInfo } from '../../types';
 import { api } from '../api';
 import { onMessage, onReconnected, joinUser } from '../signalr';
+import { startVisiblePoll } from '../visiblePoll';
 
 export interface AiAwaitingRec {
   chatId: string;
@@ -132,7 +133,9 @@ function wireRealtime() {
   // а status_changed не несёт ни имени, ни projectId. Поэтому периодически пересчитываем
   // состав и meta-кэш из сводки — она единственно достоверно видит все проекты и чаты.
   // Тот же эндпоинт, что у дашборда «Домой» (прецедент — lib/agentBoard).
-  setInterval(() => { void loadFromSummary(); }, POLL_MS);
+  // Пауза на скрытой вкладке + догон: вечный опрос не должен жечь сеть в фоне.
+  // Стор живёт на модуле и не гаснет — stop не храним.
+  startVisiblePoll(() => { void loadFromSummary(); }, POLL_MS);
 }
 
 // Первичная загрузка + запуск реалтайм-подписки. Вызывается из AiLauncher при монтировании

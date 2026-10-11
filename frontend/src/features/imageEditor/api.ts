@@ -390,7 +390,7 @@ const withToken = (url: string) => {
 function characterForm(input: ImageEditCharacterInput): FormData {
   const form = new FormData();
   form.append('name', input.name);
-  if (input.description) form.append('description', input.description);
+  if (input.description !== undefined) form.append('description', input.description);
   input.removePhotos?.forEach(f => form.append('removePhotos', f));
   input.photos.forEach((b, i) => form.append('photos', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
   if (input.lora === 'remove') form.append('removeLora', 'true');

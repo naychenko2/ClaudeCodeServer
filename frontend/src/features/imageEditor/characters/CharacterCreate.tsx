@@ -73,7 +73,7 @@ export function CharacterCreate({ api, projectId, onCreated, onClose }: {
       <BackButton onClick={onClose} title="Все персонажи">
         <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>Все персонажи</span>
       </BackButton>
-      <h2 style={{ margin: 0, fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 600, color: C.textHeading }}>{CREATE.title}</h2>
+      <h2 style={{ margin: 0, fontFamily: FONT.serif, fontSize: FS.h2, color: C.textHeading }}>{CREATE.title}</h2>
       {!photos.length && (
         <>
           <div
@@ -95,7 +95,7 @@ export function CharacterCreate({ api, projectId, onCreated, onClose }: {
             onChange={e => { void addRef.current?.(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
         </>
       )}
-      <CharacterFacePhotos photos={facePhotos} onAdd={onAdd} onRemove={onRemove} disabled={busy} isMobile={isMobile} addRef={addRef} />
+      <CharacterFacePhotos photos={facePhotos} onAdd={onAdd} onRemove={onRemove} disabled={busy} addRef={addRef} />
       {photos.length > 0 && <div style={{ fontSize: FS.sm, color: C.textMuted }}>{CREATE.mainTip}</div>}
       <Field label="Имя">
         <TextField value={name} onChange={setName} placeholder="Например, Аня" autoFocus={!isMobile} />

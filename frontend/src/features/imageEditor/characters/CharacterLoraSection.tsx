@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Folder } from 'lucide-react';
 import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, SP } from 'aihome_shell/kit';
 import { labelOrShortName, loraLabelParts, loraLabels } from './loraName';
+import { LoraLabel } from './LoraLabel';
 import { EXPERT } from './characterTexts';
 import type { ImageEditCharacter, ImageEditLoras } from '../api';
 
@@ -90,14 +91,7 @@ export function CharacterLoraSection({ list, current, slug, disabled, onChange }
           <Field label={EXPERT.ownLabel} hint={EXPERT.ownHint}>
             <Select value={removed ? '' : name} options={selectOptions} disabled={disabled} onChange={pick} />
           </Field>
-          {picked && (
-            <div data-lora-label style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, minWidth: 0, fontSize: FS.sm }}>
-              <span title={`${picked.name} ${picked.rest}`.trim()} style={{
-                color: C.textPrimary, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>{picked.name}</span>
-              {picked.rest && <span style={{ color: C.textMuted, flex: '0 0 auto', whiteSpace: 'nowrap' }}>{picked.rest}</span>}
-            </div>
-          )}
+          {picked && <LoraLabel parts={picked} />}
           {has && (
             <Field label="Слово-триггер своей версии" hint="Одно слово: буквы, цифры и «_». Оно попадёт в запрос, чтобы модель включила LoRA. Возьмите то, что указано при обучении LoRA.">
               <TextField value={trigger} placeholder="например, anna_face" disabled={disabled}

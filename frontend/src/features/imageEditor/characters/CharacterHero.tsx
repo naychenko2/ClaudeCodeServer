@@ -3,7 +3,7 @@
 // приходят пропсами из карточки, здесь только разметка и модалки.
 
 import { useState } from 'react';
-import { AlertCircle, Clock, Info, RefreshCw, Sparkles, Square, Upload, X } from 'lucide-react';
+import { AlertCircle, Clock, Info, Plus, RefreshCw, Sparkles, Square, Upload, X } from 'lucide-react';
 import {
   Button, ConfirmDialog, ContextAddButton, IconButton, Notice, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
@@ -43,7 +43,7 @@ export function CharacterHero({
   const main = (node: React.ReactNode, meta?: string) => (
     <div data-hero="main" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       {node}
-      {meta && <div style={{ fontSize: FS.xs, color: C.textMuted, textAlign: 'center' }}>{meta}</div>}
+      {meta && <div style={{ fontSize: FS.xs, color: C.textMuted, textAlign: 'center', marginTop: -SP.sm }}>{meta}</div>}
     </div>
   );
   const startBtn = (label: string, icon: React.ReactNode, isDisabled = false) => (
@@ -169,7 +169,7 @@ export function CharacterHero({
       body = contextSessionId
         ? <div data-hero="main"><ContextAddButton sessionId={contextSessionId} projectId={projectId} size="lg" toggle
           candidate={{ kind: 'image-character', ref: { slug } }} /></div>
-        : main(<Button variant="primary" size="lg" fullWidth disabled>{HERO.toChatContext}</Button>, HERO.noChat);
+        : main(<Button variant="primary" size="lg" fullWidth disabled leftIcon={<Plus {...ico} />}>{HERO.toChatContext}</Button>, HERO.noChat);
       break;
   }
 

@@ -15,7 +15,7 @@ export function LikenessMeter({ stops }: { stops: readonly [MeterStop, MeterStop
       </div>
       <div style={GRID}>
         {stops.map((s, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.3, fontSize: FS.xs, overflowWrap: 'anywhere' }}>
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, lineHeight: 1.3, fontSize: FS.xs, overflowWrap: 'anywhere' }}>
             <span style={{ fontWeight: 600, color: s.titleColor }}>{s.titleKey === 'running' ? METER.running(s.percent) : METER.stops[s.titleKey]}</span>
             <span style={{ color: C.textMuted }}>{s.hint}</span>
           </div>

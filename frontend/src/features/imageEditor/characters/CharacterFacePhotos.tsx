@@ -10,13 +10,12 @@ import { MAX_PHOTOS, MIN_PHOTOS, addGate, photoSizeError, pickFaceFiles, shrinkP
 
 export type FacePhoto = { key: string; url: string; primary: boolean };
 
-export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, isMobile, renderCaption, onSelectPhoto, selectedKey, labelsEditor, addRef }: {
+export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, renderCaption, onSelectPhoto, selectedKey, labelsEditor, addRef }: {
   photos: FacePhoto[];
   onAdd: (files: File[]) => Promise<void>;
   onRemove: (key: string) => Promise<void>;
   uploading?: boolean;
   disabled?: boolean;
-  isMobile?: boolean;
   // Места под метки фото (шаг 15): подпись под фото, выбор фото, редактор под сеткой
   renderCaption?: (photo: FacePhoto) => ReactNode;
   onSelectPhoto?: (photo: FacePhoto) => void;
@@ -89,12 +88,12 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: SP.sm }}>
         <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{FACES.title}</span>
-        <span style={{ fontSize: FS.sm, color: C.textMuted }}>{FACES.counter(photos.length)}</span>
+        <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{FACES.counter(photos.length)}</span>
       </div>
       <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
         {FACES.hint}{onSelectPhoto ? ` ${FACES.hintLabels}` : ''}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 64 : 72}px, 1fr))`, gap: SP.sm }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))', gap: SP.sm }}>
         {photos.map(p => {
           const image = <img src={p.url} alt="" style={cell} />;
           return (

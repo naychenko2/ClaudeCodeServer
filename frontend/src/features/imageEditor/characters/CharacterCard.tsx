@@ -2,7 +2,7 @@
 // коллаж фото, имя и фраза о состоянии, шкала, главная кнопка, тихие чипы и шторки.
 // Хуки обучения, версий и числа фото для обучения живут здесь — остальным уходят пропсами.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { Check, Image as ImageIcon, Layers, MoreHorizontal, Pencil, SlidersHorizontal, Trash2 } from 'lucide-react';
 import {
   BackButton, Badge, Chip, ConfirmDialog, Dot, IconButton, Menu, MenuItem, MenuSep, useIsMobile,
@@ -14,7 +14,7 @@ import {
   chipKeys, collageLayout, deleteConfirmTexts, menuKeys, orderedPhotos, photosNeedDot, sheetForChip, sheetForMenu,
   type CardChipKey, type CardMenuKey, type CardSheet,
 } from './characterCardSheets';
-import { CHIPS, MENU, METER, SAY } from './characterTexts';
+import { CHIPS, MENU, METER, SAY, type SayPart } from './characterTexts';
 import { CharacterHero } from './CharacterHero';
 import { CharacterNameSheet } from './CharacterNameSheet';
 import { CharacterPhotosSheet } from './CharacterPhotosSheet';
@@ -22,6 +22,7 @@ import { CharacterTuneSheet } from './CharacterTuneSheet';
 import { CharacterVersionsSheet } from './CharacterVersionsSheet';
 import { LikenessMeter } from './LikenessMeter';
 import { loraLabelParts, ownLoraLabel } from './loraName';
+import { LoraLabel } from './LoraLabel';
 import { putCharacter, reloadCharacters } from './useCharacters';
 import { useCharacterTrain } from './useCharacterTrain';
 import { useLoraList } from './useLoraList';
@@ -42,12 +43,19 @@ const MENU_LABEL: Record<CardMenuKey, string> = {
   name: MENU.nameDesc, photos: MENU.photos, versions: MENU.versions, tune: MENU.expert, remove: MENU.remove,
 };
 
-function sayText(say: CardSay): string {
+function sayText(say: CardSay): ReactNode {
   switch (say.key) {
-    case 'needTrain': return SAY.needTrain(say.n);
+    case 'needTrain': return renderSayParts(SAY.needTrain(say.n));
+    case 'ready': return renderSayParts(SAY.ready());
     case 'trained': return SAY.trained(say.title);
     default: return SAY[say.key];
   }
+}
+
+// Жирные части фразы — <b> цветом C.textHeading, остальное — обычный текст
+function renderSayParts(parts: readonly SayPart[]): ReactNode {
+  return parts.map((p, i) =>
+    p.bold ? <b key={i} style={{ color: C.textHeading }}>{p.text}</b> : <span key={i}>{p.text}</span>);
 }
 
 export function CharacterCard({ api, projectId, character, contextSessionId, onBack, onDeleted }: {
@@ -202,12 +210,7 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
           )}
           <span style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.45 }}>{sayText(cv.say)}</span>
         </div>
-        {ownLabel && (
-          <div style={{ display: 'flex', gap: SP.xs, minWidth: 0, fontSize: FS.sm, color: C.textMuted }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{ownLabel.name}</span>
-            {ownLabel.rest && <span style={{ flexShrink: 0 }}>{ownLabel.rest}</span>}
-          </div>
-        )}
+        {ownLabel && <LoraLabel parts={ownLabel} />}
       </div>
 
       <LikenessMeter stops={cv.stops} />

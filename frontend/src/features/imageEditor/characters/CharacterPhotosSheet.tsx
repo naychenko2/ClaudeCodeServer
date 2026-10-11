@@ -2,11 +2,11 @@
 // и «Для обучения». Фото лица уходят на сервер сразу, а свежий персонаж едет наверх через onChanged.
 
 import { useEffect, useRef, useState } from 'react';
-import { Modal, useIsMobile, C, FS, MODAL_W, SP } from 'aihome_shell/kit';
+import { Modal, C, MODAL_W, SP } from 'aihome_shell/kit';
 import type { ImageEditCharacter, ImageEditorApi } from '../api';
 import { CharacterFacePhotos, type FacePhoto } from './CharacterFacePhotos';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
-import { FACES, SHEET, TRAIN_PHOTOS } from './characterTexts';
+import { SHEET, TRAIN_PHOTOS } from './characterTexts';
 
 export function CharacterPhotosSheet({ api, projectId, character, onChanged, onCount, onClose, focus }: {
   api: ImageEditorApi;
@@ -18,7 +18,6 @@ export function CharacterPhotosSheet({ api, projectId, character, onChanged, onC
   // 'train' — открыть сразу на разделе обучения
   focus?: 'face' | 'train';
 }) {
-  const isMobile = useIsMobile();
   const [busy, setBusy] = useState(false);
   const trainRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -42,14 +41,13 @@ export function CharacterPhotosSheet({ api, projectId, character, onChanged, onC
 
   return (
     <Modal title={SHEET.photos(character.name)} width={MODAL_W.form} onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, minWidth: 0 }}>
-        <section style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
-          <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{FACES.title}</div>
-          <CharacterFacePhotos photos={photos} disabled={busy} isMobile={isMobile}
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div style={{ paddingBottom: SP.md }}>
+          <CharacterFacePhotos photos={photos} disabled={busy}
             onAdd={files => save({ photos: files })}
             onRemove={key => save({ photos: [], removePhotos: [key] })} />
-        </section>
-        <div ref={trainRef}>
+        </div>
+        <div ref={trainRef} style={{ borderTop: `1px solid ${C.divider}`, paddingTop: SP.md }}>
           <CharacterTrainingPhotos projectId={projectId} slug={character.slug} onCount={onCount}
             title={TRAIN_PHOTOS.title} hint={TRAIN_PHOTOS.hint} />
         </div>

@@ -291,6 +291,8 @@ public class ImageEditorController(
     public sealed class CharacterForm
     {
         public string? Name { get; set; }
+        // Пустая строка = «стереть», поэтому в null её не превращаем
+        [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
         public string? Description { get; set; }
         public List<IFormFile>? Photos { get; set; }
         public List<string>? Angles { get; set; }

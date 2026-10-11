@@ -1,0 +1,37 @@
+import type { Project, Session } from '../../types';
+export declare const MAX_SLOTS = 5;
+export declare const MAX_CHATS = 5;
+export declare const MIN_COL = 420;
+export interface WallState {
+    loaded: boolean;
+    chats: Session[];
+    projects: Map<string, Project>;
+    focusId: string | null;
+    statuses: Map<string, string>;
+}
+export declare function getWallState(): WallState;
+export declare function subscribeWall(fn: () => void): () => void;
+export declare function useWallState(): WallState;
+export declare function chatStatus(s: Session): string;
+export declare function slotCount(windowWidth: number): number;
+export declare function refresh(): Promise<void>;
+export declare function initWall(ownerId: string | undefined): void;
+export type AddChatResult = 'added' | 'duplicate' | 'full';
+export declare function addChat(s: Session): AddChatResult;
+export declare function addChatSafe(s: Session): Promise<AddChatResult>;
+export declare function removeChat(id: string): void;
+export declare const WALL_ORDER_TYPE = "cc-wall-order";
+export type OrderDragMode = 'move' | 'swap';
+export declare function startOrderDrag(e: React.DragEvent, index: number, mode?: OrderDragMode): void;
+export declare function isOrderDrag(e: React.DragEvent): boolean;
+export declare function dropOrder(e: React.DragEvent, index: number): boolean;
+export declare function swapChats(a: number, b: number): void;
+export declare function reorderChat(from: number, to: number): void;
+export declare function moveToVisible(id: string, slots: number): void;
+export declare function focusChat(id: string): void;
+export declare function getWallFocusProject(): Project | null;
+export declare function useWallFocusProject(): Project | null;
+export declare function updateProject(p: Project): void;
+export declare function updateChat(s: Session): void;
+export declare function resetWallOwner(): void;
+export declare function __resetWallForTests(): void;

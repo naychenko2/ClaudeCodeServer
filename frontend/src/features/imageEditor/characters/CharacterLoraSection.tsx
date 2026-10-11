@@ -1,11 +1,13 @@
-// Раздел «LoRA для локальной модели» в форме персонажа. Сворачиваемый, раскрыт сам,
-// если LoRA уже задана. Список файлов приходит от формы персонажа. Наружу отдаёт ввод
-// (или 'remove') только после того, как человек что-то тронул, — иначе LoRA не трогаем.
+// Раздел «Своя обученная версия» шторки «Тонкая настройка»: сила сходства и выбор LoRA из ComfyUI.
+// Список файлов приходит сверху. Наружу отдаёт ввод (или 'remove') только после того, как человек
+// что-то тронул, — иначе LoRA не трогаем. Значение выбора — полный путь, в подписи пути нет.
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
-import { labelOrShortName, loraLabels } from './loraName';
+import { Folder } from 'lucide-react';
+import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, SP } from 'aihome_shell/kit';
+import { labelOrShortName, loraLabelParts, loraLabels } from './loraName';
+import { LoraLabel } from './LoraLabel';
+import { EXPERT } from './characterTexts';
 import type { ImageEditCharacter, ImageEditLoras } from '../api';
 
 type Lora = NonNullable<ImageEditCharacter['local']>;
@@ -15,15 +17,15 @@ const DEFAULT_STRENGTH = 0.8;
 // Узкий экран: в свёрнутом селекте режется имя, а дата и папка остаются видны; подпись под селектом — полная
 const SELECT_NAME_MAX = 12;
 
-export function CharacterLoraSection({ list, current, disabled, onChange }: {
+export function CharacterLoraSection({ list, current, slug, disabled, onChange }: {
   // общий список ComfyUI, загруженный формой; null — ещё грузится
   list: ImageEditLoras | null;
   current: Lora | null | undefined;
+  slug?: string;
   disabled?: boolean;
   // undefined — человек ничего не менял
   onChange: (lora: LoraInput | undefined) => void;
 }) {
-  const [open, setOpen] = useState(!!current);
   const [name, setName] = useState(current?.lora ?? '');
   const [trigger, setTrigger] = useState(current?.trigger ?? '');
   const [strength, setStrength] = useState(current?.strength ?? DEFAULT_STRENGTH);
@@ -50,66 +52,70 @@ export function CharacterLoraSection({ list, current, disabled, onChange }: {
   const shortLabels = loraLabels(allNames, list?.trained, SELECT_NAME_MAX);
   const fullLabels = loraLabels(allNames, list?.trained);
   const short = (n: string) => labelOrShortName(shortLabels, n);
-  const selectOptions = options.map(o => ({ value: o, label: short(o) }));
-  if (missing) selectOptions.unshift({ value: name, label: `${short(name)} (нет в ComfyUI)` });
+  const selectOptions = [{ value: '', label: EXPERT.ownNone }, ...options.map(o => ({ value: o, label: short(o) }))];
+  if (missing) selectOptions.splice(1, 0, { value: name, label: `${short(name)} (нет в ComfyUI)` });
 
   const hint = (text: string) => (
     <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{text}</div>
   );
 
+  const picked = has ? loraLabelParts(labelOrShortName(fullLabels, name)) : null;
+
+  // Выбор «не выбрана»: у персонажа была LoRA — снимаем, не было — ничего не меняем
+  const pick = (v: string) => {
+    if (v) { setName(v); touch(v, trigger, strength); return; }
+    if (current?.lora) remove();
+    else { setName(''); onChange(undefined); }
+  };
+
   return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, minWidth: 0 }}>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)} style={{
-        display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%', padding: `${SP.sm}px ${SP.md}px`,
-        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
-        fontSize: FS.base, fontWeight: 600, color: C.textHeading, fontFamily: 'inherit',
-      }}>
-        {open ? <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-        LoRA для локальной модели
-      </button>
-      {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: `0 ${SP.md}px ${SP.md}px`, minWidth: 0 }}>
-          {hint('Необязательно. С LoRA локальная модель точнее держит лицо персонажа. Без неё всё работает как раньше.')}
-          {!list && hint('Загружаю список…')}
-          {list && !list.available && hint(
-            'ComfyUI сейчас недоступен, список LoRA получить нельзя. Настроить раздел можно будет, когда он заработает.'
-            + (has ? ' Текущая LoRA сохранена и показана ниже.' : ''))}
-          {list?.available && list.items.length === 0 && !has && hint(
-            'В ComfyUI пока нет ни одной LoRA. Положите файл в папку loras у ComfyUI и откройте раздел снова.')}
-          {list?.available && (list.items.length > 0 || has) && (
-            <>
-              <Field label="Файл LoRA" hint="Выберите из списка: AI Home берёт файлы, которые лежат в ComfyUI.">
-                <Select value={removed ? '' : name} options={selectOptions} placeholder="Не выбрана" disabled={disabled}
-                  onChange={v => { setName(v); touch(v, trigger, strength); }} />
-              </Field>
-              <Field label="Слово-триггер" hint="Одно слово: буквы, цифры и «_». Оно попадёт в запрос, чтобы модель включила LoRA. Возьмите то, что указано при обучении LoRA.">
-                <TextField value={trigger} placeholder="например, anna_face" disabled={disabled}
-                  onChange={v => { setTrigger(v); touch(name, v, strength); }} />
-              </Field>
-              <Field label="Сила" hint="От 0 до 2, по умолчанию 0,8. Чем больше, тем сильнее LoRA влияет на лицо; слишком большая сила искажает картинку.">
-                <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-                  <input type="range" min={0} max={2} step={0.05} value={strength} aria-label="Сила LoRA" disabled={disabled}
-                    onChange={e => { const s = Number(e.target.value); setStrength(s); touch(name, trigger, s); }}
-                    style={{ flex: 1, minWidth: 0, accentColor: C.accent }} />
-                  <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 32, textAlign: 'right' }}>
-                    {strength.toFixed(2).replace('.', ',')}
-                  </span>
-                </div>
-              </Field>
-            </>
-          )}
-          {list && !list.available && has && (
-            <div style={{ fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
-              Файл: {labelOrShortName(fullLabels, name)}, {trigger}, {strength.toFixed(2).replace('.', ',')}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
+      {!list && hint('Загружаю список…')}
+      {list && !list.available && hint(
+        'ComfyUI сейчас недоступен, список LoRA получить нельзя. Настроить раздел можно будет, когда он заработает.'
+        + (has ? ' Текущая LoRA сохранена и показана ниже.' : ''))}
+      {list?.available && list.items.length === 0 && !has && hint(
+        'В ComfyUI пока нет ни одной LoRA. Положите файл в папку loras у ComfyUI и откройте раздел снова.')}
+      {list?.available && (list.items.length > 0 || has) && (
+        <>
+          <Field label={EXPERT.strengthLabel} hint={EXPERT.strengthHint}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+              <input type="range" min={0} max={2} step={0.05} value={strength} aria-label={EXPERT.strengthLabel} disabled={disabled}
+                onChange={e => { const s = Number(e.target.value); setStrength(s); touch(name, trigger, s); }}
+                style={{ flex: 1, minWidth: 0, accentColor: C.accent }} />
+              <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 32, textAlign: 'right' }}>
+                {strength.toFixed(2).replace('.', ',')}
+              </span>
             </div>
-          )}
+          </Field>
+          <Field label={EXPERT.ownLabel} hint={EXPERT.ownHint}>
+            <Select value={removed ? '' : name} options={selectOptions} disabled={disabled} onChange={pick} />
+          </Field>
+          {picked && <LoraLabel parts={picked} />}
           {has && (
-            <div>
-              <Button variant="ghost" size="sm" disabled={disabled} title="Убрать LoRA у персонажа" aria-label="Убрать LoRA у персонажа" onClick={remove}>
-                Убрать
-              </Button>
-            </div>
+            <Field label="Слово-триггер своей версии" hint="Одно слово: буквы, цифры и «_». Оно попадёт в запрос, чтобы модель включила LoRA. Возьмите то, что указано при обучении LoRA.">
+              <TextField value={trigger} placeholder="например, anna_face" disabled={disabled}
+                onChange={v => { setTrigger(v); touch(name, v, strength); }} />
+            </Field>
           )}
+        </>
+      )}
+      {list && !list.available && has && (
+        <div style={{ fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
+          Файл: {labelOrShortName(fullLabels, name)}, {trigger}, {strength.toFixed(2).replace('.', ',')}
+        </div>
+      )}
+      {has && (
+        <div>
+          <Button variant="ghost" size="sm" disabled={disabled} title="Убрать LoRA у персонажа" aria-label="Убрать LoRA у персонажа" onClick={remove}>
+            Убрать
+          </Button>
+        </div>
+      )}
+      {slug && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>
+          <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flex: '0 0 auto' }} />
+          <span>Папка: characters/{slug}/</span>
         </div>
       )}
     </div>

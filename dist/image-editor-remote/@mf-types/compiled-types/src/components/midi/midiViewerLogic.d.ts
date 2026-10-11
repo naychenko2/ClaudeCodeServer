@@ -1,0 +1,11 @@
+export declare const MIN_PX_PER_SEC = 8;
+export declare const MAX_PX_PER_SEC = 800;
+export declare const ZOOM_STEP = 1.5;
+export declare function formatTime(sec: number): string;
+export declare const clampPxPerSec: (px: number) => number;
+export declare function fitPxPerSec(viewW: number, keyW: number, durationSec: number): number;
+export declare const zoomPxPerSec: (px: number, dir: 1 | -1) => number;
+export declare function toggleMute(muted: Set<number>, index: number): Set<number>;
+export declare function isSolo(indices: number[], muted: Set<number>, index: number): boolean;
+export declare function toggleSolo(indices: number[], muted: Set<number>, index: number): Set<number>;
+export declare function shouldFollowPlayhead(prevSec: number, sec: number, [t0, t1]: [number, number], force: boolean): boolean;

@@ -1,0 +1,1 @@
+import{t as e}from"./subsystem-BYiNmxUb.js";export{e as subsystem};

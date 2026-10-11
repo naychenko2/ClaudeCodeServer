@@ -225,6 +225,31 @@ public class CharacterEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Пустое_описание_в_PUT_стирает_а_отсутствующее_не_меняет()
+    {
+        var factory = Factory();
+        var (id, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        var api = $"/api/projects/{id}/image-editor";
+
+        var form = CharacterForm("Аня");
+        form.Add(new StringContent("рыжая"), "description");
+        (await client.PostAsync($"{api}/characters", form)).StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var keep = new MultipartFormDataContent { { new StringContent("Аня"), "name" } };
+        var kept = await Json(await client.PutAsync($"{api}/characters/anya", keep));
+        kept.GetProperty("description").GetString().Should().Be("рыжая");
+
+        var erase = new MultipartFormDataContent { { new StringContent(""), "description" } };
+        var erased = await Json(await client.PutAsync($"{api}/characters/anya", erase));
+        (erased.TryGetProperty("description", out var d) ? d.ValueKind : JsonValueKind.Null)
+            .Should().Be(JsonValueKind.Null);
+        var again = (await Json(await client.GetAsync($"{api}/characters"))).EnumerateArray().Single();
+        (again.TryGetProperty("description", out var d2) ? d2.ValueKind : JsonValueKind.Null)
+            .Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task Создание_список_и_фото_у_владельца()
     {
         var factory = Factory();

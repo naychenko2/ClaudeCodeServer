@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LoraVersionDto } from '../api';
 import { C } from '../../../lib/design';
 import { characterCardView, type CardViewInput } from './characterCardView';
-import { METER } from './characterTexts';
+import { METER, SAY } from './characterTexts';
 import type { TrainSectionView } from './loraTrainView';
 
 const ver = (p: Partial<LoraVersionDto> = {}): LoraVersionDto => ({
@@ -39,6 +39,10 @@ describe('состояния §4', () => {
       const r = characterCardView(input({ train: 5, view: { kind } as TrainSectionView }));
       expect(r.say).toEqual({ key: 'readyNoTrain' });
     }
+  });
+  it('2: readyNoTrain — текст без призыва «Обучите» (мутац: вернуть «Обучите…» → краснеет)', () => {
+    const text = SAY.readyNoTrain().map(p => p.text).join('');
+    expect(text).not.toContain('Обучите');
   });
   it('2: слово-метка не подходит — кнопка выключена', () => {
     expect(characterCardView(input({ view: form({ reason: 'trigger' }) })).action)

@@ -249,7 +249,7 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
       )}
       {confirmDelete && (
         <ConfirmDialog title={del.title} subtitle={del.subtitle} confirmLabel={del.confirmLabel} confirmVariant="danger"
-          onConfirm={remove} onCancel={closeDelete} />
+          wrapTitle onConfirm={remove} onCancel={closeDelete} />
       )}
     </div>
   );

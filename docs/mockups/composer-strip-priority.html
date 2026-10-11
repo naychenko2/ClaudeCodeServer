@@ -351,7 +351,7 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
     внутри неё — по важности для человека: столбики уровня усилия первыми (уровень есть в
     тултипе и меню плашки модели), собеседник вторым (кто ведёт чат важнее уровня рассуждения),
     модель последней (имя модели держится до предела). Усилие с 2026-09-29 живёт в плашке
-    модели, отдельной плашки и замка в полосе нет. Номиналы: A-wide 419 · A 279 · B 254 ·
+    модели, отдельной плашки и замка в полосе нет. Номиналы: A-wide 309 · A 279 · B 254 ·
     B2 163 · C 100.
   </p>
   <div id="formsGrid"></div>
@@ -612,7 +612,7 @@ function rightHTML(form) {
   }</span>`;
   const modelBars = `<button class="pick" title="Модель: Sonnet 4.5 · Усилие: Высокий">${ICON('cpu',12)}Sonnet 4.5${bars}${ICON('chev',11)}</button>`;
   const modelFull = `<button class="pick" title="Модель: Sonnet 4.5 · Усилие: Высокий">${ICON('cpu',12)}Sonnet 4.5${ICON('chev',11)}</button>`;
-  const compWide = `<button class="pick" title="Собеседник" style="max-width:270px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">UI/UX-дизайнер и исследователь (Майя)</span>${ICON('chev',11)}</button>`;
+  const compWide = `<button class="pick" title="Собеседник" style="max-width:160px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">UI/UX-дизайнер и исследователь (Майя)</span>${ICON('chev',11)}</button>`;
   const compA = `<button class="pick" title="Собеседник" style="max-width:140px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">Дизайнер (Майя)</span>${ICON('chev',11)}</button>`;
   const compIcon = `<button class="pick icononly" title="Собеседник: Дизайнер (Майя)"><span class="avatar" style="margin:0">М</span></button>`;
   const modelIcon = `<button class="pick icononly" title="Модель: Sonnet 4.5 · Усилие: Высокий">${ICON('cpu')}</button>`;
@@ -640,7 +640,7 @@ function stripHTML(step, active) {
 
 // ===== Алгоритм ступеней (номиналы «с зазором», десктоп) =====
 const PADX = 16, LEFT = 112, MENU = 38, GAPS = 12;
-const RW = { 'A-wide': 419, 'A': 279, 'B': 254, 'B2': 163, 'C': 100 };
+const RW = { 'A-wide': 309, 'A': 279, 'B': 254, 'B2': 163, 'C': 100 };
 const TPW = { full: 150, compact: 130 };
 const KRW = { full: 180, noauto: 160, menu: 0 };
 const LPW = { full: 155, menu: 0 };
@@ -709,7 +709,7 @@ function renderLive() {
 // ===== Статичные секции =====
 function renderForms() {
   const forms = [
-    ['A-wide', 'Всё словами, столбики усилия, собеседник до 270 px — 419', 'Ничего не свёрнуто'],
+    ['A-wide', 'Всё словами, столбики усилия, собеседник до 160 px — 309', 'Ничего не свёрнуто'],
     ['A', 'Собеседник с короткой подписью (до 140 px) — 279', 'Свёрнуто: длинная подпись собеседника'],
     ['B', 'Без столбиков усилия, модель и собеседник словами — 254', 'Свёрнуто: столбики усилия'],
     ['B2', 'Собеседник иконкой, модель словом — 163', 'Свёрнуто: столбики усилия и подпись собеседника'],

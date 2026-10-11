@@ -47,7 +47,7 @@ public class LocalMediaAudioTests : IDisposable
         }).Build();
         var store = new LocalMediaJobStore(config);
         var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
-        return (new LocalMediaService(client, store, _projects, config, NullLogger<LocalMediaService>.Instance, adopters), store);
+        return (new LocalMediaService(client, store, _projects, config, NullLogger<LocalMediaService>.Instance, adopters: adopters), store);
     }
 
     private static LocalMediaRequest Audio(string op, JsonObject args, string? prompt = null) =>

@@ -498,7 +498,9 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
       visibility: open ? 'visible' : 'hidden',
       transition: 'max-height 0.28s ease, opacity 0.22s ease, margin-bottom 0.28s ease, visibility 0.28s ease',
       background: C.bgPanel,
-      border: `1px solid ${C.border}`,
+      // Закрытая раскрывашка схлопнута в maxHeight 0, но рамка добавляла бы 2px сверх
+      // него — лишний зазор между верхней губой композера и полем ввода
+      border: `${open ? 1 : 0}px solid ${C.border}`,
       borderRadius: '16px 16px 6px 6px',
       boxShadow: SHADOW.sheet,
       pointerEvents: open ? 'auto' : 'none',

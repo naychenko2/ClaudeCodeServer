@@ -106,3 +106,9 @@ export const MediaVisibilityContext = createContext<Map<string, import('./MediaB
 // ChatPanel считает его одним мемо, чтобы «кольцо» и «свет» не разъезжались.
 // null — озвучки нет либо говорит голос инстанса (лицо не резолвится, подсвечивать нечего).
 export const SpeakingItemContext = createContext<{ index: number; color: string } | null>(null);
+
+// Какие карточки инструментов без результата идут в живом ходе, а какие оборваны
+// (lib/toolTiming.ts, toolLiveness). Таймер «идёт M:SS» тикает только живым: у оборванного
+// хода (Стоп, падение процесса) результата не будет никогда, и без этого гейта на старой
+// карточке тикали бы часы. null — вне ленты: гейта нет, карточка судит сама по себе.
+export const ToolLivenessContext = createContext<import('../../lib/toolTiming').ToolLiveness | null>(null);

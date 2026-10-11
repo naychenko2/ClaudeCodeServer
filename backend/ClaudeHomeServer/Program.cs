@@ -174,6 +174,15 @@ var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalPro
 // своими опциями SessionManager, и вычисленные поля в файл не попадают.
 builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Microsoft.AspNetCore.Mvc.JsonOptions>,
     ClaudeHomeServer.Services.SessionJsonOptionsSetup>();
+// Сжатие ответов REST (подключается в конвейере только для /api, см. UseWhen ниже):
+// список чатов проекта — сотни КБ JSON, и через внешний домен он ехал несжатым.
+// EnableForHttps — осознанно: секрет в теле отдаёт только /api/auth, он из сжатия исключён.
+builder.Services.AddResponseCompression(o =>
+{
+    o.EnableForHttps = true;
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
 // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
@@ -683,6 +692,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Images.LocalMedia.ILocal
     ClaudeHomeServer.Services.Mcp.LocalMediaProjectAccess>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.LocalMediaToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.TestsToolset>();
+// Сборка с прогрессом (dev: build) — движки той же вертикали TestRuns, гейты как у tests
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.DevToolset>();
 // Контекст чата для агента (ADR-023 §3.2): context_state / context_attach / context_detach; сессия — хвостом
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.TurnContextToolset>();
@@ -930,6 +944,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // всех: вертикаль листовая, ни от кого не зависит; наоборот, на неё ссылаются
     // PreviewController и SessionHub (через Program.cs).
     new ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem(),
+    // TestRuns — движок run_tests (листовая: Core и только Core). Тулсет `tests` в Main
+    // зависит от него опционально — выключенная подсистема даёт честный отказ инструмента.
+    new ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem(),
     // Changelog — «Что нового»: листовая подсистема, ни от кого не зависит, читает
     // git-вывод и `data/changelog/product.json` через `FileService`.
     new ClaudeHomeServer.Services.Changelog.ChangelogSubsystem(),
@@ -1708,6 +1725,12 @@ if (!app.Environment.IsDevelopment())
             router.ForgetPort(target.Link.Jti, target.Port);
     });
 }
+
+// Сжатие — только REST: статика, превью-прокси, хабы и MCP живут по своим правилам.
+// /api/auth исключён: токен в теле ответа рядом со сжатием — материал для BREACH
+app.UseWhen(
+    ctx => ctx.Request.Path.StartsWithSegments("/api") && !ctx.Request.Path.StartsWithSegments("/api/auth"),
+    branch => branch.UseResponseCompression());
 
 app.UseRouting();
 app.UseCors();

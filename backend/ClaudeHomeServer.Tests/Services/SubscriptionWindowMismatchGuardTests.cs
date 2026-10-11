@@ -145,6 +145,22 @@ public class SubscriptionWindowMismatchGuardTests : IDisposable
     }
 
     [Fact]
+    public async Task ПерекатОкна_СнимкиСоседнихОкон_Тишина()
+    {
+        // Ложный алерт 07.10.2026: probe записал окно перед самым сбросом, oauth — уже
+        // перекатившееся. Оба снимка свежие, сбросы расходятся ровно на 5 часов, но
+        // аккаунт один: снимок с прошедшим сбросом описывает отжившее окно
+        var (guard, usage, notifier) = MkGuard();
+        var now = DateTime.UtcNow;
+        Record(usage, "probe", now.AddMinutes(-10).ToString("o"), 0.9);
+        Record(usage, "oauth", now.AddHours(4).AddMinutes(50).ToString("o"), 0.1);
+
+        await guard.CheckAsync("claude-2", now);
+
+        notifier.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task СхождениеОкон_ГаситФлаг_НовоеРасхождениеБьётСнова()
     {
         var (guard, usage, notifier) = MkGuard();

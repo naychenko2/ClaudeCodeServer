@@ -30,6 +30,8 @@ public class IlBoundaryRegressionTests
         // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
         // сторож видел FileService и проверял границы вертикали по Files.dll.
         _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
+        // TestRuns — отдельная сборка (движок run_tests): IL-скан обязан видеть её типы.
+        _ = typeof(ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem).Assembly;
         // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
         // без форс-загрузки сторож прошёл бы по нему вакуумно.
         _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;

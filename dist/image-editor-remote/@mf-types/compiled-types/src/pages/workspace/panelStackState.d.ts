@@ -1,0 +1,127 @@
+import { type PanelKey, type Zone } from './panelCatalog';
+export type { PanelKey, Zone } from './panelCatalog';
+export declare const PANEL_MIN_H = 120;
+export declare const PANEL_SPLIT_MIN_H = 260;
+export declare const COL_MIN = 280;
+export declare const COL_MAX = 560;
+export declare const COL_DEFAULT = 340;
+export declare const COL_CAP = 2;
+export type PanelMode = 'multi' | 'solo';
+export declare const ZONES: readonly Zone[];
+export declare function sanitizeLayout(cols: unknown, exclude?: Set<PanelKey>): PanelKey[][];
+export declare function parseLayout(rawLayout: string | null, rawLegacyOpen: string | null): PanelKey[][];
+export declare function addPanel(layout: PanelKey[][], k: PanelKey, side?: Zone, cap?: number, railSeq?: readonly PanelKey[]): PanelKey[][];
+export interface RailPlacement {
+    layout: PanelKey[][];
+    ci: number;
+    ri: number;
+    newColumn: boolean;
+}
+export declare function placeByRail(layout: PanelKey[][], k: PanelKey, side: Zone, cap: number, railSeq: readonly PanelKey[]): RailPlacement;
+export declare function removePanel(layout: PanelKey[][], k: PanelKey): PanelKey[][];
+export declare function swapPanels(layout: PanelKey[][], a: PanelKey, b: PanelKey): PanelKey[][];
+export declare function movePanelToNewColumn(layout: PanelKey[][], from: PanelKey, insertIdx: number): PanelKey[][];
+export declare function movePanelAt(layout: PanelKey[][], from: PanelKey, colIdx: number, rowIdx: number): PanelKey[][];
+export declare function parseWeights(raw: string | null): Partial<Record<PanelKey, number>>;
+export declare function parseColFlex(raw: unknown): number[];
+export declare function normalizeColFlex(colCount: number, flex: number[]): number[];
+export declare function parseWidth(raw: string | null): number;
+export declare function normalizeWeights(open: PanelKey[], weights: Partial<Record<PanelKey, number>>): Partial<Record<PanelKey, number>>;
+export interface ZoneState {
+    layout: PanelKey[][];
+    mode: PanelMode;
+    width: number;
+    colFlex: number[];
+    stash: PanelKey[][];
+}
+export interface PanelZones {
+    left: ZoneState;
+    right: ZoneState;
+    weights: Partial<Record<PanelKey, number>>;
+    home: Partial<Record<PanelKey, Zone>>;
+    tucked: PanelKey[];
+    railOrder: PanelKey[];
+    exclusive: boolean;
+    activeSide: Zone | null;
+    closeCompactSignal: number;
+    restoreCompactSignal: number;
+}
+export declare function emptyZone(): ZoneState;
+export declare function emptyZones(): PanelZones;
+export declare function homeOf(zones: PanelZones, k: PanelKey): Zone;
+export declare function isTucked(zones: PanelZones, k: PanelKey): boolean;
+export declare function trackHome(zones: PanelZones): PanelZones;
+export declare function zoneOf(zones: PanelZones, k: PanelKey): Zone | null;
+export declare function openKeysOf(zones: PanelZones): PanelKey[];
+export declare function enforceZoneInvariant(zones: PanelZones): PanelZones;
+export declare function sanitizeZones(raw: unknown): PanelZones;
+export declare function parseKeyList(raw: unknown): PanelKey[];
+export declare function parseHome(raw: unknown): Partial<Record<PanelKey, Zone>>;
+export declare function closePanel(zones: PanelZones, k: PanelKey): PanelZones;
+export declare function closePanelTo(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones;
+export declare function tuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones;
+export declare function untuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones;
+export declare function mergeTuckDefaults(tucked: readonly PanelKey[], want: readonly PanelKey[], applied: readonly PanelKey[]): {
+    tucked: PanelKey[];
+    applied: PanelKey[];
+    changed: boolean;
+};
+export declare function sortRail(order: readonly PanelKey[], keys: readonly PanelKey[]): PanelKey[];
+export declare function railSequence(railOrder: readonly PanelKey[]): PanelKey[];
+export declare function reorderRail(zones: PanelZones, keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null): PanelZones;
+export declare function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]): PanelZones;
+export declare function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]): PanelZones;
+export declare function markActiveSide(zones: PanelZones, side: Zone): PanelZones;
+export declare function restoreOppositeIfEmpty(zones: PanelZones, side: Zone): PanelZones;
+export declare function swapAcross(zones: PanelZones, a: PanelKey, b: PanelKey): PanelZones;
+export declare function replacePanelWith(zones: PanelZones, guest: PanelKey, host: PanelKey): PanelZones;
+export declare function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx: number, rowIdx: number): PanelZones;
+export declare function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone, insertIdx: number): PanelZones;
+export declare function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null;
+export declare function isZoneCollapsed(z: ZoneState): boolean;
+export declare function revealPanel(zones: PanelZones, k: PanelKey): {
+    zones: PanelZones;
+    wasOpen: boolean;
+};
+export declare function migrateZones(read: (key: string) => string | null, ns: string, legacyOpenKey?: string): PanelZones | null;
+export declare const LEGACY_SIDEBAR_WIDTH_KEY = "cc_sidebar_width";
+export declare function migrateSidebarSection(read: (key: string) => string | null, modeKey: string, panelKey: PanelKey): PanelZones | null;
+export interface PanelZonesApi {
+    zones: PanelZones;
+    toggle: (zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => void;
+    openIn: (zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => void;
+    close: (k: PanelKey) => void;
+    closeTo: (zone: Zone, k: PanelKey) => void;
+    evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
+    tuck: (zone: Zone, k: PanelKey) => void;
+    untuck: (zone: Zone, k: PanelKey) => void;
+    reorder: (keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => void;
+    swapWith: (a: PanelKey, b: PanelKey) => void;
+    replaceWith: (guest: PanelKey, host: PanelKey) => void;
+    moveAt: (k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => void;
+    moveToNewColumn: (k: PanelKey, zone: Zone, insertIdx: number) => void;
+    setMode: (zone: Zone, m: PanelMode) => void;
+    setWidth: (zone: Zone, n: number) => void;
+    toggleCollapsed: (zone: Zone) => void;
+    setWeights: (next: Partial<Record<PanelKey, number>>) => void;
+    setColFlex: (zone: Zone, next: number[]) => void;
+    setExclusive: (on: boolean) => void;
+    markActive: (side: Zone) => void;
+    closeCompactStack: () => void;
+    releaseCompactSide: (side: Zone) => void;
+    reveal: (k: PanelKey) => boolean;
+    registerOpener: (zone: Zone, open: (k: PanelKey) => void) => () => void;
+    moveTo: (zone: Zone, k: PanelKey) => void;
+    registerZoneKeys: (zone: Zone, keys: readonly PanelKey[]) => () => void;
+    zoneKeys: Partial<Record<Zone, readonly PanelKey[]>>;
+}
+export type PanelZonesStore = {
+    use: () => PanelZonesApi;
+};
+export declare const WS_DEFAULT_TUCKED: readonly PanelKey[];
+export declare const wsPanels: PanelZonesStore;
+export declare const chatPanels: PanelZonesStore;
+export declare const notesPanels: PanelZonesStore;
+export declare const knowledgePanels: PanelZonesStore;
+export declare const personasPanels: PanelZonesStore;
+export declare const projectsPanels: PanelZonesStore;

@@ -105,6 +105,14 @@ describe('buildSubscriptionCard → expandedPills', () => {
     expect(card.hint).toContain('ограничение частоты');
   });
 
+  // 429 на продлении токена: вход живой — хинт про продление и без команды входа
+  it('refresh_rate_limited без снимков — хинт про продление, без команды входа', () => {
+    const card = buildSubscriptionCard('claude', { ...baseSub, loginCommand: 'claude login' },
+      { ...ctx, pollStatuses: { claude: 'refresh_rate_limited' } });
+    expect(card.hint).toContain('Продление токена');
+    expect(card.copyCommand).toBeNull();
+  });
+
   it('без ограничений — expandedPills пустой', () => {
     const card = buildSubscriptionCard('claude', { ...baseSub, tier: 'Max' }, ctx);
     expect(card.expandedPills).toEqual([]);

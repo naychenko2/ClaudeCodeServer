@@ -455,7 +455,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['id'],
-      properties: { id: { type: 'string', description: 'ID задачи' } },
+      properties: { id: { type: 'string', description: 'ID задачи (полный или его начало от 8 символов)' } },
     },
   },
   {

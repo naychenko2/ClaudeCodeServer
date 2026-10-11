@@ -150,6 +150,57 @@ public class FalImageEditorTests
     }
 
     [Fact]
+    public async Task Запуск_ПустойОтветСТекстомМодели_ПричинаВОшибке()
+    {
+        var http = new FakeHttp(c => c switch
+        {
+            _ when c.Method == HttpMethod.Post => FakeHttp.Json(
+                $$"""{"request_id":"r4","status_url":"{{Queue}}/r4/status","response_url":"{{Queue}}/r4","cancel_url":"{{Queue}}/r4/cancel"}"""),
+            _ when c.Url.EndsWith("/status") => FakeHttp.Json("""{"status":"COMPLETED"}"""),
+            _ => FakeHttp.Json("""{"images":[],"description":"Уточните, кого нарисовать"}"""),
+        });
+
+        var result = await Editor(http).RunAsync(EditRequest(), new SyncProgress(_ => { }), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.RemoteId.Should().Be("r4");
+        result.Error.Should().Be("fal.ai не вернул картинок — модель ответила: «Уточните, кого нарисовать»");
+    }
+
+    [Fact]
+    public async Task Запуск_КартинкаНеСкачалась_КодОтказаЗагрузчикаВОшибке()
+    {
+        var http = new FakeHttp(c => c switch
+        {
+            _ when c.Method == HttpMethod.Post => FakeHttp.Json(
+                $$"""{"request_id":"r5","status_url":"{{Queue}}/r5/status","response_url":"{{Queue}}/r5","cancel_url":"{{Queue}}/r5/cancel"}"""),
+            _ when c.Url.EndsWith("/status") => FakeHttp.Json("""{"status":"COMPLETED"}"""),
+            _ when c.Url == $"{Queue}/r5" => FakeHttp.Json("""{"images":[{"url":"https://cdn.test/a.png"}],"description":""}"""),
+            _ => new HttpResponseMessage(HttpStatusCode.Forbidden),
+        });
+
+        var result = await Editor(http).RunAsync(EditRequest(), new SyncProgress(_ => { }), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Charged.Should().BeTrue("fal картинку нарисовал");
+        result.Error.Should().Be("fal.ai нарисовал картинку, но скачать её не удалось: http-403");
+    }
+
+    [Theory]
+    [InlineData("""{"images":[],"description":"Blocked by safety filters"}""", EditOutcome.Rejected, "safety filters")]
+    [InlineData("""{"images":[],"has_nsfw_concepts":[true]}""", EditOutcome.Rejected, "фильтром безопасности")]
+    [InlineData("""{"images":[{"url":"https://cdn.test/a.png"}]}""", EditOutcome.Failed, "скачать её не удалось")]
+    [InlineData("""{"images":[]}""", EditOutcome.Failed, "причину не назвал")]
+    [InlineData("не json", EditOutcome.Failed, "не вернул картинок")]
+    public void ПустойОтвет_ПричинаРазличается(string body, EditOutcome outcome, string error)
+    {
+        var (o, e) = FalImageEditor.EmptyResultReason(body);
+
+        o.Should().Be(outcome);
+        e.Should().Contain(error);
+    }
+
+    [Fact]
     public async Task Отмена_ОтзываетЗадачуУПоставщикаИПробрасываетОтмену()
     {
         using var cts = new CancellationTokenSource();

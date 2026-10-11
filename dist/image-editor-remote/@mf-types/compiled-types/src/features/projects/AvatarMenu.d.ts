@@ -1,0 +1,30 @@
+interface Props {
+    username: string;
+    displayName?: string;
+    isAdmin: boolean;
+    serverUrl: string;
+    onLogout: () => void;
+    onShowChangePassword: () => void;
+    onShowFeatureFlags: () => void;
+    onShowUserManagement: () => void;
+    hideStatus?: boolean;
+    onShowHistory?: () => void;
+    historyBadge?: number;
+    historyNeverSeen?: boolean;
+    historyActive?: boolean;
+    onOpenKnowledge?: () => void;
+    onOpenSpecialties?: () => void;
+    onShowModelsSpend?: () => void;
+    onOpenSpend?: () => void;
+    onShowMcpServers?: () => void;
+    onOpenNotifications?: () => void;
+    notifBadge?: number;
+    notifActive?: boolean;
+    onShowDevices?: () => void;
+    onShowDeploy?: () => void;
+    onShowSubsystems?: () => void;
+    onShowPower?: () => void;
+    onShowRemoteCommands?: () => void;
+}
+export declare function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge, historyNeverSeen, historyActive, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onShowSubsystems, onShowPower, onShowRemoteCommands, onOpenNotifications, notifBadge, notifActive }: Props): import("react").JSX.Element;
+export {};

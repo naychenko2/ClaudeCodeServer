@@ -60,6 +60,7 @@ export const C = {
   divider:     'var(--c-divider)',   // выраженная граница между панелями
   dashed:      'var(--c-dashed)',   // пунктирные границы кнопок «создать»
   track:       'var(--c-track)',   // дорожка выключенного переключателя
+  progressTrack: 'var(--c-progress-track)', // дорожка тонкой полосы прогресса, кольцо спиннера
   // Нейтральный «дымный» серый — фоновые/ожидательные состояния (кольца wait-индикатора и пр.),
   // где акцент был бы слишком сильным. Совпадает с тенью/кромкой, но как самостоятельный токен.
   smoke:       'var(--c-smoke)',
@@ -159,6 +160,7 @@ export const SHADOW = {
   island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
   islandDrop: 'var(--drop-island)',     // та же тень для CSS filter: повторяет контур (SVG, PNG с прозрачностью)
   lift:     'var(--shadow-lift)',       // тот же подъём, но ВВЕРХ — для стоящих на кромке холста
+  liftSoft: 'var(--shadow-lift-soft)',  // мягкий подъём ВВЕРХ — верхняя губа композера над лентой
   dropdown: 'var(--shadow-dropdown)',   // выпадающие меню
   modal:    'var(--shadow-modal)',      // модальные окна
   peek:     'var(--shadow-peek)',       // попап-превью панели: остров НАД раскладкой
@@ -201,6 +203,45 @@ export const ISLAND = {
   // CanvasBackdrop в themed-режиме красит слой туши через rgba(ink, projectInkAlpha).
   projectInkAlpha: 'var(--canvas-project-alpha)',
 } as const
+
+// === Губы композера (десктоп и планшет) ===
+// Белое поле ввода обнимают две «губы»: снизу ряд кнопок (режим, модель…), сверху
+// полоса над композером (Git / Картинки / Руки). Губа заезжает под поле на overlap,
+// поэтому со стороны поля её поле = overlap + gap, а с открытой стороны — edge.
+// Геометрия у обеих одна — отступы сходятся по построению, а не подгонкой цифр.
+// На телефоне губ нет: ряд кнопок и полосы стоят отдельно.
+export const COMPOSER_LIP = {
+  overlap: 12,  // заезд под поле ввода
+  gap:     3,   // видимый зазор между полем ввода и рядом губы
+  edge:    4,   // поле губы с открытой стороны
+  padX:    8,   // поля губы по бокам
+  row:     32,  // высота ряда содержимого
+  rowMini: 20,  // ряд свёрнутой строки полосы (ушка): переключатель «Git ▾» ужат до 20
+  edgeTab: 2,   // поле ушка с открытой стороны — тоньше, чем у полной губы
+} as const
+
+// Готовый стиль губы. Высота задана явно, чтобы губа не зависела от роста кнопок
+// внутри: развёрнутая полоса — одной высоты с нижней губой. Свёрнутая строка полосы
+// становится ушком (tab): низкий ряд rowMini, ширину оболочка задаёт сама через
+// замер scrollWidth — закладка слева, не вторая строка поля во всю ширину.
+export function composerLip(side: 'top' | 'bottom', { row, tab = false }: { row?: number; tab?: boolean } = {}) {
+  const { overlap, gap, padX } = COMPOSER_LIP;
+  const edge = tab ? COMPOSER_LIP.edgeTab : COMPOSER_LIP.edge;
+  row ??= tab ? COMPOSER_LIP.rowMini : COMPOSER_LIP.row;
+  const top = side === 'top';
+  const inner = overlap + gap;
+  return {
+    boxSizing: 'border-box' as const,
+    height: row + edge + inner + 2,   // + рамка 1px сверху и снизу
+    padding: top ? `${edge}px ${padX}px ${inner}px` : `${inner}px ${padX}px ${edge}px`,
+    background: C.bgMain, border: `1px solid ${C.borderLight}`,
+    borderRadius: top ? `${R.xxl}px ${R.xxl}px 0 0` : `0 0 ${R.xxl}px ${R.xxl}px`,
+    // Тень обводит открытую сторону: вниз — как у островов; вверх — мягкий подъём:
+    // над губой узкий зазор и лента, полный разлёт ложился на неё ореолом
+    boxShadow: top ? SHADOW.liftSoft : SHADOW.island,
+    ...(top ? { marginBottom: -overlap } : { marginTop: -overlap }),
+  };
+}
 
 // === Слои (z-index) ===
 export const Z = {
@@ -262,8 +303,17 @@ export const MODAL_W = {
 // колонка чтения для них тесна (по ~465px на колонку), а сетка раздела —
 // наоборот, растягивает карточки в полосы. 1028 даёт колонки примерно по 500px.
 export const CHAT_MAX_W = 950
+// Мобильный боковой отступ ленты чата и размер круглой кнопки «Вниз» над композером. Общие:
+// по ним на телефоне ставится ось круглешка AI (FAB_MOBILE_RIGHT) — центр на центре «Вниз»
+export const CHAT_GUTTER_MOBILE = 16
+export const SCROLL_DOWN_SIZE = 44
 export const HOME_MAX_W = 1028
 export const CONTENT_MAX_W = 1180
+
+// FAB_CLEAR_PAD — нижний отступ прокручиваемого списка под круглешок AI: на телефоне
+// кнопка висит над концом списка, и без запаса последний контрол так и оставался бы под
+// ней. Значение переменной ставит AiLauncher (только на телефоне), без неё отступа нет.
+export const FAB_CLEAR_PAD = 'var(--cc-fab-clear, 0px)'
 
 // CHAT_GUTTER_L — боковое поле СЛЕВА от колонки сообщений. Геометрию области
 // прокрутки по нему считает chatGutter.ts (marginRight гасит перекос «поле слева

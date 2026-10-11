@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { Activity, Bell, ChevronRight, ExternalLink, House, Puzzle, Settings, Users } from 'lucide-react';
 import type { AuthState, Project } from '../types';
-import { C, FONT, R, TB, SHADOW } from '../lib/design';
+import { C, FONT, R, TB } from '../lib/design';
 import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { isSubsystemEnabled } from '../lib/subsystems';
 import { useRegisteredSubsystems } from '../lib/subsystems/registry';
 import { IconButton } from './ui/IconButton';
+import { Tooltip } from './ui/Tooltip';
 import { ICON_SIZE } from './ui/icons';
 import { ProjectIcon } from '../features/projects/ProjectIcon';
 import { HubTabs, defaultHubTabs, subsystemTabValue, tabLabel, tabIcon, isSubsystemTab, type HubTab, type HubTabValue, isModuleTab } from './HubTabs';
@@ -18,7 +19,8 @@ import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
-import { DeployModal } from './DeployModal';
+import { useDevicesMenuVisible } from '../features/desktop/deviceOptions';
+import { openDeployModal } from '../lib/deployState';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
 import { api } from '../lib/api';
@@ -71,7 +73,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showModelsSpend, setShowModelsSpend] = useState(hasPendingOpen);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
-  const [showDeploy, setShowDeploy] = useState(false);
   const [showPower, setShowPower] = useState(false);
   const [showRemoteCommands, setShowRemoteCommands] = useState(false);
   // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
@@ -130,7 +131,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [historyBadge, setHistoryBadge] = useState(0);
   const [neverSeen, setNeverSeen] = useState(false);
   const [notifBadge, setNotifBadge] = useState(0);
-  const [showNotifTip, setShowNotifTip] = useState(false);       // кастомный tooltip колокольчика
 
   // Подписка на счётчик уведомлений. Счётчик подтягиваем и здесь: шапка живёт во всех
   // разделах, поэтому бейдж должен быть правдивым сразу, не дожидаясь захода в раздел
@@ -179,6 +179,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     window.addEventListener(BADGE_EVENT, refresh);
     return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
   }, [isAdmin]);
+
+  // Пункт «Устройства» — под флагом local-projects: без него подключать нечего
+  const devicesMenu = useDevicesMenuVisible();
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
   // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
@@ -492,42 +495,32 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
             уведомления — пунктом меню аватара; бейдж числом выносится на сам
             аватар (см. AvatarMenu). На мобиле и десктопе — без изменений. */}
         {!isTablet && (
-          <button
-            onClick={() => onTab('notifications')}
-            aria-label={notifTip}
-            style={{
-              position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
-              background: 'none', color: value === 'notifications' ? C.accent : C.textSecondary,
-              cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowNotifTip(true); }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowNotifTip(false); }}
-          >
-            <Bell size={17} strokeWidth={2} />
-            {notifBadge > 0 && (
-              <span style={{
-                position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
-                padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
-                fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
-                boxSizing: 'border-box', pointerEvents: 'none',
-              }}>
-                {notifBadge > 99 ? '99+' : notifBadge}
-              </span>
-            )}
-            {/* Кастомный tooltip в стиле приложения — как у соседней кнопки «Что нового» */}
-            {showNotifTip && (
-              <span style={{
-                position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
-                background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
-                boxShadow: SHADOW.dropdown, padding: '5px 10px',
-                fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
-                fontFamily: FONT.sans, pointerEvents: 'none',
-              }}>
-                {notifTip}
-              </span>
-            )}
-          </button>
+          <Tooltip content={notifTip} align="end">
+            <button
+              onClick={() => onTab('notifications')}
+              aria-label={notifTip}
+              style={{
+                position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
+                background: 'none', color: value === 'notifications' ? C.accent : C.textSecondary,
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+            >
+              <Bell size={17} strokeWidth={2} />
+              {notifBadge > 0 && (
+                <span style={{
+                  position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
+                  padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
+                  fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
+                  boxSizing: 'border-box', pointerEvents: 'none',
+                }}>
+                  {notifBadge > 99 ? '99+' : notifBadge}
+                </span>
+              )}
+            </button>
+          </Tooltip>
         )}
 
         {/* «Единый поиск» и «Утренний бриф» убраны из шапки — теперь только через AI-палитру (⌘/Ctrl+K). */}
@@ -545,7 +538,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
           // Устройства — агенты локальных проектов
-          onShowDevices={() => setShowDevices(true)}
+          onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только
           // чтение через GET /api/admin/subsystems, без тумблера — глобальный
@@ -560,7 +553,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
           // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —
           // на машине, где своего раннера нет, пункт был бы кнопкой в никуда
-          onShowDeploy={isAdmin && deployEnabled ? () => setShowDeploy(true) : undefined}
+          onShowDeploy={isAdmin && deployEnabled ? openDeployModal : undefined}
           // Питание машины: тот же двойной замок, что и у выкатки
           onShowPower={isAdmin && powerEnabled ? () => setShowPower(true) : undefined}
           // Пульт управления: тот же двойной замок плюс непустой список действий
@@ -585,7 +578,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
       {showDevices && <DevicesModal onClose={() => setShowDevices(false)} />}
-      {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
       {showPower && <PowerModal onClose={() => setShowPower(false)} />}
       {showRemoteCommands && <RemoteCommandsModal onClose={() => setShowRemoteCommands(false)} />}
     </div>

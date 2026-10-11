@@ -154,9 +154,14 @@ public sealed class TasksToolset(
 
             case "tasks_get":
             {
-                if (GetAccessible(context.OwnerId, projectId, allowed, StringArg(arguments, "id")) is not { } task)
-                    return Deny($"Задача {StringArg(arguments, "id")} не найдена или недоступна в этом контексте.");
-                return Json(task);
+                var id = StringArg(arguments, "id");
+                var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id);
+                if (task is not null) return Json(task);
+                // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
+                if (candidates is { Count: > 0 })
+                    return Deny($"Несколько задач начинаются с «{id}» — уточните id: " +
+                        string.Join(", ", candidates.Take(5).Select(t => $"{t.Id} — {t.Title}")) + ".");
+                return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
             }
 
             case "tasks_board_columns":
@@ -730,6 +735,33 @@ public sealed class TasksToolset(
         return task;
     }
 
+    // Чтение (tasks_get): точное совпадение + префиксный поиск. Возвращает (задача, кандидаты):
+    // задача != null — найдена (точно, либо по префиксу с ровно одним совпадением);
+    // кандидаты != null — неоднозначный префикс (несколько совпадений), задача null.
+    // Запись (update/complete/delete/сабтаски) идёт через GetAccessible — полным id: ошибка
+    // в записи стоит дороже, чем в чтении, поэтому префикс туда не пускаем.
+    private (TaskItem? Task, IReadOnlyList<TaskItem>? Candidates) GetForRead(
+        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id)
+    {
+        if (GetAccessible(ownerId, projectId, allowed, id) is { } exact) return (exact, null);
+        if (!LooksLikeIdPrefix(id)) return (null, null);
+        // Того же владельца, видимые в контексте (InScope), id начинается с префикса (без учёта регистра)
+        var candidates = tasks.GetByOwner(ownerId)
+            .Where(t => InScope(projectId, allowed, t) && t.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return candidates.Count switch
+        {
+            1 => (candidates[0], null),
+            > 1 => (null, candidates),
+            _ => (null, null),
+        };
+    }
+
+    // Префикс id: только hex-символы и '-', длина >= 8 (короче — слишком общий, риск неоднозначности)
+    private static bool LooksLikeIdPrefix(string id) =>
+        id.Length >= 8 && id.All(c =>
+            c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+
     private static string? TaskDenied(string? projectId, IReadOnlyCollection<string> allowed, TaskItem task)
     {
         if (projectId is null || task.ProjectId is null) return null;
@@ -980,7 +1012,7 @@ public sealed class TasksToolset(
                 ["required"] = new JsonArray { "id" },
                 ["properties"] = new JsonObject
                 {
-                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи" },
+                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи (полный или его начало от 8 символов)" },
                 },
             });
 

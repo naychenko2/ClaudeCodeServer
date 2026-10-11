@@ -21,6 +21,9 @@ const threadsUrl = (scope: string, sessionId: string) =>
   isPersonalScope(scope) ? `${imageBase(scope, sessionId)}/threads` : `${imageBase(scope, sessionId)}/sessions/${encodeURIComponent(sessionId)}/threads`;
 
 const _states = new Map<string, ImgState>();
+// Потолок: onImageEvent кладёт состояние ЛЮБОЙ сессии, приславшей image_thread_changed —
+// длинная сессия с множеством чатов-картинок копит их в кучу. Вытесняем старейшее.
+const MAX_IMG_STATES = 40;
 const _loading = new Set<string>();
 // Нить, нарисованная ради кадра: первая версия станет кадром. needEdit — нить открыта на готовом
 // кадре-файле: «исходник» кадром не становится (смена формы ссылки без правки метила сцену «изменён»
@@ -32,6 +35,30 @@ let _version = 0;
 const _subs = new Set<() => void>();
 let _off: (() => void) | null = null;
 const emit = () => { _version++; _subs.forEach(f => f()); };
+
+// LRU-вставка: set по существующему ключу порядок не двигает, поэтому delete+set —
+// самое свежее всегда в хволe. Вытесняем старейшее, но с живой привязкой не трогаем.
+function setState(sessionId: string, st: ImgState) {
+  _states.delete(sessionId);
+  _states.set(sessionId, st);
+}
+
+// Вытеснение сверх потолка: старейшее БЕЗ живой привязки. Привязанные к сцене
+// (_bindings) не вытесняются никогда — иначе геттеры молча вернут null для активной
+// сессии. Все старейшие привязаны — потолок держим, лучше переполнить, чем потерять кадр.
+function evictOldestUnbound() {
+  while (_states.size > MAX_IMG_STATES) {
+    let evicted = false;
+    for (const key of _states.keys()) {
+      if (!_bindings.has(key)) {
+        _states.delete(key);
+        evicted = true;
+        break;
+      }
+    }
+    if (!evicted) break;
+  }
+}
 
 // Версия нити с картинкой: первая не «origin» (у черновика исходника нет), иначе текущая
 export function versionWithImage(t: ImgThread): string | null {
@@ -45,7 +72,8 @@ export function versionWithImage(t: ImgThread): string | null {
 
 function onImageEvent(m: { type?: string; sessionId?: string; state?: ImgState }) {
   if (m.type !== 'image_thread_changed' || !m.sessionId || !m.state) return;
-  _states.set(m.sessionId, m.state);
+  setState(m.sessionId, m.state);
+  evictOldestUnbound();
   const b = _bindings.get(m.sessionId);
   if (b) {
     const t = m.state.threads.find(x => x.id === b.threadId);
@@ -68,7 +96,7 @@ export async function loadImageThreads(scope: string, sessionId: string, force =
   _loading.add(sessionId);
   try {
     const st = await request<ImgState>(threadsUrl(scope, sessionId), { live: true });
-    _states.set(sessionId, st);
+    setState(sessionId, st);
     emit();
     return st;
   } catch {
@@ -85,7 +113,7 @@ export async function createImageThread(scope: string, sessionId: string, what: 
   const next = await request<ImgState>(threadsUrl(scope, sessionId), {
     method: 'POST', body: JSON.stringify({ ...what, revision: cur?.revision ?? 0 }),
   });
-  _states.set(sessionId, next);
+  setState(sessionId, next);
   emit();
   const created = next.threads.find(t => !before.has(t.id)) ?? next.threads.find(t => 'file' in what && (t.file === what.file || t.lineage.includes(what.file)));
   return created?.id ?? null;
@@ -156,4 +184,6 @@ export function useImageFramesVersion(scope: string, sessionId: string | null, n
 export const frameThread = (f: FrameRef | null | undefined) => (f && f.kind === 'image' ? f.threadId : null);
 
 export function __resetImageFrames() { _states.clear(); _bindings.clear(); _loading.clear(); emit(); }
-export function __setImageState(sessionId: string, st: ImgState) { _states.set(sessionId, st); emit(); }
+export function __setImageState(sessionId: string, st: ImgState) { setState(sessionId, st); emit(); }
+// Тестовая ручка: порядок ключей _states (старейшее → новейшее) — проверяет LRU-вытеснение
+export function __stateOrder(): string[] { return [..._states.keys()]; }

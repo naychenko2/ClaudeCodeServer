@@ -36,7 +36,8 @@ public class ImageEditorController(
     ILocalImageMedia? localMedia = null,
     CharacterTrainingPhotos? trainingPhotos = null,
     IFeatureFlagGate? flags = null,
-    CharacterPhotoLabeling? labeling = null)
+    CharacterPhotoLabeling? labeling = null,
+    CharacterLoraRuns? loraRuns = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
@@ -213,10 +214,14 @@ public class ImageEditorController(
     [HttpGet("loras")]
     public async Task<IActionResult> Loras(string projectId, CancellationToken ct)
     {
-        if (!ProjectGate(projectId, out _, out var denied)) return denied;
+        if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var items = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
         var own = items?.Where(n => LoraNamespace.VisibleTo(UserId, n)).ToList();
-        return Ok(new { available = own is not null, items = own ?? [] });
+        // Даты обучения — только для имён, прошедших фильтр видимости: чужие не утекают
+        var trained = own is null ? [] : loraRuns?.TrainedDates(project.RootPath)
+            .Where(kv => own.Contains(kv.Key, StringComparer.Ordinal))
+            .ToDictionary(kv => kv.Key, kv => kv.Value) ?? [];
+        return Ok(new { available = own is not null, items = own ?? [], trained });
     }
 
     [HttpGet("characters/{slug}")]
@@ -298,6 +303,8 @@ public class ImageEditorController(
     public sealed class CharacterForm
     {
         public string? Name { get; set; }
+        // Пустая строка = «стереть», поэтому в null её не превращаем
+        [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
         public string? Description { get; set; }
         public List<IFormFile>? Photos { get; set; }
         public List<string>? Angles { get; set; }

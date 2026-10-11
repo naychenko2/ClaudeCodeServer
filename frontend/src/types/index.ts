@@ -181,12 +181,15 @@ export interface Project {
 // (`kind === 'glyph'`, не `kind !== 'initials'`): старая запись с числовым Kind = 1
 // (бывший Image) должна тихо деградировать в инициалы, а не притворяться глифом.
 // color — ключ палитры AGENT_COLORS, красит плитку и глиф через currentColor.
+// image — картинка, загруженная владельцем (ревизия ADR-009 от 01.10.2026), в родных цветах.
 export interface ProjectIcon {
-  kind: 'initials' | 'glyph';
+  kind: 'initials' | 'glyph' | 'image';
   color?: string;
   // Имя lucide-значка. Проверка на клиенте: glyph присутствует и name непустой.
   // Иначе — рисуем инициалы (§7 ADR-009).
   glyph?: { name?: string | null } | null;
+  // Имя файла загруженной картинки — оно же cache-buster у api.projects.iconImageUrl
+  imageFile?: string | null;
 }
 
 // Колонка Kanban-доски проекта. category — семантическая категория статуса
@@ -854,6 +857,9 @@ export interface Session {
   // null/отсутствует — через API не отмечали. Непрочитанность считает chatReadState.ts:
   // updatedAt > max(локальная отметка, эта, baseline)
   lastReadAt?: string | null;
+  // Последнее сообщение, написанное владельцем руками (не автоматика и не исполнитель);
+  // по нему сортируется список проектов. null — с появления поля сюда не писали
+  lastUserMessageAt?: string | null;
   // Чат заглушён: браузерные уведомления по нему не показываются
   notificationsMuted?: boolean;
   // Голосовой режим чата: ответы озвучиваются (POST /api/tts)
@@ -1138,9 +1144,14 @@ export type ServerMessage = { sessionId: string } & (
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }
   | { type: 'agent_thinking'; parentToolUseId: string; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
+  // startedAt/finishedAt — Unix-мс по часам сервера (таймер карточки инструмента)
+  | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string; startedAt?: number }
   | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }
-  | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  // Фактический старт инструмента (task_started CLI: Bash, агенты) — сдвигает отсчёт таймера
+  | { type: 'tool_started'; toolUseId: string; startedAt?: number }
+  // Живой прогресс идущего инструмента поверх таймера карточки (ToolProgress)
+  | ({ type: 'tool_progress'; toolUseId: string } & ToolProgress)
+  | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean; finishedAt?: number }
   // Фоновые агенты (Agent run_in_background / Workflow) реально завершились — единственный
   // достоверный сигнал «ответ готов» (по task-notification CLI). aborted=true — агенты
   // умерли вместе с процессом (Стоп/несовместимый ход), не доработав
@@ -1396,6 +1407,9 @@ export interface ProjectService {
   // Составной запуск (Rider multilaunch): id входящих сервисов. Своей команды у
   // группы нет — она поднимает участников, статус и порт производные от них
   members?: string[] | null;
+  // Стенд поднят агентом из чата (инструмент start_stand): только подпись — жизнь стенда от
+  // чата не зависит
+  origin?: { sessionId: string; label: string } | null;
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)
@@ -1544,7 +1558,8 @@ export interface UsageResponse {
   providers?: Record<string, UsageSnapshot[]>;
   // Статус опроса api/oauth/usage по ключам аккаунтов: "ok" | "unauthorized" (токен
   // не подходит — setup-токен вместо полноценного входа) | "rate_limited" (429: опрос
-  // упёрся в лимит частоты, ждёт backoff) | "error"
+  // упёрся в лимит частоты, ждёт backoff) | "refresh_rate_limited" (429 на продлении
+  // access-токена профиля: вход живой, повтор сам) | "error"
   pollStatuses?: Record<string, string>;
   // Локальная модель (Ollama или llama-server): какая модель и на какие фоновые действия
   // она заведена. Имя поля контрактное и не переименовывается вместе с движком.
@@ -2004,6 +2019,56 @@ export interface TeamEscalation {
   resolutionNote?: string | null;
 }
 
+// Живой прогресс идущего инструмента (событие tool_progress, ToolProgressMessage на бэке).
+// percent — оценка с потолком 95, «готово» — только результат; exact — процент по настоящим
+// шагам семплера ComfyUI (потолок 99), полоса сплошная, а не пунктир оценки.
+// Сабагент: stage 'working', label — описание, lastTool/toolUses/durationMs.
+// Локальная генерация (local_jobs_wait): stage 'queued' | 'running', queuePosition, percent,
+// exact, etaSeconds; label — «шаг N из M» и/или «K из N» задач
+export interface ToolProgress {
+  stage?: string | null;
+  label?: string | null;
+  percent?: number | null;
+  exact?: boolean | null;
+  queuePosition?: number | null;
+  etaSeconds?: number | null;
+  lastTool?: string | null;
+  // Клиентское: вид прогона, когда lastTool — run_tests («vitest»); ставит редьюсер по
+  // вложенному вызову сабагента, сервер это поле не шлёт
+  lastToolKind?: string | null;
+  toolUses?: number | null;
+  durationMs?: number | null;
+  // run_tests: полный снимок этапов и (в последнем событии) итоговые счётчики — редьюсер
+  // переносит их в поля карточки stages/totals, они же лежат в истории вызова
+  stages?: ToolStage[] | null;
+  totals?: ToolRunTotals | null;
+}
+
+// Этап долгого инструмента (run_tests, ToolStage на бэке): ключ queued | build | list | stand |
+// running, короткая подпись, начало и конец — Unix-мс по часам сервера. endedAt нет — этап идёт
+// (или вызов оборвался, не закрыв его); failed — этап кончился неудачей (крестик, а не галочка)
+export interface ToolStage {
+  stage: string;
+  label: string;
+  startedAt: number;
+  endedAt?: number | null;
+  failed?: boolean | null;
+}
+
+// Итоговые счётчики прогона тестов для закрытой карточки: «174 из 177 · упало 3»
+export interface ToolRunTotals {
+  passed: number;
+  failed: number;
+  total: number;
+  // Первые упавшие (до трёх): имя и первая строка сообщения — список под строкой этапов
+  failures?: ToolRunFailure[] | null;
+}
+
+export interface ToolRunFailure {
+  name: string;
+  message?: string | null;
+}
+
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send);
@@ -2037,8 +2102,13 @@ export type ChatItem =
   | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string; model?: string; ts?: number; delegationTaskId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
   // bgDone/bgAborted — завершение фонового агента (bg_agent_done / bgDone из истории);
-  // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся)
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean }
+  // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся);
+  // startedAt/finishedAt — Unix-мс по часам сервера, нет у старых историй;
+  // started — пришёл tool_started (фактический старт Bash/агента), startedAt уже сдвинут на него;
+  // appearedAt — прежний startedAt до сдвига (только живая лента): порог индикатора ожидания;
+  // progress — последний tool_progress (только живая лента, в историю не пишется);
+  // stages/totals — этапы и итог run_tests: из tool_progress вживую и из истории после F5
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean; startedAt?: number; finishedAt?: number; started?: boolean; appearedAt?: number; progress?: ToolProgress; progressAt?: number; stages?: ToolStage[]; totals?: ToolRunTotals }
   // decision — вердикт пользователя (только живая лента: permission_request в history не персистится)
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }

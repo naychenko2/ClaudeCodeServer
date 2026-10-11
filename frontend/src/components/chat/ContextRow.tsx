@@ -1,6 +1,6 @@
 // Строка контекста хода: связка стора контекста (lib/chatContext) и git-чипа с отрисовкой
 // ContextRowView. Открытость правой панели сюда не приходит: строка от неё не зависит.
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
@@ -40,14 +40,17 @@ interface Props {
 const iconOf = (kind: string): ReactNode =>
   getKindApi(kind)?.icon(kind) ?? <FileIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
-export function ContextRow(props: Props) {
+// memo: пропсы (session, project, turnTree, onCommit*) держат стабильные ссылки, пока
+// содержимое не изменилось (ChatPanel: turnTree — стабильный ref, commit-обработчики —
+// useCallback) — строка не перерисовывается на дельты ленты, а только на смену контекста.
+export const ContextRow = memo(function ContextRow(props: Props) {
   return (
     <>
       <ContextRowBody {...props} />
       <ContextSheet session={props.session} project={props.project} />
     </>
   );
-}
+});
 
 function ContextRowBody(props: Props) {
   const { session, onCommitOwn, onCommitAll } = props;
@@ -69,12 +72,20 @@ function WithGit(props: Props & { project: Project }) {
   const git: RowGit | null = chip.isRepo ? {
     label: chip.label,
     changes: chip.diff.files,
+    added: chip.diff.added,
+    deleted: chip.diff.deleted,
     ahead: chip.ahead,
     publishN: chip.publishN,
     onCommitOwn: props.onCommitOwn,
     onCommitAll: props.onCommitAll,
     onPublish: () => setPublish(true),
     onShowChanges: () => {
+      // На мобиле рельсы панелей нет — «Изменения» живут вкладкой проекта, её открывает WorkspacePage
+      if (props.isMobile) {
+        window.dispatchEvent(new CustomEvent('cc-open-changes-tab', { detail: { projectId: project.id } }));
+        window.dispatchEvent(new CustomEvent('cc-git-open-working'));
+        return;
+      }
       // Панель уже открыта — просим её мигнуть: иначе клик выглядит как «ничего не произошло»
       if (reveal('changes')) window.dispatchEvent(new CustomEvent('cc-panel-flash', { detail: { key: 'changes' } }));
       window.dispatchEvent(new CustomEvent('cc-git-open-working'));

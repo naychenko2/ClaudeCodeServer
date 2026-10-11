@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pencil, Check, Sparkles } from 'lucide-react';
 import type { Project } from '../../types';
 import { api, type GlyphCandidate } from '../../lib/api';
@@ -34,6 +34,12 @@ const MENU_LABEL_COLOR = 'Цвет проекта';
 // «Цвет фона» переименован: палитра красит и инициалы, и плитку глифа (макет §"Композиция секции").
 const MENU_LABEL_RESET_TO_INITIALS = 'Вернуть инициалы';
 const MENU_LABEL_RESET_TO_GLYPH = 'Вернуть значок';
+const MENU_LABEL_RESET_TO_IMAGE = 'Вернуть картинку';
+const MENU_LABEL_UPLOAD = '🖼 Загрузить картинку';
+const MENU_HINT_UPLOAD = 'SVG, PNG, JPG, WebP или ICO до 512 КБ';
+const UPLOAD_FAIL_MSG = 'Не удалось загрузить картинку.';
+// Подсказка выбора файла; сервер всё равно проверяет формат по байтам
+const UPLOAD_ACCEPT = '.svg,.png,.jpg,.jpeg,.webp,.ico,image/svg+xml,image/png,image/jpeg,image/webp,image/x-icon';
 const PLACEHOLDER_PROMPT = 'Опишите, что изобразить (необязательно)…';
 const SUGGESTING_LABEL = 'Подбираю…';
 const REST_PICKING_LABEL = 'Подобрать';
@@ -63,7 +69,13 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
 }) {
   // Активный значок: в edit — на сохранённой записи проекта; в creating — в pendingGlyph.
   const activeGlyph = (creating ? project.icon?.glyph : project.icon?.glyph) ?? null;
-  const isGlyphActive = !creating && project.icon?.kind === 'glyph' && !!activeGlyph;
+  const kind = project.icon?.kind ?? 'initials';
+  // Куда можно переключиться без повторного подбора или загрузки
+  const canInitials = kind !== 'initials';
+  const canGlyph = kind !== 'glyph' && !!project.icon?.glyph;
+  const canImage = kind !== 'image' && !!project.icon?.imageFile;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
 
   // Блок подбора: в editing держим имя и id для повторного «Попробовать снова»;
   // в creating — список приходит с preview-эндпоинта и валится в onDraftGlyphChange.
@@ -158,13 +170,29 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
     }
   };
 
-  const setMode = async (kind: 'initials' | 'glyph') => {
+  const setMode = async (next: 'initials' | 'glyph' | 'image') => {
     setSuggErr('');
     try {
-      applyUpdated(await api.projects.setIconMode(project.id, kind));
+      applyUpdated(await api.projects.setIconMode(project.id, next));
       setMenuOpen(false);
     } catch (e: unknown) {
       setSuggErr(e instanceof Error ? e.message : GLYPH_FAIL_MSG);
+    }
+  };
+
+  // Своя картинка: только у существующего проекта (в creating id ещё нет)
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    setSuggErr('');
+    setUploadBusy(true);
+    try {
+      applyUpdated(await api.projects.uploadIconImage(project.id, file));
+    } catch (e: unknown) {
+      setSuggErr(e instanceof Error ? e.message : UPLOAD_FAIL_MSG);
+    } finally {
+      setUploadBusy(false);
+      // Тот же файл повторно тоже должен вызвать onChange
+      if (fileInput.current) fileInput.current.value = '';
     }
   };
 
@@ -185,11 +213,11 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
             onClick={() => setMenuOpen(v => !v)}
             aria-label="Изменить иконку"
             title="Изменить иконку"
-            disabled={suggBusy}
+            disabled={suggBusy || uploadBusy}
             style={{
               position: 'absolute', right: -5, bottom: -5, width: 24, height: 24, borderRadius: R.full,
               border: `2.5px solid ${C.bgMain}`, background: C.accent, color: C.onAccent,
-              cursor: suggBusy ? 'default' : 'pointer', padding: 0,
+              cursor: suggBusy || uploadBusy ? 'default' : 'pointer', padding: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               boxShadow: SHADOW.thumb, transition: 'background 0.15s',
             }}
@@ -206,6 +234,17 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
               <div style={{ fontSize: 11.5, color: C.textMuted, padding: '0 12px 6px', fontFamily: FONT.sans }}>
                 {MENU_HINT_GLYPH}
               </div>
+              {!creating && (
+                <>
+                  <MenuItem
+                    label={MENU_LABEL_UPLOAD}
+                    onClick={() => { setMenuOpen(false); fileInput.current?.click(); }}
+                  />
+                  <div style={{ fontSize: 11.5, color: C.textMuted, padding: '0 12px 6px', fontFamily: FONT.sans }}>
+                    {MENU_HINT_UPLOAD}
+                  </div>
+                </>
+              )}
               <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '4px 2px' }} />
               {/* Палитра цвета: красит и инициалы, и плитку глифа (макет §"Композиция секции"). */}
               <div style={{ padding: '4px 8px 6px' }}>
@@ -228,20 +267,29 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
                   ))}
                 </div>
               </div>
-              {/* «Вернуть инициалы» / «Вернуть значок» — режим переключения, файл не трогается. */}
-              {!creating && isGlyphActive && (
-                <>
-                  <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '4px 2px' }} />
-                  <MenuItem label={MENU_LABEL_RESET_TO_INITIALS} onClick={() => void setMode('initials')} />
-                </>
+              {/* «Вернуть …» — переключение режима: значок и картинка в записи не стираются. */}
+              {!creating && (canInitials || canGlyph || canImage) && (
+                <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '4px 2px' }} />
               )}
-              {!creating && !isGlyphActive && project.icon?.glyph && (
-                <>
-                  <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '4px 2px' }} />
-                  <MenuItem label={MENU_LABEL_RESET_TO_GLYPH} onClick={() => void setMode('glyph')} />
-                </>
+              {!creating && canInitials && (
+                <MenuItem label={MENU_LABEL_RESET_TO_INITIALS} onClick={() => void setMode('initials')} />
+              )}
+              {!creating && canGlyph && (
+                <MenuItem label={MENU_LABEL_RESET_TO_GLYPH} onClick={() => void setMode('glyph')} />
+              )}
+              {!creating && canImage && (
+                <MenuItem label={MENU_LABEL_RESET_TO_IMAGE} onClick={() => void setMode('image')} />
               )}
             </Menu>
+          )}
+          {!creating && (
+            <input
+              ref={fileInput}
+              type="file"
+              accept={UPLOAD_ACCEPT}
+              hidden
+              onChange={e => void upload(e.target.files?.[0])}
+            />
           )}
         </div>
 

@@ -6,6 +6,7 @@ import { hasUnread, subscribeReadState } from './chatReadState';
 import { loadChatFilters, matchChatFilter } from './chatFilters';
 import { onMessage, onReconnected } from './signalr';
 import { bgWorkPresenceSnapshot, subscribeAgentsPresence } from './agentsPresence';
+import { startVisiblePoll, throttleRefetch } from './visiblePoll';
 
 // Стор активности проектов для переключателя в сайдбаре (флаг sidebar-project-switcher):
 // агрегат «в каком проекте агент работает / ждет ответа» по live-сессиям всех проектов.
@@ -48,6 +49,19 @@ export const STATUS_PULSE: Record<ActivityStatus, string> = {
   unread: ' cc-dot',
 };
 
+// Свёртка per-чат активности в одну точку: самое важное по всем чатам, КРОМЕ
+// исключённого (открытого сейчас — о нём и так всё видно на экране). Приоритет тот
+// же, что у точки проекта: waiting > working > unread. Тишина — null
+export function foldChatActivity(chats: ReadonlyMap<string, ActivityStatus>, excludeId?: string): ActivityStatus | null {
+  const rank = { unread: 1, working: 2, waiting: 3 } as const;
+  let best: ActivityStatus | null = null;
+  for (const [id, st] of chats) {
+    if (id === excludeId) continue;
+    if (!best || rank[st] > rank[best]) best = st;
+  }
+  return best;
+}
+
 const POLL_MS = 15_000;
 
 let _agg = new Map<string, ProjectActivity>();
@@ -61,8 +75,9 @@ let _chatAgg = new Map<string, ActivityStatus>();
 let _chatFingerprint = '';
 const _listeners = new Set<() => void>();
 
-let _timer: ReturnType<typeof setInterval> | null = null;
+let _timer: (() => void) | null = null;
 let _offMessage: (() => void) | null = null;
+let _offThrottle: (() => void) | null = null;
 let _offReconnected: (() => void) | null = null;
 let _offReadState: (() => void) | null = null;
 let _offPresence: (() => void) | null = null;
@@ -214,9 +229,13 @@ function fetchNow() {
 function start() {
   if (_timer) return;
   fetchNow();
-  _timer = setInterval(fetchNow, POLL_MS);
+  // Пауза на скрытой вкладке + догон: страховочный поллинг не должен жечь сеть в фоне
+  _timer = startVisiblePoll(fetchNow, POLL_MS);
+  // Пачка status_changed/chat_deleted — один fetch, а не по одному на событие
+  const [fetchThrottled, disposeThrottle] = throttleRefetch(fetchNow, 1000);
+  _offThrottle = disposeThrottle;
   _offMessage = onMessage(msg => {
-    if (msg.type === 'status_changed' || msg.type === 'chat_deleted') fetchNow();
+    if (msg.type === 'status_changed' || msg.type === 'chat_deleted') fetchThrottled();
   });
   _offReconnected = onReconnected(fetchNow);
   // Чат отметили прочитанным — точка обязана погаснуть сразу, без ожидания
@@ -229,8 +248,9 @@ function start() {
 }
 
 function stop() {
-  if (_timer) { clearInterval(_timer); _timer = null; }
+  if (_timer) { _timer(); _timer = null; }
   _offMessage?.(); _offMessage = null;
+  _offThrottle?.(); _offThrottle = null;
   _offReconnected?.(); _offReconnected = null;
   _offReadState?.(); _offReadState = null;
   _offPresence?.(); _offPresence = null;

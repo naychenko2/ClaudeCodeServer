@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 // Без DOM: чипы строки читаем по data-атрибутам статической разметки
 
+import type { FormatModel } from '../../../lib/chatContext/formatTypes';
 import { ContextRowView, rowFacts, showsRow, type ContextRowViewProps, type RowExec, type RowGit } from '../ContextRowView';
 import type { ChatContextPrimary, ChatContextRef } from '../../../lib/chatContext/types';
 
@@ -52,6 +53,31 @@ describe('ContextRowView', () => {
     expect(has(h, 'primary')).toBe(false);
   });
 
+  it('десктоп, только ветка: подпись ветки без меню; есть что делать — пилюля и кнопки справа', () => {
+    const git = props({}).git!;
+    const clean = html(props({ primary: null, refs: [], git: { ...git, changes: 0, publishN: 0 } }));
+    expect(clean).toContain('data-git-bare');
+    expect(clean).not.toContain('lucide-chevron-down');
+    expect(clean).not.toContain('data-git-actions');
+    expect(clean).toContain('data-git-clean');
+    expect(clean).toContain('>нет изменений<');
+    const dirty = html(props({ primary: null, refs: [], git: { ...git, changes: 3, added: 12, deleted: 4, publishN: 1 } }));
+    expect(dirty).toContain('data-git-actions');
+    expect(dirty).toContain('>3<');
+    expect(dirty).toContain('>+12<');
+    expect(dirty).toContain('>−4<');
+    expect(dirty).not.toContain('изменения<');
+    expect(dirty).toContain('Зафиксировать');
+    expect(dirty).toContain('Опубликовать');
+    expect(dirty).not.toContain('data-git-clean');
+  });
+
+  it('с объектом ветка — полным чипом строки, кнопок Git справа нет', () => {
+    const h = html(props({}));
+    expect(h).not.toContain('data-git-bare');
+    expect(h).not.toContain('data-git-actions');
+  });
+
   it('строка не форматирует подписи: label и version — ровно из DTO', () => {
     const h = html(props({ primary: primary({ label: 'Подпись из dto', version: 'версия из dto' }), refs: [ref('r1', { label: 'реф из dto' })] }));
     expect(h).toContain('>Подпись из dto<');
@@ -95,11 +121,41 @@ describe('ContextRowView', () => {
     expect(h).toContain('data-chip="more"');
   });
 
-  it('телефон: ветка иконкой с бейджем, лестницы нет', () => {
-    const h = html(props({ isMobile: true, width: 342 }));
-    expect(h).toContain('data-ladder-scroll="1"');
-    expect(h).not.toContain('>feat/video-editor<');
-    expect(h).toContain('>3<');
+  it('телефон: смысловые строки «Где», «С чем», «Подключено», ветка целиком, прокрутки нет', () => {
+    const h = html(props({ isMobile: true, width: 342, refs: [ref('a')], exec }));
+    expect(h).toContain('data-ladder-scroll="0"');
+    expect(h).not.toContain('overflow-x:auto');
+    const lines = [...h.matchAll(/data-row-line="(\w+)"/g)].map(m => m[1]);
+    expect(lines).toEqual(['where', 'what', 'refs']);
+    expect(h).toContain('feat/video-editor');
+    // Тач-цель: чипы на телефоне 28px
+    expect(h).toContain('height:28px');
+  });
+
+  it('телефон + формат: чип «Чем» голый — имя модели без бейджа цены', () => {
+    const format = { kind: 'generate', title: 'Формат', state: null, by: null, footer: () => '', onChange: () => {},
+      chip: { main: '16:9', tone: 'normal' } } as FormatModel;
+    const withFormat = html(props({ isMobile: true, width: 342, exec, format }));
+    expect(has(withFormat, 'exec')).toBe(true);
+    expect(withFormat).not.toContain('>бесплатно<');
+    // без строки «Формат» бейдж цены на месте
+    expect(html(props({ isMobile: true, width: 342, exec }))).toContain('>бесплатно<');
+  });
+
+  it('телефон: строки без содержимого нет — без объекта и референсов только «Где»', () => {
+    const h = html(props({ isMobile: true, width: 342, primary: null, exec: null, refs: [] }));
+    expect([...h.matchAll(/data-row-line="(\w+)"/g)].map(m => m[1])).toEqual(['where']);
+  });
+
+  it('телефон, чистое дерево: ветка подписью без меню, справа «нет изменений»; есть изменения — чип с меню', () => {
+    const clean = html(props({ isMobile: true, width: 342, git: { ...git, changes: 0, publishN: 0 } }));
+    expect(clean).toContain('data-git-bare');
+    expect(clean).toContain('data-git-clean');
+    expect(clean).toContain('>нет изменений<');
+    expect(clean).not.toContain('lucide-chevron-down');
+    const dirty = html(props({ isMobile: true, width: 342 }));
+    expect(dirty).not.toContain('data-git-bare');
+    expect(dirty).not.toContain('data-git-clean');
   });
 
   it('плашка «Вернуть» после снятия объекта: текст по макету, отсчёт от срока из стора', () => {

@@ -118,7 +118,7 @@ public sealed class ImageEditLaunchAssembler(
         // «Дорисовать» (ADR-025): холст любых пропорций «W:H», белый список трёх пропорций — только у старого пути правки.
         // Модели дорисовки формата не объявляют (caps.Format = null), поэтому проверка — читаемость пропорции,
         // тот же разбор, что у ImageFormatPlan
-        var outpaint = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId.Trim())?.Op == ImageEditOp.Outpaint;
+        var outpaint = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim())?.Op == ImageEditOp.Outpaint;
         if (aspectRatio is not null)
         {
             if (outpaint && !AspectCrop.TryParse(aspectRatio, out _))
@@ -171,7 +171,7 @@ public sealed class ImageEditLaunchAssembler(
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");
 
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
-            req.QuoteId.Trim(),
+            req.QuoteId!.Trim(),
             req.Prompt ?? "",
             req.MarksJson,
             source,

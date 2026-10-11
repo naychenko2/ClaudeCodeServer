@@ -20,6 +20,8 @@ public static class LocalMediaRegistration
 
         services.AddSingleton<ComfyClient>();
         services.AddSingleton<LocalMediaJobStore>();
+        // Настоящие шаги семплера по WebSocket ComfyUI; без связи — оценка по ETA
+        services.AddSingleton(sp => new ComfyProgressTracker(sp.GetRequiredService<LocalMediaJobStore>()));
         services.AddSingleton<LocalMediaService>();
         // Шов для поставщика «Локальные модели» редактора картинок (модуль ImageEditor)
         services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.ILocalImageMedia, LocalImageMediaAdapter>();
@@ -37,6 +39,7 @@ public static class LocalMediaRegistration
         services.AddSingleton<ClaudeHomeServer.Services.Media.IVideoDsp, FfmpegVideoDsp>();
         services.AddSingleton<LocalMediaCleanup>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
+        services.AddGatedHostedService<ComfyProgressListener>(config, "images");
         return services;
     }
 }

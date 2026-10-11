@@ -35,8 +35,10 @@ import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationSt
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
-import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
+import { computeTurnTree, sessionStartedBoundaries, type TurnTree } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
+import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
+import { BUILD_TOOL, RUN_TESTS_TOOL, operationOf } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, sanitizeForSpeech, splitSentences, type StreamSpeech } from '../lib/tts';
@@ -52,7 +54,7 @@ import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ContextRow } from './chat/ContextRow';
 import { chatContextApi } from '../lib/chatContext/api';
-import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
+import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
 import { useIsTouch } from '../lib/breakpoints';
@@ -60,7 +62,7 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
@@ -82,6 +84,8 @@ import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { SLOT_COMPOSER_CHIP, useSlot, type ComposerChipApi, type ComposerChipCtx } from '../lib/subsystems/registry';
 import type { ChatItemToolCtx } from '../lib/subsystems/registryCore';
+import { ensureTasksLoaded, useTasks } from '../lib/tasks';
+import { openChatById } from '../lib/openChat';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
@@ -89,7 +93,14 @@ import type { ChatItemToolCtx } from '../lib/subsystems/registryCore';
 // разъедутся. Десктоп пользуется полем CHAT_GUTTER_L, этот отступ — только мобила.
 // Значения сейчас совпадают, но роли разные: мобильное поле держит ширину экрана,
 // десктопное — размах колец индикатора. Сливать в одно не надо.
-const CHAT_GUTTER_MOBILE = 16;
+// Само значение (CHAT_GUTTER_MOBILE) живёт в lib/design: по нему же ставится ось круглешка AI
+
+// Мягкое затухание низа ленты над композером (десктоп): строки уходят под губу плавно,
+// а не обрубаются ровной линией. Нижний отступ ленты не меньше затухания — прокрученная
+// до конца лента последнее сообщение не гасит
+const FEED_FADE_PX = 14;
+// Маска берёт только непрозрачность цвета: подойдёт любой непрозрачный токен
+const FEED_FADE_MASK = `linear-gradient(to bottom, ${C.bgMain} calc(100% - ${FEED_FADE_PX}px), transparent)`;
 
 interface Props {
   session: Session;
@@ -132,7 +143,7 @@ interface Props {
   headerIsland?: boolean;
   // Режим «Стены» (WallColumn): на экране НЕСКОЛЬКО инстансов ChatPanel разом, поэтому
   // глобальные синглтоны одного хозяина (setGitSessionContext, setChatContext,
-  // --cc-fab-bottom) не трогаем — иначе инстансы перебивают друг друга, а анмаунт
+  // препятствие круглешка AI) не трогаем — иначе инстансы перебивают друг друга, а анмаунт
   // любого сбрасывает контекст всем. Git-бар скрыт (воркспейсный инструмент);
   // шапка чата — штатная (канонический вид), ярлык колонки рисует WallColumn.
   embedded?: boolean;
@@ -537,6 +548,25 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
   // Возможности провайдера модели (UI скрывает недоступное)
   const caps = useModelCaps(session.model);
+  // Чат-исполнитель задачи: композер помечается строкой «Исполнитель задачи «…»».
+  // Постановщик — родитель чата в списке (бэк выводит его из задачи)
+  const isExecutor = !!session.taskExecution;
+  useEffect(() => { if (isExecutor) void ensureTasksLoaded(); }, [isExecutor]);
+  const tasks = useTasks();
+  const executorTitle = isExecutor && session.taskId ? tasks.find(t => t.id === session.taskId)?.title ?? null : null;
+  const parentChatId = session.parentSessionId ?? null;
+  const executorTask = useMemo(() => !isExecutor ? null : {
+    title: executorTitle,
+    onOpenParent: parentChatId ? () => {
+      // Постановщик в этом же проекте — открываем внутри воркспейса, как групповой чат:
+      // диплинк через cc-open-url уже открытый проект на другой чат не переключает
+      void api.chats.get(parentChatId).then(chat => {
+        if (project && chat.projectId === project.id)
+          window.dispatchEvent(new CustomEvent('cc-open-project-session', { detail: { session: chat } }));
+        else void openChatById(parentChatId);
+      }, () => { void openChatById(parentChatId); });
+    } : undefined,
+  }, [isExecutor, executorTitle, parentChatId, project]);
   // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
   const canCompact = useMemo(
     () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,
@@ -816,30 +846,23 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
   // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
   // пересечение выходило истинным всегда — круг оставался ужатым при любом окне.
-  const composerObstacleRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // embedded: препятствие глобальное, несколько колонок стены перебивали бы друг друга
-    if (embedded) return;
-    setFabObstacle(composerObstacleRef.current);
-    return () => setFabObstacle(null);
-    // composerH в зависимостях — им ловим момент, когда композер уже в DOM
-    // (первый замер высоты) и ref наконец не пустой
-  }, [embedded, composerH]);
-  // QA Fold 8: на планшете FAB прижимался к композеру и ужимался (54→36), причём
-  // пилюля «Собеседник» резалась сверху. Поднимаем кнопку над композером вместо
-  // ужимания — `--cc-fab-bottom = composerH + 12` (12 = зазор). Сбрасывается на 20px
-  // при уходе композера. На Стене (embedded) поведение прежнее: глобальный
-  // --cc-fab-bottom трогать нельзя — колонки перебивают друг друга.
-  useEffect(() => {
-    if (embedded) return;
-    const root = document.documentElement;
-    if (composerH > 0) {
-      root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
-    } else {
-      root.style.setProperty('--cc-fab-bottom', '20px');
-    }
-    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
-  }, [composerH, embedded]);
+  // Ref-колбэк, а не эффект на composerH: переопубликация на каждый рост композера
+  // поднимала его на вершину стека поверх футера мастера персон, и FAB ложился на футер.
+  // Узел публикуется ровно раз при монтировании и снимается при размонтировании.
+  // embedded: ref не вешаем — препятствие глобальное, колонки стены перебивали бы друг друга
+  const composerReleaseRef = useRef<(() => void) | null>(null);
+  const composerObstacleRef = useCallback((el: HTMLDivElement | null) => {
+    composerReleaseRef.current?.();
+    composerReleaseRef.current = el ? setFabObstacle(el) : null;
+  }, []);
+  // Кнопка «Вниз» — сосед композера, который тоже нельзя накрывать (свой слот препятствия).
+  // Ref-колбэк: кнопка монтируется и снимается вместе с showScrollDown, null приходит сам —
+  // тогда снимаем ранее опубликованный узел
+  const scrollDownReleaseRef = useRef<(() => void) | null>(null);
+  const scrollDownObstacleRef = useCallback((el: HTMLButtonElement | null) => {
+    scrollDownReleaseRef.current?.();
+    scrollDownReleaseRef.current = el ? setFabObstacle(el, 'scroll-down') : null;
+  }, []);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project
     ? {
@@ -1432,8 +1455,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
   // Дерево ХОДА (turnWorktree с бэка + EnterWorktree первого хода, см. lib/turnWorktree) —
-  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath
-  const turnTree = useMemo(() => computeTurnTree(items), [items]);
+  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath.
+  // computeTurnTree пересчитывается на каждую дельту (useMemo по items) и возвращает новый
+  // объект {path,name} даже когда содержимое то же — ContextRow (React.memo) перерисовывался
+  // бы на каждый text_delta. Держим стабильную ссылку: path/name не изменились — прежний объект.
+  const turnTreeRef = useRef<TurnTree | null>(null);
+  const turnTree = useMemo(() => {
+    const next = computeTurnTree(items);
+    const prev = turnTreeRef.current;
+    if (prev === next || (prev !== null && next !== null && prev.path === next.path && prev.name === next.name)) {
+      return prev;
+    }
+    turnTreeRef.current = next;
+    return next;
+  }, [items]);
   // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
   // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
   const turnBoundaries = useMemo(() => sessionStartedBoundaries(items), [items]);
@@ -1523,6 +1558,48 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const showWaiting =
     items.length > 0
     && sessionBusy;
+  // Живые и оборванные карточки инструментов (таймер «идёт M:SS» и пометка «прервано»).
+  // Значение контекста меняется только вместе с составом множеств, а не на каждую дельту
+  // стрима: иначе каждая карточка ленты перерисовывалась бы на каждый токен
+  const livenessRaw = useMemo(() => toolLiveness(items, sessionBusy), [items, sessionBusy]);
+  const livenessKey = `${[...livenessRaw.live].join(',')}|${[...livenessRaw.dead].join(',')}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- пересчёт по составу множеств (livenessKey), а не по ссылке
+  const toolLivenessCtx = useMemo(() => livenessRaw, [livenessKey]);
+  // Идущий инструмент для подписи индикатора ожидания («Синхронизирую транскрипты · 52 с»).
+  // Наружу — примитивы: индикатор не перезапускает печать глаголов на каждую дельту ленты
+  const activeTool = useMemo(() => pickActiveTool(items, toolLivenessCtx.live), [items, toolLivenessCtx]);
+  const activeToolText = activeTool?.kind === 'tool_use' ? activeToolLabel(activeTool) : null;
+  const activeToolStart = activeTool?.kind === 'tool_use' ? activeTool.startedAt ?? null : null;
+  const activeToolTimed = activeTool?.kind === 'tool_use' ? !awaitsToolStart(activeTool) : true;
+  const activeToolAppeared = activeTool?.kind === 'tool_use' ? activeTool.appearedAt ?? null : null;
+  // Счётчик текущего этапа прогона («412 из 7951 · упало 1») — ход прогона виден и без прокрутки
+  // ленты к карточке; у инструментов без этапов — ничего
+  const activeToolDetail = activeTool?.kind === 'tool_use' && activeTool.stages?.length
+    ? stageCaptionOf(activeTool.progress, activeTool.name) : null;
+  // Типовая операция — та же иконка, что в шапке карточки (примитив: индикатор не перерисовываем)
+  const activeToolOperation = activeTool?.kind === 'tool_use' ? operationOf(activeTool.name, activeTool.input) : null;
+  // Видна ли карточка активного инструмента в ленте: видна — индикатор ожидания не повторяет
+  // её подпись и время (иначе один текст стоит дважды подряд), ушла за край — повторяет
+  const activeToolId = activeTool?.kind === 'tool_use' ? activeTool.id : null;
+  const [activeToolOnScreen, setActiveToolOnScreen] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс при смене активного инструмента
+    setActiveToolOnScreen(false);
+    const root = scrollRef.current;
+    if (!activeToolId || !root || typeof IntersectionObserver === 'undefined') return;
+    let io: IntersectionObserver | null = null;
+    let raf = 0;
+    let tries = 0;
+    // Карточка может встать в DOM на кадр позже, чем вызов попал в ленту
+    const attach = () => {
+      const el = root.querySelector(`[data-tool-id="${CSS.escape(activeToolId)}"]`);
+      if (!el) { if (++tries < 30) raf = requestAnimationFrame(attach); return; }
+      io = new IntersectionObserver(([e]) => setActiveToolOnScreen(e.isIntersecting), { root, threshold: 0.5 });
+      io.observe(el);
+    };
+    attach();
+    return () => { cancelAnimationFrame(raf); io?.disconnect(); };
+  }, [activeToolId, scrollRef]);
   // Ждёт ответа от пользователя (permission_request / ask_question) — для режима текста
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
@@ -2275,7 +2352,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           it.kind === 'tool_use' && !it.isError && isWidgetShow(it.name);
         // Карточка подсистемы (запуск генерации агентом, «✦ Промпт») — визуальный результат, в свёртку не прячется
         const isOwnCardEntry = (it: ChatItem) => it.kind === 'tool_use' && ownToolNames.has(it.name);
-        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it);
+        // Прогон тестов — итог хода, который ищут глазами: карточка «Тесты · vitest» с исходом
+        // остаётся видна и в свёрнутой группе
+        // Упавшая сборка — тоже: красное «ошибка» не прячется в свёрнутые «N действий»
+        const isTestRunEntry = (it: ChatItem) => it.kind === 'tool_use' && (it.name === RUN_TESTS_TOOL
+          || (it.name === BUILD_TOOL && it.stages?.some(s => s.failed) === true));
+        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it) || isTestRunEntry(it);
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
@@ -2286,7 +2368,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
         // но ход уже завершён (сессия не работает): иначе действия последнего диалога
         // оставались бы раскрытыми в отличие от всех предыдущих групп.
-        const isGroupDone = after < display.length || !sessionBusy;
+        // Живой или ждущий разрешения вызов держит группу раскрытой, даже если карточка
+        // разрешения уже встала после неё (ждущей считается неотвеченная карточка дальше в ленте)
+        const isGroupDone = isToolGroupDone({
+          entries: slice.map(([it]) => it),
+          liveness: toolLivenessCtx,
+          hasVisibleAfter: after < display.length,
+          busy: sessionBusy,
+          awaitingPermission: display.some((it, k) => k >= i && it.kind === 'permission_request' && !it.resolved),
+        });
         // Изменения файлов не теряются при сворачивании: в свёрнутой шапке — те же плашки
         // (дедуп по пути, +N/−N событий суммируются), при раскрытии они на своих местах
         const fileAgg = new Map<string, Extract<ChatItem, { kind: 'file_changed' }>>();
@@ -2317,7 +2407,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             <Fragment key={itemKey(it, idx)}>
               <div data-feed-index={idx} style={topBorder ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
                 {it.kind === 'file_changed'
-                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} />
                   : renderItem(it, idx, isPersonaTask
                       ? { agentActivity: inlineChildren, agentRenderChild: renderItem }
                       : undefined)}
@@ -2336,7 +2426,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           .map(([it, idx]) => renderGroupEntry(it, idx, true));
         const filesSummary = [...fileAgg.values()].map(f => (
           <div key={`fsum-${f.path}`} style={{ borderTop: `1px solid ${C.bgInset}` }}>
-            <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+            <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} />
           </div>
         ));
         const summaryNodes = [...agentSummary, ...filesSummary];
@@ -2418,7 +2508,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sphereOf, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sphereOf, sessionBusy, toolLivenessCtx, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
 
   // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
   // узел за пределами видимой области физически отсутствует в DOM — простой
@@ -2644,12 +2734,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // компенсировать некуда, поэтому остаток до CHAT_GUTTER_L добирается
         // паддингом — величину считает useChatGutter замером полосы.
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20,
-        paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: 8,
+        paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: isMobile ? 8 : FEED_FADE_PX,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
         // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
-        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
+        // Граница — верх верхней губы: губа во всю ширину, под ней ленте делать нечего
+        marginBottom: composerH,
+        // Десктоп: последние 14 px ленты растворяются в зазоре над губой. Телефон — как было
+        ...(isMobile ? {} : { maskImage: FEED_FADE_MASK, WebkitMaskImage: FEED_FADE_MASK }) }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && showHistorySpinner && (
           <div style={{
@@ -2695,7 +2788,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           </>
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}>{visibleNodes}</SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}><ToolLivenessContext.Provider value={toolLivenessCtx}>{visibleNodes}</ToolLivenessContext.Provider></SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Карточка «Готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
@@ -2729,13 +2822,27 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
           // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
           <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <WaitingIndicator
-              planning={planningKind}
-              awaitingResponse={awaitingResponse}
-              waitingReason={workLoopState?.waitingReason ?? null}
-              waitingTicks={workLoopState?.waitingTicks ?? 0}
-            />
-            <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
+            {/* Обёртка с нулевой базой: индикатор берёт место, оставшееся после пилюли, и
+                длинная подпись инструмента обрезается многоточием, а не выдавливает пилюлю */}
+            <div style={{ flex: '1 1 0%', minWidth: 0 }}>
+              <WaitingIndicator
+                planning={planningKind}
+                awaitingResponse={awaitingResponse}
+                waitingReason={workLoopState?.waitingReason ?? null}
+                waitingTicks={workLoopState?.waitingTicks ?? 0}
+                activeToolLabel={activeToolText}
+                activeToolStartedAt={activeToolStart}
+                activeToolTimer={activeToolTimed}
+                activeToolAppearedAt={activeToolAppeared}
+                activeToolDetail={activeToolDetail}
+                activeToolOnScreen={activeToolOnScreen}
+                activeToolOperation={activeToolOperation}
+              />
+            </div>
+            {/* Пилюле — не больше половины строки: иначе на 320px её 300px съедали всё, и у
+                индикатора не оставалось места даже под аватар и время. Половина — потолок,
+                а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
+            <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
               <TurnPlanPill todos={taskTodos} />
             </div>
           </div>
@@ -2839,9 +2946,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           кнопка встаёт над кнопкой отправки — у правого края КОЛОНКИ ЧТЕНИЯ, а не
           контейнера панели: в разделах «Проекты»/«Чаты» контейнер тянется до рельсы
           панелей, и привязка к его краю уносила кнопку в пустоту сбоку от ленты.
-          По вертикали — прямо над композером: круглешок AI приклеен к углу ЭКРАНА и на
-          подошедший композер отвечает ужиманием, а не подъёмом, так что уступать ему
-          место не надо. */}
+          По вертикали — прямо над композером. Круглешок AI приклеен к углу ЭКРАНА; когда
+          угол занят композером (телефон), он поднимается над ним — и над этой кнопкой
+          тоже: она публикуется отдельным слотом препятствия (scroll-down), и FAB уступает
+          их объединению. */}
       {showScrollDown && (
         <div style={{
           position: 'absolute', left: 0, right: 0, bottom: composerH + 14,
@@ -2850,13 +2958,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         }}>
           <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', display: 'flex', justifyContent: 'flex-end' }}>
             <button
+              ref={embedded ? undefined : scrollDownObstacleRef}
               onClick={scrollToBottom}
               title="Вниз чата"
               style={{
                 // Служебная прокрутка — нейтральная (не accent), чтобы единственным
                 // акцентом в углу оставался круглешок AI.
                 pointerEvents: 'auto',
-                width: 44, height: 44, borderRadius: '50%',
+                width: SCROLL_DOWN_SIZE, height: SCROLL_DOWN_SIZE, borderRadius: '50%',
                 border: `1px solid ${C.border}`,
                 background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2876,14 +2985,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // даёт padding холста (ISLAND.pad), и губа композера встаёт на одну линию
         // с нижней кромкой соседних островов. Внутри острова (split чат|файл)
         // отступ нужен — у Island своего padding нет, композер лёг бы на рамку.
-        padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px 12px` : `0 ${CHAT_GUTTER_L}px ${headerIsland ? 0 : 18}px`,
+        // На мобиле снизу хватает SP.sm: воздух под рядом ⚡ + ⋯ добирают
+        // зоны нажатия его кнопок, 12px поверх них давали лишнюю полосу
+        padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px ${SP.sm}px` : `0 ${CHAT_GUTTER_L}px ${headerIsland ? 0 : 18}px`,
         pointerEvents: 'none',
       }}>
         {/* Именно этот узел — препятствие для круглешка AI: у него РЕАЛЬНАЯ геометрия
             композера (ограничен CHAT_MAX_W и центрирован). Внешняя обёртка растянута
             left:0/right:0, и замер по ней всегда давал пересечение с углом кнопки —
             круг был ужат даже когда композер визуально далеко */}
-        <div ref={composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
+        <div ref={embedded ? undefined : composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',
@@ -2893,8 +3004,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023) */}
-          {!embedded && (
+          {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
+              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать */}
+          {!embedded && online && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
               onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
           )}
@@ -2997,6 +3109,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
             // ни того, ни другого нет — оранжевый токен внутри композера
             auroraColorHex={activeSpeaker?.color ?? (project ? projectMainColor(project) : undefined)}
+            executorTask={executorTask}
           />
           </div>
         </div>

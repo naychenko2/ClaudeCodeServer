@@ -3,7 +3,7 @@ import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import { NewNoteDialog } from './NewNoteDialog';
 import {
-  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, CHAT_MAX_W,
+  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, CHAT_MAX_W, FAB_CLEAR_PAD,
   api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG,
   useOnline, OfflineError, createNoteOffline,
   parseHash, navPush, navReplace, getNav,
@@ -439,7 +439,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const sidebar = (
     <>
       {sidebarControls({ withModeSwitch: true, listMode: mobileMode === 'notes' })}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: FAB_CLEAR_PAD }}>
         {mobileMode === 'notes' ? listPane : graphSidebar}
       </div>
     </>

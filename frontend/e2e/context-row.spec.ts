@@ -56,14 +56,16 @@ test('1440: ветка при свободном месте без многот�
   await shot(page, 'git-1440.png');
 });
 
-test('360: строка 32 px прокручивается, ветка иконкой с бейджем', async ({ page }) => {
+test('360: губа строками «Где» / «С чем» / «Подключено», без прокрутки, ветка с именем', async ({ page }) => {
   newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня'), ref('r2', 'palette.png')] } });
   await openChat(page, { vp: M });
   await expect(row(page)).toBeVisible({ timeout: 30_000 });
-  expect((await row(page).boundingBox())!.height).toBe(32);
-  await expect(row(page)).toHaveAttribute('data-ladder-scroll', '1');
-  await expect(chip(page, 'git')).not.toContainText('feat/video-editor');
-  await expect(chip(page, 'git')).toContainText('3');
+  await expect(row(page)).toHaveAttribute('data-ladder-scroll', '0');
+  const lines = await row(page).locator('[data-row-line]').evaluateAll(els => els.map(e => e.getAttribute('data-row-line')));
+  expect(lines).toEqual(['where', 'what', 'refs']);
+  for (const l of await row(page).locator('[data-row-line]').all())
+    expect(await l.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'строка без боковой прокрутки').toBe(true);
+  await expect(chip(page, 'git')).toContainText('feat/video');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await shot(page, 'row-360.png');
 });

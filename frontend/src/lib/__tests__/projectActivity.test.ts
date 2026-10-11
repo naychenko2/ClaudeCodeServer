@@ -26,7 +26,7 @@ import type { HomeSessionInfo } from '../../types';
 import { api } from '../api';
 import { __resetAgentsPresence } from '../agentsPresence';
 import {
-  __subscribeActivity, __projectAggSnapshot, __chatAggSnapshot, __resetProjectActivity,
+  __subscribeActivity, __projectAggSnapshot, __chatAggSnapshot, __resetProjectActivity, foldChatActivity,
 } from '../projectActivity';
 
 function chat(id: string, status: string, projectId = 'p1'): HomeSessionInfo {
@@ -116,5 +116,20 @@ describe('projectActivity: живые фоновые агенты', () => {
 
     __subscribeActivity(() => {});
     await vi.waitFor(() => expect(__projectAggSnapshot().get('p1')?.status).toBe('waiting'));
+  });
+});
+
+// Точка на шевроне мобильного переключателя чатов: самое важное по ДРУГИМ чатам
+describe('foldChatActivity', () => {
+  it('приоритет waiting > working > unread', () => {
+    const m = new Map([['a', 'unread'], ['b', 'working'], ['c', 'waiting'], ['d', 'unread']] as const);
+    expect(foldChatActivity(m)).toBe('waiting');
+    expect(foldChatActivity(new Map([['a', 'unread'], ['b', 'working']] as const))).toBe('working');
+  });
+
+  it('открытый чат в свёртку не входит', () => {
+    const m = new Map([['cur', 'waiting'], ['b', 'unread']] as const);
+    expect(foldChatActivity(m, 'cur')).toBe('unread');
+    expect(foldChatActivity(new Map([['cur', 'working']] as const), 'cur')).toBeNull();
   });
 });

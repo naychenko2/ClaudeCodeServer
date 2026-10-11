@@ -1,4 +1,5 @@
 // Общие хелперы секций артефактов (вынесены из ArtifactsPanel при разбиении на секции).
+import { toolLabel } from '../../lib/toolLabels';
 
 export function basename(p: string): string {
   const norm = p.replace(/\\/g, '/');
@@ -11,7 +12,8 @@ export function dirname(p: string): string {
   return i > 0 ? norm.slice(0, i) : '';
 }
 
-// Имя инструмента для мини-ленты: MCP → «server · tool», остальные — как есть
+// Имя инструмента для мини-ленты: MCP — русской подписью, если она есть («Тесты»), иначе
+// «server · tool»; остальные — как есть
 export function callName(name: string): string {
-  return name.startsWith('mcp__') ? name.slice(5).replace(/__/g, ' · ') : name;
+  return name.startsWith('mcp__') ? toolLabel(name) : name;
 }

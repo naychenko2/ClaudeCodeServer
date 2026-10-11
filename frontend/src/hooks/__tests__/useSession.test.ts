@@ -94,6 +94,7 @@ vi.mock('../../lib/signalr', () => ({
 }));
 
 const { useSession, waitDiag } = await import('../useSession');
+const { toolLiveness } = await import('../../lib/toolTiming');
 
 // Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
 const emitStatus = (sid: string, status: string) =>
@@ -455,7 +456,7 @@ describe('useSession: прерывание хода ради очереди', ()
     await chat.first.send('не спрашивай, делай');
 
     // Отметка стоит ДО прихода exited — редьюсер не сочтёт смерть прогона аварией
-    expect(chat.render().items.at(-1)).toEqual({ kind: 'interrupted' });
+    expect(chat.render().items.at(-1)).toEqual({ kind: 'interrupted', ts: expect.any(Number) });
     emitExited(sid);
     expect(chat.render().items.some(i => i.kind === 'session_ended')).toBe(false);
 
@@ -545,6 +546,28 @@ describe('useSession: прерывание хода ради очереди', ()
     await chat.first.preemptForPending();
 
     expect(chat.render().items.some(i => i.kind === 'interrupted')).toBe(false);
+
+    chat.unmount();
+  });
+});
+
+describe('useSession: «Стоп» на глазах', () => {
+  it('живая отметка «прервано» несёт время — у оборванной карточки есть длительность', async () => {
+    const sid = nextSid();
+    // Ход идёт: Bash стартовал и результата не прислал
+    m.getHistory.mockResolvedValue([user('в'), { kind: 'tool_use', id: 't1', name: 'Bash', input: {}, result: null }]);
+    const chat = openChat(sid);
+    await flush();
+
+    const before = Date.now();
+    chat.render().interrupt();
+    const items = chat.render().items;
+
+    // Без ts пометки toolLiveness не знает момента обрыва, и «прервано» до F5 шло без времени
+    expect(items.at(-1)).toEqual({ kind: 'interrupted', ts: expect.any(Number) });
+    const l = toolLiveness(items as Parameters<typeof toolLiveness>[0], false);
+    expect(l.dead.has('t1')).toBe(true);
+    expect(l.abortedAt?.get('t1')).toBeGreaterThanOrEqual(before);
 
     chat.unmount();
   });

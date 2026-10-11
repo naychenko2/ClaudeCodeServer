@@ -148,7 +148,11 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (spec.Env is not null)
             foreach (var (k, v) in spec.Env) psi.Environment[k] = v;
 
-        if (!options.Enabled || targetIsWindows) return (psi, "no-isolation");
+        if (!options.Enabled || targetIsWindows)
+        {
+            ApplyPrivateBuildNodes(psi.Environment, spec);
+            return (psi, "no-isolation");
+        }
 
         // Fail-open: обёртку не применить — запускаем как раньше, причину пишем в лог один раз
         string? reason = null;
@@ -166,6 +170,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (reason is not null)
         {
             WarnIsolationOnce(reason);
+            ApplyPrivateBuildNodes(psi.Environment, spec);
             return (psi, reason);
         }
 
@@ -253,6 +258,26 @@ public sealed class LocalProcessRunner : IProcessLauncher
         ("DOTNET_CLI_USE_MSBUILD_SERVER", "0"),
         ("UseSharedCompilation", "false"),
     ];
+
+    // Запреты для spec с меткой PrivateBuildNodes вне scope (ProcessSpec.PrivateBuildNodes):
+    //  • MSBUILDDISABLENODEREUSE=1 — узлы выходят с концом сборки и не принимают чужих
+    //    клиентов (флаг реюза входит в рукопожатие узла), поэтому дерево процесса — только своё;
+    //  • DOTNET_CLI_USE_MSBUILD_SERVER=0 — то же для сервера MSBuild;
+    //  • UseSharedCompilation=false — без сервера компилятора: VBCSCompiler общий на
+    //    пользователя, висит минуты после сборки, а гашение нашего дерева роняло бы чужую
+    //    компиляцию. Соль трубы (SharedCompilationId, как в scope) спасла бы от чужих, но не от
+    //    висящего сервера: вне scope его некому погасить. Цена — холодный csc на проект.
+    // Перебивают и унаследованное окружение хоста (там бывает «0»), но не явный spec.Env.
+    // Внутри scope не нужны: там реюз приватен (соль = имя юнита) и гаснет со scope.
+    public static IEnumerable<(string Key, string Value)> PrivateBuildNodeEnv(ProcessSpec spec) =>
+        spec.PrivateBuildNodes
+            ? BuildIsolationEnv.Where(e => spec.Env is null || !spec.Env.ContainsKey(e.Key))
+            : [];
+
+    private static void ApplyPrivateBuildNodes(IDictionary<string, string?> env, ProcessSpec spec)
+    {
+        foreach (var (k, v) in PrivateBuildNodeEnv(spec)) env[k] = v;
+    }
 
     // Путь к systemd-run: явный из конфига (Execution:Isolation:SystemdRunPath) или поиск по PATH.
     public static string? ResolveSystemdRunPath(IsolationOptions options) =>

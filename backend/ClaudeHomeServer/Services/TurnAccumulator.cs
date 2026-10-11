@@ -126,18 +126,28 @@ internal class TurnAccumulator
         lock (_lock) _thinkingBuf.Append(text);
     }
 
-    public void OnToolUse(string id, string name, object? input, string? parentToolUseId = null)
+    public void OnToolUse(string id, string name, object? input, string? parentToolUseId = null, long? startedAt = null)
     {
         lock (_lock)
         {
             FlushBuffers();
-            // Дедуп: ранняя карточка из стрима (пустой input) + финальный assistant с тем же id → обновляем, не дублируем
+            // Дедуп: ранняя карточка из стрима (пустой input) + финальный assistant с тем же id → обновляем, не дублируем.
+            // Старт тоже сдвигается на финальный: ранняя карточка приходит в начале стрима
+            // аргументов, а выполняться инструмент начнёт только после него
+            // Фактический старт уже пришёл — его не трогаем: финальный tool_use бывает и позже него
             if (_pendingTools.TryGetValue(id, out var existing))
             {
                 existing.Input = input;
+                if (startedAt is not null && existing.Started != true) existing.StartedAt = startedAt;
                 return;
             }
-            var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId };
+            var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId, StartedAt = startedAt };
+            // Старт MCP-вызова обогнал саму карточку (OnExternalToolStarted)
+            if (_unannouncedStarts.TryGetValue(id, out var early))
+            {
+                msg.StartedAt = early;
+                msg.Started = true;
+            }
             _pendingTools[id] = msg;
             _currentTurn.Add(msg);
         }
@@ -164,27 +174,114 @@ internal class TurnAccumulator
         }
     }
 
-    public void OnToolResult(string toolUseId, string content, bool isError)
+    public void OnToolResult(string toolUseId, string content, bool isError, long? finishedAt = null)
     {
         lock (_lock)
         {
-            if (_pendingTools.TryGetValue(toolUseId, out var msg))
+            if (FindTool(toolUseId) is { } msg)
             {
                 msg.Result = content;
                 msg.IsError = isError;
-                return;
+                msg.FinishedAt = finishedAt;
             }
-            // Инструмент завершился после конца хода (дочерний вызов доживающего фонового
-            // агента) — его tool_use уже уплыл в _history: дописываем результат туда,
-            // иначе после перезагрузки карточка крутила бы спиннер вечно
-            for (var i = _history.Count - 1; i >= 0; i--)
-                if (_history[i] is StoredToolUseMessage h && h.Id == toolUseId)
-                {
-                    h.Result = content;
-                    h.IsError = isError;
-                    return;
-                }
         }
+    }
+
+    // Фактический старт выполнения (task_started CLI) — сдвигает отсчёт таймера карточки.
+    // Результат уже есть — старт опоздал (гонка событий), длительность не трогаем
+    public void OnToolStarted(string toolUseId, long startedAt)
+    {
+        lock (_lock)
+        {
+            if (FindTool(toolUseId) is { Result: null } msg)
+            {
+                msg.StartedAt = startedAt;
+                msg.Started = true;
+            }
+        }
+    }
+
+    // Фактический старт, пришедший мимо пампа CLI: MCP-инструмент с прогрессом (run_tests,
+    // build, start_stand) сообщает о нём сам из HTTP-запроса tools/call, и тот может обогнать
+    // и разбор tool_use из stdout, и его рассылку в ленту — тогда клиент выбросил бы старт
+    // неизвестной карточки и ждал бы его до результата. Поэтому событие уходит сразу, только
+    // если карточка уже в ленте (OnToolAnnounced); иначе старт ждёт её анонса, и SessionManager
+    // шлёт его следом за tool_use. Решение под тем же локом, что и анонс, — окна между ними нет.
+    // true — слать tool_started сейчас; false — отложен либо опоздал (результат уже есть)
+    public bool OnExternalToolStarted(string toolUseId, long startedAt)
+    {
+        lock (_lock)
+        {
+            var msg = FindTool(toolUseId);
+            if (msg is { Result: not null }) return false;
+            if (msg is not null)
+            {
+                msg.StartedAt = startedAt;
+                msg.Started = true;
+                // Карточка прошлого хода (уже в _history) в ленте заведомо есть
+                if (_announcedTools.Contains(toolUseId) || !_pendingTools.ContainsKey(toolUseId)) return true;
+            }
+            // Потолок — от вызовов с id, карточка которых так и не придёт
+            if (_unannouncedStarts.Count < MaxUnannouncedStarts) _unannouncedStarts[toolUseId] = startedAt;
+            return false;
+        }
+    }
+
+    // tool_use ушёл в ленту. Возвращает отложенный старт, который теперь можно слать следом
+    public long? OnToolAnnounced(string toolUseId)
+    {
+        lock (_lock)
+        {
+            _announcedTools.Add(toolUseId);
+            return _unannouncedStarts.Remove(toolUseId, out var startedAt) ? startedAt : null;
+        }
+    }
+
+    private const int MaxUnannouncedStarts = 64;
+    // Карточки хода, уже ушедшие в ленту, и старты, ждущие анонса своей карточки
+    private readonly HashSet<string> _announcedTools = [];
+    private readonly Dictionary<string, long> _unannouncedStarts = [];
+
+    // Этапы и итоговые счётчики долгого инструмента (run_tests): снимок целиком заменяет
+    // прежний (правило — ApplyToolStages). Ищется и в _history: прогон, оборванный вместе с
+    // ходом, дописывает этапы уже после конца хода.
+    // false — вызова нет (чужой toolUseId, потерянный tool_use)
+    public bool OnToolStages(string toolUseId, IReadOnlyList<ToolStage> stages, ToolRunTotals? totals)
+    {
+        lock (_lock)
+        {
+            if (FindTool(toolUseId) is not { } msg) return false;
+            ApplyToolStages(msg, stages, totals);
+            return true;
+        }
+    }
+
+    // Слияние снимка этапов в карточку вызова — общее для аккумулятора и правки истории на
+    // диске. Финальный снимок (итог есть либо последний этап закрыт) не перетирается поздним
+    // живым: события уходят fire-and-forget и могут обогнать друг друга, а живой снимок
+    // вернул бы «✓ сборка» вместо «✕ сборка». Итог, однажды записанный, не стирается
+    internal static void ApplyToolStages(StoredToolUseMessage msg, IReadOnlyList<ToolStage> stages, ToolRunTotals? totals)
+    {
+        if (IsFinalStages(msg.Stages, msg.Totals) && !IsFinalStages(stages, totals)) return;
+        msg.Stages = [.. stages];
+        if (totals is not null) msg.Totals = totals;
+    }
+
+    // Живой снимок всегда держит последний этап открытым (Advance закрывает прежний и
+    // открывает следующий); закрывает его только конец прогона
+    private static bool IsFinalStages(IReadOnlyList<ToolStage>? stages, ToolRunTotals? totals) =>
+        totals is not null || stages is [.., { EndedAt: not null }];
+
+    // Вызывать только под _lock. Сначала текущий ход; инструмент, завершившийся после конца
+    // хода (дочерний вызов доживающего фонового агента), уже уплыл в _history — ищем там,
+    // иначе после перезагрузки карточка крутила бы спиннер вечно
+    private StoredToolUseMessage? FindTool(string toolUseId)
+    {
+        if (_pendingTools.TryGetValue(toolUseId, out var msg)) return msg;
+        for (var i = _history.Count - 1; i >= 0; i--)
+            if (_history[i] is StoredToolUseMessage h && h.Id == toolUseId)
+                return h;
+        return null;
     }
 
     // Завершение фоновых агентов (bg_agent_done): помечаем их tool_use — единственный
@@ -699,6 +796,8 @@ internal class TurnAccumulator
             // где ход обрывается мимо него (страховка от переезда строки в следующий ход)
             _outOfTurn.Clear();
             _pendingTools.Clear();
+            _announcedTools.Clear();
+            _unannouncedStarts.Clear();
             _pendingQuestions.Clear();
             _pendingPlans.Clear();
             _teamRawText.Clear();

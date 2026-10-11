@@ -70,6 +70,9 @@ async function reloadHistory(sid: string, projectId?: string) {
       const patched = resolveCardsFromHistory(items, prev.items);
       return patched ? { ...prev, items: patched } : prev;
     });
+    // Фоновая перезагрузка кладёт сессию в стор: если холодных стало больше потолка,
+    // выселяем старейшие (иначе куча растёт на каждый фоновый ход)
+    evictColdSessions();
   } catch { /* история недоступна — не блокируем */ }
 }
 
@@ -250,10 +253,13 @@ function ensureHandler() {
         setState(sid, prev => ({ ...prev, isWaiting: false }));
       }
     }
-    // Переподключаем project-группы (для real-time статусов)
+    // Переподключаем project-группы (для real-time статусов) — но только проектов,
+    // где есть ОТКРЫТЫЙ (смотримый) чат. Ушедший проект (все его сессии холодные,
+    // зритель ушёл) группу не держит: иначе реконнект перевступал бы во все проекты,
+    // в которых когда-либо был чат, и куча групп росла без ограничения
     const projectIds = new Set<string>();
-    for (const [, s] of _store) {
-      if (s.projectId) projectIds.add(s.projectId);
+    for (const [sid, s] of _store) {
+      if (s.projectId && isWatched(sid)) projectIds.add(s.projectId);
     }
     for (const pid of projectIds) {
       // Осознанно: неудача переподключения project-группы не критична — догонится следующим join
@@ -313,7 +319,7 @@ function ensureHandler() {
     if (msg.type === 'exited' && (_sending.has(sid) || _preempted.has(sid))) {
       const s = getState(sid);
       if (s.isWaiting && !turnAlreadyEnded(s.items))
-        touch(sid, { ...s, items: [...s.items, { kind: 'interrupted' }] });
+        touch(sid, { ...s, items: [...s.items, { kind: 'interrupted', ts: Date.now() }] });
     }
     // Ход, который прерывали, закончился — флаг отработал. Гасим и на result: если перебой
     // не состоялся (409, гонка), ход дошёл до конца сам, и держать флаг дальше нельзя —
@@ -333,11 +339,13 @@ function ensureHandler() {
     if (msg.type === 'recall_manifest') setRecallManifest(sid, msg.items);
 
     // Побочный эффект вне редьюсера: при переходе в active перезагружаем историю —
-    // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
+    // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе.
+    // Только для сессий СО ЗРИТЕЛЯМИ: фоновый чат без открытой вкладки не должен
+    // грузить мегабайты истории в кучу (OOM) — пропущенные дельты ему не нужны
     if (msg.type === 'status_changed') {
       // Флаг сверяем ДО применения редьюсера — prev держит клиентское состояние
       noteReconcileResult(sid, prev.isWaiting, msg.status);
-      if (msg.status === 'active') reloadHistory(sid, getState(sid).projectId);
+      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId);
     }
   });
 
@@ -436,6 +444,9 @@ export function warmSession(sid: string, projectId?: string, isGroup?: boolean) 
         return { ...prev, items, isHistoryLoading: false };
       });
       _warmed.add(sid);
+      // Прогрев кладёт сессию в стор: если холодных стало больше потолка, выселяем
+      // старейшие (иначе наведение по списку копит кучу без ограничения)
+      evictColdSessions();
     })
     .catch(() => { /* прогрев необязателен — откроется штатно, со спиннером */ })
     .finally(() => _warming.delete(sid));
@@ -535,7 +546,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     setState(sessionId, prev => {
       if (turnAlreadyEnded(prev.items)) return prev;
       added = true;
-      return { ...prev, items: [...prev.items, { kind: 'interrupted' }] };
+      return { ...prev, items: [...prev.items, { kind: 'interrupted', ts: Date.now() }] };
     });
     try { await api.sessions.preemptForPending(sessionId); }
     catch (e) {
@@ -593,7 +604,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
         _preempted.add(sessionId);
         setState(sessionId, prev => turnAlreadyEnded(prev.items)
           ? prev
-          : { ...prev, items: [...prev.items, { kind: 'interrupted' }] });
+          : { ...prev, items: [...prev.items, { kind: 'interrupted', ts: Date.now() }] });
       }
     } catch (err) {
       // JoinSession мог упасть потому, что чат удалён на сервере или у нас нет к нему
@@ -709,6 +720,8 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     if (!sessionId) return;
     interruptSession(sessionId);
     // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна.
+    // Время пометки — момент обрыва для «прервано · M:SS» (toolLiveness.abortedAt): без него
+    // длительность держалась бы только в состоянии карточки и терялась при перемонтировании
     // Закончившийся ход не помечаем: сервер пишет ту же отметку в историю только на идущем
     // ходу, и лишний персистентный элемент в ленте навсегда перевесил бы историю при сверке
     setState(sessionId, prev => ({
@@ -717,7 +730,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       promptSuggestion: null,
       items: turnAlreadyEnded(prev.items)
         ? prev.items
-        : [...prev.items, { kind: 'interrupted' }],
+        : [...prev.items, { kind: 'interrupted', ts: Date.now() }],
     }));
   }, [sessionId]);
 

@@ -25,6 +25,9 @@ interface ModalProps {
   // шторки и скругления, с safe-area сверху и снизу; на десктопе — карточка во весь
   // вьюпорт с отступом. width при этом игнорируется.
   size?: 'default' | 'fullscreen';
+  // Длинное имя/путь в заголовке (моноширинный, без пробелов) рвём в произвольном месте:
+  // по умолчанию выключено, чтобы не задеть все модалки (FileExplorer, EditorModal и др.).
+  wrapTitle?: boolean;
 }
 
 // Единое модальное окно.
@@ -36,9 +39,12 @@ interface ModalProps {
 // могут спрятать встроенный через hideCloseButton.
 export function Modal({
   width = 440, title, subtitle, footer, onClose,
-  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle, size = 'default',
+  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle, size = 'default', wrapTitle = false,
 }: ModalProps) {
   const isMobile = useIsMobileModal();
+  // Только при wrapTitle: рвём длинный заголовок/подзаголовок в произвольном месте.
+  // По умолчанию {} — стили шапки остаются как в master, без overflow-wrap.
+  const wrapStyle: CSSProperties = wrapTitle ? { overflowWrap: 'anywhere' } : {};
 
   useEffect(() => {
     // preventDefault — сигнал нижележащим слоям (оверлей «Стены» и любой будущий),
@@ -80,13 +86,13 @@ export function Modal({
       {title && (
         <h2 style={{
           fontFamily: FONT.serif, fontWeight: 500, fontSize: isMobile ? 21 : 22, margin: 0,
-          color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25,
+          color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, ...wrapStyle,
         }}>
           {title}
         </h2>
       )}
       {subtitle && (
-        <div style={{ fontSize: 13.5, lineHeight: 1.5, color: C.textSecondary }}>
+        <div style={{ fontSize: 13.5, lineHeight: 1.5, color: C.textSecondary, ...wrapStyle }}>
           {subtitle}
         </div>
       )}

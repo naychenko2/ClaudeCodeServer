@@ -73,6 +73,12 @@ public sealed record PromptSessionContext(
     // MCP-сервер редактора картинок (image_new/image_generate) доехал до хода: без него
     // TrimMcpServers или выключенный модуль оставляют ход без этих инструментов
     bool HasImageEditorMcp = false,
+    // MCP-сервер прогона тестов (run_tests) доехал до хода: в нём учтены подсистема, чат
+    // проекта на сервере и персона, которой не запрещён Bash; TrimMcpServers — тоже
+    bool HasTestsMcp = false,
+    // MCP-сервер сборки (dev: build) доехал до хода: гейты те же, что у tests, а
+    // TrimMcpServers гасит его отдельно (Keep("dev"))
+    bool HasDevMcp = false,
     // MCP-сервер модуля «Звук» (audio_*) доехал до хода — по той же причине, что у картинок
     bool HasAudioEditorMcp = false,
     // MCP-сервер модуля «Видео» (video_*) доехал до хода — по той же причине

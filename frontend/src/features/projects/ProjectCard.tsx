@@ -12,6 +12,8 @@ interface Props {
   index: number;
   online: boolean;
   hasActiveSession?: boolean;
+  // Последняя активность (свежее из проекта и его чатов); нет — берём updatedAt проекта
+  activityAt?: string;
   onOpen: (p: Project) => void;
   onMove: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
@@ -20,11 +22,11 @@ interface Props {
 }
 
 // Мобильная карточка проекта: плитка + имя (+ меню) + путь + подпись «N чатов · дата».
-export function ProjectCard({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
+export function ProjectCard({ project: p, online, hasActiveSession, activityAt, onOpen, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
   const pinned = usePinnedIds().includes(p.id);
 
   const count = p.sessionCount ?? 0;
-  const date = new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const date = new Date(activityAt ?? p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   const openLabel = `${count} ${pluralChats(count)} · ${date}`;
   const path = p.relativePath || p.rootPath;
 

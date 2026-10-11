@@ -6,6 +6,7 @@ import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
+import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
@@ -103,13 +104,16 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Первичная загрузка + поллинг + realtime-обновление статусов через user-группу
   useEffect(() => {
     refresh();
-    const poll = setInterval(refresh, 5000);
+    // Пауза на скрытой вкладке + догон: час фоновых агентов не должен жечь сеть опросом
+    const stop = startVisiblePoll(refresh, 5000);
     if (auth.id) joinUser(auth.id).catch(() => {});
+    // Пачка status_changed/task_changed — один fetch, а не по одному на событие
+    const [refreshThrottled, disposeThrottle] = throttleRefetch(refresh, 1000);
     const off = onMessage(msg => {
-      if (msg.type === 'status_changed') refresh();
+      if (msg.type === 'status_changed') refreshThrottled();
       // Смена статуса задачи меняет признак «Готово» её чата (taskDone в HomeSessionDto).
       // Перечитываем список — иначе фильтр «Готово» обновится только на следующем тике поллинга.
-      if (msg.type === 'task_changed') refresh();
+      if (msg.type === 'task_changed') refreshThrottled();
       // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
       // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
       if (msg.type === 'chat_deleted') {
@@ -145,13 +149,23 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       }
     });
     return () => {
-      clearInterval(poll);
+      stop();
       off();
+      disposeThrottle();
       // Группу user_{id} НЕ покидаем: она сессионная и общая (её держат
       // NotificationToasts и стор задач). Ранний LeaveUser выкидывал всё
       // соединение из группы → task_changed переставал доходить в проектном чате.
     };
   }, [auth.id]);
+
+  // Чат, открытый из памяти (OPEN_CHAT_KEY: вход в раздел пилюлей, диплинком), — в снимок
+  // текущей записи. Без chatId запись обещает список: «назад» на неё закрывал бы чат,
+  // а шторка чатов, открытая из него, теряла выбранный переход вместе с шапкой
+  useEffect(() => {
+    const nav = getNav();
+    if (activeId && nav?.screen === 'chats' && !nav.chatId) navReplace({ ...nav, chatId: activeId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- только на монтировании: дальше снимок пишут сами переходы (selectChat, cc-open-chat, popstate)
+  }, []);
 
   // Back/forward браузера внутри вкладки «Чаты» — синхронизируем активный чат из истории
   useEffect(() => {

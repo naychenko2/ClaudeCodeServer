@@ -1,0 +1,12 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Alpha.Core -> C:\src\alpha\Alpha.Core\bin\Debug\net10.0\Alpha.Core.dll
+C:\src\alpha\Alpha.Data\Class1.cs(8,33): error CS0103: The name 'y' does not exist in the current context [C:\src\alpha\Alpha.Data\Alpha.Data.csproj]
+
+Build FAILED.
+
+C:\src\alpha\Alpha.Data\Class1.cs(8,33): error CS0103: The name 'y' does not exist in the current context [C:\src\alpha\Alpha.Data\Alpha.Data.csproj]
+    0 Warning(s)
+    1 Error(s)
+
+Time Elapsed 00:00:05.83

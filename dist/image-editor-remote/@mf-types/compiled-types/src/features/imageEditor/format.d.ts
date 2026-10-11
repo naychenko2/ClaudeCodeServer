@@ -1,0 +1,25 @@
+import type { ImageEditCatalog, ImageEditEstimate, ImageEditModel, ImageEditOp, ImageEditProvider } from './api';
+export declare const plural: (n: number, one: string, few: string, many: string) => string;
+export declare const variantsWord: (n: number) => string;
+export declare const isFreeUnit: (unit: string) => unit is "free";
+export declare function money(amount: number, unit: string): string;
+export type FreeLoad = Pick<ImageEditEstimate, 'etaSeconds' | 'queueLength'>;
+export declare function etaText(seconds: number): string;
+export declare function freeSum(load?: FreeLoad | null): string;
+export declare function priceSum(amount: number | null | undefined, unit: string, approx: boolean, load?: FreeLoad | null): string;
+export declare function priceText(amount: number | null | undefined, unit: string, approx: boolean, count: number, load?: FreeLoad | null): string;
+export declare const providerHint: (p: ImageEditProvider) => "" | "оплата в долларах" | "оплата в кредитах" | "бесплатно, на своей видеокарте";
+export declare const unavailableMark: (p: ImageEditProvider) => "" | "не отвечает";
+export declare const providerTitle: (p: ImageEditProvider) => string;
+export declare function providerOps(p: ImageEditProvider): ImageEditOp[] | null;
+export declare function pickOp(hasImage: boolean, hasMask: boolean): ImageEditOp;
+export declare const isRemovalPrompt: (prompt: string) => boolean;
+export declare function modelBlockReason(m: ImageEditModel, hasImage: boolean, hasMask: boolean, op?: ImageEditOp): string;
+export type ProviderChoice = 'settings' | string;
+export declare function effectiveProvider(catalog: ImageEditCatalog, choice: ProviderChoice): ImageEditProvider | null;
+export declare function nextVersionName(fileName: string): string;
+export declare const splitPath: (path: string) => {
+    folder: string;
+    name: string;
+};
+export declare const isEditableImage: (path: string) => boolean;

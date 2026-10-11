@@ -225,7 +225,8 @@ export interface ImageEditCharacter {
   createdAt: string;
 }
 
-export interface ImageEditLoras { available: boolean; items: string[] }
+// trained — дата обучения своих LoRA (полное имя → ISO), если бэкенд её отдаёт
+export interface ImageEditLoras { available: boolean; items: string[]; trained?: Record<string, string> }
 
 export interface ImageEditCharacterInput {
   name: string;
@@ -389,7 +390,7 @@ const withToken = (url: string) => {
 function characterForm(input: ImageEditCharacterInput): FormData {
   const form = new FormData();
   form.append('name', input.name);
-  if (input.description) form.append('description', input.description);
+  if (input.description !== undefined) form.append('description', input.description);
   input.removePhotos?.forEach(f => form.append('removePhotos', f));
   input.photos.forEach((b, i) => form.append('photos', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
   if (input.lora === 'remove') form.append('removeLora', 'true');
@@ -435,7 +436,7 @@ export interface LoraVersionDto {
   rejected?: { name: string; reason: LoraRejectReason }[]
   error?: { code: string; message: string }
 }
-export interface LoraVersionsDto { items: LoraVersionDto[]; own: { lora: string } | null; limit: number; used: number }
+export interface LoraVersionsDto { items: LoraVersionDto[]; own: { lora: string; trainedAt?: string | null } | null; limit: number; used: number }
 
 // Занятость видеокарты на уровне инстанса (ADR-026 §7.4); jobId приходит только админу
 export interface LoraActiveDto { busy: boolean; mine: boolean; busyUntil?: string; jobId?: string }

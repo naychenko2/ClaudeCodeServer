@@ -45,11 +45,11 @@ import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
   SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
-  Menu, MenuItem, MenuSep, BackButton, WaitingIndicator,
+  Menu, MenuItem, MenuSep, BackButton, PressableArea, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
-  Chip, ProgressBar,
+  Chip, ProgressBar, LiveDot,
   Tabs, Stepper, ResizeHandle,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
@@ -67,9 +67,11 @@ import type {
 } from '../components/ui';
 
 import { ColorsSection } from './ColorsSection';
+import { ToolProgressSection } from './ToolProgressSection';
 import { AudioPlayerKitSection } from './AudioPlayerKitSection';
 import { GenSharedKitSection } from './GenSharedKitSection';
 import { ContextRowKitSection } from './ContextRowKitSection';
+import { RingPillKitSection } from './RingPillKitSection';
 import { ContextPanelKitSection } from './ContextPanelKitSection';
 import { FormatKitSection } from './FormatKitSection';
 import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
@@ -97,6 +99,9 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
   { color: C.info,         label: 'info'         },
   { color: C.textMuted,    label: 'textMuted'    },
 ];
+
+// Старт инструмента для витрины WaitingIndicator: 52 с до загрузки модуля, дальше тикает
+const SHOWCASE_TOOL_STARTED_AT = Date.now() - 52_000;
 
 // Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
 // (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
@@ -139,6 +144,8 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-panels',     label: 'Панели'             },
   { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
+  { id: 'sec-ring-pill',  label: 'Пилюля «кольца»'    },
+  { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -326,6 +333,17 @@ export function UiKitPage() {
             {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
             <div id="sec-headers" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <HeadersSection />
+            </div>
+
+            {/* Секция «Пилюля «кольца» шапки чата» — все состояния RingPillBadge */}
+            <div id="sec-ring-pill" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <RingPillKitSection />
+            </div>
+
+            {/* Секция «Карточка инструмента: прогресс» — все состояния живой карточки
+                на настоящем ToolUseView (см. ToolProgressSection) */}
+            <div id="sec-tool-progress" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ToolProgressSection />
             </div>
           </div>
 
@@ -546,15 +564,37 @@ function TogglesSection() {
           </div>
         </SubBlock>
 
-        {/* ProgressBar: тонкая полоса 4px на дорожке C.track, тон — роль. estimate —
-            прогноз, а не факт (приглушённая заливка) */}
-        <SubBlock label="ProgressBar — тоны и прогноз (estimate)">
+        {/* ProgressBar: тонкая полоса 4px на дорожке C.track, тон — роль. Факт (настоящие
+            шаги) — сплошная заливка; estimate — прогноз, а не факт (пунктир); indeterminate —
+            сколько осталось, неизвестно (бегущий отрезок); thin — 2px для строки карточки */}
+        <SubBlock label="ProgressBar — тоны, прогноз (estimate), бегущая и тонкая">
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, maxWidth: 320 }}>
             <ProgressBar value={62} />
             <ProgressBar value={40} estimate />
+            <ProgressBar value={0} indeterminate />
+            <ProgressBar value={48} size="thin" />
+            {/* Пара строки карточки: шаги идут сплошной заливкой, оценка — пунктиром */}
+            <ProgressBar value={48} size="thin" estimate />
+            <ProgressBar value={0} size="thin" indeterminate />
+            {/* muted — полоса под карточкой инструмента: факт, оценка и бегущая */}
+            <ProgressBar value={48} size="thin" tone="muted" />
+            <ProgressBar value={48} size="thin" tone="muted" estimate />
+            <ProgressBar value={0} size="thin" tone="muted" indeterminate />
             <ProgressBar value={100} tone="success" />
             <ProgressBar value={75} tone="warning" />
             <ProgressBar value={20} tone="danger" />
+          </div>
+        </SubBlock>
+
+        {/* LiveDot: идёт, а сколько осталось — неизвестно. Ставится на место спиннера вместо
+            бегущей полосы; полоса появляется только с процентом. Карточка инструмента вместо
+            отдельной точки «дышит» своей иконкой тем же классом cc-live-dot */}
+        <SubBlock label="LiveDot — живая точка вместо бегущей полосы">
+          <div data-kit="live-dot" style={{ display: 'flex', alignItems: 'center', gap: SP.md, fontSize: FS.xs, color: C.textMuted }}>
+            <LiveDot />
+            <span>по умолчанию — 6px, accent</span>
+            <LiveDot size={8} color={C.success} />
+            <span>8px, success</span>
           </div>
         </SubBlock>
       </div>
@@ -670,11 +710,42 @@ function OverlaysSection() {
           </BackButton>
         </SubBlock>
 
+        {/* PressableArea: нажимаемая область, внутри которой бывают свои кнопки
+            (зона имени чата в мобильной шапке); feedback — подложка на нажатие/hover
+            и кольцо фокуса */}
+        <SubBlock label="PressableArea — нажимаемая область со своими кнопками внутри (feedback)">
+          <PressableArea
+            feedback onPress={() => {}} aria-label="Нажимаемая область"
+            style={{ display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md }}
+          >
+            <span style={{ fontSize: FS.base, color: C.textPrimary }}>Имя чата</span>
+            <IconButton size="sm" variant="ghost" tone="muted" title="Своя кнопка внутри" onClick={e => e.stopPropagation()}>
+              <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          </PressableArea>
+        </SubBlock>
+
         {/* WaitingIndicator: обычный режим + с hint */}
         <SubBlock label="WaitingIndicator — индикатор ожидания (обычный и с hint)">
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
             <WaitingIndicator />
             <WaitingIndicator hint="Читаю файлы проекта…" />
+          </div>
+        </SubBlock>
+
+        {/* WaitingIndicator с идущим инструментом: русская подпись вместо глагола и время.
+            Старт — за 52 с до загрузки витрины, отсчёт идёт дальше; второй вариант — Bash до
+            фактического старта (подпись без времени) */}
+        <SubBlock label="WaitingIndicator — идёт инструмент (с временем и до фактического старта)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+            <WaitingIndicator activeToolLabel="Синхронизирую транскрипты в sub-claude" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
+            {/* Прогон тестов: машинка по кругу «подпись → счётчик этапа», иконка операции, время слева */}
+            <WaitingIndicator activeToolLabel="Тесты · dotnet" activeToolDetail="412 из 7951 · упало 2" activeToolOperation="tests" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
+            <WaitingIndicator activeToolLabel="Собираю бэкенд и прогоняю тесты" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} activeToolTimer={false} />
+            {/* Длинная подпись в узкой колонке: режется многоточием, время не сжимается */}
+            <div style={{ width: 240, border: `1px dashed ${C.border}` }}>
+              <WaitingIndicator activeToolLabel="Синхронизирую транскрипты всех профилей CLI и пересобираю индекс поиска" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
+            </div>
           </div>
         </SubBlock>
 

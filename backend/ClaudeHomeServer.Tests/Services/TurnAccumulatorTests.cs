@@ -332,6 +332,188 @@ public class TurnAccumulatorTests : IDisposable
         tool.IsError.Should().BeTrue();
     }
 
+    // Таймер карточки инструмента: старт и конец живут в истории, иначе после F5 отсчёт
+    // начинался бы заново. Ранняя карточка из стрима сдвигается финальным tool_use, а
+    // фактический старт (task_started) — ещё дальше, но только пока результата нет
+    [Fact]
+    public void ToolTiming_СтартСдвигаетсяФинальнымToolUseИTaskStarted_КонецПишетсяРезультатом()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "Bash", new { }, startedAt: 1_000);
+        acc.OnToolUse("t1", "Bash", new { command = "sleep 20" }, startedAt: 2_000);
+        acc.OnToolStarted("t1", 5_000);
+        acc.OnToolResult("t1", "ok", false, finishedAt: 25_000);
+        acc.OnToolStarted("t1", 30_000); // опоздавший старт после результата не портит длительность
+
+        var tool = acc.GetAll().OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(5_000);
+        tool.FinishedAt.Should().Be(25_000);
+        tool.Started.Should().BeTrue();
+    }
+
+    // Старт MCP-инструмента с прогрессом (run_tests/build/start_stand) приходит из его
+    // tools/call мимо пампа CLI: карточка уже в ленте — событие уходит сразу, метка — в историю
+    [Fact]
+    public void ExternalStart_КарточкаВЛенте_СлатьСразу_МеткаВИстории()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolAnnounced("t1").Should().BeNull();
+
+        acc.OnExternalToolStarted("t1", 7_000).Should().BeTrue();
+
+        var tool = acc.GetAll().OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(7_000);
+        tool.Started.Should().BeTrue();
+    }
+
+    // Вызов обогнал и разбор tool_use, и его рассылку: старт ждёт анонса карточки и уходит
+    // следом за ней, а запоздавший финальный tool_use фактический старт не перетирает
+    [Fact]
+    public void ExternalStart_ОбогналКарточку_ЖдётАнонса_ФинальныйToolUseНеПеретирает()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnExternalToolStarted("t1", 7_000).Should().BeFalse();
+        acc.OnToolUse("t1", "mcp__dev__build", new { }, startedAt: 8_000);
+        acc.OnToolUse("t1", "mcp__dev__build", new { target = "x" }, startedAt: 9_000);
+
+        var tool = acc.GetAll().OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(7_000);
+        tool.Started.Should().BeTrue();
+        acc.OnToolAnnounced("t1").Should().Be(7_000);
+        acc.OnToolAnnounced("t1").Should().BeNull(); // отложенный старт уходит один раз
+    }
+
+    // Карточка разобрана, но в ленту ещё не ушла: событие сейчас клиент выбросил бы
+    [Fact]
+    public void ExternalStart_КарточкаНеАнонсирована_ОткладываетсяДоАнонса()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__dev__start_stand", new { }, startedAt: 1_000);
+
+        acc.OnExternalToolStarted("t1", 4_000).Should().BeFalse();
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().Started.Should().BeTrue();
+        acc.OnToolAnnounced("t1").Should().Be(4_000);
+    }
+
+    // Старт после результата — опоздал: ни события, ни правки длительности
+    [Fact]
+    public void ExternalStart_ПослеРезультата_Игнорируется()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolAnnounced("t1");
+        acc.OnToolResult("t1", "ok", false, finishedAt: 5_000);
+
+        acc.OnExternalToolStarted("t1", 9_000).Should().BeFalse();
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().StartedAt.Should().Be(1_000);
+        acc.OnToolAnnounced("t1").Should().BeNull();
+    }
+
+    // Без фактического старта признака нет: карточка Bash после F5 не покажет «идёт»,
+    // пока длится ожидание разрешения
+    [Fact]
+    public void ToolTiming_БезTaskStarted_ПризнакаСтартаНет()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "Bash", new { }, startedAt: 1_000);
+
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().Started.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ToolTiming_ПереживаетСохранениеИстории()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("t1", "Bash", new { }, startedAt: 1_000);
+        acc.OnToolResult("t1", "ok", false, finishedAt: 16_000);
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var tool = (await _histSvc.LoadAsync(sessionId)).OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(1_000);
+        tool.FinishedAt.Should().Be(16_000);
+    }
+
+    // Этапы и итог run_tests живут в истории вызова: строка этапов и «174 из 177 · упало 3»
+    // на закрытой карточке переживают F5 (сохранение и загрузка с диска)
+    [Fact]
+    public async Task ToolStages_ЭтапыИИтог_ПереживаютСохранениеИстории()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolStages("t1", [new ToolStage("build", "сборка", 1_000)], null).Should().BeTrue();
+        acc.OnToolStages("t1",
+        [
+            new ToolStage("build", "сборка", 1_000, 103_000),
+            new ToolStage("running", "тесты", 103_000, 135_000),
+        ], new ToolRunTotals(174, 3, 177));
+        acc.OnToolResult("t1", "итог", false, finishedAt: 135_500);
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var tool = (await _histSvc.LoadAsync(sessionId)).OfType<StoredToolUseMessage>().Single();
+        tool.Stages.Should().Equal(
+            new ToolStage("build", "сборка", 1_000, 103_000),
+            new ToolStage("running", "тесты", 103_000, 135_000));
+        tool.Totals.Should().Be(new ToolRunTotals(174, 3, 177));
+    }
+
+    // Живые снимки уходят fire-and-forget и могут опоздать: снимок без итога после итогового
+    // не стирает ни счётчики, ни закрытые этапы. Без этапов поля в истории нет вовсе
+    [Fact]
+    public void ToolStages_ОпоздавшийСнимокБезИтога_НеПеретираетИтог()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { });
+        acc.OnToolUse("t2", "Bash", new { });
+        var final = new ToolStage("running", "тесты", 1_000, 5_000);
+        acc.OnToolStages("t1", [final], new ToolRunTotals(5, 0, 5));
+        acc.OnToolStages("t1", [new ToolStage("running", "тесты", 1_000)], null);
+
+        var tools = acc.GetAll().OfType<StoredToolUseMessage>().ToList();
+        tools[0].Stages.Should().Equal(final);
+        tools[0].Totals.Should().Be(new ToolRunTotals(5, 0, 5));
+        tools[1].Stages.Should().BeNull();
+        acc.OnToolStages("нет-такого", [final], null).Should().BeFalse();
+    }
+
+    // Прогон оборван на сборке: итога нет, но последний этап закрыт неудачей — снимок
+    // финальный. Опоздавший живой снимок (этап ещё открыт) не возвращает «✓ сборка»
+    [Fact]
+    public void ToolStages_ОпоздавшийЖивойСнимок_НеПеретираетФиналБезИтога()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { });
+        var failed = new ToolStage("build", "сборка", 1_000, 70_000, Failed: true);
+        acc.OnToolStages("t1", [failed], null);
+        acc.OnToolStages("t1", [new ToolStage("build", "сборка", 1_000)], null);
+
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().Stages.Should().Equal(failed);
+    }
+
+    // Регресс QA (F5 посреди выполнения): у идущего инструмента в истории лежало
+    // "result": null, и лента принимала null за результат — «готово» без времени.
+    // Незавершённый вызов пишется в историю вовсе без поля result и без пустого конца
+    [Fact]
+    public async Task ToolTiming_ИдущийИнструмент_ВИсторииНетNullПолейResultИFinishedAt()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("t1", "Bash", new { command = "sleep 20" }, startedAt: 1_000);
+        await acc.SaveSnapshotAsync(_histSvc);
+
+        var file = Directory.GetFiles(_tempDir, "history.json", SearchOption.AllDirectories).Single();
+        var json = await File.ReadAllTextAsync(file);
+        json.Should().Contain("\"startedAt\":1000");
+        json.Should().NotContain("\"result\"");
+        json.Should().NotContain("\"finishedAt\"");
+
+        var tool = (await _histSvc.LoadAsync(sessionId)).OfType<StoredToolUseMessage>().Single();
+        tool.Result.Should().BeNull();
+        tool.StartedAt.Should().Be(1_000);
+    }
+
     [Fact]
     public void OnFileChanged_AddsFileChangedMessage()
     {

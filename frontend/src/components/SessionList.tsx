@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, Layers, Sparkles } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
@@ -721,20 +721,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       && g.items.some(c => new Date(c.updatedAt).getTime() < sweepSince);
     return (
       <div key={key} className={flashSubject === key ? LIST_FLASH_CLASS : undefined} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
-        {!g.subject && registryEmpty && online && (
-          <EmptyState
-            compact
-            icon={<Layers size={20} strokeWidth={2} />}
-            title="Тем пока нет"
-            subtitle="AI разложит новые чаты сам, когда в них будет пара ходов. Старые — кнопкой."
-            action={subjectRun.running ? undefined : (
-              <Button variant="ghost" size="sm" loading={subjectRun.starting} onClick={startRun}
-                leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
-                Разложить сейчас
-              </Button>
-            )}
-          />
-        )}
         <SubjectSectionHeader
           subject={g.subject}
           // Счётчик — видимые строки секции: в дереве это корни, в плоском списке —
@@ -744,7 +730,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           isMobile={isMobile}
           online={online}
           run={subjectRun}
-          hideRunButton={registryEmpty}
           onRename={setRenameSubject}
           onMove={doMoveSubject}
           onDelete={setDeleteSubject}

@@ -220,15 +220,13 @@ export function SubjectDeleteDialog({ subject, chats, onConfirm, onClose }: {
 
 // === Заголовок секции темы: имя, ✦ у темы AI, счётчик, ⋮ (реестровые темы, онлайн) или
 // кнопка «Разложить» у хвоста «Без темы» ===
-export function SubjectSectionHeader({ subject, count, registry, isMobile, online, run, hideRunButton, onRename, onMove, onDelete, onRun }: {
+export function SubjectSectionHeader({ subject, count, registry, isMobile, online, run, onRename, onMove, onDelete, onRun }: {
   subject: ProjectSubject | null;
   count: number;
   registry: ProjectSubject[];
   isMobile: boolean;
   online: boolean;
   run: SubjectRunView;
-  // Кнопку «Разложить» уже показывает пустое состояние реестра — не дублируем
-  hideRunButton?: boolean;
   onRename: (s: ProjectSubject) => void;
   onMove: (s: ProjectSubject, dir: -1 | 1) => void;
   onDelete: (s: ProjectSubject) => void;
@@ -246,7 +244,7 @@ export function SubjectSectionHeader({ subject, count, registry, isMobile, onlin
         <MoreHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
     );
-  } else if (!subject && online && !hideRunButton && !run.running) {
+  } else if (!subject && online && !run.running) {
     actions = (
       <Button variant="ghost" size={isMobile ? 'sm' : 'xs'} loading={run.starting} onClick={onRun}
         leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}

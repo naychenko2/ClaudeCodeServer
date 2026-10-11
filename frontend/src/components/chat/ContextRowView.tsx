@@ -519,6 +519,11 @@ export function ContextRowView(props: ContextRowViewProps) {
   const rungs = !props.pick && !isMobile ? ladderRungs(facts) : [];
   const last = rungs.length - 1;
   const at = Math.min(last, Math.max(0, base.index - shift));
+  // Гоняем лестницу только при смене сигнатуры (содержимое/ширина/ступень) и пока
+  // идём по ступеням (shift меняется): чтение scrollWidth/clientWidth — синхронный
+  // reflow, и на каждый text_delta (sig и shift стабильны) он не должен просыпаться.
+  // Реальная смена ширины контейнера уже в sig: width приходит из ResizeObserver
+  // (useContainerWidth), поэтому отдельного наблюдателя здесь не нужно.
   useLayoutEffect(() => {
     const el = rowRef.current;
     if (!el || !rungs.length) return;
@@ -532,7 +537,8 @@ export function ContextRowView(props: ContextRowViewProps) {
     } else if (!trial.current.locked && at > 0) {
       setShift(shift + 1);
     }
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- см. комментарий: deps осознанно сужены
+  }, [sig, shift, last]);
   useEffect(() => {
     if (needsChoice && !wasNeeding.current) {
       const el = rowRef.current?.querySelector('[data-chip="format"]');
@@ -540,7 +546,9 @@ export function ContextRowView(props: ContextRowViewProps) {
     }
     wasNeeding.current = needsChoice;
   }, [needsChoice]);
-  // Строка «Подключено» на телефоне переполнилась — ещё один референс в «+N ›»
+  // Строка «Подключено» на телефоне переполнилась — ещё один референс в «+N ›».
+  // Как и лестница: reflow-чтение только при смене sig и пока drop меняется,
+  // на text_delta (sig/drop стабильны) не просыпаемся.
   const lineSig = useRef('');
   useLayoutEffect(() => {
     const el = refsLineRef.current;
@@ -550,7 +558,8 @@ export function ContextRowView(props: ContextRowViewProps) {
       if (drop !== 0) { setDrop(0); return; }
     }
     if (el && el.scrollWidth > el.clientWidth + 1 && drop < refs.length) setDrop(drop + 1);
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps осознанно сужены (см. лестницу выше)
+  }, [sig, drop, isMobile, props.pick]);
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
     // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться

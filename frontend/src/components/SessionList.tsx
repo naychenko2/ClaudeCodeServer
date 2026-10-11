@@ -21,6 +21,7 @@ import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, useTreeCollapse, withAncestors } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
+import { startVisiblePoll } from '../lib/visiblePoll';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
@@ -74,10 +75,23 @@ const ARCHIVE_PAGE = 40;
 
 // Опрос и рефетч после переподключения отдают весь список заново, обычно без изменений.
 // Новый массив перерисовал бы панель целиком — оставляем прежний, если по содержимому совпало.
+// Сравниваем не JSON.stringify (тяжёлый: сериализует весь объект, включая teamImplement/workLoop),
+// а отпечаток полей, которые реально рисует карточка (ChatCard): имя, статус, превью, теги,
+// срок, закрепление, персона, группа, тема, досье, мьют, unread, архив, происхождение.
+// Порядок — позиционно: сменился порядок в списке, это уже новое состояние, а не «то же».
+const sessionFingerprint = (s: Session): string => [
+  s.id, s.updatedAt, s.status, s.archivedAt ?? '', s.name ?? '',
+  s.personaId ?? '', (s.participants ?? []).join(','), s.topic ?? '',
+  s.teamImplement ? `${s.teamImplement.stage}:${s.teamImplement.waveNumber}` : '',
+  s.expiresAfterMinutes ?? '', s.isPinned ? '1' : '', s.lastMessage ?? '',
+  s.lastReadAt ?? '', s.projectId ?? '', s.excludeFromDossiers ? '1' : '',
+  s.notificationsMuted ? '1' : '', (s.tags ?? []).join(','), s.taskId ?? '', s.origin,
+].join('|');
+
 function keepIfSame(prev: Session[], next: Session[]): Session[] {
   if (prev.length !== next.length) return next;
   for (let i = 0; i < next.length; i++) {
-    if (JSON.stringify(prev[i]) !== JSON.stringify(next[i])) return next;
+    if (sessionFingerprint(prev[i]) !== sessionFingerprint(next[i])) return next;
   }
   return prev;
 }
@@ -260,18 +274,21 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     };
 
     init();
-    const interval = setInterval(() => {
+    // Пауза на скрытой вкладке + догон при возврате: час фоновых агентов не должен
+    // жечь CPU/сеть опросом списка (см. lib/visiblePoll)
+    const stop = startVisiblePoll(() => {
       api.sessions.list(project.id).then(list => setSessions(prev => keepIfSame(prev, list))).catch(() => {});
     }, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; stop(); };
   }, [project.id]);
 
   // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.
   useEffect(() => {
     let mounted = true;
 
-    // Переподключение — рефетчим статусы (могли пропустить status_changed)
-    onReconnected(() => {
+    // Переподключение — рефетчим статусы (могли пропустить status_changed).
+    // Отписку храним и зовём в cleanup: иначе колбэк живёт после unmount (утечка)
+    const offReconnected = onReconnected(() => {
       if (!mounted) return;
       api.sessions.list(project.id).then(list => {
         if (mounted) setSessions(prev => keepIfSame(prev, list));
@@ -358,6 +375,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     return () => {
       mounted = false;
       unsub();
+      offReconnected();
     };
   }, [project.id]);
 

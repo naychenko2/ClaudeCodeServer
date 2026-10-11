@@ -6,6 +6,7 @@ import { hasUnread, subscribeReadState } from './chatReadState';
 import { loadChatFilters, matchChatFilter } from './chatFilters';
 import { onMessage, onReconnected } from './signalr';
 import { bgWorkPresenceSnapshot, subscribeAgentsPresence } from './agentsPresence';
+import { startVisiblePoll, throttleRefetch } from './visiblePoll';
 
 // Стор активности проектов для переключателя в сайдбаре (флаг sidebar-project-switcher):
 // агрегат «в каком проекте агент работает / ждет ответа» по live-сессиям всех проектов.
@@ -74,8 +75,9 @@ let _chatAgg = new Map<string, ActivityStatus>();
 let _chatFingerprint = '';
 const _listeners = new Set<() => void>();
 
-let _timer: ReturnType<typeof setInterval> | null = null;
+let _timer: (() => void) | null = null;
 let _offMessage: (() => void) | null = null;
+let _offThrottle: (() => void) | null = null;
 let _offReconnected: (() => void) | null = null;
 let _offReadState: (() => void) | null = null;
 let _offPresence: (() => void) | null = null;
@@ -227,9 +229,13 @@ function fetchNow() {
 function start() {
   if (_timer) return;
   fetchNow();
-  _timer = setInterval(fetchNow, POLL_MS);
+  // Пауза на скрытой вкладке + догон: страховочный поллинг не должен жечь сеть в фоне
+  _timer = startVisiblePoll(fetchNow, POLL_MS);
+  // Пачка status_changed/chat_deleted — один fetch, а не по одному на событие
+  const [fetchThrottled, disposeThrottle] = throttleRefetch(fetchNow, 1000);
+  _offThrottle = disposeThrottle;
   _offMessage = onMessage(msg => {
-    if (msg.type === 'status_changed' || msg.type === 'chat_deleted') fetchNow();
+    if (msg.type === 'status_changed' || msg.type === 'chat_deleted') fetchThrottled();
   });
   _offReconnected = onReconnected(fetchNow);
   // Чат отметили прочитанным — точка обязана погаснуть сразу, без ожидания
@@ -242,8 +248,9 @@ function start() {
 }
 
 function stop() {
-  if (_timer) { clearInterval(_timer); _timer = null; }
+  if (_timer) { _timer(); _timer = null; }
   _offMessage?.(); _offMessage = null;
+  _offThrottle?.(); _offThrottle = null;
   _offReconnected?.(); _offReconnected = null;
   _offReadState?.(); _offReadState = null;
   _offPresence?.(); _offPresence = null;

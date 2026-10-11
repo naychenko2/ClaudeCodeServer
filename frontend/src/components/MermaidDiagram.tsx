@@ -18,6 +18,34 @@ let mermaidSeq = 0;
 const mermaidSvgCache = new Map<string, string>();
 const cacheKey = (code: string) => `${getEffectiveTheme()}\n${code}`;
 
+// Потолок кэша SVG: без него длинная сессия с диаграммами копит отрендеренные SVG
+// без ограничения (каждая уникальная «тема+код» — запись, а промежуточные варианты
+// стрима — мёртвый вес). LRU: при переполнении вытесняем старейшее. Map не даёт
+// move-to-end, поэтому порядок доступа держим отдельно (конец — самое свежее).
+const MAX_MERMAID_CACHE = 40;
+const mermaidCacheOrder: string[] = [];
+
+const cacheSvg = (key: string, svg: string) => {
+  const i = mermaidCacheOrder.indexOf(key);
+  if (i >= 0) mermaidCacheOrder.splice(i, 1);
+  mermaidCacheOrder.push(key);
+  mermaidSvgCache.set(key, svg);
+  while (mermaidSvgCache.size > MAX_MERMAID_CACHE) {
+    const oldest = mermaidCacheOrder.shift();
+    if (oldest === undefined) break;
+    mermaidSvgCache.delete(oldest);
+  }
+};
+
+const getSvg = (key: string): string | undefined => {
+  const v = mermaidSvgCache.get(key);
+  if (v !== undefined) {
+    const i = mermaidCacheOrder.indexOf(key);
+    if (i >= 0) { mermaidCacheOrder.splice(i, 1); mermaidCacheOrder.push(key); }
+  }
+  return v;
+};
+
 // Палитры Mermaid под тему (свет/тьма). Значения — конкретные hex, т.к. mermaid
 // не понимает var(). Держим их в тон дизайн-системе.
 const MERMAID_VARS = {
@@ -213,7 +241,7 @@ function sanitizeMermaid(code: string): string {
 export function MermaidDiagram({ code }: { code: string }) {
   // Ленивая инициализация из кэша — если диаграмма уже рендерилась, показываем её
   // сразу первым кадром (без вспышки кода при ремоунте).
-  const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(cacheKey(code)) ?? null);
+  const [svg, setSvg] = useState<string | null>(() => getSvg(cacheKey(code)) ?? null);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<'diagram' | 'code'>('diagram');
   const [zoom, setZoom] = useState(false);
@@ -224,7 +252,7 @@ export function MermaidDiagram({ code }: { code: string }) {
 
   useEffect(() => {
     // Уже в кэше (для текущей темы) — перерисовывать нечего, берём готовый SVG.
-    const cached = mermaidSvgCache.get(cacheKey(code));
+    const cached = getSvg(cacheKey(code));
     // eslint-disable-next-line react-hooks/set-state-in-effect -- быстрая отдача кэшированного SVG диаграммы
     if (cached) { setSvg(cached); setFailed(false); return; }
     let cancelled = false;
@@ -247,7 +275,7 @@ export function MermaidDiagram({ code }: { code: string }) {
         if (!ok) { setFailed(true); return; }
         const { svg: rendered } = await mermaid.render(`mermaid-svg-${++mermaidSeq}`, src);
         // Кэшируем по «тема + код».
-        if (!cancelled) { mermaidSvgCache.set(cacheKey(code), rendered); setSvg(rendered); setFailed(false); }
+        if (!cancelled) { cacheSvg(cacheKey(code), rendered); setSvg(rendered); setFailed(false); }
       } catch {
         if (!cancelled) setFailed(true);
       }

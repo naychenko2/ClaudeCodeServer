@@ -6,6 +6,9 @@ import type { NotificationItem, NotificationKind, NotificationListResponse, Crea
 // предоставляет список, счётчики и методы для работы с REST API.
 
 // ====== State ======
+// Потолок списка: сервер отдаёт страницу (loadNotifications limit=50), а live-уведомления
+// дописываются в начало без ограничения — длинная сессия копит их в кучу. Режем хвост.
+const MAX_NOTIFICATIONS = 100;
 let items: NotificationItem[] = [];
 let unreadCount = 0;
 let listeners: (() => void)[] = [];
@@ -207,6 +210,7 @@ export function ensureNotificationsSubscribed() {
         createdAt: new Date().toISOString(),
       };
       items = [item, ...items];
+      if (items.length > MAX_NOTIFICATIONS) items = items.slice(0, MAX_NOTIFICATIONS);
       unreadCount++;
       notify();
     }

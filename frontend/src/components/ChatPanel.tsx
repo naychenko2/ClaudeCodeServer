@@ -35,7 +35,7 @@ import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationSt
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
-import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
+import { computeTurnTree, sessionStartedBoundaries, type TurnTree } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
 import { BUILD_TOOL, RUN_TESTS_TOOL, operationOf } from '../lib/toolLabels';
@@ -1455,8 +1455,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
   // Дерево ХОДА (turnWorktree с бэка + EnterWorktree первого хода, см. lib/turnWorktree) —
-  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath
-  const turnTree = useMemo(() => computeTurnTree(items), [items]);
+  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath.
+  // computeTurnTree пересчитывается на каждую дельту (useMemo по items) и возвращает новый
+  // объект {path,name} даже когда содержимое то же — ContextRow (React.memo) перерисовывался
+  // бы на каждый text_delta. Держим стабильную ссылку: path/name не изменились — прежний объект.
+  const turnTreeRef = useRef<TurnTree | null>(null);
+  const turnTree = useMemo(() => {
+    const next = computeTurnTree(items);
+    const prev = turnTreeRef.current;
+    if (prev === next || (prev !== null && next !== null && prev.path === next.path && prev.name === next.name)) {
+      return prev;
+    }
+    turnTreeRef.current = next;
+    return next;
+  }, [items]);
   // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
   // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
   const turnBoundaries = useMemo(() => sessionStartedBoundaries(items), [items]);

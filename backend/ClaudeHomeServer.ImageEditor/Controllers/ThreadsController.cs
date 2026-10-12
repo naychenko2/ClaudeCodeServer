@@ -204,7 +204,12 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
 public class ThreadsController(
     ImageEditScopeGate gate,
     ImageThreadService threads,
-    IImageEditJobs? jobs = null) : ImageThreadEndpoints(threads, jobs)
+    IImageEditJobs? jobs = null,
+    ImageEditSteps? steps = null,
+    IProjectManager? projects = null,
+    ILocalImageMedia? localMedia = null,
+    IFeatureFlagGate? flags = null,
+    Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs)
 {
     [HttpGet]
     public IActionResult Get(string projectId, string sessionId) =>
@@ -258,6 +263,72 @@ public class ThreadsController(
         [FromBody] ImageThreadSettingsRequest req) =>
         Gate(projectId, sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, threadId, req) : denied;
 
+    // «Найти лица на версии» (ADR-027, §4, этап 2): детекция ComfyUI по байтам версии, результат —
+    // список лиц (n с 1, bbox, score, small) + facesKey (детерминирован по байтам, для сверки 7b).
+    // Детекция — не запуск: версию не создаёт, трату не пишет, в ленту не кладёт. Только проектная
+    // область: в личной (PersonalThreadsController) маршрута нет — 404.
+    [HttpPost("{threadId}/versions/{versionId}/faces")]
+    public async Task<IActionResult> Faces(string projectId, string sessionId, string threadId, string versionId,
+        CancellationToken ct)
+    {
+        if (!Gate(projectId, sessionId, out var scope, out var denied)) return denied;
+
+        // Флаг выключен — как у DossiersController: 404, «ручки нет» (фича скрыта)
+        if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "Подстановка персонажа на лицо выключена", code = "feature_disabled" });
+
+        // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
+        // provider_unavailable, не 500
+        if (localMedia is null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Локальные модели не настроены: детекция лиц недоступна", code = "provider_unavailable" });
+
+        var state = threads.Get(UserId, sessionId);
+        if (!threads.OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "Картинка не найдена в этом чате", code = ImageEditErrorCodes.ThreadNotFound });
+        if (thread.Version(versionId) is not { } version)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "Версии нет в этой картинке", code = ImageEditErrorCodes.VersionNotFound });
+
+        // Байты версии: шаг версии, иначе файл проекта (у исходника). Не прочитано — нет картинки
+        var bytes = await VersionBytesAsync(scope, thread, version, ct);
+        if (bytes is null)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "У версии ещё нет изображения", code = ImageEditErrorCodes.VersionNotFound });
+
+        var result = await (faces ?? new ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache())
+            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, ct));
+
+        if (result.Busy)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Видеокарта занята долгой задачей. Попробуйте чуть позже", code = "busy" });
+        if (result.Error is not null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = result.Error, code = "provider_unavailable" });
+
+        return Ok(new ImageThreadFacesResponse(
+            FacesKey: ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache.FacesKey(bytes),
+            result.Width, result.Height,
+            result.Faces.Select(f => new ImageThreadFaceDto(f.N, new[] { f.X1, f.Y1, f.X2, f.Y2 }, f.Score, f.Small)).ToList()));
+    }
+
+    // Картинка версии: её текущий шаг (байты из рабочей папки), у исходника файловой нити — файл
+    // проекта. null — картинки ещё нет (пустой черновик) или файл не прочитан
+    private async Task<byte[]?> VersionBytesAsync(ImageEditScope scope, ImageThread thread,
+        ImageThreadVersion version, CancellationToken ct)
+    {
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(UserId, scope.Key, stepId) is { } found)
+            return found.Image.Bytes;
+        if (thread.File is { Length: > 0 } file && projects?.GetById(scope.Key) is { } project)
+        {
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            return read.Value?.Bytes;
+        }
+        return null;
+    }
+
     private bool Gate(string projectId, string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>
         gate.TryProjectChat(UserId, projectId, sessionId, out scope, out denied);
@@ -285,3 +356,16 @@ public sealed record ImageThreadCropRequest(string? Aspect, string? Anchor = nul
 public sealed record ImageThreadCropResponse(int Width, int Height, string Aspect, string? VersionId, ImageThreadsState State);
 
 public sealed record ImageThreadSettingsRequest(ImageThreadSettings? Settings, long Revision);
+
+// «Найти лица на версии» (ADR-027, §4, этап 2): FacesKey — детерминирован по байтам (для сверки
+// 7b), Width/Height — размер картинки по ответу воркера, Faces — в порядке ответа (n с 1)
+public sealed record ImageThreadFacesResponse(
+    string FacesKey, int Width, int Height, IReadOnlyList<ImageThreadFaceDto> Faces);
+
+// Лицо: N — номер с 1 (слева направо), BBox — [x1, y1, x2, y2] в пикселях, Score — уверенность 0..1,
+// Small — короткая сторона < 64 px. BBox сериализуется как «bbox» (camelCase дал бы «bBox»)
+public sealed record ImageThreadFaceDto(
+    int N,
+    [property: System.Text.Json.Serialization.JsonPropertyName("bbox")] int[] BBox,
+    double Score,
+    bool Small);

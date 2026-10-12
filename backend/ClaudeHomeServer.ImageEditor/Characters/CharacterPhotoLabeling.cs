@@ -21,7 +21,8 @@ public sealed class CharacterPhotoLabeling(
     IImageLabeler? labeler = null,
     IFeatureFlagGate? flags = null,
     ILocalImageMedia? localMedia = null,
-    IImageRaster? raster = null) : BackgroundService
+    IImageRaster? raster = null,
+    TimeProvider? time = null) : BackgroundService
 {
     // Пачка на место за один заход
     public const int BatchSize = 10;
@@ -29,11 +30,16 @@ public sealed class CharacterPhotoLabeling(
     public const int CloudMaxSide = 512;
     // Столько неудач модели подряд по месту фото — и оно получает unknown, чтобы не уходить в облако бесконечно
     public const int MaxFailures = 3;
+    // Пауза перед повтором noroute: пока не прошло, Candidates не берёт noroute-фото персонажа
+    public const int NoRouteCooldownMinutes = 5;
 
     private readonly Channel<Job> _queue = Channel.CreateUnbounded<Job>();
     private readonly HashSet<(string Root, string Slug)> _pending = [];
     // Неудачи Failed по (владелец, корень, slug, файл, место) — только в памяти: после рестарта счёт с нуля
     private readonly Dictionary<(string Owner, string Root, string Slug, string File, string Place), int> _failures = [];
+    // Время последней записи noroute по (владелец, корень, slug) — только в памяти: после рестарта пауза обнуляется
+    private readonly Dictionary<(string Owner, string Root, string Slug), DateTime> _lastNoRouteWriteUtc = [];
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     public sealed record Job(string OwnerId, string Root, string Slug);
 
@@ -72,14 +78,14 @@ public sealed class CharacterPhotoLabeling(
         if (manifest is null) return;
         PruneFailures(job, manifest);
 
-        var angleFiles = Candidates(manifest, p => p.Angle is null);
+        var angleFiles = Candidates(job, manifest, p => p.Angle is null);
         if (angleFiles.Count > 0)
         {
             var result = await LabelAngleAsync(job, angleFiles, ct);
             if (result is not null) await WriteAsync(job, result.Labels, result.Source, ct);
         }
 
-        var emotionFiles = Candidates(manifest, p => p.Emotion is null);
+        var emotionFiles = Candidates(job, manifest, p => p.Emotion is null);
         if (emotionFiles.Count > 0)
         {
             var result = await LabelEmotionAsync(job, emotionFiles, ct);
@@ -88,14 +94,20 @@ public sealed class CharacterPhotoLabeling(
     }
 
     // Размеченное место и human не трогаем; unknown — это «пробовали», он тоже не null.
-    // noroute — «разметить было нечем»: берём снова, чтобы фото размечалось, когда маршрут появится.
+    // noroute — «разметить было нечем»: берём снова, чтобы фото размечалось, когда маршрут появится,
+    // но не чаще раза в NoRouteCooldownMinutes на персонажа — иначе шторм записей при частых поводах.
     // Повторы конечны: Candidates зовут только ленивые поводы, а не маршрут даёт noroute мгновенно, без модели.
-    private static List<string> Candidates(CharacterManifest manifest, Func<CharacterPhoto, bool> needs) =>
-        [.. manifest.Photos
+    private List<string> Candidates(Job job, CharacterManifest manifest, Func<CharacterPhoto, bool> needs)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var inCooldown = _lastNoRouteWriteUtc.TryGetValue((job.OwnerId, job.Root, job.Slug), out var last)
+            && now - last < TimeSpan.FromMinutes(NoRouteCooldownMinutes);
+        return [.. manifest.Photos
             .Where(p => p.LabelSource != PhotoLabelValues.Human
-                && (needs(p) || p.LabelSource == PhotoLabelValues.NoRoute))
+                && (needs(p) || (p.LabelSource == PhotoLabelValues.NoRoute && !inCooldown)))
             .Take(BatchSize)
             .Select(p => p.File)];
+    }
 
     // Итог разметки места: метки по файлам и источник записи (Auto — модель ответила,
     // NoRoute — разметить было нечем). null — писать нечего (временный отказ, до трёх попыток)
@@ -255,6 +267,8 @@ public sealed class CharacterPhotoLabeling(
     }
 
     internal int FailureCount { get { lock (_failures) return _failures.Count; } }
+    // Сколько раз WriteAsync записал noroute — для тестов: пауза должна гасить повторы
+    internal int NoRouteWriteCount { get; private set; }
 
     private void ResetFailures(Job job, string place, List<string> files)
     {
@@ -324,6 +338,11 @@ public sealed class CharacterPhotoLabeling(
     {
         using (await locks.LockCharacterAsync(job.Root, job.Slug, ct))
             CharacterStore.MergeAutoLabels(job.Root, job.Slug, labels, labelSource);
+        if (labelSource == PhotoLabelValues.NoRoute)
+        {
+            _lastNoRouteWriteUtc[(job.OwnerId, job.Root, job.Slug)] = _time.GetUtcNow().UtcDateTime;
+            NoRouteWriteCount++;
+        }
     }
 
     private const string Rules =

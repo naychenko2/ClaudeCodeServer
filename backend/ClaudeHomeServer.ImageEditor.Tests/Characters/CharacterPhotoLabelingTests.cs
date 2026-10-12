@@ -25,8 +25,8 @@ public class CharacterPhotoLabelingTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private CharacterPhotoLabeling Service() =>
-        new(_locks, NullLogger<CharacterPhotoLabeling>.Instance, _labeler, _flags, _media, _raster);
+    private CharacterPhotoLabeling Service(TimeProvider? time = null) =>
+        new(_locks, NullLogger<CharacterPhotoLabeling>.Instance, _labeler, _flags, _media, _raster, time);
 
     private string Root(string name = "p")
     {
@@ -217,7 +217,8 @@ public class CharacterPhotoLabelingTests : IDisposable
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
         var root = Root();
         var m = MakeCharacter(root);
-        var svc = Service();
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
 
         for (var round = 1; round <= 2; round++)
         {
@@ -232,8 +233,9 @@ public class CharacterPhotoLabelingTests : IDisposable
             p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
         _labeler.Calls.Should().Be(6);
 
-        // noroute повторно уходит (маршрут Vision по-прежнему есть, но Failed дошёл до порога):
-        // четвёртый заход — ещё один Failed, счётчик сбрасывался, поэтому вызовов больше
+        // Пауза noroute истекла: noroute повторно уходит (маршрут Vision по-прежнему есть,
+        // Failed дошёл до порога, счётчик сбрасывался) — ещё один Failed, вызовов больше
+        time.Advance(TimeSpan.FromMinutes(CharacterPhotoLabeling.NoRouteCooldownMinutes + 1));
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
         _labeler.Calls.Should().Be(8);
     }
@@ -356,6 +358,7 @@ public class CharacterPhotoLabelingTests : IDisposable
     // Главный сценарий: сначала маршрута нет → фото noroute/unknown; затем маршрут появился
     // (админ назначил модель) и пришёл повод очереди → фото размечены (auto, реальные значения).
     // Повтор запускается на ленивом поводе (здесь — прямой заход ProcessAsync), не по таймеру.
+    // Пауза noroute: между фазами 1 и 2 должно пройти больше NoRouteCooldownMinutes.
     [Fact]
     public async Task Маршрут_появился_после_noroute_фото_размечаются()
     {
@@ -365,12 +368,16 @@ public class CharacterPhotoLabelingTests : IDisposable
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         var root = Root();
         var m = MakeCharacter(root);
-        var svc = Service();
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
 
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
             p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
         var callsAfterNoRoute = _labeler.Calls; // 0: без маршрута модель не вызывается
+
+        // Пауза noroute истекла: фото снова в Candidates
+        time.Advance(TimeSpan.FromMinutes(CharacterPhotoLabeling.NoRouteCooldownMinutes + 1));
 
         // Фаза 2: админ назначил модель — маршрут появился (face-pose для ракурса, vision для эмоции)
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
@@ -394,6 +401,7 @@ public class CharacterPhotoLabelingTests : IDisposable
 
     // ComfyUI лежит → три неудачи → noroute; ComfyUI поднялся и пришёл повод → фото размечаются.
     // В отличие от «модель ответила, но не определила» (auto), noroute «лечится» восстановлением.
+    // Пауза noroute: между фазами должно пройти больше NoRouteCooldownMinutes.
     [Fact]
     public async Task ComfyUI_поднялся_после_noroute_фото_размечаются()
     {
@@ -403,12 +411,16 @@ public class CharacterPhotoLabelingTests : IDisposable
         _media.Available = false; // настроен, но ComfyUI сейчас лежит
         var root = Root();
         var m = MakeCharacter(root);
-        var svc = Service();
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
 
         for (var round = 0; round < CharacterPhotoLabeling.MaxFailures; round++)
             await svc.ProcessAsync(JobOf(root, m.Slug), default);
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
             p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "noroute");
+
+        // Пауза noroute истекла: фото снова в Candidates
+        time.Advance(TimeSpan.FromMinutes(CharacterPhotoLabeling.NoRouteCooldownMinutes + 1));
 
         // ComfyUI поднялся, пришёл повод: noroute-фото снова в Candidates и размечаются.
         // Эмоция тоже через vision (реальный ответ), чтобы её запись не понизила LabelSource до noroute
@@ -452,7 +464,8 @@ public class CharacterPhotoLabelingTests : IDisposable
     }
 
     // human не трогается ни в одном сценарии: через цикл «нет маршрута → маршрут появился»
-    // ручная метка остаётся на месте, авторазметка её не затирает
+    // ручная метка остаётся на месте, авторазметка её не затирает.
+    // Пауза noroute: между фазами должно пройти больше NoRouteCooldownMinutes.
     [Fact]
     public async Task Human_не_трогается_через_noroute_и_появление_маршрута()
     {
@@ -464,7 +477,8 @@ public class CharacterPhotoLabelingTests : IDisposable
         // Ручная метка на первом фото
         CharacterStore.Update(root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
             new Dictionary<string, CharacterPhotoLabels> { [m.Photos[0].File] = new("profile") })).Should().NotBeNull();
-        var svc = Service();
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
 
         // Фаза 1: нет маршрута → остальные фото noroute, human не тронут
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
@@ -473,6 +487,9 @@ public class CharacterPhotoLabelingTests : IDisposable
         first.Angle.Should().Be("profile");
         CharacterStore.Get(root, m.Slug)!.Photos.Where(p => p.LabelSource != "human")
             .Should().OnlyContain(p => p.LabelSource == "noroute");
+
+        // Пауза noroute истекла: фото снова в Candidates
+        time.Advance(TimeSpan.FromMinutes(CharacterPhotoLabeling.NoRouteCooldownMinutes + 1));
 
         // Фаза 2: маршрут появился → human по-прежнему не тронут, остальные размечены
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
@@ -525,6 +542,90 @@ public class CharacterPhotoLabelingTests : IDisposable
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
             p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
         _media.Calls.Should().Be(0);
+    }
+
+    // Пауза noroute: 10 поводов подряд при route=None → запись noroute не больше одного раза.
+    // Первый заход: фото null → берём → noroute. Повторные: noroute в паузе → не берём.
+    [Fact]
+    public async Task Noroute_пауза_не_больше_одной_записи_за_пять_минут()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        var root = Root();
+        var m = MakeCharacter(root);
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
+
+        for (var i = 0; i < 10; i++)
+            await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        // 2 = один цикл × два места (angle + emotion); повторные циклы в паузе не пишут
+        svc.NoRouteWriteCount.Should().Be(2, "первый цикл пишет noroute для angle и emotion, остальные в паузе");
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
+    }
+
+    // Пауза noroute при лежащем ComfyUI: 10 поводов → обращений к ComfyUI не больше 3 (MaxFailures).
+    // Первый заход: 3 фото × 1 FacePose = 3 обращения → Failed × 3 → noroute.
+    // Повторные: noroute в паузе → не берём → обращений нет.
+    [Fact]
+    public async Task Noroute_пауза_ComfyUI_лежит_не_больше_трёх_обращений()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        _media.Available = false; // ComfyUI лежит
+        var root = Root();
+        var m = MakeCharacter(root);
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
+
+        for (var i = 0; i < 10; i++)
+            await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        // ComfyUI лежит — FacePoseAsync short-circuit'ит на !Available, localMedia.FacePoseAsync не вызывается
+        _media.Calls.Should().Be(0, "ComfyUI лежит — FacePoseAsync не доходит до localMedia");
+        // 2 = один цикл × два места (angle + emotion); повторные циклы в паузе не пишут
+        svc.NoRouteWriteCount.Should().Be(2, "первый цикл доводит счётчик до MaxFailures → noroute, остальные в паузе");
+    }
+
+    // Пауза прошла, маршрут появился → фото размечены (главный сценарий жив).
+    // Отличается от Маршрут_появился_после_noroute: здесь ComfyUI лежит (не route=None),
+    // и мы проверяем, что именно истечение паузы (а не смена маршрута) возвращает фото в Candidates.
+    [Fact]
+    public async Task Noroute_пауза_прошла_маршрут_появился_фото_размечаются()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        var root = Root();
+        var m = MakeCharacter(root);
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
+
+        // Запись noroute: 2 = один цикл × два места (angle + emotion)
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        svc.NoRouteWriteCount.Should().Be(2);
+
+        // Пауза ещё не прошла: повторный заход не пишет
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        svc.NoRouteWriteCount.Should().Be(2, "в пределах паузы noroute не повторяется");
+
+        // Пауза истекла, маршрут появился
+        time.Advance(TimeSpan.FromMinutes(CharacterPhotoLabeling.NoRouteCooldownMinutes + 1));
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _media.Poses = [new(3, 2, 0), new(60, 0, 0), null];
+        _labeler.Answer = _ => ImageLabelResult.Ok(
+            "[{\"emotion\":\"smile\"},{\"emotion\":\"laugh\"},{\"emotion\":\"neutral\"}]");
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        var photos = CharacterStore.Get(root, m.Slug)!.Photos;
+        photos.Select(p => p.Angle).Should().Equal("front", "profile", "unknown");
+        photos.Select(p => p.Emotion).Should().Equal("smile", "laugh", "neutral");
+        photos.Should().OnlyContain(p => p.LabelSource == "auto");
     }
 
     [Fact]
@@ -688,5 +789,12 @@ public class CharacterPhotoLabelingTests : IDisposable
         public RasterOutcome Encode(byte[] data, ImageEncodeSpec encode) => throw new NotSupportedException();
         public RasterOutcome ResizeMask(byte[] mask, int width, int height) => throw new NotSupportedException();
         public RasterOutcome EraseMasked(byte[] image, byte[] mask) => throw new NotSupportedException();
+    }
+
+    // Часы с ручным ходом: тесты паузы noroute двигают время, не ждя реальных пяти минут
+    private sealed class ManualTime(DateTimeOffset now) : TimeProvider
+    {
+        public void Advance(TimeSpan delta) => now += delta;
+        public override DateTimeOffset GetUtcNow() => now;
     }
 }

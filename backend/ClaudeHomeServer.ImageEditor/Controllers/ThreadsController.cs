@@ -302,9 +302,9 @@ public class ThreadsController(
                 new { error = "У версии ещё нет изображения", code = ImageEditErrorCodes.VersionNotFound });
 
         // Детекция на CancellationToken.None: отмена ct одного вызывающего не должна отменять
-        // детекцию остальных ожидающих (single-flight) — вызывающий лишь перестаёт ждать
+        // детекцию остальных ожидающих (single-flight). Вызывающий перестаёт ждать через WaitAsync(ct)
         var result = await (faces ?? new ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache())
-            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, CancellationToken.None));
+            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, CancellationToken.None), ct);
 
         if (result.Busy)
             return StatusCode(StatusCodes.Status503ServiceUnavailable,

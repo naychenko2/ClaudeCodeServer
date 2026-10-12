@@ -209,6 +209,76 @@ public class FaceDetectionCacheTests
         third.Faces.Should().NotBeEmpty();
     }
 
+    // Отмена ct вызывающего во время долгой детекции: OperationCanceledException немедленно,
+    // детектор НЕ отменяется (продолжает жить для остальных ожидающих)
+    [Fact]
+    public async Task Отмена_вызывающего_не_останавливает_детекцию()
+    {
+        var tcs = new TaskCompletionSource<LocalFaceDetectResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detector = new ScriptedDetector(_ => tcs.Task);
+        var cache = new FaceDetectionCache();
+        var cts = new CancellationTokenSource();
+
+        // Первый вызывающий: стартует детекцию, затем отменяет свой токен
+        var first = cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1]), cts.Token);
+        detector.Calls.Should().Be(1, "детектор запущен");
+
+        cts.Cancel();
+        await FluentActions.Invoking(() => first).Should().ThrowAsync<OperationCanceledException>();
+
+        // Детектор не отменён: задача всё ещё висячая, вызовов ровно 1
+        detector.Calls.Should().Be(1);
+        tcs.Task.IsCompleted.Should().BeFalse("детекция продолжает жить после отмены вызывающего");
+    }
+
+    // Второй вызывающий на тот же ключ после отмены первого: single-flight, детектор вызван один раз,
+    // результат приходит после завершения детекции
+    [Fact]
+    public async Task Второй_вызывающий_после_отмены_первого_получает_результат()
+    {
+        var tcs = new TaskCompletionSource<LocalFaceDetectResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detector = new ScriptedDetector(_ => tcs.Task);
+        var cache = new FaceDetectionCache();
+        var cts = new CancellationTokenSource();
+
+        // Первый: стартует, отменяется
+        var first = cache.GetOrDetectAsync(Owner, [2], () => detector.Detect([2]), cts.Token);
+        cts.Cancel();
+        await FluentActions.Invoking(() => first).Should().ThrowAsync<OperationCanceledException>();
+
+        // Второй: single-flight на тот же ключ, ждёт ту же задачу
+        var second = cache.GetOrDetectAsync(Owner, [2], () => detector.Detect([2]));
+        detector.Calls.Should().Be(1, "single-flight: детектор вызван ровно один раз");
+
+        // Детекция завершается: второй получает результат
+        tcs.SetResult(Ok());
+        var result = await second;
+        result.Faces.Should().NotBeEmpty();
+    }
+
+    // После завершения детекции результат в кэше: третий вызов не запускает детектор
+    [Fact]
+    public async Task После_отмены_вызывающего_результат_кэшируется()
+    {
+        var tcs = new TaskCompletionSource<LocalFaceDetectResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detector = new ScriptedDetector(_ => tcs.Task);
+        var cache = new FaceDetectionCache();
+        var cts = new CancellationTokenSource();
+
+        // Первый: стартует, отменяется
+        var first = cache.GetOrDetectAsync(Owner, [3], () => detector.Detect([3]), cts.Token);
+        cts.Cancel();
+        await FluentActions.Invoking(() => first).Should().ThrowAsync<OperationCanceledException>();
+
+        // Детекция завершается успешно
+        tcs.SetResult(Ok());
+
+        // Третий вызов: результат уже в кэше, детектор не вызывается повторно
+        var third = await cache.GetOrDetectAsync(Owner, [3], () => detector.Detect([3]));
+        detector.Calls.Should().Be(1, "результат в кэше — детектор не запускается повторно");
+        third.Faces.Should().NotBeEmpty();
+    }
+
     // facesKey детерминирован: те же байты — тот же ключ, другие — другой; формат «<16 hex>:v1»
     [Fact]
     public void FacesKey_детерминирован_по_байтам()

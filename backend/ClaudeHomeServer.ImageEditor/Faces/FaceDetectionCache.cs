@@ -44,9 +44,11 @@ public sealed class FaceDetectionCache
     public static string FacesKey(byte[] image) => $"{Sha256Prefix16(image)}:{FormatVersion}";
 
     // Прогон детектора: промах в кэше → detect; успешный результат (без Error и без Busy) кладётся
-    // в кэш. Два параллельных запроса на один ключ — один детектор, второй ждёт ту же задачу
+    // в кэш. Два параллельных запроса на один ключ — один детектор, второй ждёт ту же задачу.
+    // ct — токен вызывающего: отмена освобождает его (OperationCanceledException), но сама детекция
+    // и single-flight-запись продолжают жить для остальных ожидающих
     public async Task<LocalFaceDetectResult> GetOrDetectAsync(string ownerId, byte[] image,
-        Func<Task<LocalFaceDetectResult>> detect)
+        Func<Task<LocalFaceDetectResult>> detect, CancellationToken ct = default)
     {
         var key = (ownerId, Sha256Prefix16(image));
         Task<LocalFaceDetectResult> task;
@@ -68,7 +70,7 @@ public sealed class FaceDetectionCache
                 task = entry.Task;
             }
         }
-        return await task;
+        return await task.WaitAsync(ct);
     }
 
     // Завершение детекции. Вызывается через ContinueWith (не inline): детектор может вернуть

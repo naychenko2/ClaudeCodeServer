@@ -560,4 +560,37 @@ public class LocalImageMediaAdapterTests
         graph.ContainsKey("mask").Should().BeFalse();
         graph.ContainsKey("overlay").Should().BeFalse();
     }
+
+    // Маска сверх лимита входов → отказ до загрузки: в input ComfyUI ничего не легло
+    [Fact]
+    public async Task Маска_вне_маски_сверх_лимита_отказ_до_загрузки()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            KeepMask = new byte[LocalMediaService.MaxInputBytes + 1],
+        }, default);
+
+        submitted.Error.Should().Be($"Маска больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        _comfy.Uploads.Should().BeEmpty("отказ случился до загрузки файлов");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Пустой массив маски = «маски нет»: обычная правка проходит, склейки в графе нет
+    [Fact]
+    public async Task Маска_вне_маски_пустой_массив_как_без_маски()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            KeepMask = [],
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph.ContainsKey("mask").Should().BeFalse();
+        graph.ContainsKey("overlay").Should().BeFalse();
+    }
 }

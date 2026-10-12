@@ -192,11 +192,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
 
         // Вне маски вернуть исходник: маска — PNG того же размера, что холст; только у Edit,
-        // несовместима со стиранием кистью и дорисовкой
-        if (request.KeepMask is { } keepMask)
+        // несовместима со стиранием кистью и дорисовкой; пустой массив — «маски нет»
+        if (request.KeepMask is { Length: > 0 } keepMask)
         {
             if (request.Op != LocalImageOp.Edit || request.EraseMask is not null || request.Pad is not null)
                 return LocalImageSubmitted.Fail("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+            if (keepMask.Length > LocalMediaService.MaxInputBytes)
+                return LocalImageSubmitted.Fail($"Маска больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
             if (!ImageDimensions.IsPng(keepMask))
                 return LocalImageSubmitted.Fail("Маска — не PNG.");
             var maskSize = ImageDimensions.Read(keepMask);
@@ -277,7 +279,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
             // Маска «вне маски вернуть исходник»: тот же префикс, что у входов, чтобы забрала чистка
             string? maskName = null;
-            if (request.KeepMask is { } maskBytes)
+            if (request.KeepMask is { Length: > 0 } maskBytes)
                 maskName = await UploadTrackedAsync(uploaded, maskBytes, $"{jobId}-mask.png", ct);
 
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;

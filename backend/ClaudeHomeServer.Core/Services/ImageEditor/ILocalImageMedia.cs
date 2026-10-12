@@ -50,6 +50,8 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // Aspect — ключ таблицы размеров Qwen-Image («1:1», «16:9» …); null — по холсту или 1:1.
 // EraseMask — только у Edit: белое на маске закрашивается на холсте нейтральным серым до
 // модели («удали» кистью). Маску-образец Qwen-Image не понимает, а серую заливку — да.
+// KeepMask — только у Edit: вне маски вернуть исходник (схожесть мерится внутри маски).
+// Несовместима с EraseMask и Pad; маска — PNG того же размера, что холст
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
 // Lora — только у Edit и у Generate с образцами
@@ -67,7 +69,8 @@ public sealed record LocalImageRequest(
     int? Width = null,
     int? Height = null,
     LocalImageLora? Lora = null,
-    IReadOnlyList<byte[]>? FaceReferences = null);
+    IReadOnlyList<byte[]>? FaceReferences = null,
+    byte[]? KeepMask = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);

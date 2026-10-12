@@ -15,7 +15,8 @@ public class LocalImageMediaAdapterTests
     private readonly FakeComfy _comfy = new();
 
     private LocalImageMediaAdapter Build(bool enabled = true, int maxQueue = 4, HttpMessageHandler? handler = null,
-        ClaudeHomeServer.Services.Images.Editing.Raster.IImageRaster? raster = null)
+        ClaudeHomeServer.Services.Images.Editing.Raster.IImageRaster? raster = null,
+        ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaJobStore? store = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -24,7 +25,7 @@ public class LocalImageMediaAdapterTests
             ["LocalMedia:MaxComfyQueue"] = maxQueue.ToString(),
         }).Build();
         var client = new ComfyClient(new FakeComfyFactory(handler ?? _comfy), config);
-        return new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance, raster);
+        return new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance, raster, store);
     }
 
     private static LocalImageRequest Edit(string prompt = "убери провод") =>
@@ -424,5 +425,139 @@ public class LocalImageMediaAdapterTests
 
         submitted.Error.Should().Be("Дорисовка за края здесь недоступна.");
         _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Реальный PNG (SkiaSharp): минимальный заголовок LocalMediaTestImages.Png не декодируется растром,
+    // а стирание/дорисовка требуют именно декодирования, чтобы блок прошёл до проверки несовместимости
+    private static byte[] RealPng(int width, int height)
+    {
+        using var bitmap = new SkiaSharp.SKBitmap(width, height);
+        bitmap.Erase(SkiaSharp.SKColors.White);
+        using var encoded = bitmap.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+        return encoded.ToArray();
+    }
+
+    // Канал «вне маски вернуть исходник»: несовместимость с другими операциями правки
+    [Fact]
+    public async Task Маска_вне_маски_с_дорисовкой_отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Pad = new LocalImagePad(1, 0, 1, 0),
+        }, default);
+
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Маска_вне_маски_с_стиранием_отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            EraseMask = RealPng(8, 8),
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Маска_вне_маски_при_генерации_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(new LocalImageRequest(
+            LocalImageOp.Generate, "Тимур сидит в кафе", [LocalMediaTestImages.Png(8, 8)], "1:1", 1,
+            KeepMask: LocalMediaTestImages.Png(8, 8)), default);
+
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Маска — PNG: сигнатура не PNG → отказ до постановки
+    [Fact]
+    public async Task Маска_вне_маски_не_png_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            KeepMask = [1, 2, 3],
+        }, default);
+
+        submitted.Error.Should().Be("Маска — не PNG.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Размер маски = размер первой картинки: не совпал → отказ
+    [Fact]
+    public async Task Маска_вне_маски_размер_не_совпал_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Маска не совпадает размером с первой картинкой.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Валидный случай: маска загружена, имя записано в стор для чистки, граф склеивает вне маски
+    [Fact]
+    public async Task Маска_вне_маски_загружена_в_стор_и_граф_склеивает()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "keepmask_" + Guid.NewGuid().ToString("N"));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tempDir, "data", "projects.json"),
+        }).Build();
+        var store = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaJobStore(config);
+        var adapter = Build(store: store);
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        // Маска загружена в input ComfyUI под именем {jobId}-mask.png
+        _comfy.Uploads.Should().Contain(u => u.EndsWith("-mask.png"));
+        // Имя записано среди входов для общей чистки
+        var job = store.ListByOp(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaOps.EditorInputs)
+            .Should().ContainSingle().Subject;
+        job.ComfyInputs.Should().Contain(u => u.EndsWith("-mask.png"));
+        // Граф: LoadImageMask с именем маски и ImageCompositeMasked (склейка вне маски)
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        var maskName = _comfy.UploadPaths.Should().Contain(u => u.EndsWith("-mask.png")).Subject;
+        graph["mask"]!["class_type"]!.GetValue<string>().Should().Be("LoadImageMask");
+        graph["mask"]!["inputs"]!["image"]!.GetValue<string>().Should().Be(maskName);
+        graph["overlay"]!["class_type"]!.GetValue<string>().Should().Be("ImageCompositeMasked");
+        ClaudeHomeServer.Tests.Helpers.TestFs.DeleteDirectoryResilient(tempDir);
+    }
+
+    // Без KeepMask граф прежний: ни LoadImageMask, ни ImageCompositeMasked
+    [Fact]
+    public async Task Без_маски_вне_маски_граф_без_склейки()
+    {
+        var adapter = Build();
+
+        (await adapter.SubmitAsync(Edit(), default)).Error.Should().BeNull();
+
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph.ContainsKey("mask").Should().BeFalse();
+        graph.ContainsKey("overlay").Should().BeFalse();
     }
 }

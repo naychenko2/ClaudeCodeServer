@@ -191,6 +191,20 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             canvas = OutpaintSize(padded.Image.Width, padded.Image.Height);
         }
 
+        // Вне маски вернуть исходник: маска — PNG того же размера, что холст; только у Edit,
+        // несовместима со стиранием кистью и дорисовкой
+        if (request.KeepMask is { } keepMask)
+        {
+            if (request.Op != LocalImageOp.Edit || request.EraseMask is not null || request.Pad is not null)
+                return LocalImageSubmitted.Fail("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+            if (!ImageDimensions.IsPng(keepMask))
+                return LocalImageSubmitted.Fail("Маска — не PNG.");
+            var maskSize = ImageDimensions.Read(keepMask);
+            var canvasSize = ImageDimensions.Read(images[0]);
+            if (maskSize is null || canvasSize is null || maskSize != canvasSize)
+                return LocalImageSubmitted.Fail("Маска не совпадает размером с первой картинкой.");
+        }
+
         if (request.Lora is { } requested)
         {
             var name = requested.Name ?? "";
@@ -261,13 +275,18 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                     faceRefs.Add(await UploadTrackedAsync(uploaded, photo, $"{jobId}-ref{k + 1}{ext}", ct));
                 }
 
+            // Маска «вне маски вернуть исходник»: тот же префикс, что у входов, чтобы забрала чистка
+            string? maskName = null;
+            if (request.KeepMask is { } maskBytes)
+                maskName = await UploadTrackedAsync(uploaded, maskBytes, $"{jobId}-mask.png", ct);
+
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;
             var graph = request.Op switch
             {
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);

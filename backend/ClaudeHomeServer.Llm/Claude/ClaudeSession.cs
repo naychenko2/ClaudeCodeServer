@@ -3002,6 +3002,12 @@ public class ClaudeSession : ILlmSessionAdapter
             ? _localEngineBusy.Enter()
             : null;
 
+        // База дельты хода: у чатов, созданных до фикса расхода, снимка (Session.LastCostState)
+        // ещё нет — первый ход после выкатки засчитал бы накопленный итог CLI целиком (повтор
+        // инцидента). Засеиваем базу из последней cost-state-записи транскрипта ДО запуска:
+        // --resume восстановит ровно этот накопленный итог, и дельта первого хода = расход хода.
+        SeedTurnBaseFromTranscript();
+
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
@@ -4969,6 +4975,65 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
+    // Засев базы дельты хода (Session.LastCostState) из последней cost-state-записи транскрипта.
+    // Зовётся в начале хода, когда снимка ещё нет (Info.LastCostState == null) и ход идёт с
+    // --resume: --resume восстановит накопленный итог, записанный в транскрипте, и дельта
+    // первого хода = расход хода, а не вся история (инцидент, который фикс ad52316b лечил,
+    // повторился бы один раз на каждый старый чат). Локальный проект (ADR-016: транскрипт
+    // только на устройстве) — откат: на хосте транскрипта нет, базу не засеиваем, первый ход
+    // станет базой сам (расход 0, пометка в логе).
+    internal void SeedTurnBaseFromTranscript()
+    {
+        if (Info.LastCostState is not null) return; // снимок уже есть — дельта считается от него
+        if (!_transcriptOnServer) return; // локальный проект: транскрипт на устройстве, не на хосте
+        if (_cliConfigRoot is not { Length: > 0 } root) return;
+        if (Info.ClaudeSessionId is not { } csid) return; // без --resume накопленного итога нет
+
+        try
+        {
+            var path = TranscriptMigrator.FindTranscript(root, _rootPath, csid);
+            if (path is null)
+            {
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] База дельты не засеяна: транскрипт {csid} не найден в {root} (session {Info.Id})");
+                return;
+            }
+            // Последняя cost-state-запись = накопленный итог до текущего хода. Файл append-only,
+            // записи в порядке хода — ищем с конца, не тащим весь файл в память.
+            SessionCostState? seeded = null;
+            foreach (var line in File.ReadLines(path).Reverse())
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                JsonDocument doc;
+                try { doc = JsonDocument.Parse(line); }
+                catch (JsonException) { continue; } // битая строка (обрыв append) — пропускаем
+                using (doc)
+                {
+                    var rec = doc.RootElement;
+                    if (rec.TryGetProperty("type", out var t) && t.GetString() == "cost-state")
+                    {
+                        seeded = BuildCostStateFromTranscript(rec);
+                        break;
+                    }
+                }
+            }
+            if (seeded is null)
+            {
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] База дельты не засеяна: cost-state в транскрипте {csid} не найдена (session {Info.Id})");
+                return;
+            }
+            Info.LastCostState = seeded;
+            Console.Error.WriteLine(
+                $"[ClaudeSession] База дельты засеяна из транскрипта {csid} (session {Info.Id}): " +
+                $"{seeded.Models.Count} моделей, totalCostUsd={seeded.TotalCostUsd}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] База дельты не засеяна (чтение транскрипта {csid}): {ex.Message}");
+        }
+    }
+
     // Аргументы запуска для показа человеку. Системный промпт не дублируем (он и есть
     // секции), а путь temp-конфига MCP заменяем именем файла: внутри сервисный JWT владельца.
     private static IReadOnlyList<string> MaskArgs(IReadOnlyList<string> args)
@@ -5620,12 +5685,28 @@ public class ClaudeSession : ILlmSessionAdapter
                     foreach (var x in pd.EnumerateArray())
                         denials.Add(x.TryGetProperty("tool_name", out var tnm) ? tnm.GetString() ?? "?" : "?");
                 }
-                // Дельта хода: расход = текущий накопленный снимок (modelUsage/total_cost_usd)
-                // минус прошлый (Session.LastCostState). prev == null (первый ход) → сам снимок;
-                // любое уменьшение (сброс/форк/новая csid) → сам снимок. usage/totalCost/usageModel
-                // — уже расход ЭТОГО хода, а не накопленный итог (см. ComputeTurnDelta).
+                // Расход хода. Две формы result:
+                //  (1) modelUsage есть (Anthropic, с 24.09) — НАКОПЛЁННЫЙ итог сессии (CLI
+                //      восстанавливает его на --resume): расход = дельта (текущий снимок − прошлый
+                //      из Session.LastCostState); prev == null (первый ход) → сам снимок; смена csid
+                //      (новый разговор/сброс/смена провайдера) → сам снимок; та же csid (включая
+                //      уменьшение от гонки двух процессов CLI) → дельта (см. ComputeTurnDelta).
+                //  (2) modelUsage нет (сторонний поток) — usage/total_cost_usd описывают ход как
+                //      есть и не копятся: берём их без дельты, базу (Session.LastCostState) не трогаем.
                 var currentCostState = BuildCostState(root);
-                var (usage, totalCost, usageModel) = ComputeTurnDelta(currentCostState, Info.LastCostState);
+                UsageInfo? usage;
+                double? totalCost;
+                string? usageModel;
+                if (currentCostState.Models.Count > 0)
+                {
+                    (usage, totalCost, usageModel) = ComputeTurnDelta(currentCostState, PrevCostStateForDelta(currentCostState));
+                }
+                else
+                {
+                    usage = ParseUsage(root);
+                    totalCost = DoubleProp(root, "total_cost_usd");
+                    usageModel = ParseUsageModel(root);
+                }
                 if (IsEmptyNoopResult(numTurns, subtype, apiErr, denials, usage))
                 {
                     // Пустой result CLI (ноль ходов модели, ноль токенов, success без api-ошибки
@@ -5647,8 +5728,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 _lastTurnResolved = true;
                 // Персистим новый накопленный снимок (только реальный result, no-op выше
                 // уже отфильтрован): процесс CLI перезапустится, а --resume восстановит этот
-                // накопленный итог — он и есть база для дельты следующего хода.
-                Info.LastCostState = currentCostState;
+                // накопленный итог — он и есть база для дельты следующего хода. Только когда
+                // modelUsage есть (накопленный итог); в стороннем потоке (без modelUsage) база
+                // не меняется — накопленного итога в таком result нет.
+                if (currentCostState.Models.Count > 0)
+                    Info.LastCostState = currentCostState;
                 // На стороннем эндпоинте CLI считает total_cost_usd по ценам Anthropic —
                 // пересчитываем по ценам конфига модели (от дельты хода, не от накопленного
                 // итога; нет цен → стоимость не показываем)
@@ -6646,10 +6730,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // накопленными снимками (текущим и прошлым, хранимым в Session.LastCostState).
 
     // Снимок накопленного cost-state из result: modelUsage (по моделям) + total_cost_usd.
+    // ClaudeSessionId — csid, к которому относится снимок (result.session_id): дельта хода
+    // считается только внутри одной csid, а смена csid — новый накопленный итог с нуля.
     // Чистая функция — её же использует сторож-тест.
     internal static SessionCostState BuildCostState(JsonElement root)
     {
         var state = new SessionCostState();
+        if (root.TryGetProperty("session_id", out var sid) && sid.ValueKind == JsonValueKind.String)
+            state.ClaudeSessionId = sid.GetString();
         if (root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == JsonValueKind.Object)
         {
             foreach (var m in mu.EnumerateObject())
@@ -6665,6 +6753,34 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         state.TotalCostUsd = DoubleProp(root, "total_cost_usd");
+        return state;
+    }
+
+    // Снимок накопленного cost-state из ЗАПИСИ транскрипта ({"type":"cost-state"}): modelUsage
+    // (по моделям) + totalCostUSD. Поля camelCase (sessionId/totalCostUSD) — CLI пишет транскрипт
+    // в своём формате, в отличие от result (session_id/total_cost_usd). Используется для засева
+    // базы (Session.LastCostState) у чатов, у которых снимка ещё нет (созданы до фикса): последняя
+    // cost-state-запись транскрипта = накопленный итог до текущего хода. Чистая функция.
+    internal static SessionCostState BuildCostStateFromTranscript(JsonElement record)
+    {
+        var state = new SessionCostState();
+        if (record.TryGetProperty("sessionId", out var sid) && sid.ValueKind == JsonValueKind.String)
+            state.ClaudeSessionId = sid.GetString();
+        if (record.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var m in mu.EnumerateObject())
+            {
+                if (m.Value.ValueKind != JsonValueKind.Object) continue;
+                state.Models[m.Name] = new ModelUsageSnapshot
+                {
+                    InputTokens = LongProp(m.Value, "inputTokens"),
+                    OutputTokens = LongProp(m.Value, "outputTokens"),
+                    CacheReadInputTokens = LongProp(m.Value, "cacheReadInputTokens"),
+                    CacheCreationInputTokens = LongProp(m.Value, "cacheCreationInputTokens"),
+                };
+            }
+        }
+        state.TotalCostUsd = DoubleProp(record, "totalCostUSD");
         return state;
     }
 
@@ -6702,43 +6818,40 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // Расход хода = дельта (current − prev) по каждой модели отдельно + по total_cost_usd.
-    // prev == null (первый ход / новая csid / форк без снимка) — расход = сам current.
-    // ЛЮБОЕ уменьшение (счётчик любой модели или total_cost_usd) — сброс/форк/новая csid,
-    // дельта была бы отрицательной — расход = сам current. Возвращает UsageInfo (агрегат
-    // дельты), стоимость дельты и доминирующую модель по дельте. Чистая функция.
+    // prev == null (первый ход) — расход = сам current (накопленный итог с нуля).
+    // СМЕНА csid (current ≠ prev: новый разговор/сброс/смена провайдера) — накопленный итог
+    // начинается с нуля, дельта бессмысленна → расход = сам current.
+    // ТА ЖЕ csid — дельта; уменьшение счётчика (два процесса CLI одной сессии пишут cost-state
+    // вперемешку: фоновое продолжение, ре-аттемпт, ход-продолжение) → max(0, cur − prev) по
+    // каждому полю, а не весь снимок: недосчёт пары процентов честнее, чем пересчёт всей истории.
+    // Возвращает UsageInfo (агрегат дельты), стоимость дельты и доминирующую модель по дельте.
+    // Чистая функция — её же использует сторож-тест.
     internal static (UsageInfo? Usage, double? Cost, string? Model) ComputeTurnDelta(
         SessionCostState current, SessionCostState? prev)
     {
         if (prev is null)
             return (AggregateUsage(current), current.TotalCostUsd, DominantModel(current));
 
-        var decreased = false;
-        foreach (var (model, cur) in current.Models)
-        {
-            if (!prev.Models.TryGetValue(model, out var pre)) continue; // новая модель — не уменьшение
-            if (cur.InputTokens < pre.InputTokens
-                || cur.OutputTokens < pre.OutputTokens
-                || cur.CacheReadInputTokens < pre.CacheReadInputTokens
-                || cur.CacheCreationInputTokens < pre.CacheCreationInputTokens)
-            { decreased = true; break; }
-        }
-        if (!decreased && current.TotalCostUsd is double c && prev.TotalCostUsd is double p && c < p)
-            decreased = true;
-
-        if (decreased)
+        // Смена csid: накопленный итог новой csid начинается с нуля, весь снимок = расход.
+        // (Форк — исключение: ветка наследует снимок родителя с ЧУЖОЙ csid, но это продолжение,
+        // не смена; PrevCostStateForDelta нормализует csid базы, и дельта по совпавшим моделям
+        // даёт ~0. См. PrevCostStateForDelta / SessionManager.BranchAsync.)
+        if (!string.Equals(current.ClaudeSessionId, prev.ClaudeSessionId, StringComparison.Ordinal))
             return (AggregateUsage(current), current.TotalCostUsd, DominantModel(current));
 
-        var delta = new SessionCostState();
+        var delta = new SessionCostState { ClaudeSessionId = current.ClaudeSessionId };
         foreach (var (model, cur) in current.Models)
         {
             if (prev.Models.TryGetValue(model, out var pre))
             {
+                // max(0, …): уменьшение счётчика (гонка двух процессов CLI) не даёт отрицательной
+                // дельты, а весь снимок не засчитывает — недосчёт пары процентов честнее.
                 delta.Models[model] = new ModelUsageSnapshot
                 {
-                    InputTokens = cur.InputTokens - pre.InputTokens,
-                    OutputTokens = cur.OutputTokens - pre.OutputTokens,
-                    CacheReadInputTokens = cur.CacheReadInputTokens - pre.CacheReadInputTokens,
-                    CacheCreationInputTokens = cur.CacheCreationInputTokens - pre.CacheCreationInputTokens,
+                    InputTokens = Math.Max(0, cur.InputTokens - pre.InputTokens),
+                    OutputTokens = Math.Max(0, cur.OutputTokens - pre.OutputTokens),
+                    CacheReadInputTokens = Math.Max(0, cur.CacheReadInputTokens - pre.CacheReadInputTokens),
+                    CacheCreationInputTokens = Math.Max(0, cur.CacheCreationInputTokens - pre.CacheCreationInputTokens),
                 };
             }
             else
@@ -6747,9 +6860,29 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         double? cost = current.TotalCostUsd is double c2 && prev.TotalCostUsd is double p2
-            ? c2 - p2
+            ? Math.Max(0, c2 - p2)
             : current.TotalCostUsd; // один из итогов null — берём текущий (консервативно)
         return (AggregateUsage(delta), cost, DominantModel(delta));
+    }
+
+    // База для дельты хода. Обычный случай — Session.LastCostState как есть. Исключение — первый
+    // ход форка: ветка наследует снимок родителя (SessionManager.BranchAsync) с ЧУЖОЙ csid, но
+    // это продолжение (транскрипт ветки — копия префикса родителя), а не смена csid. Нормализуем
+    // csid базы на csid текущего снимка (копией, не мутируя общий снимок родителя, который ветка
+    // и родитель делят ссылкой), чтобы ComputeTurnDelta считал дельту, а не «весь снимок».
+    internal SessionCostState? PrevCostStateForDelta(SessionCostState current)
+    {
+        var prev = Info.LastCostState;
+        if (prev is null
+            || Info.BranchedFromSessionId is null
+            || string.Equals(current.ClaudeSessionId, prev.ClaudeSessionId, StringComparison.Ordinal))
+            return prev;
+        return new SessionCostState
+        {
+            ClaudeSessionId = current.ClaudeSessionId,
+            Models = new Dictionary<string, ModelUsageSnapshot>(prev.Models),
+            TotalCostUsd = prev.TotalCostUsd,
+        };
     }
 
     // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для JSON

@@ -18,6 +18,11 @@ public sealed class ModelUsageSnapshot
 
 public sealed class SessionCostState
 {
+    // ClaudeSessionId, к которому относится снимок: CLI пишет cost-state под своим csid, а
+    // --resume восстанавливает накопленный итог именно этой csid. Дельта хода считается только
+    // внутри одной csid; смена csid (новый разговор/сброс/смена провайдера) — новый накопленный
+    // итог с нуля, и весь снимок = расход. null — csid из result не прочитан (сторона).
+    public string? ClaudeSessionId { get; set; }
     // model → накопленные токены. Ключ — имя модели из modelUsage.
     public Dictionary<string, ModelUsageSnapshot> Models { get; set; } = new();
     // Накопленная стоимость (total_cost_usd). null — CLI поля не прислал.

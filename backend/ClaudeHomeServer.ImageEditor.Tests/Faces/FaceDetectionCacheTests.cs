@@ -16,6 +16,16 @@ public class FaceDetectionCacheTests
     private static LocalFaceDetectResult Busy() => new(0, 0, [], null, true);
     private static LocalFaceDetectResult Err() => new(0, 0, [], "Сбой");
 
+    // Верхний таймаут ожидания отмены вызывающего: сломанный WaitAsync(ct) оставил бы детекцию
+    // висячей, и ожидание OCE зависло бы в CI. Рабочий код бросает OCE мгновенно (миллисекунды);
+    // таймаут — страховка, чтобы поломка давала красный тест, а не висящий
+    private static async Task WaitForCancellationAsync(Task task)
+    {
+        var winner = await Task.WhenAny(task, Task.Delay(2000));
+        winner.Should().Be(task, "отмена вызывающего даёт OCE до таймаута, а не зависание");
+        await FluentActions.Invoking(() => task).Should().ThrowAsync<OperationCanceledException>();
+    }
+
     // Детектор-счётчик: возвращает результат из делегата, считает вызовы
     private sealed class CountingDetector
     {
@@ -224,7 +234,7 @@ public class FaceDetectionCacheTests
         detector.Calls.Should().Be(1, "детектор запущен");
 
         cts.Cancel();
-        await FluentActions.Invoking(() => first).Should().ThrowAsync<OperationCanceledException>();
+        await WaitForCancellationAsync(first);
 
         // Детектор не отменён: задача всё ещё висячая, вызовов ровно 1
         detector.Calls.Should().Be(1);
@@ -244,7 +254,7 @@ public class FaceDetectionCacheTests
         // Первый: стартует, отменяется
         var first = cache.GetOrDetectAsync(Owner, [2], () => detector.Detect([2]), cts.Token);
         cts.Cancel();
-        await FluentActions.Invoking(() => first).Should().ThrowAsync<OperationCanceledException>();
+        await WaitForCancellationAsync(first);
 
         // Второй: single-flight на тот же ключ, ждёт ту же задачу
         var second = cache.GetOrDetectAsync(Owner, [2], () => detector.Detect([2]));
@@ -268,7 +278,7 @@ public class FaceDetectionCacheTests
         // Первый: стартует, отменяется
         var first = cache.GetOrDetectAsync(Owner, [3], () => detector.Detect([3]), cts.Token);
         cts.Cancel();
-        await FluentActions.Invoking(() => first).Should().ThrowAsync<OperationCanceledException>();
+        await WaitForCancellationAsync(first);
 
         // Детекция завершается успешно
         tcs.SetResult(Ok());

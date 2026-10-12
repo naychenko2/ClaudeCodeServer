@@ -223,8 +223,9 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   **Аргументы `generate_image` с 2026-09 лежат внутри `params`**: плоские Higgsfield отвергает
   «params: Invalid input», и котировка остаётся без цены. Запуск — с явным `use_unlim: false`.
 - **«Локальные модели»** (`local`) — `LocalImageEditor` над `ILocalImageMedia`: Qwen-Image 2.1
-  (генерация, правка, кисть; маска — образцом, кроме «удали», там серая заливка `EraseMask`) и
-  FaceDetailer (`EnhanceFaces`). Котировка без цены: `free`, время по замерам и длина очереди
+  (генерация, правка, кисть; маска — образцом **и каналом склейки** (`KeepMask` — вне маски
+  вернуть исходник; канал общий, назван по смыслу, не привязан к персонажу), кроме «удали»,
+  там серая заливка `EraseMask`) и FaceDetailer (`EnhanceFaces`). Котировка без цены: `free`, время по замерам и длина очереди
   ComfyUI; не ответил ComfyUI — `provider_unavailable`. Граф — только из шаблонов `ComfyWorkflows`.
   Варианты и генерации, и правки — прогоном на каждый (`Count = 1`), котировка — время прогона ×
   число; `batch_size` графа не трогаем: он общий с MCP-инструментом `local_generate_image`.

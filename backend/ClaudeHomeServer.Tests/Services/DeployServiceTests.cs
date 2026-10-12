@@ -44,9 +44,9 @@ public class DeployServiceTests : IDisposable
             return Task.FromResult(WakeError);
         }
 
-        // Настоящего именованного мьютекса в тестах не берём: на общем имени тесты цеплялись бы
-        // друг за друга (и за живой агент на машине разработчика)
-        public IDisposable? TryLockAgent()
+        // Настоящего именованного мьютекса/файлового лока в тестах не берём: на общем имени
+        // тесты цеплялись бы друг за друга (и за живой агент на машине разработчика)
+        public IDisposable? TryLockAgent(string releasesDir)
         {
             LockAttempts++;
             return AgentAlive ? null : new Lease();

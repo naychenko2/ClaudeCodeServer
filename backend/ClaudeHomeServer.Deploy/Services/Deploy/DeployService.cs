@@ -200,9 +200,10 @@ public sealed class DeployService(
         var age = utcNow - (running.StartedAt ?? utcNow);
         if (age < TimeSpan.FromMinutes(Options.StaleQueuedMinutes)) return null;
 
-        // Свободный мьютекс и есть доказательство, что агента больше нет: он берёт его первым
-        // делом и держит до конца работы
-        using var lease = host.TryLockAgent();
+        // Свободный лок и есть доказательство, что агента больше нет: он берёт его первым
+        // делом и держит до конца работы. releasesDir — из конфига: на Linux лок — файл
+        // deploy.lock в каталоге релизов, на Windows — именованный мьютекс (путь не важен).
+        using var lease = host.TryLockAgent(Options.ReleasesDir);
         if (lease is null) return null;
 
         // Под мьютексом перечитываем: агент мог дописать журнал, пока мы решали

@@ -38,6 +38,13 @@ public sealed class DeployOptions
 
     public string TaskName { get; init; } = "CCS-Deploy";
 
+    /// <summary>
+    /// Платформа хоста: на Linux побудка идёт через systemd-run, а лок «агент жив» —
+    /// файловый (deploy.lock), на Windows — прежний schtasks + именованный мьютекс.
+    /// По умолчанию — реальная ОС; тесты задают явно, чтобы выбрать ветку без OperatingSystem.
+    /// </summary>
+    public bool IsLinux { get; init; }
+
     /// <summary>Журнал выкатки — единственная точка истины и шов с агентом (ADR-010).</summary>
     public string StatePath => Path.Combine(ReleasesDir, DeployState.FileName);
 
@@ -87,6 +94,8 @@ public sealed class DeployOptions
             HealthTimeoutSec = health is > 0 and <= 600 ? health : 90,
             StaleQueuedMinutes = stale is > 0 and <= 1440 ? stale : 15,
             TaskName = (config["Deploy:TaskName"] ?? "").Trim() is { Length: > 0 } t ? t : "CCS-Deploy",
+            // Платформа хоста — из ОС, не из конфига: тесты переопределяют свойство явно.
+            IsLinux = OperatingSystem.IsLinux(),
         };
     }
 }

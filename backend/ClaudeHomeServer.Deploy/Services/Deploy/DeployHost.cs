@@ -23,12 +23,13 @@ public interface IDeployHost
     Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default);
 
     /// <summary>
-    /// Взять мьютекс выкатки Global\ccs-deploy — тот же, что держит агент всё время работы.
-    /// null — занят, агент жив. Под ним (и только под ним) серверу позволено писать в журнал
-    /// после старта агента: иначе записи двух процессов затирают друг друга.
-    /// ВАЖНО: владение мьютексом принадлежит ПОТОКУ — брать и отпускать без await между ними.
+    /// Взять лок выкатки — тот же, что держит агент всё время работы: на Windows именованный
+    /// мьютекс Global\ccs-deploy, на Linux файл deploy.lock (flock). null — занят, агент жив.
+    /// Под ним (и только под ним) серверу позволено писать в журнал после старта агента:
+    /// иначе записи двух процессов затирают друг друга.
+    /// ВАЖНО: владение локом принадлежит ПОТОКУ — брать и отпускать без await между ними.
     /// </summary>
-    IDisposable? TryLockAgent();
+    IDisposable? TryLockAgent(string releasesDir);
 }
 
 public sealed class DeployHost(
@@ -65,24 +66,20 @@ public sealed class DeployHost(
 
     public async Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default)
     {
-        // Командная строка ФИКСИРОВАНА: имя задачи из конфига (проверено белым списком) и
-        // ничего больше. Параметры заявки едут агенту журналом — см. DeployRequest.
-        var spec = new ProcessSpec
-        {
-            FileName = "schtasks",
-            Args = ["/run", "/tn", options.TaskName],
-            WorkingDirectory = Directory.Exists(options.AgentDir) ? options.AgentDir : null,
-            RedirectStdin = false,
-            StdioEncoding = new UTF8Encoding(false),
-            Track = false,
-        };
+        // Командная строка ФИКСИРОВАНА: параметры заявки НЕ едут в argv — они лежат в
+        // журнале (deploy-state.json), а агент читает его сам. argv различает только
+        // запуск: на Linux — имя systemd-юнита (id прошёл IsValidBuildId) и каталог релизов
+        // из конфига; на Windows — имя задачи планировщика (белый список).
+        var spec = options.IsLinux
+            ? BuildLinuxWakeSpec(options)
+            : BuildWindowsWakeSpec(options);
 
         System.Diagnostics.Process proc;
         try { proc = launchers.Local.Start(spec); }
         catch (Exception ex)
         {
-            log.LogError(ex, "Не удалось запустить schtasks для задачи {Task}", options.TaskName);
-            return $"не удалось запустить планировщик: {ex.Message}";
+            log.LogError(ex, "Не удалось запустить побудку ({File})", spec.FileName);
+            return $"не удалось запустить побудку: {ex.Message}";
         }
 
         try
@@ -95,30 +92,55 @@ public sealed class DeployHost(
             catch (OperationCanceledException)
             {
                 launchers.Local.Kill(proc);
-                return "планировщик не ответил вовремя";
+                return "побудка не ответила вовремя";
             }
 
             if (proc.ExitCode == 0) return null;
             var text = ((await stderr) + " " + (await stdout)).Trim();
-            log.LogError("schtasks /run {Task} завершился с кодом {Code}: {Text}",
-                options.TaskName, proc.ExitCode, text);
-            return $"планировщик отказал (код {proc.ExitCode}): {text}";
+            log.LogError("{File} завершился с кодом {Code}: {Text}", spec.FileName, proc.ExitCode, text);
+            return $"побудка отказала (код {proc.ExitCode}): {text}";
         }
         finally { proc.Dispose(); }
     }
 
-    public IDisposable? TryLockAgent() =>
-        agentLock.TryAcquireDeploy() is { } mutex ? new MutexLease(mutex) : null;
-
-    // Отпускаем в try/catch: мьютекс мог быть заброшен умершим агентом (владение перешло
-    // к нам через AbandonedMutexException), и падение на ReleaseMutex не должно ронять
-    // приём заявки — предмет вызова совсем в другом.
-    private sealed class MutexLease(Mutex mutex) : IDisposable
+    // Linux: systemd-run --user --collect --quiet --unit=ccs-deploy-<id> -p
+    // ManagedOOMPreference=avoid --setenv=CCS_RELEASES_DIR=<ReleasesDir> <AgentDir>/scripts/ops/deploy-linux.sh
+    // systemd-run ставит one-shot юнит и возвращается сразу; сам скрипт идёт уже в
+    // отвязанном процессе. -p ManagedOOMPreference=avoid — не дать systemd-oomd убить
+    // выкатку при нехватке памяти; CCS_RELEASES_DIR — каталог из конфига, не из заявки.
+    // <id> уже прошёл IsValidBuildId (DeployValidation), поэтому безопасен в имени юнита.
+    private static ProcessSpec BuildLinuxWakeSpec(DeployOptions options)
     {
-        public void Dispose()
+        var script = Path.Combine(options.AgentDir, "scripts", "ops", "deploy-linux.sh");
+        return new ProcessSpec
         {
-            try { mutex.ReleaseMutex(); } catch { /* не наш мьютекс или уже отпущен */ }
-            mutex.Dispose();
-        }
+            FileName = "systemd-run",
+            Args =
+            [
+                "--user",
+                "--collect",
+                "--quiet",
+                $"--unit=ccs-deploy-{options.TaskName}",
+                "-p", "ManagedOOMPreference=avoid",
+                $"--setenv=CCS_RELEASES_DIR={options.ReleasesDir}",
+                script,
+            ],
+            RedirectStdin = false,
+            StdioEncoding = new UTF8Encoding(false),
+            Track = false,
+        };
     }
+
+    // Windows: прежний schtasks /run /tn <TaskName>. Имя задачи из конфига (белый список).
+    private static ProcessSpec BuildWindowsWakeSpec(DeployOptions options) => new()
+    {
+        FileName = "schtasks",
+        Args = ["/run", "/tn", options.TaskName],
+        WorkingDirectory = Directory.Exists(options.AgentDir) ? options.AgentDir : null,
+        RedirectStdin = false,
+        StdioEncoding = new UTF8Encoding(false),
+        Track = false,
+    };
+
+    public IDisposable? TryLockAgent(string releasesDir) => agentLock.TryAcquireDeploy(releasesDir);
 }

@@ -66,13 +66,23 @@ APP="${CCS_APP_DIR:-/opt/ccs/app}"
 STAGING="${CCS_STAGING_DIR:-/opt/ccs/staging}"
 JOURNAL_HELPER="${CCS_DEPLOY_JOURNAL:-$(dirname "$CCS_DEPLOY_ORIG")/deploy-journal.py}"
 
+log()  { echo "[$(date +%H:%M:%S)] $*"; }
+warn() { echo "[$(date +%H:%M:%S)] warning: $*" >&2; }
+
 # flock -x держим ДО всего — иначе параллельная выкатка могла бы писать в журнал
 # одновременно с нами. Тот же файл держит и switch-release.sh: при ручном запуске он
 # открывает свой fd 9, при вызове из нас — пользуется унаследованным (мы передаём
 # номер fd через env). Без передачи fd switch-release.sh сделал бы свой exec 9>file
 # на уже открытый fd, bash оптимизировал бы redirect в noop, а flock -n получил бы
 # EAGAIN (тот же OFD уже залочен нами).
-exec 9>"$LOCK"
+#
+# Различаем ошибки открытия лока и захват: «не смогли открыть файл» значит нет прав
+# или родительского каталога, надо сообщить человеку (а не делать вид, что занято);
+# «flock -n не взял» — другая выкатка идёт, это штатный no-op.
+if ! exec 9>"$LOCK"; then
+  warn "не смог открыть $LOCK (нет прав или каталога $RELEASES_DIR не существует)"
+  exit 0
+fi
 if ! flock -x -n 9; then
   echo "deploy-linux: deploy.lock занят — выкатка уже идёт, выход" >&2
   exit 0
@@ -82,53 +92,63 @@ fi
 # брать свой.
 export CCS_DEPLOY_LOCK_FD=9
 
-# Аварийный выход: если скрипт упал до явного finalize (например, journal не читался),
-# trap EXIT закроет current как failed. Нормальный путь ставит __deploy_done=1 — тогда
-# trap no-op. journal_finalize идемпотентен (повторный вызов при current=None не пишет).
-__deploy_done=0
-trap '__finalize_on_exit' EXIT
-__finalize_on_exit() {
-  if [ "$__deploy_done" = "0" ]; then
-    "$JOURNAL_HELPER" "$STATE_PATH" finalize failed \
-      "deploy-linux завершился аварийно (ловушка EXIT)" 2>/dev/null || true
-  fi
-}
-
-log()  { echo "[$(date +%H:%M:%S)] $*"; }
-warn() { echo "[$(date +%H:%M:%S)] warning: $*" >&2; }
-
 # Хелперы журнала. Любой сбой журнала — предупреждение в stderr, не роняем выкатку:
 # прод важнее карточки в чате. Если карточка нужна — сервер всё ещё владеет файлом
-# и при следующей побудке запишет заново.
+# и при следующей побудке запишет заново. python3 -I — граница привилегий: выкатка
+# не тянет site-packages и user-site (через env shebang не пробрасывает флаги на Linux,
+# поэтому идём через явный интерпретатор).
+journal() {
+  python3 -I "$JOURNAL_HELPER" "$STATE_PATH" "$@" 2>/dev/null \
+    || warn "journal $* не удался"
+}
 journal_phase() {
-  "$JOURNAL_HELPER" "$STATE_PATH" set-phase "$1" 2>/dev/null \
-    || warn "journal set-phase $1 не удался"
+  journal set-phase "$1"
 }
 journal_step() {
-  "$JOURNAL_HELPER" "$STATE_PATH" set-step "$1" "$2" 2>/dev/null \
-    || warn "journal set-step $1 $2 не удался"
+  # ms (длительность шага в мс, DeployStep.Ms) приходит третьим аргументом.
+  # Без него — пишем только name/status, как раньше.
+  if [ -n "${3:-}" ]; then
+    journal set-step "$1" "$2" "$3"
+  else
+    journal set-step "$1" "$2"
+  fi
 }
 journal_sha() {
-  "$JOURNAL_HELPER" "$STATE_PATH" set-sha "$1" 2>/dev/null \
-    || warn "journal set-sha $1 не удался"
+  journal set-sha "$1"
 }
+# finalize <status> [message] [releaseId]. releaseId — снимок, на котором остановились
+# (на откате — куда вернулись), пишется в result.releaseId.
 journal_finalize() {
-  local status="$1" message="${2:-}"
-  if [ -n "$message" ]; then
-    "$JOURNAL_HELPER" "$STATE_PATH" finalize "$status" "$message" 2>/dev/null \
-      || warn "journal finalize $status не удался"
+  local status="$1" message="${2:-}" release_id="${3:-}"
+  if [ -n "$release_id" ]; then
+    journal finalize "$status" "$message" "$release_id"
+  elif [ -n "$message" ]; then
+    journal finalize "$status" "$message"
   else
-    "$JOURNAL_HELPER" "$STATE_PATH" finalize "$status" 2>/dev/null \
-      || warn "journal finalize $status не удался"
+    journal finalize "$status"
   fi
   __deploy_done=1
 }
 
+# Аварийный выход: если скрипт упал до явного finalize (например, journal не читался),
+# trap EXIT закроет current как failed. Нормальный путь ставит __deploy_done=1 — тогда
+# trap no-op. journal_finalize идемпотентен (повторный вызов при current=None не пишет).
+# Через journal() — единая точка с python3 -I.
+__deploy_done=0
+trap '__finalize_on_exit' EXIT
+__finalize_on_exit() {
+  if [ "$__deploy_done" = "0" ]; then
+    journal finalize failed "deploy-linux завершился аварийно (ловушка EXIT)"
+  fi
+}
+
 # Чтение заявки. current уже записан сервером: id, kind=deploy, phase=queued, ref, sha,
 # dirty, request, initiatedBy, startedAt. Агент добавляет phase/sha/steps/result.
-deploy_id=$(python3 -c "
-import json, sys
-s = json.load(open('$STATE_PATH'))
+# python3 -I — граница привилегий. STATE_PATH передаём переменной окружения, а не
+# подстановкой в python-код: иначе путь с апострофом или переводом строки пробивает код.
+deploy_id=$(STATE_PATH="$STATE_PATH" python3 -I -c "
+import json, sys, os
+s = json.load(open(os.environ['STATE_PATH']))
 cur = s.get('current')
 if not cur:
   sys.exit('current пуст — сервер не оставил заявку')
@@ -139,17 +159,30 @@ print(cur['id'])
   exit 0
 }
 
-request_json=$(python3 -c "
-import json
-print(json.dumps(json.load(open('$STATE_PATH'))['current']['request']))
+request_json=$(STATE_PATH="$STATE_PATH" python3 -I -c "
+import json, os
+print(json.dumps(json.load(open(os.environ['STATE_PATH']))['current']['request']))
 ")
 
 log "deploy $deploy_id start: $request_json"
 
-# Параметры заявки.
-ref=$(echo "$request_json" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('ref') or 'master')")
-skipFrontend=$(echo "$request_json" | python3 -c "import sys,json; print(str(json.load(sys.stdin).get('skipFrontend', False)).lower())")
-allowDirty=$(echo "$request_json" | python3 -c "import sys,json; print(str(json.load(sys.stdin).get('allowDirty', False)).lower())")
+# Параметры заявки. STATE_PATH передаём env, входной JSON — через stdin (<<< here-string),
+# без подстановки bash-переменной в код python.
+ref=$(STATE_PATH="$STATE_PATH" python3 -I -c "
+import json, os
+r = json.load(open(os.environ['STATE_PATH']))['current']['request']
+print(r.get('ref') or 'master')
+" <<< "$request_json")
+skipFrontend=$(STATE_PATH="$STATE_PATH" python3 -I -c "
+import json, os
+r = json.load(open(os.environ['STATE_PATH']))['current']['request']
+print(str(r.get('skipFrontend', False)).lower())
+" <<< "$request_json")
+allowDirty=$(STATE_PATH="$STATE_PATH" python3 -I -c "
+import json, os
+r = json.load(open(os.environ['STATE_PATH']))['current']['request']
+print(str(r.get('allowDirty', False)).lower())
+" <<< "$request_json")
 
 log "deploy $deploy_id: ref=$ref skipFrontend=$skipFrontend allowDirty=$allowDirty"
 
@@ -195,13 +228,14 @@ else
 fi
 
 log "deploy $deploy_id: publish-linux.sh (BUILD_FRONTEND=$build_frontend PUBLISH_DIR=$STAGING)"
+build_t0=$(( $(date +%s%N) / 1000000 ))
 if ! env BUILD_FRONTEND="$build_frontend" BUILD_DIFY=1 PUBLISH_DIR="$STAGING" \
         "$AGENT_DIR/scripts/ops/publish-linux.sh" 2>&1; then
-  journal_step build fail
+  journal_step build fail "$(( $(date +%s%N) / 1000000 - build_t0 ))"
   journal_finalize failed "publish-linux.sh упал"
   exit 0
 fi
-journal_step build ok
+journal_step build ok "$(( $(date +%s%N) / 1000000 - build_t0 ))"
 
 # Переключение. CCS_SWITCH_DETACHED=1 — мы уже в своём юните systemd-run, повторная
 # самоотвязка не нужна и была бы петлёй. Журнал и пути передаём переменными.
@@ -218,6 +252,8 @@ log "deploy $deploy_id: switch-release.sh вернул $switch_rc"
 # Интерпретация кода выхода: 0 → succeeded, 1 → rolled_back, остальное → failed.
 case "$switch_rc" in
   0) journal_finalize succeeded ;;
+  # releaseId (снимок, на который вернулись) finalize берёт сам из rollbackTarget,
+  # который switch-release.sh оставил в журнале перед откатом.
   1) journal_finalize rolled_back ;;
   *) journal_finalize failed "switch-release.sh вернул код $switch_rc" ;;
 esac

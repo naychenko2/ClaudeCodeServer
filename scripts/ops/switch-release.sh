@@ -98,26 +98,38 @@ fi
 # скрипт умирал сразу после stop, прод оставался лежать (2026-09-28 08:59, лог 085902).
 # Поэтому любой запуск (setsid, nohup, напрямую) сам перезапускается через systemd-run
 # и сразу возвращает управление; прогресс — в /opt/ccs/deploy-*.log.
+#
+# Имя юнита уникально по pid родительского bash (`$$`): два ручных запуска подряд
+# никогда не подерут один юнит. Метка времени в STAMP ниже читается человеком, но
+# защитой от коллизий она не работает — два запуска в одну секунду дали бы один юнит.
 if [ -z "${CCS_SWITCH_DETACHED:-}" ]; then
-  unit="ccs-switch-$(date +%Y%m%d-%H%M%S)"
+  unit="ccs-switch-$$"
   echo "switch-release: перезапускаюсь отдельным юнитом $unit (journalctl --user -u $unit, лог — /opt/ccs/deploy-*.log)"
   exec systemd-run --user --quiet --collect --unit="$unit" \
     --setenv=CCS_SWITCH_DETACHED=1 "$(readlink -f "$0")" "$@"
 fi
 
-# Журналирование фазы. Без CCS_DEPLOY_JOURNAL — no-op (ручной запуск).
-journal_phase() {
+# Журналирование фазы/шага. Без CCS_DEPLOY_JOURNAL — no-op (ручной запуск).
+# python3 -I — граница привилегий: через env shebang не пробрасывает -I на Linux,
+# поэтому идём через явный интерпретатор.
+journal() {
   if [ -n "${CCS_DEPLOY_JOURNAL:-}" ] && [ -n "${CCS_DEPLOY_STATE_PATH:-}" ]; then
-    "$CCS_DEPLOY_JOURNAL" "$CCS_DEPLOY_STATE_PATH" set-phase "$1" || true
+    python3 -I "$CCS_DEPLOY_JOURNAL" "$CCS_DEPLOY_STATE_PATH" "$@" || true
   fi
 }
-
-# Журналирование шага. step <name> <status>. Тот же name переписывается, а не плодит дубль —
-# удобно, если шаг временно выставил промежуточный статус (например, stop ok, потом health fail).
+journal_phase() {
+  journal set-phase "$1"
+}
+# step <name> <status>. Тот же name переписывается, а не плодит дубль — удобно,
+# если шаг временно выставил промежуточный статус (например, stop ok, потом health fail).
+# Длительность шага (мс) — время с прошлой отметки __mark, её же и сдвигаем: шаги
+# идут встык, поэтому каждому достаётся своя доля без пересечений.
+__mark=$(( $(date +%s%N) / 1000000 ))
 step() {
-  if [ -n "${CCS_DEPLOY_JOURNAL:-}" ] && [ -n "${CCS_DEPLOY_STATE_PATH:-}" ]; then
-    "$CCS_DEPLOY_JOURNAL" "$CCS_DEPLOY_STATE_PATH" set-step "$1" "$2" || true
-  fi
+  local now
+  now=$(( $(date +%s%N) / 1000000 ))
+  journal set-step "$1" "$2" "$(( now - __mark ))"
+  __mark=$now
 }
 
 # Конфигурация путей и команд — через env для прогона на временном каталоге.
@@ -173,6 +185,7 @@ log "staging проверен: dll, wwwroot, modules/notes, modules/spend на �
 journal_phase switching
 
 mkdir -p "$RELEASES"
+__mark=$(( $(date +%s%N) / 1000000 ))   # отсчёт длительности шагов идёт от начала снимка, не от проверок выше
 log "сохраняю текущий билд целиком в $PREV"
 cp -a "$APP" "$PREV" || { log "ОТКАЗ: не удалось сохранить текущий билд"; exit 3; }
 log "сохранено: $(du -sh "$PREV" | cut -f1)"
@@ -222,6 +235,9 @@ if [ "$ok" = "1" ]; then
 fi
 
 step health fail
+# Сигнализируем оркестратору, на какой снимок вернулись: deploy-linux.sh при exit 1
+# прочитает state.rollbackTarget и передаст его в finalize как result.releaseId.
+journal set-rollback-target "$STAMP"
 log "!!! health не прошёл за ${HEALTH_TRIES}×${HEALTH_SLEEP} с — возвращаю предыдущую сборку"
 $SYSTEMCTL_CMD stop ccs.service
 sleep 2

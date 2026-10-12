@@ -192,7 +192,7 @@ cd C:\Sources\ClaudeCodeServer\scripts\ops
 | Скрипт | Что делает |
 |---|---|
 | `deploy-linux.sh` | оркестратор: flock → читает заявку → проверяет relcheck → `git checkout --detach` → `publish-linux.sh` → `switch-release.sh` → finalize. Самоexec: на старте копирует себя в `/tmp` и делает `exec` — git checkout не должен затереть код посреди bash. |
-| `deploy-journal.py` | единственный писатель журнала со стороны оркестратора. Команды: `set-phase`, `set-step`, `set-sha`, `finalize [message]`. Атомарная запись через tmp + os.replace. Запускается через `python3 -I`, чтобы не подхватить site-packages и user-site — это граница привилегий. |
+| `deploy-journal.py` | единственный писатель журнала со стороны оркестратора. Команды: `set-phase`, `set-step <name> <status> [ms]`, `set-sha`, `finalize <status> [message] [releaseId]`. Атомарная запись через tmp + os.replace. Запускается через явный `python3 -I` от вызывающих скриптов: на Linux `/usr/bin/env python3` не пробрасывает флаги в shebang, и `python3 deploy-journal.py` без `-I` открыл бы site-packages и user-site (это граница привилегий — файл пишется в ReleasesDir, права хоста). |
 | `switch-release.sh` | фазовый сценарий: snapshot → stop → swap → start → health → succeeded/rolled_back. Функция `step <name> <status>` пишет шаг в журнал через хелпер; без `CCS_DEPLOY_JOURNAL` ничего не делает. Поддерживает ручной запуск без журнала для отладки и идёт с самоотвязкой в свой юнит systemd-run, если не выставлен `CCS_SWITCH_DETACHED=1` (оркестратор его уже поднял). |
 | `publish-linux.sh` | сборка фронта (`BUILD_FRONTEND=1`) + бэкенда + mcp-dify + релиз агента устройства. Используется оркестратором и людьми; в журнал не пишет (только в stdout/журналы). |
 
@@ -215,11 +215,13 @@ cd C:\Sources\ClaudeCodeServer\scripts\ops
 Формат — ADR-010, имена camelCase, история лимитом 30 записей, `releases` снимков релизов
 живёт отдельно. Фазы `queued → building → switching → verifying → succeeded | rolled_back | failed`.
 Шаги `build / snapshot / stop / swap / start / health` пишутся оркестратором и `switch-release.sh`
-по ходу работы.
+по ходу работы; каждый шаг может нести `ms` (длительность в мс), как `DeployStep.Ms`.
 
 `current` пишет сервер ДО побудки: `id`, `kind`, `phase=queued`, `ref`, `sha` (от snapshot),
 `dirty`, `dirtyFiles`, `request`, `initiatedBy`, `startedAt`. Агент поправляет только
 `phase`, `sha` (фактический после checkout), `steps[]`, `result` (закрытие на любом выходе).
+На откате оркестратор (`journal_finalize rolled_back <message> <releaseId>`) пишет
+`result.releaseId` — снимок, на котором остановились, как `DeployResult.ReleaseId`.
 
 ### Лок `$CCS_RELEASES_DIR/deploy.lock`
 
@@ -238,17 +240,24 @@ cd C:\Sources\ClaudeCodeServer\scripts\ops
 не трогает.
 
 ```bash
-# Локальный прогон (подставные пути через переменные окружения, никаких /opt/ccs)
-CCS_RELEASES_DIR=/tmp/ccs-test/releases \
-CCS_REPO_DIR=/tmp/ccs-test/relcheck \
-CCS_APP_DIR=/tmp/ccs-test/app \
-CCS_STAGING_DIR=/tmp/ccs-test/staging \
-PATH=/tmp/ccs-test/fakebin:$PATH \
+# Локальный прогон: каталог-песочница с КОПИЕЙ скриптов и подставным publish-linux.sh
+# (настоящий соберёт фронт и бэкенд), шимы в начале PATH, пути — переменными окружения.
+SBX=/tmp/ccs-test
+install -m 755 scripts/ops/{deploy-linux.sh,switch-release.sh,deploy-journal.py} $SBX/agent/scripts/ops/
+CCS_RELEASES_DIR=$SBX/releases CCS_REPO_DIR=$SBX/relcheck \
+CCS_APP_DIR=$SBX/app CCS_STAGING_DIR=$SBX/staging \
+PATH=$SBX/shim:$PATH \
 HEALTH_URL=http://127.0.0.1:19999/ HEALTH_TRIES=3 HEALTH_SLEEP=1 \
-scripts/ops/deploy-linux.sh
+$SBX/agent/scripts/ops/deploy-linux.sh
 ```
 
-Реальный `/opt/ccs` этим скриптом не трогается — только подставленные пути через env.
+> **Шимы `systemctl` и `systemd-run` в `$SBX/shim` обязательны.** `switch-release.sh` при любых
+> недозаданных переменных берёт боевые умолчания (`/opt/ccs/*`, настоящий `systemctl --user`),
+> а запущенный без `CCS_SWITCH_DETACHED=1` уходит в реальный `systemd-run`. `APP=… STAGING=…`
+> нужно задавать **окружением**, а не аргументами после имени скрипта: аргументы он молча
+> игнорирует. Остановка `ccs.service` гасит весь `ccs-agents.slice`, включая ход агента, из
+> которого скрипт запущен, и все остальные идущие ходы: так прод уже ронялся 28.09 и 12.10.
+> Шим `systemd-run` должен падать с ненулевым кодом, шим `systemctl` — только писать в журнал.
 
 ---
 

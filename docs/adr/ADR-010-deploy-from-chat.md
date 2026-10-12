@@ -103,9 +103,9 @@ systemd-run --user --collect --quiet --unit=ccs-deploy-<id> \
 
 argv фиксированный: ни одного параметра заявки, никаких полей `current.request` в
 командной строке — заявка целиком лежит в журнале. `<id>` — UTC-штамп вида
-`YYYYMMDD-HHMMSS[-(N)]`, проверяется белым списком `^[A-Za-z0-9_-]{1,128}$`
-(`DeployValidation.IsValidBuildId`) до подстановки в имя юнита, иначе CR/LF
-стал бы инъекцией.
+`YYYYMMDD-HHMMSS[-(N)]`, проверяется белым списком `^[A-Za-z0-9._-]{1,64}$`
+(`DeployValidation.IsValidBuildId` → `BuildIdPattern`) до подстановки в имя
+юнита, иначе CR/LF стал бы инъекцией.
 
 **Почему НЕ `setsid`/`nohup`.** Инцидент 2026-09-28 08:59 (лог 085902): `setsid`
 сменил сессию, но не cgroup; оркестратор жил в scope `ccs-agents.slice` и умер на

@@ -5,12 +5,36 @@
 // прилипает к низу (решение команды №2).
 
 import type { ReactNode } from 'react';
-import { Cpu, ScanFace } from 'lucide-react';
+import { AlertTriangle, Cpu, Info, RefreshCw, ScanFace, Clock } from 'lucide-react';
 import { Badge, Button, MetaChip, C, R, SP, ICON_SIZE, ICON_STROKE, useIsMobile } from 'aihome_shell/kit';
 import type { ImageEditCharacter, ImageEditorApi } from './api';
-import { FS_TEXT } from './faceSwapView';
+import { FS_TEXT, type NoticeSpec } from './faceSwapView';
 
 const ic = (I: typeof Cpu, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
+
+// Плашка-уведомление (состояния 2/5/6/7/8/9/10): тон (info/warning/danger), иконка, текст,
+// опциональное действие. Фон/рамка/текст — по тону, токены design.ts.
+function Notice({ n, onAction }: { n: NoticeSpec; onAction: (n: NoticeSpec) => void }) {
+  const tone = n.tone;
+  const bg = tone === 'danger' ? C.dangerBg : tone === 'warning' ? C.warningBg : C.bgCard;
+  const border = tone === 'danger' ? C.dangerBorder : C.borderLight;
+  const fg = tone === 'danger' ? C.dangerText : tone === 'warning' ? C.warningText : C.textPrimary;
+  const icon = n.icon === 'clock' ? ic(Clock) : n.icon === 'redo' ? ic(RefreshCw) : n.icon === 'cpu' ? ic(Cpu)
+    : n.icon === 'alert' ? ic(AlertTriangle) : ic(Info);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: SP.xs, padding: SP.sm, borderRadius: R.md,
+      background: bg, border: `1px solid ${border}`, color: fg, fontSize: 12, lineHeight: 1.45,
+    }}>
+      <span style={{ color: fg, opacity: 0.8, flexShrink: 0, marginTop: 1 }}>{icon}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>{n.text}</span>
+      {n.action && (
+        <Button size="xs" variant={n.action.kind === 'ghostAccent' ? 'ghostAccent' : 'secondary'}
+          onClick={() => onAction(n)} style={{ flexShrink: 0 }}>{n.action.label}</Button>
+      )}
+    </div>
+  );
+}
 
 // Аватар персонажа: первое фото; без фото — нейтральный кружок
 function Avatar({ api, projectId, c, size }: { api: ImageEditorApi; projectId: string; c: ImageEditCharacter; size: number }) {
@@ -110,7 +134,8 @@ function Footer({ quote, localOnce, canSubmit, submitting, mobile, onSubmit }: {
 }
 
 // Панель целиком. listEnabled — доступен ли список (лицо выбрано/закрашено); canSubmit — по матрице.
-export function FaceSwapPanel({ api, projectId, characters, selectedCharacter, inContextSlug, listEnabled, canSubmit, quote, localOnce, submitting, onPick, onSubmit }: {
+// notices — плашки состояний (2/5/6/7/8/9/10); onNoticeAction — действие из плашки (кисть/локальные).
+export function FaceSwapPanel({ api, projectId, characters, selectedCharacter, inContextSlug, listEnabled, canSubmit, quote, localOnce, submitting, notices, onPick, onNoticeAction, onSubmit }: {
   api: ImageEditorApi;
   projectId: string;
   characters: readonly ImageEditCharacter[];
@@ -121,7 +146,9 @@ export function FaceSwapPanel({ api, projectId, characters, selectedCharacter, i
   quote: string | null;
   localOnce: boolean;
   submitting: boolean;
+  notices: readonly NoticeSpec[];
   onPick: (slug: string) => void;
+  onNoticeAction: (n: NoticeSpec) => void;
   onSubmit: () => void;
 }) {
   const mobile = useIsMobile();
@@ -150,6 +177,11 @@ export function FaceSwapPanel({ api, projectId, characters, selectedCharacter, i
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minHeight: 0, flex: 1 }}>
+      {notices.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+          {notices.map((n, i) => <Notice key={i} n={n} onAction={onNoticeAction} />)}
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, flex: 1, minHeight: 0, overflowY: mobile ? undefined : 'auto' }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading }}>{FS_TEXT.pickTitle}</div>
         {list}

@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, FS_TEXT } from '../faceSwapView';
+import { faceSwapView, FS_TEXT, type NoticeSpec } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -321,6 +321,17 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   );
 
   // «Подставить персонажа»: панель выбора персонажа + подвал вместо обычного контента
+  const onFaceNoticeAction = (n: NoticeSpec) => {
+    if (!n.action) return;
+    if (n.action.kind === 'ghostAccent') {
+      // «Закрасить кистью»: выходим из режима, включаем кисть — человек закрашивает лицо сам
+      setFaceSwapMode(false);
+      setTool('mask');
+    } else {
+      // «Использовать локальные для этого запуска» (состояние 9): явное действие, тихой подмены нет
+      setFaceUi(u => ({ ...u, useLocalOnce: true }));
+    }
+  };
   const faceSide = faceSwapMode && faceView ? (
     <div style={{
       display: 'flex', flexDirection: 'column', width: mobile ? '100%' : 310, flexShrink: 0,
@@ -337,7 +348,9 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         quote={faceView.canSubmit ? FS_TEXT.quote : null}
         localOnce={faceView.localOnce}
         submitting={faceUi.submitting}
+        notices={faceView.notices}
         onPick={slug => faceSwap.selectCharacter(slug)}
+        onNoticeAction={onFaceNoticeAction}
         onSubmit={() => { void launchFaceSwapNow(); }} />
     </div>
   ) : null;

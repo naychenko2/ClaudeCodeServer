@@ -11,6 +11,11 @@ ccs_face_similarity=0.771 либо ccs_face_similarity=none, если лица �
 эталонов: в сценах с несколькими людьми нужное лицо может быть меньше самого крупного
 («Андрей рядом с прохожим» — крупный прохожий тянет сходство вниз).
 
+Необязательный вход mask (MASK) — для правки по маске лица второго персонажа: тогда
+максимум берётся только по лицам, чей bbox покрыт маской не меньше чем на 0,5, иначе лицо
+первого персонажа вне маски перебило бы результат. Без маски ключа mask в job.json нет,
+поведение прежнее.
+
 Тяжёлые зависимости (insightface, onnxruntime, opencv) живут в отдельном venv
 (~/ai-data/face-workers/.venv): в venv ComfyUI им не место — numpy<2 и opencv рядом с
 torch cu128 ломают весь ComfyUI целиком. Поэтому:
@@ -110,6 +115,25 @@ def _save_variant_png(image, png_path):
     Image.fromarray(arr).save(png_path)
 
 
+def _save_mask_png(mask, png_path):
+    """ComfyUI MASK — torch.Tensor [B,H,W] float32 0..1. Порог 0,5 → PNG режима L
+    со значениями 0/255: воркеру не гадать о полутонах."""
+    import numpy as np
+    from PIL import Image
+
+    if hasattr(mask, "detach") and hasattr(mask, "cpu"):
+        arr = mask.detach().cpu().numpy()
+    else:
+        arr = np.asarray(mask)
+    while arr.ndim > 2:
+        arr = arr[0]
+    if arr.ndim != 2 or arr.size == 0:
+        raise ValueError(f"маска неожиданной формы: {arr.shape}")
+    arr = np.where(arr >= 0.5, 255, 0).astype(np.uint8)
+    # uint8 2D у PIL — всегда режим L; аргумент mode в Pillow 11.3+ устарел
+    Image.fromarray(arr).save(png_path)
+
+
 def _safe_none(reason):
     """Возврат 'none' с записью причины в лог. Граф НЕ роняем."""
     log.warning("ccs_face_similarity: %s", reason)
@@ -129,6 +153,9 @@ class CcsFaceSimilarity:
             "image": ("IMAGE",),
             # имена файлов во входной папке ComfyUI, по одному на строку (как у CcsAudioWorker)
             "references": ("STRING", {"default": "", "multiline": True}),
+        }, "optional": {
+            # маска правки: сходство меряется только у лица внутри неё
+            "mask": ("MASK",),
         }}
 
     @classmethod
@@ -136,7 +163,7 @@ class CcsFaceSimilarity:
         # nan — каждый запуск новая работа; совпадает с ccs_audio_worker
         return float("nan")
 
-    def run(self, image, references):
+    def run(self, image, references, mask=None):
         # 1. Где воркер
         try:
             family = _config()["families"]["similarity"]
@@ -175,6 +202,14 @@ class CcsFaceSimilarity:
                 "face_models": _face_models(),
                 "det_size": _det_size(),
             }
+            if mask is not None:
+                mask_path = os.path.join(tmp, "mask.png")
+                try:
+                    _save_mask_png(mask, mask_path)
+                except Exception as e:
+                    # без маски не откатываемся: максимум по всем лицам дал бы чужое сходство
+                    return _safe_none(f"маска не сохранена: {type(e).__name__}: {e}")
+                job["mask"] = mask_path
             with open(job_path, "w", encoding="utf-8") as f:
                 json.dump(job, f, ensure_ascii=False)
 

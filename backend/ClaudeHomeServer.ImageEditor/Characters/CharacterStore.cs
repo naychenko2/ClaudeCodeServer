@@ -167,10 +167,13 @@ public static partial class CharacterStore
     // время мог поменяться, поэтому он читается заново. Фото с LabelSource=human не трогаем целиком,
     // метка удалённого фото отбрасывается, прочие поля манифеста остаются как есть.
     // null — персонажа нет; иначе имена файлов, чьи метки записаны.
-    // labelSource — кто разметил: Auto (модель ответила) или NoRoute (разметить было нечем, повторим позже)
+    // placeSource — источник МЕСТА разметки: Auto (модель ответила) или NoRoute (разметить было
+    // нечем, повторим позже). anglePlace — куда писать: AngleSource (angle/pitch) или EmotionSource
+    // (emotion). По месту, а не общим LabelSource: запись одного места не затирает noroute другого
+    // (дефекты а/б находки Александра).
     public static IReadOnlyList<string>? MergeAutoLabels(
         string root, string slug, IReadOnlyDictionary<string, CharacterPhotoLabels> labels,
-        string labelSource = PhotoLabelValues.Auto)
+        string placeSource = PhotoLabelValues.Auto, bool anglePlace = true)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
@@ -183,13 +186,18 @@ public static partial class CharacterStore
             if (photo.LabelSource == PhotoLabelValues.Human || !labels.TryGetValue(photo.File, out var found)) continue;
             // Запись без единой метки ничего не говорит о фото: источник не ставим
             if (found.Angle is null && found.Pitch is null && found.Emotion is null) continue;
-            manifest.Photos[i] = photo with
-            {
-                Angle = found.Angle ?? photo.Angle,
-                Pitch = found.Pitch ?? photo.Pitch,
-                Emotion = found.Emotion ?? photo.Emotion,
-                LabelSource = labelSource,
-            };
+            manifest.Photos[i] = anglePlace
+                ? photo with
+                {
+                    Angle = found.Angle ?? photo.Angle,
+                    Pitch = found.Pitch ?? photo.Pitch,
+                    AngleSource = placeSource,
+                }
+                : photo with
+                {
+                    Emotion = found.Emotion ?? photo.Emotion,
+                    EmotionSource = placeSource,
+                };
             applied.Add(photo.File);
         }
         if (applied.Count == 0) return applied;
@@ -215,8 +223,9 @@ public static partial class CharacterStore
         return null;
     }
 
-    // Ручная правка: поля меняются только переданные, источник становится human.
-    // Запись из одних null — сброс ручной разметки: метки и источник стираются, фото снова доступно авторазметке
+    // Ручная правка: поля меняются только переданные, источник фото становится human (авторазметка
+    // такое фото не трогает). Запись из одних null — сброс: метки, источник фото и по-местные
+    // источники (AngleSource/EmotionSource) стираются, фото снова доступно авторазметке.
     private static void ApplyHumanLabels(CharacterManifest manifest, IReadOnlyDictionary<string, CharacterPhotoLabels> labels)
     {
         for (var i = 0; i < manifest.Photos.Count; i++)
@@ -225,7 +234,8 @@ public static partial class CharacterStore
             if (!labels.TryGetValue(photo.File, out var l)) continue;
             if (l.Angle is null && l.Pitch is null && l.Emotion is null)
             {
-                manifest.Photos[i] = photo with { Angle = null, Pitch = null, Emotion = null, LabelSource = null };
+                manifest.Photos[i] = photo with
+                { Angle = null, Pitch = null, Emotion = null, LabelSource = null, AngleSource = null, EmotionSource = null };
                 continue;
             }
             manifest.Photos[i] = photo with
@@ -234,6 +244,8 @@ public static partial class CharacterStore
                 Pitch = l.Pitch ?? photo.Pitch,
                 Emotion = l.Emotion ?? photo.Emotion,
                 LabelSource = PhotoLabelValues.Human,
+                AngleSource = null,
+                EmotionSource = null,
             };
         }
     }

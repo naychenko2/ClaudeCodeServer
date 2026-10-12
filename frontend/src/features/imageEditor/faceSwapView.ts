@@ -19,8 +19,14 @@ export const FS_TEXT = {
   over8: 'Показаны 8 самых крупных лиц',
   small: 'Лицо слишком мелкое — персонаж получится непохожим. Закрасьте его кистью или увеличьте картинку',
   close: 'Лица стоят слишком близко — закрасьте нужное кистью',
+  // face_out_of_frame (этап 2 · шаг 10d): новое — на согласование продакту
+  outOfFrame: 'Лицо вне картинки. Выберите другое лицо или закрасьте нужное кистью',
   busy: 'Видеокарта занята долгой задачей. Попробуйте чуть позже',
   provider: 'Подставлять персонажа можно только локальными моделями',
+  // provider_unavailable, когда локальные модели недоступны: действие не помогает (этап 2 · шаг 10d)
+  localUnavailable: 'Локальные модели сейчас недоступны. Попробуйте позже',
+  // feature_disabled: флаг выключили, пока экран был открыт — режим закрывается (этап 2 · шаг 10d)
+  featureDisabled: 'Режим «Подставить персонажа» отключён',
   useLocal: 'Использовать локальные для этого запуска',
   changed: 'Картинка изменилась — лица найдены заново',
   go: 'Подставить',
@@ -87,7 +93,9 @@ export interface FaceSwapViewInput {
   tappedSmall: number | null;
   over8: boolean;
   facesTooClose: boolean;
+  faceOutOfFrame: boolean;
   busy: boolean;
+  providerUnavailable: boolean;
   facesChanged: boolean;
   // «Лиц нет» (состояние 2): «Подставить» активна, когда есть закрашенная область
   hasMask: boolean;
@@ -111,11 +119,38 @@ export interface FaceSwapView {
   localOnce: boolean;
 }
 
+// ── Реакция на отказ запуска (этап 2 · шаг 10d) ────────────────────────────────
+// Код ошибки запуска → вид отказа. Чистая функция: без React, без DOM.
+// Тело запуска несёт code (offline.ts: body = JSON-ответ сервера); проверка по тексту
+// сообщения убрана — только по коду. provider_unavailable → 9/нейтрально решает
+// faceSwapView по localAvailable (действие «использовать локальные» не помогает, когда
+// локальные недоступны).
+export type LaunchFailure =
+  | { kind: 'facesTooClose' }        // faces_too_close → плашка 7 (danger, «близко»)
+  | { kind: 'faceOutOfFrame' }       // face_out_of_frame → плашка (новый текст)
+  | { kind: 'busy' }                 // busy → плашка 8 (danger, clock, «Видеокарта занята…»)
+  | { kind: 'providerUnavailable' }  // provider_unavailable → плашка 9 / нейтрально
+  | { kind: 'facesChanged' }         // faces_changed → обновление рамок + сброс выбора
+  | { kind: 'featureDisabled' }      // feature_disabled → закрытие режима
+  | { kind: 'generic'; message: string }; // неизвестный код → общая ошибка
+
+export function launchFailure(code: string | null, message: string | null): LaunchFailure {
+  switch (code) {
+    case 'faces_too_close': return { kind: 'facesTooClose' };
+    case 'face_out_of_frame': return { kind: 'faceOutOfFrame' };
+    case 'busy': return { kind: 'busy' };
+    case 'provider_unavailable': return { kind: 'providerUnavailable' };
+    case 'faces_changed': return { kind: 'facesChanged' };
+    case 'feature_disabled': return { kind: 'featureDisabled' };
+    default: return { kind: 'generic', message: message ?? '' };
+  }
+}
+
 // Чистое вычисление состояния экрана. canSubmit — по матрице макета: лицо и персонаж
 // выбраны, исполнитель — локальные (или переключены на этот запуск).
 export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
   const { phase, faces, selectedFace, selectedCharacter, error, provider, localAvailable, useLocalOnce,
-    tappedSmall, over8, facesTooClose, busy, facesChanged, hasMask } = i;
+    tappedSmall, over8, facesTooClose, faceOutOfFrame, busy, providerUnavailable, facesChanged, hasMask } = i;
 
   // Исполнитель запуска: локальные модели, либо переключены на этот запуск
   const local = useLocalOnce || provider === 'local';
@@ -153,15 +188,23 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     if (facesTooClose) {
       notices.push({ tone: 'danger', icon: 'alert', text: FS_TEXT.close, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
     }
+    if (faceOutOfFrame) {
+      notices.push({ tone: 'danger', icon: 'alert', text: FS_TEXT.outOfFrame, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
+    }
     if (busy) {
       notices.push({ tone: 'danger', icon: 'clock', text: FS_TEXT.busy });
     }
     if (facesChanged) {
       notices.push({ tone: 'info', icon: 'redo', text: FS_TEXT.changed });
     }
-    // Провайдер не локальные (9): плашка + явное действие; тихой подмены нет
+    // Провайдер не локальные (9): плашка + явное действие; тихой подмены нет.
+    // provider_unavailable, когда локальные недоступны: действие не помогает → нейтральный текст
     if (!localOk) {
-      notices.push({ tone: 'warning', icon: 'cpu', text: FS_TEXT.provider, action: { label: FS_TEXT.useLocal, kind: 'secondary' } });
+      if (providerUnavailable && !localAvailable) {
+        notices.push({ tone: 'info', icon: 'cpu', text: FS_TEXT.localUnavailable });
+      } else {
+        notices.push({ tone: 'warning', icon: 'cpu', text: FS_TEXT.provider, action: { label: FS_TEXT.useLocal, kind: 'secondary' } });
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedFace } from './api';
 import {
-  faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual,
+  faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
   type FaceSwapViewInput,
 } from './faceSwapView';
 
@@ -11,7 +11,8 @@ const face = (n: number, small = false): DetectedFace => ({ n, bbox: [10, 10, 30
 const base = (over: Partial<FaceSwapViewInput> = {}): FaceSwapViewInput => ({
   phase: 'ready', faces: [face(1), face(2)], selectedFace: null, selectedCharacter: null,
   error: null, provider: 'local', localAvailable: true, useLocalOnce: false,
-  tappedSmall: null, over8: false, facesTooClose: false, busy: false, facesChanged: false, hasMask: false,
+  tappedSmall: null, over8: false, facesTooClose: false, faceOutOfFrame: false, busy: false,
+  providerUnavailable: false, facesChanged: false, hasMask: false,
   ...over,
 });
 
@@ -108,12 +109,24 @@ describe('faceSwapView: плашки', () => {
     const v = faceSwapView(base({ facesTooClose: true }));
     expect(v.notices.some(n => n.tone === 'danger' && n.text.includes('близко'))).toBe(true);
   });
+  it('face_out_of_frame: danger + «вне картинки» + «Закрасить кистью»', () => {
+    const v = faceSwapView(base({ faceOutOfFrame: true }));
+    expect(v.notices.some(n => n.tone === 'danger' && n.text.includes('вне картинки') && n.action?.label === 'Закрасить кистью')).toBe(true);
+  });
   it('занята долгой задачей (8): danger', () => {
     expect(faceSwapView(base({ busy: true })).notices.some(n => n.tone === 'danger' && n.icon === 'clock')).toBe(true);
   });
   it('провайдер не local (9): warning + «Использовать локальные…»', () => {
     const v = faceSwapView(base({ provider: 'fal' }));
     expect(v.notices.some(n => n.tone === 'warning' && n.action?.label === 'Использовать локальные для этого запуска')).toBe(true);
+  });
+  it('provider_unavailable, локальные доступны (9): warning + «Использовать локальные…»', () => {
+    const v = faceSwapView(base({ provider: 'fal', providerUnavailable: true, localAvailable: true }));
+    expect(v.notices.some(n => n.tone === 'warning' && n.action?.label === 'Использовать локальные для этого запуска')).toBe(true);
+  });
+  it('provider_unavailable, локальные недоступны: нейтральный текст, без действия', () => {
+    const v = faceSwapView(base({ provider: 'fal', providerUnavailable: true, localAvailable: false }));
+    expect(v.notices.some(n => n.tone === 'info' && n.icon === 'cpu' && n.text.includes('Локальные модели сейчас недоступны') && n.action == null)).toBe(true);
   });
   it('409 faces_changed (10): info «Картинка изменилась…»', () => {
     expect(faceSwapView(base({ facesChanged: true })).notices.some(n => n.tone === 'info' && n.icon === 'redo')).toBe(true);
@@ -170,5 +183,34 @@ describe('faceTargetCaption: выбор подписи на карточке з�
   it('имя персонажа по slug; персонаж не найден в списке — fallback на slug', () => {
     expect(faceTargetCaption({ n: 1, characterSlug: 'marina' }, null)).toBe('marina → лицо 1');
     expect(faceTargetCaption({ n: 1, characterSlug: 'marina' }, '  ')).toBe('marina → лицо 1');
+  });
+});
+
+// ── launchFailure: код отказа запуска → состояние экрана (этап 2 · шаг 10d) ─────
+describe('launchFailure: код → состояние', () => {
+  it('faces_too_close → facesTooClose (по коду, не по тексту)', () => {
+    // message без подстроки «близко»: мутация «подстрока вместо кода» должна покраснеть
+    expect(launchFailure('faces_too_close', 'лицо слишком мелкое')).toEqual({ kind: 'facesTooClose' });
+  });
+  it('face_out_of_frame → faceOutOfFrame', () => {
+    expect(launchFailure('face_out_of_frame', 'Лицо вне картинки.')).toEqual({ kind: 'faceOutOfFrame' });
+  });
+  it('busy → busy (плашка 8)', () => {
+    expect(launchFailure('busy', null)).toEqual({ kind: 'busy' });
+  });
+  it('provider_unavailable → providerUnavailable (плашка 9/нейтрально)', () => {
+    expect(launchFailure('provider_unavailable', null)).toEqual({ kind: 'providerUnavailable' });
+  });
+  it('faces_changed → facesChanged (обновление рамок + сброс выбора)', () => {
+    expect(launchFailure('faces_changed', null)).toEqual({ kind: 'facesChanged' });
+  });
+  it('feature_disabled → featureDisabled (закрытие режима)', () => {
+    expect(launchFailure('feature_disabled', null)).toEqual({ kind: 'featureDisabled' });
+  });
+  it('неизвестный код → generic с сообщением', () => {
+    expect(launchFailure('weird_code', 'что-то пошло не так')).toEqual({ kind: 'generic', message: 'что-то пошло не так' });
+  });
+  it('код null (нет кода в теле) → generic', () => {
+    expect(launchFailure(null, 'сеть')).toEqual({ kind: 'generic', message: 'сеть' });
   });
 });

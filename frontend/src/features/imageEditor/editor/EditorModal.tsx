@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, FS_TEXT, type NoticeSpec } from '../faceSwapView';
+import { faceSwapView, launchFailure, FS_TEXT, type NoticeSpec } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -114,13 +114,14 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const { list: faceCharacters } = useCharacters(projectId);
   // Локальное состояние экрана: мелкое лицо (тап), отказы запуска, «локальные на этот запуск», запуск
   const [faceUi, setFaceUi] = useState({
-    tappedSmall: null as number | null, tooClose: false, busy: false, facesChanged: false, useLocalOnce: false, submitting: false,
+    tappedSmall: null as number | null, tooClose: false, faceOutOfFrame: false, busy: false,
+    providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false,
   });
   // Вход в режим / смена версии-нити: новый поиск лиц + сброс переходных состояний (устаревший ответ не применяется)
   useEffect(() => {
     if (!faceSwapMode) return;
     void faceSwap.search();
-    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, busy: false, facesChanged: false }));
+    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceSwapMode, threadId, viewedVersionId]);
   const viewedSrc = useMemo(() => {
@@ -170,7 +171,9 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     tappedSmall: faceUi.tappedSmall,
     over8: faceSwap.state.faces.length >= 8,
     facesTooClose: faceUi.tooClose,
+    faceOutOfFrame: faceUi.faceOutOfFrame,
     busy: faceUi.busy,
+    providerUnavailable: faceUi.providerUnavailable,
     facesChanged: faceUi.facesChanged,
     hasMask: hasMaskMark(marks),
   }) : null;
@@ -276,10 +279,21 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
       const err = e as { body?: { code?: string; message?: string } };
       const code = typeof err?.body?.code === 'string' ? err.body.code : null;
       const msg = typeof err?.body?.message === 'string' ? err.body.message : (e as Error).message;
-      if (code === 'faces_changed') setFaceUi(u => ({ ...u, facesChanged: true }));
-      else if (code === 'busy' || code === 'provider_unavailable') setFaceUi(u => ({ ...u, busy: true }));
-      else if (msg.includes('близко')) setFaceUi(u => ({ ...u, tooClose: true }));
-      else showToast(`Запуск не удался: ${msg}`, '', 'error');
+      // Реакция на отказ — по коду (launchFailure), не по тексту сообщения
+      const f = launchFailure(code, msg);
+      switch (f.kind) {
+        case 'facesTooClose': setFaceUi(u => ({ ...u, tooClose: true })); break;
+        case 'faceOutOfFrame': setFaceUi(u => ({ ...u, faceOutOfFrame: true })); break;
+        case 'busy': setFaceUi(u => ({ ...u, busy: true })); break;
+        case 'providerUnavailable': setFaceUi(u => ({ ...u, providerUnavailable: true })); break;
+        case 'facesChanged': setFaceUi(u => ({ ...u, facesChanged: true })); break;
+        case 'featureDisabled':
+          // Флаг выключили, пока экран был открыт: режим закрывается с коротким сообщением
+          showToast(FS_TEXT.featureDisabled, '', 'info');
+          setFaceSwapMode(false);
+          break;
+        default: showToast(`Запуск не удался: ${msg}`, '', 'error');
+      }
     } finally {
       setFaceUi(u => ({ ...u, submitting: false }));
     }

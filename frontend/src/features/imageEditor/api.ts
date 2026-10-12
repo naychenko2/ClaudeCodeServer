@@ -11,7 +11,7 @@
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
 import { mockFormatState, mockTierFactor } from './mockFormat';
-import { projectBase, scopeBase } from './scope';
+import { isPersonalScope, projectBase, scopeBase, threadsBase } from './scope';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -417,7 +417,7 @@ export type FacesErrorCode =
   | 'faces_changed'         // 409: картинка изменилась, в теле свежий список лиц
   | 'version_not_found'
   | 'not_found'             // 404: личная область (ручки нет) или нить/версия не найдены
-  | 'flag_off'              // флаг character-face-swap выключен
+  | 'feature_disabled'      // флаг character-face-swap выключен
   | 'other';
 
 export interface FacesError {
@@ -433,7 +433,7 @@ export function facesError(e: unknown): FacesError {
   const code = typeof err?.body?.code === 'string' ? err.body.code : null;
   const faces = parseFacesResponse(err?.body?.faces);
   if (code === 'busy' || code === 'provider_unavailable' || code === 'faces_changed'
-    || code === 'version_not_found' || code === 'not_found' || code === 'flag_off') {
+    || code === 'version_not_found' || code === 'not_found' || code === 'feature_disabled') {
     return { code, ...(code === 'faces_changed' && faces ? { faces } : null) };
   }
   if (code) return { code: 'other' };
@@ -450,11 +450,15 @@ function parseFacesResponse(v: unknown): FacesResponse | null {
   return r;
 }
 
-// «Найти лица» (этап 2 · шаг 10a): POST image-editor/threads/{threadId}/versions/{versionId}/faces.
-// Проектная область: в личной области ручки нет → 404. Отказ — типизированный FacesError (facesError)
-export function findFaces(threadId: string, versionId: string): Promise<FacesResponse> {
+// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces.
+// Только проектная область: в личной области персонажей нет по построению → типизированный
+// отказ not_found без сетевого запроса. Отказ — типизированный FacesError (facesError)
+export function findFaces(scope: string, sessionId: string, threadId: string, versionId: string): Promise<FacesResponse> {
+  if (isPersonalScope(scope)) {
+    return Promise.reject(Object.assign(new Error('not_found'), { status: 404, body: { code: 'not_found' } }));
+  }
   return request<FacesResponse>(
-    `/image-editor/threads/${encodeURIComponent(threadId)}/versions/${encodeURIComponent(versionId)}/faces`,
+    `${threadsBase(scope, sessionId)}/${encodeURIComponent(threadId)}/versions/${encodeURIComponent(versionId)}/faces`,
     { method: 'POST' },
   );
 }

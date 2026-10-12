@@ -25,65 +25,121 @@ const resp = (faces: number[], smallAt?: number[]): FacesResponse => ({
   faces: faces.map((n, i) => face(n, smallAt?.includes(i) ?? false)),
 });
 
+// searchStart → requestSeq=1; searchOk/searchError/facesChanged с requestId=1 применяются
+const searchOk = (r: FacesResponse, reset = false) =>
+  faceSwapReducer(
+    faceSwapReducer(initialFaceSwap, { type: 'searchStart' }),
+    { type: 'searchOk', response: r, reset, requestId: 1 },
+  );
+
 describe('faceSwapReducer: авто-выбор', () => {
   it('одно доступное лицо выбирается сразу', () => {
-    const s = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1]) });
+    const s = searchOk(resp([1]));
     expect(s.phase).toBe('ready');
     expect(s.selectedFace).toBe(1);
   });
 
   it('мелкое лицо не выбирается (доступных нет)', () => {
-    const s = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1], [0]) });
+    const s = searchOk(resp([1], [0]));
     expect(s.selectedFace).toBeNull();
   });
 
   it('несколько доступных лиц — авто-выбора нет, человек выбирает', () => {
-    const s = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1, 2]) });
+    const s = searchOk(resp([1, 2]));
     expect(s.selectedFace).toBeNull();
   });
 
   it('faces_changed (409) обновляет список и СБРАСЫВАЕТ выбор', () => {
-    const withSel = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1]) });
+    const withSel = searchOk(resp([1]));
     expect(withSel.selectedFace).toBe(1);
-    const after = faceSwapReducer(withSel, { type: 'facesChanged', response: resp([2, 3]) });
+    const after = faceSwapReducer(withSel, { type: 'facesChanged', response: resp([2, 3]), requestId: 1 });
     expect(after.faces.map(f => f.n)).toEqual([2, 3]);
     expect(after.selectedFace).toBeNull();
   });
 
   it('повторный searchOk без reset сохраняет валидный выбор', () => {
-    const withSel = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1, 2]) });
+    const withSel = searchOk(resp([1, 2]));
     faceSwapReducer(withSel, { type: 'selectFace', n: 2 });
-    const kept = faceSwapReducer({ ...withSel, selectedFace: 2 }, { type: 'searchOk', response: resp([1, 2]) });
+    const kept = faceSwapReducer({ ...withSel, selectedFace: 2 }, { type: 'searchOk', response: resp([1, 2]), requestId: 1 });
     expect(kept.selectedFace).toBe(2);
+  });
+});
+
+// ── Редьюсер: защита от out-of-order ───────────────────────────────────────────
+describe('faceSwapReducer: out-of-order', () => {
+  it('ответ запроса №1 после запроса №2 игнорируется (не затирает ни список, ни выбор)', () => {
+    // Запрос №1: searchStart → requestSeq=1
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    // Запрос №2: searchStart → requestSeq=2
+    s = faceSwapReducer(s, { type: 'searchStart' });
+    // Ответ запроса №2 приходит первым: requestId=2 === requestSeq=2 → применяется
+    s = faceSwapReducer(s, { type: 'searchOk', response: resp([3, 4]), requestId: 2 });
+    expect(s.faces.map(f => f.n)).toEqual([3, 4]);
+    expect(s.phase).toBe('ready');
+    // Ответ запроса №1 приходит вторым: requestId=1 !== requestSeq=2 → игнорируется
+    const stale = faceSwapReducer(s, { type: 'searchOk', response: resp([1, 2]), requestId: 1 });
+    expect(stale).toBe(s); // === по ссылке: состояние не изменилось
+  });
+
+  it('searchError с устаревшим requestId игнорируется', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchStart' });
+    // Запрос №2: error
+    s = faceSwapReducer(s, { type: 'searchError', code: 'busy', requestId: 2 });
+    expect(s.phase).toBe('error');
+    // Запрос №1: error (устаревший)
+    const stale = faceSwapReducer(s, { type: 'searchError', code: 'provider_unavailable', requestId: 1 });
+    expect(stale).toBe(s);
+  });
+
+  it('facesChanged с устаревшим requestId игнорируется', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchStart' });
+    // Запрос №2: faces_changed
+    s = faceSwapReducer(s, { type: 'facesChanged', response: resp([5]), requestId: 2 });
+    expect(s.faces.map(f => f.n)).toEqual([5]);
+    // Запрос №1: faces_changed (устаревший)
+    const stale = faceSwapReducer(s, { type: 'facesChanged', response: resp([9]), requestId: 1 });
+    expect(stale).toBe(s);
+  });
+
+  it('unmount обнуляет requestSeq: ответ после размонтирования не применяется', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    // requestSeq=1, ответ в пути
+    s = faceSwapReducer(s, { type: 'unmount' });
+    expect(s.requestSeq).toBe(0);
+    // Ответ запроса №1 приходит после unmount: requestId=1 !== requestSeq=0 → игнорируется
+    const stale = faceSwapReducer(s, { type: 'searchOk', response: resp([1]), requestId: 1 });
+    expect(stale).toBe(s);
   });
 });
 
 // ── Редьюсер: выбор персонажа и canSubmit ──────────────────────────────────────
 describe('faceSwapReducer: персонаж и canSubmit', () => {
   it('персонаж по умолчанию не выбран (персонаж контекста сам не подставляется)', () => {
-    const s = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1]) });
+    const s = searchOk(resp([1]));
     expect(s.selectedCharacter).toBeNull();
   });
 
   it('canSubmit: лицо+персонаж+local → true', () => {
-    let s: FaceSwapState = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1]) });
+    let s: FaceSwapState = searchOk(resp([1]));
     s = faceSwapReducer(s, { type: 'selectCharacter', slug: 'marina' });
     expect(faceSwapCanSubmit(s, 'local')).toBe(true);
   });
 
   it('canSubmit: без персонажа → false', () => {
-    const s = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1]) });
+    const s = searchOk(resp([1]));
     expect(faceSwapCanSubmit(s, 'local')).toBe(false);
   });
 
   it('canSubmit: без лица → false', () => {
-    let s: FaceSwapState = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1, 2]) });
+    let s: FaceSwapState = searchOk(resp([1, 2]));
     s = faceSwapReducer(s, { type: 'selectCharacter', slug: 'marina' });
     expect(faceSwapCanSubmit(s, 'local')).toBe(false);
   });
 
   it('canSubmit: не-local (fal) → false, даже с лицом и персонажем', () => {
-    let s: FaceSwapState = faceSwapReducer(initialFaceSwap, { type: 'searchOk', response: resp([1]) });
+    let s: FaceSwapState = searchOk(resp([1]));
     s = faceSwapReducer(s, { type: 'selectCharacter', slug: 'marina' });
     expect(faceSwapCanSubmit(s, 'fal')).toBe(false);
     expect(faceSwapCanSubmit(s, null)).toBe(false);
@@ -107,8 +163,8 @@ describe('facesError: разбор по кодам/статусам', () => {
     expect(facesError(err(404, { code: 'version_not_found' }))).toEqual({ code: 'version_not_found' });
   });
 
-  it('flag_off → flag_off', () => {
-    expect(facesError(err(409, { code: 'flag_off' }))).toEqual({ code: 'flag_off' });
+  it('feature_disabled → feature_disabled', () => {
+    expect(facesError(err(409, { code: 'feature_disabled' }))).toEqual({ code: 'feature_disabled' });
   });
 
   it('404 без кода → not_found (личная область)', () => {

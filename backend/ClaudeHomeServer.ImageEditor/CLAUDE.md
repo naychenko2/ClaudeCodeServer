@@ -216,6 +216,28 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   Main на проде не найдётся. Нужен пакет (как SkiaSharp) — он ложится в `Images` за швом, а не
   сюда. Сторож — `DynamicModulePackagesGuardTests`.
 
+**Подстановка персонажа на лицо (ADR-027, §4, этап 2).** Запуск с `FaceTarget` — отдельный путь
+`ImageEditLaunchAssembler.AssembleFaceTargetAsync`, инварианты:
+
+- **Главный: контекст чата игнорируется целиком.** Образец — только явно выбранный персонаж
+  (`CharacterStore.ForRequest`), а не персонаж контекста хода: тот — обычно первый человек в кадре,
+  и его фото образцом на чужое лицо дало бы смесь лиц, ради устранения которой фича и делается.
+  `ContextRevision` с `FaceTarget` несовместим (отказ `invalid_request`): входы явные — версия,
+  лицо, персонаж.
+- **Кэш лиц** (`FaceDetectionCache`, LRU ~256) хранит только bbox/score/`small` и только успехи
+  (без `Error` и без `Busy`); ключ — `(ownerId, sha256 байт)`, `facesKey` = префикс sha256 + версия
+  формата. Single-flight: два параллельных запроса на один ключ — один детектор.
+- **Вызывающий отвязан от детекции:** `GetOrDetectAsync` ждёт через `WaitAsync(ct)` — отмена
+  освобождает только этого вызывающего (OCE), single-flight-задача живёт для остальных. Путь запуска
+  детектит на `ct` запроса; read-only (MCP `image_find_faces`, ручка `faces`) — на
+  `CancellationToken.None`.
+- **Код → статус** (единая точка `ImageEditorEndpoints.Map`): `provider_unavailable` → 409,
+  `faces_changed` → 409, `feature_disabled` → 404, `busy` → 503, `faces_too_close` /
+  `face_out_of_frame` → 400.
+- **Инструменты агента:** новый read-only `image_find_faces` (номера лиц версии) и аргумент `face`
+  у `image_generate` — статичная схема; состав `tools/list` от флага `character-face-swap` не
+  зависит (инструмент не пропадает — отказ на вызове, `feature_disabled` 404).
+
 Поставщики (`Providers/`), каталог моделей с `caps` — `ImageEditCatalog`:
 
 - **fal** — `FalImageEditor`, ключ инстанса.

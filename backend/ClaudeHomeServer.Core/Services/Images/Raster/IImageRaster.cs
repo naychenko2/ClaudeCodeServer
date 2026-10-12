@@ -25,7 +25,22 @@ public interface IImageRaster
     // маски (локальная Qwen-Image): «замени серое фоном» она понимает, а маску-образец — нет.
     // Результат — PNG
     RasterOutcome EraseMasked(byte[] image, byte[] mask);
+
+    // Маска из эллипсов с вычитанием прямоугольников: непрозрачный PNG, чёрный фон, белые эллипсы
+    // (без сглаживания — дальше её растягивают nearest), затем по ней чёрные прямоугольники. Фигуры,
+    // вылезающие за холст, обрезаются; пустой список эллипсов — полностью чёрная маска. Некорректный
+    // размер (≤ 0 или выше потолка) — ArgumentOutOfRangeException. Default-реализация — чтобы тестовые
+    // фейки шва не ломались: они не рисуют масок и бросают NotImplementedException, как и другие
+    // опциональные методы.
+    byte[] RenderMask(int width, int height, IReadOnlyList<MaskEllipse> ellipses, IReadOnlyList<MaskRect> excludeRects)
+        => throw new NotImplementedException();
 }
+
+// Эллипс маски в пикселях: центр (Cx, Cy) и полуоси (Rx, Ry)
+public sealed record MaskEllipse(double Cx, double Cy, double Rx, double Ry);
+
+// Прямоугольник вычитания в пикселях: X1..X2, Y1..Y2, X2/Y2 — исключающие границы
+public sealed record MaskRect(int X1, int Y1, int X2, int Y2);
 
 // Width/Height — как лежат в файле; DisplayWidth/DisplayHeight — после учёта EXIF-ориентации.
 // Orientation — значение EXIF 1..8 (1 — нормальная). Format = null — формат не PNG/JPEG/WebP

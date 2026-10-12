@@ -129,6 +129,39 @@ public sealed class SkiaImageRaster : IImageRaster
 
     private const byte EraseGray = 128;
 
+    // Маска из эллипсов с вычитанием прямоугольников: непрозрачный PNG, чёрный фон, белые эллипсы
+    // без сглаживания, затем по ним чёрные прямоугольники. Не через Run: контракт — исключение
+    // ArgumentOutOfRangeException наружу и byte[] напрямую, а Run всё глотает в RasterOutcome.
+    public byte[] RenderMask(int width, int height, IReadOnlyList<MaskEllipse> ellipses, IReadOnlyList<MaskRect> excludeRects)
+    {
+        if (width < 1 || width > MaxSide)
+            throw new ArgumentOutOfRangeException(nameof(width), $"Ширина маски {width} вне 1–{MaxSide} px");
+        if (height < 1 || height > MaxSide)
+            throw new ArgumentOutOfRangeException(nameof(height), $"Высота маски {height} вне 1–{MaxSide} px");
+
+        // Opaque: у маски нет прозрачности, альфа везде 255
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColors.Black);
+            using var white = new SKPaint { Color = SKColors.White, IsAntialias = false };
+            using var black = new SKPaint { Color = SKColors.Black, IsAntialias = false };
+            foreach (var e in ellipses)
+            {
+                // Эллипс — вписанный в прямоугольник центр ± полуоси; вылезание за холст Skia обрежет
+                canvas.DrawOval(new SKRect((float)(e.Cx - e.Rx), (float)(e.Cy - e.Ry),
+                    (float)(e.Cx + e.Rx), (float)(e.Cy + e.Ry)), white);
+            }
+            foreach (var r in excludeRects)
+            {
+                // X2/Y2 — исключающие границы: пиксель в колонке X2 уже не закрашивается
+                canvas.DrawRect(r.X1, r.Y1, r.X2, r.Y2, black);
+            }
+            canvas.Flush();
+        }
+        return EncodePixels(bitmap, ImageEncodeFormat.Png, MaxQuality);
+    }
+
     // Общая обвязка: семафор, заголовок, потолок, декодирование с AutoOrient
     private RasterOutcome Run(byte[] data, bool unpremul, Func<SKBitmap, ImageEncodeFormat?, RasterOutcome> body)
     {

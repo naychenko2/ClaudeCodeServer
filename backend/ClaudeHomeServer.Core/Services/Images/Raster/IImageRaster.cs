@@ -27,11 +27,16 @@ public interface IImageRaster
     RasterOutcome EraseMasked(byte[] image, byte[] mask);
 
     // Маска из эллипсов с вычитанием прямоугольников: непрозрачный PNG, чёрный фон, белые эллипсы
-    // (без сглаживания — дальше её растягивают nearest), затем по ней чёрные прямоугольники. Фигуры,
-    // вылезающие за холст, обрезаются; пустой список эллипсов — полностью чёрная маска. Некорректный
-    // размер (≤ 0 или выше потолка) — ArgumentOutOfRangeException. Default-реализация — чтобы тестовые
-    // фейки шва не ломались: они не рисуют масок и бросают NotImplementedException, как и другие
-    // опциональные методы.
+    // (без сглаживания — дальше её растягивают nearest), затем по ним чёрные прямоугольники. Фигуры,
+    // вылезающие за холст, обрезаются; пустой список эллипсов — полностью чёрная маска.
+    //
+    // Осознанное исключение из конвенции «ошибки — ответом, не исключением»: некорректный размер
+    // (≤ 0 или выше потолка) — баг вызывающего, поэтому ArgumentOutOfRangeException, а не RasterOutcome.
+    //
+    // Default-реализация (NotImplementedException) добавлена специально для RenderMask, чтобы не ломать
+    // три тестовых фейка шва (VideoFormatJobTests.FakeRaster, CharacterPhotoLabelingTests.FakeRaster,
+    // ImageEditJobServiceTests.SlowRaster) — они масок не рисуют. В проде зарегистрирован только
+    // SkiaImageRaster (ImagesSubsystem.cs), поэтому NIE в проде недостижим.
     byte[] RenderMask(int width, int height, IReadOnlyList<MaskEllipse> ellipses, IReadOnlyList<MaskRect> excludeRects)
         => throw new NotImplementedException();
 }
@@ -39,7 +44,8 @@ public interface IImageRaster
 // Эллипс маски в пикселях: центр (Cx, Cy) и полуоси (Rx, Ry)
 public sealed record MaskEllipse(double Cx, double Cy, double Rx, double Ry);
 
-// Прямоугольник вычитания в пикселях: X1..X2, Y1..Y2, X2/Y2 — исключающие границы
+// Прямоугольник вычитания в пикселях: углы (X1, Y1) — левый верх, (X2, Y2) — правый нижний;
+// X2/Y2 — исключающие границы, рисуется [X1, X2) × [Y1, Y2)
 public sealed record MaskRect(int X1, int Y1, int X2, int Y2);
 
 // Width/Height — как лежат в файле; DisplayWidth/DisplayHeight — после учёта EXIF-ориентации.

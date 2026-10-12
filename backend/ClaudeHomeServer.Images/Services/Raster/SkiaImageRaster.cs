@@ -138,6 +138,10 @@ public sealed class SkiaImageRaster : IImageRaster
             throw new ArgumentOutOfRangeException(nameof(width), $"Ширина маски {width} вне 1–{MaxSide} px");
         if (height < 1 || height > MaxSide)
             throw new ArgumentOutOfRangeException(nameof(height), $"Высота маски {height} вне 1–{MaxSide} px");
+        // Потолок мегапикселей: 16384×16384 прошло бы проверку стороны, но дало бы канву ~1 ГБ
+        if ((long)width * height > _maxPixels)
+            throw new ArgumentOutOfRangeException(nameof(width),
+                $"Маска {width}×{height} больше потолка {_maxPixels / 1_000_000} Мп");
 
         // Opaque: у маски нет прозрачности, альфа везде 255
         using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
@@ -154,8 +158,11 @@ public sealed class SkiaImageRaster : IImageRaster
             }
             foreach (var r in excludeRects)
             {
-                // X2/Y2 — исключающие границы: пиксель в колонке X2 уже не закрашивается
-                canvas.DrawRect(r.X1, r.Y1, r.X2, r.Y2, black);
+                // X2/Y2 — исключающие границы (правый нижний угол), как у SKRect: рисуется [X1, X2) × [Y1, Y2),
+                // поэтому пиксель в колонке X2 уже не закрашивается. Пустой прямоугольник (X2 <= X1 или Y2 <= Y1)
+                // — ничего не рисуем, без исключения.
+                if (r.X2 <= r.X1 || r.Y2 <= r.Y1) continue;
+                canvas.DrawRect(new SKRect(r.X1, r.Y1, r.X2, r.Y2), black);
             }
             canvas.Flush();
         }

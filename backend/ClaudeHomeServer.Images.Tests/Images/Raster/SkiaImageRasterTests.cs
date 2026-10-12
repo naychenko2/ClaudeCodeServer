@@ -387,6 +387,36 @@ public class SkiaImageRasterTests
         b.GetPixel(2, 5).Should().Be(new SKColor(255, 255, 255), "внутри эллипса, вне прямоугольника — белый");
     }
 
+    // MaskRect как углы: X2/Y2 — исключающие границы, рисуется [X1,X2)×[Y1,Y2). Эллипс покрывает весь
+    // холст 64×64 (всё белое), прямоугольник (10,20,40,30) вычитает x∈[10,40), y∈[20,30). Старая
+    // перегрузка DrawRect(x,y,w,h) рисовала бы [10,50)×[20,50) — этот кейс её отличает: (40,29) и (39,30)
+    // были бы чёрными, а по семантике углов — белыми.
+    [Fact]
+    public void RenderMask_прямоугольник_как_углы_исключающие_границы()
+    {
+        var png = _raster.RenderMask(64, 64, [new MaskEllipse(32, 32, 32, 32)], [new MaskRect(10, 20, 40, 30)]);
+
+        using var b = SKBitmap.Decode(png);
+        b.GetPixel(10, 20).Should().Be(new SKColor(0, 0, 0), "левый верх прямоугольника — вычтено");
+        b.GetPixel(39, 29).Should().Be(new SKColor(0, 0, 0), "последний пиксель внутри [X1,X2)×[Y1,Y2) — вычтено");
+        b.GetPixel(40, 29).Should().Be(new SKColor(255, 255, 255), "x=X2 — уже вне, белый");
+        b.GetPixel(39, 30).Should().Be(new SKColor(255, 255, 255), "y=Y2 — уже вне, белый");
+    }
+
+    // Вырожденный прямоугольник (X2<=X1 или Y2<=Y1) — пустой, маску не меняет
+    [Fact]
+    public void RenderMask_вырожденный_прямоугольник_маску_не_меняет()
+    {
+        var full = _raster.RenderMask(10, 10, [new MaskEllipse(5, 5, 4, 4)], []);
+        var degenerate = _raster.RenderMask(10, 10, [new MaskEllipse(5, 5, 4, 4)],
+            [new MaskRect(4, 4, 4, 6), new MaskRect(2, 2, 6, 2)]);
+
+        using var a = SKBitmap.Decode(full);
+        using var b = SKBitmap.Decode(degenerate);
+        b.Pixels.Zip(a.Pixels).All(p => p.First == p.Second).Should().BeTrue(
+            "вырожденный прямоугольник (X2<=X1 или Y2<=Y1) ничего не вычитает");
+    }
+
     // Эллипс, частично вылезающий за холст: без исключения, видимая часть белая
     [Fact]
     public void RenderMask_эллипс_за_границей_холста_обрезается_без_исключения()
@@ -425,15 +455,27 @@ public class SkiaImageRasterTests
         b.Pixels.Select(p => (p.Red, p.Green, p.Blue)).Distinct().Should().Equal([(0, 0, 0)], "без эллипсов — только чёрный фон");
     }
 
-    // Размер ≤ 0 — ArgumentOutOfRangeException
+    // Размер вне 1–MaxSide (включая верхнюю границу) — ArgumentOutOfRangeException
     [Theory]
     [InlineData(0, 10)]
     [InlineData(10, 0)]
     [InlineData(-1, 10)]
     [InlineData(10, -1)]
-    public void RenderMask_размер_не_положительный_исключение(int w, int h)
+    [InlineData(20000, 10)]
+    [InlineData(10, 20000)]
+    public void RenderMask_размер_вне_1_до_MaxSide_исключение(int w, int h)
     {
         var act = () => _raster.RenderMask(w, h, [new MaskEllipse(5, 5, 3, 3)], []);
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    // Потолок мегапикселей: 16384×16384 проходит проверку стороны (== MaxSide), но даёт канву ~1 ГБ
+    [Fact]
+    public void RenderMask_размер_больше_потолка_мегапикселей_исключение()
+    {
+        var act = () => _raster.RenderMask(SkiaImageRaster.MaxSide, SkiaImageRaster.MaxSide,
+            [new MaskEllipse(8192, 8192, 10, 10)], []);
 
         act.Should().Throw<ArgumentOutOfRangeException>();
     }

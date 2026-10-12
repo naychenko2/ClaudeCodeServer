@@ -532,12 +532,21 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.
         // Явный обход обязателен — автокаскада сессий нет. Best-effort + force: судьба
         // незакоммиченных правок решена удалением самого проекта.
+        // Сносим только СВОИ деревья (WorktreeOwned): чужие/общие (привязанные) и старые (без
+        // признака) не трогаем, если на тот же нормализованный путь не ссылается другой живой чат.
         // Деревья локального проекта живут на устройстве — серверному git до них не дотянуться
         foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null
                      && ProjectCapabilityGuard.Allows(p, ProjectCapabilityArea.FileBound)).ToList())
         {
-            try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, s.WorktreePath!, force: true); }
-            catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
+            var wt = s.WorktreePath!;
+            var removeTree = s.WorktreeOwned
+                && !sessions.GetAll().Any(e => e.Id != s.Id && e.WorktreePath is string other
+                    && WorkspaceKnowledgeStore.NormalizePath(other) == WorkspaceKnowledgeStore.NormalizePath(wt));
+            if (removeTree)
+            {
+                try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, wt, force: true); }
+                catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
+            }
         }
 
         // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для

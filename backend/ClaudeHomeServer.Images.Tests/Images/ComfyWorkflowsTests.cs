@@ -152,6 +152,48 @@ public class ComfyWorkflowsTests
         Class(wf, "sim").Should().Be("CcsFaceSimilarity");
     }
 
+    [Fact]
+    public void Правка_СМаской_СклейкаВнеМаскиИСходник()
+    {
+        // Вне маски возвращаем исходный холст (img1): resize_source растягивает сгенерированное
+        // до размера холста, поэтому результат графа ровно размера холста; sim меряет то, что сохраняется
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", faceReferences: ["r1.png"], mask: "m.png");
+
+        // Цепочка маски: та же, что в инпейнте видео (общий помощник AddMaskSoftening)
+        Class(wf, "mask").Should().Be("LoadImageMask");
+        Inputs(wf, "mask")["channel"]!.GetValue<string>().Should().Be("red");
+        Inputs(wf, "mask_grow")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]");
+        Inputs(wf, "mask_img")["mask"]!.ToJsonString().Should().Be("[\"mask_grow\",0]");
+        Inputs(wf, "mask_blur")["image"]!.ToJsonString().Should().Be("[\"mask_img\",0]");
+        Inputs(wf, "mask_soft")["image"]!.ToJsonString().Should().Be("[\"mask_blur\",0]");
+
+        // Склейка: вне маски — исходный холст, внутри — сгенерированное
+        Class(wf, "overlay").Should().Be("ImageCompositeMasked");
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — загруженный холст");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]", "внутри маски — сгенерированное");
+        Inputs(wf, "overlay")["resize_source"]!.GetValue<bool>().Should().BeTrue();
+        Inputs(wf, "overlay")["mask"]!.ToJsonString().Should().Be("[\"mask_soft\",0]");
+        Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]", "сохраняется результат склейки");
+
+        // Сходство лица: та же картинка, что сохраняется, плюс вход-маска
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Inputs(wf, "save")["images"]!.ToJsonString());
+        Inputs(wf, "sim")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]");
+    }
+
+    [Fact]
+    public void Правка_СМаскойБезЭталона_СклейкаБезУзлаСходства()
+    {
+        // Маска без эталона лица: склейка есть, узла сходства нет
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]");
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]");
+        Inputs(wf, "overlay")["resize_source"]!.GetValue<bool>().Should().BeTrue();
+        wf.ContainsKey("sim").Should().BeFalse();
+    }
+
     // Сборка EditImage до правки: загрузчики Qwen-модели плюс те же ноды, что в текущей
     // (QwenLoaders/KSampler/AddDecodeAndSave приватные, поэтому загрузчики собраны руками)
     private static JsonObject OldEditGraph(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
@@ -270,6 +312,8 @@ public class ComfyWorkflowsTests
             ("generate", ComfyWorkflows.GenerateImage("a", "", 1328, 1328, 1, 25, 1, "p")),
             ("edit", ComfyWorkflows.EditImage("a", ["x.png", "y.png"], null, 1, "p")),
             ("edit-size", ComfyWorkflows.EditImage("a", ["x.png"], (1664, 928), 1, "p")),
+            // Без эталона лица: склейка вне маски, но без узла сходства (он не в object_info)
+            ("edit-mask", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png")),
             ("face", ComfyWorkflows.FaceDetail("x.png", 1, "p")),
             ("t2v", ComfyWorkflows.TextToVideo("a", 1344, 768, 124, 1, false, "p", "l")),
             ("t2v-fast", ComfyWorkflows.TextToVideo("a", 768, 1344, 243, 1, true, "p", "l")),

@@ -167,6 +167,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
                 // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference)
                 run = new LocalImageRequest(LocalImageOp.Edit, WithTrigger(req.Prompt, req), [req.Source.Bytes, .. references], null, 1,
+                    KeepMask: KeepMaskOf(req),
                     Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
@@ -275,6 +276,13 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         EditIntent.IsRemoval(req.Instruction)
             ? req.References.FirstOrDefault(r => r.Label == EditRequestComposer.MaskLabel)?.Bytes
             : null;
+
+    // Маска «вне маски вернуть исходник»: маска-образец есть, а размеченной копии нет — иначе
+    // стрелки/рамки могут просить правку вне кисти, и склейка молча выбросила бы её
+    private static byte[]? KeepMaskOf(ImageEditRequest req) =>
+        req.References.Any(r => r.Label == EditRequestComposer.AnnotatedLabel)
+            ? null
+            : req.References.FirstOrDefault(r => r.Label == EditRequestComposer.MaskLabel)?.Bytes;
 
     internal const string EraseNote =
         "Серая заливка на картинке закрывает то, что нужно удалить. Замени серую область продолжением фона " +

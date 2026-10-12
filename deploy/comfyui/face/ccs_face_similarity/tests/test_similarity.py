@@ -13,7 +13,10 @@
 - два лица в варианте, нужное — не самое крупное → берётся его сходство (мутация
   «вернуть самое крупное» красит этот тест);
 - путь ../etc/passwd у узла → ValueError, эталон пропускается;
-- недоступный воркер у узла → ccs_face_similarity=none.
+- недоступный воркер у узла → ccs_face_similarity=none;
+- маска: отбор лиц по покрытию bbox (граница 0,5), в воркере — лицо в маске, а не максимум
+  (мутация «игнорировать маску» красит этот тест), битая маска → null, узел кладёт mask в
+  job.json только при поданной маске.
 """
 import importlib
 import io
@@ -155,6 +158,51 @@ class TestCore(unittest.TestCase):
         # max cos(emb_variant, centroid) ≈ 1.0 (target), не 0.0 (bystander)
         self.assertGreater(sim, 0.9)
 
+    def test_faces_in_mask_by_coverage(self):
+        """Маска на правой половине: лицо справа покрыто целиком, лицо слева — нет,
+        лицо на стыке — на четверть."""
+        from core import faces_in_mask
+
+        mask = np.zeros((100, 100), dtype=bool)
+        mask[:, 50:] = True
+        bboxes = [
+            np.array([60.0, 10.0, 90.0, 40.0]),   # целиком в маске
+            np.array([5.0, 10.0, 35.0, 40.0]),    # целиком вне
+            np.array([35.0, 10.0, 55.0, 40.0]),   # 5 из 20 столбцов — 0,25
+        ]
+        self.assertEqual(faces_in_mask(bboxes, mask), [0])
+
+    def test_faces_in_mask_boundary_half(self):
+        """Ровно 0,5 покрытия — лицо берётся; на столбец меньше — нет."""
+        from core import faces_in_mask
+
+        mask = np.zeros((100, 100), dtype=bool)
+        mask[:, 50:] = True
+        half = np.array([40.0, 0.0, 60.0, 20.0])         # 10 из 20 столбцов
+        below = np.array([39.0, 0.0, 59.0, 20.0])        # 9 из 20
+        self.assertEqual(faces_in_mask([half], mask), [0])
+        self.assertEqual(faces_in_mask([below], mask), [])
+
+    def test_faces_in_mask_empty_mask(self):
+        """Пустая маска — ни одного лица, в том числе и bbox за кадром."""
+        from core import faces_in_mask
+
+        mask = np.zeros((100, 100), dtype=np.uint8)
+        bboxes = [np.array([10.0, 10.0, 50.0, 50.0]),
+                  np.array([200.0, 200.0, 240.0, 240.0])]
+        self.assertEqual(faces_in_mask(bboxes, mask), [])
+
+    def test_resize_nearest_keeps_binary(self):
+        """Маска 2x2 → 4x4: каждый пиксель размножается квадратом, полутонов нет."""
+        from core import resize_nearest
+
+        small = np.array([[0, 255], [255, 0]], dtype=np.uint8)
+        big = resize_nearest(small, 4, 4)
+        self.assertEqual(big.shape, (4, 4))
+        self.assertEqual(set(np.unique(big).tolist()), {0, 255})
+        self.assertEqual(int(big[0, 3]), 255)
+        self.assertEqual(int(big[3, 3]), 0)
+
 
 # ---------- worker: моки insightface и cv2, реальный numpy через core ----------
 
@@ -214,16 +262,22 @@ _FakeApp._current_path = None
 
 
 class _FakeCv2:
-    """Подделка cv2: imread возвращает фиктивный BGR-массив фиксированного размера."""
+    """Подделка cv2: imread возвращает фиктивный BGR-массив 128x128; маску (IMREAD_GRAYSCALE)
+    отдаёт из masks — {путь: np.ndarray|None}, None — «битый файл»."""
+
+    masks = {}
 
     @staticmethod
     def imread(path, flags):
         if not os.path.isfile(path):
             return None
+        if flags == _FakeCv2.IMREAD_GRAYSCALE:
+            return _FakeCv2.masks.get(path)
         # важен сам факт чтения: реальный _biggest_embedding вызывает app.get() с этим bgr
         return np.full((128, 128, 3), 64, dtype=np.uint8)
 
     IMREAD_COLOR = 1
+    IMREAD_GRAYSCALE = 0
 
 
 def _install_fakes(mapping):
@@ -265,9 +319,10 @@ def _restore_fakes(cleanup):
 
 
 class TestWorker(unittest.TestCase):
-    def _run_worker(self, variant_faces, refs_faces):
+    def _run_worker(self, variant_faces, refs_faces, mask=False):
         """Гоняет worker_similarity.main() с моками. variant_faces — np.array|None|list.
-        refs_faces — список кортежей (имя_файла, np.array|None|list). Возвращает распарсенный
+        refs_faces — список кортежей (имя_файла, np.array|None|list). mask — False (ключа
+        mask в job нет), None (битая маска) или 2D np.ndarray 0/255. Возвращает распарсенный
         CCS_RESULT и захваченный stdout (на случай ошибок)."""
         tmp = tempfile.mkdtemp(prefix="ccs-face-test-")
         try:
@@ -287,6 +342,11 @@ class TestWorker(unittest.TestCase):
 
             job = {"variant": variant_path, "references": ref_paths,
                    "face_models": tmp, "det_size": 640}
+            _FakeCv2.masks = {}
+            if mask is not False:
+                mask_path = _touch(os.path.join(tmp, "mask.png"))
+                _FakeCv2.masks[mask_path] = mask
+                job["mask"] = mask_path
             job_path = os.path.join(tmp, "job.json")
             with open(job_path, "w", encoding="utf-8") as f:
                 json.dump(job, f)
@@ -299,7 +359,9 @@ class TestWorker(unittest.TestCase):
             original_imread = _FakeCv2.imread
 
             def imread_with_path(path, flags):
-                _FakeApp._current_path = path
+                # маска лиц не ищет — текущий путь детектора она не сбивает
+                if flags == _FakeCv2.IMREAD_COLOR:
+                    _FakeApp._current_path = path
                 return original_imread(path, flags)
 
             _FakeCv2.imread = staticmethod(imread_with_path)
@@ -447,6 +509,81 @@ class TestWorker(unittest.TestCase):
         self.assertGreater(result["similarity"], 0.9)
         # и в логе воркер должен был предупредить, что в эталоне больше одного лица
         self.assertIn("в эталоне 2 лиц", output)
+
+    # Сцена второй правки: слева первый персонаж (похож на эталон), справа второй — его
+    # и правили по маске, он похож меньше. Кадр подделки cv2 — 128x128.
+    _E_TARGET = np.array([1.0, 0.0, 0.0])
+    _E_SECOND = np.array([0.6, 0.8, 0.0])  # cos к эталону = 0,6
+    _TWO_FACES = [
+        (np.array([4, 4, 60, 60]), _E_TARGET),
+        (np.array([68, 68, 124, 124]), _E_SECOND),
+    ]
+
+    def _right_bottom_mask(self, size=128):
+        m = np.zeros((size, size), dtype=np.uint8)
+        m[size // 2:, size // 2:] = 255
+        return m
+
+    def test_worker_mask_picks_face_inside_mask_not_max(self):
+        """Маска на менее похожем лице → сходство его (0,6), а не максимум (1,0).
+
+        Мутация «игнорировать маску» (не фильтровать faces_variant по faces_in_mask) —
+        этот тест краснеет: вернётся 1,0 первого персонажа вне маски."""
+        result, output, rc = self._run_worker(
+            variant_faces=self._TWO_FACES,
+            refs_faces=[("r1.png", self._E_TARGET)],
+            mask=self._right_bottom_mask(),
+        )
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertAlmostEqual(result["similarity"], 0.6, places=5)
+        self.assertEqual(result["stats"]["faces_total"], 2)
+        self.assertEqual(result["stats"]["faces_in_mask"], 1)
+
+    def test_worker_mask_without_faces_inside_returns_none(self):
+        """В маске нет ни одного лица → null, а не сходство лица вне маски."""
+        empty = np.zeros((128, 128), dtype=np.uint8)
+        result, output, rc = self._run_worker(
+            variant_faces=self._TWO_FACES,
+            refs_faces=[("r1.png", self._E_TARGET)],
+            mask=empty,
+        )
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertIsNone(result["similarity"])
+        self.assertEqual(result["stats"]["faces_in_mask"], 0)
+
+    def test_worker_mask_other_size_resized_nearest(self):
+        """Маска 64x64 при варианте 128x128 растягивается, в лог — запись об этом."""
+        result, output, rc = self._run_worker(
+            variant_faces=self._TWO_FACES,
+            refs_faces=[("r1.png", self._E_TARGET)],
+            mask=self._right_bottom_mask(64),
+        )
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertAlmostEqual(result["similarity"], 0.6, places=5)
+        self.assertIn("растягиваю nearest", output)
+
+    def test_worker_broken_mask_returns_none(self):
+        """cv2 не прочитал маску → null с предупреждением, код возврата 0."""
+        result, output, rc = self._run_worker(
+            variant_faces=self._TWO_FACES,
+            refs_faces=[("r1.png", self._E_TARGET)],
+            mask=None,
+        )
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertIsNone(result["similarity"])
+        self.assertIn("маска не читается", output)
+
+    def test_worker_without_mask_keeps_max_and_stats(self):
+        """Без маски — прежний максимум по всем лицам; faces_in_mask = null."""
+        result, output, rc = self._run_worker(
+            variant_faces=self._TWO_FACES,
+            refs_faces=[("r1.png", self._E_TARGET)],
+        )
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertAlmostEqual(result["similarity"], 1.0, places=5)
+        self.assertEqual(result["stats"]["faces_total"], 2)
+        self.assertIsNone(result["stats"]["faces_in_mask"])
 
 
 # ---------- node: моки subprocess.Popen, реальный folder_paths через подмену ----------
@@ -641,6 +778,58 @@ class TestNode(unittest.TestCase):
                 node = self._node_module.CcsFaceSimilarity()
                 out = node.run(self._fake_image(), "test_ref.png")
         self.assertEqual(out["ui"]["text"], ["ccs_face_similarity=none"])
+
+    def _run_capturing_job(self, mask):
+        """Гоняет узел и возвращает (job, пиксели маски|None) на момент запуска воркера:
+        после run временная папка уже стёрта."""
+        captured = {}
+
+        def spy_popen(args, **kw):
+            with open(args[2], encoding="utf-8") as f:
+                captured["job"] = json.load(f)
+            mpath = captured["job"].get("mask")
+            if mpath:
+                from PIL import Image
+                with Image.open(mpath) as im:
+                    captured["mode"] = im.mode
+                    captured["pixels"] = np.asarray(im).copy()
+            payload = json.dumps({"similarity": 0.5, "stats": {}})
+            return _FakePopen(f"CCS_RESULT {payload}\n")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            in_root, _ = self._setup_input(tmp)
+            family = {"python": _touch(os.path.join(tmp, "_p")),
+                      "script": _touch(os.path.join(tmp, "_w.py"))}
+            cfg_patch, fp_patch = self._patch_config_and_input(in_root, family=family)
+            with cfg_patch, fp_patch, mock.patch.object(self._node_module, "_save_variant_png",
+                                                       return_value=None), \
+                 mock.patch.object(self._node_module.subprocess, "Popen", spy_popen), \
+                 mock.patch.object(self._node_module.time, "sleep", lambda _x: None):
+                node = self._node_module.CcsFaceSimilarity()
+                if mask is None:
+                    out = node.run(self._fake_image(), "test_ref.png")
+                else:
+                    out = node.run(self._fake_image(), "test_ref.png", mask=mask)
+        self.assertEqual(out["ui"]["text"], ["ccs_face_similarity=0.500"])
+        return captured
+
+    def test_node_mask_goes_to_job_as_binary_png(self):
+        """С маской в job.json есть ключ mask, PNG режима L с порогом 0,5 → 0/255."""
+        mask = np.array([[[0.2, 0.7], [0.5, 0.49]]], dtype=np.float32)  # MASK [B,H,W]
+        captured = self._run_capturing_job(mask)
+        self.assertIn("mask", captured["job"])
+        self.assertEqual(captured["mode"], "L")
+        self.assertEqual(captured["pixels"].tolist(), [[0, 255], [255, 0]])
+
+    def test_node_without_mask_has_no_mask_key(self):
+        """Без маски ключа mask в job.json нет вовсе — воркер считает по-старому."""
+        captured = self._run_capturing_job(None)
+        self.assertNotIn("mask", captured["job"])
+
+    def test_node_input_types_mask_optional(self):
+        types = self._node_module.CcsFaceSimilarity.INPUT_TYPES()
+        self.assertEqual(set(types["required"]), {"image", "references"})
+        self.assertEqual(types["optional"], {"mask": ("MASK",)})
 
 
 if __name__ == "__main__":

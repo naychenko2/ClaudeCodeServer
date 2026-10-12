@@ -93,7 +93,7 @@ public static partial class ComfyWorkflows
     // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере)
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
         long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
-        IReadOnlyList<string>? faceReferences = null)
+        IReadOnlyList<string>? faceReferences = null, string? mask = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
@@ -142,14 +142,35 @@ public static partial class ComfyWorkflows
         }
         wf["ks"] = KSampler(latent, seed, DefaultSteps);
         AddDecodeAndSave(wf, filenamePrefix);
+        if (mask is { } m)
+        {
+            // Склейка вне маски: модель меняет 8–14 % пикселей и вне маски, поэтому вне неё
+            // возвращаем исходный холст (img1). resize_source: ComfyUI растянет сгенерированное
+            // до размера холста до наложения → результат графа ровно размера холста
+            wf["mask"] = Node("LoadImageMask", new JsonObject { ["image"] = m, ["channel"] = "red" });
+            AddMaskSoftening(wf);
+            wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+            {
+                ["destination"] = Link("img1"),
+                ["source"] = Link("dec"),
+                ["x"] = 0,
+                ["y"] = 0,
+                ["resize_source"] = true,
+                ["mask"] = Link("mask_soft"),
+            });
+            wf["save"]!["inputs"]!["images"] = Link("overlay");
+        }
         if (faceReferences is { Count: > 0 })
         {
             // Сходство лица с эталоном: оценивается та же картинка, что уходит в SaveImage
-            wf["sim"] = Node("CcsFaceSimilarity", new JsonObject
+            var sim = new JsonObject
             {
                 ["image"] = wf["save"]!["inputs"]!["images"]!.DeepClone(),
                 ["references"] = string.Join("\n", faceReferences),
-            });
+            };
+            if (mask is not null)
+                sim["mask"] = Link("mask");
+            wf["sim"] = Node("CcsFaceSimilarity", sim);
         }
         return wf;
     }
@@ -380,20 +401,7 @@ public static partial class ComfyWorkflows
     private static void AddSourceOverlay(JsonObject wf, int length)
     {
         wf.Remove("adec");
-        wf["mask_grow"] = Node("GrowMask", new JsonObject
-        {
-            ["mask"] = Link("mask"),
-            ["expand"] = InpaintMaskGrow,
-            ["tapered_corners"] = true,
-        });
-        wf["mask_img"] = Node("MaskToImage", new JsonObject { ["mask"] = Link("mask_grow") });
-        wf["mask_blur"] = Node("ImageBlur", new JsonObject
-        {
-            ["image"] = Link("mask_img"),
-            ["blur_radius"] = InpaintMaskBlurRadius,
-            ["sigma"] = InpaintMaskBlurSigma,
-        });
-        wf["mask_soft"] = Node("ImageToMask", new JsonObject { ["image"] = Link("mask_blur"), ["channel"] = "red" });
+        AddMaskSoftening(wf);
         wf["src_frames"] = Node("ImageFromBatch", new JsonObject
         {
             ["image"] = Link("src_parts"),
@@ -413,6 +421,27 @@ public static partial class ComfyWorkflows
         video["images"] = Link("overlay");
         video["fps"] = Link("src_parts", 2);
         video["audio"] = Link("src_parts", 1);
+    }
+
+    // Мягкий шов: исходная маска (узел "mask") расширяется и размывается, результат — узел
+    // "mask_soft". Имена узлов и константы общие с инпейнтом видео (InpaintVideo), поэтому
+    // граф видео остаётся байт-в-байт прежним; используется и в склейке EditImage
+    private static void AddMaskSoftening(JsonObject wf)
+    {
+        wf["mask_grow"] = Node("GrowMask", new JsonObject
+        {
+            ["mask"] = Link("mask"),
+            ["expand"] = InpaintMaskGrow,
+            ["tapered_corners"] = true,
+        });
+        wf["mask_img"] = Node("MaskToImage", new JsonObject { ["mask"] = Link("mask_grow") });
+        wf["mask_blur"] = Node("ImageBlur", new JsonObject
+        {
+            ["image"] = Link("mask_img"),
+            ["blur_radius"] = InpaintMaskBlurRadius,
+            ["sigma"] = InpaintMaskBlurSigma,
+        });
+        wf["mask_soft"] = Node("ImageToMask", new JsonObject { ["image"] = Link("mask_blur"), ["channel"] = "red" });
     }
 
     public const int InpaintMaskGrow = 8;

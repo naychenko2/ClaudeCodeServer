@@ -11,6 +11,8 @@ insightface/cv2.
 - best_similarity_from(embs_variant, embs_ref) — сходство = максимум косинуса каждого
   эмбеддинга варианта к центроиду эталонов; None — лиц в варианте нет или все эталоны
   с NaN/Inf. Возвращает (similarity, used_refs) для stats воркера.
+- resize_nearest(mask, h, w)     — маска под размер картинки ближайшим соседом.
+- faces_in_mask(bboxes, mask)    — индексы лиц, чей bbox покрыт маской не меньше чем на 0,5.
 """
 import numpy as np
 
@@ -71,3 +73,39 @@ def best_similarity_from(embs_variant, embs_ref):
         if best is None or s > best:
             best = s
     return best, used
+
+
+MIN_MASK_COVER = 0.5
+
+
+def resize_nearest(mask, height, width):
+    """Растягивает 2D-маску до height×width ближайшим соседом: значения остаются 0/1,
+    без полутонов на границе, которые дала бы интерполяция."""
+    mask = np.asarray(mask)
+    h, w = mask.shape[:2]
+    rows = np.arange(height) * h // height
+    cols = np.arange(width) * w // width
+    return mask[rows[:, None], cols]
+
+
+def faces_in_mask(bboxes, mask, min_cover=MIN_MASK_COVER):
+    """Индексы лиц, у которых доля пикселей bbox под маской не меньше min_cover.
+
+    mask — 2D-массив размера картинки, истина — «правим здесь». Доля считается по части
+    bbox внутри кадра; bbox целиком за кадром — покрытие 0. При второй правке по маске
+    сходство меряется только у лица внутри неё: лицо первого персонажа вне маски иначе
+    перебило бы результат максимумом."""
+    mask = np.asarray(mask).astype(bool)
+    h, w = mask.shape[:2]
+    out = []
+    for i, bbox in enumerate(bboxes):
+        x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+        x1 = max(0, int(np.floor(x1)))
+        y1 = max(0, int(np.floor(y1)))
+        x2 = min(w, int(np.ceil(x2)))
+        y2 = min(h, int(np.ceil(y2)))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        if float(mask[y1:y2, x1:x2].mean()) >= min_cover:
+            out.append(i)
+    return out

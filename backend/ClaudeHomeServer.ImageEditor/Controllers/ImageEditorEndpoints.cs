@@ -46,6 +46,7 @@ public abstract class ImageEditorEndpoints(
     protected IImageEditJobs? Jobs => jobs;
     protected ImageEditSteps? Steps => steps;
     protected IImageRaster? Raster => raster;
+    protected IFeatureFlagGate? Flags => flags;
 
     protected IActionResult CatalogOf()
     {
@@ -349,13 +350,15 @@ public abstract class ImageEditorEndpoints(
         var code = result.ErrorCode ?? ImageEditErrorCodes.InvalidRequest;
         var status = code switch
         {
-            ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken
-                or ImageEditErrorCodes.ContextChanged => StatusCodes.Status409Conflict,
+            ImageEditErrorCodes.NameTaken or ImageEditErrorCodes.ContextChanged
+                or ImageEditErrorCodes.FacesChanged => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
-                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound
+                or ImageEditErrorCodes.FeatureDisabled => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
-            ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
+            ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable
+                or ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
         // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата

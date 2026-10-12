@@ -279,7 +279,7 @@ public sealed class ImageEditLaunchAssembler(
     {
         // a. Флаг выключен — как в 7a
         if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return Fail<ImageEditJobInput>("feature_disabled", "Подстановка персонажа на лицо выключена");
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.FeatureDisabled, "Подстановка персонажа на лицо выключена");
 
         // b. Личная область, входы
         if (scope.Project is null)
@@ -319,9 +319,9 @@ public sealed class ImageEditLaunchAssembler(
         Func<Task<LocalFaceDetectResult>> detect = localMedia is null
             ? () => Task.FromResult(new LocalFaceDetectResult(0, 0, [], "Детекция лиц здесь не поддерживается."))
             : () => localMedia.DetectFacesAsync(sourceBytes, ct);
-        var result = await detector.GetOrDetectAsync(ownerId, sourceBytes, detect);
+        var result = await detector.GetOrDetectAsync(ownerId, sourceBytes, detect, ct);
         if (result.Busy)
-            return Fail<ImageEditJobInput>("busy", "Видеокарта занята долгой задачей. Попробуйте чуть позже");
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.Busy, "Видеокарта занята долгой задачей. Попробуйте чуть позже");
         if (result.Error is not null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.ProviderUnavailable, result.Error);
         // facesKey не совпал — 409 со свежим списком (та же сборка, что в 7a)
@@ -332,7 +332,7 @@ public sealed class ImageEditLaunchAssembler(
                 currentKey, result.Width, result.Height,
                 result.Faces.Select(f => new ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFaceDto(
                     f.N, [f.X1, f.Y1, f.X2, f.Y2], f.Score, f.Small)).ToList());
-            return ImageEditCallResult<ImageEditJobInput>.Fail("faces_changed", "Список лиц изменился", payload);
+            return ImageEditCallResult<ImageEditJobInput>.Fail(ImageEditErrorCodes.FacesChanged, "Список лиц изменился", payload);
         }
 
         // e. Номер лица вне диапазона или лицо мелкое
@@ -348,7 +348,15 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена");
         var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, faceTarget.Face);
         if (maskResult.Png is null)
-            return Invalid(maskResult.Error ?? "Не удалось построить маску лица");
+        {
+            var code = maskResult.Reason switch
+            {
+                FaceMaskReason.TooClose => ImageEditErrorCodes.FacesTooClose,
+                FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
+                _ => ImageEditErrorCodes.InvalidRequest,
+            };
+            return Fail<ImageEditJobInput>(code, maskResult.Error ?? "Не удалось построить маску лица");
+        }
 
         // g. Промпт: серверная константа + необязательное пожелание человека
         var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, req.CharacterSlug!);

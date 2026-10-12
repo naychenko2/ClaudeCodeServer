@@ -32,7 +32,7 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
             throw new ArgumentOutOfRangeException(nameof(width), "Размер холста должен быть положительным");
 
         var target = faces.FirstOrDefault(f => f.N == targetN);
-        if (target is null) return new FaceMaskResult(null, FaceNotFound);
+        if (target is null) return new FaceMaskResult(null, FaceNotFound, FaceMaskReason.NotFound);
 
         var (ellipse, excludeRects) = EllipseAndExcludes(target, faces);
 
@@ -40,8 +40,8 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         // после вычитания соседей S'. Цикл по пикселям описывающего прямоугольника эллипса,
         // обрезанного холстом; без декодирования PNG.
         var (s, sPrime) = VisibleArea(width, height, ellipse, excludeRects);
-        if (s == 0) return new FaceMaskResult(null, FaceOutsideImage);
-        if (sPrime < MinRemainingShare * s) return new FaceMaskResult(null, FacesTooClose);
+        if (s == 0) return new FaceMaskResult(null, FaceOutsideImage, FaceMaskReason.OutOfFrame);
+        if (sPrime < MinRemainingShare * s) return new FaceMaskResult(null, FacesTooClose, FaceMaskReason.TooClose);
 
         return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null);
     }
@@ -112,6 +112,10 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
     }
 }
 
+// Причина отказа маски: NotFound — такого лица нет, TooClose — лица слишком близко, OutOfFrame — вне картинки
+public enum FaceMaskReason { NotFound, TooClose, OutOfFrame }
+
 // Итог построения маски: Png — непрозрачный PNG (чёрный фон, белые эллипсы минус прямоугольники),
-// Error — человекочитаемая причина, по которой маску строить не стали (Png = null).
-public sealed record FaceMaskResult(byte[]? Png, string? Error);
+// Error — человекочитаемая причина, по которой маску строить не стали (Png = null),
+// Reason — машинная причина (для кода ошибки в ответе); null — успех
+public sealed record FaceMaskResult(byte[]? Png, string? Error, FaceMaskReason? Reason = null);

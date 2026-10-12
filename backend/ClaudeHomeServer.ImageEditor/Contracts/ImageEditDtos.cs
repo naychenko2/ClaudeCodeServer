@@ -289,6 +289,14 @@ public static class ImageEditErrorCodes
     public const string RasterUnavailable = "raster_unavailable";
     // 409: ревизия контекста чата устарела (ADR-023 §Д2.1); в теле — свежий ChatContextDto
     public const string ContextChanged = "context_changed";
+    // 409: список лиц версии изменился (facesKey не совпал); в теле — свежий ImageThreadFacesResponse
+    public const string FacesChanged = "faces_changed";
+    // 503: видеокарта занята долгой задачей (детекция лиц)
+    public const string Busy = "busy";
+    // 400: лица стоят слишком близко — закрасьте лицо кистью
+    public const string FacesTooClose = "faces_too_close";
+    // 400: лицо вне картинки
+    public const string FaceOutOfFrame = "face_out_of_frame";
 }
 
 // Результат вызова шва: Value при успехе, иначе код ImageEditErrorCodes.* и текст

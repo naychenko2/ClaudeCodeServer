@@ -1,7 +1,10 @@
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Faces;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -84,7 +87,7 @@ public class FaceTargetLaunchTests : IDisposable
     }
 
     private ImageEditLaunchAssembler Assembler(ILocalImageMedia? media = null,
-        IFeatureFlagGate? flags = null, IImageEditJobs? jobs = null)
+        IFeatureFlagGate? flags = null, IImageEditJobs? jobs = null, ImageContextLaunch? context = null)
     {
         return new ImageEditLaunchAssembler(
             [HiggsfieldImageEditorTests.Create().Editor],
@@ -93,7 +96,8 @@ public class FaceTargetLaunchTests : IDisposable
             threads: _threads,
             flags: flags ?? Flags(true),
             faces: new FaceDetectionCache(),
-            localMedia: media);
+            localMedia: media,
+            context: context);
     }
 
     private ImageEditLaunchRequest Request(string? slug, string faceTargetJson,
@@ -373,5 +377,40 @@ public class FaceTargetLaunchTests : IDisposable
         result.Value.Should().NotBeNull(result.Error);
         result.Value!.Character.Should().NotBeNull();
         result.Value!.Character!.Lora.Should().BeNull();
+    }
+
+    // ── Гейт контекста чата: FaceTarget не читает IChatContextStore ───────────────
+
+    [Fact]
+    public async Task Гейт_контекста_чата_FaceTarget_не_читает_стор()
+    {
+        // Фейк IChatContextStore: считает обращения Get; в сторе — активная ревизия с персонажем «A»
+        var getCallCount = 0;
+        var storeMock = new Mock<IChatContextStore>();
+        var itemA = new ContextItem("i-a", ImageContextKind.CharacterKind,
+            new JsonObject { ["slug"] = _charA }, "character", ContextActor.Human, DateTime.UtcNow);
+        var stateA = new ChatContextState(1, null, [itemA]);
+        storeMock.Setup(s => s.Get(Owner, Chat))
+            .Callback(() => Interlocked.Increment(ref getCallCount))
+            .Returns(stateA);
+
+        var registry = new ContextKindRegistry([
+            new ImageContextKind(_store),
+            new ProjectFileContextKind()]);
+        var directory = new Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(Chat)).Returns(new Session { Id = Chat, OwnerId = Owner, ProjectId = "p1" });
+        directory.Setup(d => d.ResolveOwnerId(It.IsAny<Session>())).Returns((Session s) => s.OwnerId ?? Owner);
+        var context = new ImageContextLaunch(storeMock.Object, registry, directory.Object, _store);
+
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var result = await Assembler(media: FakeMedia(faces), context: context)
+            .AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        // Персонаж — B, не A из контекста
+        result.Value!.Character!.Slug.Should().Be(_charB);
+        // Стор контекста не читался вовсе
+        getCallCount.Should().Be(0, "FaceTarget не должен читать IChatContextStore");
     }
 }

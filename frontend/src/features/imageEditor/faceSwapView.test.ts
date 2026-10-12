@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedFace } from './api';
 import {
-  faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceVisual,
+  faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual,
   type FaceSwapViewInput,
 } from './faceSwapView';
 
@@ -157,4 +157,18 @@ describe('faceVisual: рамка', () => {
 // ── Подпись карточки ──────────────────────────────────────────────────────────
 describe('faceCaption', () => {
   it('«{Имя} → лицо {n}»', () => expect(faceCaption('Марина', 2)).toBe('Марина → лицо 2'));
+});
+
+describe('faceTargetCaption: выбор подписи на карточке запуска', () => {
+  it('faceTarget есть — подпись «{Имя} → лицо {n}»', () => {
+    expect(faceTargetCaption({ n: 2, characterSlug: 'marina' }, 'Марина')).toBe('Марина → лицо 2');
+  });
+  it('faceTarget нет — подписи нет (карточка прежняя)', () => {
+    expect(faceTargetCaption(null, 'Марина')).toBeNull();
+    expect(faceTargetCaption(undefined, 'Марина')).toBeNull();
+  });
+  it('имя персонажа по slug; персонаж не найден в списке — fallback на slug', () => {
+    expect(faceTargetCaption({ n: 1, characterSlug: 'marina' }, null)).toBe('marina → лицо 1');
+    expect(faceTargetCaption({ n: 1, characterSlug: 'marina' }, '  ')).toBe('marina → лицо 1');
+  });
 });

@@ -31,6 +31,18 @@ export const FS_TEXT = {
 // Подпись карточки запуска/версии: «{Имя} → лицо {n}»
 export const faceCaption = (name: string, n: number) => `${name} → лицо ${n}`;
 
+// Выбор подписи на карточке запуска (этап 2 · шаг 10c): faceTarget null — подписи нет
+// (карточка прежняя). Имя — имя персонажа по slug из списка проекта; персонаж не найден
+// (удалён) — сам slug
+export function faceTargetCaption(
+  ft: { n: number; characterSlug: string } | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  if (!ft) return null;
+  const n = name?.trim();
+  return faceCaption(n || ft.characterSlug, ft.n);
+}
+
 // ── Масштаб рамок: bbox в пикселях картинки → доли (0..1) ─────────────────────
 // bbox = [x1, y1, x2, y2]; width/height — размеры картинки из ответа. Доли — как
 // координаты картинки в макете: рамка рисуется в долях контейнера, который сам

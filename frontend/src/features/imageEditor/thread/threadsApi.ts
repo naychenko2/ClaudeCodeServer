@@ -60,6 +60,9 @@ export interface ImageThreadLaunch {
   // Операция запуска (generate / edit / inpaint / outpaint / …); null — старые нити
   // и запуски без операции (обрезка, local-media)
   op?: string | null;
+  // Подстановка персонажа на лицо (ADR-027, §4, этап 2): номер лица, bbox и slug персонажа
+  // для подписи карточки «{Имя} → лицо {n}»; null — запуск без подстановки (старые нити)
+  faceTarget?: { n: number; bBox?: number[]; characterSlug: string } | null;
 }
 
 export interface ImageThreadSettings {

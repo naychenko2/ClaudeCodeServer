@@ -10,7 +10,7 @@ import { MAX_PHOTOS, MIN_PHOTOS, addGate, photoSizeError, pickFaceFiles, shrinkP
 
 export type FacePhoto = { key: string; url: string; primary: boolean };
 
-export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, renderCaption, onSelectPhoto, selectedKey, labelsEditor, addRef }: {
+export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, renderCaption, onSelectPhoto, selectedKey, labelsEditor, addRef, notice = CHARACTER_PHOTOS_NOTICE }: {
   photos: FacePhoto[];
   onAdd: (files: File[]) => Promise<void>;
   onRemove: (key: string) => Promise<void>;
@@ -24,6 +24,8 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
   labelsEditor?: ReactNode;
   // Вход для файлов извне (зона перетаскивания создания): идёт через тот же путь с проверкой согласия
   addRef?: MutableRefObject<((files: File[]) => Promise<void>) | null>;
+  // Текст согласия; по умолчанию прежний (без меток)
+  notice?: string;
 }) {
   const [consent, setConsent] = useState(false);
   const [pending, setPending] = useState(0);
@@ -143,7 +145,7 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
         onChange={e => { void addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
       {labelsEditor}
       {error && <div style={{ fontSize: FS.sm, color: C.dangerText, overflowWrap: 'anywhere' }}>{error}</div>}
-      <Notice tone="warning" icon={ShieldAlert}>{CHARACTER_PHOTOS_NOTICE}</Notice>
+      <Notice tone="warning" icon={ShieldAlert}>{notice}</Notice>
       <label style={{ display: 'flex', gap: SP.xs, alignItems: 'center', fontSize: FS.sm, color: C.textPrimary }}>
         <Checkbox checked={consent} onChange={setConsent} disabled={!!disabled || pending > 0} />
         <span>{FACES.consentLabel}</span>

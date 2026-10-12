@@ -8,6 +8,10 @@ import { TRAIN_BADGE, TRAIN_TEXT } from './loraTrainTexts';
 export const CHARACTER_PHOTOS_NOTICE =
   'Фото будут отправляться выбранному сервису рисования при каждой генерации. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия';
 
+// Согласие при включённом character-smart-photos (ADR-027 §10): фото ещё и на разметку модели
+export const CHARACTER_PHOTOS_NOTICE_LABELS =
+  'Фото лица уходят выбранному сервису рисования при каждой генерации, а при загрузке — ещё и модели, которая размечает ракурс и эмоцию. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия';
+
 // Список: статусы строк и пустое состояние
 export const LIST_STATUS = {
   emptySubtitle: 'Персонаж — это 3–10 фото лица. Обучите его — и сходство на картинках станет заметно точнее.',
@@ -118,6 +122,46 @@ export const FACES = {
   add: 'Ещё фото',
   upload: 'Загрузить',
   remove: 'Убрать фото',
+} as const;
+
+// Метки фото (ADR-027 §1, спека character-panel-final-spec §10.5)
+export const LABELS = {
+  // Поля редактора
+  angle: 'Ракурс',
+  pitch: 'Наклон головы',
+  emotion: 'Эмоция',
+  close: 'Закрыть метки',
+  // Словари значений (ключ — значение из ADR-027)
+  angleOptions: [
+    { value: 'front', label: 'Анфас' },
+    { value: 'three-quarter', label: 'Вполоборота' },
+    { value: 'profile', label: 'Профиль' },
+  ] as const,
+  pitchOptions: [
+    { value: 'level', label: 'Прямо' },
+    { value: 'up', label: 'Вверх' },
+    { value: 'down', label: 'Вниз' },
+  ] as const,
+  emotionOptions: [
+    { value: 'neutral', label: 'Спокойное' },
+    { value: 'smile', label: 'Улыбка' },
+    { value: 'laugh', label: 'Смех' },
+    { value: 'serious', label: 'Серьёзное' },
+    { value: 'sad', label: 'Грустное' },
+    { value: 'surprised', label: 'Удивлённое' },
+  ] as const,
+  // Подпись под фото: эмоция — со строчной («Анфас · спокойное»)
+  captionAngle: { front: 'Анфас', 'three-quarter': 'Вполоборота', profile: 'Профиль' } as Record<string, string>,
+  captionEmotion: { neutral: 'спокойное', smile: 'улыбка', laugh: 'смех', serious: 'серьёзное', sad: 'грустное', surprised: 'удивлённое' } as Record<string, string>,
+  // Состояния
+  pending: 'Размечаем…',
+  none: 'Без меток',
+  // Источник разметки
+  srcAuto: 'Разметила модель. Ошиблась — поправьте, ваша правка останется.',
+  srcHuman: 'Поправлено вами — авторазметка эту метку не тронет.',
+  srcPending: 'Модель ещё размечает это фото.',
+  srcNone: 'Модель не разметила это фото. Выберите метки сами.',
+  saveFailed: 'Не получилось сохранить метку. Попробуйте ещё раз.',
 } as const;
 
 // Шторка «Фото»: для обучения

@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, launchFailure, FS_TEXT, type NoticeSpec } from '../faceSwapView';
+import { faceSwapView, launchFailure, clearFailures, clearFaceChange, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -113,8 +113,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const [faceSwapMode, setFaceSwapMode] = useState(startTool === 'faceSwap');
   const { list: faceCharacters } = useCharacters(projectId);
   // Локальное состояние экрана: мелкое лицо (тап), отказы запуска, «локальные на этот запуск», запуск
-  const [faceUi, setFaceUi] = useState({
-    tappedSmall: null as number | null, tooClose: false, faceOutOfFrame: false, busy: false,
+  const [faceUi, setFaceUi] = useState<FaceUi>({
+    tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
     providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false,
   });
   // Вход в режим / смена версии-нити: новый поиск лиц + сброс переходных состояний (устаревший ответ не применяется)
@@ -259,7 +259,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
             onSelect={n => {
               const f = faceSwap.state.faces.find(x => x.n === n);
               if (f?.small) setFaceUi(u => ({ ...u, tappedSmall: n }));
-              else faceSwap.selectFace(n);
+              else { faceSwap.selectFace(n); setFaceUi(clearFaceChange); }
             }} />
         : null
   ) : null;
@@ -269,16 +269,18 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     const ft = faceSwap.state.selectedFace;
     const ch = faceSwap.state.selectedCharacter;
     if (ft == null || !ch) return;
-    setFaceUi(u => ({ ...u, submitting: true }));
+    // Новый запуск: сброс ВСЕХ флагов отказов (иначе старый отказ висит поверх нового)
+    setFaceUi(u => ({ ...clearFailures(u), submitting: true }));
     try {
       const ok = await launchFaceSwap(projectId, sessionId, thread,
         { versionId: viewedVersionId ?? '', face: ft, facesKey: faceSwap.state.facesKey ?? '' },
         ch, viewedVersionId, dims);
       if (ok) setFaceSwapMode(false); // новая версия ляжет в ленту; режим закрывается
     } catch (e) {
-      const err = e as { body?: { code?: string; message?: string } };
+      const err = e as { body?: { code?: string; error?: string } };
       const code = typeof err?.body?.code === 'string' ? err.body.code : null;
-      const msg = typeof err?.body?.message === 'string' ? err.body.message : (e as Error).message;
+      // Бэкенд шлёт { error, code }; поля body.message нет (всегда undefined)
+      const msg = typeof err?.body?.error === 'string' ? err.body.error : (e as Error).message;
       // Реакция на отказ — по коду (launchFailure), не по тексту сообщения
       const f = launchFailure(code, msg);
       switch (f.kind) {
@@ -292,7 +294,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
           showToast(FS_TEXT.featureDisabled, '', 'info');
           setFaceSwapMode(false);
           break;
-        default: showToast(`Запуск не удался: ${msg}`, '', 'error');
+        case 'generic': showToast(`Запуск не удался: ${msg}`, '', 'error'); break;
+        default: {
+          // Исчерпывающесь: все виды LaunchFailure обработаны выше; f сужен до never
+          const _exhaustive: never = f;
+          void _exhaustive;
+          break;
+        }
       }
     } finally {
       setFaceUi(u => ({ ...u, submitting: false }));

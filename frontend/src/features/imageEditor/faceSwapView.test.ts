@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { DetectedFace } from './api';
 import {
   faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
-  type FaceSwapViewInput,
+  clearFailures, clearFaceChange,
+  type FaceSwapViewInput, type FaceUi,
 } from './faceSwapView';
 
 const face = (n: number, small = false): DetectedFace => ({ n, bbox: [10, 10, 30, 30], score: 0.9, small });
@@ -120,12 +121,18 @@ describe('faceSwapView: плашки', () => {
     const v = faceSwapView(base({ provider: 'fal' }));
     expect(v.notices.some(n => n.tone === 'warning' && n.action?.label === 'Использовать локальные для этого запуска')).toBe(true);
   });
-  it('provider_unavailable, локальные доступны (9): warning + «Использовать локальные…»', () => {
-    const v = faceSwapView(base({ provider: 'fal', providerUnavailable: true, localAvailable: true }));
-    expect(v.notices.some(n => n.tone === 'warning' && n.action?.label === 'Использовать локальные для этого запуска')).toBe(true);
+  // provider_unavailable, когда клиент считал локальные доступными (localOk=true):
+  // кнопка «Подставить» активна, отказ приходит — плашка обязана быть, иначе немой.
+  // Мутация: вернуть старое `if (!localOk)` вокруг localUnavailable → этот тест краснеет.
+  it('provider_unavailable, локальные доступны (local): нейтральная плашка, canSubmit не меняется', () => {
+    const withFlag = faceSwapView(base({ provider: 'local', localAvailable: true, providerUnavailable: true }));
+    const withoutFlag = faceSwapView(base({ provider: 'local', localAvailable: true, providerUnavailable: false }));
+    expect(withFlag.notices.some(n => n.tone === 'info' && n.icon === 'cpu' && n.text.includes('Локальные модели сейчас недоступны') && n.action == null)).toBe(true);
+    expect(withFlag.canSubmit).toBe(withoutFlag.canSubmit);
   });
-  it('provider_unavailable, локальные недоступны: нейтральный текст, без действия', () => {
-    const v = faceSwapView(base({ provider: 'fal', providerUnavailable: true, localAvailable: false }));
+  // provider_unavailable + локальные недоступны: приоритет у нейтральной плашки (причина — недоступность)
+  it('provider_unavailable, локальные недоступны: нейтральная плашка, без действия', () => {
+    const v = faceSwapView(base({ provider: 'local', localAvailable: false, providerUnavailable: true }));
     expect(v.notices.some(n => n.tone === 'info' && n.icon === 'cpu' && n.text.includes('Локальные модели сейчас недоступны') && n.action == null)).toBe(true);
   });
   it('409 faces_changed (10): info «Картинка изменилась…»', () => {
@@ -212,5 +219,42 @@ describe('launchFailure: код → состояние', () => {
   });
   it('код null (нет кода в теле) → generic', () => {
     expect(launchFailure(null, 'сеть')).toEqual({ kind: 'generic', message: 'сеть' });
+  });
+});
+
+// ── Сброс флагов отказов (этап 2 · шаг 10d) ───────────────────────────────────
+const fullUi = (over: Partial<FaceUi> = {}): FaceUi => ({
+  tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
+  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false,
+  ...over,
+});
+
+describe('clearFailures: сброс всех флагов отказов (в начале запуска)', () => {
+  it('все флаги отказов → false; tappedSmall/useLocalOnce/submitting не трогаем', () => {
+    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, tappedSmall: 3, useLocalOnce: true, submitting: true });
+    const r = clearFailures(ui);
+    expect(r.tooClose).toBe(false);
+    expect(r.faceOutOfFrame).toBe(false);
+    expect(r.busy).toBe(false);
+    expect(r.providerUnavailable).toBe(false);
+    expect(r.facesChanged).toBe(false);
+    expect(r.tappedSmall).toBe(3);
+    expect(r.useLocalOnce).toBe(true);
+    expect(r.submitting).toBe(true);
+  });
+  it('чистое состояние — остаётся чистым', () => {
+    expect(clearFailures(fullUi())).toEqual(fullUi());
+  });
+});
+
+describe('clearFaceChange: смена выбранного лица', () => {
+  it('faceOutOfFrame и tooClose → false; busy/providerUnavailable/facesChanged не трогаем', () => {
+    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true });
+    const r = clearFaceChange(ui);
+    expect(r.tooClose).toBe(false);
+    expect(r.faceOutOfFrame).toBe(false);
+    expect(r.busy).toBe(true);
+    expect(r.providerUnavailable).toBe(true);
+    expect(r.facesChanged).toBe(true);
   });
 });

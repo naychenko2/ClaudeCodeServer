@@ -19,8 +19,8 @@ export const FS_TEXT = {
   over8: 'Показаны 8 самых крупных лиц',
   small: 'Лицо слишком мелкое — персонаж получится непохожим. Закрасьте его кистью или увеличьте картинку',
   close: 'Лица стоят слишком близко — закрасьте нужное кистью',
-  // face_out_of_frame (этап 2 · шаг 10d): новое — на согласование продакту
-  outOfFrame: 'Лицо вне картинки. Выберите другое лицо или закрасьте нужное кистью',
+  // face_out_of_frame (этап 2 · шаг 10d): тире, как у соседних (утверждено продактом)
+  outOfFrame: 'Лицо вне картинки — выберите другое лицо или закрасьте нужное кистью',
   busy: 'Видеокарта занята долгой задачей. Попробуйте чуть позже',
   provider: 'Подставлять персонажа можно только локальными моделями',
   // provider_unavailable, когда локальные модели недоступны: действие не помогает (этап 2 · шаг 10d)
@@ -146,6 +146,33 @@ export function launchFailure(code: string | null, message: string | null): Laun
   }
 }
 
+// ── Локальное состояние экрана «Подставить персонажа» (EditorModal) ──────────
+// tappedSmall — мелкое лицо, которое тапнули; флаги отказов запуска; useLocalOnce —
+// «локальные на этот запуск»; submitting — идёт запуск.
+export interface FaceUi {
+  tappedSmall: number | null;
+  tooClose: boolean;
+  faceOutOfFrame: boolean;
+  busy: boolean;
+  providerUnavailable: boolean;
+  facesChanged: boolean;
+  useLocalOnce: boolean;
+  submitting: boolean;
+}
+
+// Сброс ВСЕХ флагов отказов (в начале запуска, вместе с submitting: true):
+// иначе старый отказ (например face_out_of_frame) висит поверх нового (busy) —
+// две противоречащие плашки. Остальные поля (tappedSmall/useLocalOnce) не трогаем.
+export function clearFailures(ui: FaceUi): FaceUi {
+  return { ...ui, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false };
+}
+
+// Смена выбранного лица: «вне картинки» и «близко» гасятся (человек выбрал другое
+// лицо); остальные флаги (busy/providerUnavailable/facesChanged) — нет.
+export function clearFaceChange(ui: FaceUi): FaceUi {
+  return { ...ui, faceOutOfFrame: false, tooClose: false };
+}
+
 // Чистое вычисление состояния экрана. canSubmit — по матрице макета: лицо и персонаж
 // выбраны, исполнитель — локальные (или переключены на этот запуск).
 export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
@@ -197,14 +224,15 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     if (facesChanged) {
       notices.push({ tone: 'info', icon: 'redo', text: FS_TEXT.changed });
     }
-    // Провайдер не локальные (9): плашка + явное действие; тихой подмены нет.
-    // provider_unavailable, когда локальные недоступны: действие не помогает → нейтральный текст
-    if (!localOk) {
-      if (providerUnavailable && !localAvailable) {
-        notices.push({ tone: 'info', icon: 'cpu', text: FS_TEXT.localUnavailable });
-      } else {
-        notices.push({ tone: 'warning', icon: 'cpu', text: FS_TEXT.provider, action: { label: FS_TEXT.useLocal, kind: 'secondary' } });
-      }
+    // provider_unavailable: локальные модели реально недоступны → нейтральная плашка
+    // (действие «использовать локальные» не помогает). Независимо от localOk: кнопка
+    // «Подставить» активна только при localOk, поэтому отказ приходит, когда клиент
+    // считал локальные доступными, — плашка обязана быть, иначе отказ немой.
+    // Провайдер не локальные (9): warning + явное действие; тихой подмены нет.
+    if (providerUnavailable) {
+      notices.push({ tone: 'info', icon: 'cpu', text: FS_TEXT.localUnavailable });
+    } else if (!localOk) {
+      notices.push({ tone: 'warning', icon: 'cpu', text: FS_TEXT.provider, action: { label: FS_TEXT.useLocal, kind: 'secondary' } });
     }
   }
 

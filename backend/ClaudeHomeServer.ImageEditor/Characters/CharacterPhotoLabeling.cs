@@ -78,18 +78,18 @@ public sealed class CharacterPhotoLabeling(
         if (manifest is null) return;
         PruneFailures(job, manifest);
 
-        var angleFiles = Candidates(job, manifest, p => p.Angle is null);
+        var angleFiles = Candidates(job, manifest, p => p.Angle is null, p => p.AngleSource);
         if (angleFiles.Count > 0)
         {
             var result = await LabelAngleAsync(job, angleFiles, ct);
-            if (result is not null) await WriteAsync(job, result.Labels, result.Source, ct);
+            if (result is not null) await WriteAsync(job, result.Labels, result.Source, anglePlace: true, ct);
         }
 
-        var emotionFiles = Candidates(job, manifest, p => p.Emotion is null);
+        var emotionFiles = Candidates(job, manifest, p => p.Emotion is null, p => p.EmotionSource);
         if (emotionFiles.Count > 0)
         {
             var result = await LabelEmotionAsync(job, emotionFiles, ct);
-            if (result is not null) await WriteAsync(job, result.Labels, result.Source, ct);
+            if (result is not null) await WriteAsync(job, result.Labels, result.Source, anglePlace: false, ct);
         }
     }
 
@@ -97,14 +97,16 @@ public sealed class CharacterPhotoLabeling(
     // noroute — «разметить было нечем»: берём снова, чтобы фото размечалось, когда маршрут появится,
     // но не чаще раза в NoRouteCooldownMinutes на персонажа — иначе шторм записей при частых поводах.
     // Повторы конечны: Candidates зовут только ленивые поводы, а не маршрут даёт noroute мгновенно, без модели.
-    private List<string> Candidates(Job job, CharacterManifest manifest, Func<CharacterPhoto, bool> needs)
+    // needs — «месту нужна разметка» (поле места null); placeSource — источник МЕСТА: noroute → повторить
+    // после паузы. По месту, а не общим LabelSource: noroute одного места не тянет повтор разметки другого.
+    private List<string> Candidates(Job job, CharacterManifest manifest, Func<CharacterPhoto, bool> needs, Func<CharacterPhoto, string?> placeSource)
     {
         var now = _time.GetUtcNow().UtcDateTime;
         var inCooldown = _lastNoRouteWriteUtc.TryGetValue((job.OwnerId, job.Root, job.Slug), out var last)
             && now - last < TimeSpan.FromMinutes(NoRouteCooldownMinutes);
         return [.. manifest.Photos
             .Where(p => p.LabelSource != PhotoLabelValues.Human
-                && (needs(p) || (p.LabelSource == PhotoLabelValues.NoRoute && !inCooldown)))
+                && (needs(p) || (placeSource(p) == PhotoLabelValues.NoRoute && !inCooldown)))
             .Take(BatchSize)
             .Select(p => p.File)];
     }
@@ -252,7 +254,8 @@ public sealed class CharacterPhotoLabeling(
                 else _failures[key] = n;
             }
         }
-        if (exhausted.Count > 0) await WriteAsync(job, exhausted, PhotoLabelValues.NoRoute, ct);
+        if (exhausted.Count > 0)
+            await WriteAsync(job, exhausted, PhotoLabelValues.NoRoute, place == LocalActionCatalog.CharacterPhotoAngle, ct);
     }
 
     // Счётчики фото, которых в манифесте уже нет, выбрасываем: иначе они копятся до рестарта
@@ -334,11 +337,11 @@ public sealed class CharacterPhotoLabeling(
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
         && v.GetString()?.Trim().ToLowerInvariant() is { } s && vocabulary.Contains(s) ? s : null;
 
-    private async Task WriteAsync(Job job, Dictionary<string, CharacterPhotoLabels> labels, string labelSource, CancellationToken ct)
+    private async Task WriteAsync(Job job, Dictionary<string, CharacterPhotoLabels> labels, string placeSource, bool anglePlace, CancellationToken ct)
     {
         using (await locks.LockCharacterAsync(job.Root, job.Slug, ct))
-            CharacterStore.MergeAutoLabels(job.Root, job.Slug, labels, labelSource);
-        if (labelSource == PhotoLabelValues.NoRoute)
+            CharacterStore.MergeAutoLabels(job.Root, job.Slug, labels, placeSource, anglePlace);
+        if (placeSource == PhotoLabelValues.NoRoute)
         {
             _lastNoRouteWriteUtc[(job.OwnerId, job.Root, job.Slug)] = _time.GetUtcNow().UtcDateTime;
             NoRouteWriteCount++;

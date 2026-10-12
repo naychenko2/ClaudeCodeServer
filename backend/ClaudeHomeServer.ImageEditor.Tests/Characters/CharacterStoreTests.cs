@@ -626,8 +626,10 @@ public class CharacterStoreTests : IDisposable
         var photo = CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file);
         photo.Angle.Should().Be("three-quarter");
         photo.Pitch.Should().Be("level");
-        photo.Emotion.Should().Be("smile");
-        photo.LabelSource.Should().Be("auto");
+        // MergeAutoLabels по умолчанию пишет место ракурса (anglePlace): AngleSource=auto,
+        // EmotionSource не трогается (эмоция — отдельное место, своя запись)
+        photo.AngleSource.Should().Be("auto");
+        photo.EmotionSource.Should().BeNull();
     }
 
     [Fact]
@@ -723,7 +725,8 @@ public class CharacterStoreTests : IDisposable
         photo.Emotion.Should().BeNull();
         photo.LabelSource.Should().BeNull();
         CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "front", "smile"))!.Should().Equal(file);
-        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().Be("auto");
+        // MergeAutoLabels (anglePlace) ставит источник места ракурса, а не общий LabelSource фото
+        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).AngleSource.Should().Be("auto");
         // Соседнее фото не задето: ручные метки на месте, манифест не изменился
         var after = CharacterStore.Get(_root, m.Slug)!;
         var neighbour = after.Photos.Single(p => p.File == other);

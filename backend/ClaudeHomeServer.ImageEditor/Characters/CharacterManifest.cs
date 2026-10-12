@@ -88,15 +88,20 @@ public sealed record CharacterLora(string Name, string Trigger, double Strength)
 
 // File — только имя файла внутри папки персонажа, без каталогов
 // Метки (ADR-027, §1): null — разметка не пробовалась, "unknown" — пробовали, ответа нет.
+// LabelSource — только human (ручная правка: фото не трогаем целиком). Auto/NoRoute — по месту
+// разметки, а не на фото: AngleSource (ракурс+наклон) и EmotionSource (эмоция) независимы,
+// общий источник их путал (находка Александра, дефекты а/б).
 // Extra переносит незнакомые поля фото как есть, чтобы откат кода не стёр их при правке.
 public sealed record CharacterPhoto(
     string File, bool Primary = false,
-    string? Angle = null, string? Pitch = null, string? Emotion = null, string? LabelSource = null)
+    string? Angle = null, string? Pitch = null, string? Emotion = null,
+    string? LabelSource = null, string? AngleSource = null, string? EmotionSource = null)
 {
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; init; }
 }
 
-// Словари меток фото и источник метки
+// Словари меток фото и источник метки. Auto/NoRoute — значения источника МЕСТА разметки
+// (AngleSource/EmotionSource), а не фото; Human — источник фото (LabelSource).
 public static class PhotoLabelValues
 {
     public const string Unknown = "unknown";
@@ -140,7 +145,8 @@ public sealed record CharacterDto(
 }
 
 // Фото персонажа для фронта: Extra манифеста наружу не идёт. Pitch/Emotion/LabelSource у фото без метки
-// (и при выключенном флаге) в JSON отсутствуют, а не null
+// (и при выключенном флаге) в JSON отсутствуют, а не null. LabelSource — единый для фронта:
+// human (ручная) → auto (хотя бы одно место авто) → noroute (хотя бы одно без маршрута) → null.
 public sealed record CharacterPhotoDto(
     string File,
     bool Primary,
@@ -150,7 +156,16 @@ public sealed record CharacterPhotoDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LabelSource = null)
 {
     public static CharacterPhotoDto From(CharacterPhoto p, bool withLabels) =>
-        withLabels ? new(p.File, p.Primary, p.Angle, p.Pitch, p.Emotion, p.LabelSource) : new(p.File, p.Primary, p.Angle);
+        withLabels ? new(p.File, p.Primary, p.Angle, p.Pitch, p.Emotion, DtoLabelSource(p)) : new(p.File, p.Primary, p.Angle);
+
+    // Единый источник для подписи/иконки фронта: ручная правка главнее, затем «авто» (хотя бы
+    // одно место размечено моделью), затем «без маршрута», иначе null. Фронт не различает, какое
+    // именно место auto/noroute — ему достаточно показать «Авто»/«Без меток»/«Вручную».
+    private static string? DtoLabelSource(CharacterPhoto p) =>
+        p.LabelSource == PhotoLabelValues.Human ? PhotoLabelValues.Human
+        : p.AngleSource == PhotoLabelValues.Auto || p.EmotionSource == PhotoLabelValues.Auto ? PhotoLabelValues.Auto
+        : p.AngleSource == PhotoLabelValues.NoRoute || p.EmotionSource == PhotoLabelValues.NoRoute ? PhotoLabelValues.NoRoute
+        : null;
 }
 
 // LoRA персонажа для фронта: из providers.local наружу уходят только эти три поля

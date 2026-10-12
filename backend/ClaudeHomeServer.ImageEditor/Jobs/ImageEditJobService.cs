@@ -274,7 +274,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     }
 
     private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request,
-        Func<CancellationToken, Task<CharacterPickOutcome>>? picker)
+        Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker)
     {
         ImageEditResult result;
         var cancelled = false;
@@ -323,12 +323,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // Подбор фото персонажа под сюжет: любой сбой оставляет запрос как есть (порядок «главное, затем
     // манифест»), отмена пробрасывается. Новые фото ужимаются под лимиты модели, как и прежние
     private async Task<ImageEditRequest> PickCharacterAsync(Job job, ImageEditRequest request,
-        Func<CancellationToken, Task<CharacterPickOutcome>> picker)
+        Func<int, CancellationToken, Task<CharacterPickOutcome>> picker)
     {
         CharacterPickOutcome outcome;
         try
         {
-            outcome = await picker(job.Cts.Token);
+            outcome = await picker(ConfidentScore(job.Quote.Model), job.Cts.Token);
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -373,6 +373,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             .ToList();
         return request with { References = references };
     }
+
+    // Порог уверенности ракурса (ADR-027 §7): только local (MaxCharacterPhotos=1) подменяет
+    // главное фото на профильное при точном совпадении; у облака (null или иное) первым
+    // остаётся главное, как до подбора
+    private static int ConfidentScore(ImageEditModelInfo model) =>
+        model.Caps.MaxCharacterPhotos == 1 ? CharacterPhotoPicker.LocalConfidentScore : int.MaxValue;
 
     private Task NotifyFinishedAsync(Job job) => NotifyAsync(Finished, job, "завершения");
 

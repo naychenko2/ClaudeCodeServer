@@ -132,8 +132,10 @@ public record ImageEditJobInput(
     // Версия нити, от которой запущена правка (изменение 27.09 к ADR-019); null — вне нити
     string? BaseVersionId = null,
     // Подбор фото персонажа под сюжет (ADR-027 §7): выполняется в задаче перед драйвером, а не в
-    // запуске; null — флаг выключен или персонажа нет
-    Func<CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null);
+    // запуске; null — флаг выключен или персонажа нет. Первый аргумент — порог уверенности ракурса:
+    // CharacterPhotoPicker.LocalConfidentScore для local (MaxCharacterPhotos=1), int.MaxValue для
+    // облака — у облака первым остаётся главное фото, как до подбора
+    Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null);
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);

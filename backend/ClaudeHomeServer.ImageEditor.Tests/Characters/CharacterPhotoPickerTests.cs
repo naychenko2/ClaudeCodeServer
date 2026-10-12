@@ -192,12 +192,12 @@ public class CharacterPhotoPickerTests
     [Fact]
     public void Вполоборота_без_точного_совпадения_даёт_главное()
     {
-        // Только front и profile: three-quarter — соседний (1 очко), не точное совпадение
+        // Главное без метки ракурса (0 очков), a.jpg — front (1 очко, соседний к сцене three-quarter).
+        // При пороге 2 (default) 1 < 2 → главное первым; мутация порога в 1 краснит: a.jpg вперёд
         var photos = new[]
         {
-            P("m.jpg", primary: true, angle: "front"),
             P("a.jpg", angle: "front"),
-            P("b.jpg", angle: "profile"),
+            P("m.jpg", primary: true),
         };
         var pick = CharacterPhotoPicker.Pick(photos, new CharacterScene("three-quarter", null, null), 1);
         pick.Pick.Should().Be("auto");

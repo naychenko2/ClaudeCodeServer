@@ -593,4 +593,144 @@ public class LocalImageMediaAdapterTests
         graph.ContainsKey("mask").Should().BeFalse();
         graph.ContainsKey("overlay").Should().BeFalse();
     }
+
+    // Детекция лиц (ADR-027, §4): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
+    // POST /prompt получает prompt-1, поэтому ответ кладём в историю заранее, без гонок
+    private void AnswerDetect(string text)
+    {
+        _comfy.History["prompt-1"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["status"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["status_str"] = "success",
+                ["completed"] = true,
+                ["messages"] = new System.Text.Json.Nodes.JsonArray(),
+            },
+            ["outputs"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["detect"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["text"] = new System.Text.Json.Nodes.JsonArray(text),
+                },
+            },
+        };
+    }
+
+    [Fact]
+    public async Task Детекция_два_лица_порядок_номера_и_флаг_мелкого()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[1,1,3,3],\"score\":0.9,\"small\":false},{\"bbox\":[4,4,6,6],\"score\":0.7,\"small\":true}]}");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Width.Should().Be(8);
+        result.Height.Should().Be(8);
+        result.Faces.Should().HaveCount(2);
+        result.Faces[0].Should().Be(new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false));
+        result.Faces[1].Should().Be(new LocalDetectedFace(2, 4, 4, 6, 6, 0.7, true));
+    }
+
+    [Fact]
+    public async Task Детекция_без_лиц_успех_с_пустыми_Faces_и_без_ошибки()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[]}");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Faces.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Детекция_error_узла_это_ошибка_а_не_лица_нет()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect=error");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().NotBeNullOrEmpty();
+        result.Faces.Should().BeEmpty();
+    }
+
+    // Битый JSON, нулевой/отрицательный размер, нечисловой и вырожденный bbox — «неожиданный
+    // ответ» (null), а не «лиц нет»: адаптер превратит null в Error
+    [Theory]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":")]
+    [InlineData("ccs_face_detect={\"width\":0,\"height\":8,\"faces\":[]}")]
+    [InlineData("ccs_face_detect={\"width\":-1,\"height\":8,\"faces\":[]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[3,3,1,1],\"score\":0.9,\"small\":false}]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[\"a\",1,3,3],\"score\":0.9,\"small\":false}]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[1,1,3],\"score\":0.9,\"small\":false}]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8}")]
+    public void Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(string text)
+    {
+        LocalImageMediaAdapter.ParseFaces([text], LocalMediaTestImages.Png(8, 8)).Should().BeNull();
+    }
+
+    // EXIF-поворот: воркер (cv2) повернул JPEG, ImageDimensions — нет; размер не совпал → отказ
+    [Fact]
+    public async Task Детекция_размер_воркера_не_совпал_с_байтами_отказ_сопоставить()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":16,\"height\":8,\"faces\":[]}");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().Be("Не удалось сопоставить лица с картинкой.");
+        result.Faces.Should().BeEmpty();
+    }
+
+    // Таймаут: потолок ожидания укорочен, история не появляется — Busy, а не исключение
+    [Fact]
+    public async Task Детекция_потолок_ожидания_это_Busy()
+    {
+        var adapter = Build();
+        adapter.FaceDetectTimeoutOverride = TimeSpan.FromMilliseconds(200);
+
+        var result = await adapter.DetectFacesAsync(LocalMediaTestImages.Png(8, 8), CancellationToken.None);
+
+        result.Busy.Should().BeTrue();
+    }
+
+    // Детекцию запускает человек — задача в голову очереди: ключ front в теле POST /prompt
+    [Fact]
+    public async Task Детекция_ставится_в_голову_очереди_front()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[]}");
+
+        await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        _comfy.Prompts.Should().ContainSingle();
+        _comfy.Prompts[0].ContainsKey("front").Should().BeTrue();
+        _comfy.Prompts[0]["front"]!.GetValue<bool>().Should().BeTrue();
+    }
+
+    // Вход — биометрия: имя {id}-detect.<ext> записано в стор на общую чистку
+    [Fact]
+    public async Task Детекция_вход_зарегистрирован_на_чистку()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "detect_" + Guid.NewGuid().ToString("N"));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tempDir, "data", "projects.json"),
+        }).Build();
+        var store = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaJobStore(config);
+        var adapter = Build(store: store);
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[]}");
+
+        await adapter.DetectFacesAsync(image, CancellationToken.None);
+
+        _comfy.Uploads.Should().ContainSingle().Which.Should().StartWith("lm_").And.EndWith("-detect.png");
+        store.ListByOp(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaOps.EditorInputs)
+            .Should().ContainSingle().Subject.ComfyInputs.Should().Contain(u => u.EndsWith("-detect.png"));
+        ClaudeHomeServer.Tests.Helpers.TestFs.DeleteDirectoryResilient(tempDir);
+    }
 }

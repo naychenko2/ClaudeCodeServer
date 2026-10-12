@@ -41,6 +41,13 @@ public interface ILocalImageMedia
     // по умолчанию — «не поддерживается»: подсистема images ещё не подключена
     Task<LocalFacePoseResult> FacePoseAsync(IReadOnlyList<byte[]> images, CancellationToken ct) =>
         Task.FromResult(new LocalFacePoseResult(null, "Определение ракурса здесь не поддерживается."));
+
+    // Лица на картинке (ADR-027, §4): узел ComfyUI CcsFaceDetect, ответ — bbox по порядку слева
+    // направо. Faces — в порядке ответа воркера, N — номер с 1 (присваивает бэкенд); Error — сбой
+    // или неожиданный ответ, Busy — очередь занята или ComfyUI не ответил. Реализация по умолчанию
+    // — «не поддерживается»: подсистема images ещё не подключена
+    Task<LocalFaceDetectResult> DetectFacesAsync(byte[] image, CancellationToken ct) =>
+        Task.FromResult(new LocalFaceDetectResult(0, 0, [], "Детекция лиц здесь не поддерживается."));
 }
 
 public enum LocalImageOp { Generate, Edit, FaceDetail }
@@ -106,3 +113,14 @@ public sealed record LocalFacePoseResult(IReadOnlyList<LocalFacePose?>? Poses, s
 
 // Углы головы в градусах; осям соответствуют имена полей, а не позиции
 public sealed record LocalFacePose(double Yaw, double Pitch, double Roll);
+
+// Лицо, найденное детектором (ADR-027, §4): N — номер с 1 (индекс в списке + 1, присваивает
+// бэкенд, воркер номеров не отдаёт), X1/Y1/X2/Y2 — bbox в пикселях, Score — уверенность 0..1,
+// Small — короткая сторона < 64 px
+public sealed record LocalDetectedFace(int N, int X1, int Y1, int X2, int Y2, double Score, bool Small);
+
+// Результат детекции лиц: Width/Height — размер картинки по ответу воркера, Faces — в порядке
+// ответа; Error — сбой или неожиданный ответ, Busy — очередь занята или ComfyUI не ответил
+// («попробуй позже»)
+public sealed record LocalFaceDetectResult(int Width, int Height, IReadOnlyList<LocalDetectedFace> Faces,
+    string? Error = null, bool Busy = false);

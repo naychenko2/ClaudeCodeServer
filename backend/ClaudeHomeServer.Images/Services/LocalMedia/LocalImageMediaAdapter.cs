@@ -528,6 +528,139 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
     }
 
+    // Потолок ожидания детекции — как у воркера сходства: человек ждёт результат, но видеокарта
+    // может быть занята долгой задачей — по таймауту Busy, а не исключение
+    private static readonly TimeSpan FaceDetectTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan FaceDetectPollInterval = TimeSpan.FromMilliseconds(500);
+    internal TimeSpan FaceDetectTimeoutOverride { get; set; } = FaceDetectTimeout;
+    private static readonly TimeSpan FaceDetectCleanupDelay = TimeSpan.FromMinutes(10);
+
+    public async Task<LocalFaceDetectResult> DetectFacesAsync(byte[] image, CancellationToken ct)
+    {
+        var options = LocalMediaOptions.Read(config);
+        if (!options.Enabled) return new LocalFaceDetectResult(0, 0, [], "Локальные модели выключены на этом сервере.");
+        if (image.Length > LocalMediaService.MaxInputBytes)
+            return new LocalFaceDetectResult(0, 0, [], $"Картинка больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        var ext = ImageFormatSniffer.DetectExtension(image);
+        if (ext is null) return new LocalFaceDetectResult(0, 0, [], "Картинка — не PNG, JPEG, WebP или GIF.");
+
+        var jobId = LocalMediaService.JobIdPrefix + Guid.NewGuid().ToString("N");
+        var uploaded = new List<string>();
+        string ticket;
+        var queuedOk = false;
+        try
+        {
+            // Лицо = биометрия: загружаем как входы и записываем на общую чистку
+            var name = await UploadTrackedAsync(uploaded, image, $"{jobId}-detect{ext}", ct);
+            // Детекцию запускает человек — в голову очереди
+            ticket = (await comfy.QueuePromptAsync(ComfyWorkflows.FaceDetect(name), ct, front: true)).PromptId;
+            queuedOk = true;
+        }
+        catch (ComfyException ex)
+        {
+            Remember(alive: false);
+            log.LogWarning("ComfyUI не принял задачу детекции лиц: {Error}", ex.Message);
+            return new LocalFaceDetectResult(0, 0, [], ex.Message, true);
+        }
+        finally
+        {
+            RegisterInputs(jobId, uploaded, queuedOk ? FaceDetectCleanupDelay : null);
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(FaceDetectTimeoutOverride);
+        try
+        {
+            while (true)
+            {
+                var history = await comfy.GetHistoryAsync(ticket, timeout.Token);
+                if (history is { Failed: true })
+                {
+                    ReleaseCleanup(jobId);
+                    return new LocalFaceDetectResult(0, 0, [], history.Error ?? "ComfyUI завершил задачу ошибкой.");
+                }
+                if (history is { Completed: true })
+                {
+                    ReleaseCleanup(jobId);
+                    return ParseFaces(history.Texts, image) is { } result
+                        ? result
+                        : new LocalFaceDetectResult(0, 0, [], "Узел детекции вернул неожиданный ответ.");
+                }
+                await Task.Delay(FaceDetectPollInterval, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new LocalFaceDetectResult(0, 0, [], "Детекция лиц не уложилась в отведённое время.", true);
+        }
+        catch (ComfyException ex)
+        {
+            Remember(alive: false);
+            return new LocalFaceDetectResult(0, 0, [], ex.Message, true);
+        }
+    }
+
+    private const string FaceDetectKey = "ccs_face_detect=";
+
+    // Строка узла: ccs_face_detect={"width":W,"height":H,"faces":[{"bbox":[x1,y1,x2,y2],"score":0.87,"small":false}, ...]}
+    // либо ccs_face_detect=error. Лиц нет — faces пуст (нормальный результат, без Error). Битый JSON,
+    // нечисловой bbox, нулевой/отрицательный размер, x2<=x1 — «неожиданный ответ» (null), а не «лиц нет».
+    // Сверка W/H: воркер (cv2) может повернуть JPEG по EXIF, а ImageDimensions — нет; не совпало и
+    // реальный размер известен → null; реальный размер неизвестен (null) — доверяем воркеру.
+    internal static LocalFaceDetectResult? ParseFaces(IReadOnlyList<string> texts, byte[] image)
+    {
+        foreach (var text in texts)
+        {
+            var line = text.Trim();
+            if (!line.StartsWith(FaceDetectKey, StringComparison.Ordinal)) continue;
+            var rest = line[FaceDetectKey.Length..].Trim();
+            if (rest == "error") return new LocalFaceDetectResult(0, 0, [], "Узел детекции вернул ошибку.");
+            try
+            {
+                if (System.Text.Json.Nodes.JsonNode.Parse(rest) is not System.Text.Json.Nodes.JsonObject answer)
+                    return null;
+                var width = Int(answer["width"]);
+                var height = Int(answer["height"]);
+                if (width is null || height is null || width <= 0 || height <= 0) return null;
+                var faces = new List<LocalDetectedFace>();
+                if (answer["faces"] is System.Text.Json.Nodes.JsonArray list)
+                {
+                    for (var i = 0; i < list.Count; i++)
+                    {
+                        if (list[i] is not System.Text.Json.Nodes.JsonObject face) return null;
+                        if (face["bbox"] is not System.Text.Json.Nodes.JsonArray bbox || bbox.Count != 4) return null;
+                        var x1 = Int(bbox[0]); var y1 = Int(bbox[1]); var x2 = Int(bbox[2]); var y2 = Int(bbox[3]);
+                        if (x1 is null || y1 is null || x2 is null || y2 is null) return null;
+                        if (x2 <= x1 || y2 <= y1) return null;
+                        faces.Add(new LocalDetectedFace(i + 1, x1.Value, y1.Value, x2.Value, y2.Value,
+                            Score(face), Small(face)));
+                    }
+                }
+                else return null;
+
+                // Сверка системы координат: реальный размер байт против ответа воркера
+                var real = ImageDimensions.Read(image);
+                if (real is { } size && (size.Width != width || size.Height != height))
+                    return new LocalFaceDetectResult(width.Value, height.Value, [], "Не удалось сопоставить лица с картинкой.");
+                return new LocalFaceDetectResult(width.Value, height.Value, faces);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;
+            }
+        }
+        return null;
+
+        static int? Int(System.Text.Json.Nodes.JsonNode? node) =>
+            node is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
+
+        static double Score(System.Text.Json.Nodes.JsonObject face) =>
+            face["score"] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<double>(out var d) && double.IsFinite(d) ? d : 0;
+
+        static bool Small(System.Text.Json.Nodes.JsonObject face) =>
+            face["small"] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<bool>(out var b) && b;
+    }
+
     private const string FacePoseKey = "ccs_face_pose=";
 
     // Строка узла: ccs_face_pose={"файл.png": {"yaw":..,"pitch":..,"roll":..}, ...}. Лицо не найдено —

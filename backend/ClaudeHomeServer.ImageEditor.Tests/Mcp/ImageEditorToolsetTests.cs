@@ -1376,6 +1376,118 @@ public class ImageEditorToolsetTests : IDisposable
         result.IsError.Should().BeFalse(result.Text);
     }
 
+    // ── Лимит image_find_faces за ход (MaxFindFacesPerTurn) ─────────────────────
+
+    // Нить с N версиями: N запусков по одному варианту
+    private string ThreadWithVersions(int count)
+    {
+        var thread = Thread();
+        for (var i = 0; i < count; i++)
+        {
+            var job = $"job-ff-{i}";
+            _store.AddLaunch(Owner, ChatId, thread, new ImageThreadLaunch(job, ImageThreadVersion.OriginId, null,
+                _store.Now(), ImageThreadLaunchStatus.Running, "agent", $"v{i}"));
+            _store.AddLaunchVersions(Owner, ChatId, thread, job, [(1, $"s-ff-{i}", null)]);
+            _store.FinishLaunch(Owner, ChatId, thread, job, ImageThreadLaunchStatus.Done, []);
+        }
+        return thread;
+    }
+
+    private IReadOnlyList<string> VersionIds(string threadId) =>
+        _store.Get(Owner, ChatId).Threads.Single(t => t.Id == threadId).Versions
+            .Where(v => !v.IsOrigin).Select(v => v.Id).ToList();
+
+    // (а) девять вызовов на девяти версиях: первые восемь — успех, девятый — лимит
+    [Fact]
+    public async Task image_find_faces_лимит_девять_вызовов_девятый_отказ()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var thread = ThreadWithVersions(9);
+        var versionIds = VersionIds(thread);
+        versionIds.Should().HaveCount(9);
+
+        for (var i = 0; i < 8; i++)
+        {
+            var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+                new JsonObject { ["threadId"] = thread, ["versionId"] = versionIds[i] });
+            result.IsError.Should().BeFalse($"вызов {i + 1}: {result.Text}");
+        }
+
+        var ninth = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread, ["versionId"] = versionIds[8] });
+        ninth.IsError.Should().BeTrue();
+        ninth.Text.Should().Contain("Лимит поиска лиц за ход исчерпан");
+    }
+
+    // (б) после OnTurnCompleted счётчик сброшен
+    [Fact]
+    public async Task image_find_faces_после_хода_счётчик_сброшен()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var thread = ThreadWithVersions(9);
+        var versionIds = VersionIds(thread);
+
+        for (var i = 0; i < 8; i++)
+            (await Call(toolset, ImageEditorToolset.ToolFindFaces,
+                new JsonObject { ["threadId"] = thread, ["versionId"] = versionIds[i] })).IsError.Should().BeFalse();
+
+        (await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread, ["versionId"] = versionIds[8] })).IsError.Should().BeTrue();
+
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext(ChatId, Owner, 1, 0), "success"));
+
+        var afterReset = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread, ["versionId"] = versionIds[0] });
+        afterReset.IsError.Should().BeFalse($"после сброса: {afterReset.Text}");
+    }
+
+    // (в) лимит find_faces не мешает image_generate с face (свой лимит запусков)
+    [Fact]
+    public async Task image_find_faces_лимит_не_мешает_face_запуску()
+    {
+        var slug = CreateCharacter("Тест");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var thread = ThreadWithVersions(9);
+        var versionIds = VersionIds(thread);
+
+        for (var i = 0; i < 8; i++)
+            (await Call(toolset, ImageEditorToolset.ToolFindFaces,
+                new JsonObject { ["threadId"] = thread, ["versionId"] = versionIds[i] })).IsError.Should().BeFalse();
+
+        var gen = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slug, ["provider"] = "local" });
+        gen.IsError.Should().BeFalse($"face-запуск после 8 find_faces: {gen.Text}");
+    }
+
+    // (г) image_generate с face без character, но персонаж «A» в контексте чата →
+    // отказ: персонаж из контекста на чужое лицо не подставляется
+    [Fact]
+    public async Task image_generate_face_без_character_персонаж_контекста_не_подставляется()
+    {
+        var slug = CreateCharacter("A");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        // Персонаж «A» в контексте чата: primary-картинка + ref с kind image-character
+        _ctxStore.SetPrimary(Owner, ChatId,
+            new ContextItem("p-img", ImageContextKind.Kind, new JsonObject { ["threadId"] = thread },
+                null, ContextActor.Human, DateTime.UtcNow), null);
+        _ctxStore.AddRef(Owner, ChatId,
+            new ContextItem("char-a", ImageContextKind.CharacterKind, new JsonObject { ["slug"] = slug },
+                ImageContextRoles.Character, ContextActor.Human, DateTime.UtcNow), null);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1 });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("контекста", "персонаж из контекста на чужое лицо не подставляется");
+    }
+
     private sealed class FakeTurnBus : ITurnEventBus
     {
         private readonly List<Func<TurnCompleted, Task>> _completed = [];

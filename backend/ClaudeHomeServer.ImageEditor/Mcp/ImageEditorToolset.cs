@@ -44,6 +44,7 @@ namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 {
     public const int MaxLaunchesPerTurn = 2;
+    public const int MaxFindFacesPerTurn = 8;
     public const string AgentLaunchKey = "ImageEditor:AgentLaunch";
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
@@ -71,6 +72,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     // Запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
     private readonly Dictionary<string, int> _launches = new(StringComparer.Ordinal);
     private readonly Lock _launchGate = new();
+    // Вызовы image_find_faces в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
+    private readonly Dictionary<string, int> _findFaces = new(StringComparer.Ordinal);
+    private readonly Lock _findFacesGate = new();
 
     public ImageEditorToolset(
         IMcpSessionAccessor sessions,
@@ -285,16 +289,30 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (bytes is null)
             return Deny("У версии ещё нет изображения");
 
-        // Детекция: кэш по байтам, промах — детектор. CancellationToken.None, как в ручке faces:
-        // отмена одного вызывающего не должна отменять детекцию остальных ожидающих (single-flight)
-        var result = await (_faces ?? new Faces.FaceDetectionCache())
-            .GetOrDetectAsync(ownerId, bytes, () => _localMedia!.DetectFacesAsync(bytes, CancellationToken.None), ct);
-        if (result.Busy)
-            return Deny("Видеокарта занята долгой задачей. Попробуйте чуть позже");
-        if (result.Error is not null)
-            return Deny(result.Error);
+        // Лимит поиска лиц за ход: детекция ставится в голову очереди GPU (front:true),
+        // агент в цикле может залить очередь; кэш смягчает повторы, но не разные версии
+        if (!TryReserveFindFaces(session.Id))
+            return Deny($"Лимит поиска лиц за ход исчерпан (не больше {MaxFindFacesPerTurn}). "
+                + "Продолжайте с уже найденными номерами или дождитесь следующей реплики человека.");
+        var reserved = true;
+        try
+        {
+            // Детекция: кэш по байтам, промах — детектор. CancellationToken.None, как в ручке faces:
+            // отмена одного вызывающего не должна отменять детекцию остальных ожидающих (single-flight)
+            var result = await (_faces ?? new Faces.FaceDetectionCache())
+                .GetOrDetectAsync(ownerId, bytes, () => _localMedia!.DetectFacesAsync(bytes, CancellationToken.None), ct);
+            if (result.Busy)
+                return Deny("Видеокарта занята долгой задачей. Попробуйте чуть позже");
+            if (result.Error is not null)
+                return Deny(result.Error);
 
-        return Json(Controllers.ImageThreadFacesResponse.FromDetection(bytes, result));
+            reserved = false;
+            return Json(Controllers.ImageThreadFacesResponse.FromDetection(bytes, result));
+        }
+        finally
+        {
+            if (reserved) ReleaseFindFaces(session.Id);
+        }
     }
 
     // ── image_generate ─────────────────────────────────────────────────────────
@@ -802,9 +820,32 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         }
     }
 
+    // Лимит поиска лиц за ход: все вызовы считаются (включая кэшированные повторы) —
+    // проще и безопаснее, чем отслеживать, был ли результат из кэша
+    private bool TryReserveFindFaces(string sessionId)
+    {
+        lock (_findFacesGate)
+        {
+            var used = _findFaces.GetValueOrDefault(sessionId);
+            if (used >= MaxFindFacesPerTurn) return false;
+            _findFaces[sessionId] = used + 1;
+            return true;
+        }
+    }
+
+    private void ReleaseFindFaces(string sessionId)
+    {
+        lock (_findFacesGate)
+        {
+            if (_findFaces.TryGetValue(sessionId, out var used) && used > 0)
+                _findFaces[sessionId] = used - 1;
+        }
+    }
+
     private Task OnTurnCompleted(TurnCompleted e)
     {
         lock (_launchGate) _launches.Remove(e.Turn.SessionId);
+        lock (_findFacesGate) _findFaces.Remove(e.Turn.SessionId);
         return Task.CompletedTask;
     }
 

@@ -42,7 +42,7 @@ if [ "${1:-}" != "--link-only" ]; then
   # только с CPU-исполнителем
   P="$FACE_ROOT/.venv"
   [ -d "$P" ] || uv venv -q -p 3.12 "$P"
-  uv pip install -q -p "$P/bin/python" "numpy<2" "opencv-python<4.12" insightface onnxruntime
+  uv pip install -q -p "$P/bin/python" "numpy<2" "opencv-python>=4.5.1,<4.12" insightface onnxruntime
 
   echo "== веса (только вне шлагбаума: узел работает офлайн)"
   export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY

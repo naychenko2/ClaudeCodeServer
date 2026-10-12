@@ -4,16 +4,20 @@ insightface/cv2), узел ComfyUI (с моком subprocess). Запуск из
     python3 -m unittest discover -s tests -v
 
 Что покрыто:
-- core: слева направо по центру x, тай-брейк сверху вниз у близких центров; порог score;
-  потолок 8 лиц по площади (оставляет крупные, потом сортирует); small на границе 64 px;
-  рамка — целые пиксели внутри картинки;
+- core: порядок по ключу (центр x, центр y) — слева направо, при равном x сверху вниз,
+  в том числе на контрпримере к старому нетранзитивному правилу; порог score; потолок
+  8 лиц по площади (оставляет крупные, потом сортирует); small на границе 64 px; рамка —
+  целые пиксели внутри картинки, округление half-up;
 - воркер: пустой кадр → faces: [], W/H из прочитанной картинки, параметры детектора —
   константы core, нечитаемая картинка → код 2 без CCS_RESULT;
 - узел: путь вне input → error без запуска воркера, сбой воркера → error, ответ — строка
   ccs_face_detect={...} по контракту.
 
-Мутации: сортировка по площади вместо x — краснеет test_left_to_right_by_center_x;
-снять порог small — краснеет test_small_boundary_64.
+Мутации: сортировка по площади вместо (x, y) — краснеют все 7 тестов порядка, включая
+test_nontransitive_counterexample_by_x; старый компаратор «близкие — сверху вниз» —
+краснеют test_nontransitive_counterexample_by_x и test_close_centers_still_left_to_right;
+снять порог small — краснеет test_small_boundary_64; round() вместо half-up — краснеет
+test_bbox_rounds_half_up.
 """
 import importlib
 import io
@@ -54,6 +58,11 @@ def _box(cx, cy, w, h=None):
     return [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]
 
 
+def _center(f):
+    b = f["bbox"]
+    return (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+
+
 # ---------- core ----------
 
 class TestCore(unittest.TestCase):
@@ -74,15 +83,37 @@ class TestCore(unittest.TestCase):
         centers = [(f["bbox"][0] + f["bbox"][2]) / 2 for f in self._arrange(raw)]
         self.assertEqual(centers, [300, 900, 1500])
 
-    def test_close_centers_top_to_bottom(self):
-        """Центры по x ближе половины ширины меньшего лица → между ними сверху вниз, даже
-        если нижнее чуть левее."""
+    def test_close_centers_still_left_to_right(self):
+        """Близкие по x центры не переходят на «сверху вниз»: нижнее, но чуть левее лицо —
+        первое. Правило «близкие — сверху вниз» снято: оно нетранзитивно."""
         raw = [
-            (_box(520, 1200, 200), 0.9),  # ниже и левее на 30 px (< 100 = половина ширины)
-            (_box(550, 400, 200), 0.9),   # выше
+            (_box(550, 400, 200), 0.9),   # выше, правее на 30 px
+            (_box(520, 1200, 200), 0.9),  # ниже, левее
         ]
         faces = self._arrange(raw)
-        self.assertEqual([(f["bbox"][1] + f["bbox"][3]) / 2 for f in faces], [400, 1200])
+        self.assertEqual([_center(f) for f in faces], [(520, 1200), (550, 400)])
+
+    def test_equal_x_tie_break_top_to_bottom(self):
+        """Равные центры по x — сверху вниз по центру y, независимо от порядка детектора."""
+        raw = [
+            (_box(600, 1500, 200), 0.9),
+            (_box(600, 300, 200), 0.9),
+            (_box(600, 900, 200), 0.9),
+        ]
+        faces = self._arrange(raw)
+        self.assertEqual([_center(f) for f in faces], [(600, 300), (600, 900), (600, 1500)])
+
+    def test_nontransitive_counterexample_by_x(self):
+        """Контрпример Глеба к старому правилу: три лица шириной 400, пары A↔B и B↔C
+        решались по y, а A↔C — по x, и сортировка давала [C, B, A]. Теперь строго по x
+        при любом порядке детектора. Сдвиг +1000 — чтобы рамки не обрезались краем
+        картинки; взаимное расположение то же."""
+        d = 1000
+        a, b, c = _box(d + 100, d + 400, 400), _box(d + 200, d + 200, 400), _box(d + 300, d + 100, 400)
+        expected = [(d + 100, d + 400), (d + 200, d + 200), (d + 300, d + 100)]
+        for order in ([a, b, c], [c, b, a], [b, c, a], [c, a, b]):
+            faces = self._arrange([(bb, 0.9) for bb in order])
+            self.assertEqual([_center(f) for f in faces], expected)
 
     def test_far_centers_stay_left_to_right(self):
         """Центры дальше половины ширины меньшего — снова слева направо, хотя левое ниже."""
@@ -130,6 +161,12 @@ class TestCore(unittest.TestCase):
                               320, 240)
         self.assertEqual(faces[0]["bbox"], [0, 10, 320, 240])
         self.assertTrue(all(type(v) is int for v in faces[0]["bbox"]))
+
+    def test_bbox_rounds_half_up(self):
+        """x.5 округляется вверх, а не к чётному: 0.5 → 1, 2.5 → 3 (round() дал бы 0 и 2)."""
+        from core import arrange_faces
+        faces = arrange_faces([([0.5, 2.5, 10.5, 12.5], 0.9)], 100, 100)
+        self.assertEqual(faces[0]["bbox"], [1, 3, 11, 13])
 
     def test_same_input_same_output(self):
         """Детерминизм: тот же вход — тот же ответ, вплоть до сериализации."""

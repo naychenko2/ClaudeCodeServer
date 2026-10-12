@@ -5,15 +5,15 @@
 (рамки на картинке) и агента (номер лица).
 
 Контракт arrange_faces(raw, width, height) → список лиц в порядке номеров:
-  1. рамка округляется до целых пикселей и обрезается краями картинки;
+  1. рамка округляется до целых пикселей (half-up: x.5 → вверх) и обрезается краями картинки;
   2. отбрасываются лица со score < MIN_SCORE;
   3. если лиц больше MAX_FACES — остаются MAX_FACES самых крупных по площади рамки;
-  4. порядок слева направо по центру рамки по x; если центры двух лиц по x ближе половины
-     ширины меньшего из них — между ними сверху вниз по центру y;
+  4. порядок — по ключу (центр x, центр y): слева направо, при равном x — сверху вниз.
+     Ключ строго упорядочен, поэтому номер не зависит от порядка детектора и версии Python;
   5. лицо с короткой стороной рамки меньше SMALL_SIDE_PX — "small": true.
 Номера (индекс + 1) присваивает бэкенд.
 """
-import functools
+import math
 
 import numpy as np
 
@@ -31,7 +31,9 @@ def int_bbox(bbox, width, height):
     """Рамка детектора (float, может вылезать за край) → [x1, y1, x2, y2] целыми пикселями
     внутри картинки."""
     b = np.asarray(bbox, dtype=np.float64).reshape(4)
-    x1, y1, x2, y2 = (int(round(float(v))) for v in b)
+    # Явное half-up: round() в Python банковский (0.5 → 0, 1.5 → 2), и рамка съезжала бы
+    # на пиксель в зависимости от чётности
+    x1, y1, x2, y2 = (int(math.floor(float(v) + 0.5)) for v in b)
     x1 = min(max(x1, 0), width)
     x2 = min(max(x2, 0), width)
     y1 = min(max(y1, 0), height)
@@ -45,18 +47,6 @@ def _area(b):
 
 def _center(b):
     return (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
-
-
-def _reading_order(a, b):
-    ax, ay = _center(a["bbox"])
-    bx, by = _center(b["bbox"])
-    narrower = min(a["bbox"][2] - a["bbox"][0], b["bbox"][2] - b["bbox"][0])
-    if abs(ax - bx) < narrower / 2.0:
-        if ay != by:
-            return -1 if ay < by else 1
-    if ax != bx:
-        return -1 if ax < bx else 1
-    return 0
 
 
 def arrange_faces(raw, width, height):
@@ -76,7 +66,7 @@ def arrange_faces(raw, width, height):
         # sorted устойчив: при равной площади остаётся то лицо, что детектор дал раньше
         faces = sorted(faces, key=lambda f: -_area(f["bbox"]))[:MAX_FACES]
 
-    faces = sorted(faces, key=functools.cmp_to_key(_reading_order))
+    faces = sorted(faces, key=lambda f: _center(f["bbox"]))
 
     for f in faces:
         b = f["bbox"]

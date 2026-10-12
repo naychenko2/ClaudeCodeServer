@@ -30,6 +30,29 @@ public class FaceDetectionCacheTests
         }
     }
 
+    // Детектор по сценарию: n-й вызов даёт задачу из скрипта (сбой / отмена / успех). Считает вызовы
+    private sealed class ScriptedDetector
+    {
+        private int _calls;
+        public int Calls => _calls;
+        private readonly Func<int, Task<LocalFaceDetectResult>> _script;
+        public ScriptedDetector(Func<int, Task<LocalFaceDetectResult>> script) => _script = script;
+        public Task<LocalFaceDetectResult> Detect(byte[] image) => _script(Interlocked.Increment(ref _calls));
+    }
+
+    // Первый вызов — сбой (faulted), далее — успех
+    private static ScriptedDetector FaultThenOk() =>
+        new(n => n == 1
+            ? Task.FromException<LocalFaceDetectResult>(new InvalidOperationException("сбой детектора"))
+            : Task.FromResult(Ok()));
+
+    // Первый вызов — отмена (canceled), далее — успех. Токен non-None: Task.FromCanceled(None)
+    // бросает ArgumentOutOfRangeException синхронно, а не возвращает canceled-задачу
+    private static ScriptedDetector CancelThenOk() =>
+        new(n => n == 1
+            ? Task.FromCanceled<LocalFaceDetectResult>(new CancellationToken(true))
+            : Task.FromResult(Ok()));
+
     // Повторный запрос на те же байты берётся из кэша: детектор вызван один раз, результат тот же
     [Fact]
     public async Task Повтор_на_те_же_байты_детектор_один_раз()
@@ -115,6 +138,75 @@ public class FaceDetectionCacheTests
 
         detector.Calls.Should().Be(1, "single-flight: все параллельные запросы ждут один прогон");
         results.Should().AllBeEquivalentTo(results[0]);
+    }
+
+    // Сбой детектора не залипает: следующий вызов на те же байты запускает детектор ВТОРОЙ раз
+    // (calls = 2) и успешно кэширует (третий вызов — calls остаётся 2)
+    [Fact]
+    public async Task Сбой_детектора_не_залипает()
+    {
+        var detector = FaultThenOk();
+        var cache = new FaceDetectionCache();
+
+        // Первый вызов: детектор упал — исходное исключение пробрасывается, запись из кэша удалена
+        await FluentActions.Invoking(() => cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1])))
+            .Should().ThrowAsync<InvalidOperationException>().WithMessage("сбой детектора");
+
+        // Второй вызов: детектор запускается ВТОРОЙ раз (calls = 2) и успешно кэширует
+        var second = await cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1]));
+        detector.Calls.Should().Be(2, "после сбоя детектор запускается заново");
+        second.Faces.Should().NotBeEmpty();
+
+        // Третий вызов: кэш, детектор не вызывается (calls остаётся 2)
+        await cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1]));
+        detector.Calls.Should().Be(2, "успех после сбоя кэшируется");
+    }
+
+    // Отмена детектора не залипает: как и сбой, следующий вызов запускает детектор заново и кэширует
+    [Fact]
+    public async Task Отмена_детектора_не_залипает()
+    {
+        var detector = CancelThenOk();
+        var cache = new FaceDetectionCache();
+
+        // Первый вызов: задача детектора завершена Canceled — TaskCanceledException, запись удалена
+        await FluentActions.Invoking(() => cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1])))
+            .Should().ThrowAsync<TaskCanceledException>();
+
+        // Второй вызов: детектор запускается ВТОРОЙ раз (calls = 2) и успешно кэширует
+        var second = await cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1]));
+        detector.Calls.Should().Be(2, "после отмены детектор запускается заново");
+        second.Faces.Should().NotBeEmpty();
+
+        // Третий вызов: кэш, calls остаётся 2
+        await cache.GetOrDetectAsync(Owner, [1], () => detector.Detect([1]));
+        detector.Calls.Should().Be(2, "успех после отмены кэшируется");
+    }
+
+    // Второй ожидающий single-flight при сбое получает исключение, но запись не залипает:
+    // следующий (третий) вызов запускает детектор заново. Первый прогон «висит» (TaskCompletionSource),
+    // чтобы continuation не успел удалить запись до того, как второй вызов подвяжется на ту же задачу
+    [Fact]
+    public async Task Второй_ожидающий_при_сбое_не_залипает()
+    {
+        var tcs = new TaskCompletionSource<LocalFaceDetectResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detector = new ScriptedDetector(n => n == 1 ? tcs.Task : Task.FromResult(Ok()));
+        var cache = new FaceDetectionCache();
+
+        // Первый и второй вызовы параллельно на один ключ: single-flight, один прогон детектора (calls = 1)
+        var first = cache.GetOrDetectAsync(Owner, [9], () => detector.Detect([9]));
+        var second = cache.GetOrDetectAsync(Owner, [9], () => detector.Detect([9]));
+        detector.Calls.Should().Be(1, "single-flight: один прогон детектора");
+
+        // Первый прогон завершается сбоем: оба ожидающие получают исключение
+        tcs.SetException(new InvalidOperationException("сбой детектора"));
+        await FluentActions.Invoking(() => first).Should().ThrowAsync<InvalidOperationException>();
+        await FluentActions.Invoking(() => second).Should().ThrowAsync<InvalidOperationException>();
+
+        // Третий вызов: запись после сбоя удалена — детектор запускается ВТОРОЙ раз (calls = 2)
+        var third = await cache.GetOrDetectAsync(Owner, [9], () => detector.Detect([9]));
+        detector.Calls.Should().Be(2, "после сбоя запись не залипает — детектор запускается заново");
+        third.Faces.Should().NotBeEmpty();
     }
 
     // facesKey детерминирован: те же байты — тот же ключ, другие — другой; формат «<16 hex>:v1»

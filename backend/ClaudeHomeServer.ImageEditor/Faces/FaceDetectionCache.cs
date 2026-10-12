@@ -52,10 +52,10 @@ public sealed class FaceDetectionCache
         Task<LocalFaceDetectResult> task;
         lock (_gate)
         {
-            if (_entries.TryGetValue(key, out var e) && e.Result is { } hit)
-                return hit;
-            if (_entries.TryGetValue(key, out e))
+            if (_entries.TryGetValue(key, out var e))
             {
+                if (e.Result is { } hit)
+                    return hit;
                 task = e.Task!;
             }
             else
@@ -74,13 +74,19 @@ public sealed class FaceDetectionCache
     // Завершение детекции. Вызывается через ContinueWith (не inline): детектор может вернуть
     // готовую задачу, и inline-вызов встал бы в тот же lock, что и постановка записи, — запись
     // удалилась бы до того, как была добавлена. Успех (без Error и без Busy) кладётся в кэш;
-    // неуспех запись удаляет — повторный запрос запускает детектор снова (иначе завершённая
-    // задача single-flight мемоизировала бы сбой)
+    // неуспех (Error/Busy, сбой, отмена) запись удаляет — повторный запрос запускает детектор
+    // снова (иначе завершённая задача single-flight мемоизировала бы сбой до вытеснения LRU)
     private Task<LocalFaceDetectResult> DetectAndStoreAsync((string Owner, string Hash) key, int seq,
         Func<Task<LocalFaceDetectResult>> detect) =>
         detect().ContinueWith(t =>
         {
-            if (t.IsFaulted || t.IsCanceled) return t.Result;
+            if (t.IsFaulted || t.IsCanceled)
+            {
+                // Сбой или отмена: запись удаляется, а исключение пробрасывается исходным — отмена
+                // даёт TaskCanceledException, сбой — первичное, не AggregateException (GetAwaiter)
+                RemoveEntry(key, seq);
+                return t.GetAwaiter().GetResult();
+            }
             FinishDetection(key, seq, t.Result);
             return t.Result;
         }, TaskScheduler.Default);
@@ -102,6 +108,20 @@ public sealed class FaceDetectionCache
                 var node = _order.Find(key);
                 if (node is not null) _order.Remove(node);
             }
+        }
+    }
+
+    // Удаление записи по ключу и поколению: только если запись ещё принадлежит этому запуску
+    // (сверка по seq, как в FinishDetection). Вызывается при сбое/отмене детекции, чтобы повторный
+    // запрос на те же байты запустил детектор заново
+    private void RemoveEntry((string Owner, string Hash) key, int seq)
+    {
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(key, out var e) || e.Seq != seq) return;
+            _entries.Remove(key);
+            var node = _order.Find(key);
+            if (node is not null) _order.Remove(node);
         }
     }
 

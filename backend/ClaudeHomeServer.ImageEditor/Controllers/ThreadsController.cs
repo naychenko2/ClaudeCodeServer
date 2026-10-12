@@ -29,6 +29,9 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
 {
     protected string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // threads уже захвачен базовым классом: наследники берут его отсюда, не дублируя хранение (CS9107)
+    protected ImageThreadService Threads => threads;
+
     protected IActionResult GetIn(string sessionId) => Ok(threads.View(UserId, sessionId));
 
     // Взять картинку в работу: ровно одно из file (путь в проекте) и draftFolder (черновик «Новая
@@ -273,10 +276,10 @@ public class ThreadsController(
     {
         if (!Gate(projectId, sessionId, out var scope, out var denied)) return denied;
 
-        // Флаг выключен — как у DossiersController: 404, «ручки нет» (фича скрыта)
+        // Флаг выключен — 404 с телом feature_disabled (фича скрыта)
         if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
             return StatusCode(StatusCodes.Status404NotFound,
-                new { error = "Подстановка персонажа на лицо выключена", code = "feature_disabled" });
+                new { error = "Подстановка персонажа на лицо выключена", code = ImageEditErrorCodes.FeatureDisabled });
 
         // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
         // provider_unavailable, не 500
@@ -284,8 +287,8 @@ public class ThreadsController(
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Локальные модели не настроены: детекция лиц недоступна", code = "provider_unavailable" });
 
-        var state = threads.Get(UserId, sessionId);
-        if (!threads.OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+        var state = Threads.Get(UserId, sessionId);
+        if (!Threads.OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
             return StatusCode(StatusCodes.Status404NotFound,
                 new { error = "Картинка не найдена в этом чате", code = ImageEditErrorCodes.ThreadNotFound });
         if (thread.Version(versionId) is not { } version)
@@ -298,8 +301,10 @@ public class ThreadsController(
             return StatusCode(StatusCodes.Status404NotFound,
                 new { error = "У версии ещё нет изображения", code = ImageEditErrorCodes.VersionNotFound });
 
+        // Детекция на CancellationToken.None: отмена ct одного вызывающего не должна отменять
+        // детекцию остальных ожидающих (single-flight) — вызывающий лишь перестаёт ждать
         var result = await (faces ?? new ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache())
-            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, ct));
+            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, CancellationToken.None));
 
         if (result.Busy)
             return StatusCode(StatusCodes.Status503ServiceUnavailable,

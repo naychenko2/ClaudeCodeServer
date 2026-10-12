@@ -265,6 +265,8 @@ public static class ImageEditErrorCodes
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)
     public const string ThreadNotFound = "thread_not_found";
     public const string VersionNotFound = "version_not_found";
+    // 404: фича скрыта флагом (ручка есть, но выключена) — неотличима от «ручки нет»
+    public const string FeatureDisabled = "feature_disabled";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
     // 409: запись нитей чата со старой revision; в теле ещё state — актуальное

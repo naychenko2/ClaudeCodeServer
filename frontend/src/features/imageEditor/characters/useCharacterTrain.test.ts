@@ -38,6 +38,12 @@ vi.mock('react', () => ({
     rt.effects[e] = slot;
     queueMicrotask(() => { slot.cleanup = fn() ?? undefined; });
   },
+  // Кит (в графе через loraErrors) зовёт эти фабрики на уровне модуля;
+  // сами компоненты в этом тесте не рендерятся
+  createContext: (defaultValue: unknown) => ({ defaultValue }),
+  lazy: (load: () => unknown) => load,
+  memo: <T,>(c: T) => c,
+  forwardRef: <T,>(c: T) => c,
 }));
 vi.mock('../api', () => ({ loraTrainApi: { active: h.active } }));
 vi.mock('./useCharacters', () => ({ reloadCharacters: h.reload }));

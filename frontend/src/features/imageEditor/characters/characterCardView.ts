@@ -3,7 +3,7 @@
 // React здесь нет — тестируется в node. Тексты — ключи characterTexts.ts, цвета — токены C.*.
 
 import type { LoraVersionDto } from '../api';
-import { C } from '../../../lib/design';
+import { C } from 'aihome_shell/kit';
 import { METER } from './characterTexts';
 import { formatTrainedDate, type TrainSectionView } from './loraTrainView';
 import { versionTitle } from './loraVersionsView';

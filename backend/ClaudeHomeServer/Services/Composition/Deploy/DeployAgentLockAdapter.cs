@@ -20,9 +20,13 @@ public sealed class DeployAgentLockAdapter : IDeployAgentLock
 
     // Файловый лок: тот же файл, что держит flock в deploy-linux.sh. FileShare.None —
     // ключевое: на Linux .NET реализует его через flock(LOCK_EX|LOCK_NB), поэтому пока
-    // deploy-linux.sh держит flock -x, наш OpenOrCreate падает с IOException. IOException
-    // → null («агент жив»); любой другой сбой — тоже null, чтобы приём заявки не ронялся
-    // на лок-примитиве (предмет вызова — в другом).
+    // deploy-linux.sh держит flock -x, наш OpenOrCreate падает с IOException (EWOULDBLOCK).
+    //
+    // Две ситуации, которые раньше маскировались одним catch (Exception) → null:
+    //   1. Лок занят (EWOULDBLOCK) → «агент жив» → null.
+    //   2. Файл недоступен (нет прав, нет каталога, ENOSPC) → не «агент жив», а сбой
+    //      системы: пробрасываем, чтобы DeployService ответил понятной ошибкой, а не
+    //      «другая выкатка идёт».
     private static IDisposable? TryAcquireFileLock(string releasesDir)
     {
         try
@@ -31,11 +35,18 @@ public sealed class DeployAgentLockAdapter : IDeployAgentLock
             var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             return new FileLease(stream);
         }
-        catch (Exception)
+        catch (IOException ex) when (IsLockConflict(ex))
         {
+            // flock(LOCK_EX|LOCK_NB) вернул EWOULDBLOCK — файл занят другим процессом.
             return null;
         }
+        // IOException другого рода (DirectoryNotFoundException, ENOSPC) и
+        // UnauthorizedAccessException — файл недоступен, не «агент жив»: пробрасываем.
     }
+
+    // EWOULDBLOCK (errno 11) — .NET на Linux передаёт его как HResult без facility-кода.
+    // Это единственный случай, когда FileShare.None → flock означает «занято», а не «сбой».
+    private static bool IsLockConflict(IOException ex) => ex.HResult is 0x0000000B;
 
     // FileStream закрываем в try/catch: файл мог быть удалён агентом (deploy.lock), и падение
     // на Dispose не должно ронять приём заявки.

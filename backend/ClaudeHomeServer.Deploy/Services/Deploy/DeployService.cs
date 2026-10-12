@@ -101,7 +101,16 @@ public sealed class DeployService(
                 // Заявка могла остаться висеть в «queued» навсегда: агент не приступил
                 // (не стартовала задача планировщика, сработал его собственный guard) и итог
                 // не записал. Без TTL такой призрак отвечает 409 на всё следующее.
-                if (CloseStaleQueued(running, DateTime.UtcNow) is not { } reloaded)
+                DeployState? reloaded;
+                try { reloaded = CloseStaleQueued(running, DateTime.UtcNow); }
+                catch (Exception ex)
+                {
+                    // Лок-файл недоступен (нет прав, нет каталога) — не «агент жив»,
+                    // а сбой системы: честный отказ, а не «другая выкатка идёт».
+                    return new DeployStartResult(DeployStartStatus.LaunchFailed, running.Id,
+                        $"Не удалось проверить статус агента выкатки: {ex.Message}");
+                }
+                if (reloaded is null)
                     return new DeployStartResult(DeployStartStatus.AlreadyRunning, running.Id,
                         $"Выкатка {running.Id} уже идёт (фаза «{running.Phase}»)");
                 state = reloaded;

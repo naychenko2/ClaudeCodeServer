@@ -475,6 +475,56 @@ public class DeployServiceTests : IDisposable
         state.Releases.Should().ContainSingle(r => r.Sha == "8e28cba9");
     }
 
+    // Агент ставит result.releaseId при откате (set-rollback-target → finalize rolled_back).
+    // Мутация: переименуй ReleaseId → ReleaseIdX в DeployResult (или releaseId → releaseIdX
+    // в JSON) — тест краснеет.
+    [Fact]
+    public void Итог_отката_с_releaseId_читается_и_сериализуется()
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "releases"));
+        File.WriteAllText(StatePath, """
+        {
+          "current": {
+            "id": "20261012-131230",
+            "kind": "rollback",
+            "phase": "rolled_back",
+            "ref": "master", "sha": "4dc7ddab", "dirty": false,
+            "initiatedBy": { "userId": "u1", "sessionId": "s1" },
+            "request": { "releaseId": "20261012-120000" },
+            "steps": [ { "name": "switch", "status": "ok", "ms": 5200 } ],
+            "result": {
+              "ok": false,
+              "status": "rolled_back",
+              "message": "health не сошёлся, откат на предыдущий снимок",
+              "releaseId": "20261012-120000",
+              "finishedAt": "2026-10-12T13:12:45.000Z"
+            },
+            "reported": true
+          },
+          "history": [],
+          "releases": [
+            { "id": "20261012-120000", "sha": "4dc7ddab", "path": "/opt/ccs/releases/20261012-120000" }
+          ]
+        }
+        """);
+
+        var state = Build().Load();
+
+        state.Current!.Id.Should().Be("20261012-131230");
+        state.Current.Phase.Should().Be(DeployPhases.RolledBack);
+        state.Current.Result.Should().NotBeNull("агент записал итог");
+        state.Current.Result!.Ok.Should().BeFalse();
+        state.Current.Result.Status.Should().Be(DeployPhases.RolledBack);
+        state.Current.Result.ReleaseId.Should().Be("20261012-120000",
+            "releaseId из result — на каком снимке остановились");
+        state.Current.Result.FinishedAt.Should().NotBeNull();
+
+        // Сериализация обратно: releaseId не теряется
+        var json = JsonSerializer.Serialize(state, DeployState.Json);
+        var reloaded = JsonSerializer.Deserialize<DeployState>(json, DeployState.Json)!;
+        reloaded.Current!.Result!.ReleaseId.Should().Be("20261012-120000");
+    }
+
     [Fact]
     public async Task Незадоложенный_итог_поднимается_и_гасится_отметкой()
     {

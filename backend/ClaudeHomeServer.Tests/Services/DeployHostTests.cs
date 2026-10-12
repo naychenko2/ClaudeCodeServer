@@ -311,6 +311,22 @@ public class DeployHostTests : IDisposable
             try { Directory.Delete(releasesDir, recursive: true); } catch { }
         }
     }
+
+    // Недоступный каталог → исключение, а не null: файл лока не «занят», а «недоступен».
+    // Мутация: верни catch (Exception) в TryAcquireFileLock — DirectoryNotFoundException
+    // будет проглочена → null → тест краснеет.
+    [Fact]
+    public void Lock_НедоступныйКаталог_Исключение_НеNull()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "файловый лок — только Linux");
+
+        var nonExistent = Path.Combine(Path.GetTempPath(), "ccs_nonexistent_" + Guid.NewGuid().ToString("N"));
+        var adapter = new DeployAgentLockAdapter();
+
+        var act = () => adapter.TryAcquireDeploy(nonExistent);
+        act.Should().Throw<DirectoryNotFoundException>(
+            "нет каталога → файл недоступен, не «агент жив»");
+    }
 }
 
 /// <summary>Тестовая заглушка: лок всегда свободен (null = не занят).</summary>

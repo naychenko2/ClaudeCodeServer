@@ -507,13 +507,16 @@ body {
   will-change: opacity;
   animation: cc-unread-breath 3s ease-in-out infinite;
 }
-/* Пик поверх покоя (z-index 1 > 0): тёмно-серый проявляется над базовым серым,
-   как в оригинальном перетекании muted → secondary. */
+/* Пик поверх покоя (z-index 0 = покой): тёмно-серый проявляется над базовым серым,
+   как в оригинальном перетекании muted → secondary. z-index 0 (не 1): положительный
+   z-index вырывает слой в группу 7 и кладёт его ПОВЕРХ текста карточки (блок текста —
+   z-index auto, группа 0); в 0 оба псевдоэлемента остаются под содержимым, а порядок
+   «пик над покоем» даёт tree order (::before перед ::after). */
 .cc-unread::before {
   content: '';
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 0;
   pointer-events: none;
   border-radius: inherit;
   background: var(--c-text-secondary);
@@ -729,10 +732,11 @@ body {
   .cc-tint--flow::after { animation: none; }
   /* Точка проекта перестаёт мерцать, но остаётся видимой */
   .cc-dot-pulse::after { animation: none; }
-  /* Непрочитанность остаётся видимой, просто перестаёт переливаться: оба слоя
-     (покой + пик) фиксируются на пиковой плотности — тёмно-серый, как раньше */
+  /* Непрочитанность остаётся видимой, просто перестаёт переливаться: покой фиксируется
+     на пиковой плотности .22 (один слой, как раньше), пик в покое не проявлен (0) —
+     иначе суммарно .22 + .12 выходило темнее прежнего */
   .cc-unread::after { animation: none; opacity: .22; }
-  .cc-unread::before { animation: none; opacity: .12; }
+  .cc-unread::before { animation: none; opacity: 0; }
   .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
   /* Скелетон перестаёт бежать, но подложка обязана остаться видимой — иначе на месте

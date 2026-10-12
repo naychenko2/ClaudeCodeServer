@@ -887,7 +887,10 @@ function ChatCardView({
           Без персоны резерв не держим: текст идёт во всю ширину, а кнопки действий
           (при наведении, с непрозрачной подложкой cardBg) перекрывают его хвост */}
       <div style={{
-        position: 'relative', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
+        // zIndex: 1 — над слоями непрочитанного (index.css .cc-unread::before/::after,
+        // оба z-index 0): положительный z-index кладёт текст в группу 7, псевдоэлементы
+        // остаются в группе 0 и не глушат заголовок/превью/аватара в пике перелива
+        position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
         paddingRight: backdropPersona ? COMPANION_W - (isMobile ? 16 : 12) : 0,
       }}>
         {/* Строка 1: признак задачи, название, метки срока и закрепления. Состояние

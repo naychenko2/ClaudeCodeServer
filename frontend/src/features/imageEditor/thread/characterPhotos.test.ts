@@ -101,6 +101,20 @@ describe('showReplace: видимость «Заменить»', () => {
     expect(showReplace({ prompt: 'в профиль' }, card(['a.jpg', 'b.jpg']))).toBe(true);
     // Мутация: >= 2 → > 2 — тест краснеет
   });
+
+  it('старый запуск без op — как раньше: два фото и промпт — да', () => {
+    expect(showReplace({ prompt: 'в профиль', op: null }, card(['a.jpg', 'b.jpg']))).toBe(true);
+  });
+
+  it('запуск с маской (op = inpaint) — нет', () => {
+    expect(showReplace({ prompt: 'в профиль', op: 'inpaint' }, card(['a.jpg', 'b.jpg']))).toBe(false);
+    // Мутация: op не проверять — тест краснеет
+  });
+
+  it('другие операции (edit, generate) — да', () => {
+    expect(showReplace({ prompt: 'в профиль', op: 'edit' }, card(['a.jpg', 'b.jpg']))).toBe(true);
+    expect(showReplace({ prompt: 'в профиль', op: 'generate' }, card(['a.jpg', 'b.jpg']))).toBe(true);
+  });
 });
 
 describe('pickLimit: лимит из DTO персонажа', () => {

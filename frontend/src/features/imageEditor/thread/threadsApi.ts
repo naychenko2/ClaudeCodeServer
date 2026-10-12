@@ -57,6 +57,9 @@ export interface ImageThreadLaunch {
   prompt: string | null;
   // Персонаж запуска; null — подбор не работал (старые нити)
   character?: ImageThreadCharacter | null;
+  // Операция запуска (generate / edit / inpaint / outpaint / …); null — старые нити
+  // и запуски без операции (обрезка, local-media)
+  op?: string | null;
 }
 
 export interface ImageThreadSettings {

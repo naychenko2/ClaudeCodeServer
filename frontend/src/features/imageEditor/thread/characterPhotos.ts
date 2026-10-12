@@ -63,10 +63,11 @@ export function pickBadge(pick: ImageThreadCharacter['pick']): { tone: 'info' | 
 }
 
 // Кнопка «Заменить»: нет у запуска без промпта (при перерисовке промпт теряется),
-// при удалённом персонаже и когда у персонажа одно фото (тогда — подсказка empty-state).
-// Маска в запуске не хранится (ImageThreadLaunch не имеет op) — inpaint не отличим: см. отчёт
-export function showReplace(launch: Pick<ImageThreadLaunch, 'prompt'>, card: ImageEditCharacter | null): boolean {
+// при удалённом персонаже, когда у персонажа одно фото (тогда — подсказка empty-state)
+// и у запуска с маской: сервер сам превращает edit + маска в inpaint, у других операций маски нет
+export function showReplace(launch: Pick<ImageThreadLaunch, 'prompt' | 'op'>, card: ImageEditCharacter | null): boolean {
   if (!launch.prompt || !card) return false;
+  if (launch.op === 'inpaint') return false;
   return card.photos.length >= 2;
 }
 

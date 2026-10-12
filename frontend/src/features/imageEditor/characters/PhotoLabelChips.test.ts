@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { C } from 'aihome_shell/kit';
-import { isEditorBlocked, labelCaption, type PhotoLabelState } from './PhotoLabelChips';
+import { hasPendingLabels, isEditorBlocked, labelCaption, type PhotoLabelState } from './PhotoLabelChips';
 import { LABELS } from './characterTexts';
 
 describe('labelCaption', () => {
@@ -70,5 +70,38 @@ describe('isEditorBlocked', () => {
 
   it('метки уже есть (auto) и не идёт сохранение — редактор активен', () => {
     expect(isEditorBlocked({ angle: 'front', labelSource: 'auto' }, false)).toBe(false);
+  });
+});
+
+// hasPendingLabels — есть ли фото «Размечаем…» (все поля меток null): шторка «Фото»
+// по этому признаку перечитывает карточку. Мутация: считать pending по labelSource alone
+// (убрать проверки меток) — тест краснеет (unknown-фото без labelSource снова опрашивается).
+describe('hasPendingLabels', () => {
+  it('все поля null — фото размечается', () => {
+    expect(hasPendingLabels([{}, { angle: null, pitch: null, emotion: null, labelSource: null }])).toBe(true);
+    // Мутация: требовать labelSource === 'auto' — тест краснеет
+  });
+
+  it('метки есть (auto/human) — не размечается', () => {
+    expect(hasPendingLabels([{ angle: 'front', labelSource: 'auto' }])).toBe(false);
+    expect(hasPendingLabels([{ angle: 'front', emotion: 'smile', labelSource: 'human' }])).toBe(false);
+  });
+
+  it('модель ответила, но меток нет (unknown) — не размечается', () => {
+    expect(hasPendingLabels([{ angle: 'unknown', emotion: 'unknown', labelSource: 'auto' }])).toBe(false);
+    // Мутация: опираться только на labelSource (без проверок меток) — unknown снова «размечается», тест краснеет
+  });
+
+  it('смешанно: одно размечается, другое нет — true', () => {
+    expect(hasPendingLabels([{}, { angle: 'front', labelSource: 'auto' }])).toBe(true);
+  });
+
+  it('labelSource пуст, но метка есть (angle) — не «размечается»: опора на метки, а не только на labelSource', () => {
+    expect(hasPendingLabels([{ angle: 'front', labelSource: null }])).toBe(false);
+    // Мутация: опираться только на labelSource (без проверок меток) — такое фото снова «размечается», тест краснеет
+  });
+
+  it('пустой список — false', () => {
+    expect(hasPendingLabels([])).toBe(false);
   });
 });

@@ -18,33 +18,33 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock('react', () => ({
-  useState: <T,>(init: T) => {
-    const rt = h.rt; const i = rt.i++;
-    if (!(i in rt.slots)) rt.slots[i] = init;
-    const set = (v: T) => {
-      if (Object.is(rt.slots[i], v)) return;
-      rt.slots[i] = v;
-      if (rt.rendering) rt.dirty = true; else rt.render();
-    };
-    return [rt.slots[i] as T, set];
-  },
-  useEffect: (fn: () => void | (() => void), deps?: unknown[]) => {
-    const rt = h.rt; const e = rt.e++;
-    const prev = rt.effects[e];
-    if (prev && deps && prev.deps && deps.every((d, k) => Object.is(d, prev.deps![k]))) return;
-    prev?.cleanup?.();
-    const slot: { deps: unknown[] | undefined; cleanup?: () => void } = { deps };
-    rt.effects[e] = slot;
-    queueMicrotask(() => { slot.cleanup = fn() ?? undefined; });
-  },
-  // Кит (в графе через loraErrors) зовёт эти фабрики на уровне модуля;
-  // сами компоненты в этом тесте не рендерятся
-  createContext: (defaultValue: unknown) => ({ defaultValue }),
-  lazy: (load: () => unknown) => load,
-  memo: <T,>(c: T) => c,
-  forwardRef: <T,>(c: T) => c,
-}));
+vi.mock('react', async (importOriginal) => {
+  // Реальный react — для кита (loraErrors → kit → PanelShell: createContext/forwardRef в module-scope);
+  // useState/useEffect — mini-прогонщик (node-окружение без рендерера)
+  const actual = await importOriginal<typeof import('react')>();
+  return {
+    ...actual,
+    useState: <T,>(init: T) => {
+      const rt = h.rt; const i = rt.i++;
+      if (!(i in rt.slots)) rt.slots[i] = init;
+      const set = (v: T) => {
+        if (Object.is(rt.slots[i], v)) return;
+        rt.slots[i] = v;
+        if (rt.rendering) rt.dirty = true; else rt.render();
+      };
+      return [rt.slots[i] as T, set];
+    },
+    useEffect: (fn: () => void | (() => void), deps?: unknown[]) => {
+      const rt = h.rt; const e = rt.e++;
+      const prev = rt.effects[e];
+      if (prev && deps && prev.deps && deps.every((d, k) => Object.is(d, prev.deps![k]))) return;
+      prev?.cleanup?.();
+      const slot: { deps: unknown[] | undefined; cleanup?: () => void } = { deps };
+      rt.effects[e] = slot;
+      queueMicrotask(() => { slot.cleanup = fn() ?? undefined; });
+    },
+  };
+});
 vi.mock('../api', () => ({ loraTrainApi: { active: h.active } }));
 vi.mock('./useCharacters', () => ({ reloadCharacters: h.reload }));
 vi.mock('./useLoraTraining', () => ({ useLoraTraining: () => h.training.value }));

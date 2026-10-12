@@ -274,7 +274,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     }
 
     private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request,
-        Func<CancellationToken, Task<CharacterPickOutcome>>? picker)
+        Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker)
     {
         ImageEditResult result;
         var cancelled = false;
@@ -323,12 +323,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // Подбор фото персонажа под сюжет: любой сбой оставляет запрос как есть (порядок «главное, затем
     // манифест»), отмена пробрасывается. Новые фото ужимаются под лимиты модели, как и прежние
     private async Task<ImageEditRequest> PickCharacterAsync(Job job, ImageEditRequest request,
-        Func<CancellationToken, Task<CharacterPickOutcome>> picker)
+        Func<int, CancellationToken, Task<CharacterPickOutcome>> picker)
     {
         CharacterPickOutcome outcome;
         try
         {
-            outcome = await picker(job.Cts.Token);
+            outcome = await picker(ConfidentScore(job.Quote.Model), job.Cts.Token);
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -340,9 +340,17 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (CharacterPicked is { } handlers)
         {
             var dto = ToDto(job);
+            // Запись отражает, что драйвер реально получил: Compose уже ужалил ссылки персонажа
+            // под лимит модели (локальная — 1), а подбор подменяет только эти позиции. Обрезаем
+            // список до числа реально отправленных фото — иначе блок «Фото персонажа» покажет
+            // фото, которые модель не видела
+            var sent = request.References.Count(r => r.Role == ReferenceRole.Character);
+            var launch = outcome.Launch;
+            if (launch.Photos.Count > sent)
+                launch = launch with { Photos = launch.Photos.Take(sent).ToList() };
             foreach (var listener in handlers.GetInvocationList().Cast<Func<string, ImageEditJobDto, ImageThreadCharacter, Task>>())
             {
-                try { await listener(job.OwnerId, dto, outcome.Launch); }
+                try { await listener(job.OwnerId, dto, launch); }
                 catch (Exception ex) { _log.LogWarning(ex, "Редактор картинок: слушатель подбора задачи {JobId} упал", job.Id); }
             }
         }
@@ -365,6 +373,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             .ToList();
         return request with { References = references };
     }
+
+    // Порог уверенности ракурса (ADR-027 §7): только local (MaxCharacterPhotos=1) подменяет
+    // главное фото на профильное при точном совпадении; у облака (null или иное) первым
+    // остаётся главное, как до подбора
+    private static int ConfidentScore(ImageEditModelInfo model) =>
+        model.Caps.MaxCharacterPhotos == 1 ? CharacterPhotoPicker.LocalConfidentScore : int.MaxValue;
 
     private Task NotifyFinishedAsync(Job job) => NotifyAsync(Finished, job, "завершения");
 

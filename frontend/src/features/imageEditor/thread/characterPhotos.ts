@@ -20,7 +20,6 @@ export const CPS = {
   characterGone: 'Персонажа больше нет в проекте',
   singleHint: 'Добавьте фото в разных ракурсах — AI Home будет подбирать подходящее под сюжет.',
   pickerTitle: 'Какие фото взять',
-  pickerSubtitle: 'Первое фото важнее остальных. Локальная модель берёт только одно.',
   reset: 'Сбросить выбор',
   loading: 'Загружаем фото…',
   redraw: 'Перерисовать',
@@ -71,9 +70,16 @@ export function showReplace(launch: Pick<ImageThreadLaunch, 'prompt' | 'op'>, ca
   return card.photos.length >= 2;
 }
 
-// Лимит окна выбора — из DTO персонажа (бэкенд отдаёт его только при включённом флаге)
-export function pickLimit(card: ImageEditCharacter | null): number {
+// Лимит окна выбора: maxCharacterPhotos текущей модели «Чем», если задан, иначе
+// photosPerRequest из DTO персонажа (бэкенд отдаёт его только при включённом флаге), иначе 3
+export function pickLimit(card: ImageEditCharacter | null, maxCharacterPhotos?: number | null): number {
+  if (maxCharacterPhotos != null) return maxCharacterPhotos;
   return card?.photosPerRequest ?? 3;
+}
+
+// Подсказка окна: по лимиту — модель берёт одно фото (local) или первое фото важнее (остальные)
+export function pickerSubtitle(limit: number): string {
+  return limit <= 1 ? 'Модель берёт одно фото — выберите самое подходящее.' : 'Первое фото важнее остальных.';
 }
 
 // Начальный выбор: фото этого запуска в их порядке; имён, которых уже нет в манифесте, отбрасываем

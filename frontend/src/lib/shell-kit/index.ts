@@ -77,9 +77,7 @@ export { followPeeked } from '../genPanelOpen';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
-// ходит по своим маршрутам в обход фасада api. OfflineError/RequestTimeoutError —
-// те же классы, которыми request() бросает сетевые отказы: remote-модуль должен
-// ловить их по instanceof, а не по второй копии из lib/offline.
+// ходит по своим маршрутам в обход фасада api
 export { OfflineError, RequestTimeoutError, request, readStoredToken } from '../offline';
 
 // ─── featureFlags ────────────────────────────────────────────────────────────

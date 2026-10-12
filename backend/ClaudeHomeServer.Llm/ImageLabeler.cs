@@ -44,7 +44,15 @@ public sealed class ImageLabeler(
                 return new ImageLabelRoute(ImageLabelRouteKind.None, explicitRoute, null);
         }
 
-        var model = route.Kind == RouteKind.Model ? route.Model : SlotModel(route, actionKey, ownerId);
+        var (model, noRoute) = route.Kind == RouteKind.Model
+            ? (route.Model, false)
+            : SlotModel(route, actionKey, ownerId);
+        // Маркер слота развернулся в пусто (все шаги пресета недоступны) — честный отказ
+        // маршрута: разметить некем. Не Vision с null-моделью: та ушла бы в CLI как preset:…
+        // (подстановка слота в OneShotClaudeRunner) и упала с unrecognized_model, а фото
+        // висело бы в ожидании, а не получало noroute с повтором.
+        if (noRoute)
+            return new ImageLabelRoute(ImageLabelRouteKind.None, explicitRoute, null);
         if (model is not null && CloudCheapClient.IsDirectRoute(model))
             return new ImageLabelRoute(ImageLabelRouteKind.None, explicitRoute, model);
 
@@ -57,18 +65,23 @@ public sealed class ImageLabeler(
     }
 
     // Слот → модель владельца; маркер слота (preset:/tier:*) разворачивается в конкретную
-    // модель той же точкой, что и у текстового раннера. Пусто — null (дефолт CLI).
-    private string? SlotModel(ActionRoute route, string actionKey, string ownerId)
+    // модель той же точкой, что и у текстового раннера. Пустой слот — (null, false): дефолт CLI.
+    // Маркер, развернувшийся в пусто (все шаги пресета недоступны), — (null, true): честный
+    // отказ маршрута (noroute), а не null, иначе preset:… ушёл бы в CLI как --model.
+    private (string? Model, bool NoRoute) SlotModel(ActionRoute route, string actionKey, string ownerId)
     {
         var tier = route.Tier ?? ModelTier.Medium;
         var slot = userTiers?.ModelFor(tier, ownerId) ?? appSettings?.TierModel(tier);
-        if (string.IsNullOrWhiteSpace(slot)) return null;
-        if (assignment is null || !IsMarker(slot)) return slot;
+        if (string.IsNullOrWhiteSpace(slot)) return (null, false);
+        if (assignment is null || !IsMarker(slot)) return (slot, false);
         var expanded = assignment.ExpandModelChain(slot, ownerId).FirstOrDefault();
         if (expanded is null)
-            log.LogWarning("image-labeler: слот {Slot} места {Action} развернулся пусто — идём на дефолт CLI",
+        {
+            log.LogWarning("image-labeler: слот {Slot} места {Action} развернулся пусто — разметки некем (noroute)",
                 slot, actionKey);
-        return expanded;
+            return (null, true);
+        }
+        return (expanded, false);
     }
 
     private static bool IsMarker(string value) =>

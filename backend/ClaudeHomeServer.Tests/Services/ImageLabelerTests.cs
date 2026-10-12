@@ -39,7 +39,7 @@ public class ImageLabelerTests
 
     private static (ImageLabeler Labeler, LocalActionOverridesStore Store, RecordingLogger<ImageLabeler> Log) Make(
         ImageRunFunc? run = null, Dictionary<ModelTier, string>? slots = null,
-        string? presetId = null, string? presetStep = null, string? cloudTimeoutMs = null)
+        string? presetId = null, IReadOnlyList<string>? presetSteps = null, string? cloudTimeoutMs = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -67,7 +67,7 @@ public class ImageLabelerTests
             if (presetId is not null)
                 specialty.SetGlobal(new SpecialtySettingsLayer
                 {
-                    Presets = { new ModelRoutePreset { Id = presetId, Name = "П", Steps = [presetStep!] } },
+                    Presets = { new ModelRoutePreset { Id = presetId, Name = "П", Steps = presetSteps is null ? [] : [.. presetSteps] } },
                 });
             assignment = new ModelAssignmentResolver(tiers, store, null, specialty, providers);
         }
@@ -296,12 +296,26 @@ public class ImageLabelerTests
     public void СлотПресет_РазворачиваетсяВПервыйШагЦепочки()
     {
         var (labeler, store, _) = Make(slots: new() { [ModelTier.Medium] = "preset:p1" },
-            presetId: "p1", presetStep: "claude-haiku-4-5");
+            presetId: "p1", presetSteps: ["claude-haiku-4-5"]);
         store.Set(Action, "tier:medium");
 
         var route = labeler.RouteOf(Action, "owner-1");
         route.Model.Should().NotBeNull().And.NotStartWith("tier:").And.NotStartWith("preset:");
         route.Model.Should().Contain("haiku");
+    }
+
+    // Пресет развернулся в пусто (все шаги недоступны) — честный отказ маршрута: None (noroute),
+    // а не Vision с null-моделью (та ушла бы в CLI как preset:… и упала с unrecognized_model)
+    [Fact]
+    public void СлотПресетПустой_NoRoute_НеVisionСNullМоделью()
+    {
+        var (labeler, store, _) = Make(slots: new() { [ModelTier.Medium] = "preset:p1" },
+            presetId: "p1", presetSteps: []);
+        store.Set(Action, "tier:medium");
+
+        var route = labeler.RouteOf(Action, "owner-1");
+        route.Kind.Should().Be(ImageLabelRouteKind.None);
+        route.Model.Should().BeNull();
     }
 
     [Fact]

@@ -8,7 +8,7 @@ import type { ImageEditCharacter, ImageEditorApi } from '../api';
 import { CharacterFacePhotos, type FacePhoto } from './CharacterFacePhotos';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
 import { CHARACTER_PHOTOS_NOTICE_LABELS, LABELS, SHEET, TRAIN_PHOTOS } from './characterTexts';
-import { PhotoLabelCaption, PhotoLabelEditor, type PhotoLabelState } from './PhotoLabelChips';
+import { hasPendingLabels, PhotoLabelCaption, PhotoLabelEditor, type PhotoLabelState } from './PhotoLabelChips';
 
 // Правка одной метки: {файл: {angle, pitch, emotion}}; null в поле — не менять
 type LabelEdit = { angle?: string | null; pitch?: string | null; emotion?: string | null };
@@ -71,6 +71,25 @@ export function CharacterPhotosSheet({ api, projectId, character, onChanged, onC
   useEffect(() => {
     if (focus === 'train') trainRef.current?.scrollIntoView?.({ block: 'start' });
   }, [focus]);
+
+  // Живое обновление меток: пока открыта шторка и есть фото «Размечаем…», перечитываем карточку
+  // персонажа раз в 5 с (метки готовы за секунды, а шторка узнаёт о них только при следующем
+  // открытии — дефект «23 минуты Размечаем…»). Интервал стабилен по булеву и slug (не по объекту
+  // character): один запрос на тик, а не на каждый рендер — не повтор шторма 779d926a9.
+  const needsPolling = hasPendingLabels(character.photos);
+  useEffect(() => {
+    if (!needsPolling) return;
+    const id = window.setInterval(() => {
+      void api.listCharacters(projectId)
+        .then(list => {
+          const fresh = list.find(c => c.slug === character.slug);
+          if (fresh) onChanged(fresh);
+        })
+        .catch(() => { /* нет связи — следующий тик */ });
+    }, 5000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsPolling, projectId, character.slug]);
 
   // Порядок сетки: главное первым, остальные по манифесту
   const ordered = [...character.photos.filter(p => p.primary), ...character.photos.filter(p => !p.primary)];

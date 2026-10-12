@@ -33,6 +33,9 @@ export interface ImageEditCaps {
   maxCount: number;
   faceByReferences: boolean;
   separateMaskPass?: boolean;
+  // Сколько фото персонажа модель берёт в один запуск (ADR-027): local (Qwen-Image) — 1,
+  // не задан — обычный лимит персонажа (photosPerRequest)
+  maxCharacterPhotos?: number | null;
   // Лимиты входа модели для автоуменьшения (ADR-018 §9); null — лимита нет
   maxInputSide?: number | null;
   maxInputMegapixels?: number | null;

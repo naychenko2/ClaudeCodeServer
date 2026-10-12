@@ -130,7 +130,7 @@ export function CharacterPhotosStrip({ projectId, sessionId, thread, version, ch
           {canReplace && (
             <span style={{ marginLeft: 'auto' }}>
               <Button size={mobile ? 'sm' : 'xs'} variant="ghost" leftIcon={ic(Replace)}
-                title={overLimitText(pickLimit(card))}
+                title={overLimitText(pickLimit(card, m?.caps?.maxCharacterPhotos))}
                 onClick={openPicker} disabled={launching}>
                 Заменить
               </Button>
@@ -149,6 +149,7 @@ export function CharacterPhotosStrip({ projectId, sessionId, thread, version, ch
           projectId={projectId} sessionId={sessionId} thread={thread}
           character={character} card={card} launch={launch}
           modelLabel={m?.label ?? null} provider={pv?.key ?? null} modelId={m?.id ?? null}
+          maxCharacterPhotos={m?.caps?.maxCharacterPhotos}
           format={wishForQuote(projectId)}
           onClose={() => setPickerOpen(false)}
           onLaunching={setLaunching}

@@ -38,15 +38,15 @@ public class DeployServiceTests : IDisposable
         public Task<DeployGitSnapshot> GitSnapshotAsync(string repoDir, CancellationToken ct = default) =>
             Task.FromResult(Snapshot);
 
-        public Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default)
+        public Task<string?> WakeAgentAsync(DeployOptions options, string deployId, CancellationToken ct = default)
         {
             WakeCalls++;
             return Task.FromResult(WakeError);
         }
 
-        // Настоящего именованного мьютекса в тестах не берём: на общем имени тесты цеплялись бы
-        // друг за друга (и за живой агент на машине разработчика)
-        public IDisposable? TryLockAgent()
+        // Настоящего именованного мьютекса/файлового лока в тестах не берём: на общем имени
+        // тесты цеплялись бы друг за друга (и за живой агент на машине разработчика)
+        public IDisposable? TryLockAgent(string releasesDir)
         {
             LockAttempts++;
             return AgentAlive ? null : new Lease();
@@ -69,6 +69,9 @@ public class DeployServiceTests : IDisposable
             ["Deploy:StagingDir"] = Path.Combine(_tempDir, "staging"),
             ["Deploy:ReleasesDir"] = Path.Combine(_tempDir, "releases"),
             ["Deploy:TaskName"] = "CCS-Deploy-Test",
+            // Явно Windows-ветка: CI на Linux, иначе IsLinux=OperatingSystem.IsLinux() увёл бы
+            // тесты в Linux-ветку Misconfiguration/отката. Linux-ветка — в DeployServiceLinuxTests.
+            ["Deploy:IsLinux"] = "false",
         };
         tweak?.Invoke(values);
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
@@ -470,6 +473,56 @@ public class DeployServiceTests : IDisposable
         state.Current.Steps.Should().ContainSingle(s => s.Name == "frontend" && s.Ms == 41200);
         state.History.Should().ContainSingle(h => h.Id == "20260818-120000");
         state.Releases.Should().ContainSingle(r => r.Sha == "8e28cba9");
+    }
+
+    // Агент ставит result.releaseId при откате (set-rollback-target → finalize rolled_back).
+    // Мутация: переименуй ReleaseId → ReleaseIdX в DeployResult (или releaseId → releaseIdX
+    // в JSON) — тест краснеет.
+    [Fact]
+    public void Итог_отката_с_releaseId_читается_и_сериализуется()
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "releases"));
+        File.WriteAllText(StatePath, """
+        {
+          "current": {
+            "id": "20261012-131230",
+            "kind": "rollback",
+            "phase": "rolled_back",
+            "ref": "master", "sha": "4dc7ddab", "dirty": false,
+            "initiatedBy": { "userId": "u1", "sessionId": "s1" },
+            "request": { "releaseId": "20261012-120000" },
+            "steps": [ { "name": "switch", "status": "ok", "ms": 5200 } ],
+            "result": {
+              "ok": false,
+              "status": "rolled_back",
+              "message": "health не сошёлся, откат на предыдущий снимок",
+              "releaseId": "20261012-120000",
+              "finishedAt": "2026-10-12T13:12:45.000Z"
+            },
+            "reported": true
+          },
+          "history": [],
+          "releases": [
+            { "id": "20261012-120000", "sha": "4dc7ddab", "path": "/opt/ccs/releases/20261012-120000" }
+          ]
+        }
+        """);
+
+        var state = Build().Load();
+
+        state.Current!.Id.Should().Be("20261012-131230");
+        state.Current.Phase.Should().Be(DeployPhases.RolledBack);
+        state.Current.Result.Should().NotBeNull("агент записал итог");
+        state.Current.Result!.Ok.Should().BeFalse();
+        state.Current.Result.Status.Should().Be(DeployPhases.RolledBack);
+        state.Current.Result.ReleaseId.Should().Be("20261012-120000",
+            "releaseId из result — на каком снимке остановились");
+        state.Current.Result.FinishedAt.Should().NotBeNull();
+
+        // Сериализация обратно: releaseId не теряется
+        var json = JsonSerializer.Serialize(state, DeployState.Json);
+        var reloaded = JsonSerializer.Deserialize<DeployState>(json, DeployState.Json)!;
+        reloaded.Current!.Result!.ReleaseId.Should().Be("20261012-120000");
     }
 
     [Fact]

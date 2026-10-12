@@ -84,7 +84,9 @@ Tone.js, где встроен, инварианты ленивой загруз
 
 **operations/** — [docker.md](operations/docker.md) (сборка и запуск в контейнере),
 [remote-access.md](operations/remote-access.md) (Tailscale + HTTPS),
-[viaduct-module.md](operations/viaduct-module.md) (сборка, раздача и выкатка редактора Viaduct).
+[viaduct-module.md](operations/viaduct-module.md) (сборка, раздача и выкатка редактора Viaduct),
+[release-linux.md](operations/release-linux.md) (ручная выкатка на Linux-прод + `watch_start`),
+[deploy-linux.md](operations/deploy-linux.md) (включение контура выкатки из чата на Linux: секция `Deploy` в `appsettings.Local.json`, порядок «сначала ручная, потом `Enabled=true`»),
 
 **design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
 [target-devices.md](design/target-devices.md) (приоритетные устройства и их ширины

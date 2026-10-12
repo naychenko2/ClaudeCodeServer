@@ -116,6 +116,8 @@ export function RoutePicker({
   // модели без зрения не годятся — пикер их прячет. face-pose (InsightFace) виден
   // только на месте ракурса. filterPlaceRoutes — чистая функция с тестами; здесь
   // лишь считаем признак зрения каждого кандидата (у нас есть каталог моделей и caps).
+  // tier:*-слот с моделью без зрения прячем осознанно: сервер его примет и проверит уже
+  // при запуске, но не предлагаем выбор, который при текущей модели слота не сработает.
   const isImagePlace = place?.input === 'images';
   const tierVision = (t: TierKey) => modelCaps(tierModels[t] ?? '').supportsImages;
   const routeVision = (r: string): boolean => {

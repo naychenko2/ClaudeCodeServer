@@ -165,7 +165,8 @@ public class DeployHostTests : IDisposable
     // systemd-run --user --collect --quiet --unit=ccs-deploy-<id> -p ManagedOOMPreference=avoid
     //   --setenv=CCS_RELEASES_DIR=<ReleasesDir> <AgentDir>/scripts/ops/deploy-linux.sh
     // Тест фиксирует argv поэлементно через подставной launcher: нет полей заявки (ref/sha),
-    // есть --unit=ccs-deploy-<id> и --setenv=CCS_RELEASES_DIR=<ReleasesDir> из конфига.
+    // есть --unit=ccs-deploy-<id выкатки> (конкретное значение, не TaskName) и
+    // --setenv=CCS_RELEASES_DIR=<ReleasesDir> из конфига.
     [Fact]
     public async Task WakeAgent_Linux_ArgvПоКонтракту_БезПолейЗаявки()
     {
@@ -184,7 +185,10 @@ public class DeployHostTests : IDisposable
             TaskName = "CCS-Deploy",
         };
 
-        var error = await host.WakeAgentAsync(options);
+        // id выкатки — UTC-штамп (формат NewDeployId), прошёл IsValidBuildId
+        const string deployId = "20261012-123456";
+
+        var error = await host.WakeAgentAsync(options, deployId);
 
         error.Should().BeNull("тривиальный процесс завершился с кодом 0 → побудка успешна");
         launcher.Started.Should().HaveCount(1, "один запуск systemd-run");
@@ -195,11 +199,38 @@ public class DeployHostTests : IDisposable
             "--user",
             "--collect",
             "--quiet",
-            $"--unit=ccs-deploy-{options.TaskName}",
+            $"--unit=ccs-deploy-{deployId}",
             "-p",
             "ManagedOOMPreference=avoid",
             $"--setenv=CCS_RELEASES_DIR={options.ReleasesDir}",
             Path.Combine(options.AgentDir, "scripts", "ops", "deploy-linux.sh"));
+    }
+
+    // id выкатки уходит в имя systemd-юнита — недопустимый (не прошёл IsValidBuildId) обязан
+    // дать отказ ДО запуска, а не уехать в имя юнита. Мутация: убери guard IsValidBuildId —
+    // launcher.Started станет 1 и тест краснеет.
+    [Fact]
+    public async Task WakeAgent_Linux_НедопустимыйId_ОтказДоЗапуска()
+    {
+        var launcher = new RecordingLauncher();
+        var host = new DeployHost(
+            new GitService(new LocalOnlyFactory()),
+            new RecordingFactory(launcher),
+            new NoopDeployAgentLock(),
+            NullLogger<DeployHost>.Instance);
+
+        var options = new DeployOptions
+        {
+            IsLinux = true,
+            AgentDir = "/opt/ccs/agent",
+            ReleasesDir = "/opt/ccs/releases",
+        };
+
+        // пробел не входит в белый список IsValidBuildId
+        var error = await host.WakeAgentAsync(options, "2026 1012");
+
+        error.Should().NotBeNullOrEmpty("недопустимый id → отказ до запуска");
+        launcher.Started.Should().BeEmpty("процесс не запущен: id не прошёл IsValidBuildId");
     }
 
     // ---------- Лок «агент жив» ----------
@@ -237,6 +268,10 @@ public class DeployHostTests : IDisposable
 
     // Только Linux: пока bash держит flock -x на deploy.lock, .NET-лок (FileShare.None →
     // flock LOCK_EX) не возьмётся и вернёт null. На Windows flock нет — честный skip.
+    //
+    // Ожидание события, а не времени: bash после взятия flock печатает маркер «locked» в
+    // stdout; тест читает stdout до маркера (ReadLineAsync с таймаутом), а не спит фиксированную
+    // паузу. sleep 30 — с запасом, чтобы лок держался на весь прогон (убиваем в finally).
     [Fact]
     public async Task Lock_FlockДержитBash_DotNetЛокNull()
     {
@@ -246,25 +281,24 @@ public class DeployHostTests : IDisposable
         Directory.CreateDirectory(releasesDir);
         var lockPath = Path.Combine(releasesDir, "deploy.lock");
 
-        // bash: flock -x -n <lockPath> -c 'sleep 5' — берёт эксклюзивный flock и держит 5 с.
-        // stdout/stderr НЕ перенаправляем: flock/sleep молчат, а незакрытый pipe-буфер мог бы
-        // заблокировать bash на записи (тут нечего читать, поэтому redirect не нужен).
         var psi = new ProcessStartInfo
         {
             FileName = "bash",
             UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add($"flock -x -n {lockPath} -c 'sleep 5'");
+        psi.ArgumentList.Add($"flock -x {lockPath} -c 'echo locked; sleep 30'");
         var bash = Process.Start(psi)!;
 
         try
         {
-            // flock берётся bash'ем за миллисекунды и держится 5 с (sleep 5). Фиксированная
-            // пауза 200 мс — с запасом на старт bash, но на порядок меньше времени удержания,
-            // поэтому детерминированно: к моменту проверки bash гарантированно держит лок.
-            await Task.Delay(200);
-            bash.HasExited.Should().BeFalse("bash (flock + sleep 5) должен быть жив после 200 мс");
+            // Маркер «locked» в stdout = доказательство, что flock уже взят. ReadLineAsync
+            // с таймаутом — ожидание события: маркер либо придёт, либо тест падает по таймауту.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var line = await bash.StandardOutput.ReadLineAsync(cts.Token);
+            line.Should().Be("locked", "bash напечатал маркер после взятия flock");
 
             // flock у bash → .NET-лок (FileShare.None → flock LOCK_EX) не возьмётся
             var adapter = new DeployAgentLockAdapter();

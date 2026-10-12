@@ -12,6 +12,7 @@ public enum DeployStartStatus
     NoRelease,       // откатывать не на что
     GitFailed,       // guard не смог отработать — ехать вслепую нельзя
     LaunchFailed,    // задача планировщика не запустилась
+    Unsupported,     // действие не поддержано на этой ОС (откат из чата на Linux)
 }
 
 /// <summary>Заявка на выкатку — ровно поля контракта ADR-010.</summary>
@@ -126,6 +127,14 @@ public sealed class DeployService(
 
             if (kind == DeployKinds.Rollback)
             {
+                // Откат из чата на Linux пока не поддержан: снимки живут в /opt/ccs/releases,
+                // а автооткат внутри switch-release.sh работает. Честный отказ ДО проверки
+                // снимков: журнал не пишем и агента не будим (на Linux он бы нашёл откатывать
+                // не на что, а карточка хода осталась бы висеть «идущей»).
+                if (Options.IsLinux)
+                    return new DeployStartResult(DeployStartStatus.Unsupported,
+                        Error: "Откат из чата на Linux пока не поддержан — откат вручную из "
+                            + "/opt/ccs/releases (автооткат внутри switch-release.sh работает)");
                 // Откатываться некуда: снимков ещё нет (первая выкатка их и создаёт)
                 if (state.Releases.Count == 0)
                     return new DeployStartResult(DeployStartStatus.NoRelease,
@@ -158,7 +167,9 @@ public sealed class DeployService(
             state.Current = record;
             Save(state);
 
-            if (await host.WakeAgentAsync(Options, ct) is { } launchError)
+            // id выкатки — тот, что сервер только что записал в журнал (record.Id): на Linux
+            // он уходит в имя systemd-юнита, на Windows в argv не едет.
+            if (await host.WakeAgentAsync(Options, record.Id, ct) is { } launchError)
             {
                 // Агент не стартовал: заявка не должна остаться висеть «в очереди» —
                 // иначе следующая попытка получит 409 от призрака

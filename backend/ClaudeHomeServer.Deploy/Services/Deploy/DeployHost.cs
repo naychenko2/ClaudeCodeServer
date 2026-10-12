@@ -19,8 +19,12 @@ public interface IDeployHost
 {
     Task<DeployGitSnapshot> GitSnapshotAsync(string repoDir, CancellationToken ct = default);
 
-    /// <summary>Разбудить агента. null — задача запущена, иначе текст отказа.</summary>
-    Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default);
+    /// <summary>
+    /// Разбудить агента. null — задача запущена, иначе текст отказа. deployId — id выкатки
+    /// (UTC-штамп, он же имя папки снимка): на Linux уходит в имя systemd-юнита, на Windows
+    /// в argv не едет (там имя задачи из конфига).
+    /// </summary>
+    Task<string?> WakeAgentAsync(DeployOptions options, string deployId, CancellationToken ct = default);
 
     /// <summary>
     /// Взять лок выкатки — тот же, что держит агент всё время работы: на Windows именованный
@@ -64,14 +68,19 @@ public sealed class DeployHost(
         }
     }
 
-    public async Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default)
+    public async Task<string?> WakeAgentAsync(DeployOptions options, string deployId, CancellationToken ct = default)
     {
         // Командная строка ФИКСИРОВАНА: параметры заявки НЕ едут в argv — они лежат в
         // журнале (deploy-state.json), а агент читает его сам. argv различает только
         // запуск: на Linux — имя systemd-юнита (id прошёл IsValidBuildId) и каталог релизов
         // из конфига; на Windows — имя задачи планировщика (белый список).
+        // id выкатки уходит в имя юнита — принимаем только прошедший IsValidBuildId, иначе
+        // CR/LF в имени = инъекция. На Windows id в argv не едет, проверка не нужна.
+        if (options.IsLinux && !DeployValidation.IsValidBuildId(deployId))
+            return $"недопустимый id выкатки для имени systemd-юнита: {deployId}";
+
         var spec = options.IsLinux
-            ? BuildLinuxWakeSpec(options)
+            ? BuildLinuxWakeSpec(options, deployId)
             : BuildWindowsWakeSpec(options);
 
         System.Diagnostics.Process proc;
@@ -108,8 +117,9 @@ public sealed class DeployHost(
     // systemd-run ставит one-shot юнит и возвращается сразу; сам скрипт идёт уже в
     // отвязанном процессе. -p ManagedOOMPreference=avoid — не дать systemd-oomd убить
     // выкатку при нехватке памяти; CCS_RELEASES_DIR — каталог из конфига, не из заявки.
-    // <id> уже прошёл IsValidBuildId (DeployValidation), поэтому безопасен в имени юнита.
-    private static ProcessSpec BuildLinuxWakeSpec(DeployOptions options)
+    // <id> — id выкатки (UTC-штамп), он прошёл IsValidBuildId в WakeAgentAsync, поэтому
+    // безопасен в имени юнита.
+    private static ProcessSpec BuildLinuxWakeSpec(DeployOptions options, string deployId)
     {
         var script = Path.Combine(options.AgentDir, "scripts", "ops", "deploy-linux.sh");
         return new ProcessSpec
@@ -120,7 +130,7 @@ public sealed class DeployHost(
                 "--user",
                 "--collect",
                 "--quiet",
-                $"--unit=ccs-deploy-{options.TaskName}",
+                $"--unit=ccs-deploy-{deployId}",
                 "-p", "ManagedOOMPreference=avoid",
                 $"--setenv=CCS_RELEASES_DIR={options.ReleasesDir}",
                 script,

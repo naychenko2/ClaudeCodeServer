@@ -1796,6 +1796,9 @@ public sealed partial class WorkspaceToolset(
                 return Deny($"{action} НЕ запущена: механизм выкатки на этой машине не настроен "
                     + $"({result.Error}). Это не временный сбой и не занятость — включить контур может только "
                     + "администратор в appsettings.Local.json. Сообщи это пользователю и не повторяй вызов.");
+            case DeployStartStatus.Unsupported:
+                return Deny($"{action} НЕ запущена: {result.Error}. Это ограничение платформы, а не сбой — "
+                    + "повторять тот же вызов бессмысленно; действуй по тексту отказа.");
             default:
                 return Deny($"{action} НЕ запущена: {result.Error ?? "внутренняя ошибка сервера"}.");
         }

@@ -70,8 +70,21 @@ public sealed class DeployOptions
         if (string.IsNullOrWhiteSpace(RepoDir)) return "не задан Deploy:RepoDir (репозиторий-источник)";
         if (string.IsNullOrWhiteSpace(PublishDir)) return "не задан Deploy:PublishDir";
         if (string.IsNullOrWhiteSpace(ReleasesDir)) return "не задан Deploy:ReleasesDir";
+
+        if (IsLinux)
+        {
+            // Linux: побудка идёт через <AgentDir>/scripts/ops/deploy-linux.sh (systemd-run),
+            // имени задачи планировщика нет — вместо TaskName проверяем AgentDir и сам скрипт.
+            if (string.IsNullOrWhiteSpace(AgentDir))
+                return "не задан Deploy:AgentDir (каталог агента выкатки)";
+            var script = Path.Combine(AgentDir, "scripts", "ops", "deploy-linux.sh");
+            if (!File.Exists(script))
+                return $"скрипт выкатки не найден: {script}";
+            return null;
+        }
+
+        // Windows: имя задачи уходит в командную строку schtasks — принимаем только безопасный набор
         if (string.IsNullOrWhiteSpace(TaskName)) return "не задано Deploy:TaskName";
-        // Имя задачи уходит в командную строку schtasks — принимаем только безопасный набор
         if (!DeployValidation.IsValidTaskName(TaskName))
             return $"недопустимое имя задачи планировщика «{TaskName}»";
         return null;
@@ -94,8 +107,9 @@ public sealed class DeployOptions
             HealthTimeoutSec = health is > 0 and <= 600 ? health : 90,
             StaleQueuedMinutes = stale is > 0 and <= 1440 ? stale : 15,
             TaskName = (config["Deploy:TaskName"] ?? "").Trim() is { Length: > 0 } t ? t : "CCS-Deploy",
-            // Платформа хоста — из ОС, не из конфига: тесты переопределяют свойство явно.
-            IsLinux = OperatingSystem.IsLinux(),
+            // Платформа хоста — по умолчанию из ОС; тесты и боевой конфиг переопределяют
+            // ключом Deploy:IsLinux, чтобы выбрать ветку без OperatingSystem.
+            IsLinux = config.GetValue<bool?>("Deploy:IsLinux") ?? OperatingSystem.IsLinux(),
         };
     }
 }

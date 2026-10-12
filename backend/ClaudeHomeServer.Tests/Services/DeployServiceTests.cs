@@ -38,7 +38,7 @@ public class DeployServiceTests : IDisposable
         public Task<DeployGitSnapshot> GitSnapshotAsync(string repoDir, CancellationToken ct = default) =>
             Task.FromResult(Snapshot);
 
-        public Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default)
+        public Task<string?> WakeAgentAsync(DeployOptions options, string deployId, CancellationToken ct = default)
         {
             WakeCalls++;
             return Task.FromResult(WakeError);
@@ -69,6 +69,9 @@ public class DeployServiceTests : IDisposable
             ["Deploy:StagingDir"] = Path.Combine(_tempDir, "staging"),
             ["Deploy:ReleasesDir"] = Path.Combine(_tempDir, "releases"),
             ["Deploy:TaskName"] = "CCS-Deploy-Test",
+            // Явно Windows-ветка: CI на Linux, иначе IsLinux=OperatingSystem.IsLinux() увёл бы
+            // тесты в Linux-ветку Misconfiguration/отката. Linux-ветка — в DeployServiceLinuxTests.
+            ["Deploy:IsLinux"] = "false",
         };
         tweak?.Invoke(values);
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();

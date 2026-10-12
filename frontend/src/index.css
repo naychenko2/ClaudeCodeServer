@@ -490,6 +490,11 @@ body {
    к контрастному accent («обрати внимание»), opacity фиксирован и лёгкий:
    заливка не глушит текст, меняется только её оттенок. Слой под содержимым,
    скруглён по карточке */
+/* Покой (textMuted) — базовый слой: фон фиксирован, «дыхание» даёт только opacity.
+   Пик (textSecondary) — второй слой поверх: проявляется через opacity, так что
+   перетекание серый → тёмно-серый считает композитор, а не перерисовка background
+   на основном потоке (то было 10–15% CPU на простое при каждом кадре на каждой
+   непрочитанной карточке). will-change: opacity — слой на композиторе. */
 .cc-unread::after {
   content: '';
   position: absolute;
@@ -498,15 +503,34 @@ body {
   pointer-events: none;
   border-radius: inherit;
   background: var(--c-text-muted);
-  opacity: .12;
+  opacity: .10;
+  will-change: opacity;
   animation: cc-unread-breath 3s ease-in-out infinite;
+}
+/* Пик поверх покоя (z-index 1 > 0): тёмно-серый проявляется над базовым серым,
+   как в оригинальном перетекании muted → secondary. */
+.cc-unread::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--c-text-secondary);
+  opacity: 0;
+  will-change: opacity;
+  animation: cc-unread-peak 3s ease-in-out infinite;
 }
 /* Серый ↔ тёмно-серый, поровну по времени: 1.5с разгорание к тёмному, 1.5с спад
    к светлому. Пик — textSecondary (на ступень темнее покоя textMuted), без цвета:
-   непрочитанность — пометка, а не событие */
+   непрочитанность — пометка, а не событие. Оба слоя — только opacity. */
 @keyframes cc-unread-breath {
-  0%, 100% { background: var(--c-text-muted);     opacity: .10; }
-  50%      { background: var(--c-text-secondary); opacity: .22; }
+  0%, 100% { opacity: .10; }
+  50%      { opacity: .22; }
+}
+@keyframes cc-unread-peak {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: .12; }
 }
 
 /* === «Панель уже открыта»: двойная вспышка карточки правой рельсы ===
@@ -705,14 +729,16 @@ body {
   .cc-tint--flow::after { animation: none; }
   /* Точка проекта перестаёт мерцать, но остаётся видимой */
   .cc-dot-pulse::after { animation: none; }
-  /* Непрочитанность остаётся видимой, просто перестаёт переливаться: фон и
-     плотность фиксируются на покое (серый, .12) */
+  /* Непрочитанность остаётся видимой, просто перестаёт переливаться: оба слоя
+     (покой + пик) фиксируются на пиковой плотности — тёмно-серый, как раньше */
   .cc-unread::after { animation: none; opacity: .22; }
+  .cc-unread::before { animation: none; opacity: .12; }
   .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
   /* Скелетон перестаёт бежать, но подложка обязана остаться видимой — иначе на месте
-     загрузки просто пустота. Отсюда ровная заливка вместо градиента. */
-  .cc-skel { animation: none; background: var(--c-bg-selected); }
+     загрузки просто пустота. Базовый слой уже твёрдый (bg-selected), светлую полосу
+     (::after) просто прячем. */
+  .cc-skel::after { animation: none; opacity: 0; }
   .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
   .cc-echo-ring { animation: none; }
   /* Заставка остаётся видимой, просто перестаёт дышать и проявляться */
@@ -868,21 +894,24 @@ body {
 @keyframes cc-fab-arc { to { transform: rotate(360deg); } }
 
 /* Маячок «нужен ответ»: два удара и пауза — прерывистый ритм, не спутать с ровным
-   вращением дуги. Цвет внутри box-shadow берётся rgba-литералом (не из токена),
-   поэтому парный keyframe на тёмную тему — как у существующих --shadow-*. */
+   вращением дуги. Кольцо вынесено в псевдоэлемент ::after (см. .cc-fab[data-state=
+   "awaiting"] ниже): анимируются только transform: scale + opacity — композитор,
+   а не перерисовка box-shadow на основном потоке (то было ~10% CPU на простое).
+   Статичный нейтральный ореол остаётся на самой кнопке (.cc-fab → --shadow-fab-neutral).
+   Цвет кольца — rgba-литерал (не из токена), поэтому парный keyframe на тёмную тему. */
 @keyframes cc-fab-alert {
-  0%        { box-shadow: 0 0 0 0   rgba(201, 146, 62, 0.42), var(--shadow-fab-neutral); }
-  12%       { box-shadow: 0 0 0 7px rgba(201, 146, 62, 0),    var(--shadow-fab-neutral); }
-  24%       { box-shadow: 0 0 0 0   rgba(201, 146, 62, 0.42), var(--shadow-fab-neutral); }
-  36%       { box-shadow: 0 0 0 7px rgba(201, 146, 62, 0),    var(--shadow-fab-neutral); }
-  40%, 100% { box-shadow: 0 0 0 0   rgba(201, 146, 62, 0),    var(--shadow-fab-neutral); }
+  0%        { transform: scale(1);    opacity: .42; }
+  12%       { transform: scale(1.16); opacity: 0; }
+  24%       { transform: scale(1);    opacity: .42; }
+  36%       { transform: scale(1.16); opacity: 0; }
+  40%, 100% { transform: scale(1);    opacity: 0; }
 }
 @keyframes cc-fab-alert-dark {
-  0%        { box-shadow: 0 0 0 0   rgba(224, 172, 90, 0.46), var(--shadow-fab-neutral); }
-  12%       { box-shadow: 0 0 0 7px rgba(224, 172, 90, 0),    var(--shadow-fab-neutral); }
-  24%       { box-shadow: 0 0 0 0   rgba(224, 172, 90, 0.46), var(--shadow-fab-neutral); }
-  36%       { box-shadow: 0 0 0 7px rgba(224, 172, 90, 0),    var(--shadow-fab-neutral); }
-  40%, 100% { box-shadow: 0 0 0 0   rgba(224, 172, 90, 0),    var(--shadow-fab-neutral); }
+  0%        { transform: scale(1);    opacity: .46; }
+  12%       { transform: scale(1.16); opacity: 0; }
+  24%       { transform: scale(1);    opacity: .46; }
+  36%       { transform: scale(1.16); opacity: 0; }
+  40%, 100% { transform: scale(1);    opacity: 0; }
 }
 
 /* Базовая кнопка FAB: нейтральный ореол (без accent-заливки — весь круг занимает
@@ -899,12 +928,25 @@ body {
 /* AI работает: та же дымчатая оправа, поверх — бегущая дуга + «Эхо» (в AiLauncher). */
 .cc-fab[data-state="busy"] { --cc-fab-ring-c: var(--c-smoke); }
 .cc-fab[data-state="busy"] .cc-fab-arc { display: block; }
-/* Нужен ответ: янтарная оправа + маячок из двух ударов. */
-.cc-fab[data-state="awaiting"] {
-  --cc-fab-ring-c: var(--c-warning);
+/* Нужен ответ: янтарная оправа + маячок из двух ударов. Кольцо-маячок —
+   псевдоэлемент ::after (см. ниже): кнопка сама анимации не держит, чтобы
+   box-shadow не перерисовывался на основном потоке. */
+.cc-fab[data-state="awaiting"] { --cc-fab-ring-c: var(--c-warning); }
+.cc-fab[data-state="awaiting"]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(201, 146, 62, 0.42);
+  will-change: transform, opacity;
   animation: cc-fab-alert 2.6s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 5;
 }
-:root[data-theme="dark"] .cc-fab[data-state="awaiting"] { animation-name: cc-fab-alert-dark; }
+:root[data-theme="dark"] .cc-fab[data-state="awaiting"]::after {
+  box-shadow: 0 0 0 4px rgba(224, 172, 90, 0.46);
+  animation-name: cc-fab-alert-dark;
+}
 
 /* prefers-reduced-motion: движение выключено, но состояния различимы статикой —
    характером линии и толщиной (читается даже в оттенках серого). Кольца «Эхо» при
@@ -912,19 +954,33 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cc-fab[data-state="busy"] .cc-fab-arc { display: none; }
   .cc-fab[data-state="busy"] .cc-fab-ring { border-style: dashed; --cc-fab-ring-c: var(--c-text-muted); }
-  .cc-fab[data-state="awaiting"] { animation: none; box-shadow: var(--shadow-alert); }
+  .cc-fab[data-state="awaiting"] { box-shadow: var(--shadow-alert); }
+  .cc-fab[data-state="awaiting"]::after { animation: none; opacity: 0; }
   .cc-fab[data-state="awaiting"] .cc-fab-ring { border-width: 3px; }
 }
 
-/* Скелетон загрузки (аналитика токенов и др.): мягкое мерцание подложки */
-@keyframes cc-skeleton {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
+/* Скелетон загрузки (аналитика токенов и др.): мягкое мерцание подложки.
+   Базовый слой — твёрдый bg-selected; светлая полоса bg-card — отдельный ::after,
+   который едет transform: translateX (композитор), а не background-position
+   (перерисовка на основном потоке каждый кадр). overflow:hidden + border-radius
+   (inline) обрезают полосу по скруглению карточки. */
 .cc-skel {
-  background: linear-gradient(90deg, var(--c-bg-selected) 25%, var(--c-bg-card) 50%, var(--c-bg-selected) 75%);
+  position: relative;
+  overflow: hidden;
+  background: var(--c-bg-selected);
+}
+.cc-skel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 25%, var(--c-bg-card) 50%, transparent 75%);
   background-size: 200% 100%;
-  animation: cc-skeleton 1.4s infinite;
+  will-change: transform;
+  animation: cc-skeleton 1.4s linear infinite;
+}
+@keyframes cc-skeleton {
+  0%   { transform: translateX(-50%); }
+  100% { transform: translateX(50%); }
 }
 
 /* Маркер связи у аватарки (AvatarMenu): мягкая пульсация пунктирного кольца

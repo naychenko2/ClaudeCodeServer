@@ -114,6 +114,28 @@ IndexedDB и при обрыве **молча возвращает сохран�
 связь работает, пока продукт и трей — в одной интерактивной сессии Windows (нынешняя
 топология: трей запускает продукт). Другая даст безопасный отказ «трей не отвечает».
 
+## Контур Linux
+
+Платформо-чувствительная ветка того же контура (`DeployOptions.IsLinux=true`).
+Оркестратор — [`scripts/ops/deploy-linux.sh`](../../scripts/ops/deploy-linux.sh),
+запускается через `systemd-run --user --collect --quiet --unit=ccs-deploy-<id>
+-p ManagedOOMPreference=avoid` (`BuildLinuxWakeSpec` в
+[`DeployHost.cs`](Services/Deploy/DeployHost.cs)); полная картина контракта
+побудки/лока/журнала и инцидент, откуда родилось решение — раздел «Контур Linux»
+[ADR-010](../../docs/adr/ADR-010-deploy-from-chat.md).
+
+Стыковка с бэкендом прежняя: шов `<ReleasesDir>/deploy-state.json` (сервер пишет
+заявку ДО побудки, оркестратор правит `phase/sha/steps/result` через
+[`deploy-journal.py`](../../scripts/ops/deploy-journal.py) — единственный писатель
+журнала со стороны оркестратора, `python3 -I`). Лок — `flock -x` на
+`<ReleasesDir>/deploy.lock`; занятость с серверной стороны ловится через
+`FileShare.None` на том же файле
+([`DeployAgentLockAdapter`](../../backend/ClaudeHomeServer/Services/Composition/Deploy/DeployAgentLockAdapter.cs)).
+Откат из чата на Linux сознательно не сделан: `DeployService.RollbackAsync`
+отвечает `DeployStartStatus.Unsupported` ДО записи в журнал (иначе карточка
+хода осталась бы «идущей» без агента); автооткат внутри `switch-release.sh` уже
+работает — этого хватает на ручной сценарий.
+
 ## Границы вертикали
 
 `ITrayGate` и `IDeployHost` — швы ради тестов: реализации опираются на именованные объекты ядра

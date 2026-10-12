@@ -12,8 +12,8 @@ import {
 } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
+  FLAGS, useFeature,
 } from 'aihome_shell/kit';
-import { FLAGS, useFeature } from '../../../lib/featureFlags';
 import { stripVisible } from './characterPhotos';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';

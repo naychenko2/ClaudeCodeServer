@@ -3,8 +3,7 @@
 // Метки фото (ADR-027) — только при включённом character-smart-photos; выключен — блок как в master.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Modal, C, MODAL_W, SP } from 'aihome_shell/kit';
-import { FLAGS, useFeature } from '../../../lib/featureFlags';
+import { Modal, C, MODAL_W, SP, FLAGS, useFeature } from 'aihome_shell/kit';
 import type { ImageEditCharacter, ImageEditorApi } from '../api';
 import { CharacterFacePhotos, type FacePhoto } from './CharacterFacePhotos';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';

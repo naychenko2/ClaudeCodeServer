@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
 // «Найти лица на версии» (ADR-027, §4, этап 2): POST .../threads/{threadId}/versions/{versionId}/faces.
 // Флаг character-face-swap гейтит ручку (выключен — 404 feature_disabled), 200 — список лиц + facesKey,
-// повторный запрос на те же байты берётся из кэша (детектор один раз), Busy/Error — 503 и не кэшируются,
+// повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
 // версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).
 public class FacesEndpointTests : IDisposable
 {
@@ -192,9 +192,9 @@ public class FacesEndpointTests : IDisposable
         _media.DetectCalls.Should().Be(2, "Busy не кэшируется — повторный запрос запускает детектор");
     }
 
-    // Error — 503 provider_unavailable; не кэшируется
+    // Error — 409 provider_unavailable; не кэшируется
     [Fact]
-    public async Task Error_503_provider_unavailable_и_не_кэшируется()
+    public async Task Error_409_provider_unavailable_и_не_кэшируется()
     {
         var chat = await Chat();
         var (threadId, originId) = await OpenThread(chat.Id, "images/hero.png");
@@ -202,7 +202,7 @@ public class FacesEndpointTests : IDisposable
         _media.Result = _ => new LocalFaceDetectResult(0, 0, [], "Сбой детекции");
 
         var resp = await Faces(chat.Id, threadId, originId);
-        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await Code(resp)).Should().Be("provider_unavailable");
 
         await Faces(chat.Id, threadId, originId);

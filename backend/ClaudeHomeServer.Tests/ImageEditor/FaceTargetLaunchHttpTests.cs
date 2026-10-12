@@ -16,7 +16,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.ImageEditor;
 
 // Запуск с FaceTarget: HTTP-статусы отказов (ADR-027 §4, этап 2).
-// faces_changed → 409, feature_disabled → 404, busy → 503, provider_unavailable → 503,
+// faces_changed → 409, feature_disabled → 404, busy → 503, provider_unavailable → 409,
 // version_not_found → 404, invalid_request → 400.
 public class FaceTargetLaunchHttpTests : IDisposable
 {
@@ -229,10 +229,10 @@ public class FaceTargetLaunchHttpTests : IDisposable
         factory.Dispose();
     }
 
-    // ── provider_unavailable → 503 ────────────────────────────────────────────────
+    // ── provider_unavailable → 409 ────────────────────────────────────────────────
 
     [Fact]
-    public async Task Error_503_provider_unavailable()
+    public async Task Error_409_provider_unavailable()
     {
         var factory = new TestWebApplicationFactory { UseFrontend = false };
         factory.ExtraServices = services =>
@@ -280,7 +280,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         form.Add(new StringContent(thread.Thread!.Id), "threadId");
 
         var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
-        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, await resp.Content.ReadAsStringAsync());
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict, await resp.Content.ReadAsStringAsync());
         (await Code(resp)).Should().Be(ImageEditErrorCodes.ProviderUnavailable);
         factory.Dispose();
     }

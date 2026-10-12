@@ -223,7 +223,7 @@ public class ImageEditorControllerTests : IDisposable
         body.GetProperty("reason").GetString().Should().Be(ImageEditCatalogReasons.NoProviderConfigured);
 
         var start = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", JobForm());
-        start.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        start.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var error = await Json(start);
         error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
         error.GetProperty("error").GetString().Should().Contain("не настроен");
@@ -321,7 +321,7 @@ public class ImageEditorControllerTests : IDisposable
         catalog.StatusCode.Should().Be(HttpStatusCode.OK);
         (await Json(catalog)).GetProperty("reason").GetString().Should().Be(ImageEditCatalogReasons.SubsystemDisabled);
         (await client.PostAsJsonAsync($"{root}/quote", Quote("fal"))).StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await client.PostAsync($"{root}/jobs", JobForm())).StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await client.PostAsync($"{root}/jobs", JobForm())).StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await client.DeleteAsync($"{root}/jobs/any")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await client.PostAsJsonAsync($"{root}/save", new { jobId = "any", variant = 1 }))
             .StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);

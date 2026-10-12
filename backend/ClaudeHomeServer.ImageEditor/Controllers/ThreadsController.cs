@@ -284,7 +284,7 @@ public class ThreadsController(
         // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
         // provider_unavailable, не 500
         if (localMedia is null)
-            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+            return StatusCode(StatusCodes.Status409Conflict,
                 new { error = "Локальные модели не настроены: детекция лиц недоступна", code = "provider_unavailable" });
 
         var state = Threads.Get(UserId, sessionId);
@@ -310,7 +310,7 @@ public class ThreadsController(
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Видеокарта занята долгой задачей. Попробуйте чуть позже", code = "busy" });
         if (result.Error is not null)
-            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+            return StatusCode(StatusCodes.Status409Conflict,
                 new { error = result.Error, code = "provider_unavailable" });
 
         return Ok(new ImageThreadFacesResponse(

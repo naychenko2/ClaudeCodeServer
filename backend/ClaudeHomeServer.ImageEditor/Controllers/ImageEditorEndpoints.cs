@@ -344,6 +344,7 @@ public abstract class ImageEditorEndpoints(
     protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена");
 
+    // Единый контракт: provider_unavailable — 409 везде; busy — 503; feature_disabled — 404
     protected IActionResult Map<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok)
     {
         if (result.ErrorCode is null && result.Value is not null) return ok(result.Value);
@@ -351,14 +352,15 @@ public abstract class ImageEditorEndpoints(
         var status = code switch
         {
             ImageEditErrorCodes.NameTaken or ImageEditErrorCodes.ContextChanged
-                or ImageEditErrorCodes.FacesChanged => StatusCodes.Status409Conflict,
+                or ImageEditErrorCodes.FacesChanged or ImageEditErrorCodes.ProviderUnavailable
+                => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
                 or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound
                 or ImageEditErrorCodes.FeatureDisabled => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable
-                or ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,
+                or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
         // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата

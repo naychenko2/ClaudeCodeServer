@@ -27,6 +27,8 @@ public class CharacterStoreTests : IDisposable
 
     internal static byte[] Jpeg(byte tag) => TestImages.Jpeg(tag);
 
+    internal static string Hex(byte[] bytes) => Convert.ToHexString(bytes);
+
     internal static CharacterPhotoUpload[] Photos(int count) =>
         [.. Enumerable.Range(1, count).Select(i => new CharacterPhotoUpload(Jpeg((byte)i), i == 1 ? "front" : null))];
 
@@ -315,6 +317,86 @@ public class CharacterStoreTests : IDisposable
         CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.FacePhotos.Should().HaveCount(10);
     }
 
+    [Fact]
+    public void Явный_список_берёт_ровно_эти_фото_в_этом_порядке()
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+        var chosen = new[] { files[2], files[1] };
+
+        var found = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: chosen)!;
+
+        found.Photos.Select(p => Convert.ToHexString(p.Bytes)).Should().Equal(Hex(Jpeg(3)), Hex(Jpeg(2)));
+    }
+
+    [Fact]
+    public void Эталон_facePhotos_не_зависит_от_явного_списка()
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+        var byDefault = CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.FacePhotos;
+
+        var explicitOne = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[2]])!;
+
+        explicitOne.Photos.Should().ContainSingle();
+        explicitOne.Ref.FacePhotos.Should().HaveCount(3).And.Subject.Select(Hex).Should().Equal(byDefault.Select(Hex));
+    }
+
+    [Fact]
+    public void Без_явного_списка_образцы_как_раньше()
+    {
+        var m = Create("Аня");
+        var byDefault = CharacterStore.ForRequest(_root, Owner, m.Slug)!;
+        var withNull = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: null)!;
+
+        withNull.Photos.Select(p => Hex(p.Bytes)).Should().Equal(byDefault.Photos.Select(p => Hex(p.Bytes)));
+    }
+
+    [Theory]
+    [InlineData("other.jpg")]
+    [InlineData("../x.png")]
+    [InlineData("/etc/passwd")]
+    [InlineData("character.json")]
+    public void Явный_список_с_файлом_вне_манифеста_отклоняется_целиком(string bad)
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+        File.WriteAllBytes(Path.Combine(_root, CharacterStore.Folder, m.Slug, "other.jpg"), Jpeg(8));
+        File.WriteAllBytes(Path.Combine(_root, "x.png"), Jpeg(8));
+
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[0], bad]).Should().BeNull();
+    }
+
+    [Fact]
+    public void Явный_список_с_символической_ссылкой_отклоняется()
+    {
+        var m = Create("Аня");
+        var dir = Path.Combine(_root, CharacterStore.Folder, m.Slug);
+        var files = m.Photos.Select(p => p.File).ToList();
+        var target = Path.Combine(_base, "outside.jpg");
+        File.WriteAllBytes(target, Jpeg(7));
+        File.Delete(Path.Combine(dir, files[2]));
+        try { File.CreateSymbolicLink(Path.Combine(dir, files[2]), target); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            return; // Windows без прав на ссылки — проверка идёт в CI на Linux
+        }
+
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[0], files[2]]).Should().BeNull();
+    }
+
+    [Fact]
+    public void Явный_список_с_дублем_пустой_или_длиннее_лимита_отклоняется()
+    {
+        var m = Create("Аня");
+        var files = m.Photos.Select(p => p.File).ToList();
+
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[0], files[0]]).Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: []).Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: files).Should().NotBeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug, maxPhotos: 2, explicitPhotos: files).Should().BeNull();
+    }
+
     private string ManifestPath(CharacterManifest m) =>
         Path.Combine(_root, CharacterStore.Folder, m.Slug, CharacterStore.ManifestFile);
 
@@ -500,5 +582,167 @@ public class CharacterStoreTests : IDisposable
         dto.Local.Should().Be(new CharacterLocalDto(OwnLora, "anya_face", 0.9));
         typeof(CharacterDto).GetProperty("Providers").Should().BeNull();
         CharacterDto.From(m).Local.Should().BeNull();
+    }
+
+    [Fact]
+    public void Dto_отдаёт_PhotosPerRequest_только_при_включённом_флаге()
+    {
+        var m = CharacterStore.Get(_root, Create("Аня").Slug)!;
+
+        CharacterDto.From(m, withLabels: true).PhotosPerRequest.Should().Be(CharacterStore.PhotosPerRequest);
+        CharacterDto.From(m).PhotosPerRequest.Should().BeNull();
+        System.Text.Json.JsonSerializer.Serialize(CharacterDto.From(m)).Should().NotContain("hotosPerRequest");
+    }
+
+    // --- Метки фото (ADR-027, §1) ---
+
+    private static IReadOnlyDictionary<string, CharacterPhotoLabels> Labels(string file, string angle, string emotion) =>
+        new Dictionary<string, CharacterPhotoLabels> { [file] = new(angle, "level", emotion) };
+
+    [Fact]
+    public void Авторазметка_не_затирает_ручную()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            Labels(file, "profile", "laugh")))!.Error.Should().BeNull();
+
+        CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "front", "sad"))!.Should().BeEmpty();
+
+        var photo = CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file);
+        photo.Angle.Should().Be("profile");
+        photo.Emotion.Should().Be("laugh");
+        photo.LabelSource.Should().Be("human");
+    }
+
+    [Fact]
+    public void Авторазметка_пишет_метки_и_ставит_источник_auto()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[1].File;
+
+        CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "three-quarter", "smile"))!.Should().Equal(file);
+
+        var photo = CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file);
+        photo.Angle.Should().Be("three-quarter");
+        photo.Pitch.Should().Be("level");
+        photo.Emotion.Should().Be("smile");
+        photo.LabelSource.Should().Be("auto");
+    }
+
+    [Fact]
+    public void Старый_манифест_читается_без_потерь()
+    {
+        var m = Create("Аня");
+        var path = ManifestPath(m);
+        var node = JsonNode.Parse(File.ReadAllText(path))!;
+        node["photos"]![0]!.AsObject().Remove("pitch");
+        node["photos"]![0]!["angle"] = "front";
+        File.WriteAllText(path, node.ToJsonString());
+
+        var photo = CharacterStore.Get(_root, m.Slug)!.Photos[0];
+
+        photo.Angle.Should().Be("front");
+        photo.Pitch.Should().BeNull();
+        photo.Emotion.Should().BeNull();
+        photo.LabelSource.Should().BeNull();
+    }
+
+    [Fact]
+    public void Неизвестное_поле_фото_переживает_сохранение()
+    {
+        var m = Create("Аня");
+        var path = ManifestPath(m);
+        var node = JsonNode.Parse(File.ReadAllText(path))!;
+        node["photos"]![0]!["futureField"] = "keep";
+        File.WriteAllText(path, node.ToJsonString());
+
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch("Анна", null, [], [], null))!
+            .Error.Should().BeNull();
+
+        JsonNode.Parse(File.ReadAllText(path))!["photos"]![0]!["futureField"]!.GetValue<string>().Should().Be("keep");
+    }
+
+    [Fact]
+    public void Метка_удалённого_фото_отбрасывается()
+    {
+        var m = Create("Аня");
+        var path = ManifestPath(m);
+        var gone = m.Photos[0].File;
+        // фото пропало из манифеста за время разметки
+        var node = JsonNode.Parse(File.ReadAllText(path))!;
+        node["photos"]!.AsArray().RemoveAt(0);
+        File.WriteAllText(path, node.ToJsonString());
+
+        var applied = CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(gone, "front", "smile"));
+
+        applied.Should().BeEmpty();
+        CharacterStore.Get(_root, m.Slug)!.Photos.Should().NotContain(p => p.File == gone);
+    }
+
+    [Fact]
+    public void Ручная_правка_чужого_имени_файла_отказ()
+    {
+        var m = Create("Аня");
+        var result = CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            Labels("nope.jpg", "front", "smile")));
+        result!.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    [Fact]
+    public void Ручная_правка_со_словом_вне_словаря_отказ()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        var bogus = new Dictionary<string, CharacterPhotoLabels> { [file] = new("bogus", null, null) };
+
+        var result = CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, bogus));
+
+        result!.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    [Fact]
+    public void Ручная_запись_из_одних_null_сбрасывает_разметку_и_открывает_фото_авторазметке()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        var other = m.Photos[1].File;
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            Labels(file, "profile", "laugh")))!.Error.Should().BeNull();
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            Labels(other, "front", "smile")))!.Error.Should().BeNull();
+        var before = CharacterStore.Get(_root, m.Slug)!;
+        var empty = new Dictionary<string, CharacterPhotoLabels> { [file] = new(null, null, null) };
+
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, empty))!
+            .Error.Should().BeNull();
+
+        var photo = CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file);
+        photo.Angle.Should().BeNull();
+        photo.Pitch.Should().BeNull();
+        photo.Emotion.Should().BeNull();
+        photo.LabelSource.Should().BeNull();
+        CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "front", "smile"))!.Should().Equal(file);
+        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().Be("auto");
+        // Соседнее фото не задето: ручные метки на месте, манифест не изменился
+        var after = CharacterStore.Get(_root, m.Slug)!;
+        var neighbour = after.Photos.Single(p => p.File == other);
+        neighbour.Angle.Should().Be("front");
+        neighbour.Emotion.Should().Be("smile");
+        neighbour.LabelSource.Should().Be("human");
+        after.Name.Should().Be(before.Name);
+        after.Description.Should().Be(before.Description);
+    }
+
+    [Fact]
+    public void Авторазметка_без_меток_отбрасывается_целиком()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        var empty = new Dictionary<string, CharacterPhotoLabels> { [file] = new(null, null, null) };
+
+        CharacterStore.MergeAutoLabels(_root, m.Slug, empty)!.Should().BeEmpty();
+
+        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().BeNull();
     }
 }

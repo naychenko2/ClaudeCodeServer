@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -31,7 +32,10 @@ public sealed class ImageEditLaunchAssembler(
     IImageRaster? raster = null,
     ImageThreadService? threads = null,
     ImageEditSteps? steps = null,
-    ImageContextLaunch? context = null)
+    ImageContextLaunch? context = null,
+    IFeatureFlagGate? flags = null,
+    CharacterSceneParser? sceneParser = null,
+    CharacterPhotoLabeling? labeling = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -140,13 +144,26 @@ public sealed class ImageEditLaunchAssembler(
         }
         // Персонаж — фото из его папки образцами с ролью Character, первыми по порядку
         CharacterRef? character = null;
+        Func<CancellationToken, Task<CharacterPickOutcome>>? picker = null;
         if (req.CharacterSlug is { Length: > 0 } slug)
         {
             var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug);
             if (found is null) return Invalid("Персонаж не найден");
+            labeling?.Enqueue(ownerId, scope.Project!.RootPath, slug);
+            // Явный список — только при включённом флаге; любое нарушение отказывает целиком
+            if (req.CharacterPhotos is { } chosen)
+            {
+                found = flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) == true
+                    ? CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, explicitPhotos: chosen)
+                    : null;
+                if (found is null) return PhotosInvalid();
+            }
             character = found.Ref;
             references.InsertRange(0, found.Photos);
+            picker = CharacterPicker(ownerId, scope.Project!.RootPath, slug, req, found.Photos.Count);
         }
+        else if (req.CharacterPhotos is not null)
+            return PhotosInvalid();
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
 
@@ -169,7 +186,38 @@ public sealed class ImageEditLaunchAssembler(
             BaseStepId: baseStepId,
             AspectRatio: aspectRatio,
             ThreadId: threadId,
-            BaseVersionId: baseVersionId));
+            BaseVersionId: baseVersionId,
+            CharacterPicker: picker));
+    }
+
+    // Подбор фото персонажа под сюжет (ADR-027 §7) — только при включённом флаге владельца. Возвращает
+    // делегат, который исполнитель зовёт в задаче перед драйвером: разбор сюжета не держит ответ «запустить».
+    // Явный список — Pick=manual без подбора; пустой промпт или нет разбора — подбора нет, запись в запуск тоже
+    private Func<CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker(
+        string ownerId, string root, string slug, ImageEditLaunchRequest req, int count)
+    {
+        if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) != true) return null;
+        if (req.CharacterPhotos is { } chosen)
+            return _ => Task.FromResult(new CharacterPickOutcome(null, new ImageThreadCharacter(slug, chosen, CharacterPhotoPick.Manual, null)));
+        if (sceneParser is null || string.IsNullOrWhiteSpace(req.Prompt)) return null;
+
+        var prompt = req.Prompt;
+        return async ct =>
+        {
+            var manifest = CharacterStore.Get(root, slug);
+            if (manifest is null) throw new InvalidOperationException("Персонаж пропал до подбора");
+            var scene = await sceneParser.ParseAsync(prompt, ct);
+            var pick = CharacterPhotoPicker.Pick(manifest.Photos, scene, count);
+            var names = pick.Photos.Select(p => p.File).ToList();
+            var launch = new ImageThreadCharacter(slug, names, pick.Pick, scene);
+            if (pick.Pick == CharacterPhotoPick.Fallback) return new CharacterPickOutcome(null, launch);
+
+            // Подобранные фото читаются тем же путём, что явный список; не прочиталось — прежний порядок
+            var picked = CharacterStore.ForRequest(root, ownerId, slug, count, names);
+            if (picked is null)
+                return new CharacterPickOutcome(null, launch with { Pick = CharacterPhotoPick.Fallback });
+            return new CharacterPickOutcome(picked.Photos, launch);
+        };
     }
 
     // Входы запуска — из стора контекста по ревизии клиента; поля входов тела заменяются раскладкой
@@ -239,6 +287,9 @@ public sealed class ImageEditLaunchAssembler(
             new ImageBytes(await File.ReadAllBytesAsync(full, ct), ContentTypeByExtension(full)));
     }
 
+    private static ImageEditCallResult<ImageEditJobInput> PhotosInvalid() =>
+        Fail<ImageEditJobInput>(ImageEditErrorCodes.CharacterPhotosInvalid, "Выбранные фото не подходят этому персонажу");
+
     private static ImageEditCallResult<ImageEditJobInput> Invalid(string error) =>
         Fail<ImageEditJobInput>(ImageEditErrorCodes.InvalidRequest, error);
 
@@ -279,4 +330,6 @@ public sealed record ImageEditLaunchRequest(
     string? ThreadId = null,
     string? VersionId = null,
     // Ревизия контекста чата, на которой человек видел цену (ADR-023 §Д2.1); null — запуск без контекста
-    long? ContextRevision = null);
+    long? ContextRevision = null,
+    // Явный список фото персонажа (имена файлов манифеста, порядок значим); null — подбор как обычно
+    IReadOnlyList<string>? CharacterPhotos = null);

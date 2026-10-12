@@ -13,6 +13,8 @@ export const FLAGS = {
   changeDossiersRecall: 'change-dossiers-recall',
   // Сферы: группы проектов с общей командой персон и хартией; зона персоны «Сфера».
   spheres: 'spheres',
+  // Умный подбор фото персонажа под сюжет (ADR-027): метки ракурса/эмоции, подбор, «Заменить».
+  characterSmartPhotos: 'character-smart-photos',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

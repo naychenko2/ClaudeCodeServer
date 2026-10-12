@@ -35,6 +35,8 @@ public class ImageEditorController(
     ImageContextLaunch? context = null,
     ILocalImageMedia? localMedia = null,
     CharacterTrainingPhotos? trainingPhotos = null,
+    IFeatureFlagGate? flags = null,
+    CharacterPhotoLabeling? labeling = null,
     CharacterLoraRuns? loraRuns = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
@@ -195,11 +197,16 @@ public class ImageEditorController(
     // Потолок тела формы персонажа: 10 фото по 8 МБ плюс поля
     private const long MaxCharacterBodyBytes = 100L * 1024 * 1024;
 
+    // Флаг «умного подбора фото» у владельца (ADR-027 §10): гейт меток в DTO и в PUT персонажа
+    private bool SmartPhotos => flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterSmartPhotos) == true;
+
     [HttpGet("characters")]
     public IActionResult Characters(string projectId)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
-        return Ok(CharacterStore.List(project.RootPath).Select(CharacterDto.From));
+        var list = CharacterStore.List(project.RootPath);
+        foreach (var m in list) labeling?.Enqueue(UserId, project.RootPath, m.Slug);
+        return Ok(list.Select(m => CharacterDto.From(m, SmartPhotos)));
     }
 
     // Список LoRA ComfyUI для формы персонажа. Нет шва или ComfyUI не ответил — не ошибка:
@@ -222,7 +229,8 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var manifest = CharacterStore.Get(project.RootPath, slug);
-        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest));
+        if (manifest is not null) labeling?.Enqueue(UserId, project.RootPath, manifest.Slug);
+        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest, SmartPhotos));
     }
 
     [HttpPost("characters")]
@@ -248,7 +256,8 @@ public class ImageEditorController(
             if (withLora?.Value is { } loraChange) Notify(project.RootPath, loraChange, FileMutationKind.Write);
             created = withLora ?? created;
         }
-        return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest)));
+        if (created.Value is { } born) labeling?.Enqueue(UserId, project.RootPath, born.Manifest.Slug);
+        return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest, SmartPhotos)));
     }
 
     [HttpPut("characters/{slug}")]
@@ -259,12 +268,15 @@ public class ImageEditorController(
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var (lora, loraDenied) = await LoraPatchAsync(form, ct);
         if (loraDenied is not null) return loraDenied;
+        var (labels, labelsDenied) = PhotoLabelsOf(form);
+        if (labelsDenied is not null) return labelsDenied;
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
-        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto, lora);
+        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto, lora, labels);
         var updated = CharacterStore.Update(project.RootPath, UserId, slug, patch);
         if (updated is null) return CharacterNotFound();
         if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
-        return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest)));
+        if (photos.Count > 0) labeling?.Enqueue(UserId, project.RootPath, slug);
+        return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest, SmartPhotos)));
     }
 
     [HttpDelete("characters/{slug}")]
@@ -302,6 +314,27 @@ public class ImageEditorController(
         public string? LoraTrigger { get; set; }
         public string? LoraStrength { get; set; }
         public bool? RemoveLora { get; set; }
+        // JSON {"<файл>": {"angle","pitch","emotion"}}; только при включённом флаге character-smart-photos
+        public string? PhotoLabels { get; set; }
+    }
+
+    private static readonly System.Text.Json.JsonSerializerOptions LabelsJson = new(System.Text.Json.JsonSerializerDefaults.Web);
+
+    // Ручные метки фото (ADR-027 §1). Флаг выключен — 400, как у явного списка фото: молча проглоченная
+    // правка хуже отказа. Значения и имена файлов проверяет CharacterStore.Update
+    private (IReadOnlyDictionary<string, CharacterPhotoLabels>? Labels, IActionResult? Denied) PhotoLabelsOf(CharacterForm form)
+    {
+        if (string.IsNullOrWhiteSpace(form.PhotoLabels)) return (null, null);
+        if (!SmartPhotos)
+            return (null, Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Метки фото недоступны: умный подбор фото не включён"));
+        try
+        {
+            var labels = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, CharacterPhotoLabels>>(form.PhotoLabels, LabelsJson);
+            if (labels is not null && labels.Values.All(l => l is not null)) return (labels, null);
+        }
+        catch (System.Text.Json.JsonException) { }
+        return (null, Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Метки фото: ожидается объект {файл: {angle, pitch, emotion}}"));
     }
 
     // Патч LoRA из формы: RemoveLora — убрать, LoraName — задать, иначе null (не трогать).

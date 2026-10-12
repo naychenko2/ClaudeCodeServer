@@ -18,7 +18,8 @@ public class CharacterLoraVersionsController(
     ImageEditScopeGate gate,
     CharacterLoraRuns runs,
     IProjectFiles? files = null,
-    ILocalImageMedia? localMedia = null) : ControllerBase
+    ILocalImageMedia? localMedia = null,
+    IFeatureFlagGate? flags = null) : ControllerBase
 {
     private const int MaxTitle = 60;
 
@@ -69,7 +70,7 @@ public class CharacterLoraVersionsController(
             return Error(StatusCodes.Status409Conflict, updated?.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                 updated?.Error ?? "Не удалось подключить LoRA");
         Notify(project.RootPath, change);
-        return Ok(CharacterDto.From(change.Manifest));
+        return Ok(CharacterDto.From(change.Manifest, flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterSmartPhotos) == true));
     }
 
     [HttpPatch("{runId}")]
@@ -105,7 +106,7 @@ public class CharacterLoraVersionsController(
                 return Error(StatusCodes.Status409Conflict, updated?.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                     updated?.Error ?? "Не удалось снять LoRA с персонажа");
             Notify(project.RootPath, change);
-            character = CharacterDto.From(change.Manifest);
+            character = CharacterDto.From(change.Manifest, flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterSmartPhotos) == true);
         }
         if (runs.Update(project.RootPath, slug, runId, r => r with { Status = CharacterLoraRuns.Status.Deleting }) is null)
             return VersionNotFound();

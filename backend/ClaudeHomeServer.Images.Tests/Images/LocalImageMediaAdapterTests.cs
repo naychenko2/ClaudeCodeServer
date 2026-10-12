@@ -125,7 +125,7 @@ public class LocalImageMediaAdapterTests
 
         submitted.Error.Should().BeNull();
         submitted.Ticket.Should().NotBeNullOrEmpty();
-        _comfy.Uploads.Should().ContainSingle().Which.Should().StartWith("ie_").And.EndWith("-in1.png");
+        _comfy.Uploads.Should().ContainSingle().Which.Should().StartWith("lm_").And.EndWith("-in1.png");
         _comfy.Prompts.Should().ContainSingle();
 
         var waiting = await adapter.PollAsync(submitted.Ticket!, default);
@@ -174,7 +174,7 @@ public class LocalImageMediaAdapterTests
 
         submitted.Error.Should().BeNull();
         _comfy.Uploads.Where(u => u.Contains("-ref")).Should().HaveCount(2)
-            .And.OnlyContain(u => u.StartsWith("ie_"));
+            .And.OnlyContain(u => u.StartsWith("lm_"));
         _comfy.Uploads.Should().Contain(u => u.EndsWith("-ref1.png")).And.Contain(u => u.EndsWith("-ref2.png"));
         var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
         graph["sim"]!["class_type"]!.GetValue<string>().Should().Be("CcsFaceSimilarity");

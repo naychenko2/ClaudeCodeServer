@@ -10,6 +10,32 @@ public sealed class CheapTextRunner(
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
+    // Место с картинками на входе текстовым раннером не ходит никогда: текстовая модель
+    // «разметила» бы фото вслепую (ADR-027 §2). Пишем warning и сообщаем вызывающему.
+    private bool RefuseImageAction(string actionKey)
+    {
+        if (LocalActionCatalog.Find(actionKey)?.Input != ActionInput.Images) return false;
+        log.LogWarning(
+            "cheap-runner: действие {Action} принимает картинки — текстовый раннер его не выполняет",
+            actionKey);
+        return true;
+    }
+
+    // Маршрут действия для текстового раннера. face-pose — не LLM-маршрут (ракурс считает
+    // local-media, а не этот раннер): если он всё же пришёл (стор правили руками), идём по
+    // дефолтному слоту места и пишем warning, как с битой ссылкой на пресет.
+    private ActionRoute ResolveRoute(string actionKey)
+    {
+        var route = router.Resolve(actionKey);
+        if (route.Kind != RouteKind.FacePose) return route;
+        log.LogWarning(
+            "cheap-runner: действие {Action} получило маршрут face-pose — он не для текстового раннера, иду по дефолтному слоту места",
+            actionKey);
+        var action = LocalActionCatalog.Find(actionKey);
+        return new ActionRoute(RouteKind.Tier, null, route.Source,
+            action is null ? ModelTier.Medium : LocalActionCatalog.EffectiveDefaultTier(action));
+    }
+
     // Та же проверка, что и первые два шага RunFreeAsync: прямой адаптер → локаль.
     // Не вызывает — нужно только знать «пройдёт ли», не тратить деньги/время.
     // Условия (см. CheapTextRunner.RunFreeAsync):
@@ -21,7 +47,7 @@ public sealed class CheapTextRunner(
     // в UI у каждого хода на локали.
     public bool HasFreeRoute(string actionKey)
     {
-        var route = router.Resolve(actionKey);
+        var route = ResolveRoute(actionKey);
 
         if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model)
             && CloudCheapClient.IsDirectRoute(route.Model))
@@ -38,7 +64,7 @@ public sealed class CheapTextRunner(
     // раньше лог показывал только «не ответил».
     public string DescribeRoute(string actionKey, string? fallbackModel)
     {
-        var route = router.Resolve(actionKey);
+        var route = ResolveRoute(actionKey);
         return route.Kind switch
         {
             RouteKind.Model when !string.IsNullOrWhiteSpace(route.Model) =>
@@ -105,7 +131,10 @@ public sealed class CheapTextRunner(
     public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
     {
-        var route = router.Resolve(actionKey);
+        if (RefuseImageAction(actionKey))
+            throw new InvalidOperationException(
+                $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
+        var route = ResolveRoute(actionKey);
 
         // Шаг 1 — выбранная админом модель. Два транспорта: префикс "direct:" → прямой
         // HTTP-адаптер (быстро, для бесплатных моделей агрегатора), иначе → провайдер через
@@ -256,7 +285,8 @@ public sealed class CheapTextRunner(
     public async Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
         CancellationToken ct = default)
     {
-        var route = router.Resolve(actionKey);
+        if (RefuseImageAction(actionKey)) return null;
+        var route = ResolveRoute(actionKey);
 
         if (route.Kind == RouteKind.Model && CloudCheapClient.IsDirectRoute(route.Model))
         {
@@ -293,7 +323,10 @@ public sealed class CheapTextRunner(
         string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
         int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
     {
-        var route = router.Resolve(actionKey);
+        if (RefuseImageAction(actionKey))
+            throw new InvalidOperationException(
+                $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
+        var route = ResolveRoute(actionKey);
         // Таймаут по маршруту: явный override потребителя (changelog), иначе ОБЛАЧНЫЙ
         // потолок профиля — вызов заканчивается на claude даже у действий на локали.
         var effTimeout = timeout ?? CloudTimeoutFor(actionKey);

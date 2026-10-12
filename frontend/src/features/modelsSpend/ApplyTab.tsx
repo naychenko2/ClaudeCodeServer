@@ -300,6 +300,9 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
           busy={busy}
           onChange={onPick}
           manual={{ models, presetIds: globalPresetIds }}
+          // Контекст места (ADR-027 §2): место с картинками прячет слепые маршруты,
+          // место ракурса показывает «Локально, InsightFace». Обычные места — как раньше.
+          place={{ input: a.input ?? 'text', facePose: !!a.facePose }}
         />
       </div>
     </div>

@@ -143,6 +143,10 @@ public sealed class ImageEditorStateContributor(
                 sb.AppendLine("  - " + VersionLine(t, v));
             if (ai.Count > shown.Count) sb.AppendLine($"  - (ещё {ai.Count - shown.Count} раньше — полный список в image_state)");
         }
+        // Взятые фото персонажа — у запусков, чьи версии показаны, и у идущих (ADR-027 §8)
+        foreach (var l in t.Launches.Where(l => l.Character is not null
+                     && (l.Status == ImageThreadLaunchStatus.Running || t.Versions.Any(v => v.JobId == l.JobId && (shown.Contains(v) || v.IsOrigin)))))
+            sb.AppendLine("  " + CharacterPhotosText(l.Character!));
         foreach (var l in t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Running))
             sb.AppendLine($"  рисуется: «{l.Prompt}», от: {(t.Version(l.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходника")}"
                 + Outcome(job(l.JobId)));
@@ -176,6 +180,40 @@ public sealed class ImageEditorStateContributor(
             : v.JobId is { } job && t.Versions.Any(x => x.JobId == job && x.Similarity is not null)
                 ? "сходство с персонажем не посчитано (лицо не найдено)"
                 : null;
+
+    // «Фото персонажа «anya»: a.jpg, b.jpg — подобраны под сюжет (в профиль, улыбка)» / «— выбраны человеком» /
+    // «— обычный порядок». Имя в нити не хранится, поэтому slug. Схемы MCP не затронуты: это только текст хода
+    public static string CharacterPhotosText(ImageThreadCharacter c)
+    {
+        var head = $"Фото персонажа «{c.Slug}»: {string.Join(", ", c.Photos)} — ";
+        switch (c.Pick)
+        {
+            case CharacterPhotoPick.Auto:
+                var traits = SceneTraits(c.Scene);
+                return head + "подобраны под сюжет" + (traits.Count > 0 ? $" ({string.Join(", ", traits)})" : "");
+            case CharacterPhotoPick.Manual:
+                return head + "выбраны человеком";
+            default:
+                return head + "обычный порядок";
+        }
+    }
+
+    private static List<string> SceneTraits(CharacterScene? scene)
+    {
+        var traits = new List<string>();
+        if (scene is null) return traits;
+        if (scene.Angle is { } angle && CharacterScene.IsKnown(angle))
+            traits.Add(angle switch { "profile" => "в профиль", "three-quarter" => "вполоборота", "front" => "анфас", _ => angle });
+        if (scene.Pitch is { } pitch && CharacterScene.IsKnown(pitch) && pitch != "level")
+            traits.Add(pitch switch { "up" => "голова поднята", "down" => "голова опущена", _ => pitch });
+        if (scene.Emotion is { } emotion && CharacterScene.IsKnown(emotion))
+            traits.Add(emotion switch
+            {
+                "smile" => "улыбка", "laugh" => "смех", "neutral" => "нейтральное лицо", "serious" => "серьёзное лицо",
+                "sad" => "грусть", "surprised" => "удивление", _ => emotion,
+            });
+        return traits;
+    }
 
     // Исполнитель в «Чем» хвоста «Контекст хода» — выбор человека, а персонаж и образцы берутся из контекста
     // чата (в префах проекта персонаж не читается)

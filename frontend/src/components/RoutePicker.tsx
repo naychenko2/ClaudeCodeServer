@@ -6,6 +6,8 @@ import { QuickOptionCard } from './QuickOptionCard';
 import { PresetOptions } from './PresetOptions';
 import { Button } from './ui';
 import { TIERS, TIER_ORDER, routeTier, tierSubtitle, type TierKey } from '../lib/modelProvidersShared';
+import { modelCaps } from '../lib/models';
+import { filterPlaceRoutes, FACE_POSE_ROUTE, type PlaceRouteContext } from '../lib/routePlaceFilter';
 import { localEngineLabel } from '../lib/localEngine';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { usePresets, presetIdOf } from '../lib/presets';
@@ -31,7 +33,7 @@ export function RoutePicker({
   route, label, models, tierModels, ollamaModel, ollamaProvider, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle, title,
   showTiers = true, showPresets = false, presetCreation, presetScope, manual,
-  fullWidth = false, dashed = false,
+  fullWidth = false, dashed = false, place,
 }: {
   route: string;
   label: string;
@@ -91,6 +93,11 @@ export function RoutePicker({
   // Пунктирный контур приглушённого значения — «поле не задано, оно наследуется».
   // Работает только на пустом значении: у заданного маршрута контур обычный.
   dashed?: boolean;
+  // Контекст места каталога (ADR-027 §2). Не задан — пикер ведёт себя как раньше
+  // (текстовые места, слоты, матрицы). Для места с картинками на входе:
+  //  - локаль, direct:-модели, пресеты и модели без зрения скрыты;
+  //  - на месте ракурса (facePose) показывается пункт «Локально, InsightFace» (face-pose).
+  place?: PlaceRouteContext;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -103,6 +110,38 @@ export function RoutePicker({
   const presets = usePresets();
   const activeTier = routeTier(route);
   const interactive = !busy && !readOnly;
+
+  // === Фильтр маршрутов по месту (ADR-027 §2) ===
+  // Место с картинками на входе: слепая локаль, direct:-модели, текстовые пресеты и
+  // модели без зрения не годятся — пикер их прячет. face-pose (InsightFace) виден
+  // только на месте ракурса. filterPlaceRoutes — чистая функция с тестами; здесь
+  // лишь считаем признак зрения каждого кандидата (у нас есть каталог моделей и caps).
+  // tier:*-слот с моделью без зрения прячем осознанно: сервер его примет и проверит уже
+  // при запуске, но не предлагаем выбор, который при текущей модели слота не сработает.
+  const isImagePlace = place?.input === 'images';
+  const tierVision = (t: TierKey) => modelCaps(tierModels[t] ?? '').supportsImages;
+  const routeVision = (r: string): boolean => {
+    if (r === FACE_POSE_ROUTE) return true;
+    if (r === 'local') return false;
+    const tier = routeTier(r);
+    if (tier) return tierVision(tier);
+    if (r.toLowerCase().startsWith('preset:')) return false;
+    return modelCaps(r).supportsImages;
+  };
+  // Кандидаты, которые пикер мог бы показать, с признаком зрения; filterPlaceRoutes
+  // режет список по месту (картинки → только vision, ракурс → +face-pose).
+  const allCandidates: { route: string; hasVision: boolean }[] = [
+    ...TIER_ORDER.map(t => ({ route: TIERS[t].route, hasVision: tierVision(t) })),
+    { route: 'local', hasVision: false },
+    ...models.map(m => ({ route: m.value, hasVision: modelCaps(m.value).supportsImages })),
+  ];
+  const visibleRoutes = new Set(
+    filterPlaceRoutes({ input: place?.input ?? 'text', facePose: !!place?.facePose }, allCandidates)
+      .map(c => c.route),
+  );
+  // Текущее значение места — маршрут без зрения на месте с картинками: сервер всё же
+  // прислал отказ (ручной ввод / старое назначение). Показываем честный текст.
+  const routeRejected = isImagePlace && route !== '' && !routeVision(route);
 
   // === Ручной ввод id маршрута (блок `manual`) ===
   // Черновик живёт только пока панель открыта: при открытии восстанавливается из
@@ -179,6 +218,10 @@ export function RoutePicker({
   const pick = (v: string) => { onChange(v); setOpen(false); };
   // Подсветка в ModelPicker: слот/локаль/пресет — не модельные значения, им нечего светить
   const pickerValue = activeTier || route === 'local' || presetIdOf(route) ? '' : route;
+  // Пресеты — текстовые цепочки: на месте с картинками они не видят фото, поэтому скрыты.
+  const showPresetsOpt = showPresets && !isImagePlace;
+  // Модели, которые пикер реально показывает: на месте с картинками — только vision.
+  const visibleModels = models.filter(m => visibleRoutes.has(m.value));
 
   const panel = open && pos ? (
     <div
@@ -190,7 +233,7 @@ export function RoutePicker({
         boxShadow: SHADOW.dropdown, padding: 8, zIndex: Z.dropdown,
       }}
     >
-      {!presetEditing && showTiers && TIER_ORDER.map(t => (
+      {!presetEditing && showTiers && TIER_ORDER.filter(t => visibleRoutes.has(TIERS[t].route)).map(t => (
         <QuickOptionCard
           key={t}
           title={TIERS[t].title}
@@ -199,7 +242,7 @@ export function RoutePicker({
           onClick={() => pick(TIERS[t].route)}
         />
       ))}
-      {!presetEditing && allowLocal && (
+      {!presetEditing && allowLocal && visibleRoutes.has('local') && (
         <QuickOptionCard
           title="Локальная модель"
           subtitle={ollamaModel ? `${localEngineLabel(ollamaProvider)} · ${ollamaModel}` : 'не настроена'}
@@ -207,25 +250,39 @@ export function RoutePicker({
           onClick={() => pick('local')}
         />
       )}
-      {showPresets && (
+      {/* Место ракурса: локальный InsightFace (face-pose) — не LLM, виден только здесь */}
+      {!presetEditing && isImagePlace && place?.facePose && visibleRoutes.has(FACE_POSE_ROUTE) && (
+        <QuickOptionCard
+          title="Локально, InsightFace"
+          subtitle="Ракурс лица по геометрии — без облачной модели"
+          active={route === FACE_POSE_ROUTE}
+          onClick={() => pick(FACE_POSE_ROUTE)}
+        />
+      )}
+      {showPresetsOpt && (
         <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel, ollamaProvider }} scope={presetScope}
           creation={presetCreation ? { models, ...presetCreation } : undefined}
           onEditingChange={setPresetEditing}
         />
       )}
-      {!presetEditing && !showPresets && presets.length > 0 && (
+      {!presetEditing && !showPresetsOpt && presets.length > 0 && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
           Цепочка в цепочку не вкладывается — выпишите шаги подряд.
+        </div>
+      )}
+      {routeRejected && (
+        <div style={{ fontSize: FS.xs, color: C.dangerText, lineHeight: 1.4, padding: '0 2px' }}>
+          Эта модель не видит картинки — для разметки фото не подойдёт.
         </div>
       )}
       {!presetEditing && <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />}
       {!presetEditing && (
         <ModelPicker
           value={pickerValue}
-          options={models}
+          options={visibleModels}
           onChange={pick}
           collapsible={false}
-          includeDirect={allowLocal}
+          includeDirect={allowLocal && !isImagePlace}
           hideDefault
         />
       )}

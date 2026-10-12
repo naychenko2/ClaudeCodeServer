@@ -83,6 +83,9 @@ public sealed class LocalActionPresetService(
             // Старые пресеты (Recommended/FreeOnly/LocalFirst/Balanced) затрагивали только
             // фоновые one-shot действия. Новые v2-пресеты «Tiers»/«TiersLocal» управляют
             // всем списком «Применение моделей», включая агентные места «Чаты и персоны».
+            // Места с картинками на входе пресеты не трогают ни в одном режиме: слот Tiers
+            // не гарантирует зрения, а выбор модели со зрением — решение админа (ADR-027 §2)
+            if (a.Input == ActionInput.Images) continue;
             if (a.Agentic && preset is not (ActionPreset.Tiers or ActionPreset.TiersLocal)) continue;
             var route = preset switch
             {

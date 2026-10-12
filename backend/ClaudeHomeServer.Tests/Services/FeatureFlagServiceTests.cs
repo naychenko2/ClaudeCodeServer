@@ -143,7 +143,7 @@ public class FeatureFlagServiceTests : IDisposable
     }
 
     [Fact]
-    public void СнятыеФлаги_ОтсутствуютВКаталоге_ОстаётсяРовноТри()
+    public void СнятыеФлаги_ОтсутствуютВКаталоге_ОстаютсяАктивные()
     {
         string[] removed =
         [
@@ -155,7 +155,7 @@ public class FeatureFlagServiceTests : IDisposable
             FeatureFlagCatalog.Exists(key).Should().BeFalse($"флаг {key} снят и не должен возвращаться в каталог");
 
         FeatureFlagCatalog.All.Select(f => f.Key).Should().BeEquivalentTo(
-            ["workspace-destructive", "spheres", "change-dossiers-recall"]);
+            ["workspace-destructive", "spheres", "change-dossiers-recall", "character-smart-photos"]);
     }
 
     // --- GetDefinitions ---

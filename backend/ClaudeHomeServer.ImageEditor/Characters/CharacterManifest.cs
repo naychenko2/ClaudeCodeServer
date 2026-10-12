@@ -87,7 +87,35 @@ public sealed class CharacterManifest
 public sealed record CharacterLora(string Name, string Trigger, double Strength);
 
 // File — только имя файла внутри папки персонажа, без каталогов
-public sealed record CharacterPhoto(string File, bool Primary = false, string? Angle = null);
+// Метки (ADR-027, §1): null — разметка не пробовалась, "unknown" — пробовали, ответа нет.
+// Extra переносит незнакомые поля фото как есть, чтобы откат кода не стёр их при правке.
+public sealed record CharacterPhoto(
+    string File, bool Primary = false,
+    string? Angle = null, string? Pitch = null, string? Emotion = null, string? LabelSource = null)
+{
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; init; }
+}
+
+// Словари меток фото и источник метки
+public static class PhotoLabelValues
+{
+    public const string Unknown = "unknown";
+    public const string Auto = "auto";
+    public const string Human = "human";
+    // Разметить было нечем (маршрута нет или ComfyUI лежит): повторим, когда станет чем.
+    // Отличается от Auto+unknown («модель ответила, но не определила» — повторно не размечаем)
+    public const string NoRoute = "noroute";
+
+    public static readonly IReadOnlySet<string> Angles =
+        new HashSet<string> { "front", "three-quarter", "profile", Unknown };
+    public static readonly IReadOnlySet<string> Pitches =
+        new HashSet<string> { "level", "up", "down", Unknown };
+    public static readonly IReadOnlySet<string> Emotions =
+        new HashSet<string> { "neutral", "smile", "laugh", "serious", "sad", "surprised", Unknown };
+}
+
+// Метки одного фото; null в поле — не менять
+public sealed record CharacterPhotoLabels(string? Angle = null, string? Pitch = null, string? Emotion = null);
 
 // То, что видит фронт. Providers наружу не отдаём: там привязки к аккаунту поставщика.
 public sealed record CharacterDto(
@@ -95,13 +123,34 @@ public sealed record CharacterDto(
     string Name,
     string? Description,
     string Path,
-    IReadOnlyList<CharacterPhoto> Photos,
+    IReadOnlyList<CharacterPhotoDto> Photos,
     DateTime CreatedAt,
-    CharacterLocalDto? Local = null)
+    CharacterLocalDto? Local = null,
+    // Сколько фото ложится в один запрос: окно выбора фронта берёт предел отсюда. Только при включённом
+    // флаге character-smart-photos, иначе поля в JSON нет
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? PhotosPerRequest = null)
 {
-    public static CharacterDto From(CharacterManifest m) =>
-        new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}", m.Photos, m.CreatedAt,
-            m.ReadLora() is { } lora ? new CharacterLocalDto(lora.Name, lora.Trigger, lora.Strength) : null);
+    // withLabels (ADR-027 §10) — флаг character-smart-photos у владельца: без него фото отдаются как до фичи
+    // (file, primary, angle), без pitch/emotion/labelSource
+    public static CharacterDto From(CharacterManifest m, bool withLabels = false) =>
+        new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}",
+            [.. m.Photos.Select(p => CharacterPhotoDto.From(p, withLabels))], m.CreatedAt,
+            m.ReadLora() is { } lora ? new CharacterLocalDto(lora.Name, lora.Trigger, lora.Strength) : null,
+            withLabels ? CharacterStore.PhotosPerRequest : null);
+}
+
+// Фото персонажа для фронта: Extra манифеста наружу не идёт. Pitch/Emotion/LabelSource у фото без метки
+// (и при выключенном флаге) в JSON отсутствуют, а не null
+public sealed record CharacterPhotoDto(
+    string File,
+    bool Primary,
+    string? Angle,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Pitch = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Emotion = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LabelSource = null)
+{
+    public static CharacterPhotoDto From(CharacterPhoto p, bool withLabels) =>
+        withLabels ? new(p.File, p.Primary, p.Angle, p.Pitch, p.Emotion, p.LabelSource) : new(p.File, p.Primary, p.Angle);
 }
 
 // LoRA персонажа для фронта: из providers.local наружу уходят только эти три поля
@@ -119,7 +168,8 @@ public sealed record CharacterPatch(
     IReadOnlyList<CharacterPhotoUpload> AddPhotos,
     IReadOnlyList<string> RemovePhotos,
     string? PrimaryPhoto,
-    CharacterLoraPatch? Lora = null);
+    CharacterLoraPatch? Lora = null,
+    IReadOnlyDictionary<string, CharacterPhotoLabels>? PhotoLabels = null);
 
 // Три состояния LoRA в патче: Lora == null у CharacterPatch — не трогать; Remove — убрать;
 // иначе задать Name/Trigger/Strength. Known — список LoRA ComfyUI от контроллера

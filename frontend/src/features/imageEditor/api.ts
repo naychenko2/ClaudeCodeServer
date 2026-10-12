@@ -157,6 +157,9 @@ export interface ImageEditJobInput {
   annotated?: Blob;
   // Подключённый персонаж проекта: сервер добавит его фото образцами с ролью Character
   characterSlug?: string;
+  // Явный список фото персонажа (имена файлов манифеста, до photosPerRequest): «Заменить» в
+  // блоке «Фото персонажа» (ADR-027, шаг 18); без него сервер сам подбирает/берёт по порядку
+  characterPhotos?: string[];
   // Образцы с компьютера (байты) и из проекта (путь от корня) — у каждого своя роль
   references?: ImageEditUploadedReference[];
   referencePaths?: ImageEditProjectReference[];
@@ -191,6 +194,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.mask) form.append('mask', input.mask, 'mask.png');
   if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
   if (input.characterSlug) form.append('characterSlug', input.characterSlug);
+  for (const f of input.characterPhotos ?? []) form.append('characterPhotos', f);
   for (const r of input.references ?? []) {
     form.append('references', r.file, r.name);
     form.append('referenceRoles', r.role);
@@ -211,7 +215,16 @@ export function jobForm(input: ImageEditJobInput): FormData {
 }
 
 // Персонаж — папка characters/<slug>/ в проекте (ADR-017, раздел 10)
-export interface ImageEditCharacterPhoto { file: string; primary?: boolean | null; angle?: string | null }
+// Метки фото (ADR-027 §1): angle/pitch/emotion — словари бэкенда, labelSource — кто разметил.
+// pitch/emotion/labelSource в JSON отсутствуют (а не null), когда метки нет или флаг выключен.
+export interface ImageEditCharacterPhoto {
+  file: string;
+  primary?: boolean | null;
+  angle?: string | null;
+  pitch?: string | null;
+  emotion?: string | null;
+  labelSource?: string | null;
+}
 
 export interface ImageEditCharacter {
   slug: string;
@@ -223,10 +236,15 @@ export interface ImageEditCharacter {
   // LoRA для локальной модели; null — не задана
   local?: { lora: string; trigger: string; strength: number } | null;
   createdAt: string;
+  // Сколько фото уходит в один запрос (лимит окна выбора); только при включённом character-smart-photos
+  photosPerRequest?: number | null;
 }
 
 // trained — дата обучения своих LoRA (полное имя → ISO), если бэкенд её отдаёт
 export interface ImageEditLoras { available: boolean; items: string[]; trained?: Record<string, string> }
+
+// Метка одного фото (ADR-027 §1): null в поле — не менять. Ключ — имя файла из манифеста.
+export interface CharacterPhotoLabelEdit { angle?: string | null; pitch?: string | null; emotion?: string | null }
 
 export interface ImageEditCharacterInput {
   name: string;
@@ -236,6 +254,8 @@ export interface ImageEditCharacterInput {
   photos: Blob[];
   // не задано — LoRA не трогаем; 'remove' — снять
   lora?: { name: string; trigger: string; strength: number } | 'remove';
+  // Метки фото (только при включённом character-smart-photos): имя файла → {angle, pitch, emotion}
+  photoLabels?: Record<string, CharacterPhotoLabelEdit>;
 }
 
 // next-version — hero.v2.png рядом с исходником; as — «Сохранить как…» (ADR-018 §5)
@@ -393,6 +413,8 @@ function characterForm(input: ImageEditCharacterInput): FormData {
   if (input.description !== undefined) form.append('description', input.description);
   input.removePhotos?.forEach(f => form.append('removePhotos', f));
   input.photos.forEach((b, i) => form.append('photos', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
+  // Метки фото уходят JSON-строкой {файл: {angle, pitch, emotion}} (ADR-027 §1); бэк читает её как PhotoLabels
+  if (input.photoLabels) form.append('photoLabels', JSON.stringify(input.photoLabels));
   if (input.lora === 'remove') form.append('removeLora', 'true');
   else if (input.lora) {
     form.append('loraName', input.lora.name);

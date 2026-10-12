@@ -234,6 +234,26 @@ public class LocalActionPresetTests
         Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.SubagentConsultant));
     }
 
+    [Theory]
+    [InlineData(ActionPreset.Tiers)]
+    [InlineData(ActionPreset.TiersLocal)]
+    [InlineData(ActionPreset.Recommended)]
+    [InlineData(ActionPreset.Balanced)]
+    public async Task МестаСКартинками_ПресетомНеТрогаются(ActionPreset preset)
+    {
+        var (service, store) = Build(new()
+        {
+            ["Ollama:Model"] = "qwen3:14b",
+            ["Ollama:BaseUrl"] = "http://localhost:11434",
+        });
+        await service.ApplyAsync(preset);
+
+        Assert.Null(store.TryGet(LocalActionCatalog.CharacterPhotoAngle));
+        Assert.Null(store.TryGet(LocalActionCatalog.CharacterPhotoEmotion));
+        // Текстовое соседнее место пресет, как раньше, назначает
+        Assert.NotNull(store.TryGet(LocalActionCatalog.CharacterSceneParse));
+    }
+
     [Fact]
     public async Task TiersLocal_OllamaOff_FallsBackToTiers()
     {

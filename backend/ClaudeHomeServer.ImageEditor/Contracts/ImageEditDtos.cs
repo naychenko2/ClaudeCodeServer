@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 namespace ClaudeHomeServer.Services.ImageEditor;
 
 // REST-контракт редактора картинок (ADR-017, разделы 2, 4, 5, 7). Маршруты —
@@ -129,7 +130,13 @@ public record ImageEditJobInput(
     // Нить картинки чата ChatSessionId (ADR-019): её варианты станут версиями; null — запуск вне нити
     string? ThreadId = null,
     // Версия нити, от которой запущена правка (изменение 27.09 к ADR-019); null — вне нити
-    string? BaseVersionId = null);
+    string? BaseVersionId = null,
+    // Подбор фото персонажа под сюжет (ADR-027 §7): выполняется в задаче перед драйвером, а не в
+    // запуске; null — флаг выключен или персонажа нет
+    Func<CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null);
+
+// Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
+public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);
 
 public record ImageEditJobCreatedDto(string JobId);
 
@@ -172,7 +179,10 @@ public record ImageEditJobDto(
     int? EtaSeconds = null,
     int? RunElapsedSeconds = null,
     // Сходство лица с образцом персонажа по номеру варианта; null — персонажа нет или не считалось
-    IReadOnlyDictionary<int, double>? Similarities = null);
+    IReadOnlyDictionary<int, double>? Similarities = null,
+    // Операция запуска (generate / edit / inpaint / outpaint / …), camelCase; null — запуск без
+    // операции (обрезка, local-media)
+    string? Op = null);
 
 public static class ImageEditSizeNotes
 {
@@ -248,6 +258,8 @@ public static class ImageEditErrorCodes
     public const string LoraNotVisible = "lora_not_visible";
     // 404: персонажа нет в проекте (или slug не проходит белый список)
     public const string CharacterNotFound = "character_not_found";
+    // 400: явный список фото персонажа не прошёл проверку (чужое имя, дубль, ссылка) или флаг выключен
+    public const string CharacterPhotosInvalid = "character_photos_invalid";
     // 404: чата нет, он чужой или из другого проекта — неотличимо
     public const string ChatNotFound = "chat_not_found";
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)

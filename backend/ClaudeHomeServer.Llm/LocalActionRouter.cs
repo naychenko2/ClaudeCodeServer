@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.ImageEditor;
+
 namespace ClaudeHomeServer.Services.Llm;
 
 // Откуда взято действующее значение маршрута — нужно UI, чтобы честно показать,
@@ -10,8 +12,10 @@ public enum RouteSource { Default, Config, Admin }
 // Claude — модель действия по умолчанию (та, что оно берёт из своего конфига);
 // Tier   — слот тира инстанса (сильная/средняя/слабая, AppSettings.ModelTier*);
 //          пустой слот откатывается на модель действия, как Claude;
-// Model  — конкретная модель конкретного провайдера (Model заполнено её id).
-public enum RouteKind { Local, Claude, Tier, Model }
+// Model  — конкретная модель конкретного провайдера (Model заполнено её id);
+// FacePose — локальный расчёт ракурса лица (InsightFace в local-media), не LLM: допустим
+//          только месту с LocalAction.FacePose (ADR-027 §3). Не путать с Local (Ollama).
+public enum RouteKind { Local, Claude, Tier, Model, FacePose }
 
 // Действующий маршрут действия: чем начинаем, какой моделью (для Kind=Model),
 // каким слотом (для Kind=Tier) и откуда взято.
@@ -36,6 +40,7 @@ public sealed class LocalActionRouter
     private readonly Dictionary<string, bool> _overrides;
     private readonly Dictionary<CheapProfile, CheapProfileSpec> _profiles;
     private readonly ILogger<LocalActionRouter> _log;
+    private readonly ILocalImageMedia? _localMedia;
 
     // Значение LocalLlm:BackgroundWhileTurn — что делать с фоновым действием, пока на
     // локальном движке идёт ход исполнителя.
@@ -44,8 +49,10 @@ public sealed class LocalActionRouter
 
     public LocalActionRouter(ILocalLlmClient ollama, LocalActionOverridesStore store,
         IConfiguration config, ILogger<LocalActionRouter> log,
-        SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null)
+        SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null,
+        ILocalImageMedia? localMedia = null)
     {
+        _localMedia = localMedia;
         _ollama = ollama;
         _store = store;
         _specialty = specialty;
@@ -148,15 +155,20 @@ public sealed class LocalActionRouter
         // продукте. Модель действия (обычно haiku) остаётся фолбэком — её берёт
         // CheapTextRunner.EffectiveFallback, когда слот пуст.
         var action = LocalActionCatalog.Find(actionKey);
+        // Дефолт места ракурса — локальный InsightFace; без local-media разворачивается в
+        // обычный дефолт места (vision-слот). Явный выбор админа выше не подменяется.
+        if (action?.FacePose == true && _localMedia?.Configured == true)
+            return new ActionRoute(RouteKind.FacePose, null, RouteSource.Default);
         return action?.DefaultLocal == true
             ? new ActionRoute(RouteKind.Local, null, RouteSource.Default)
             : new ActionRoute(RouteKind.Tier, null, RouteSource.Default,
                 action is null ? ModelTier.Medium : LocalActionCatalog.EffectiveDefaultTier(action));
     }
 
-    private static ActionRoute Parse(string route, RouteSource source) => route switch
+    internal static ActionRoute Parse(string route, RouteSource source) => route switch
     {
         LocalActionOverridesStore.LocalRoute => new ActionRoute(RouteKind.Local, null, source),
+        LocalActionOverridesStore.FacePoseRoute => new ActionRoute(RouteKind.FacePose, null, source),
         // Легаси-значения одиночной «модели по умолчанию» (v1): оба означали «обычная модель,
         // не локаль» — с появлением слотов это средняя
         LocalActionOverridesStore.ClaudeRoute or LocalActionOverridesStore.DefaultRoute =>

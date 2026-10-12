@@ -240,6 +240,134 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
         body.GetProperty("route").GetString().Should().Be("tier:strong");
     }
 
+    // --- Места с картинками на входе (ADR-027 §2, шаг 12а) ---
+
+    [Theory]
+    [InlineData("local")]
+    [InlineData("direct:какая-то-модель")]
+    [InlineData("preset:любой")]
+    [InlineData("face-pose")]
+    public async Task МестоСКартинками_СлепойМаршрут400(string route)
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoEmotion}", new { route });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task FacePose_НаМестеРакурса_Принят()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoAngle}", new { route = "face-pose" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be("face-pose");
+        body.GetProperty("source").GetString().Should().Be("admin");
+
+        var usage = await _admin.GetFromJsonAsync<JsonElement>("/api/usage");
+        usage.GetProperty("ollama").GetProperty("actions").EnumerateArray()
+            .First(x => x.GetProperty("key").GetString() == LocalActionCatalog.CharacterPhotoAngle)
+            .GetProperty("route").GetString().Should().Be("face-pose");
+
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoAngle}");
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.CharacterPhotoEmotion)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    [InlineData(LocalActionCatalog.NotesTags)]
+    public async Task FacePose_НаДругихМестах_400(string key)
+    {
+        var put = await _admin.PutAsJsonAsync($"/api/admin/local-actions/{key}", new { route = "face-pose" });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        await _admin.DeleteAsync($"/api/admin/local-actions/{key}");
+    }
+
+    [Fact]
+    public async Task МестоСКартинками_ТекстОтказаДляLocal()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoAngle}", new { route = "local" });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should()
+            .Be("Эта модель не видит картинки — для разметки фото не подойдёт.");
+    }
+
+    [Theory]
+    [InlineData("haiku")]
+    [InlineData("tier:weak")]
+    public async Task МестоСКартинками_МодельСоЗрением_Принимается(string route)
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoEmotion}", new { route });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoEmotion}");
+    }
+
+    [Fact]
+    public async Task ТекстовоеМесто_LocalПоПрежнемуПринимается()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterSceneParse}", new { route = "local" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.CharacterSceneParse}");
+    }
+
+    [Fact]
+    public async Task Describe_ОтдаётInputИFacePose()
+    {
+        var angle = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoAngle}", new { route = "tier:weak" });
+        var a = await angle.Content.ReadFromJsonAsync<JsonElement>();
+        a.GetProperty("input").GetString().Should().Be("images");
+        a.GetProperty("facePose").GetBoolean().Should().BeTrue();
+
+        var emotion = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoEmotion}", new { route = "tier:weak" });
+        var e = await emotion.Content.ReadFromJsonAsync<JsonElement>();
+        e.GetProperty("input").GetString().Should().Be("images");
+        e.GetProperty("facePose").GetBoolean().Should().BeFalse();
+
+        var text = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "tier:weak" });
+        (await text.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("input").GetString().Should().Be("text");
+
+        var usage = await _admin.GetFromJsonAsync<JsonElement>("/api/usage");
+        var item = usage.GetProperty("ollama").GetProperty("actions").EnumerateArray()
+            .First(x => x.GetProperty("key").GetString() == LocalActionCatalog.CharacterPhotoAngle);
+        item.GetProperty("input").GetString().Should().Be("images");
+        item.GetProperty("facePose").GetBoolean().Should().BeTrue();
+        item.GetProperty("group").GetString().Should().Be("Персонажи");
+
+        foreach (var k in new[] { LocalActionCatalog.CharacterPhotoAngle,
+                     LocalActionCatalog.CharacterPhotoEmotion, LocalActionCatalog.NotesTags })
+            await _admin.DeleteAsync($"/api/admin/local-actions/{k}");
+    }
+
+    [Fact]
+    public void ValidateImageRoute_МодельПровайдераБезЗрения_Отказ()
+    {
+        var cfg = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["LlmProviders:blind:DisplayName"] = "Blind",
+            ["LlmProviders:blind:ApiKey"] = "k",
+            ["LlmProviders:blind:AnthropicBaseUrl"] = "https://example.invalid",
+            ["LlmProviders:blind:SupportsImages"] = "false",
+            ["LlmProviders:blind:Models:0:Id"] = "blind-1",
+            ["LlmProviders:sighted:DisplayName"] = "Sighted",
+            ["LlmProviders:sighted:ApiKey"] = "k",
+            ["LlmProviders:sighted:AnthropicBaseUrl"] = "https://example.invalid",
+            ["LlmProviders:sighted:SupportsImages"] = "true",
+            ["LlmProviders:sighted:Models:0:Id"] = "sighted-1",
+        });
+        var providers = new LlmProviderRegistry(cfg);
+
+        LocalActionsAdminController.ValidateImageRoute("blind-1", providers).Should().NotBeNull();
+        LocalActionsAdminController.ValidateImageRoute("sighted-1", providers).Should().BeNull();
+        LocalActionsAdminController.ValidateImageRoute("haiku", providers).Should().BeNull();
+    }
+
     // --- unit DescribePreset: через HTTP битую ссылку не смоделировать (валидация Set
     //     отсекает несуществующий id), поэтому пробуем логику напрямую. ---
 

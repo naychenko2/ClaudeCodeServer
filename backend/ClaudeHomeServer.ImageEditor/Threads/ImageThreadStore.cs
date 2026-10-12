@@ -260,6 +260,20 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             }, log);
         });
 
+    // Выбор фото персонажа дописывается к уже лежащему запуску (подбор идёт в задаче, после запуска).
+    // Запуска ещё нет или выбор уже записан — ничего не меняет
+    public ImageThreadWrite SetLaunchCharacter(string ownerId, string sessionId, string threadId, string jobId,
+        ImageThreadCharacter character) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { } launch || launch.Character is not null)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+            return Replace(state, thread with
+            {
+                Launches = [.. thread.Launches.Select(l => l.JobId == jobId ? l with { Character = character } : l)],
+            });
+        });
+
     // Готовые по ходу варианты идущего запуска: версии добавляются, статус запуска НЕ меняется — его
     // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
     // Журнал не пишется: строка одна на весь запуск, в финале

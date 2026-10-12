@@ -484,10 +484,11 @@ public sealed class ImageThreadService(
             var from = thread?.Version(baseVersionId) is { } baseVersion ? $" · от: {ImageThread.Label(baseVersion)}" : "";
             var written = store.AddLaunch(ownerId, sessionId, threadId,
                 new ImageThreadLaunch(jobId, baseVersionId, baseStepId, store.Now(), ImageThreadLaunchStatus.Running,
-                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim()),
+                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim(), Op: job?.Op),
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
                     $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;
+            ApplyPick(ownerId, sessionId, threadId, jobId);
 
             await RecordAsync(sessionId, RecordTypes.LaunchVersions,
                 $"{(agent ? "Claude запустил" : "Вы запустили")}: «{prompt.Trim()}» · {model}{variants}",
@@ -668,6 +669,50 @@ public sealed class ImageThreadService(
     {
         jobs.VariantReady += OnVariantReadyAsync;
         jobs.Finished += OnJobFinishedAsync;
+        jobs.CharacterPicked += OnCharacterPickedAsync;
+    }
+
+    // Выбор фото персонажа приходит из задачи, а запуск ложится в нить после ответа «запустить»:
+    // кто из двоих позже, тот и записывает. Сначала кладём в ожидающие, потом пробуем записать;
+    // OnLaunchedAsync делает наоборот — хотя бы один из двоих увидит другого. Запись, которой
+    // некуда лечь (нити нет), удаляется сразу, а забытые старше PendingPickTtl выбрасываются при
+    // следующем обращении — фоновых таймеров нет
+    private static readonly TimeSpan PendingPickTtl = TimeSpan.FromMinutes(10);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (ImageThreadCharacter Character, DateTime At)> _pendingPicks = new();
+
+    internal int PendingPickCount => _pendingPicks.Count;
+
+    public Task OnCharacterPickedAsync(string ownerId, ImageEditJobDto job, ImageThreadCharacter character)
+    {
+        if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId }) return Task.CompletedTask;
+        DropStalePicks();
+        _pendingPicks[job.JobId] = (character, store.Now());
+        ApplyPick(ownerId, sessionId, threadId, job.JobId);
+        return Task.CompletedTask;
+    }
+
+    private void DropStalePicks()
+    {
+        var border = store.Now() - PendingPickTtl;
+        foreach (var (jobId, pick) in _pendingPicks)
+            if (pick.At < border) _pendingPicks.TryRemove(jobId, out _);
+    }
+
+    private void ApplyPick(string ownerId, string sessionId, string threadId, string jobId)
+    {
+        DropStalePicks();
+        if (!_pendingPicks.TryGetValue(jobId, out var pick)) return;
+        var written = store.SetLaunchCharacter(ownerId, sessionId, threadId, jobId, pick.Character);
+        // Нити нет — писать некуда и не будет: запись не держим
+        if (written.Status == ImageThreadWriteStatus.ThreadNotFound)
+        {
+            _pendingPicks.TryRemove(jobId, out _);
+            return;
+        }
+        if (written.Status == ImageThreadWriteStatus.Ok
+            && store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId)
+                ?.Launches.Any(l => l.JobId == jobId && l.Character is not null) == true)
+            _pendingPicks.TryRemove(jobId, out _);
     }
 
     // Человек сохранил картинку нити: нить идёт за новым файлом, в ленте тихая строка

@@ -12,7 +12,9 @@ import {
 } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
+  FLAGS, useFeature,
 } from 'aihome_shell/kit';
+import { stripVisible } from './characterPhotos';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
@@ -23,6 +25,7 @@ import {
   threadName, versionDone, versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
 } from './model';
 import { recordOf } from './records';
+import { CharacterPhotosStrip } from './CharacterPhotosStrip';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
@@ -116,6 +119,11 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const meta = cropNote ?? [versionMeta(thread, version, null), sim, model ?? ''].filter(Boolean).join(' · ');
   const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const done = versionDone(thread, version);
+  // Блок «Фото персонажа» (ADR-027, шаг 18): не у исходника, не у обрезки без ИИ, только с персонажем
+  const smart = useFeature(FLAGS.characterSmartPhotos);
+  const launch = version.jobId ? launchOf(thread, version.jobId) : null;
+  const character = stripVisible({ smart, versionId: version.id, cropNote: cropNote ?? null, character: launch?.character ?? null })
+    ? (launch?.character ?? null) : null;
   const personal = isPersonalScope(projectId);
   const primary = versionPrimary(thread, version, focused, saved, personal);
   const save = () => { if (src) void download(src, mime => downloadName(thread, version, mime)); };
@@ -145,6 +153,9 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
         <div title={metaTitle} style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {meta}
         </div>
+      )}
+      {character && (
+        <CharacterPhotosStrip projectId={projectId} sessionId={sessionId} thread={thread} version={version} character={character} />
       )}
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
         <Button size="xs" variant="secondary" leftIcon={ic(Expand)} onClick={open}>Открыть</Button>

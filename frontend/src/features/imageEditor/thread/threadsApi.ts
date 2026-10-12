@@ -37,6 +37,15 @@ export interface ImageThreadVersion {
 
 export type ImageThreadLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
+// Какие фото персонажа ушли драйверу и почему (ADR-027 §8). Photos — имена файлов манифеста
+// в порядке отправки (до 3). Pick: auto — подобрано по сцене, manual — явный список, fallback — порядок.
+export interface ImageThreadCharacter {
+  slug: string;
+  photos: string[];
+  pick: 'auto' | 'manual' | 'fallback';
+  scene: { angle: string | null; pitch: string | null; emotion: string | null } | null;
+}
+
 // Запуск ИИ в нить: его якорь в ленте — запись image_launch_versions с тем же jobId
 export interface ImageThreadLaunch {
   jobId: string;
@@ -46,6 +55,11 @@ export interface ImageThreadLaunch {
   status: ImageThreadLaunchStatus;
   initiator: 'human' | 'agent';
   prompt: string | null;
+  // Персонаж запуска; null — подбор не работал (старые нити)
+  character?: ImageThreadCharacter | null;
+  // Операция запуска (generate / edit / inpaint / outpaint / …); null — старые нити
+  // и запуски без операции (обрезка, local-media)
+  op?: string | null;
 }
 
 export interface ImageThreadSettings {

@@ -131,6 +131,7 @@ public static partial class CharacterStore
         if ((remove.Count > 0 || patch.AddPhotos.Count > 0) && remaining is < MinPhotos or > MaxPhotos)
             return Invalid($"Нужно от {MinPhotos} до {MaxPhotos} фото");
         if (CheckPhotos(patch.AddPhotos) is { } bad) return Invalid(bad);
+        if (CheckPhotoLabels(manifest, remove, patch.PhotoLabels) is { } labelError) return Invalid(labelError);
         if (patch.PrimaryPhoto is { } primary
             && (remove.Contains(primary) || manifest.Photos.All(p => p.File != primary)))
             return Invalid("Главное фото не найдено");
@@ -148,6 +149,7 @@ public static partial class CharacterStore
         if (patch.PrimaryPhoto is { } chosen)
             manifest.Photos = [.. manifest.Photos.Select(p => p with { Primary = p.File == chosen })];
         EnsurePrimary(manifest);
+        if (patch.PhotoLabels is { Count: > 0 } labels) ApplyHumanLabels(manifest, labels);
         if (patch.Lora is { } lora) ApplyLora(manifest, lora);
 
         // Манифест перезаписывается целиком через временный файл: оборванная запись не
@@ -158,6 +160,82 @@ public static partial class CharacterStore
         File.Move(temp, target, overwrite: true);
         written.Add(Rel(slug, ManifestFile));
         return ImageEditCallResult<CharacterChange>.Ok(new CharacterChange(manifest, written, deleted));
+    }
+
+    // Слияние меток авторазметки (ADR-027, §1). Вызывать под блокировкой персонажа
+    // (CharacterLoraRuns.LockCharacterAsync), как Update: метки считались долго, манифест за это
+    // время мог поменяться, поэтому он читается заново. Фото с LabelSource=human не трогаем целиком,
+    // метка удалённого фото отбрасывается, прочие поля манифеста остаются как есть.
+    // null — персонажа нет; иначе имена файлов, чьи метки записаны.
+    // labelSource — кто разметил: Auto (модель ответила) или NoRoute (разметить было нечем, повторим позже)
+    public static IReadOnlyList<string>? MergeAutoLabels(
+        string root, string slug, IReadOnlyDictionary<string, CharacterPhotoLabels> labels,
+        string labelSource = PhotoLabelValues.Auto)
+    {
+        var manifest = Get(root, slug);
+        var dir = CharacterDir(root, slug);
+        if (manifest is null || dir is null) return null;
+
+        var applied = new List<string>();
+        for (var i = 0; i < manifest.Photos.Count; i++)
+        {
+            var photo = manifest.Photos[i];
+            if (photo.LabelSource == PhotoLabelValues.Human || !labels.TryGetValue(photo.File, out var found)) continue;
+            // Запись без единой метки ничего не говорит о фото: источник не ставим
+            if (found.Angle is null && found.Pitch is null && found.Emotion is null) continue;
+            manifest.Photos[i] = photo with
+            {
+                Angle = found.Angle ?? photo.Angle,
+                Pitch = found.Pitch ?? photo.Pitch,
+                Emotion = found.Emotion ?? photo.Emotion,
+                LabelSource = labelSource,
+            };
+            applied.Add(photo.File);
+        }
+        if (applied.Count == 0) return applied;
+
+        var target = Path.Combine(dir, ManifestFile);
+        var temp = target + ".tmp";
+        File.WriteAllText(temp, manifest.Serialize());
+        File.Move(temp, target, overwrite: true);
+        return applied;
+    }
+
+    private static string? CheckPhotoLabels(
+        CharacterManifest manifest, HashSet<string> remove, IReadOnlyDictionary<string, CharacterPhotoLabels>? labels)
+    {
+        if (labels is null) return null;
+        foreach (var (file, l) in labels)
+        {
+            if (remove.Contains(file) || manifest.Photos.All(p => p.File != file)) return "Такого фото у персонажа нет";
+            if (l.Angle is not null && !PhotoLabelValues.Angles.Contains(l.Angle)) return "Неизвестный ракурс";
+            if (l.Pitch is not null && !PhotoLabelValues.Pitches.Contains(l.Pitch)) return "Неизвестный наклон головы";
+            if (l.Emotion is not null && !PhotoLabelValues.Emotions.Contains(l.Emotion)) return "Неизвестная эмоция";
+        }
+        return null;
+    }
+
+    // Ручная правка: поля меняются только переданные, источник становится human.
+    // Запись из одних null — сброс ручной разметки: метки и источник стираются, фото снова доступно авторазметке
+    private static void ApplyHumanLabels(CharacterManifest manifest, IReadOnlyDictionary<string, CharacterPhotoLabels> labels)
+    {
+        for (var i = 0; i < manifest.Photos.Count; i++)
+        {
+            var photo = manifest.Photos[i];
+            if (!labels.TryGetValue(photo.File, out var l)) continue;
+            if (l.Angle is null && l.Pitch is null && l.Emotion is null)
+            {
+                manifest.Photos[i] = photo with { Angle = null, Pitch = null, Emotion = null, LabelSource = null };
+                continue;
+            }
+            manifest.Photos[i] = photo with
+            {
+                Angle = l.Angle ?? photo.Angle,
+                Pitch = l.Pitch ?? photo.Pitch,
+                Emotion = l.Emotion ?? photo.Emotion,
+                LabelSource = PhotoLabelValues.Human,
+            };
+        }
     }
 
     // Проверка «задать LoRA»: null — всё в порядке, иначе отказ. Зовёт и Update, и контроллер
@@ -228,8 +306,12 @@ public static partial class CharacterStore
     }
 
     // Персонаж для запроса: primary первым, затем остальные в порядке манифеста;
-    // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже)
-    public static CharacterForRequest? ForRequest(string root, string ownerId, string slug, int maxPhotos = PhotosPerRequest)
+    // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже).
+    // explicitPhotos (ADR-027 §8) — явный выбор человека: образцами уходят ровно эти файлы манифеста
+    // в этом порядке; любое нарушение (чужое имя, дубль, лишние, ссылка, не картинка) — null целиком.
+    // Эталон facePhotos от явного списка не зависит
+    public static CharacterForRequest? ForRequest(string root, string ownerId, string slug,
+        int maxPhotos = PhotosPerRequest, IReadOnlyList<string>? explicitPhotos = null)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
@@ -240,15 +322,29 @@ public static partial class CharacterStore
         var facePhotos = new List<byte[]>();
         foreach (var photo in ordered)
         {
-            if (photos.Count >= maxPhotos && facePhotos.Count >= MaxPhotos) break;
+            if ((explicitPhotos is not null || photos.Count >= maxPhotos) && facePhotos.Count >= MaxPhotos) break;
             var full = PhotoPath(dir, photo.File);
             if (full is null || !File.Exists(full) || IsLink(full)) continue;
             var bytes = File.ReadAllBytes(full);
             var ext = ImageFormatSniffer.DetectExtension(bytes);
             if (ext is null) continue;
-            if (photos.Count < maxPhotos)
+            if (explicitPhotos is null && photos.Count < maxPhotos)
                 photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
             if (facePhotos.Count < MaxPhotos) facePhotos.Add(bytes);
+        }
+        if (explicitPhotos is not null)
+        {
+            if (explicitPhotos.Count == 0 || explicitPhotos.Count > maxPhotos
+                || explicitPhotos.Distinct().Count() != explicitPhotos.Count) return null;
+            foreach (var file in explicitPhotos)
+            {
+                if (manifest.Photos.All(p => p.File != file)) return null;
+                var full = PhotoPath(dir, file);
+                if (full is null || !File.Exists(full) || IsLink(full)) return null;
+                var bytes = File.ReadAllBytes(full);
+                if (ImageFormatSniffer.DetectExtension(bytes) is not { } ext) return null;
+                photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
+            }
         }
         if (photos.Count == 0) return null;
         var lora = manifest.ReadLora();

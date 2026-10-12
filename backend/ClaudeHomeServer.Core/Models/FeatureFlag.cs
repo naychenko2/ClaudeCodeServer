@@ -33,6 +33,10 @@ public static class FeatureFlagKeys
     // Сферы: проекты группируются в сферы с общей командой персон и хартией; зона персоны
     // «Сфера». Dark launch, выключено по умолчанию
     public const string Spheres = "spheres";
+
+    // Умный подбор фото персонажа под сюжет (ADR-027): метки ракурса и эмоции у фото,
+    // автоподбор. Гейтится на сервере. Dark launch, выключено по умолчанию
+    public const string CharacterSmartPhotos = "character-smart-photos";
 }
 
 /// <summary>
@@ -70,6 +74,13 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.Spheres,
             Title: "Сферы",
             Description: "Проекты объединяются в сферы: у сферы своя команда персон и общая хартия, персона сферы видит все проекты сферы.",
+            Default: false,
+            Stage: "dev"),
+
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.CharacterSmartPhotos,
+            Title: "Умный подбор фото персонажа",
+            Description: "AI Home сам выбирает фото персонажа под сюжет: для «в профиль у окна» возьмёт фото в профиль, для «смеётся» — где он смеётся. Фото размечаются автоматически, метку можно поправить.",
             Default: false,
             Stage: "dev"),
     ];

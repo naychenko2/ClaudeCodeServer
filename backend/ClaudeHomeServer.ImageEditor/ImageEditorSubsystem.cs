@@ -44,6 +44,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
+        // Фоновая разметка ракурса и эмоции фото персонажей (ADR-027 §9); нет шва IImageLabeler или флага —
+        // очередь живёт вхолостую, поводы ничего не ставят
+        services.AddSingleton<CharacterPhotoLabeling>();
+        services.AddHostedService(sp => sp.GetRequiredService<CharacterPhotoLabeling>());
         services.AddSingleton<CharacterTrainingPhotos>();
         services.AddSingleton<IProjectTrainingPhotoCleaner>(sp => sp.GetRequiredService<CharacterTrainingPhotos>());
         services.AddSingleton<CharacterLoraRuns>();
@@ -71,6 +75,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             : null!);
         // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
         services.AddSingleton<ChatContext.ImageContextLaunch>();
+        // Разбор сюжета для подбора фото персонажа: без дешёвого раннера его нет, подбор тогда не работает
+        services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
+            ? new CharacterSceneParser(runner)
+            : null!);
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();

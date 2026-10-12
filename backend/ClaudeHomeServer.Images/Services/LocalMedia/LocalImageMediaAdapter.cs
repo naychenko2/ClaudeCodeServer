@@ -544,6 +544,11 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         var ext = ImageFormatSniffer.DetectExtension(image);
         if (ext is null) return new LocalFaceDetectResult(0, 0, [], "Картинка — не PNG, JPEG, WebP или GIF.");
 
+        // Нормализация EXIF: воркер (cv2) применяет EXIF-поворот, а ImageDimensions и LoadImage ComfyUI — нет.
+        // Чтобы рамки, маска и исходник были в одной системе координат (той, что видит пользователь),
+        // применяем EXIF-поворот и обнуляем тег до отправки узлу. Orientation 1 (или нет EXIF) — байты не трогаем.
+        var normalized = NormalizeExif(image);
+
         var jobId = LocalMediaService.JobIdPrefix + Guid.NewGuid().ToString("N");
         var uploaded = new List<string>();
         string ticket;
@@ -551,7 +556,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         try
         {
             // Лицо = биометрия: загружаем как входы и записываем на общую чистку
-            var name = await UploadTrackedAsync(uploaded, image, $"{jobId}-detect{ext}", ct);
+            var name = await UploadTrackedAsync(uploaded, normalized, $"{jobId}-detect{ext}", ct);
             // Детекцию запускает человек — в голову очереди
             ticket = (await comfy.QueuePromptAsync(ComfyWorkflows.FaceDetect(name), ct, front: true)).PromptId;
             queuedOk = true;
@@ -582,7 +587,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 if (history is { Completed: true })
                 {
                     ReleaseCleanup(jobId);
-                    return ParseFaces(history.Texts, image) is { } result
+                    return ParseFaces(history.Texts, normalized) is { } result
                         ? result
                         : new LocalFaceDetectResult(0, 0, [], "Узел детекции вернул неожиданный ответ.");
                 }
@@ -598,6 +603,19 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             Remember(alive: false);
             return new LocalFaceDetectResult(0, 0, [], ex.Message, true);
         }
+    }
+
+    // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег, чтобы воркер (cv2), ImageDimensions
+    // и LoadImage ComfyUI видели картинку в одной системе координат. Orientation 1 (или нет EXIF) —
+    // байты не трогаем (перекодировка впустую). raster = null (подсистема images выключена) — как раньше.
+    // Сбой Apply (потолок мегапикселей, битый файл) — исходные байты: детекция по ним откажет сама.
+    private byte[] NormalizeExif(byte[] image)
+    {
+        if (raster is null) return image;
+        var probe = raster.Probe(image);
+        if (probe is null || probe.Orientation <= 1) return image;
+        var outcome = raster.Apply(image, [], null);
+        return outcome.Image is { } img ? img.Bytes : image;
     }
 
     private const string FaceDetectKey = "ccs_face_detect=";

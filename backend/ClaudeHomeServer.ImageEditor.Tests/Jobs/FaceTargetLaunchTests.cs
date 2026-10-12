@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -11,6 +13,7 @@ using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Tests.ImageEditor.Providers;
 using FluentAssertions;
 using Moq;
+using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Jobs;
 
@@ -485,5 +488,73 @@ public class FaceTargetLaunchTests : IDisposable
 
         // Детектор вызван один раз (single-flight)
         Volatile.Read(ref detectCount).Should().Be(1);
+    }
+
+    // ── Нормализация EXIF: source в ImageEditJobInput — в системе координат экрана ──────
+
+    // JPEG с EXIF Orientation 6 (сырые 1312×640, показ 640×1312): после нормализации
+    // source = 640×1312 без EXIF, маска по bbox детекции в той же системе. facesKey — по сырым
+    // байтам (совпадает с faces-эндпоинтом), поэтому faces_changed не срабатывает
+    [Fact]
+    public async Task EXIF6_source_нормализован_и_facesKey_стабилен()
+    {
+        // Создаём JPEG 1312×640 с EXIF Orientation 6
+        var jpeg = JpegWithExif6();
+        var jpegPath = Path.Combine(_root, "exif6.jpg");
+        File.WriteAllBytes(jpegPath, jpeg);
+
+        // Открываем нить на JPEG (текущий revision, не 0 — иначе Conflict); facesKey — из файловых байтов
+        var revision = _store.Get(Owner, Chat).Revision;
+        _threads.OpenAsync(Owner, "p1", Chat, "exif6.jpg", null, revision, default).GetAwaiter().GetResult();
+        var threadId = _store.Get(Owner, Chat).Threads.Last().Id;
+        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(jpegPath));
+
+        // Воркер возвращает нормализованные размеры 640×1312
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(new LocalFaceDetectResult(640, 1312, faces)));
+
+        var req = new ImageEditLaunchRequest(
+            "q1", null, null, null, null, null, null, [], [], _charB,
+            ThreadSessionId: Chat, ThreadId: threadId,
+            FaceTarget: new FaceTarget("origin", 1, facesKey));
+
+        var result = await Assembler(media: media.Object).AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var input = result.Value!;
+        // Source нормализован: 640×1312 (не 1312×640)
+        input.Source.Should().NotBeNull();
+        var sourceSize = ImageDimensions.Read(input.Source!.Bytes);
+        sourceSize.Should().Be((640, 1312));
+        // Маска построена в той же системе
+        input.Mask.Should().NotBeNull();
+    }
+
+    // JPEG 1312×640 с EXIF Orientation 6 (тот же формат, что в LocalImageMediaAdapterTests)
+    private static byte[] JpegWithExif6()
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(1312, 640, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Gray);
+        canvas.Flush();
+        using var pixmap = bitmap.PeekPixels();
+        using var data = pixmap.Encode(new SKJpegEncoderOptions(90, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore));
+        var jpeg = data!.ToArray();
+
+        var tiff = new List<byte> { (byte)'I', (byte)'I', 0x2A, 0x00, 8, 0, 0, 0 };
+        void Le16(List<byte> b, int v) { b.Add((byte)v); b.Add((byte)(v >> 8)); }
+        void Le32(List<byte> b, uint v) { for (var i = 0; i < 4; i++) b.Add((byte)(v >> (8 * i))); }
+        Le16(tiff, 1);
+        Le16(tiff, 0x0112);
+        Le16(tiff, 3);
+        Le32(tiff, 1);
+        Le32(tiff, 6);
+        Le32(tiff, 0);
+        var payload = "Exif\0\0"u8.ToArray().Concat(tiff).ToArray();
+        var length = payload.Length + 2;
+        var app1 = new byte[] { 0xFF, 0xE1, (byte)(length >> 8), (byte)length }.Concat(payload);
+        return jpeg.Take(2).Concat(app1).Concat(jpeg.Skip(2)).ToArray();
     }
 }

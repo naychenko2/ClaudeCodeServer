@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using System.Text;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -684,6 +687,83 @@ public class LocalImageMediaAdapterTests
 
         result.Error.Should().Be("Не удалось сопоставить лица с картинкой.");
         result.Faces.Should().BeEmpty();
+    }
+
+    // EXIF Orientation 6 (iPhone): сырые байты 1312×640, воркер (cv2) поворачивает → 640×1312.
+    // Нормализация в DetectFacesAsync применяет EXIF и обнуляет тег → ImageDimensions.Read видит
+    // 640×1312, совпадает с воркером → детекция проходит, а не «Не удалось сопоставить»
+    [Fact]
+    public async Task Детекция_EXIF6_нормализация_поворачивает_и_детекция_проходит()
+    {
+        var image = JpegWithExif(1312, 640, orientation: 6);
+        AnswerDetect("ccs_face_detect={\"width\":640,\"height\":1312,\"faces\":[{\"bbox\":[10,10,100,100],\"score\":0.9,\"small\":false}]}");
+
+        var result = await Build(raster: new SkiaImageRaster()).DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Width.Should().Be(640);
+        result.Height.Should().Be(1312);
+        result.Faces.Should().HaveCount(1);
+    }
+
+    // EXIF Orientation 8 (iPhone, поворот в другую сторону): та же нормализация, детекция проходит
+    [Fact]
+    public async Task Детекция_EXIF8_нормализация_поворачивает_и_детекция_проходит()
+    {
+        var image = JpegWithExif(1312, 640, orientation: 8);
+        AnswerDetect("ccs_face_detect={\"width\":640,\"height\":1312,\"faces\":[]}");
+
+        var result = await Build(raster: new SkiaImageRaster()).DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Width.Should().Be(640);
+        result.Height.Should().Be(1312);
+    }
+
+    // Orientation 1 (без EXIF-поворота): нормализация no-op, детекция как раньше — регрессия
+    [Fact]
+    public async Task Детекция_Orientation1_без_EXIF_нормализация_noop_регрессия()
+    {
+        var image = JpegWithExif(800, 600, orientation: 1);
+        AnswerDetect("ccs_face_detect={\"width\":800,\"height\":600,\"faces\":[]}");
+
+        var result = await Build(raster: new SkiaImageRaster()).DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Width.Should().Be(800);
+        result.Height.Should().Be(600);
+    }
+
+    // JPEG с EXIF Orientation: SkiaSharp кодирует bitmap → JPEG, вставляем APP1/EXIF после SOI
+    private static byte[] JpegWithExif(int width, int height, int orientation)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Gray);
+        canvas.Flush();
+        using var pixmap = bitmap.PeekPixels();
+        using var data = pixmap.Encode(new SKJpegEncoderOptions(90, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore));
+        var jpeg = data!.ToArray();
+
+        // TIFF little-endian: II + 00 2A + offset IFD0=8, 1 entry (Orientation)
+        // Tag 0x0112 — тот же, что в SkiaImageRasterTests.WithExif (SkiaSharp читает ориентацию оттуда)
+        var tiff = new List<byte> { (byte)'I', (byte)'I', 0x2A, 0x00, 8, 0, 0, 0 };
+        Le16(tiff, 1); // 1 entry
+        Le16(tiff, 0x0112); // tag Orientation (тот же, что в WithExif)
+        Le16(tiff, 3); // type SHORT
+        Le32(tiff, 1); // count
+        Le32(tiff, (uint)orientation); // value
+        Le32(tiff, 0); // next IFD offset = 0
+
+        var payload = "Exif\0\0"u8.ToArray().Concat(tiff).ToArray();
+        var length = payload.Length + 2;
+        var app1 = new byte[] { 0xFF, 0xE1, (byte)(length >> 8), (byte)length }.Concat(payload);
+        return jpeg.Take(2).Concat(app1).Concat(jpeg.Skip(2)).ToArray();
+
+        static void Le16(List<byte> b, int v) { b.Add((byte)v); b.Add((byte)(v >> 8)); }
+        static void Le32(List<byte> b, uint v) { for (var i = 0; i < 4; i++) b.Add((byte)(v >> (8 * i))); }
     }
 
     // Таймаут: потолок ожидания укорочен, история не появляется — Busy, а не исключение

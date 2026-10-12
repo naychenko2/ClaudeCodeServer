@@ -314,17 +314,23 @@ public sealed class ImageEditLaunchAssembler(
         if (sourceBytes is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "У версии ещё нет изображения");
 
-        // d. Детекция: кэш по байтам, промах — детектор
+        // Нормализация EXIF: воркер (cv2) применяет EXIF-поворот, а LoadImage ComfyUI — нет.
+        // Чтобы маска (по bbox детекции) и исходник были в одной системе координат (той, что видит
+        // пользователь), применяем EXIF-поворот и обнуляем тег. facesKey — по сырым байтам (фронт
+        // считает его на исходнике), поэтому сверка facesKey идёт до нормализации.
+        var normalizedSource = NormalizeExif(sourceBytes);
+
+        // d. Детекция: кэш по нормализованным байтам, промах — детектор
         var detector = faces ?? new Faces.FaceDetectionCache();
         Func<Task<LocalFaceDetectResult>> detect = localMedia is null
             ? () => Task.FromResult(new LocalFaceDetectResult(0, 0, [], "Детекция лиц здесь не поддерживается."))
-            : () => localMedia.DetectFacesAsync(sourceBytes, CancellationToken.None);
-        var result = await detector.GetOrDetectAsync(ownerId, sourceBytes, detect, ct);
+            : () => localMedia.DetectFacesAsync(normalizedSource, CancellationToken.None);
+        var result = await detector.GetOrDetectAsync(ownerId, normalizedSource, detect, ct);
         if (result.Busy)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.Busy, "Видеокарта занята долгой задачей. Попробуйте чуть позже");
         if (result.Error is not null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.ProviderUnavailable, result.Error);
-        // facesKey не совпал — 409 со свежим списком (та же сборка, что в 7a)
+        // facesKey не совпал — 409 со свежим списком (та же сборка, что в 7a); сверка по сырым байтам
         if (Faces.FaceDetectionCache.FacesKey(sourceBytes) != faceTarget.FacesKey)
             return ImageEditCallResult<ImageEditJobInput>.Fail(ImageEditErrorCodes.FacesChanged, "Список лиц изменился",
                 ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFacesResponse.FromDetection(sourceBytes, result));
@@ -360,8 +366,10 @@ public sealed class ImageEditLaunchAssembler(
         if (!string.IsNullOrWhiteSpace(req.Prompt))
             prompt += " " + req.Prompt!.Trim();
 
-        // h. Входы: Source = байты версии, Mask = PNG, Op = Edit, образцы = только персонаж
-        var source = new ImageBytes(sourceBytes, "image/png");
+        // h. Входы: Source = нормализованные байты версии (EXIF применён, тег обнулён), Mask = PNG,
+        // Op = Edit, образцы = только персонаж. Нормализация гарантирует, что маска (по bbox детекции)
+        // и исходник в одной системе координат — той, что видит пользователь
+        var source = new ImageBytes(normalizedSource, "image/png");
         var mask = new ImageBytes(maskResult.Png, "image/png");
         var references = new List<ReferenceImage>(character.Photos);
 
@@ -404,6 +412,18 @@ public sealed class ImageEditLaunchAssembler(
             return read.Value?.Bytes;
         }
         return null;
+    }
+
+    // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег, чтобы маска (по bbox детекции)
+    // и исходник были в одной системе координат. Orientation 1 (или нет EXIF) — байты не трогаем.
+    // raster = null (подсистема images выключена) — исходные байты; маска всё равно не построится.
+    private byte[] NormalizeExif(byte[] image)
+    {
+        if (raster is null) return image;
+        var probe = raster.Probe(image);
+        if (probe is null || probe.Orientation <= 1) return image;
+        var outcome = raster.Apply(image, [], null);
+        return outcome.Image is { } img ? img.Bytes : image;
     }
 
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;

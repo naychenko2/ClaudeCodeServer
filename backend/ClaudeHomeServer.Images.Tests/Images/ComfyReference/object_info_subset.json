@@ -4836,5 +4836,32 @@
   "output_name": [
    "abc"
   ]
+ },
+ "CcsFaceDetect": {
+  "input": {
+   "required": {
+    "references": [
+     "STRING",
+     {
+      "default": "",
+      "multiline": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "references"
+   ]
+  },
+  "output": [
+   "STRING"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "STRING"
+  ]
  }
 }

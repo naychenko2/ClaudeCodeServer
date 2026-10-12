@@ -28,6 +28,7 @@ public class ComfyWorkflowsTests
         "EmptyAceStep1.5LatentAudio", "SaveAudioMP3", "CheckpointLoaderSimple", "YuE2GenerateABC", "YuE2GenerateMusic",
         "EmptyYuE2LatentAudio", "PreviewAny", "MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio",
         "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC", "CcsFaceSimilarity",
+        "CcsFaceDetect",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -295,6 +296,16 @@ public class ComfyWorkflowsTests
         Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"fd\",0]");
     }
 
+    [Fact]
+    public void ДетекцияЛиц_ОдинУзел_ИмяФайлаВReferences()
+    {
+        var wf = ComfyWorkflows.FaceDetect("ccs-local-media/in.png");
+
+        wf.Select(p => p.Key).Should().BeEquivalentTo(["detect"]);
+        Class(wf, "detect").Should().Be("CcsFaceDetect");
+        Inputs(wf, "detect")["references"]!.GetValue<string>().Should().Be("ccs-local-media/in.png");
+    }
+
     [Theory]
     [InlineData(5, 124)]
     [InlineData(10, 243)]
@@ -315,6 +326,7 @@ public class ComfyWorkflowsTests
             // Без эталона лица: склейка вне маски, но без узла сходства (он не в object_info)
             ("edit-mask", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png")),
             ("face", ComfyWorkflows.FaceDetail("x.png", 1, "p")),
+            ("face-detect", ComfyWorkflows.FaceDetect("x.png")),
             ("t2v", ComfyWorkflows.TextToVideo("a", 1344, 768, 124, 1, false, "p", "l")),
             ("t2v-fast", ComfyWorkflows.TextToVideo("a", 768, 1344, 243, 1, true, "p", "l")),
             ("i2v", ComfyWorkflows.ImageToVideo("x.png", null, "a", 1344, 768, 124, 1, false, "p", "l")),

@@ -4854,14 +4854,8 @@
     "references"
    ]
   },
-  "output": [
-   "STRING"
-  ],
-  "output_is_list": [
-   false
-  ],
-  "output_name": [
-   "STRING"
-  ]
+  "output": [],
+  "output_is_list": [],
+  "output_name": []
  }
 }

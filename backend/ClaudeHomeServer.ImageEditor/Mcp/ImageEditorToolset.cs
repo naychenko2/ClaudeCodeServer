@@ -63,6 +63,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly ImageEditSteps? _steps;
     private readonly ImageProjectPrefsService? _prefs;
     private readonly ChatContext.ImageContextLaunch? _context;
+    private readonly IFeatureFlagGate? _flags;
+    private readonly Faces.FaceDetectionCache? _faces;
+    private readonly ILocalImageMedia? _localMedia;
     private readonly bool _agentLaunch;
 
     // Запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
@@ -82,7 +85,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         ITurnEventBus? events = null,
         IConfiguration? config = null,
         ImageProjectPrefsService? prefs = null,
-        ChatContext.ImageContextLaunch? context = null)
+        ChatContext.ImageContextLaunch? context = null,
+        IFeatureFlagGate? flags = null,
+        Faces.FaceDetectionCache? faces = null,
+        ILocalImageMedia? localMedia = null)
     {
         _sessions = sessions;
         _projects = projects;
@@ -95,6 +101,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _steps = steps;
         _prefs = prefs;
         _context = context;
+        _flags = flags;
+        _faces = faces;
+        _localMedia = localMedia;
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
@@ -105,11 +114,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolve(context, out _, out _, out _) ? ToolsOfInstance : [];
 
-    // Состав инстанса: без запуска агентом остаются чтение, выбор картинки и предложение промпта —
+    // Состав инстанса: без запуска агентом остаются чтение, выбор картинки, поиск лиц и предложение промпта —
     // всё, что не тратит денег
     private IReadOnlyList<McpToolSchema> ToolsOfInstance => _agentLaunch
         ? Schemas
-        : [.. Schemas.Where(t => t.Name is ToolState or ToolFocus or ToolNew or ToolSuggestPrompt)];
+        : [.. Schemas.Where(t => t.Name is ToolState or ToolFocus or ToolNew or ToolFindFaces or ToolSuggestPrompt)];
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
@@ -126,6 +135,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             ToolNew => await NewAsync(arguments, context.OwnerId, session, scope, ct),
             ToolSuggestPrompt => SuggestPrompt(arguments),
             ToolGenerate => await GenerateAsync(arguments, context.OwnerId, session, scope, ct),
+            ToolFindFaces => await FindFacesAsync(arguments, context.OwnerId, session, scope, ct),
             ToolCancel => await CancelAsync(arguments, context.OwnerId, session, scope, ct),
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
@@ -235,6 +245,56 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         return ImageEditLaunchAssembler.ContentTypeByExtension(full).StartsWith("image/", StringComparison.Ordinal)
             ? Path.GetRelativePath(project.RootPath, full).Replace('\\', '/')
             : null;
+    }
+
+    // ── image_find_faces ───────────────────────────────────────────────────────
+
+    // Только чтение: гейта хода и квоты MaxLaunchesPerTurn нет (детекция — не запуск: траты,
+    // версии и записи в ленту не пишет). Флаг, личная область и локальные модели отказывают
+    // на вызове — состав tools/list от них не зависит (инвариант McpToolsetStabilityTests)
+    private async Task<McpToolCallResult> FindFacesAsync(JsonObject args, string ownerId, Session session,
+        ImageEditScope scope, CancellationToken ct)
+    {
+        if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
+            return Deny("Функция «Подставить персонажа» выключена");
+        if (scope.Project is null)
+            return Deny("Подстановка персонажа на лицо — только в чате проекта");
+        // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
+        // понятный отказ, не 500
+        if (_localMedia is null)
+            return Deny("Локальные модели не настроены: детекция лиц недоступна");
+
+        if (Str(args, "threadId") is not { } threadId)
+            return Deny("Не указан threadId: картинка этого чата (id из image_state).");
+        if (_threads.Get(ownerId, session.Id).Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+            return Deny($"Картинки {threadId} нет в этом чате. Список — image_state.");
+        var versionId = Str(args, "versionId");
+        var version = versionId is null ? thread.CurrentVersion : thread.Version(versionId);
+        if (version is null)
+            return Deny($"У картинки {threadId} нет версии {versionId}. Список версий — image_state.");
+
+        // Байты версии: шаг версии, иначе файл проекта (у исходника). Не прочитано — картинки ещё нет
+        byte[]? bytes = null;
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && _steps?.Open(ownerId, scope.Key, stepId) is { } step)
+            bytes = step.Image.Bytes;
+        else if (thread.File is { Length: > 0 } file && scope.Project is { } project)
+        {
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            if (read.Value is not null) bytes = read.Value.Bytes;
+        }
+        if (bytes is null)
+            return Deny("У версии ещё нет изображения");
+
+        // Детекция: кэш по байтам, промах — детектор. CancellationToken.None, как в ручке faces:
+        // отмена одного вызывающего не должна отменять детекцию остальных ожидающих (single-flight)
+        var result = await (_faces ?? new Faces.FaceDetectionCache())
+            .GetOrDetectAsync(ownerId, bytes, () => _localMedia!.DetectFacesAsync(bytes, CancellationToken.None), ct);
+        if (result.Busy)
+            return Deny("Видеокарта занята долгой задачей. Попробуйте чуть позже");
+        if (result.Error is not null)
+            return Deny(result.Error);
+
+        return Json(Controllers.ImageThreadFacesResponse.FromDetection(bytes, result));
     }
 
     // ── image_generate ─────────────────────────────────────────────────────────
@@ -370,6 +430,19 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var referencesGiven = args["references"] is JsonArray;
         var characterGiven = args.ContainsKey("character");
         var references = ReferencesArg(args);
+        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): входы явные — версия, лицо, персонаж;
+        // контекст чата не читается вовсе (ассемблер отвергнет ContextRevision вместе с FaceTarget).
+        // Провайдер — только local, выбор человека в строке контекста не подменяем молча (ADR-023)
+        if (Int(args, "face") is { } face)
+        {
+            if (scope.Project is null)
+                return Deny("Подстановка персонажа на лицо — только в чате проекта");
+            if (Str(args, "character") is not { } faceCharacter)
+                return Deny("Укажи персонажа: персонаж из строки контекста на чужое лицо не подставляется");
+            if (Str(args, "provider") is not "local")
+                return Deny("Подставлять персонажа можно только локальными моделями: укажи provider local");
+            return await FaceTargetAsync(ownerId, session, scope, thread, version, faceCharacter, face, prompt, ct);
+        }
         // Проектные аргументы в личном чате — отказ до котировки (сборщик отказал бы тоже, но позже)
         if (scope.Project is null && (references.Count > 0 || Str(args, "character") is not null))
             return Deny("В чате вне проекта нет файлов проекта и персонажей: запусти без references и character.");
@@ -484,13 +557,80 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         });
     }
 
+    // Запуск «подставить персонажа на лицо» (ADR-027, §4, этап 2): та же котировка и тот же
+    // ImageEditLaunchAssembler, что у обычного image_generate, но входы явные — версия, лицо,
+    // персонаж; образцы и персонаж контекста чата не едут, маску строит сервер. Ключ берётся из
+    // свежей детекции версии: агенту его передавать не нужно, номера лиц — те же, что в
+    // image_find_faces (один кэш, один порядок)
+    private async Task<McpToolCallResult> FaceTargetAsync(string ownerId, Session session, ImageEditScope scope,
+        ImageThread thread, ImageThreadVersion version, string character, int face, string prompt,
+        CancellationToken ct)
+    {
+        // Байты версии: шаг версии, иначе файл проекта (у исходника)
+        ImageBytes? source = null;
+        string? baseStepId = null;
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && _steps?.Open(ownerId, scope.Key, stepId) is { } step)
+        {
+            source = new ImageBytes(step.Image.Bytes, step.Image.ContentType);
+            baseStepId = stepId;
+        }
+        else if (thread.File is { Length: > 0 } file && scope.Project is { } project)
+        {
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
+            if (read.Value is not { } image) return Deny(read.Error!);
+            source = image;
+        }
+        if (source is null)
+            return Deny("У версии ещё нет изображения");
+
+        var quoteRequest = new ImageEditQuoteRequest(LocalImageEditor.ProviderKey, ImageEditCatalog.AutoModelId,
+            EditMode.Auto, ImageEditOp.Edit, 1,
+            HasMask: true,
+            References: 1,
+            HasCharacter: true,
+            Width: ImageDimensions.Read(source.Bytes)?.Width,
+            Height: ImageDimensions.Read(source.Bytes)?.Height,
+            FaceTarget: new FaceTarget(version.Id, face,
+                Faces.FaceDetectionCache.FacesKey(source.Bytes)));
+        var quote = await _jobs!.QuoteAsync(ownerId, scope.Key, quoteRequest, ct);
+        if (quote.Value is not { } q)
+            return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct, face: true);
+
+        var request = new ImageEditLaunchRequest(
+            q.QuoteId, prompt, MarksJson: null, thread.File, source, Mask: null, Annotated: null,
+            Uploaded: [],
+            ReferencePaths: [],
+            character,
+            MatchSourceSize: true,
+            BaseStepId: baseStepId,
+            Initiator: ImageEditInitiator.Agent,
+            ThreadSessionId: session.Id,
+            ThreadId: thread.Id,
+            VersionId: version.Id,
+            FaceTarget: new FaceTarget(version.Id, face, Faces.FaceDetectionCache.FacesKey(source.Bytes)));
+        var started = await _launcher.LaunchAsync(ownerId, scope, request, ct);
+        if (started.Value is not { } created)
+            return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct, face: true);
+
+        return Json(new
+        {
+            jobId = created.JobId,
+            threadId = thread.Id,
+            baseVersion = new { versionId = version.Id, label = ImageThread.Label(version) },
+            quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds, format = q.Format },
+            note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
+                + "Каждый вариант станет новой версией картинки внизу ленты; сохранить в проект может только человек.",
+        });
+    }
+
     private static bool SameFormat(MediaFormat? a, MediaFormat b) =>
         a is not null && a.Mode == b.Mode && a.Aspect == b.Aspect && a.Tier == b.Tier && a.Width == b.Width && a.Height == b.Height;
 
     // Отказ поставщика: в результате — котировка соседа, чтобы человек повторил одним кликом.
-    // Сам тулсет второй раз не запускает — выбор поставщика не подменяется
+    // Сам тулсет второй раз не запускает — выбор поставщика не подменяется. face — запуск
+    // «на лицо»: при faces_changed подсказывает повторить image_find_faces (список лиц изменился)
     private async Task<McpToolCallResult> FailAsync(string? code, string? error, string ownerId, ImageEditScope scope,
-        ImageEditQuoteRequest failed, CancellationToken ct)
+        ImageEditQuoteRequest failed, CancellationToken ct, bool face = false)
     {
         ImageEditQuoteDto? retry = null;
         if (code == ImageEditErrorCodes.ProviderUnavailable)
@@ -503,9 +643,12 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                 if (alt.Value is { } value) { retry = value; break; }
             }
         }
+        var text = error ?? "Запуск не выполнен";
+        if (face && code == ImageEditErrorCodes.FacesChanged)
+            text += " Повторите image_find_faces: номера лиц могут измениться.";
         return new McpToolCallResult(JsonSerializer.Serialize(new
         {
-            error = error ?? "Запуск не выполнен",
+            error = text,
             code = code ?? ImageEditErrorCodes.InvalidRequest,
             retryQuote = retry,
         }, JsonOpts), IsError: true);

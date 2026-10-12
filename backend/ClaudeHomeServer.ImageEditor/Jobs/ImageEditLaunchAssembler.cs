@@ -325,15 +325,9 @@ public sealed class ImageEditLaunchAssembler(
         if (result.Error is not null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.ProviderUnavailable, result.Error);
         // facesKey не совпал — 409 со свежим списком (та же сборка, что в 7a)
-        var currentKey = Faces.FaceDetectionCache.FacesKey(sourceBytes);
-        if (currentKey != faceTarget.FacesKey)
-        {
-            var payload = new ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFacesResponse(
-                currentKey, result.Width, result.Height,
-                result.Faces.Select(f => new ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFaceDto(
-                    f.N, [f.X1, f.Y1, f.X2, f.Y2], f.Score, f.Small)).ToList());
-            return ImageEditCallResult<ImageEditJobInput>.Fail(ImageEditErrorCodes.FacesChanged, "Список лиц изменился", payload);
-        }
+        if (Faces.FaceDetectionCache.FacesKey(sourceBytes) != faceTarget.FacesKey)
+            return ImageEditCallResult<ImageEditJobInput>.Fail(ImageEditErrorCodes.FacesChanged, "Список лиц изменился",
+                ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFacesResponse.FromDetection(sourceBytes, result));
 
         // e. Номер лица вне диапазона или лицо мелкое
         var face = result.Faces.FirstOrDefault(f => f.N == faceTarget.Face);

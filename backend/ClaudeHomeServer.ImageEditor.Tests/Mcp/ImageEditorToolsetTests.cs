@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
+using ClaudeHomeServer.Services.ImageEditor.Faces;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
@@ -77,7 +78,9 @@ public class ImageEditorToolsetTests : IDisposable
     private ChatContextStore _ctxStore = null!;
 
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
-        IImagePlaceSettings? placeSettings = null)
+        IImagePlaceSettings? placeSettings = null, IFeatureFlagGate? flags = null,
+        ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
+        ILocalImageMedia? localMedia = null)
     {
         editors ??= [HiggsfieldImageEditorTests.Create().Editor];
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
@@ -96,7 +99,8 @@ public class ImageEditorToolsetTests : IDisposable
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster,
             prefs: prefs, mirror: mirror);
         var context = new ImageContextLaunch(_ctxStore, registry, directory.Object, _store, workspace: workspace);
-        var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads, context: context);
+        var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads, context: context,
+            flags: flags, faces: faces, localMedia: localMedia);
 
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
@@ -104,7 +108,7 @@ public class ImageEditorToolsetTests : IDisposable
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
-            context: context);
+            context: context, flags: flags, faces: faces, localMedia: localMedia);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -153,7 +157,8 @@ public class ImageEditorToolsetTests : IDisposable
 
         names.Should().BeEquivalentTo([
             ImageEditorToolset.ToolState, ImageEditorToolset.ToolFocus, ImageEditorToolset.ToolNew,
-            ImageEditorToolset.ToolGenerate, ImageEditorToolset.ToolCancel, ImageEditorToolset.ToolSuggestPrompt]);
+            ImageEditorToolset.ToolGenerate, ImageEditorToolset.ToolFindFaces,
+            ImageEditorToolset.ToolCancel, ImageEditorToolset.ToolSuggestPrompt]);
         names.Should().NotContain(n => n.Contains("take") || n.Contains("rollback") || n.Contains("undo")
             || n.Contains("save") || n.Contains("dismiss") || n.Contains("remove"),
             "что становится шагом и файлом проекта, решает только человек");
@@ -203,7 +208,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         toolset.ToolsFor(Ctx()).Select(t => t.Name).Should().BeEquivalentTo([
             ImageEditorToolset.ToolState, ImageEditorToolset.ToolFocus, ImageEditorToolset.ToolNew,
-            ImageEditorToolset.ToolSuggestPrompt]);
+            ImageEditorToolset.ToolFindFaces, ImageEditorToolset.ToolSuggestPrompt]);
         (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(Thread()))).IsError.Should().BeTrue();
         _spend.Records.Should().BeEmpty();
     }
@@ -230,7 +235,7 @@ public class ImageEditorToolsetTests : IDisposable
         AddChat(PersonalChat, Owner, projectId: null);
         var toolset = Toolset();
 
-        toolset.ToolsFor(Ctx()).Should().HaveCount(6, "сервер есть в любом чате проекта");
+        toolset.ToolsFor(Ctx()).Should().HaveCount(7, "сервер есть в любом чате проекта");
         toolset.ToolsFor(Ctx(tail: PersonalChat)).Select(t => t.Name).Should().Equal(
             toolset.ToolsFor(Ctx()).Select(t => t.Name), "схемы одни для чата проекта и личного");
         toolset.ToolsFor(Ctx(owner: Stranger)).Should().BeEmpty("чат владельца B чужаку не виден");
@@ -1147,6 +1152,228 @@ public class ImageEditorToolsetTests : IDisposable
             lock (Records) Records.Add((sessionId, record));
             return Task.FromResult(true);
         }
+    }
+
+    // ── image_find_faces и face у image_generate (ADR-027, §4, этап 2) ───────────
+
+    private static IFeatureFlagGate Flags(bool faceSwapOn)
+    {
+        var flags = new Mock<IFeatureFlagGate>();
+        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterFaceSwap)).Returns(faceSwapOn);
+        return flags.Object;
+    }
+
+    private static ILocalImageMedia FakeMedia(IReadOnlyList<LocalDetectedFace> faces,
+        bool busy = false, string? error = null)
+    {
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(new LocalFaceDetectResult(200, 200, faces, error, busy)));
+        return media.Object;
+    }
+
+    // FakeMedia с размерами, совпадающими с тестовой картинкой 4×4
+    private static ILocalImageMedia FaceMedia(IReadOnlyList<LocalDetectedFace> faces,
+        bool busy = false, string? error = null)
+    {
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(new LocalFaceDetectResult(4, 4, faces, error, busy)));
+        return media.Object;
+    }
+
+    private string CreateCharacter(string name)
+    {
+        var created = CharacterStore.Create(_root,
+            new CharacterDraft(name, null, Characters.CharacterStoreTests.Photos(3)), DateTime.UtcNow);
+        created.Error.Should().BeNull();
+        return created.Value!.Manifest.Slug;
+    }
+
+    // Toolset с локальным редактором + face-зависимости
+    private ImageEditorToolset FaceToolset(IFeatureFlagGate? flags = null,
+        ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
+        ILocalImageMedia? localMedia = null)
+    {
+        var media = new LocalImageEditorTests.FakeMedia();
+        return Toolset(
+            [HiggsfieldImageEditorTests.Create().Editor,
+             new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }],
+            flags: flags, faces: faces, localMedia: localMedia);
+    }
+
+    // image_find_faces: успех — возвращает лица
+    [Fact]
+    public async Task image_find_faces_успех_возвращает_лица()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var json = Parse(result);
+        json["faces"]!.AsArray().Should().HaveCount(1);
+        json["faces"]![0]!["n"]!.GetValue<int>().Should().Be(1);
+    }
+
+    // image_find_faces: флаг выключен
+    [Fact]
+    public async Task image_find_faces_флаг_выключен()
+    {
+        var toolset = FaceToolset(flags: Flags(false), faces: new FaceDetectionCache());
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("выключена");
+    }
+
+    // image_find_faces: личный чат
+    [Fact]
+    public async Task image_find_faces_личный_чат_отказ()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache());
+        var thread = Thread(chat: PersonalChat);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread }, Ctx(tail: PersonalChat));
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("только в чате проекта");
+    }
+
+    // image_find_faces: нет локальных моделей
+    [Fact]
+    public async Task image_find_faces_нет_локальных_моделей()
+    {
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: null);
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("не настроены");
+    }
+
+    // image_find_faces: видеокарта занята
+    [Fact]
+    public async Task image_find_faces_busy()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces, busy: true));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("занята");
+    }
+
+    // image_find_faces: ошибка детекции
+    [Fact]
+    public async Task image_find_faces_ошибка_детекции()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces, error: "ComfyUI не ответил"));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
+            new JsonObject { ["threadId"] = thread });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("ComfyUI");
+    }
+
+    // image_generate с face: нет персонажа
+    [Fact]
+    public async Task image_generate_face_без_персонажа()
+    {
+        var slug = CreateCharacter("Тест");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1 });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("персонажа");
+    }
+
+    // image_generate с face: провайдер не local
+    [Fact]
+    public async Task image_generate_face_провайдер_не_local()
+    {
+        var slug = CreateCharacter("Тест");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slug, ["provider"] = "fal" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("локальными");
+    }
+
+    // image_generate с face: успех — FaceTarget записан, контекст не читается
+    [Fact]
+    public async Task image_generate_face_успех_FaceTarget_контекст_не_читается()
+    {
+        var slug = CreateCharacter("Тест");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slug, ["provider"] = "local" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var json = Parse(result);
+        json["jobId"]!.GetValue<string>().Should().NotBeEmpty();
+        json["baseVersion"]!.AsObject()["versionId"]!.GetValue<string>().Should().NotBeEmpty();
+    }
+
+    // Мутация: если face-ветка передаёт ContextRevision, ассемблер отвергнет
+    // (ImageEditLaunchAssembler.cs:297: «Подстановка на лицо несовместима с контекстом чата»).
+    // Тест шва: ставим файл проекта в контекст (revision > 0), запускаем face —
+    // успех значит ContextRevision = null, т.е. face-ветка контекст не читает.
+    [Fact]
+    public async Task Мутация_face_с_ContextRevision_отвергается()
+    {
+        var slug = CreateCharacter("Тест");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        // Картинка в контексте (вид image — primary): revision > 0, если face-ветка прочитает
+        var item = new ContextItem("i-mut", "image",
+            new JsonObject { ["threadId"] = thread }, "image", ContextActor.Human, DateTime.UtcNow);
+        _ctxStore.SetPrimary(Owner, ChatId, item, 0);
+        _ctxStore.Get(Owner, ChatId).Revision.Should().BeGreaterThan(0, "контекст не пуст — мутация видна");
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slug, ["provider"] = "local" });
+
+        // Успех: FaceTarget не читает контекст, ContextRevision = null
+        result.IsError.Should().BeFalse(result.Text);
     }
 
     private sealed class FakeTurnBus : ITurnEventBus

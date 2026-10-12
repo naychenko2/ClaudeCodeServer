@@ -313,10 +313,7 @@ public class ThreadsController(
             return StatusCode(StatusCodes.Status409Conflict,
                 new { error = result.Error, code = "provider_unavailable" });
 
-        return Ok(new ImageThreadFacesResponse(
-            FacesKey: ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache.FacesKey(bytes),
-            result.Width, result.Height,
-            result.Faces.Select(f => new ImageThreadFaceDto(f.N, new[] { f.X1, f.Y1, f.X2, f.Y2 }, f.Score, f.Small)).ToList()));
+        return Ok(ImageThreadFacesResponse.FromDetection(bytes, result));
     }
 
     // Картинка версии: её текущий шаг (байты из рабочей папки), у исходника файловой нити — файл
@@ -365,7 +362,14 @@ public sealed record ImageThreadSettingsRequest(ImageThreadSettings? Settings, l
 // «Найти лица на версии» (ADR-027, §4, этап 2): FacesKey — детерминирован по байтам (для сверки
 // 7b), Width/Height — размер картинки по ответу воркера, Faces — в порядке ответа (n с 1)
 public sealed record ImageThreadFacesResponse(
-    string FacesKey, int Width, int Height, IReadOnlyList<ImageThreadFaceDto> Faces);
+    string FacesKey, int Width, int Height, IReadOnlyList<ImageThreadFaceDto> Faces)
+{
+    // Единая сборка ответа из результата детекции (ADR-027, §4, этап 2): ручка faces,
+    // faces_changed ассемблера и MCP-инструмент image_find_faces — один формат, одна точка
+    public static ImageThreadFacesResponse FromDetection(byte[] image, LocalFaceDetectResult result) =>
+        new(ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache.FacesKey(image), result.Width, result.Height,
+            result.Faces.Select(f => new ImageThreadFaceDto(f.N, [f.X1, f.Y1, f.X2, f.Y2], f.Score, f.Small)).ToList());
+}
 
 // Лицо: N — номер с 1 (слева направо), BBox — [x1, y1, x2, y2] в пикселях, Score — уверенность 0..1,
 // Small — короткая сторона < 64 px. BBox сериализуется как «bbox» (camelCase дал бы «bBox»)

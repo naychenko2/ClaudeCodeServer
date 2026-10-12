@@ -5612,7 +5612,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 // как «поле не пришло» (сторонний поток его не шлёт) — фолбэк на duration_ms
                 var durationApiMs = LongProp(root, "duration_api_ms") is > 0 and var apiMs ? apiMs : (long?)null;
                 var numTurns = IntProp(root, "num_turns");
-                var totalCost = DoubleProp(root, "total_cost_usd");
                 var apiErr = StatusProp(root, "api_error_status");
                 List<string>? denials = null;
                 if (root.TryGetProperty("permission_denials", out var pd) && pd.ValueKind == JsonValueKind.Array && pd.GetArrayLength() > 0)
@@ -5621,7 +5620,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     foreach (var x in pd.EnumerateArray())
                         denials.Add(x.TryGetProperty("tool_name", out var tnm) ? tnm.GetString() ?? "?" : "?");
                 }
-                var usage = ParseUsage(root);
+                // Дельта хода: расход = текущий накопленный снимок (modelUsage/total_cost_usd)
+                // минус прошлый (Session.LastCostState). prev == null (первый ход) → сам снимок;
+                // любое уменьшение (сброс/форк/новая csid) → сам снимок. usage/totalCost/usageModel
+                // — уже расход ЭТОГО хода, а не накопленный итог (см. ComputeTurnDelta).
+                var currentCostState = BuildCostState(root);
+                var (usage, totalCost, usageModel) = ComputeTurnDelta(currentCostState, Info.LastCostState);
                 if (IsEmptyNoopResult(numTurns, subtype, apiErr, denials, usage))
                 {
                     // Пустой result CLI (ноль ходов модели, ноль токенов, success без api-ошибки
@@ -5641,8 +5645,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Ход получил свой result (success или error) — завершён, ре-аттемпт этого
                 // текста уже не висящий: повторный ход с тем же текстом пойдёт обычным submit.
                 _lastTurnResolved = true;
+                // Персистим новый накопленный снимок (только реальный result, no-op выше
+                // уже отфильтрован): процесс CLI перезапустится, а --resume восстановит этот
+                // накопленный итог — он и есть база для дельты следующего хода.
+                Info.LastCostState = currentCostState;
                 // На стороннем эндпоинте CLI считает total_cost_usd по ценам Anthropic —
-                // пересчитываем по ценам конфига модели (нет цен → стоимость не показываем)
+                // пересчитываем по ценам конфига модели (от дельты хода, не от накопленного
+                // итога; нет цен → стоимость не показываем)
                 if (_providers is not null && _providers.ResolveByModel(EffectiveModel) is not null)
                     totalCost = _providers.ComputeCost(EffectiveModel, usage);
                 // API-ошибка (напр. 429 у провайдера): CLI отдаёт subtype=success, но is_error=true
@@ -5672,7 +5681,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root), durationApiMs));
+                // usage/totalCost/usageModel — дельта хода (см. выше), не накопленный итог
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, durationApiMs));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик
@@ -6626,6 +6636,120 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         return best;
+    }
+
+    // --- Дельта хода (накопленный cost-state CLI, см. SessionCostState) ---
+    //
+    // С 24.09 claude CLI пишет в транскрипт записи {"type":"cost-state"} и на --resume
+    // ВОССТАНАВЛИВАЕТ их, поэтому result.modelUsage/total_cost_usd — накопленный итог сессии
+    // с момента её создания, а не расход одного хода. Расход хода = дельта между двумя
+    // накопленными снимками (текущим и прошлым, хранимым в Session.LastCostState).
+
+    // Снимок накопленного cost-state из result: modelUsage (по моделям) + total_cost_usd.
+    // Чистая функция — её же использует сторож-тест.
+    internal static SessionCostState BuildCostState(JsonElement root)
+    {
+        var state = new SessionCostState();
+        if (root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var m in mu.EnumerateObject())
+            {
+                if (m.Value.ValueKind != JsonValueKind.Object) continue;
+                state.Models[m.Name] = new ModelUsageSnapshot
+                {
+                    InputTokens = LongProp(m.Value, "inputTokens"),
+                    OutputTokens = LongProp(m.Value, "outputTokens"),
+                    CacheReadInputTokens = LongProp(m.Value, "cacheReadInputTokens"),
+                    CacheCreationInputTokens = LongProp(m.Value, "cacheCreationInputTokens"),
+                };
+            }
+        }
+        state.TotalCostUsd = DoubleProp(root, "total_cost_usd");
+        return state;
+    }
+
+    // Агрегат снимка (сумма по всем моделям) → UsageInfo. Пустой снимок → null (как ParseUsage
+    // без modelUsage/usage): потребитель понимает null как «токенов не было».
+    internal static UsageInfo? AggregateUsage(SessionCostState state)
+    {
+        if (state.Models.Count == 0) return null;
+        long input = 0, output = 0, cacheRead = 0, cacheCreate = 0;
+        foreach (var m in state.Models.Values)
+        {
+            input += m.InputTokens;
+            output += m.OutputTokens;
+            cacheRead += m.CacheReadInputTokens;
+            cacheCreate += m.CacheCreationInputTokens;
+        }
+        return new UsageInfo((int)Math.Clamp(input, int.MinValue, int.MaxValue),
+            (int)Math.Clamp(output, int.MinValue, int.MaxValue),
+            (int)Math.Clamp(cacheRead, int.MinValue, int.MaxValue),
+            (int)Math.Clamp(cacheCreate, int.MinValue, int.MaxValue));
+    }
+
+    // Доминирующая модель снимка — модель с наибольшей суммой токенов (аналог ParseUsageModel,
+    // но по снимку, а не по сырому result). null — моделей нет.
+    internal static string? DominantModel(SessionCostState state)
+    {
+        string? best = null;
+        long bestSum = -1;
+        foreach (var (name, m) in state.Models)
+        {
+            long sum = m.InputTokens + m.OutputTokens + m.CacheReadInputTokens + m.CacheCreationInputTokens;
+            if (sum > bestSum) { bestSum = sum; best = name; }
+        }
+        return best;
+    }
+
+    // Расход хода = дельта (current − prev) по каждой модели отдельно + по total_cost_usd.
+    // prev == null (первый ход / новая csid / форк без снимка) — расход = сам current.
+    // ЛЮБОЕ уменьшение (счётчик любой модели или total_cost_usd) — сброс/форк/новая csid,
+    // дельта была бы отрицательной — расход = сам current. Возвращает UsageInfo (агрегат
+    // дельты), стоимость дельты и доминирующую модель по дельте. Чистая функция.
+    internal static (UsageInfo? Usage, double? Cost, string? Model) ComputeTurnDelta(
+        SessionCostState current, SessionCostState? prev)
+    {
+        if (prev is null)
+            return (AggregateUsage(current), current.TotalCostUsd, DominantModel(current));
+
+        var decreased = false;
+        foreach (var (model, cur) in current.Models)
+        {
+            if (!prev.Models.TryGetValue(model, out var pre)) continue; // новая модель — не уменьшение
+            if (cur.InputTokens < pre.InputTokens
+                || cur.OutputTokens < pre.OutputTokens
+                || cur.CacheReadInputTokens < pre.CacheReadInputTokens
+                || cur.CacheCreationInputTokens < pre.CacheCreationInputTokens)
+            { decreased = true; break; }
+        }
+        if (!decreased && current.TotalCostUsd is double c && prev.TotalCostUsd is double p && c < p)
+            decreased = true;
+
+        if (decreased)
+            return (AggregateUsage(current), current.TotalCostUsd, DominantModel(current));
+
+        var delta = new SessionCostState();
+        foreach (var (model, cur) in current.Models)
+        {
+            if (prev.Models.TryGetValue(model, out var pre))
+            {
+                delta.Models[model] = new ModelUsageSnapshot
+                {
+                    InputTokens = cur.InputTokens - pre.InputTokens,
+                    OutputTokens = cur.OutputTokens - pre.OutputTokens,
+                    CacheReadInputTokens = cur.CacheReadInputTokens - pre.CacheReadInputTokens,
+                    CacheCreationInputTokens = cur.CacheCreationInputTokens - pre.CacheCreationInputTokens,
+                };
+            }
+            else
+            {
+                delta.Models[model] = cur; // новая модель — весь её вклад
+            }
+        }
+        double? cost = current.TotalCostUsd is double c2 && prev.TotalCostUsd is double p2
+            ? c2 - p2
+            : current.TotalCostUsd; // один из итогов null — берём текущий (консервативно)
+        return (AggregateUsage(delta), cost, DominantModel(delta));
     }
 
     // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для JSON

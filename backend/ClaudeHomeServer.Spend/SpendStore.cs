@@ -238,6 +238,23 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер backfill"); }
     }
 
+    // --- delta-backfill: маркер разовой миграции накопленных итогов в дельты хода (задача
+    // ad52316b, 2026-10-12). Как и backfill.done — идемпотентный маркер: файл существует →
+    // миграция уже прогонялась, повторный запуск no-op.
+    private string DeltaBackfillMarkerPath => Path.Combine(_dir, "delta-backfill.done");
+
+    public bool DeltaBackfillDone => File.Exists(DeltaBackfillMarkerPath);
+
+    public void MarkDeltaBackfillDone()
+    {
+        try
+        {
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(DeltaBackfillMarkerPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер delta-backfill"); }
+    }
+
     // --- диск ---
 
     private string TurnsPath(string date) => Path.Combine(_dir, $"turns-{date}.jsonl");

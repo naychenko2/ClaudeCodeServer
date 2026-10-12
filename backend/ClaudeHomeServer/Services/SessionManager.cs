@@ -2950,6 +2950,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             b.VoiceStyle = source.VoiceStyle;
             b.NotificationsMuted = source.NotificationsMuted;
             b.ExcludeFromDossiers = source.ExcludeFromDossiers;
+            // Накопленный cost-state CLI: транскрипт ветки — копия префикса родителя (с его
+            // cost-state), поэтому --resume ветки восстановит накопленный итог родителя. Базой
+            // для дельты первого хода ветки берём снимок родителя, иначе он засчитал бы всю
+            // историю родителя. (См. Session.LastCostState / ClaudeSession.ComputeTurnDelta.)
+            b.LastCostState = source.LastCostState;
             // НЕ наследуем: AutoAllowTools (человек переспросит один раз, а не тихая эскалация
             // прав), WorktreePath/WorktreeBranch/TaskId/TaskExecution/ExpiresAfterMinutes/
             // ArchivedAt/ArchiveBatchId/LastReadAt — фабрика их и так не выставляет.

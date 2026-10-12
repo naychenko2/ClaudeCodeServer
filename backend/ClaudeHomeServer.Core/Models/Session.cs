@@ -2,6 +2,28 @@
 
 public enum SessionStatus { Starting, Working, Active, Waiting, Finished, Error, Orphaned }
 
+// Накопленный снимок cost-state CLI (записи {"type":"cost-state"} в транскрипте) на момент
+// последнего хода сессии: токены по каждой модели (modelUsage) + total_cost_usd. CLI с 24.09
+// восстанавливает эти итоги на --resume, поэтому result.modelUsage/total_cost_usd — НАКОПЛЁННЫЙ
+// итог сессии, а не расход одного хода. Расход хода = дельта между двумя такими снимками
+// (ClaudeSession); сам снимок живёт персистентно в Session.LastCostState (процесс CLI
+// перезапускается между ходами, а --resume восстанавливает итог).
+public sealed class ModelUsageSnapshot
+{
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadInputTokens { get; set; }
+    public long CacheCreationInputTokens { get; set; }
+}
+
+public sealed class SessionCostState
+{
+    // model → накопленные токены. Ключ — имя модели из modelUsage.
+    public Dictionary<string, ModelUsageSnapshot> Models { get; set; } = new();
+    // Накопленная стоимость (total_cost_usd). null — CLI поля не прислал.
+    public double? TotalCostUsd { get; set; }
+}
+
 // Происхождение чата — вычисляется из TaskId/AutomationRuleId (см. Session.Origin),
 // отдельно не хранится, чтобы не было второго источника истины.
 public enum ChatOrigin { Manual, Task, Automation }
@@ -514,6 +536,15 @@ public class Session
     // Аддитивное nullable-поле с дефолтом: старые записи sessions.json читаются штатно,
     // BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths/Context).
     public string? BranchedFromSessionId { get; set; }
+    // Последний накопленный снимок cost-state CLI (по моделям + total_cost_usd) для расчёта
+    // дельты хода: расход хода = текущий снимок − этот (по каждой модели отдельно; при
+    // уменьшении — сам текущий снимок). Персистентно: процесс CLI перезапускается между ходами,
+    // а --resume восстанавливает накопленный итог, поэтому без него первый ход после рестарта
+    // засчитал бы всю историю сессии. null — снимка ещё нет (первый ход / история до поля).
+    // Форк чата (chat-branch) наследует снимок родителя (SessionManager.BranchAsync), иначе
+    // первый ход ветки засчитал бы всю историю родителя. Аддитивное nullable-поле: старые
+    // записи sessions.json читаются штатно, BackupSchema.Version не двигается.
+    public SessionCostState? LastCostState { get; set; }
     // Отдельное git worktree чата: рабочая папка сессии вместо project.RootPath.
     // Путь всегда ХОСТОВЫЙ (как Project.RootPath); в песочницу транслируется при запуске.
     // null — чат живёт в основном дереве проекта. Только для проектных сессий.

@@ -101,6 +101,13 @@ public static class BackupPaths
         if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
             && fileName.Equals("task-prompts.jsonl", StringComparison.OrdinalIgnoreCase))
             return false;
+        // Резервная копия исходных turns-*.jsonl перед разовой миграцией накопленных итогов в
+        // дельты хода (задача ad52316b): это локальный страховочный снимок, не источник истины —
+        // в облачный архив не едет (иначе данные расхода дублировались бы в бэкапе).
+        if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
+            && segments.Length > 1
+            && segments[^2].Equals("pre-delta-backup", StringComparison.OrdinalIgnoreCase))
+            return false;
         // Рабочая папка редактора картинок (ADR-017, раздел 5): варианты и маски сеансов —
         // кеш на 7 дней весом до гигабайт. Журнал трат редактора лежит рядом, в корне data
         // (image-editor-spend.jsonl), и в архив едет: это деньги, других копий у них нет.

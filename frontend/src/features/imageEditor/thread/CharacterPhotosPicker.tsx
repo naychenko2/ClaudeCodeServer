@@ -14,7 +14,7 @@ import { imageEditorApi, type ImageEditCharacter, type ImageEditCharacterPhoto }
 import { reloadCharacters } from '../characters/useCharacters';
 import { labelCaption, type PhotoLabelState } from '../characters/PhotoLabelChips';
 import { buildQuoteBody } from './quoteBody';
-import { CPS, counterText, emptySelectionText, initialSelection, newRunText, overLimitText, pickLimit, redrawBody, togglePick } from './characterPhotos';
+import { CPS, counterText, emptySelectionText, initialSelection, newRunText, overLimitText, pickLimit, pickerSubtitle, redrawBody, togglePick } from './characterPhotos';
 import type { ImageThread, ImageThreadCharacter, ImageThreadLaunch } from './threadsApi';
 
 // Ячейка фото: нажатие добавляет фото в конец порядка, повторное снимает (номера сдвигаются)
@@ -75,7 +75,7 @@ function Cell({ photo, url, index, selected, pos, limit, selectedCount, onToggle
 
 export function CharacterPhotosPicker({
   projectId, sessionId, thread, character, card, launch,
-  modelLabel, provider, modelId, format, onClose, onLaunching,
+  modelLabel, provider, modelId, maxCharacterPhotos, format, onClose, onLaunching,
 }: {
   projectId: string;
   sessionId: string;
@@ -87,12 +87,14 @@ export function CharacterPhotosPicker({
   modelLabel: string | null;
   provider: string | null;
   modelId: string | null;
+  // Лимит фото модели «Чем» (maxCharacterPhotos): local — 1, unset — лимит персонажа
+  maxCharacterPhotos?: number | null;
   // Желание формата проекта (ADR-025) — в котировку явно
   format: MediaFormatWish | null;
   onClose: () => void;
   onLaunching: (b: boolean) => void;
 }) {
-  const limit = pickLimit(card);
+  const limit = pickLimit(card, maxCharacterPhotos);
   const [order, setOrder] = useState<string[]>(() => initialSelection(character.photos, card.photos));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -163,7 +165,7 @@ export function CharacterPhotosPicker({
   return (
     <Modal
       title={CPS.pickerTitle}
-      subtitle={CPS.pickerSubtitle}
+      subtitle={pickerSubtitle(limit)}
       width={MODAL_W.form}
       onClose={onClose}
       footer={

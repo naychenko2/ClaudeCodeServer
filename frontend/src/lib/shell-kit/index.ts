@@ -78,7 +78,7 @@ export { followPeeked } from '../genPanelOpen';
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
 // ходит по своим маршрутам в обход фасада api
-export { OfflineError, request, readStoredToken } from '../offline';
+export { OfflineError, RequestTimeoutError, request, readStoredToken } from '../offline';
 
 // ─── featureFlags ────────────────────────────────────────────────────────────
 export { FLAGS, useFeature, getFlag } from '../featureFlags';

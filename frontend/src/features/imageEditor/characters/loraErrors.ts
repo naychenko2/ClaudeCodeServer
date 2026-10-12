@@ -1,6 +1,6 @@
 // Коды отказов ручек обучения и версий LoRA (ADR-026 §7) → типизированные причины для интерфейса.
 
-import { OfflineError, RequestTimeoutError } from '../../../lib/offline';
+import { OfflineError, RequestTimeoutError } from 'aihome_shell/kit';
 
 export type LoraFailReason =
   | 'disabled' | 'no_seam' | 'unavailable' | 'confirm_required' | 'bad_preset' | 'bad_trigger'

@@ -5,9 +5,9 @@ import { useState } from 'react';
 import { AlertCircle, Check, Cpu, Info, Layers, Pencil, Plug, Trash2 } from 'lucide-react';
 import {
   Badge, Button, ConfirmDialog, Field, IconButton, Notice, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
+  useIsMobile,
 } from 'aihome_shell/kit';
 import type { ImageEditLoras, LoraVersionDto } from '../api';
-import { useIsMobile } from '../../../lib/breakpoints';
 import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,

@@ -44,6 +44,12 @@ export function isEditorBlocked(_label: PhotoLabelState, busy?: boolean): boolea
   return !!busy;
 }
 
+// Есть ли фото, которое модель ещё размечает (все поля меток null — подпись «Размечаем…»):
+// шторка «Фото» по этому признаку перечитывает карточку персонажа, пока такое фото есть
+export function hasPendingLabels(photos: PhotoLabelState[]): boolean {
+  return photos.some(p => p.labelSource == null && p.angle == null && p.pitch == null && p.emotion == null);
+}
+
 // Источник разметки: иконка + подпись. none — без иконки.
 function sourceLine(label: PhotoLabelState): ReactNode {
   const attempted = label.labelSource != null || label.angle != null || label.pitch != null || label.emotion != null;

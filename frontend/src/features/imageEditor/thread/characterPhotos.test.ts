@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { ImageEditCharacter } from '../api';
 import {
   CPS, counterText, emptySelectionText, initialSelection, newRunText, overLimitText,
-  pickBadge, pickLimit, redrawBody, sceneLine, showReplace, stripVisible, togglePick,
+  pickBadge, pickLimit, pickerSubtitle, redrawBody, sceneLine, showReplace, stripVisible, togglePick,
 } from './characterPhotos';
 import type { ImageThreadCharacter } from './threadsApi';
 
@@ -117,15 +117,32 @@ describe('showReplace: видимость «Заменить»', () => {
   });
 });
 
-describe('pickLimit: лимит из DTO персонажа', () => {
-  it('photosPerRequest из DTO, а не число в коде', () => {
-    expect(pickLimit(card(['a.jpg', 'b.jpg'], 5))).toBe(5);
+describe('pickLimit: лимит по модели, иначе DTO персонажа', () => {
+  it('maxCharacterPhotos модели (local = 1) — в приоритете', () => {
+    expect(pickLimit(card(['a.jpg', 'b.jpg'], 3), 1)).toBe(1);
+    // Мутация: игнорировать maxCharacterPhotos — тест краснеет (вернёт 3 из DTO)
+  });
+
+  it('без maxCharacterPhotos (Nano Banana) — photosPerRequest из DTO', () => {
+    expect(pickLimit(card(['a.jpg', 'b.jpg'], 5), undefined)).toBe(5);
     // Мутация: игнорировать DTO и вернуть 3 — тест краснеет
   });
 
-  it('DTO без поля (флаг выключен) — 3, как в бэкенде', () => {
-    expect(pickLimit(card(['a.jpg', 'b.jpg']))).toBe(3);
+  it('без поля и без DTO (флаг выключен) — 3, как в бэкенде', () => {
+    expect(pickLimit(card(['a.jpg', 'b.jpg']), null)).toBe(3);
     expect(pickLimit(null)).toBe(3);
+  });
+});
+
+describe('pickerSubtitle: подсказка по лимиту', () => {
+  it('лимит 1 (local) — «Модель берёт одно фото…»', () => {
+    expect(pickerSubtitle(1)).toBe('Модель берёт одно фото — выберите самое подходящее.');
+    // Мутация: вернуть текст «первое фото» при лимите 1 — тест краснеет
+  });
+
+  it('лимит больше 1 — «Первое фото важнее остальных.»', () => {
+    expect(pickerSubtitle(3)).toBe('Первое фото важнее остальных.');
+    expect(pickerSubtitle(5)).toBe('Первое фото важнее остальных.');
   });
 });
 
@@ -166,9 +183,8 @@ describe('тексты окна', () => {
     // Мутация: «из {лимит}» → «из 3» — тест краснеет
   });
 
-  it('тексты заметки: заголовок, подсказка, ошибка, empty-state', () => {
+  it('тексты заметки: заголовок, ошибка, empty-state', () => {
     expect(CPS.pickerTitle).toBe('Какие фото взять');
-    expect(CPS.pickerSubtitle).toBe('Первое фото важнее остальных. Локальная модель берёт только одно.');
     expect(CPS.invalid).toBe('Части фото больше нет у персонажа. Выберите заново.');
     expect(CPS.singleHint).toBe('Добавьте фото в разных ракурсах — AI Home будет подбирать подходящее под сюжет.');
     expect(CPS.photoGone).toBe('Этого фото больше нет у персонажа');

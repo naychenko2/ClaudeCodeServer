@@ -179,7 +179,10 @@ public record ImageEditJobDto(
     int? EtaSeconds = null,
     int? RunElapsedSeconds = null,
     // Сходство лица с образцом персонажа по номеру варианта; null — персонажа нет или не считалось
-    IReadOnlyDictionary<int, double>? Similarities = null);
+    IReadOnlyDictionary<int, double>? Similarities = null,
+    // Операция запуска (generate / edit / inpaint / outpaint / …), camelCase; null — запуск без
+    // операции (обрезка, local-media)
+    string? Op = null);
 
 public static class ImageEditSizeNotes
 {

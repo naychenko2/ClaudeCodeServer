@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Media;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
@@ -695,8 +696,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
                 j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
-                j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null);
+                j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null,
+                Op: OpName(j.Quote.Op));
     }
+
+    // camelCase-имя операции запуска (generate / edit / inpaint / outpaint / …); как у AudioEditJobService
+    public static string OpName(ImageEditOp op) => JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
 
     // Сколько идёт текущий прогон по часам бэкенда; вне Running — null. Звать под j.Gate
     private int? RunElapsedSeconds(Job j) =>

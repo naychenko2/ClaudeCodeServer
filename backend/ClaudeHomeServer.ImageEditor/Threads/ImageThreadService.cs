@@ -484,7 +484,7 @@ public sealed class ImageThreadService(
             var from = thread?.Version(baseVersionId) is { } baseVersion ? $" · от: {ImageThread.Label(baseVersion)}" : "";
             var written = store.AddLaunch(ownerId, sessionId, threadId,
                 new ImageThreadLaunch(jobId, baseVersionId, baseStepId, store.Now(), ImageThreadLaunchStatus.Running,
-                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim()),
+                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim(), Op: job?.Op),
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
                     $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;

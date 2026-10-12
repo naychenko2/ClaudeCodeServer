@@ -240,6 +240,13 @@ public class CharacterPickLaunchRecordTests : IDisposable
     private Task Launched(string jobId) =>
         _service.OnLaunchedAsync(Owner, "p1", Chat, _threadId, Job(jobId), jobId, "кадр", ImageEditInitiator.Human, null, null, default);
 
+    private static ImageEditJobDto JobWithOp(string id, string op) =>
+        new(id, "p1", ImageEditJobStatus.Running, "fake", "fake-model", [], null, null, null, null, null, DateTime.UtcNow,
+            ChatSessionId: Chat, ThreadId: null, Op: op);
+
+    private Task LaunchedWithOp(string jobId, string op) =>
+        _service.OnLaunchedAsync(Owner, "p1", Chat, _threadId, JobWithOp(jobId, op), jobId, "кадр", ImageEditInitiator.Human, null, null, default);
+
     [Fact]
     public async Task Запуск_хранит_Character_если_выбор_пришёл_после_запуска()
     {
@@ -307,5 +314,32 @@ public class CharacterPickLaunchRecordTests : IDisposable
         var again = new ImageThreadStore(_root);
 
         again.Get(Owner, Chat).Threads.Single().Launches.Single().Character.Should().BeEquivalentTo(Choice);
+    }
+
+    [Fact]
+    public async Task Запуск_inpaint_записывает_Op_inpaint()
+    {
+        await LaunchedWithOp("job-inpaint", "inpaint");
+
+        LaunchOf("job-inpaint")!.Op.Should().Be("inpaint");
+    }
+
+    [Fact]
+    public async Task Запуск_generate_записывает_Op_generate()
+    {
+        await LaunchedWithOp("job-generate", "generate");
+
+        LaunchOf("job-generate")!.Op.Should().Be("generate");
+    }
+
+    [Fact]
+    public void Старая_запись_запуска_без_Op_читается()
+    {
+        const string old = """{"jobId":"j","baseVersionId":null,"baseStepId":null,"at":"2026-10-01T00:00:00Z","status":"done","initiator":"human","prompt":"p"}""";
+
+        var launch = JsonSerializer.Deserialize<ImageThreadLaunch>(old, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        launch!.JobId.Should().Be("j");
+        launch.Op.Should().BeNull();
     }
 }

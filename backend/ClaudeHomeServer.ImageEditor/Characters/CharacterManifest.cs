@@ -74,11 +74,43 @@ public sealed class CharacterManifest
             if (manifest is null || string.IsNullOrWhiteSpace(manifest.Name)) return null;
             manifest.Photos ??= [];
             manifest.Providers ??= [];
+            MigratePhotoLabels(manifest);
             return manifest;
         }
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    // Миграция при чтении: старый формат (до a65a51e39) ставил LabelSource = auto/noroute на всё фото,
+    // без AngleSource/EmotionSource. Новый код читает по месту, поэтому старый noroute (Angle=unknown,
+    // AngleSource=null) не попадал в Candidates и оставался unknown навсегда. Раскладываем общий
+    // LabelSource в по-местные источники: noroute → оба места noroute; auto → auto там, где значение
+    // заполнено. human не трогается (LabelSource = human — отдельный случай, не auto/noroute).
+    // Записывать на диск не нужно: нормализованная форма уйдёт при следующей обычной записи.
+    private static void MigratePhotoLabels(CharacterManifest manifest)
+    {
+        for (var i = 0; i < manifest.Photos.Count; i++)
+        {
+            var p = manifest.Photos[i];
+            // Уже новый формат (хотя бы один по-местный источник) или human/null — не трогаем
+            if (p.AngleSource is not null || p.EmotionSource is not null) continue;
+            if (p.LabelSource is not (PhotoLabelValues.Auto or PhotoLabelValues.NoRoute)) continue;
+
+            string? angleSource = null, emotionSource = null;
+            if (p.LabelSource == PhotoLabelValues.NoRoute)
+            {
+                // Старый noroute: разметить было нечем — оба места noroute, чтобы повторились, когда маршрут появится
+                angleSource = PhotoLabelValues.NoRoute;
+                emotionSource = PhotoLabelValues.NoRoute;
+            }
+            else // auto: для мест, где значение заполнено, источник auto (повторно не размечаем)
+            {
+                if (p.Angle is not null) angleSource = PhotoLabelValues.Auto;
+                if (p.Emotion is not null) emotionSource = PhotoLabelValues.Auto;
+            }
+            manifest.Photos[i] = p with { LabelSource = null, AngleSource = angleSource, EmotionSource = emotionSource };
         }
     }
 }

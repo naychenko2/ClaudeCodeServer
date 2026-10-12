@@ -47,6 +47,24 @@ public class CharacterPhotoLabelingTests : IDisposable
 
     private static CharacterPhotoLabeling.Job JobOf(string root, string slug) => new(Owner, root, slug);
 
+    // Перезаписывает character.json в старом формате (до a65a51e39): LabelSource на всё фото,
+    // без AngleSource/EmotionSource. Значения меток задаются явно (null — поле не пишется).
+    private static void WriteOldFormat(string root, string slug, string labelSource, string? angle, string? pitch, string? emotion)
+    {
+        var manifest = CharacterStore.Get(root, slug)!;
+        for (var i = 0; i < manifest.Photos.Count; i++)
+        {
+            var p = manifest.Photos[i];
+            manifest.Photos[i] = p with
+            {
+                Angle = angle, Pitch = pitch, Emotion = emotion,
+                LabelSource = labelSource, AngleSource = null, EmotionSource = null,
+            };
+        }
+        var dir = Path.Combine(root, "characters", slug);
+        File.WriteAllText(Path.Combine(dir, "character.json"), manifest.Serialize());
+    }
+
     [Fact]
     public async Task Флаг_выключен_ни_одного_вызова()
     {
@@ -783,6 +801,79 @@ public class CharacterPhotoLabelingTests : IDisposable
         Concurrency.Max.Should().Be(1);
         _media.Calls.Should().Be(2);
         CharacterStore.Get(root, a.Slug)!.Photos.Should().OnlyContain(p => p.Angle == "front" && p.Emotion == "neutral");
+    }
+
+    // Старый формат (до a65a51e39): LabelSource = noroute на всё фото, без AngleSource/EmotionSource.
+    // Без миграции фото не попадало в Candidates (Angle=unknown, AngleSource=null) и оставалось unknown
+    // навсегда. С миграцией: AngleSource/EmotionSource = noroute → после паузы фото размечается заново.
+    [Fact]
+    public async Task Старый_манифест_noroute_размечается_когда_маршрут_появится()
+    {
+        _flags.On = true;
+        var root = Root();
+        var m = MakeCharacter(root);
+        // Старый формат: noroute на всё фото, без по-местных источников
+        WriteOldFormat(root, m.Slug, "noroute", "unknown", "unknown", "unknown");
+        var time = new ManualTime(DateTime.UtcNow);
+        var svc = Service(time);
+
+        // Маршрут настроен (face-pose для ракурса, vision для эмоции)
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _media.Poses = [new(3, 2, 0), new(60, 0, 0), null];
+        _labeler.Answer = _ => ImageLabelResult.Ok(
+            "[{\"emotion\":\"smile\"},{\"emotion\":\"laugh\"},{\"emotion\":\"neutral\"}]");
+
+        // Пауза noroute: _lastNoRouteWriteUtc пуст (старый код не шёл через WriteAsync), поэтому inCooldown=false
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        var photos = CharacterStore.Get(root, m.Slug)!.Photos;
+        photos.Select(p => p.Angle).Should().Equal("front", "profile", "unknown");
+        photos.Select(p => p.Emotion).Should().Equal("smile", "laugh", "neutral");
+        photos.Should().OnlyContain(p => p.AngleSource == "auto" && p.EmotionSource == "auto");
+        _media.Calls.Should().Be(1);
+        _labeler.Calls.Should().Be(1);
+    }
+
+    // Старый формат: LabelSource = auto, значения заполнены. Миграция раскладывает в AngleSource/EmotionSource = auto.
+    // Повторной разметки нет: needs=false (значения заполнены), placeSource=auto ≠ noroute.
+    [Fact]
+    public async Task Старый_auto_повторно_не_размечается()
+    {
+        _flags.On = true;
+        var root = Root();
+        var m = MakeCharacter(root);
+        WriteOldFormat(root, m.Slug, "auto", "front", "level", "smile");
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _media.Poses = [new(3, 2, 0), new(60, 0, 0), null];
+        _labeler.Answer = _ => ImageLabelResult.Ok(
+            "[{\"emotion\":\"laugh\"},{\"emotion\":\"neutral\"},{\"emotion\":\"sad\"}]");
+
+        await Service().ProcessAsync(JobOf(root, m.Slug), default);
+
+        var photos = CharacterStore.Get(root, m.Slug)!.Photos;
+        // Значения не изменились, источники auto, повторных вызовов модели нет
+        photos.Should().OnlyContain(p => p.AngleSource == "auto" && p.EmotionSource == "auto");
+        photos[0].Angle.Should().Be("front");
+        photos[0].Emotion.Should().Be("smile");
+        _media.Calls.Should().Be(0, "повторной разметки нет");
+        _labeler.Calls.Should().Be(0, "повторной разметки нет");
+    }
+
+    // Старый формат: LabelSource = human. Миграция не трогает (human ≠ auto/noroute).
+    [Fact]
+    public void Старый_human_не_трогается()
+    {
+        var root = Root();
+        var m = MakeCharacter(root);
+        WriteOldFormat(root, m.Slug, "human", "profile", "level", "smile");
+
+        var photo = CharacterStore.Get(root, m.Slug)!.Photos[0];
+        photo.LabelSource.Should().Be("human");
+        photo.Angle.Should().Be("profile");
+        photo.AngleSource.Should().BeNull();
+        photo.EmotionSource.Should().BeNull();
     }
 
     private static bool IsWidth512(ImageTransformOp op) => op is ResizeOp { Width: 512, Height: null };

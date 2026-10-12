@@ -35,6 +35,15 @@ export function labelCaption(label: PhotoLabelState): { text: string; color: str
   return { text: LABELS.none, color: C.textMuted, italic: false };
 }
 
+// Блокировка редактора меток: только на время сохранения своего PATCH (busy).
+// Пока идёт авторазметка (все поля null, подпись «Размечаем…») — НЕ блокируем:
+// ручная метка главнее авторазметки (сервер ставит labelSource=human, авторазметка её
+// не затирает). Параметр label — в сигнатуре «по состоянию фото»: если pending снова
+// начнёт блокировать, это будет видно по этому аргументу.
+export function isEditorBlocked(_label: PhotoLabelState, busy?: boolean): boolean {
+  return !!busy;
+}
+
 // Источник разметки: иконка + подпись. none — без иконки.
 function sourceLine(label: PhotoLabelState): ReactNode {
   const attempted = label.labelSource != null || label.angle != null || label.pitch != null || label.emotion != null;
@@ -84,8 +93,7 @@ export function PhotoLabelEditor({ index, label, busy, saveError, onSave, onClos
   onClose: () => void;
   onRemove?: () => void;
 }) {
-  const pending = label.labelSource == null && label.angle == null && label.pitch == null && label.emotion == null;
-  const disabled = !!busy || pending;
+  const disabled = isEditorBlocked(label, busy);
 
   const set = (field: 'angle' | 'pitch' | 'emotion', value: string | null) => {
     onSave({ [field]: value });

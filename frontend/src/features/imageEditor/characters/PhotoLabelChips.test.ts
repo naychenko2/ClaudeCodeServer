@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { C } from 'aihome_shell/kit';
-import { labelCaption, type PhotoLabelState } from './PhotoLabelChips';
+import { isEditorBlocked, labelCaption, type PhotoLabelState } from './PhotoLabelChips';
 import { LABELS } from './characterTexts';
 
 describe('labelCaption', () => {
@@ -53,5 +53,22 @@ describe('labelCaption', () => {
   it('смешанно: ракурс известен, эмоция unknown — берём только ракурс', () => {
     const r = labelCaption({ angle: 'front', emotion: 'unknown', labelSource: 'auto' });
     expect(r.text).toBe('Анфас');
+  });
+});
+
+// isEditorBlocked — блокировка редактора меток (ADR-027 §1).
+// Ключевой кейс: pending (меток ещё нет) НЕ блокирует — ручная метка доступна всегда.
+describe('isEditorBlocked', () => {
+  it('pending (меток ещё нет) и не идёт сохранение — редактор активен', () => {
+    expect(isEditorBlocked({}, false)).toBe(false);
+    expect(isEditorBlocked({}, undefined)).toBe(false);
+  });
+
+  it('идёт сохранение своего PATCH — редактор заблокирован', () => {
+    expect(isEditorBlocked({}, true)).toBe(true);
+  });
+
+  it('метки уже есть (auto) и не идёт сохранение — редактор активен', () => {
+    expect(isEditorBlocked({ angle: 'front', labelSource: 'auto' }, false)).toBe(false);
   });
 });

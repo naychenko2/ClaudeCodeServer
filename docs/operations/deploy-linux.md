@@ -70,7 +70,7 @@
 | `PublishDir` | `string` | — | Куда указывает `ccs.service`. Без него `Misconfigured`. |
 | `StagingDir` | `string` | — | Сборка идёт сюда при живом сервере. |
 | `ReleasesDir` | `string` | — | Снимки релизов + `deploy-state.json` + `deploy.lock`. |
-| `KeepReleases` | `int` (1..20) | `3` | Сколько снимков держим — `switch-release.sh` ротирует после удачного health. |
+| `KeepReleases` | `int` (1..20) | `3` | Сколько снимков держим. На Linux-контуре **не используется** — `switch-release.sh` хранит жёсткие 5 (`RELEASES_KEEP=5` в начале скрипта) и `Deploy.KeepReleases` не пробрасывается; на Windows-контуре (`deploy-agent.ps1`) — `3`. |
 | `HealthTimeoutSec` | `int` (1..600) | `90` | Потолок гейта (см. `HEALTH_TRIES × HEALTH_SLEEP` = `18 × 5 c`). |
 | `StaleQueuedMinutes` | `int` (1..1440) | `15` | TTL заявки, не сдвинутой агентом с `queued` — иначе 409 навсегда. |
 | `TaskName` | `string` | `"CCS-Deploy"` | Только для Windows (`schtasks`); на Linux **не читается** — `DeployOptions.Misconfiguration` спрашивает только `AgentDir` и сам скрипт. Оставлять не нужно. |
@@ -118,9 +118,11 @@
 
 1. `journalctl --user -u ccs-deploy-<id>` — поднялся ли юнит, какие фазы
    прошёл, на каком шаге остановился.
-2. `tail -n 50 /opt/ccs/deploy-<id>.log` — текстовый лог switch-release.sh,
+2. `tail -n 50 $CCS_RELEASES_DIR/deploy-<id>.log` — текстовый лог `switch-release.sh`,
    включает health-попытки и итоговую строку `=== ГОТОВО ===` или
-   `=== ОТКАЧЕНО ===`.
+   `=== ОТКАЧЕНО ===`. По умолчанию `CCS_RELEASES_DIR=/opt/ccs/releases`, то есть
+   фактически путь `/opt/ccs/releases/deploy-<id>.log`; путь передаётся в скрипт
+   переменной `CCS_RELEASES_DIR` из секции `Deploy.ReleasesDir`.
 3. `cat /opt/ccs/releases/deploy-state.json | python3 -m json.tool` — фазы
    и `result.releaseId` при откате.
 4. `curl -fs -o /dev/null -w 'http=%{http_code} build=%header{X-Build}\n'

@@ -227,10 +227,15 @@ else
   build_frontend=1
 fi
 
+# Сборка идёт из relcheck, а не из основного дерева $AGENT_DIR. publish-linux.sh вычисляет
+# REPO от собственного пути (`REPO="$(cd "$(dirname "$0")/../.." && pwd)"`), поэтому
+# вызываем его из $REPO — иначе соберётся $AGENT_DIR (с грязным основным деревом и
+# неверной веткой), и sha в build-id.txt разойдётся с фактическим sha релиза. Это
+# тот же источник скрипта, что в ручной процедуре release-linux.md:43-47.
 log "deploy $deploy_id: publish-linux.sh (BUILD_FRONTEND=$build_frontend PUBLISH_DIR=$STAGING)"
 build_t0=$(( $(date +%s%N) / 1000000 ))
 if ! env BUILD_FRONTEND="$build_frontend" BUILD_DIFY=1 PUBLISH_DIR="$STAGING" \
-        "$AGENT_DIR/scripts/ops/publish-linux.sh" 2>&1; then
+        "$REPO/scripts/ops/publish-linux.sh" 2>&1; then
   journal_step build fail "$(( $(date +%s%N) / 1000000 - build_t0 ))"
   journal_finalize failed "publish-linux.sh упал"
   exit 0

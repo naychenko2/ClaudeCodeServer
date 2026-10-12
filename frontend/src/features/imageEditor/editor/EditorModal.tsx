@@ -14,9 +14,14 @@ import { imageEditorApi, type ImageTransformBase, type ImageTransformOp, type Im
 import { AdjustPanel } from '../AdjustPanel';
 import { CropBar } from '../CropBar';
 import { EditorCanvas } from '../EditorCanvas';
+import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
+import { FaceSwapBar } from '../FaceSwapBar';
+import { FaceSwapPanel } from '../FaceSwapPanel';
+import { faceSwapView, FS_TEXT } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
+import { useCharacters } from '../characters/useCharacters';
 import { SaveAsDialog } from '../SaveAsDialog';
 import { QUICK_ACTIONS, quickOffered, quickUsesOwnModel, type OutpaintRatio, type QuickAction } from '../editorInputs';
 import { hasMaskMark, type Mark, type Tool } from '../marks';
@@ -34,10 +39,11 @@ import {
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads, type EditorTool } from '../thread/threadStore';
-import { imageSrc, launchThread, quickAvailabilityFor, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
+import { imageSrc, launchFaceSwap, launchThread, quickAvailabilityFor, resolveModel, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
 import { useCatalog } from '../thread/catalog';
 import { modeSettings, usePrefs } from '../thread/prefs';
 import { useJobStatus } from '../thread/useJobStatus';
+import { useFaceSwap } from '../thread/faceSwap';
 
 const ic = (I: typeof Check, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -97,6 +103,26 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const { status } = useJobStatus(projectId, thread?.pendingJobId ?? null);
   const catalog = useCatalog(projectId);
   const prefs = usePrefs(projectId);
+  // «Подставить персонажа» (этап 2 · шаг 10b): режим поверх холста, как обрезка.
+  // versionId версии, на которой ищем лица; provider — исполнитель текущего запуска
+  const viewedVersionId = thread && !isLegacyThread(thread)
+    ? (findVersion(thread, versionId) ?? currentVersion(thread))?.id ?? null : null;
+  const editSettings = modeSettings('edit', prefs, thread?.settings);
+  const faceProvider = resolveModel(catalog, editSettings).pv?.key ?? null;
+  const faceSwap = useFaceSwap(projectId, sessionId, threadId, viewedVersionId, faceProvider);
+  const [faceSwapMode, setFaceSwapMode] = useState(startTool === 'faceSwap');
+  const { list: faceCharacters } = useCharacters(projectId);
+  // Локальное состояние экрана: мелкое лицо (тап), отказы запуска, «локальные на этот запуск», запуск
+  const [faceUi, setFaceUi] = useState({
+    tappedSmall: null as number | null, tooClose: false, busy: false, facesChanged: false, useLocalOnce: false, submitting: false,
+  });
+  // Вход в режим / смена версии-нити: новый поиск лиц + сброс переходных состояний (устаревший ответ не применяется)
+  useEffect(() => {
+    if (!faceSwapMode) return;
+    void faceSwap.search();
+    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, busy: false, facesChanged: false }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [faceSwapMode, threadId, viewedVersionId]);
   const viewedSrc = useMemo(() => {
     if (!thread) return null;
     const v = isLegacyThread(thread) ? null : findVersion(thread, versionId) ?? currentVersion(thread);
@@ -130,6 +156,24 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const saved = savedStepOf(thread.id);
   const inProject = viewed ? versionSaved(thread, viewed) : !!thread.currentStepId && thread.currentStepId === saved;
   const canSave = !!viewedStep && !transforming;
+  // «Подставить персонажа»: состояние экрана (faceSwapView) — плашка, плашки, canSubmit, список
+  const localAvailable = !!catalog && (catalog.providers.find(p => p.key === 'local')?.available ?? true);
+  const faceView = faceSwapMode ? faceSwapView({
+    phase: faceSwap.state.phase,
+    faces: faceSwap.state.faces,
+    selectedFace: faceSwap.state.selectedFace,
+    selectedCharacter: faceSwap.state.selectedCharacter,
+    error: faceSwap.state.error,
+    provider: faceProvider,
+    localAvailable,
+    useLocalOnce: faceUi.useLocalOnce,
+    tappedSmall: faceUi.tappedSmall,
+    over8: faceSwap.state.faces.length >= 8,
+    facesTooClose: faceUi.tooClose,
+    busy: faceUi.busy,
+    facesChanged: faceUi.facesChanged,
+    hasMask: hasMaskMark(marks),
+  }) : null;
 
   // Правка открытой не текущей версии: сначала она становится текущей
   const ensureCurrent = async () => (isCurrent || !viewed ? true : continueFrom(projectId, sessionId, thread, viewed.id));
@@ -199,15 +243,60 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const baseName = thread.file ? defaultStem(splitPath(thread.file).name) : 'kartinka';
   const format: ImageEncodeFormat = thread.file && /\.jpe?g$/i.test(thread.file) ? 'jpeg' : thread.file && /\.webp$/i.test(thread.file) ? 'webp' : 'png';
 
+  // «Подставить персонажа»: оверлей поверх картинки — поиск (scrim) или рамки лиц
+  const faceOverlayNode = faceSwapMode && dims ? (
+    faceSwap.state.phase === 'loading'
+      ? <FaceSearchScrim busy={faceSwap.state.error === 'busy'} text={faceView?.bar ?? FS_TEXT.search} />
+      : faceSwap.state.phase === 'ready' && faceSwap.state.faces.length > 0
+        ? <FaceOverlay
+            faces={faceSwap.state.faces} width={faceSwap.state.width} height={faceSwap.state.height}
+            selectedFace={faceSwap.state.selectedFace} tappedSmall={faceUi.tappedSmall}
+            errorFaces={faceUi.tooClose ? faceSwap.state.faces.map(f => f.n) : []}
+            mobile={mobile}
+            onSelect={n => {
+              const f = faceSwap.state.faces.find(x => x.n === n);
+              if (f?.small) setFaceUi(u => ({ ...u, tappedSmall: n }));
+              else faceSwap.selectFace(n);
+            }} />
+        : null
+  ) : null;
+
+  // Запуск подстановки: тем же путём (quote + startJob), faceTarget + characterSlug
+  const launchFaceSwapNow = async () => {
+    const ft = faceSwap.state.selectedFace;
+    const ch = faceSwap.state.selectedCharacter;
+    if (ft == null || !ch) return;
+    setFaceUi(u => ({ ...u, submitting: true }));
+    try {
+      const ok = await launchFaceSwap(projectId, sessionId, thread,
+        { versionId: viewedVersionId ?? '', face: ft, facesKey: faceSwap.state.facesKey ?? '' },
+        ch, viewedVersionId, dims);
+      if (ok) setFaceSwapMode(false); // новая версия ляжет в ленту; режим закрывается
+    } catch (e) {
+      const err = e as { body?: { code?: string; message?: string } };
+      const code = typeof err?.body?.code === 'string' ? err.body.code : null;
+      const msg = typeof err?.body?.message === 'string' ? err.body.message : (e as Error).message;
+      if (code === 'faces_changed') setFaceUi(u => ({ ...u, facesChanged: true }));
+      else if (code === 'busy' || code === 'provider_unavailable') setFaceUi(u => ({ ...u, busy: true }));
+      else if (msg.includes('близко')) setFaceUi(u => ({ ...u, tooClose: true }));
+      else showToast(`Запуск не удался: ${msg}`, '', 'error');
+    } finally {
+      setFaceUi(u => ({ ...u, submitting: false }));
+    }
+  };
+
   const canvas = shownSrc ? (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
       <EditorCanvas src={shownSrc} size={preview && !before ? null : dims} marks={preview && !before ? [] : marks}
-        onMarksChange={setMarks} tool={preview ? 'hand' : tool}
+        onMarksChange={setMarks} tool={preview || faceSwapMode ? 'hand' : tool}
         onTextAt={(x, y) => setLabelAt({ x, y, text: '' })}
         onImageLoad={onImageLoad}
         crop={crop} onCropChange={rect => setCrop(c => (c ? { ...c, rect } : c))}
-        hint={preview ? (before ? 'До: текущий шаг' : 'После: выбранный вариант') : crop ? 'Тяните рамку или её углы' : transforming ? 'Сохраняем правку…' : undefined}
-        overlay={crop && dims ? (
+        faceOverlay={faceOverlayNode}
+        hint={faceSwapMode ? (faceView?.bar ?? FS_TEXT.search) : preview ? (before ? 'До: текущий шаг' : 'После: выбранный вариант') : crop ? 'Тяните рамку или её углы' : transforming ? 'Сохраняем правку…' : undefined}
+        overlay={faceSwapMode && faceView ? (
+          <FaceSwapBar text={faceView.bar} icon={faceView.barIcon} mobile={mobile} onCancel={() => setFaceSwapMode(false)} />
+        ) : crop && dims ? (
           <CropBar ratio={crop.ratio} mobile={mobile}
             onRatio={r => setCrop(c => (c ? { ratio: r, rect: r === 'free' ? c.rect : fitCropRatio(c.rect, r, dims) } : c))}
             onCancel={() => setCrop(null)}
@@ -220,7 +309,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
             {before ? 'Показать после' : 'Показать до'}
           </Button>
         ) : undefined} />
-      {mobile && !preview && !crop && <MobileToolbar tool={tool} onTool={setTool} />}
+      {mobile && !preview && !crop && !faceSwapMode && <MobileToolbar tool={tool} onTool={setTool} />}
     </div>
   ) : (
     <div style={{
@@ -231,7 +320,29 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     </div>
   );
 
-  const side = (
+  // «Подставить персонажа»: панель выбора персонажа + подвал вместо обычного контента
+  const faceSide = faceSwapMode && faceView ? (
+    <div style={{
+      display: 'flex', flexDirection: 'column', width: mobile ? '100%' : 310, flexShrink: 0,
+      boxSizing: 'border-box', borderLeft: mobile ? undefined : `1px solid ${C.borderLight}`,
+      background: C.bgPanel, minHeight: 0,
+    }}>
+      <FaceSwapPanel
+        api={api} projectId={projectId}
+        characters={faceCharacters ?? []}
+        selectedCharacter={faceSwap.state.selectedCharacter}
+        inContextSlug={prefs.characterSlug}
+        listEnabled={faceView.listEnabled}
+        canSubmit={faceView.canSubmit}
+        quote={faceView.canSubmit ? FS_TEXT.quote : null}
+        localOnce={faceView.localOnce}
+        submitting={faceUi.submitting}
+        onPick={slug => faceSwap.selectCharacter(slug)}
+        onSubmit={() => { void launchFaceSwapNow(); }} />
+    </div>
+  ) : null;
+
+  const side = faceSide ?? (
     <div style={{
       display: 'flex', flexDirection: 'column', gap: SP.lg, padding: mobile ? SP.md : SP.lg,
       width: mobile ? '100%' : 310, flexShrink: 0, boxSizing: 'border-box',

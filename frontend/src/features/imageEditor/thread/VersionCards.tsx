@@ -8,13 +8,15 @@
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, RotateCcw, Save, ScanFace, Sparkles, Target, X,
+  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, Sparkles, Target, X,
 } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
+  Badge, Button, Dot, IconButton, Menu, MenuItem, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
   FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import { stripVisible } from './characterPhotos';
+import { useCharacters } from '../characters/useCharacters';
+import { useCatalog } from './catalog';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
@@ -129,6 +131,14 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const save = () => { if (src) void download(src, mime => downloadName(thread, version, mime)); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); setBusy(false); };
   const open = () => openEditor(sessionId, thread.id, version.id);
+  // «Подставить персонажа» (этап 2 · шаг 10b): вход — пункт меню «⋯», виден только в проекте,
+  // за флагом, при персонажах в проекте и доступных локальных моделях. Нет условия — нет и «⋯»
+  const faceFlag = useFeature(FLAGS.characterFaceSwap);
+  const { list: faceChars } = useCharacters(projectId);
+  const faceCatalog = useCatalog(projectId);
+  const faceLocal = faceCatalog ? (faceCatalog.providers.find(p => p.key === 'local')?.available ?? true) : false;
+  const faceEntryVisible = !personal && faceFlag && (faceChars?.length ?? 0) > 0 && faceLocal;
+  const [faceMenu, setFaceMenu] = useState(false);
 
   return (
     <Shell current={current} testId={String(version.number)}
@@ -171,13 +181,26 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Button>
         )}
         <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />
-        {src && primary !== 'download' && (
-          <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
+          {src && primary !== 'download' && (
             <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
               {ic(Download)}
             </IconButton>
-          </span>
-        )}
+          )}
+          {faceEntryVisible && (
+            <span style={{ position: 'relative', display: 'inline-flex' }}>
+              <IconButton size="xs" title="Ещё" ariaLabel="Ещё" active={faceMenu} onClick={() => setFaceMenu(v => !v)}>
+                {ic(MoreHorizontal)}
+              </IconButton>
+              {faceMenu && (
+                <Menu onClose={() => setFaceMenu(false)} align="right" bottom={30} minWidth={200}>
+                  <MenuItem icon={ic(ScanFace)} label="Подставить персонажа"
+                    onClick={() => { setFaceMenu(false); openEditor(sessionId, thread.id, version.id, { tool: 'faceSwap' }); }} />
+                </Menu>
+              )}
+            </span>
+          )}
+        </span>
       </div>
     </Shell>
   );

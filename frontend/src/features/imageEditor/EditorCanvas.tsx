@@ -20,7 +20,7 @@ const TOOL_HINT: Record<Tool, string> = {
 
 const clampZoom = (z: number) => Math.min(4, Math.max(0.25, z));
 
-export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, onImageLoad, crop, onCropChange, overlay, hint }: {
+export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, onImageLoad, crop, onCropChange, faceOverlay, overlay, hint }: {
   src: string;
   // Натуральный размер исходника; null — ещё грузится
   size: { w: number; h: number } | null;
@@ -33,7 +33,9 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   // Режим обрезки: рамка вместо пометок
   crop?: { rect: ImageFractionRect; ratio: CropRatio } | null;
   onCropChange?: (rect: ImageFractionRect) => void;
-  // Плашка снизу по центру (панель обрезки)
+  // «Подставить персонажа»: рамки лиц / затемнение поиска поверх картинки (в долях, как CropOverlay)
+  faceOverlay?: ReactNode;
+  // Плашка снизу по центре (панель обрезки)
   overlay?: ReactNode;
   // Подсказка сверху вместо подсказки инструмента
   hint?: string;
@@ -158,6 +160,7 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
               onPick={tool === 'eraser' && !crop ? i => onMarksChange(marks.filter((_, j) => j !== i)) : undefined} />
           </svg>
           {crop && onCropChange && <CropOverlay rect={crop.rect} ratio={crop.ratio} size={size} onChange={onCropChange} />}
+          {faceOverlay}
         </div>
       )}
       {/* Пока натуральный размер неизвестен, картинку грузим невидимо ради onLoad */}

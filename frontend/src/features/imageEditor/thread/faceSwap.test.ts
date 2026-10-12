@@ -103,6 +103,27 @@ describe('faceSwapReducer: out-of-order', () => {
     expect(stale).toBe(s);
   });
 
+  // Наблюдение Глеба (10b): экран обязан на смену версии/нити запускать НОВЫЙ поиск;
+  // устаревший ответ прежней версии не применяется. Это и есть out-of-order редьюсера,
+  // но в терминах смены версии: поиск версии A, смена на B (новый searchStart), ответ A — мимо
+  it('смена версии: новый поиск, устаревший ответ прежней версии не применяется', () => {
+    let s = initialFaceSwap;
+    // версия A: поиск №1 → одно лицо [1], авто-выбрано
+    s = faceSwapReducer(s, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchOk', response: resp([1]), requestId: 1 });
+    expect(s.faces.map(f => f.n)).toEqual([1]);
+    expect(s.selectedFace).toBe(1);
+    // смена на версию B: новый поиск №2
+    s = faceSwapReducer(s, { type: 'searchStart' });
+    // устаревший ответ версии A (requestId 1) приходит после старта поиска B → игнорируется
+    const stale = faceSwapReducer(s, { type: 'searchOk', response: resp([1]), requestId: 1 });
+    expect(stale).toBe(s);
+    // ответ версии B (requestId 2) → новое лицо; выбор — новое, а не устаревшее лицо A
+    s = faceSwapReducer(s, { type: 'searchOk', response: resp([2]), requestId: 2 });
+    expect(s.faces.map(f => f.n)).toEqual([2]);
+    expect(s.selectedFace).toBe(2); // autoSelect нового лица, не face 1 прежней версии
+  });
+
   it('unmount обнуляет requestSeq: ответ после размонтирования не применяется', () => {
     let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
     // requestSeq=1, ответ в пути

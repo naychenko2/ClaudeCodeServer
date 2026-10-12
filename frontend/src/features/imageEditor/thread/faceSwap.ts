@@ -14,6 +14,9 @@ export interface FaceSwapState {
   // Свежий список лиц (ready); facesKey — ключ ревизии, уходящий с запуском
   faces: DetectedFace[];
   facesKey: string | null;
+  // Размеры картинки (px) из ответа: bbox в пикселях масштабируется в доли через них
+  width: number;
+  height: number;
   // Выбранное лицо (n); null — не выбрано
   selectedFace: number | null;
   // Выбранный персонаж (slug); null — не выбран. Персонаж контекста сам не подставляется
@@ -26,7 +29,7 @@ export interface FaceSwapState {
 }
 
 export const initialFaceSwap: FaceSwapState = {
-  phase: 'idle', faces: [], facesKey: null, selectedFace: null, selectedCharacter: null, error: null, requestSeq: 0,
+  phase: 'idle', faces: [], facesKey: null, width: 0, height: 0, selectedFace: null, selectedCharacter: null, error: null, requestSeq: 0,
 };
 
 // Лицо «доступное»: не мелкое (small) — мелкое выбрать нельзя
@@ -70,7 +73,8 @@ export function faceSwapReducer(s: FaceSwapState, a: FaceSwapAction): FaceSwapSt
       if (a.requestId !== s.requestSeq) return s;
       const keep = !a.reset && s.selectedFace != null && a.response.faces.some(f => f.n === s.selectedFace);
       return {
-        ...s, phase: 'ready', faces: a.response.faces, facesKey: a.response.facesKey, error: null,
+        ...s, phase: 'ready', faces: a.response.faces, facesKey: a.response.facesKey,
+        width: a.response.width, height: a.response.height, error: null,
         selectedFace: a.reset ? null : keep ? s.selectedFace : autoSelect(a.response.faces),
       };
     }
@@ -82,7 +86,8 @@ export function faceSwapReducer(s: FaceSwapState, a: FaceSwapAction): FaceSwapSt
       if (a.requestId !== s.requestSeq) return s;
       // Сброс выбора лица: сервер сопоставил старую рамку с новой, безопаснее переспросить
       return {
-        ...s, phase: 'ready', faces: a.response.faces, facesKey: a.response.facesKey, error: null,
+        ...s, phase: 'ready', faces: a.response.faces, facesKey: a.response.facesKey,
+        width: a.response.width, height: a.response.height, error: null,
         selectedFace: null,
       };
     }

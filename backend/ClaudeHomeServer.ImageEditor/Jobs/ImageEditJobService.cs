@@ -340,9 +340,17 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (CharacterPicked is { } handlers)
         {
             var dto = ToDto(job);
+            // Запись отражает, что драйвер реально получил: Compose уже ужалил ссылки персонажа
+            // под лимит модели (локальная — 1), а подбор подменяет только эти позиции. Обрезаем
+            // список до числа реально отправленных фото — иначе блок «Фото персонажа» покажет
+            // фото, которые модель не видела
+            var sent = request.References.Count(r => r.Role == ReferenceRole.Character);
+            var launch = outcome.Launch;
+            if (launch.Photos.Count > sent)
+                launch = launch with { Photos = launch.Photos.Take(sent).ToList() };
             foreach (var listener in handlers.GetInvocationList().Cast<Func<string, ImageEditJobDto, ImageThreadCharacter, Task>>())
             {
-                try { await listener(job.OwnerId, dto, outcome.Launch); }
+                try { await listener(job.OwnerId, dto, launch); }
                 catch (Exception ex) { _log.LogWarning(ex, "Редактор картинок: слушатель подбора задачи {JobId} упал", job.Id); }
             }
         }

@@ -228,15 +228,16 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   (без `Error` и без `Busy`); ключ — `(ownerId, sha256 байт)`, `facesKey` = префикс sha256 + версия
   формата. Single-flight: два параллельных запроса на один ключ — один детектор.
 - **Вызывающий отвязан от детекции:** `GetOrDetectAsync` ждёт через `WaitAsync(ct)` — отмена
-  освобождает только этого вызывающего (OCE), single-flight-задача живёт для остальных. Путь запуска
-  детектит на `ct` запроса; read-only (MCP `image_find_faces`, ручка `faces`) — на
-  `CancellationToken.None`.
+  освобождает только этого вызывающего (OCE), single-flight-задача живёт для остальных. Детекция
+  всегда на `CancellationToken.None` (и в запуске, и read-only: MCP `image_find_faces`, ручка
+  `faces`); вызывающий отвязан через `WaitAsync(ct)`.
 - **Код → статус** (единая точка `ImageEditorEndpoints.Map`): `provider_unavailable` → 409,
   `faces_changed` → 409, `feature_disabled` → 404, `busy` → 503, `faces_too_close` /
   `face_out_of_frame` → 400.
 - **Инструменты агента:** новый read-only `image_find_faces` (номера лиц версии) и аргумент `face`
-  у `image_generate` — статичная схема; состав `tools/list` от флага `character-face-swap` не
-  зависит (инструмент не пропадает — отказ на вызове, `feature_disabled` 404).
+  у `image_generate` — статичная схема. `image_find_faces` в `tools/list` при
+  `ImageEditor:AgentLaunch=true` (`ToolsOfInstance`); флаг пользователя `character-face-swap`
+  на список не влияет — он даёт только отказ `feature_disabled` (404) на вызове.
 
 Поставщики (`Providers/`), каталог моделей с `caps` — `ImageEditCatalog`:
 

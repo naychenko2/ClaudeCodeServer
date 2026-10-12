@@ -413,4 +413,77 @@ public class FaceTargetLaunchTests : IDisposable
         // Стор контекста не читался вовсе
         getCallCount.Should().Be(0, "FaceTarget не должен читать IChatContextStore");
     }
+
+    // ── Отмена запуска не убивает single-flight-детекцию ───────────────────────────
+
+    [Fact]
+    public async Task Отмена_запуска_не_убивает_детекцию_для_остальных()
+    {
+        // Общий кэш: запуск и read-only ждут одну и ту же single-flight-задачу
+        var cache = new FaceDetectionCache();
+
+        // Управляемый детектор: записывает полученный токен, возвращает задачу,
+        // которую завершаем мы (без Task.Delay — TCS)
+        var tcs = new TaskCompletionSource<LocalFaceDetectResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenTcs = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detectCount = 0;
+
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Callback<byte[], CancellationToken>((_, ct) =>
+            {
+                Interlocked.Increment(ref detectCount);
+                tokenTcs.TrySetResult(ct);
+            })
+            .Returns(() => tcs.Task);
+
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+
+        // Ассемблер с общим кэшем
+        var assembler = new ImageEditLaunchAssembler(
+            [HiggsfieldImageEditorTests.Create().Editor],
+            QuoteJobs(),
+            new SkiaImageRaster(),
+            threads: _threads,
+            flags: Flags(true),
+            faces: cache,
+            localMedia: media.Object);
+
+        // Токен запуска — отменяем во время детекции
+        var launchCts = new CancellationTokenSource();
+
+        // (а) Запуск: ассемблер с FaceTarget
+        var launchTask = assembler.AssembleAsync(Owner, _scope, req, launchCts.Token);
+
+        // Ждём, пока детектор будет вызван (запись поставлена в кэш)
+        var sourceBytes = File.ReadAllBytes(Path.Combine(_root, "test.png"));
+        while (Volatile.Read(ref detectCount) == 0)
+            await Task.Delay(10);
+
+        // (б) Параллельный read-only: прямой GetOrDetectAsync с другим токеном
+        var readOnlyCts = new CancellationTokenSource();
+        var readOnlyTask = cache.GetOrDetectAsync(Owner, sourceBytes,
+            () => media.Object.DetectFacesAsync(sourceBytes, CancellationToken.None), readOnlyCts.Token);
+
+        // Отменяем токен запуска
+        launchCts.Cancel();
+
+        // Запуск получает OCE
+        var launchEx = await Record.ExceptionAsync(() => launchTask);
+        launchEx.Should().BeAssignableTo<OperationCanceledException>();
+
+        // Завершаем детекцию
+        tcs.SetResult(new LocalFaceDetectResult(200, 200, faces));
+
+        // Read-only получает результат (верхний таймаут 2 с: поломка краснит, а не вешает)
+        var readOnlyResult = await readOnlyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        readOnlyResult.Faces.Should().HaveCount(1);
+
+        // Детектор не получил отменённый токен: детекция на CancellationToken.None
+        (await tokenTcs.Task).CanBeCanceled.Should().BeFalse("детекция должна быть на CancellationToken.None");
+
+        // Детектор вызван один раз (single-flight)
+        Volatile.Read(ref detectCount).Should().Be(1);
+    }
 }

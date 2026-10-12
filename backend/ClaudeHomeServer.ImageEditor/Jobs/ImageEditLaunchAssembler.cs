@@ -318,7 +318,7 @@ public sealed class ImageEditLaunchAssembler(
         var detector = faces ?? new Faces.FaceDetectionCache();
         Func<Task<LocalFaceDetectResult>> detect = localMedia is null
             ? () => Task.FromResult(new LocalFaceDetectResult(0, 0, [], "Детекция лиц здесь не поддерживается."))
-            : () => localMedia.DetectFacesAsync(sourceBytes, ct);
+            : () => localMedia.DetectFacesAsync(sourceBytes, CancellationToken.None);
         var result = await detector.GetOrDetectAsync(ownerId, sourceBytes, detect, ct);
         if (result.Busy)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.Busy, "Видеокарта занята долгой задачей. Попробуйте чуть позже");

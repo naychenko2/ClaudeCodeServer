@@ -305,6 +305,88 @@ public class CharacterPhotoLabelingTests : IDisposable
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.Angle == null && p.Pitch == null);
     }
 
+    // Нет маршрута (модель разметки не настроена): сразу unknown, без трёх попыток и без вызовов
+    [Fact]
+    public async Task Нет_маршрута_сразу_unknown_без_повторов()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+        // Без маршрута ни vision, ни face-pose не вызываются
+        _labeler.Calls.Should().Be(0);
+        _media.Calls.Should().Be(0);
+
+        // Повторный заход: unknown повторно не уходит, вызовов всё ещё нет
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        _labeler.Calls.Should().Be(0);
+        _media.Calls.Should().Be(0);
+    }
+
+    // Итог «не размечено» доходит до DTO непустым (labelSource=auto + unknown), иначе фронт
+    // считает фото «Размечаем…»: все четыре поля (labelSource, angle, pitch, emotion) пустые
+    [Fact]
+    public async Task Нет_маршрута_итог_доходит_до_DTO_непустым()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        var root = Root();
+        var m = MakeCharacter(root);
+
+        await Service().ProcessAsync(JobOf(root, m.Slug), default);
+
+        var dto = CharacterDto.From(CharacterStore.Get(root, m.Slug)!, withLabels: true);
+        // Не «размечается»: labelSource непустой, и хотя бы одна метка (unknown) дошла
+        dto.Photos.Should().OnlyContain(p =>
+            p.LabelSource != null && (p.Angle != null || p.Pitch != null || p.Emotion != null));
+    }
+
+    // Face-pose: ComfyUI настроен, но лежит — временный сбой, до трёх попыток, потом unknown
+    [Fact]
+    public async Task FacePose_ComfyUI_лежит_после_трёх_попыток_unknown()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _media.Available = false; // настроен, но ComfyUI сейчас лежит
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        for (var round = 0; round < CharacterPhotoLabeling.MaxFailures; round++)
+            await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "auto");
+        // ComfyUI лежит — FacePoseAsync не вызывался, только счётчик Failed
+        _media.Calls.Should().Be(0);
+    }
+
+    // Face-pose: подсистема не настроена (тумблер выключен) — нет маршрута, сразу unknown
+    [Fact]
+    public async Task FacePose_не_настроен_сразу_unknown()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _media.Configured = false; // тумблер local-media выключен
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "auto");
+        _media.Calls.Should().Be(0);
+    }
+
     [Fact]
     public async Task Сжатие_до_512_перед_отправкой_в_облако()
     {
@@ -418,8 +500,8 @@ public class CharacterPhotoLabelingTests : IDisposable
 
     private sealed class FakeMedia : ILocalImageMedia
     {
-        public bool Available => true;
-        public bool Configured => true;
+        public bool Available { get; set; } = true;
+        public bool Configured { get; set; } = true;
         public bool Busy { get; set; }
         public TimeSpan Delay { get; set; }
         public IReadOnlyList<LocalFacePose?> Poses { get; set; } = [];

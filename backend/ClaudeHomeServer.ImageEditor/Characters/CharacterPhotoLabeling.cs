@@ -12,7 +12,8 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Фоновая разметка ракурса и эмоции фото персонажа (ADR-027 §9). Очередь на инстанс: один исполнитель,
 // персонажи строго по одному, дедупликация по (корень, slug). Ставят её ленивые поводы (загрузка фото,
 // чтение списка и карточки, запуск с персонажем), обхода диска при старте нет. Флаг владельца
-// выключен — ни одного вызова. Временная недоступность ничего не пишет: фото дождутся следующего повода.
+// выключен — ни одного вызова. Нет маршрута (модель разметки не настроена) — сразу unknown, без
+// повторов; временная недоступность — до трёх попыток, потом unknown.
 public sealed class CharacterPhotoLabeling(
     CharacterLoraRuns locks,
     ILogger<CharacterPhotoLabeling> log,
@@ -92,6 +93,15 @@ public sealed class CharacterPhotoLabeling(
             .Take(BatchSize)
             .Select(p => p.File)];
 
+    // «Нет маршрута»: сразу unknown для каждого фото, без счётчика Failed и трёх попыток
+    private static Dictionary<string, CharacterPhotoLabels> UnknownLabels(
+        List<string> files, CharacterPhotoLabels unknown)
+    {
+        var labels = new Dictionary<string, CharacterPhotoLabels>();
+        foreach (var file in files) labels[file] = unknown;
+        return labels;
+    }
+
     private async Task<Dictionary<string, CharacterPhotoLabels>?> LabelAngleAsync(
         Job job, List<string> files, CancellationToken ct)
     {
@@ -107,19 +117,34 @@ public sealed class CharacterPhotoLabeling(
                     Pick(e, "angle", PhotoLabelValues.Angles), Pick(e, "pitch", PhotoLabelValues.Pitches)),
                     new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown));
             default:
-                return null;
+                // Маршрута нет (модель разметки не настроена): сразу unknown, без трёх попыток
+                return UnknownLabels(files, new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown));
         }
     }
 
     private async Task<Dictionary<string, CharacterPhotoLabels>?> FacePoseAsync(
         Job job, List<string> files, CancellationToken ct)
     {
-        if (localMedia is not { Available: true }) return null;
+        var unknown = new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown);
+        // Подсистемы local-media нет или тумблер выключен: разметить некем — сразу unknown,
+        // без трёх попыток (не вернётся без настройки)
+        if (localMedia is null || !localMedia.Configured)
+            return UnknownLabels(files, unknown);
+        // ComfyUI настроен, но сейчас лежит: временный сбой — до трёх попыток
+        if (!localMedia.Available)
+        {
+            await RegisterFailureAsync(job, LocalActionCatalog.CharacterPhotoAngle, files, unknown, ct);
+            return null;
+        }
         var bytes = ReadPhotos(job, files);
         if (bytes.Count == 0) return null;
         var result = await localMedia.FacePoseAsync([.. bytes.Select(b => b.Bytes)], ct);
-        // Busy, ошибка узла, ответ не по числу входов — «позже»: ничего не пишем
-        if (result.Poses is null || result.Poses.Count != bytes.Count) return null;
+        // Busy, ошибка узла, ответ не по числу входов — «позже»: временный сбой, до трёх попыток
+        if (result.Poses is null || result.Poses.Count != bytes.Count)
+        {
+            await RegisterFailureAsync(job, LocalActionCatalog.CharacterPhotoAngle, files, unknown, ct);
+            return null;
+        }
         var labels = new Dictionary<string, CharacterPhotoLabels>();
         for (var i = 0; i < bytes.Count; i++)
         {
@@ -135,7 +160,9 @@ public sealed class CharacterPhotoLabeling(
         Job job, List<string> files, CancellationToken ct)
     {
         var route = labeler!.RouteOf(LocalActionCatalog.CharacterPhotoEmotion, job.OwnerId);
-        if (route.Kind != ImageLabelRouteKind.Vision) return null;
+        if (route.Kind != ImageLabelRouteKind.Vision)
+            // Маршрута нет (эмоция — только vision): сразу unknown, без трёх попыток
+            return UnknownLabels(files, new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown));
         var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoEmotion, EmotionPrompt, files,
             new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown), ct);
         return answers is null ? null : MapVision(files, answers,

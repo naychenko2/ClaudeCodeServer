@@ -1,7 +1,8 @@
 #!/bin/bash
-# Установка узла сходства лиц (CcsFaceSimilarity) на машину с ComfyUI (GPU1). Идемпотентно:
-# повторный запуск доставляет недостающее. Подробности и причины каждого шага — README.md
-# рядом.
+# Установка узлов лиц (все каталоги ccs_face_* рядом: CcsFaceSimilarity, CcsFacePose...) на
+# машину с ComfyUI (GPU1). Идемпотентно: повторный запуск доставляет недостающее, а
+# workers.json сливается, а не перезаписывается. Подробности и причины каждого шага —
+# README.md рядом.
 #
 #   FACE_ROOT    — venv и код                        (по умолчанию ~/ai-data/face-workers)
 #   FACE_MODELS  — веса buffalo_l вне HF-кэша         (по умолчанию ~/ai-data/face-models)
@@ -21,8 +22,16 @@ mkdir -p "$FACE_ROOT" "$FACE_MODELS"
 # первом checkout другой ветки или удалении worktree. Структура повторяет audio: внутри
 # $DEPLOY лежат папка узла (для custom_nodes) и warm_models.py (для скачивания весов)
 DEPLOY="$FACE_ROOT/ccs"
-mkdir -p "$DEPLOY/ccs_face_similarity"
-rsync -a --delete --exclude '__pycache__' "$HERE/ccs_face_similarity/" "$DEPLOY/ccs_face_similarity/"
+NODES=()
+for dir in "$HERE"/ccs_face_*/; do
+  [ -d "$dir" ] || continue
+  NODES+=("$(basename "$dir")")
+done
+[ ${#NODES[@]} -gt 0 ] || { echo "ОШИБКА: рядом нет ни одного каталога ccs_face_*" >&2; exit 1; }
+for node in "${NODES[@]}"; do
+  mkdir -p "$DEPLOY/$node"
+  rsync -a --delete --exclude '__pycache__' "$HERE/$node/" "$DEPLOY/$node/"
+done
 cp -f "$HERE/warm_models.py" "$DEPLOY/warm_models.py"
 
 if [ "${1:-}" != "--link-only" ]; then
@@ -48,14 +57,35 @@ if [ "${1:-}" != "--link-only" ]; then
 fi  # --link-only: только копия узла, при выкатке новой версии
 
 echo "== конфиг воркера"
-cat > "$FACE_ROOT/workers.json" <<JSON
-{"families": {
-  "similarity": {"python": "$FACE_ROOT/.venv/bin/python",
-                 "script": "$DEPLOY/ccs_face_similarity/worker_similarity.py"}
-}}
-JSON
+# Слияние, а не перезапись: трогаем только семейства своих узлов (ccs_face_<семейство> с
+# worker_<семейство>.py), остальные ключи файла остаются как были. Узел без воркера
+# пропускаем. Битый JSON — отказ, а не молчаливая перезапись. Запись через временный файл
+python3 - "$FACE_ROOT/workers.json" "$FACE_ROOT/.venv/bin/python" "$DEPLOY" "${NODES[@]}" <<'PY'
+import json, os, sys
+path, python, deploy, nodes = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+cfg = {}
+if os.path.exists(path):
+    with open(path, encoding="utf-8") as f:
+        cfg = json.load(f)
+families = cfg.setdefault("families", {})
+for node in nodes:
+    fam = node[len("ccs_face_"):]
+    script = os.path.join(deploy, node, f"worker_{fam}.py")
+    if not os.path.isfile(script):
+        print(f"   {node}: нет worker_{fam}.py — семейство пропущено")
+        continue
+    families[fam] = {**families.get(fam, {}), "python": python, "script": script}
+    print(f"   {fam}: {script}")
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+os.replace(tmp, path)
+PY
 
-echo "== узел ComfyUI"
-ln -sfn "$DEPLOY/ccs_face_similarity" "$COMFY_ROOT/custom_nodes/ccs_face_similarity"
+echo "== узлы ComfyUI"
+for node in "${NODES[@]}"; do
+  ln -sfn "$DEPLOY/$node" "$COMFY_ROOT/custom_nodes/$node"
+  echo "   $node"
+done
 echo "Готово. Дальше: рестарт comfyui-h3 при ПУСТОЙ очереди,"
-echo "узел в /object_info/CcsFaceSimilarity."
+echo "узлы в /object_info/CcsFaceSimilarity, /object_info/CcsFacePose..."

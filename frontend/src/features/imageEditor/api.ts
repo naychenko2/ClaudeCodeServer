@@ -157,6 +157,9 @@ export interface ImageEditJobInput {
   annotated?: Blob;
   // Подключённый персонаж проекта: сервер добавит его фото образцами с ролью Character
   characterSlug?: string;
+  // Явный список фото персонажа (имена файлов манифеста, до photosPerRequest): «Заменить» в
+  // блоке «Фото персонажа» (ADR-027, шаг 18); без него сервер сам подбирает/берёт по порядку
+  characterPhotos?: string[];
   // Образцы с компьютера (байты) и из проекта (путь от корня) — у каждого своя роль
   references?: ImageEditUploadedReference[];
   referencePaths?: ImageEditProjectReference[];
@@ -191,6 +194,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.mask) form.append('mask', input.mask, 'mask.png');
   if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
   if (input.characterSlug) form.append('characterSlug', input.characterSlug);
+  for (const f of input.characterPhotos ?? []) form.append('characterPhotos', f);
   for (const r of input.references ?? []) {
     form.append('references', r.file, r.name);
     form.append('referenceRoles', r.role);

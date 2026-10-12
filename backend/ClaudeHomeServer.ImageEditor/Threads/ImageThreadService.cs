@@ -471,7 +471,7 @@ public sealed class ImageThreadService(
     // запуске из журнала; якорь модель не видит
     public async Task OnLaunchedAsync(string ownerId, string projectId, string sessionId, string threadId,
         ImageEditJobDto? job, string jobId, string prompt, ImageEditInitiator initiator, string? baseVersionId,
-        string? baseStepId, CancellationToken ct)
+        string? baseStepId, CancellationToken ct, ImageThreadFaceTarget? faceTarget = null)
     {
         try
         {
@@ -484,7 +484,8 @@ public sealed class ImageThreadService(
             var from = thread?.Version(baseVersionId) is { } baseVersion ? $" · от: {ImageThread.Label(baseVersion)}" : "";
             var written = store.AddLaunch(ownerId, sessionId, threadId,
                 new ImageThreadLaunch(jobId, baseVersionId, baseStepId, store.Now(), ImageThreadLaunchStatus.Running,
-                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim(), Op: job?.Op),
+                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim(), Op: job?.Op,
+                    FaceTarget: faceTarget),
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
                     $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;

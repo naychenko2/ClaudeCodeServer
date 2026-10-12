@@ -48,6 +48,10 @@ public static class ImageEditCatalogReasons
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
+// Цель подстановки персонажа на лицо (ADR-027, §4, этап 2): VersionId — версия нити,
+// Face — номер лица (с 1), FacesKey — детерминирован по байтам версии (сверка 7b)
+public sealed record FaceTarget(string VersionId, int Face, string FacesKey);
+
 // Выбор человека (поставщик + модель или «auto» с режимом) и признаки запроса.
 // HasAnnotations — стрелки, рамки, подписи на холсте (кисть сюда не входит — это HasMask);
 // Removal — запрос просит стереть отмеченное (фронт считает так же, как EditIntent.IsRemoval).
@@ -73,7 +77,11 @@ public record ImageEditQuoteRequest(
     // Действующий формат под модель считает сервер (MediaFormatResolver), а не клиент
     ClaudeHomeServer.Services.Media.MediaFormat? Format = null,
     // Заполняет сервер перед обращением к драйверу котировки; из тела запроса игнорируется
-    ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null);
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null,
+    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): при наличии — запуск считает как
+    // обычную локальную правку (бесплатно, ETA правки); персонаж обязателен
+    FaceTarget? FaceTarget = null,
+    string? CharacterSlug = null);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
 // EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
@@ -133,7 +141,9 @@ public record ImageEditJobInput(
     string? BaseVersionId = null,
     // Подбор фото персонажа под сюжет (ADR-027 §7): выполняется в задаче перед драйвером, а не в
     // запуске; null — флаг выключен или персонажа нет
-    Func<CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null);
+    Func<CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null,
+    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): запись в нить для подписи карточки
+    ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null);
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);

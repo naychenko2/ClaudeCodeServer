@@ -28,7 +28,8 @@ public abstract class ImageEditorEndpoints(
     ImageEditSteps? steps,
     IConfiguration? config,
     IImageRaster? raster,
-    ImageContextLaunch? context = null) : ControllerBase
+    ImageContextLaunch? context = null,
+    IFeatureFlagGate? flags = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -123,6 +124,21 @@ public abstract class ImageEditorEndpoints(
                 $"Число вариантов — от 1 до {maxCount}");
         if (jobs is null) return JobsUnavailable();
 
+        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): проверки a, b; детекция — только на запуске
+        if (req.FaceTarget is not null)
+        {
+            if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
+                return Error(StatusCodes.Status404NotFound, "feature_disabled", "Подстановка персонажа на лицо выключена");
+            if (scope.Project is null)
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Подстановка персонажа на лицо — только в проекте");
+            if (req.CharacterSlug is not { Length: > 0 })
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Укажите персонажа");
+            if (editor.Key != "local")
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Подставлять персонажа можно только локальными моделями");
+        }
+
         // По ревизии контекста (ADR-023 §Д2.1): образцы, персонаж и размер — из стора, поля тела игнорируются
         ImageContextLaunch.Inputs? byContext = null;
         if (req.ContextRevision is { } revision)
@@ -187,7 +203,8 @@ public abstract class ImageEditorEndpoints(
             ThreadId: form.ThreadId,
             VersionId: form.VersionId,
             ContextRevision: form.ContextRevision,
-            CharacterPhotos: form.CharacterPhotos);
+            CharacterPhotos: form.CharacterPhotos,
+            FaceTarget: ParseFaceTarget(form.FaceTarget));
 
         var started = await launcher.LaunchAsync(UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -300,6 +317,8 @@ public abstract class ImageEditorEndpoints(
         // Ревизия контекста чата (ADR-023 §Д2.1): с ней входы берутся из стора, а Source, References,
         // ReferencePaths, CharacterSlug, ThreadId и VersionId тела игнорируются; не совпала — 409 context_changed
         public long? ContextRevision { get; set; }
+        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): JSON-строка {versionId, face, facesKey}
+        public string? FaceTarget { get; set; }
     }
 
     // Строковой проверки SafePath мало: символическая ссылка внутри проекта (refs → /etc)
@@ -349,6 +368,23 @@ public abstract class ImageEditorEndpoints(
         && Enum.TryParse<ReferenceRole>(roles[index], ignoreCase: true, out var role)
             ? role
             : ReferenceRole.Object;
+
+    // JSON-строка {versionId, face, facesKey} → FaceTarget; null/пусто — null; битый JSON — null
+    // (ассемблер проверит наличие и валидность)
+    private static FaceTarget? ParseFaceTarget(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("versionId", out var vid) ||
+                !root.TryGetProperty("face", out var face) ||
+                !root.TryGetProperty("facesKey", out var key)) return null;
+            return new FaceTarget(vid.GetString() ?? "", face.GetInt32(), key.GetString() ?? "");
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
 
     protected static async Task<byte[]> ReadAsync(IFormFile file, CancellationToken ct)
     {

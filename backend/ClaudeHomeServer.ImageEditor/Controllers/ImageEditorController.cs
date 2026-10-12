@@ -38,7 +38,7 @@ public class ImageEditorController(
     IFeatureFlagGate? flags = null,
     CharacterPhotoLabeling? labeling = null,
     CharacterLoraRuns? loraRuns = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
+    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context, flags)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string projectId) =>

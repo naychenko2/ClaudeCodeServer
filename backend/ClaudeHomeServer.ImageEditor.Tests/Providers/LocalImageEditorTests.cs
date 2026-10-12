@@ -193,6 +193,7 @@ public class LocalImageEditorTests : IDisposable
         sent.EraseMask.Should().BeNull();
         sent.Images.Should().HaveCount(2);
         sent.Images[1].Should().Equal(mask, "маска — вторая картинка после холста");
+        sent.KeepMask.Should().Equal(mask, "кисть без пометок — граф склеит «вне маски — исходник»");
         sent.Prompt.Should().Contain("маска: белое — область, которую менять");
     }
 
@@ -210,6 +211,7 @@ public class LocalImageEditorTests : IDisposable
         job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
         var sent = media.Submitted.Should().ContainSingle().Subject;
         sent.EraseMask.Should().Equal(mask);
+        sent.KeepMask.Should().BeNull("стирание и склейка «вне маски» несовместимы — адаптер бы отказал");
         sent.Images.Should().ContainSingle("размеченная копия и маска-образец стираемое только показали бы");
         sent.Prompt.Should().StartWith("удали").And.Contain(LocalImageEditor.EraseNote);
     }
@@ -243,6 +245,7 @@ public class LocalImageEditorTests : IDisposable
         sent.Op.Should().Be(LocalImageOp.Edit);
         // 8×8 до 16:9 — ширина 14, по 3 px слева и справа
         sent.Pad.Should().Be(new LocalImagePad(3, 0, 3, 0));
+        sent.KeepMask.Should().BeNull("дорисовка за края — холст расширяется, «вне маски» нечего склеивать");
         sent.Images.Should().ContainSingle("образец другой пропорции сбил бы модель с полей");
         sent.Prompt.Should().Be(LocalImageEditor.OutpaintNote);
     }
@@ -274,6 +277,7 @@ public class LocalImageEditorTests : IDisposable
 
         job.Variants.Should().Equal(1, 2, 3);
         media.Submitted.Should().HaveCount(3).And.OnlyContain(r => r.Count == 1);
+        media.Submitted.Should().OnlyContain(r => r.KeepMask == null, "без маски — «вне маски» склеивать нечего, запрос прежний");
     }
 
     // Полоса прогресса: каждая стадия несёт номер прогона, их число и ETA из ответа на постановку
@@ -468,6 +472,7 @@ public class LocalImageEditorTests : IDisposable
         sent.Images[1].Should().Equal(annotated);
         sent.Images[2].Should().Equal(mask);
         sent.Images[3].Should().Equal(faces[0].Bytes);
+        sent.KeepMask.Should().BeNull("размеченная копия может просить правку вне кисти — склейка выбросила бы её");
         sent.Prompt.Should().Contain("1) исходная картинка").And.Contain("2) та же картинка с пометками")
             .And.Contain("3) маска").And.Contain("4) фото лица — персонаж «Тимур»");
     }

@@ -11,6 +11,7 @@ import {
   type MediaFormatWish,
 } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCharacter, type ImageEditCharacterPhoto } from '../api';
+import { reloadCharacters } from '../characters/useCharacters';
 import { labelCaption, type PhotoLabelState } from '../characters/PhotoLabelChips';
 import { buildQuoteBody } from './quoteBody';
 import { CPS, counterText, emptySelectionText, initialSelection, newRunText, overLimitText, pickLimit, redrawBody, togglePick } from './characterPhotos';
@@ -149,7 +150,7 @@ export function CharacterPhotosPicker({
       const err = e as { status?: number; body?: { code?: string; message?: string } };
       if (err?.body?.code === 'character_photos_invalid') {
         setError(CPS.invalid);
-        void import('../characters/useCharacters').then(m => m.reloadCharacters(projectId));
+        void reloadCharacters(projectId);
       } else {
         showToast(`Генерация не запущена: ${err?.body?.message ?? (e as Error).message}`, '', 'error');
       }

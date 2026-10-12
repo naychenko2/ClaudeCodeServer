@@ -65,7 +65,8 @@ public class CharacterPhotoPickerTests
     {
         var pick = CharacterPhotoPicker.Pick(Set, new CharacterScene("profile", null, null), 2);
         pick.Pick.Should().Be("auto");
-        Files(pick).Should().Equal("main.jpg", "b.jpg");
+        // Точное совпадение ракурса → профильное фото первым, главное вторым
+        Files(pick).Should().Equal("b.jpg", "main.jpg");
     }
 
     [Fact]
@@ -140,11 +141,12 @@ public class CharacterPhotoPickerTests
     }
 
     [Fact]
-    public void При_пороге_никогда_первое_место_главное()
+    public void При_пороге_2_по_ракурсу_лучшее_идёт_первым()
     {
+        // Default confidentScore = 2: точное совпадение ракурса → b (profile) первым
         var pick = CharacterPhotoPicker.Pick(Set, new CharacterScene("profile", null, null), 3);
         pick.Pick.Should().Be("auto");
-        Files(pick).Should().Equal("main.jpg", "b.jpg", "c.jpg");
+        Files(pick).Should().Equal("b.jpg", "main.jpg", "c.jpg");
     }
 
     [Fact]
@@ -172,14 +174,56 @@ public class CharacterPhotoPickerTests
             P("top.jpg", angle: "profile", emotion: "smile"),
         };
         var pick = CharacterPhotoPicker.Pick(photos, new CharacterScene("profile", null, "smile"), 4);
-        Files(pick).Should().Equal("m.jpg", "top.jpg", "mid.jpg", "low.jpg");
+        // Точное совпадение ракурса → top первым, main вторым, остальные по очкам
+        Files(pick).Should().Equal("top.jpg", "m.jpg", "mid.jpg", "low.jpg");
     }
 
     [Fact]
     public void N1_отдаёт_одно_фото_и_N_больше_числа_фото_не_падает()
     {
         var scene = new CharacterScene("profile", null, null);
-        Files(CharacterPhotoPicker.Pick(Set, scene, 1)).Should().Equal("main.jpg");
+        // Точное совпадение ракурса → b (profile) первым
+        Files(CharacterPhotoPicker.Pick(Set, scene, 1)).Should().Equal("b.jpg");
         CharacterPhotoPicker.Pick(Set, scene, 10).Photos.Should().HaveCount(4);
+    }
+
+    // ── Тесты подмены при точном совпадении ракурса (ADR-027 §7, замер шага 21) ──
+
+    [Fact]
+    public void Вполоборота_без_точного_совпадения_даёт_главное()
+    {
+        // Только front и profile: three-quarter — соседний (1 очко), не точное совпадение
+        var photos = new[]
+        {
+            P("m.jpg", primary: true, angle: "front"),
+            P("a.jpg", angle: "front"),
+            P("b.jpg", angle: "profile"),
+        };
+        var pick = CharacterPhotoPicker.Pick(photos, new CharacterScene("three-quarter", null, null), 1);
+        pick.Pick.Should().Be("auto");
+        Files(pick).Should().Equal("m.jpg");
+    }
+
+    [Fact]
+    public void Эмоция_без_ракурса_не_подменяет_главное()
+    {
+        // laugh-эмоция даёт 2 очка, но ракурс в сцене не задан → подмены нет
+        var photos = new[]
+        {
+            P("m.jpg", primary: true, angle: "front", emotion: "neutral"),
+            P("a.jpg", angle: "front", emotion: "laugh"),
+        };
+        var pick = CharacterPhotoPicker.Pick(photos, new CharacterScene(null, null, "laugh"), 1);
+        pick.Pick.Should().Be("auto");
+        Files(pick).Should().Equal("m.jpg");
+    }
+
+    [Fact]
+    public void Нейтральный_сюжет_даёт_главное()
+    {
+        // Сюжет без ракурса и без эмоции → фолбэк, главное первым
+        var pick = CharacterPhotoPicker.Pick(Set, new CharacterScene(null, null, null), 1);
+        pick.Pick.Should().Be("fallback");
+        Files(pick).Should().Equal("main.jpg");
     }
 }

@@ -19,9 +19,10 @@ public sealed record CharacterPhotoPick(IReadOnlyList<CharacterPhoto> Photos, st
 // Ранжирование фото персонажа под сюжет (ADR-027, §7). Чистая функция: файлов и сети нет.
 public static class CharacterPhotoPicker
 {
-    // Порог очков, с которого подобранное фото встаёт на первое место вместо главного.
-    // Пока «никогда»: значение даст замер шага 21.
-    public const int LocalConfidentScore = int.MaxValue;
+    // Порог очков РАКУРСА, с которого подобранное фото встаёт на первое место вместо главного.
+    // 2 = точное совпадение ракурса (ADR-027 §7, замер шага 21: эмоция тоже даёт 2,
+    // но она не замерена, поэтому решение — по ракурсу, а не по сумме).
+    public const int LocalConfidentScore = 2;
 
     private static readonly string[] AngleChain = ["front", "three-quarter", "profile"];
 
@@ -45,7 +46,8 @@ public static class CharacterPhotoPicker
         var best = ranked[0];
 
         var result = new List<CharacterPhoto>();
-        var first = best.score >= confidentScore ? best : main;
+        // Решение по ракурсу, а не по сумме: эмоция тоже даёт 2, но она не замерена (ADR-027 §7)
+        var first = AngleScore(best.photo.Angle, scene.Angle) >= confidentScore ? best : main;
         var second = first.index == best.index ? main : best;
         result.Add(first.photo);
         if (second.index != first.index) result.Add(second.photo);

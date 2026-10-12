@@ -130,8 +130,8 @@ public class CharacterPickModelLimitTests : IDisposable
         {
             var pick = _picks.Should().ContainSingle().Subject;
             pick.Pick.Should().Be("auto");
-            // Запись — ровно то, что ушло драйверу: одно фото, а не весь подбор
-            pick.Photos.Should().Equal(_files[0]);
+            // Точное совпадение ракурса (profile) → профильное фото первым, запись — ровно оно
+            pick.Photos.Should().Equal(_files[2]);
         }
     }
 }

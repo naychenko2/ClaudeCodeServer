@@ -9953,6 +9953,22 @@ public class SessionManagerTests : IDisposable
         return (project, worktree);
     }
 
+    // Git-репо с одним коммитом (без worktree) для владельца ownerId: для тестов тумблера
+    // SetWorktreeAsync, где дерево создаёт сам тумблер, а home владельца резолвится из стора
+    private async Task<Project> MkGitProjectAsync(string name, string ownerId, string ownerName)
+    {
+        var dir = MkProjectDir(name);
+        var project = _projectManager.Create(name, dir, ownerId, ownerName);
+        var git = new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance);
+        await git.InitAsync(null, dir);
+        await RawGitAsync(dir, "config", "user.email", "test@test");
+        await RawGitAsync(dir, "config", "user.name", "Тест");
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "один\n");
+        await git.StageAllAsync(null, dir);
+        await git.CommitAsync(null, dir, "начальный коммит");
+        return project;
+    }
+
     // Прямой git для арранжей (как в GitServiceTests)
     private static async Task RawGitAsync(string root, params string[] args)
     {
@@ -10036,6 +10052,85 @@ public class SessionManagerTests : IDisposable
 
         (await _sut.AttachWorktreeAsync(session.Id, worktree)).Should().BeFalse();
         _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
+    }
+
+    // --- Удаление чата: чьё дерево сносим, чужое/общее/старое — нет ---
+    // Дефект: временные чаты исполнителей (AttachWorktreeAsync, WorktreeOwned=false) истекали
+    // через сутки и каждый уносил ОБЩЕЕ дерево фичи вместе с незакоммиченными правками.
+
+    // Привязанное (AttachWorktreeAsync) дерево: WorktreeOwned=false → при удалении чата
+    // git worktree remove не вызывается, папка дерева остаётся (его делят другие задачи фичи).
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task DeleteAsync_ПривязанноеДерево_НеСносит()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("del-attach");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+        (await _sut.AttachWorktreeAsync(session.Id, worktree)).Should().BeTrue();
+        _sut.GetById(session.Id)!.WorktreeOwned.Should().BeFalse();
+        Directory.Exists(worktree).Should().BeTrue();
+
+        await _sut.DeleteAsync(session.Id);
+
+        Directory.Exists(worktree).Should().BeTrue("привязанное дерево не сносится");
+    }
+
+    // Своё дерево (создано тумблером SetWorktreeAsync, WorktreeOwned=true) → при удалении
+    // чата git worktree remove вызывается, папка дерева сносится.
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task DeleteAsync_СвоёДеревоТумблера_Сносит()
+    {
+        // Тумблер резолвит home владельца: нужен реальный пользователь в сторе (не TestUserId)
+        var owner = _userStore.Add("own-wt-owner", "pw-123456", "user");
+        var project = await MkGitProjectAsync("del-own", owner.Id, owner.Username);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+        var updated = await _sut.SetWorktreeAsync(session.Id, enabled: true);
+        updated!.WorktreeOwned.Should().BeTrue();
+        var wt = updated.WorktreePath!;
+        Directory.Exists(wt).Should().BeTrue();
+
+        await _sut.DeleteAsync(session.Id);
+
+        Directory.Exists(wt).Should().BeFalse("своё дерево сносится вместе с чатом");
+    }
+
+    // Два чата делят одно дерево (оба WorktreeOwned=true, один нормализованный путь):
+    // удалён один → дерево НЕ сносится, пока живой чат на него ссылается.
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task DeleteAsync_ОбщееДеревоДвухЧатов_НеСносит()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("del-shared");
+        var s1 = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+        var s2 = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+        _sut.GetById(s1.Id)!.WorktreePath = worktree;
+        _sut.GetById(s1.Id)!.WorktreeOwned = true;
+        _sut.GetById(s2.Id)!.WorktreePath = worktree;
+        _sut.GetById(s2.Id)!.WorktreeOwned = true;
+        Directory.Exists(worktree).Should().BeTrue();
+
+        await _sut.DeleteAsync(s1.Id);
+
+        Directory.Exists(worktree).Should().BeTrue("второй живой чат всё ещё ссылается на дерево");
+    }
+
+    // Старая запись (WorktreeOwned=false по умолчанию, как в sessions.json без поля) →
+    // дерево по умолчанию не сносится: лучше мусорное дерево, чем потеря работы.
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task DeleteAsync_СтараяЗаписьБезПризнака_НеСносит()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("del-old");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+        // Эмулируем старую запись: путь дерева задан, но признака владения нет (false по умолчанию)
+        _sut.GetById(session.Id)!.WorktreePath = worktree;
+        _sut.GetById(session.Id)!.WorktreeOwned.Should().BeFalse();
+        Directory.Exists(worktree).Should().BeTrue();
+
+        await _sut.DeleteAsync(session.Id);
+
+        Directory.Exists(worktree).Should().BeTrue("старая запись: дерево по умолчанию не сносится");
     }
 
     // --- Живой ход: rate_limit_event пишет usage с source=turn и трогает activity tracker ---

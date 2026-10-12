@@ -8194,6 +8194,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Info.WorktreePath = wtPath;
             entry.Info.WorktreeBranch = branchName;
+            // Чат сам создал дерево — владеет им: при удалении чата/проекта дерево сносится
+            entry.Info.WorktreeOwned = true;
             _warmup.TryStart(project, wtPath);
         }
         else
@@ -8222,6 +8224,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force);
             entry.Info.WorktreePath = null;
             entry.Info.WorktreeBranch = null;
+            // Дерево снято — владение сбрасываем вместе с путём (ветка остаётся в репе)
+            entry.Info.WorktreeOwned = false;
             ReleaseWorktreeGraph(sessionId, wtPath);
         }
 
@@ -8270,6 +8274,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.Info.WorktreePath = path;
         // Ветка задана вызывающим либо берётся из самого дерева (метка в git-баре чата)
         entry.Info.WorktreeBranch = string.IsNullOrWhiteSpace(branch) ? known.Branch : branch.Trim();
+        // Дерево завёл человек/агент, а не чат: чат им не владеет — при удалении не сносим
+        entry.Info.WorktreeOwned = false;
         entry.AdapterStale = true;
         SaveSessions();
         // Дерево задачи заводит не сервер, а человек/агент, — прогрев здесь, при первой привязке;
@@ -8844,17 +8850,26 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.Values.Any(e => e.Info.ClaudeSessionId == localHistoryKey))
             _history.Delete(localHistoryKey);
 
-        // Отдельное worktree чата сносим вместе с чатом (best-effort; ветка остаётся в репе)
+        // Отдельное worktree чата: своё (создано тумблером, WorktreeOwned) сносим вместе с
+        // чатом; чужое/общее (привязано) или старое (без признака) — только ReleaseWorktreeGraph,
+        // без git worktree remove: дерево делят другие живые чаты, и его снос унёс бы их работу.
+        // Запись этого чата из реестра уже вынята выше (TryRemove), поэтому Any видит только чужие.
         if (entry.Info.WorktreePath is string wt && entry.Info.ProjectId is string wpid && _git is not null)
         {
-            try
+            var removeTree = entry.Info.WorktreeOwned
+                && !_sessions.Values.Any(e => e.Info.WorktreePath is string other
+                    && WorkspaceKnowledgeStore.NormalizePath(other) == WorkspaceKnowledgeStore.NormalizePath(wt));
+            if (removeTree)
             {
-                if (_projects.GetById(wpid) is { } wproj)
-                    await _git.WorktreeRemoveAsync(ResolveOwnerId(entry.Info), wproj.RootPath, wt, force: true);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[SessionManager] Worktree чата не удалён ({sessionId}): {ex.Message}");
+                try
+                {
+                    if (_projects.GetById(wpid) is { } wproj)
+                        await _git.WorktreeRemoveAsync(ResolveOwnerId(entry.Info), wproj.RootPath, wt, force: true);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Worktree чата не удалён ({sessionId}): {ex.Message}");
+                }
             }
             ReleaseWorktreeGraph(sessionId, wt);
         }

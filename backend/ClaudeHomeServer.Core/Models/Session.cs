@@ -520,6 +520,13 @@ public class Session
     public string? WorktreePath { get; set; }
     // Имя ветки worktree (для метки в git-баре); заполняется вместе с WorktreePath
     public string? WorktreeBranch { get; set; }
+    // Владеем ли отдельным деревом: true — чат сам создал его тумблером (SessionManager.SetWorktreeAsync),
+    // false — дерево привязано (AttachWorktreeAsync) либо запись старая (поля в sessions.json нет → false).
+    // При удалении чата/проекта дерево сносим git worktree remove только если true и ни один другой
+    // живой чат на тот же нормализованный путь не ссылается; иначе снимаем только codegraph/filewatcher
+    // (ReleaseWorktreeGraph) — дерево делят другие чаты. Аддитивное поле с дефолтом: старые записи
+    // sessions.json читаются штатно, BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths).
+    public bool WorktreeOwned { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Теги сессии (из реестра проекта) — per-owner изоляция

@@ -1,6 +1,8 @@
-﻿using System.Net;
+﻿using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -12,10 +14,12 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;
     private readonly string _tempProjectDir;
+    private readonly TestWebApplicationFactory _factory;
 
     public ProjectsControllerTests(TestWebApplicationFactory factory)
     {
         _client = factory.CreateAuthenticatedClient();
+        _factory = factory;
         _tempProjectDir = Path.Combine(factory.TempDir, "projects");
         Directory.CreateDirectory(_tempProjectDir);
     }
@@ -184,6 +188,95 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var response = await _client.GetAsync($"/api/projects/{id}");
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // --- Удаление проекта: чьё worktree-дерево сносим, чужое/общее — нет ---
+    // Те же правила, что при удалении чата (SessionManager): своё (WorktreeOwned) сносим,
+    // привязанное (WorktreeOwned=false) и старое (без признака) — не трогаем.
+
+    // Git-репо с одним коммитом в temp-папке (проект создаётся на нём)
+    private async Task<string> MkGitRepoAsync(string name)
+    {
+        var dir = Path.Combine(_tempProjectDir, "git_" + name + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        await RunGitAsync(dir, "init");
+        await RunGitAsync(dir, "config", "user.email", "test@test");
+        await RunGitAsync(dir, "config", "user.name", "Тест");
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "один\n");
+        await RunGitAsync(dir, "add", "-A");
+        await RunGitAsync(dir, "commit", "-m", "начальный коммит");
+        return dir;
+    }
+
+    // Linked worktree репо на новой ветке (реальная папка на диске)
+    private async Task<string> MkWorktreeAsync(string repoDir, string name)
+    {
+        var worktree = Path.Combine(_tempProjectDir, name + "_" + Guid.NewGuid().ToString("N")[..8]);
+        await RunGitAsync(repoDir, "worktree", "add", "-b", "wt/тест", worktree);
+        return worktree;
+    }
+
+    private static async Task RunGitAsync(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = cwd,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        await p.WaitForExitAsync();
+    }
+
+    // Чат проекта: POST /api/projects/{projectId}/sessions
+    private async Task<string> CreateProjectChatAsync(string projectId)
+    {
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        response.EnsureSuccessStatusCode();
+        var json = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        return json.GetProperty("id").GetString()!;
+    }
+
+    // Своё дерево (тумблер, WorktreeOwned=true) → при удалении проекта git worktree remove
+    [Fact]
+    public async Task Delete_ProjectWithOwnWorktree_RemovesWorktree()
+    {
+        var repoDir = await MkGitRepoAsync("own");
+        var project = await CreateProjectAsync("OwnWt", repoDir);
+        var id = project.GetProperty("id").GetString()!;
+        var chatId = await CreateProjectChatAsync(id);
+
+        var wtResp = await _client.PutAsJsonAsync($"/api/chats/{chatId}/worktree", new { enabled = true });
+        wtResp.EnsureSuccessStatusCode();
+        var wtJson = JsonSerializer.Deserialize<JsonElement>(await wtResp.Content.ReadAsStringAsync());
+        var worktreePath = wtJson.GetProperty("worktreePath").GetString()!;
+        Directory.Exists(worktreePath).Should().BeTrue();
+
+        await _client.DeleteAsync($"/api/projects/{id}");
+
+        Directory.Exists(worktreePath).Should().BeFalse("своё дерево сносится вместе с проектом");
+    }
+
+    // Привязанное дерево (AttachWorktreeAsync, WorktreeOwned=false) → дерево НЕ сносится:
+    // его делят другие задачи фичи, удалять проект его работу не должен
+    [Fact]
+    public async Task Delete_ProjectWithAttachedWorktree_KeepsWorktree()
+    {
+        var repoDir = await MkGitRepoAsync("attach");
+        var worktree = await MkWorktreeAsync(repoDir, "attachwt");
+        var project = await CreateProjectAsync("AttachWt", repoDir);
+        var id = project.GetProperty("id").GetString()!;
+        var chatId = await CreateProjectChatAsync(id);
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        (await sessions.AttachWorktreeAsync(chatId, worktree)).Should().BeTrue();
+        Directory.Exists(worktree).Should().BeTrue();
+
+        await _client.DeleteAsync($"/api/projects/{id}");
+
+        Directory.Exists(worktree).Should().BeTrue("привязанное дерево не сносится");
     }
 
     // --- PUT /api/projects/{id}/tags (реестр общих тегов) ---

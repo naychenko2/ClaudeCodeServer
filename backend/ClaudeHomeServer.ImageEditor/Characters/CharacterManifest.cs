@@ -102,6 +102,9 @@ public static class PhotoLabelValues
     public const string Unknown = "unknown";
     public const string Auto = "auto";
     public const string Human = "human";
+    // Разметить было нечем (маршрута нет или ComfyUI лежит): повторим, когда станет чем.
+    // Отличается от Auto+unknown («модель ответила, но не определила» — повторно не размечаем)
+    public const string NoRoute = "noroute";
 
     public static readonly IReadOnlySet<string> Angles =
         new HashSet<string> { "front", "three-quarter", "profile", Unknown };

@@ -12,8 +12,9 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Фоновая разметка ракурса и эмоции фото персонажа (ADR-027 §9). Очередь на инстанс: один исполнитель,
 // персонажи строго по одному, дедупликация по (корень, slug). Ставят её ленивые поводы (загрузка фото,
 // чтение списка и карточки, запуск с персонажем), обхода диска при старте нет. Флаг владельца
-// выключен — ни одного вызова. Нет маршрута (модель разметки не настроена) — сразу unknown, без
-// повторов; временная недоступность — до трёх попыток, потом unknown.
+// выключен — ни одного вызова. Нет маршрута (модель разметки не настроена) или ComfyUI лежит — фото
+// получает noroute (повторим, когда разметка станет возможна); модель ответила, но не определила —
+// auto+unknown (повторно не размечаем).
 public sealed class CharacterPhotoLabeling(
     CharacterLoraRuns locks,
     ILogger<CharacterPhotoLabeling> log,
@@ -74,35 +75,43 @@ public sealed class CharacterPhotoLabeling(
         var angleFiles = Candidates(manifest, p => p.Angle is null);
         if (angleFiles.Count > 0)
         {
-            var labels = await LabelAngleAsync(job, angleFiles, ct);
-            if (labels is not null) await WriteAsync(job, labels, ct);
+            var result = await LabelAngleAsync(job, angleFiles, ct);
+            if (result is not null) await WriteAsync(job, result.Labels, result.Source, ct);
         }
 
         var emotionFiles = Candidates(manifest, p => p.Emotion is null);
         if (emotionFiles.Count > 0)
         {
-            var labels = await LabelEmotionAsync(job, emotionFiles, ct);
-            if (labels is not null) await WriteAsync(job, labels, ct);
+            var result = await LabelEmotionAsync(job, emotionFiles, ct);
+            if (result is not null) await WriteAsync(job, result.Labels, result.Source, ct);
         }
     }
 
-    // Размеченное место и human не трогаем; unknown — это «пробовали», он тоже не null
+    // Размеченное место и human не трогаем; unknown — это «пробовали», он тоже не null.
+    // noroute — «разметить было нечем»: берём снова, чтобы фото размечалось, когда маршрут появится.
+    // Повторы конечны: Candidates зовут только ленивые поводы, а не маршрут даёт noroute мгновенно, без модели.
     private static List<string> Candidates(CharacterManifest manifest, Func<CharacterPhoto, bool> needs) =>
         [.. manifest.Photos
-            .Where(p => p.LabelSource != PhotoLabelValues.Human && needs(p))
+            .Where(p => p.LabelSource != PhotoLabelValues.Human
+                && (needs(p) || p.LabelSource == PhotoLabelValues.NoRoute))
             .Take(BatchSize)
             .Select(p => p.File)];
 
-    // «Нет маршрута»: сразу unknown для каждого фото, без счётчика Failed и трёх попыток
-    private static Dictionary<string, CharacterPhotoLabels> UnknownLabels(
-        List<string> files, CharacterPhotoLabels unknown)
+    // Итог разметки места: метки по файлам и источник записи (Auto — модель ответила,
+    // NoRoute — разметить было нечем). null — писать нечего (временный отказ, до трёх попыток)
+    private sealed record LabelingResult(Dictionary<string, CharacterPhotoLabels> Labels, string Source);
+
+    // «Нет маршрута»: unknown для каждого фото, без счётчика Failed и трёх попыток;
+    // источник — NoRoute, чтобы фото размечалось, когда маршрут появится
+    private static LabelingResult NoRouteResult(
+        List<string> files, CharacterPhotoLabels unknown, string labelSource)
     {
         var labels = new Dictionary<string, CharacterPhotoLabels>();
         foreach (var file in files) labels[file] = unknown;
-        return labels;
+        return new LabelingResult(labels, labelSource);
     }
 
-    private async Task<Dictionary<string, CharacterPhotoLabels>?> LabelAngleAsync(
+    private async Task<LabelingResult?> LabelAngleAsync(
         Job job, List<string> files, CancellationToken ct)
     {
         var route = labeler!.RouteOf(LocalActionCatalog.CharacterPhotoAngle, job.OwnerId);
@@ -111,25 +120,27 @@ public sealed class CharacterPhotoLabeling(
             case ImageLabelRouteKind.FacePose:
                 return await FacePoseAsync(job, files, ct);
             case ImageLabelRouteKind.Vision:
-                var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoAngle, AnglePrompt, files,
+                var ask = await AskAsync(job, LocalActionCatalog.CharacterPhotoAngle, AnglePrompt, files,
                     new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown), ct);
-                return answers is null ? null : MapVision(files, answers, e => new CharacterPhotoLabels(
+                if (ask is null) return null;
+                return MapVision(files, ask.Value.Answers, e => new CharacterPhotoLabels(
                     Pick(e, "angle", PhotoLabelValues.Angles), Pick(e, "pitch", PhotoLabelValues.Pitches)),
-                    new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown));
+                    new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown), ask.Value.Source);
             default:
                 // Маршрута нет (модель разметки не настроена): сразу unknown, без трёх попыток
-                return UnknownLabels(files, new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown));
+                return NoRouteResult(files, new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown),
+                    PhotoLabelValues.NoRoute);
         }
     }
 
-    private async Task<Dictionary<string, CharacterPhotoLabels>?> FacePoseAsync(
+    private async Task<LabelingResult?> FacePoseAsync(
         Job job, List<string> files, CancellationToken ct)
     {
         var unknown = new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown);
         // Подсистемы local-media нет или тумблер выключен: разметить некем — сразу unknown,
         // без трёх попыток (не вернётся без настройки)
         if (localMedia is null || !localMedia.Configured)
-            return UnknownLabels(files, unknown);
+            return NoRouteResult(files, unknown, PhotoLabelValues.NoRoute);
         // ComfyUI настроен, но сейчас лежит: временный сбой — до трёх попыток
         if (!localMedia.Available)
         {
@@ -153,26 +164,29 @@ public sealed class CharacterPhotoLabeling(
                 : (PhotoLabelValues.Unknown, PhotoLabelValues.Unknown);
             labels[bytes[i].File] = new CharacterPhotoLabels(angle, pitch);
         }
-        return labels;
+        return new LabelingResult(labels, PhotoLabelValues.Auto);
     }
 
-    private async Task<Dictionary<string, CharacterPhotoLabels>?> LabelEmotionAsync(
+    private async Task<LabelingResult?> LabelEmotionAsync(
         Job job, List<string> files, CancellationToken ct)
     {
         var route = labeler!.RouteOf(LocalActionCatalog.CharacterPhotoEmotion, job.OwnerId);
         if (route.Kind != ImageLabelRouteKind.Vision)
             // Маршрута нет (эмоция — только vision): сразу unknown, без трёх попыток
-            return UnknownLabels(files, new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown));
-        var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoEmotion, EmotionPrompt, files,
+            return NoRouteResult(files, new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown),
+                PhotoLabelValues.NoRoute);
+        var ask = await AskAsync(job, LocalActionCatalog.CharacterPhotoEmotion, EmotionPrompt, files,
             new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown), ct);
-        return answers is null ? null : MapVision(files, answers,
+        if (ask is null) return null;
+        return MapVision(files, ask.Value.Answers,
             e => new CharacterPhotoLabels(Emotion: Pick(e, "emotion", PhotoLabelValues.Emotions)),
-            new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown));
+            new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown), ask.Value.Source);
     }
 
-    // null — писать нечего (временный отказ); иначе разобранный массив ответов по порядку фото
-    // (элементы-не-объекты и недостающие хвосты превращаются в unknown позже, в MapVision)
-    private async Task<List<JsonElement>?> AskAsync(
+    // null — писать нечего (временный отказ, до трёх попыток); иначе разобранный массив ответов
+    // по порядку фото (элементы-не-объекты и недостающие хвосты превращаются в unknown позже, в MapVision)
+    // и источник записи: Auto — модель ответила, NoRoute — Failed дошёл до порога (ComfyUI/модель лежит)
+    private async Task<(List<JsonElement>? Answers, string Source)?> AskAsync(
         Job job, string actionKey, string prompt, List<string> files, CharacterPhotoLabels unknown, CancellationToken ct)
     {
         if (raster is null) return null;
@@ -192,11 +206,12 @@ public sealed class CharacterPhotoLabeling(
         {
             case null:
                 ResetFailures(job, actionKey, files);
-                return ParseArray(result.Text);
+                return (ParseArray(result.Text), PhotoLabelValues.Auto);
             case ImageLabelFailure.NoVision or ImageLabelFailure.Refused:
                 // Модель ответила, но метки нет: «пробовали», повторно не отправляем
-                return [];
+                return ([], PhotoLabelValues.Auto);
             case ImageLabelFailure.Failed:
+                // ComfyUI/модель лежит: до трёх попыток, потом noroute (RegisterFailureAsync пишет сам)
                 await RegisterFailureAsync(job, actionKey, files, unknown, ct);
                 return null;
             default:
@@ -205,7 +220,8 @@ public sealed class CharacterPhotoLabeling(
         }
     }
 
-    // Failed по пачке: каждому фото +1; достигшие MaxFailures получают unknown и больше не уходят
+    // Failed по пачке: каждому фото +1; достигшие MaxFailures получают unknown и источник NoRoute
+    // (ComfyUI/модель лежит — повторим, когда поднимется), а не Auto (повторно не размечаем)
     private async Task RegisterFailureAsync(
         Job job, string place, List<string> files, CharacterPhotoLabels unknown, CancellationToken ct)
     {
@@ -224,7 +240,7 @@ public sealed class CharacterPhotoLabeling(
                 else _failures[key] = n;
             }
         }
-        if (exhausted.Count > 0) await WriteAsync(job, exhausted, ct);
+        if (exhausted.Count > 0) await WriteAsync(job, exhausted, PhotoLabelValues.NoRoute, ct);
     }
 
     // Счётчики фото, которых в манифесте уже нет, выбрасываем: иначе они копятся до рестарта
@@ -283,15 +299,15 @@ public sealed class CharacterPhotoLabeling(
         catch (JsonException) { return []; }
     }
 
-    private static Dictionary<string, CharacterPhotoLabels> MapVision(
-        List<string> files, List<JsonElement> answers,
-        Func<JsonElement, CharacterPhotoLabels> map, CharacterPhotoLabels unknown)
+    private static LabelingResult MapVision(
+        List<string> files, List<JsonElement>? answers,
+        Func<JsonElement, CharacterPhotoLabels> map, CharacterPhotoLabels unknown, string source)
     {
         var labels = new Dictionary<string, CharacterPhotoLabels>();
         for (var i = 0; i < files.Count; i++)
-            labels[files[i]] = i < answers.Count && answers[i].ValueKind == JsonValueKind.Object
+            labels[files[i]] = answers is not null && i < answers.Count && answers[i].ValueKind == JsonValueKind.Object
                 ? Normalize(map(answers[i]), unknown) : unknown;
-        return labels;
+        return new LabelingResult(labels, source);
     }
 
     // Поле, которого модель не дала или дала вне словаря, — unknown: «пробовали»
@@ -304,10 +320,10 @@ public sealed class CharacterPhotoLabeling(
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
         && v.GetString()?.Trim().ToLowerInvariant() is { } s && vocabulary.Contains(s) ? s : null;
 
-    private async Task WriteAsync(Job job, Dictionary<string, CharacterPhotoLabels> labels, CancellationToken ct)
+    private async Task WriteAsync(Job job, Dictionary<string, CharacterPhotoLabels> labels, string labelSource, CancellationToken ct)
     {
         using (await locks.LockCharacterAsync(job.Root, job.Slug, ct))
-            CharacterStore.MergeAutoLabels(job.Root, job.Slug, labels);
+            CharacterStore.MergeAutoLabels(job.Root, job.Slug, labels, labelSource);
     }
 
     private const string Rules =

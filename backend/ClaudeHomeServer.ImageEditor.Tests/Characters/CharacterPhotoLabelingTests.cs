@@ -166,7 +166,7 @@ public class CharacterPhotoLabelingTests : IDisposable
 
         var photos = CharacterStore.Get(root, m.Slug)!.Photos;
         photos.Should().HaveCount(10);
-        photos.Should().OnlyContain(p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "auto");
+        photos.Should().OnlyContain(p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "noroute");
     }
 
     [Fact]
@@ -229,11 +229,13 @@ public class CharacterPhotoLabelingTests : IDisposable
 
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
-            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
         _labeler.Calls.Should().Be(6);
 
+        // noroute повторно уходит (маршрут Vision по-прежнему есть, но Failed дошёл до порога):
+        // четвёртый заход — ещё один Failed, счётчик сбрасывался, поэтому вызовов больше
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
-        _labeler.Calls.Should().Be(6);
+        _labeler.Calls.Should().Be(8);
     }
 
     [Theory]
@@ -305,7 +307,8 @@ public class CharacterPhotoLabelingTests : IDisposable
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.Angle == null && p.Pitch == null);
     }
 
-    // Нет маршрута (модель разметки не настроена): сразу unknown, без трёх попыток и без вызовов
+    // Нет маршрута (модель разметки не настроена): сразу unknown + noroute, без трёх попыток и без вызовов.
+    // noroute (а не auto) — чтобы фото размечалось, когда маршрут появится
     [Fact]
     public async Task Нет_маршрута_сразу_unknown_без_повторов()
     {
@@ -319,15 +322,16 @@ public class CharacterPhotoLabelingTests : IDisposable
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
 
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
-            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
         // Без маршрута ни vision, ни face-pose не вызываются
         _labeler.Calls.Should().Be(0);
         _media.Calls.Should().Be(0);
 
-        // Повторный заход: unknown повторно не уходит, вызовов всё ещё нет
+        // Повторный заход: noroute мгновенно снова noroute (маршрута по-прежнему нет), без вызова модели
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
         _labeler.Calls.Should().Be(0);
         _media.Calls.Should().Be(0);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.LabelSource == "noroute");
     }
 
     // Итог «не размечено» доходит до DTO непустым (labelSource=auto + unknown), иначе фронт
@@ -349,7 +353,142 @@ public class CharacterPhotoLabelingTests : IDisposable
             p.LabelSource != null && (p.Angle != null || p.Pitch != null || p.Emotion != null));
     }
 
-    // Face-pose: ComfyUI настроен, но лежит — временный сбой, до трёх попыток, потом unknown
+    // Главный сценарий: сначала маршрута нет → фото noroute/unknown; затем маршрут появился
+    // (админ назначил модель) и пришёл повод очереди → фото размечены (auto, реальные значения).
+    // Повтор запускается на ленивом поводе (здесь — прямой заход ProcessAsync), не по таймеру.
+    [Fact]
+    public async Task Маршрут_появился_после_noroute_фото_размечаются()
+    {
+        _flags.On = true;
+        // Фаза 1: маршрута нет — и для ракурса, и для эмоции
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
+        var callsAfterNoRoute = _labeler.Calls; // 0: без маршрута модель не вызывается
+
+        // Фаза 2: админ назначил модель — маршрут появился (face-pose для ракурса, vision для эмоции)
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _media.Poses = [new(3, 2, 0), new(60, 0, 0), null];
+        _labeler.Answer = _ => ImageLabelResult.Ok(
+            "[{\"emotion\":\"smile\"},{\"emotion\":\"laugh\"},{\"emotion\":\"neutral\"}]");
+
+        // Повод очереди (здесь — прямой заход): noroute-фото снова в Candidates и размечаются
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        var photos = CharacterStore.Get(root, m.Slug)!.Photos;
+        photos.Select(p => p.Angle).Should().Equal("front", "profile", "unknown");
+        photos.Select(p => p.Emotion).Should().Equal("smile", "laugh", "neutral");
+        photos.Should().OnlyContain(p => p.LabelSource == "auto");
+        // Модель вызвана (эмоция через vision), face-pose тоже; без маршрута вызовов не было
+        callsAfterNoRoute.Should().Be(0);
+        _media.Calls.Should().Be(1);
+        _labeler.Calls.Should().Be(1);
+    }
+
+    // ComfyUI лежит → три неудачи → noroute; ComfyUI поднялся и пришёл повод → фото размечаются.
+    // В отличие от «модель ответила, но не определила» (auto), noroute «лечится» восстановлением.
+    [Fact]
+    public async Task ComfyUI_поднялся_после_noroute_фото_размечаются()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        _media.Available = false; // настроен, но ComfyUI сейчас лежит
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        for (var round = 0; round < CharacterPhotoLabeling.MaxFailures; round++)
+            await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "noroute");
+
+        // ComfyUI поднялся, пришёл повод: noroute-фото снова в Candidates и размечаются.
+        // Эмоция тоже через vision (реальный ответ), чтобы её запись не понизила LabelSource до noroute
+        _media.Available = true;
+        _media.Poses = [new(3, 2, 0), new(60, 0, 0), null];
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _labeler.Answer = _ => ImageLabelResult.Ok(
+            "[{\"emotion\":\"smile\"},{\"emotion\":\"laugh\"},{\"emotion\":\"neutral\"}]");
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        var photos = CharacterStore.Get(root, m.Slug)!.Photos;
+        photos.Select(p => p.Angle).Should().Equal("front", "profile", "unknown");
+        photos.Should().OnlyContain(p => p.LabelSource == "auto");
+        _media.Calls.Should().Be(1);
+    }
+
+    // Модель ответила, но определить не смогла (NoVision) → auto/unknown: повторно НЕ размечаем.
+    // Это противоположность noroute: auto «лечится» только загрузкой нового фото, а не появлением маршрута.
+    [Fact]
+    public async Task Модель_не_определила_auto_unknown_повторно_не_уходит()
+    {
+        _flags.On = true;
+        // Оба места через vision: и ракурс, и эмоция «ответили» NoVision → оба auto/unknown
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.NoVision);
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+        var calls = _labeler.Calls; // 2: ракурс и эмоция, оба «ответили» NoVision
+
+        // Повторный заход: auto/unknown повторно не уходит, вызовов нет
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        _labeler.Calls.Should().Be(calls);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+    }
+
+    // human не трогается ни в одном сценарии: через цикл «нет маршрута → маршрут появился»
+    // ручная метка остаётся на месте, авторазметка её не затирает
+    [Fact]
+    public async Task Human_не_трогается_через_noroute_и_появление_маршрута()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
+        var root = Root();
+        var m = MakeCharacter(root);
+        // Ручная метка на первом фото
+        CharacterStore.Update(root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            new Dictionary<string, CharacterPhotoLabels> { [m.Photos[0].File] = new("profile") })).Should().NotBeNull();
+        var svc = Service();
+
+        // Фаза 1: нет маршрута → остальные фото noroute, human не тронут
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        var first = Photo(root, m.Slug, 0);
+        first.LabelSource.Should().Be("human");
+        first.Angle.Should().Be("profile");
+        CharacterStore.Get(root, m.Slug)!.Photos.Where(p => p.LabelSource != "human")
+            .Should().OnlyContain(p => p.LabelSource == "noroute");
+
+        // Фаза 2: маршрут появился → human по-прежнему не тронут, остальные размечены
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
+        _media.Poses = [new(3, 2, 0), new(60, 0, 0), new(0, 0, 0)];
+        _labeler.Answer = _ => ImageLabelResult.Ok("[{\"emotion\":\"smile\"},{\"emotion\":\"laugh\"},{\"emotion\":\"neutral\"}]");
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        var afterFirst = Photo(root, m.Slug, 0);
+        afterFirst.LabelSource.Should().Be("human");
+        afterFirst.Angle.Should().Be("profile");
+        CharacterStore.Get(root, m.Slug)!.Photos.Where(p => p.LabelSource != "human")
+            .Should().OnlyContain(p => p.LabelSource == "auto");
+    }
+
+    // Face-pose: ComfyUI настроен, но лежит — временный сбой, до трёх попыток, потом unknown + noroute
     [Fact]
     public async Task FacePose_ComfyUI_лежит_после_трёх_попыток_unknown()
     {
@@ -364,17 +503,18 @@ public class CharacterPhotoLabelingTests : IDisposable
             await svc.ProcessAsync(JobOf(root, m.Slug), default);
 
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
-            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "auto");
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "noroute");
         // ComfyUI лежит — FacePoseAsync не вызывался, только счётчик Failed
         _media.Calls.Should().Be(0);
     }
 
-    // Face-pose: подсистема не настроена (тумблер выключен) — нет маршрута, сразу unknown
+    // Face-pose: подсистема не настроена (тумблер выключен) — нет маршрута, сразу unknown + noroute
     [Fact]
     public async Task FacePose_не_настроен_сразу_unknown()
     {
         _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         _media.Configured = false; // тумблер local-media выключен
         var root = Root();
         var m = MakeCharacter(root);
@@ -383,7 +523,7 @@ public class CharacterPhotoLabelingTests : IDisposable
         await svc.ProcessAsync(JobOf(root, m.Slug), default);
 
         CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
-            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.LabelSource == "auto");
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "noroute");
         _media.Calls.Should().Be(0);
     }
 

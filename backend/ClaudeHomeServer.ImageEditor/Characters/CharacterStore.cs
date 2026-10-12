@@ -167,8 +167,10 @@ public static partial class CharacterStore
     // время мог поменяться, поэтому он читается заново. Фото с LabelSource=human не трогаем целиком,
     // метка удалённого фото отбрасывается, прочие поля манифеста остаются как есть.
     // null — персонажа нет; иначе имена файлов, чьи метки записаны.
+    // labelSource — кто разметил: Auto (модель ответила) или NoRoute (разметить было нечем, повторим позже)
     public static IReadOnlyList<string>? MergeAutoLabels(
-        string root, string slug, IReadOnlyDictionary<string, CharacterPhotoLabels> labels)
+        string root, string slug, IReadOnlyDictionary<string, CharacterPhotoLabels> labels,
+        string labelSource = PhotoLabelValues.Auto)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
@@ -186,7 +188,7 @@ public static partial class CharacterStore
                 Angle = found.Angle ?? photo.Angle,
                 Pitch = found.Pitch ?? photo.Pitch,
                 Emotion = found.Emotion ?? photo.Emotion,
-                LabelSource = PhotoLabelValues.Auto,
+                LabelSource = labelSource,
             };
             applied.Add(photo.File);
         }

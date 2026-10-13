@@ -289,6 +289,7 @@ function RunningLine({ projectId, jobId, model, faces }: {
   projectId: string; jobId: string; model: string | null; faces: ImageThreadFaceTarget[];
 }) {
   const { status, cancel } = useJobStatus(projectId, jobId);
+  const mobile = useIsMobile();
   const running = (status?.phase ?? 'run') === 'run';
   const progress = useProgress(status, running);
   // Несколько лиц (ADR-028): «Проход k из N · лицо n» по run/runs из событий задачи; их нет — «Рисуем…»
@@ -297,7 +298,9 @@ function RunningLine({ projectId, jobId, model, faces }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary, flexWrap: 'wrap' }}>
         <Dot color={C.accent} />{stage ? stage.text : `Рисуем…${model ? ` · ${model}` : ''}`}{queueText(progress.queuePosition)}
-        <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
+        {/* Мобила: зона касания 44 при той же компактной кнопке xs (24) — отрицательные поля не раздувают строку */}
+        <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}
+          style={mobile ? { height: 44, minHeight: 44, marginBlock: (24 - 44) / 2 } : undefined}>Отменить</Button>
       </div>
       {stage
         ? <PassBar segments={stage.segments} run={status?.run ?? 0} />
@@ -342,7 +345,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const faces = launchFaces(launch);
   const faceCap = facePairsCaption(faces, slug => faceChars?.find(c => c.slug === slug)?.name);
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
-  const endNote = launchEndNote(status, versions.length, count);
+  const endNote = launchEndNote(status, versions.length, count, faces.length);
   // Обрезка без ИИ (ADR-025): та же карточка версии, над ней строка «Вы обрезали…» / «✦ Claude обрезал…» из записи
   const crop = model === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
   const cropNote = crop ? `${crop.width}×${crop.height} · ${crop.aspect} · обрезано без ИИ${agent ? ' · ✦ Claude' : ''}` : null;

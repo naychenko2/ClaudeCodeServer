@@ -2,7 +2,9 @@ using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using Microsoft.Extensions.Logging.Abstractions;
+using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Jobs;
 
@@ -498,7 +500,8 @@ public class FacePassChainTests
     {
         public const string ProviderKey = "partial";
         private static readonly ImageEditModelInfo Model = new("m", "M",
-            new ImageEditCaps([ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false));
+            // Потолок веса — для теста подготовки исходника прохода 2; без растра в задаче он не действует
+        new ImageEditCaps([ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false, MaxInputMb: WeightLimitMb));
 
         // passOutcome: "ok" — оба прохода прошли; "fail2" — второй упал; "cancel2" — отмена во втором
         public string PassOutcome { get; init; } = "ok";
@@ -509,6 +512,8 @@ public class FacePassChainTests
         // Сбой прохода результатом без исключения (Д2): задан — проход отдаёт его как есть
         public ImageEditResult? Pass1Result { get; init; }
         public ImageEditResult? Pass2Result { get; init; }
+        // Выход прохода 1 (по умолчанию — заглушка-заголовок, растр её не распознаёт)
+        public byte[]? Pass1Image { get; init; }
         private int _calls;
         public int Calls => Volatile.Read(ref _calls);
 
@@ -527,7 +532,7 @@ public class FacePassChainTests
             if (pass == "borya" && Pass2Result is { } r2) return r2;
             if (pass == "anya")
             {
-                var img = new EditedImage(Png(8, 8, 1), "image/png");
+                var img = new EditedImage(Pass1Image ?? Png(8, 8, 1), "image/png");
                 progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 2, Ready: [img]));
                 if (LateRunning) progress.Report(new EditProgress(EditStage.Running, Run: 1, Runs: 2));
                 Pass1Done.TrySetResult();
@@ -552,14 +557,16 @@ public class FacePassChainTests
     }
 
     private (ImageEditJobService Jobs, string JobId, PartialResultEditor Editor) StartPartial(string passOutcome, string dir,
-        bool lateRunning = false, ImageEditResult? pass1Result = null, ImageEditResult? pass2Result = null)
+        bool lateRunning = false, ImageEditResult? pass1Result = null, ImageEditResult? pass2Result = null,
+        IImageRaster? raster = null, byte[]? pass1Image = null)
     {
         var editor = new PartialResultEditor
         {
             PassOutcome = passOutcome, LateRunning = lateRunning, Pass1Result = pass1Result, Pass2Result = pass2Result,
+            Pass1Image = pass1Image,
         };
         var jobs = new ImageEditJobService([editor], new ImageEditWorkspace(dir),
-            NullLogger<ImageEditJobService>.Instance);
+            NullLogger<ImageEditJobService>.Instance, raster: raster);
         var quote = new ImageEditQuoteRequest(
             PartialResultEditor.ProviderKey, "m", EditMode.Auto, ImageEditOp.Inpaint, 1,
             true, 0, false, null, null,
@@ -748,6 +755,105 @@ public class FacePassChainTests
             job.Error.Should().Be("прервано на узле");
             job.FaceResults!.Select(r => r.Status).Should().Equal("done", "failed");
             editor.Calls.Should().Be(2);
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // ── Major-1: исходник прохода 2 ужимается по весу, размер тот же (ADR-028) ─────────────
+    // Выход прохода k — полноразмерный PNG модели, он минует PrepareAsync. Без ужатия фото ≳ 15–20 Мп
+    // после прохода 1 тяжелее потолка входа local-media (30 МБ), и проход 2 падает всегда
+
+    private const double WeightLimitMb = 0.15;
+    private static long WeightLimitBytes => (long)(WeightLimitMb * 1024 * 1024);
+
+    // Лимиты стороны и площади заведомо меньше картинки: ужатие по весу обязано их игнорировать
+    private static readonly ImageEditCaps WeightCaps = new([ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false,
+        MaxInputSide: 64, MaxInputMegapixels: 0.004, MaxInputMb: WeightLimitMb);
+
+    // Настоящий PNG из шума: не сжимается, вес ≈ 3 байта на пиксель
+    private static byte[] NoisePng(int w, int h)
+    {
+        var rnd = new Random(42);
+        using var bitmap = new SKBitmap(w, h);
+        for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+                bitmap.SetPixel(x, y, new SKColor((byte)rnd.Next(256), (byte)rnd.Next(256), (byte)rnd.Next(256)));
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    // Проход 1 отдаёт pass1Output, проход 2 — заглушку
+    private static FakeEditor Pass1OutputEditor(byte[] pass1Output) =>
+        new((req, prog, ct) =>
+        {
+            var img = new EditedImage(req.Character!.Slug == "anya" ? pass1Output : Png(8, 8, 2), "image/png");
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
+        });
+
+    // (1) Выход прохода 1 тяжелее MaxInputMb: исходник прохода 2 не тяжелее лимита, Width/Height те же
+    [Fact]
+    public async Task Тяжёлый_выход_прохода_1_ужимается_по_весу_размер_тот_же()
+    {
+        var raster = new SkiaImageRaster();
+        var fitter = new InputFitter(raster);
+        var heavy = NoisePng(256, 192);
+        heavy.LongLength.Should().BeGreaterThan(WeightLimitBytes, "предусловие: выход прохода 1 тяжелее лимита");
+        var editor = Pass1OutputEditor(heavy);
+
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), new RecordingProgress(), default,
+            prepareSource: (src, ct) => fitter.FitWeightAsync(src, WeightCaps, ct));
+
+        var source = editor.Requests[1].Source!;
+        source.Bytes.LongLength.Should().BeLessThanOrEqualTo(WeightLimitBytes, "исходник прохода 2 — под потолком веса");
+        var probe = raster.Probe(source.Bytes)!;
+        (probe.DisplayWidth, probe.DisplayHeight).Should().Be((256, 192), "кроп и маска прохода 2 — в пикселях базовой версии");
+    }
+
+    // (2) Выход прохода 1 легче лимита: исходник прохода 2 — те же байты
+    [Fact]
+    public async Task Лёгкий_выход_прохода_1_едет_как_есть()
+    {
+        var fitter = new InputFitter(new SkiaImageRaster());
+        var light = NoisePng(32, 32);
+        light.LongLength.Should().BeLessThan(WeightLimitBytes, "предусловие: выход прохода 1 легче лимита");
+        var editor = Pass1OutputEditor(light);
+
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), new RecordingProgress(), default,
+            prepareSource: (src, ct) => fitter.FitWeightAsync(src, WeightCaps, ct));
+
+        editor.Requests[1].Source!.Bytes.Should().Equal(light, "легче лимита — без перекодирования");
+    }
+
+    // Растр, который распознаёт картинку, но отказывает в перекодировании
+    private sealed class RefusingRaster : IImageRaster
+    {
+        private readonly SkiaImageRaster _inner = new();
+        public RasterProbe? Probe(byte[] data) => _inner.Probe(data);
+        public RasterOutcome Apply(byte[] data, IReadOnlyList<ImageTransformOp> ops, ImageEncodeSpec? encode = null) =>
+            RasterOutcome.Fail(RasterError.Unsupported, "растр отказал");
+        public RasterOutcome Encode(byte[] data, ImageEncodeSpec encode) => RasterOutcome.Fail(RasterError.Unsupported, "растр отказал");
+        public RasterOutcome ResizeMask(byte[] mask, int width, int height) => _inner.ResizeMask(mask, width, height);
+        public RasterOutcome EraseMasked(byte[] image, byte[] mask) => _inner.EraseMasked(image, mask);
+    }
+
+    // (3) Отказ подготовки исходника прохода 2 — сбой прохода 2: лица done/failed, проход 2 не вызван,
+    // задача Completed с версией прохода 1, текст отказа в Error
+    [Fact]
+    public async Task Отказ_подготовки_исходника_прохода_2_задача_Completed_с_версией_прохода_1()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var heavy = NoisePng(256, 192);
+        var (jobs, jobId, editor) = StartPartial("ok", dir, raster: new RefusingRaster(), pass1Image: heavy);
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Completed, "упал проход 2 — задача не падает");
+            job.Outcome.Should().Be(EditOutcome.Ok);
+            job.Variants.Should().ContainSingle("версия — выход прохода 1");
+            job.Error.Should().Be("растр отказал");
+            job.FaceResults!.Select(r => r.Status).Should().Equal("done", "failed");
+            editor.Calls.Should().Be(1, "проход 2 не вызывается: исходник не подготовлен");
         }
         finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
     }

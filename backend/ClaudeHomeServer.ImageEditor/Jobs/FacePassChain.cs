@@ -9,6 +9,8 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Обёртка прогресса гасит Ready у непоследних проходов (промежуточные выходы версиями не
 // становятся), стадия — «проход k из N» (Run/Runs).
 // Проходы идут по возрастанию номера лица.
+// Выход прохода k — полноразмерный файл модели, он минует ужатие PrepareAsync; перед проходом k+1
+// его прогоняет prepareSource (ужатие по весу, размер тот же). Отказ подготовки — сбой прохода k+1.
 //
 // Частичный результат (ADR-028, В1, шаг 10): выход прохода 1 удерживается, а не теряется.
 // FailAsync задачи не сохраняет ImageEditResult.Images — версиями становятся только варианты,
@@ -29,7 +31,8 @@ public sealed class FacePassChain
         IReadOnlyList<ImageEditRequest> requests,
         IProgress<EditProgress> progress,
         CancellationToken ct,
-        Action<FacePassResult>? onResult = null)
+        Action<FacePassResult>? onResult = null,
+        Func<ImageBytes, CancellationToken, Task<ImageEditCallResult<ImageBytes>>>? prepareSource = null)
     {
         var n = passes.Count;
         var k = 0;
@@ -44,8 +47,21 @@ public sealed class FacePassChain
             for (; k < n; k++)
             {
                 var pass = passes[k];
-                var request = requests[k] with { Source = current };
                 chain.Advance(k);
+                // Исходник прохода k+1 — выход прохода k, ужатый по весу под лимит модели. Отказ —
+                // сбой именно этого прохода (k уже указывает на него): общая ветка «проход упал»
+                if (k > 0 && prepareSource is not null)
+                {
+                    var prepared = await prepareSource(current, ct);
+                    if (prepared.Value is not { } fitted)
+                    {
+                        failure = new ImageEditResult(EditOutcome.Failed, [], null, null, null,
+                            prepared.Error ?? "Картинку не удалось подготовить");
+                        break;
+                    }
+                    current = fitted;
+                }
+                var request = requests[k] with { Source = current };
                 last = await editor.RunAsync(request, chain, ct);
                 // Отмена задачи, о которой драйвер сообщил результатом, — та же ветка, что исключение отмены
                 if (last.Outcome == EditOutcome.Cancelled) ct.ThrowIfCancellationRequested();

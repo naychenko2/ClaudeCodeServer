@@ -359,7 +359,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 // N = 1 идёт прежним путём (поведение этапа 2 не меняется)
                 result = await FacePassChain.RunAsync(editor, facePasses, requests,
                     new JobProgress(this, job), job.Cts.Token,
-                    r => { lock (job.Gate) job.FaceResults.Add(r); });
+                    r => { lock (job.Gate) job.FaceResults.Add(r); },
+                    PassSourcePreparer(job));
             }
             else
             {
@@ -418,6 +419,17 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             }
             await NotifyFinishedAsync(job);
         }
+    }
+
+    // Подготовка исходника прохода k+1 (ADR-028): выход прохода k — полноразмерный файл модели,
+    // ужимается по весу под MaxInputMb, размер тот же (кроп и маска прохода — в пикселях базовой
+    // версии). Без растра (тесты) — тождественно
+    private Func<ImageBytes, CancellationToken, Task<ImageEditCallResult<ImageBytes>>> PassSourcePreparer(Job job)
+    {
+        if (_fitter is not { } fitter)
+            return (source, _) => Task.FromResult(ImageEditCallResult<ImageBytes>.Ok(source));
+        var caps = ImageEditCatalog.WithInputLimits(job.Quote.Model).Caps;
+        return (source, ct) => fitter.FitWeightAsync(source, caps, ct);
     }
 
     // Подбор фото персонажа под сюжет: любой сбой оставляет запрос как есть (порядок «главное, затем

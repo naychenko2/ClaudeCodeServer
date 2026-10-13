@@ -69,6 +69,21 @@ public sealed class InputFitter(IImageRaster raster)
         return Ok(new FittedInput(result, probe.DisplayWidth, probe.DisplayHeight));
     }
 
+    // Ужатие только по весу (ADR-028, цепочка проходов): выход прохода k — исходник прохода k+1.
+    // Размер не меняется (сторона и площадь из лимитов убраны, как для исходника с FaceCrop):
+    // кроп и маска следующего прохода посчитаны в пикселях базовой версии. Легче MaxInputMb и без
+    // EXIF-поворота — байты те же; тяжелее — лестница JPEG. Нераспознанный растром файл едет как пришёл
+    public async Task<ImageEditCallResult<ImageBytes>> FitWeightAsync(ImageBytes image, ImageEditCaps caps, CancellationToken ct)
+    {
+        if (raster.Probe(image.Bytes) is not { } probe) return ImageEditCallResult<ImageBytes>.Ok(image);
+        var fitted = await FitImageAsync(image, probe, caps with { MaxInputSide = null, MaxInputMegapixels = null }, ct);
+        if (fitted.Error is { } error)
+            return ImageEditCallResult<ImageBytes>.Fail(
+                error.Error == RasterError.Busy ? ImageEditErrorCodes.TooManyJobs : ImageEditErrorCodes.InvalidRequest,
+                error.Message ?? "Картинку не удалось подготовить");
+        return ImageEditCallResult<ImageBytes>.Ok(fitted.Image!);
+    }
+
     // Возврат размера оригинала: вариант той же пропорции растягивается или ужимается до
     // width×height. Другая пропорция — вариант не трогаем, Mismatch = true («Размер не приведён»).
     // Сбой растра не роняет задачу: вариант остаётся как пришёл

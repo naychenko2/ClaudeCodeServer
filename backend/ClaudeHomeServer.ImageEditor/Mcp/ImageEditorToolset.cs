@@ -608,8 +608,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             HasCharacter: true,
             Width: ImageDimensions.Read(source.Bytes)?.Width,
             Height: ImageDimensions.Read(source.Bytes)?.Height,
-            FaceTarget: new FaceTarget(version.Id, face,
-                Faces.FaceDetectionCache.FacesKey(source.Bytes)));
+            FaceTarget: new FaceTarget(version.Id,
+                Faces.FaceDetectionCache.FacesKey(source.Bytes),
+                [new FaceAssignment(face, character)]));
         var quote = await _jobs!.QuoteAsync(ownerId, scope.Key, quoteRequest, ct);
         if (quote.Value is not { } q)
             return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct, face: true);
@@ -625,7 +626,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             ThreadSessionId: session.Id,
             ThreadId: thread.Id,
             VersionId: version.Id,
-            FaceTarget: new FaceTarget(version.Id, face, Faces.FaceDetectionCache.FacesKey(source.Bytes)));
+            FaceTarget: new FaceTarget(version.Id, Faces.FaceDetectionCache.FacesKey(source.Bytes),
+                [new FaceAssignment(face, character)]));
         var started = await _launcher.LaunchAsync(ownerId, scope, request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct, face: true);

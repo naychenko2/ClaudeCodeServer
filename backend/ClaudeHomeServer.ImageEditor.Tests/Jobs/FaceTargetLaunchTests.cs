@@ -103,7 +103,10 @@ public class FaceTargetLaunchTests : IDisposable
             context: context);
     }
 
-    private ImageEditLaunchRequest Request(string? slug, string faceTargetJson,
+    private string FaceTargetJson(string facesKey, int face = 1, string? characterSlug = null) =>
+        $"{{\"versionId\":\"origin\",\"facesKey\":\"{facesKey}\",\"faces\":[{{\"face\":{face},\"characterSlug\":\"{characterSlug ?? _charB}\"}}]}}";
+
+    private ImageEditLaunchRequest Request(string? slug, string? faceTargetJson,
         string? prompt = null, long? contextRevision = null)
     {
         FaceTarget? faceTarget = null;
@@ -111,8 +114,11 @@ public class FaceTargetLaunchTests : IDisposable
         {
             using var doc = System.Text.Json.JsonDocument.Parse(faceTargetJson);
             var r = doc.RootElement;
+            var faces = new List<FaceAssignment>();
+            foreach (var el in r.GetProperty("faces").EnumerateArray())
+                faces.Add(new FaceAssignment(el.GetProperty("face").GetInt32(), el.GetProperty("characterSlug").GetString()!));
             faceTarget = new FaceTarget(r.GetProperty("versionId").GetString()!,
-                r.GetProperty("face").GetInt32(), r.GetProperty("facesKey").GetString()!);
+                r.GetProperty("facesKey").GetString()!, faces);
         }
         return new ImageEditLaunchRequest(
             "q1", prompt, null, null, null, null, null, [], [], slug,
@@ -126,7 +132,7 @@ public class FaceTargetLaunchTests : IDisposable
     [Fact]
     public async Task Флаг_выключен_даёт_feature_disabled()
     {
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(flags: Flags(false)).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -139,7 +145,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task Личная_область_даёт_invalid_request()
     {
         var personalScope = ImageEditScope.Of(new Session { Id = Chat, ProjectId = null, OwnerId = Owner });
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler().AssembleAsync(Owner, personalScope, req, default);
 
         result.Value.Should().BeNull();
@@ -151,7 +157,7 @@ public class FaceTargetLaunchTests : IDisposable
     [Fact]
     public async Task Без_CharacterSlug_даёт_invalid_request()
     {
-        var req = Request(null, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(null, FaceTargetJson(_facesKey, 1, ""));
         var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -164,7 +170,7 @@ public class FaceTargetLaunchTests : IDisposable
     [Fact]
     public async Task Mask_в_теле_даёт_invalid_request()
     {
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         req = req with { Mask = new ImageBytes([1, 2, 3], "image/png") };
         var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
 
@@ -177,7 +183,7 @@ public class FaceTargetLaunchTests : IDisposable
     [Fact]
     public async Task Провайдер_не_local_даёт_invalid_request()
     {
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(jobs: QuoteJobs(provider: "fal")).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -190,7 +196,7 @@ public class FaceTargetLaunchTests : IDisposable
     [Fact]
     public async Task ContextRevision_даёт_invalid_request()
     {
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}", contextRevision: 5);
+        var req = Request(_charB, FaceTargetJson(_facesKey), contextRevision: 5);
         var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -203,7 +209,7 @@ public class FaceTargetLaunchTests : IDisposable
     [Fact]
     public async Task ReferencePaths_даёт_invalid_request()
     {
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         req = req with { ReferencePaths = [("ref.png", ReferenceRole.Object)] };
         var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
 
@@ -218,7 +224,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces, busy: true);
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -232,7 +238,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces, error: "ComfyUI не ответил");
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -246,7 +252,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces);
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"stale:v1\"}");
+        var req = Request(_charB, FaceTargetJson("stale:v1", 1, _charB));
         var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -261,7 +267,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces);
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":99,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey, 99, _charB));
         var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -276,7 +282,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 30, 30, 0.9, true) };
         var media = FakeMedia(faces);
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
@@ -294,7 +300,7 @@ public class FaceTargetLaunchTests : IDisposable
             new LocalDetectedFace(2, 120, 10, 200, 100, 0.85, false)
         };
         var media = FakeMedia(faces);
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":2,\"facesKey\":\"" + _facesKey + "\"}",
+        var req = Request(_charB, FaceTargetJson(_facesKey, 2, _charB),
             prompt: "дополнительно в профиль");
 
         var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
@@ -373,7 +379,7 @@ public class FaceTargetLaunchTests : IDisposable
             new CharacterPatch(null, null, [], [], null,
                 CharacterLoraPatch.Set("ccs/otherowner/lora", null, null, null)));
 
-        var req = Request(slug, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(slug, FaceTargetJson(_facesKey));
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
 
@@ -406,7 +412,7 @@ public class FaceTargetLaunchTests : IDisposable
         var context = new ImageContextLaunch(storeMock.Object, registry, directory.Object, _store);
 
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(media: FakeMedia(faces), context: context)
             .AssembleAsync(Owner, _scope, req, default);
 
@@ -441,7 +447,7 @@ public class FaceTargetLaunchTests : IDisposable
             .Returns(() => tcs.Task);
 
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
-        var req = Request(_charB, "{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"" + _facesKey + "\"}");
+        var req = Request(_charB, FaceTargetJson(_facesKey));
 
         // Ассемблер с общим кэшем
         var assembler = new ImageEditLaunchAssembler(
@@ -518,7 +524,7 @@ public class FaceTargetLaunchTests : IDisposable
         var req = new ImageEditLaunchRequest(
             "q1", null, null, null, null, null, null, [], [], _charB,
             ThreadSessionId: Chat, ThreadId: threadId,
-            FaceTarget: new FaceTarget("origin", 1, facesKey));
+            FaceTarget: new FaceTarget("origin", facesKey, [new FaceAssignment(1, _charB)]));
 
         var result = await Assembler(media: media.Object).AssembleAsync(Owner, _scope, req, default);
 

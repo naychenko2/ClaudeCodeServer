@@ -284,8 +284,13 @@ public sealed class ImageEditLaunchAssembler(
         // b. Личная область, входы
         if (scope.Project is null)
             return Invalid("Подстановка персонажа на лицо — только в проекте");
-        if (req.CharacterSlug is not { Length: > 0 })
-            return Invalid("Укажите персонажа");
+        // Правила запроса (ADR-028, этап 3): лимит лиц, повторы номеров и персонажей
+        var rules = Faces.FaceTargetRules.Validate(faceTarget);
+        if (!rules.Ok)
+            return Fail<ImageEditJobInput>(rules.ErrorCode!, rules.Error!);
+        // Временный отказ: цепочка N > 1 — шаг 12
+        if (faceTarget.Faces.Count > 1)
+            return Invalid("Несколько лиц за раз пока не поддерживается");
         if (req.Mask is not null || req.Annotated is not null)
             return Invalid("При подстановке на лицо маску и разметку не указывают");
         var quote = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
@@ -336,9 +341,10 @@ public sealed class ImageEditLaunchAssembler(
                 ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFacesResponse.FromDetection(sourceBytes, result));
 
         // e. Номер лица вне диапазона или лицо мелкое
-        var face = result.Faces.FirstOrDefault(f => f.N == faceTarget.Face);
+        var targetFace = faceTarget.Faces[0].Face;
+        var face = result.Faces.FirstOrDefault(f => f.N == targetFace);
         if (face is null)
-            return Invalid($"Лицо {faceTarget.Face} не найдено: на картинке {result.Faces.Count} лиц");
+            return Invalid($"Лицо {targetFace} не найдено: на картинке {result.Faces.Count} лиц");
         if (face.Small)
             return Invalid("Лицо слишком мелкое для подстановки персонажа");
 
@@ -346,7 +352,7 @@ public sealed class ImageEditLaunchAssembler(
         var maskBuilder = raster is null ? null : new FaceMaskBuilder(raster);
         if (maskBuilder is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена");
-        var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, faceTarget.Face);
+        var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, targetFace);
         if (maskResult.Png is null)
         {
             var code = maskResult.Reason switch
@@ -359,7 +365,7 @@ public sealed class ImageEditLaunchAssembler(
         }
 
         // g. Промпт: серверная константа + необязательное пожелание человека
-        var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, req.CharacterSlug!);
+        var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, faceTarget.Faces[0].CharacterSlug);
         if (character is null)
             return Invalid("Персонаж не найден");
         var prompt = $"Лицо человека в выделенной области заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.";
@@ -377,7 +383,7 @@ public sealed class ImageEditLaunchAssembler(
         var characterRef = character.Ref;
 
         // j. Запись в нить: FaceTarget { N, BBox, CharacterSlug }
-        var threadFaceTarget = new ImageThreadFaceTarget(faceTarget.Face, [face.X1, face.Y1, face.X2, face.Y2], req.CharacterSlug!);
+        var threadFaceTarget = new ImageThreadFaceTarget(targetFace, [face.X1, face.Y1, face.X2, face.Y2], faceTarget.Faces[0].CharacterSlug);
 
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
             req.QuoteId!.Trim(),

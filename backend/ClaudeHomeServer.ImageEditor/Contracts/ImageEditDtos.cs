@@ -48,9 +48,14 @@ public static class ImageEditCatalogReasons
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
-// Цель подстановки персонажа на лицо (ADR-028, этап 2): VersionId — версия нити,
-// Face — номер лица (с 1), FacesKey — детерминирован по байтам версии (сверка 7b)
-public sealed record FaceTarget(string VersionId, int Face, string FacesKey);
+// Назначение персонажа на лицо (ADR-028, этап 3): Face — номер лица (с 1),
+// CharacterSlug — персонаж, которого ставят на это лицо
+public sealed record FaceAssignment(int Face, string CharacterSlug);
+
+// Цель подстановки персонажей на лица (ADR-028, этап 3): VersionId — версия нити,
+// FacesKey — детерминирован по байтам версии (сверка), Faces — назначения «лицо → персонаж».
+// Этап 2 — частный случай Faces.Count == 1; этап 3 — до MaxFacePasses = 2
+public sealed record FaceTarget(string VersionId, string FacesKey, IReadOnlyList<FaceAssignment> Faces);
 
 // Выбор человека (поставщик + модель или «auto» с режимом) и признаки запроса.
 // HasAnnotations — стрелки, рамки, подписи на холсте (кисть сюда не входит — это HasMask);

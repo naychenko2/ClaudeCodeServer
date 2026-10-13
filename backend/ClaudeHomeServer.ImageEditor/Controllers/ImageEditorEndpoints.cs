@@ -374,8 +374,8 @@ public abstract class ImageEditorEndpoints(
             ? role
             : ReferenceRole.Object;
 
-    // JSON-строка {versionId, face, facesKey} → FaceTarget; null/пусто — null; битый JSON — null
-    // (ассемблер проверит наличие и валидность)
+    // JSON-строка {versionId, facesKey, faces: [{face, characterSlug}]} → FaceTarget;
+    // null/пусто — null; битый JSON — null (ассемблер проверит наличие и валидность)
     private static FaceTarget? ParseFaceTarget(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
@@ -384,9 +384,17 @@ public abstract class ImageEditorEndpoints(
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (!root.TryGetProperty("versionId", out var vid) ||
-                !root.TryGetProperty("face", out var face) ||
-                !root.TryGetProperty("facesKey", out var key)) return null;
-            return new FaceTarget(vid.GetString() ?? "", face.GetInt32(), key.GetString() ?? "");
+                !root.TryGetProperty("facesKey", out var key) ||
+                !root.TryGetProperty("faces", out var facesArr)) return null;
+            if (facesArr.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+            var faces = new List<FaceAssignment>();
+            foreach (var el in facesArr.EnumerateArray())
+            {
+                if (!el.TryGetProperty("face", out var face) ||
+                    !el.TryGetProperty("characterSlug", out var slug)) return null;
+                faces.Add(new FaceAssignment(face.GetInt32(), slug.GetString() ?? ""));
+            }
+            return new FaceTarget(vid.GetString() ?? "", key.GetString() ?? "", faces);
         }
         catch (System.Text.Json.JsonException) { return null; }
     }

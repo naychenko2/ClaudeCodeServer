@@ -116,8 +116,8 @@ public class FaceTargetLaunchHttpTests : IDisposable
         return await _client.PostAsync($"/api/projects/{_projectId}/image-editor/jobs", form);
     }
 
-    private string FaceTargetJson(string facesKey, int face = 1) =>
-        $"{{\"versionId\":\"origin\",\"face\":{face},\"facesKey\":\"{facesKey}\"}}";
+    private string FaceTargetJson(string facesKey, int face = 1, string characterSlug = "maria") =>
+        $"{{\"versionId\":\"origin\",\"facesKey\":\"{facesKey}\",\"faces\":[{{\"face\":{face},\"characterSlug\":\"{characterSlug}\"}}]}}";
 
     // ── faces_changed → 409 (MAJOR) ─────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
     {
         SetFlag(true);
         // FaceTarget с несуществующей версией
-        var json = $"{{\"versionId\":\"нет-такой\",\"face\":1,\"facesKey\":\"{_facesKey}\"}}";
+        var json = $"{{\"versionId\":\"нет-такой\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":1,\"characterSlug\":\"{_charSlug}\"}}]}}";
         var resp = await Start(json, _charSlug);
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound, await resp.Content.ReadAsStringAsync());
@@ -218,7 +218,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
         png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
         form.Add(png, "source", "test.png");
-        form.Add(new StringContent($"{{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"{facesKey}\"}}"), "faceTarget");
+        form.Add(new StringContent(FaceTargetJson(facesKey, 1, slug)), "faceTarget");
         form.Add(new StringContent(slug), "characterSlug");
         form.Add(new StringContent(chat.Id), "sessionId");
         form.Add(new StringContent(thread.Thread!.Id), "threadId");
@@ -274,7 +274,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
         png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
         form.Add(png, "source", "test.png");
-        form.Add(new StringContent($"{{\"versionId\":\"origin\",\"face\":1,\"facesKey\":\"{facesKey}\"}}"), "faceTarget");
+        form.Add(new StringContent(FaceTargetJson(facesKey, 1, slug)), "faceTarget");
         form.Add(new StringContent(slug), "characterSlug");
         form.Add(new StringContent(chat.Id), "sessionId");
         form.Add(new StringContent(thread.Thread!.Id), "threadId");

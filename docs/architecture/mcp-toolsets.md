@@ -118,6 +118,26 @@
     вызывается вручную; `failOpenWhenUnknown: false` — fail-closed (у REST-ветки
     отсутствие заголовка осознанно fail-open, у MCP — наш конфиг хода всегда кладёт
     заголовок).
+    **Делегированность держится на уровне ПРОГОНА, а не хода**
+    (`SessionManager.GetActiveTurnDelegation` = максимум из признака хода у адаптера и
+    `SessionEntry.RunDelegation`). Признак хода гаснет с его result, а фоновые агенты
+    делегированного хода (`Agent run_in_background`, Workflow) живут дальше и ходят в MCP с
+    заголовком того же чата — по одному признаку хода они выглядели бы человеком. Каждая
+    подача хода (сразу, из очереди, из ожидания устройства) отмечает свою делегированность
+    (глубину и «ход доклада») ещё до передачи адаптеру. Снимается признак, **что раньше**:
+    подачей человека (не авто, не директива, глубина 0, не доклад) или когда у прогона не
+    осталось живых фоновых агентов (`ILlmSessionAdapter.HasLiveBgAgents` — учёт `CliRun`:
+    агентские фоновые задачи, нераспознанный запуск, ход-продолжение; фоновая Bash-команда
+    агентом не считается). Фоновая Bash (в т.ч. `claude -p`) не в счёт осознанно — честная
+    граница: вложенный CLI наших MCP не получает. Без фоновых делегированность действует ровно ход, как до
+    фикса; авто-ход при живых агентах её не снимает. Живость не узнать (адаптера нет) —
+    признак держится (fail-closed). На «липкой» части (держат только фоновые, текущий ход
+    глубины 0, `TurnDelegationState.RunOnly`) разрешён `chats_report_up` (`allowOnStickyRun`);
+    внутри самого делегированного хода — нет. Admin-действия — `AdminByStoreHandler`
+    (сервисный токен), `deploy_*` в `wsp`, удаление публичной базы в `dify` — идут через гейт
+    с `alsoWhenExecutorSuppressed: true` и закрыты и на ходе-реакции на доклад исполнителя.
+    Тесты — `SessionManagerTests.RunDelegation.cs`, `WorkspaceDeployDelegationTests`,
+    `StructuredBgEventsTests` (`HasLiveBgAgents_*`).
 11. **Код ответа — текстом** (`isError`), не HTTP-кодом: у инструмента нет HTTP-кода,
     модель обязана прочитать причину; необработанные исключения наружу не выпускать —
     диспетчер обернёт их в протокольный `-32603`, а 5xx на `initialize` снимает весь
@@ -505,7 +525,7 @@ C#-`KnowledgeService`.
 | `list_documents` | Документы датасета (страница/лимит/keyword) — search-only |
 | `list_segments` | Сегменты документа (keyword/status) — search-only |
 | `create_dataset` | Личная — префикс `{username}:kb:`; публичная — без префикса (двоеточие недопустимо), явная проверка коллизии; лимит имени Dify 40 символов |
-| `delete_dataset` | Только deletable: привязанные (заметки/проект/память) не удаляются, публичные — только админу |
+| `delete_dataset` | Только deletable: привязанные (заметки/проект/память) не удаляются, публичные — только админу и не на делегированном ходу/ходе доклада (`DelegatedTurnGate`, `alsoWhenExecutorSuppressed: true`) |
 | `create_document_by_text` / `create_document_by_file` | Индексация документа текстом/файлом (base64); `indexing_technique`, `process_rule_mode` — валидируются |
 | `update_document_by_text` / `update_document_by_file` | Переиндексация существующего |
 | `delete_document` | Удалить документ |
@@ -652,7 +672,8 @@ REST-паре; MVC-фильтр к `McpTransportController` не применя�
 чтения и записи** (урок волны 2: у tasks запись смотрела только readonly-подмножество);
 (3) **все пути — через `FileService`** (`SafeJoin`/`SafeJoinPublic`, traversal = внятный
 отказ); (4) **`DelegatedTurnGate`** (fail-closed, `failOpenWhenUnknown: false`) на
-`chats_send`, `chats_report_up`, `chats_archive`, `files_delete`, `chats_delete`;
+`chats_send`, `chats_report_up`, `chats_archive`, `files_delete`, `chats_delete`, а на
+`deploy_*` — ещё и с `alsoWhenExecutorSuppressed: true` (admin-действие; делегированность прогона — «Что стоит знать…», п. 10);
 **self-send / self-delete запрещены** (чат не пишет сам в себя); (5) **белый список
 провайдера** (`McpToolWhitelist.KeepMcpTools` по `X-Caller-Session-Id`) — фильтрует tools/list
 и отбивает вызов; **честная граница**: защита от ОШИБКИ модели, а не от намеренного обхода

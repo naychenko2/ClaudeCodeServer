@@ -298,6 +298,22 @@ public class TaskExecutionServiceTests
         template.Should().Contain("{{TIER_LEVELS}}").And.Contain("{{CATEGORY_PROFILES}}");
     }
 
+    // Запрет фоновых сборок и тестов: фоновая команда переживает закрытие задачи, а её
+    // «убито по таймауту» будит завершённого исполнителя новым ходом. Правило обязано быть
+    // в шаблоне и в обоих встроенных фолбэках (с персоной и без), причём одной строкой.
+    [Fact]
+    public void ЗапретФоновыхСборок_ЕстьВШаблонеИВОбоихФолбэках()
+    {
+        const string rule = "- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests` " +
+            "(или обычный Bash на переднем плане); `run_in_background`, Monitor и фоновые " +
+            "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.";
+
+        TaskExecutionService.ReadRulesTemplate(projectRoot: null).Should().Contain(rule);
+        TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" }, new Persona { Name = "Вера" })
+            .Should().Contain(rule);
+        TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" }).Should().Contain(rule);
+    }
+
     // Механика подстановки: значения встают на место плейсхолдеров, а пустые убирают СТРОКУ
     // целиком — иначе в постановке остаётся пустая строка там, где у владельца нет алиасов
     // тиров или справочник категорий недоступен.

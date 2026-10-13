@@ -340,11 +340,13 @@ public class FacePassChainTests
         progress.Reports.Single(r => r.Ready is not null).Ready![0].Bytes.Should().Equal(Png(8, 8, 2));
     }
 
-    // (4) Проход 1 завершился без картинок (Downloading без Ready): удерживать нечего — версий нет
+    // (4) Проход 1 завершился без картинок (Downloading без Ready): это сбой прохода 1 (ADR-028, §8) —
+    // версий нет, проход 2 не вызывается, лица failed/cancelled
     [Fact]
     public async Task Завершение_прохода_1_без_картинок_версий_нет()
     {
         var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
         var editor = new FakeEditor((req, prog, ct) =>
         {
             if (req.Character!.Slug == "anya")
@@ -355,12 +357,103 @@ public class FacePassChainTests
             throw new InvalidOperationException("сбой прохода 2");
         });
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default));
+        var result = await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default, results.Add);
 
+        result.Outcome.Should().Be(EditOutcome.Failed, "Ok без картинок — сбой прохода");
+        editor.Requests.Should().HaveCount(1, "проход 2 не вызывается");
+        results.Select(r => r.Status).Should().Equal("failed", "cancelled");
         progress.ReadyCount.Should().Be(0, "проход 1 картинок не дал — версии нет");
         progress.Reports.Should().Contain(r => r.Stage == EditStage.Downloading && r.Run == 1 && r.Runs == 2,
             "стадия завершения прохода 1 дошла наружу");
+    }
+
+    // ── Д2: сбой прохода результатом — та же ветка «проход упал», что исключение (ADR-028, §8) ──
+    // Драйверы (Local, fal, Higgsfield) сообщают сбой ImageEditResult(Failed|Unavailable, []), а не
+    // исключением. Цепочка не бросает, а возвращает результат прохода; Cancelled без отмены задачи — сбой
+
+    // Подменный редактор: проход 1 — успех с Ready, проход 2 — заданный результат без исключения
+    private static FakeEditor Pass2ResultEditor(ImageEditResult pass2) =>
+        new((req, prog, ct) =>
+        {
+            if (req.Character!.Slug == "anya")
+            {
+                var img = new EditedImage(Png(8, 8, 1), "image/png");
+                prog.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 1, Ready: [img]));
+                return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
+            }
+            return Task.FromResult(pass2);
+        });
+
+    public static TheoryData<EditOutcome, EditOutcome> Pass2Failures => new()
+    {
+        { EditOutcome.Failed, EditOutcome.Failed },
+        { EditOutcome.Unavailable, EditOutcome.Unavailable },
+        // Ok без картинок — сбой, в задачу уходит Failed
+        { EditOutcome.Ok, EditOutcome.Failed },
+        // Cancelled при неотменённом ct — прервали снаружи: сбой, а не отмена
+        { EditOutcome.Cancelled, EditOutcome.Failed },
+    };
+
+    // (1) Проход 2 сообщил сбой результатом: done/failed, удержанный выход прохода 1 — ровно одна версия
+    [Theory]
+    [MemberData(nameof(Pass2Failures))]
+    public async Task Сбой_прохода_2_результатом_отпускает_выход_прохода_1(EditOutcome pass2, EditOutcome expected)
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var editor = Pass2ResultEditor(new ImageEditResult(pass2, [], null, null, null, "сбой прохода 2"));
+
+        var result = await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default, results.Add);
+
+        result.Outcome.Should().Be(expected);
+        result.Error.Should().Be("сбой прохода 2", "текст сбоя прохода — как есть");
+        results.Select(r => r.Status).Should().Equal("done", "failed");
+        progress.ReadyCount.Should().Be(1, "удержанный выход прохода 1 отпущен как итоговая версия");
+        progress.Reports.Single(r => r.Ready is not null).Ready![0].Bytes.Should().Equal(Png(8, 8, 1));
+    }
+
+    // (2) Проход 1 сообщил сбой результатом: failed/cancelled, проход 2 не вызван, версий нет
+    [Theory]
+    [MemberData(nameof(Pass2Failures))]
+    public async Task Сбой_прохода_1_результатом_проход_2_не_вызван(EditOutcome pass1, EditOutcome expected)
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var editor = new FakeEditor((_, _, _) =>
+            Task.FromResult(new ImageEditResult(pass1, [], null, null, null, "сбой прохода 1")));
+
+        var result = await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default, results.Add);
+
+        result.Outcome.Should().Be(expected);
+        editor.Requests.Should().HaveCount(1, "проход 2 не вызывается");
+        results.Select(r => r.Status).Should().Equal("failed", "cancelled");
+        progress.ReadyCount.Should().Be(0, "сбой прохода 1 — версии нет");
+    }
+
+    // (3) Cancelled результатом при ОТМЕНЁННОМ ct — настоящая отмена: cancelled, исключение отмены
+    [Fact]
+    public async Task Cancelled_результатом_при_отмене_задачи_остаётся_отменой()
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var cts = new CancellationTokenSource();
+        var editor = new FakeEditor((req, prog, ct) =>
+        {
+            if (req.Character!.Slug == "anya")
+            {
+                var img = new EditedImage(Png(8, 8, 1), "image/png");
+                prog.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 1, Ready: [img]));
+                return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
+            }
+            cts.Cancel();
+            return Task.FromResult(new ImageEditResult(EditOutcome.Cancelled, [], null, null, null, "Остановлено"));
+        });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, cts.Token, results.Add));
+
+        results.Select(r => r.Status).Should().Equal("done", "cancelled");
+        progress.ReadyCount.Should().Be(1, "отмена после прохода 1 — версия с его выходом");
     }
 
     // ── Шаг 10: финализация задачи (ImageEditJobService) ─────────────────────────
@@ -379,6 +472,11 @@ public class FacePassChainTests
         public bool LateRunning { get; init; }
         // Сигнал: первый проход завершён (тест отменяет задачу после него)
         public TaskCompletionSource Pass1Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Сбой прохода результатом без исключения (Д2): задан — проход отдаёт его как есть
+        public ImageEditResult? Pass1Result { get; init; }
+        public ImageEditResult? Pass2Result { get; init; }
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
 
         public string Key => ProviderKey;
         public string Label => "Partial";
@@ -389,7 +487,10 @@ public class FacePassChainTests
 
         public async Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
         {
+            Interlocked.Increment(ref _calls);
             var pass = req.Character!.Slug; // anya = проход 1, borya = проход 2
+            if (pass == "anya" && Pass1Result is { } r1) return r1;
+            if (pass == "borya" && Pass2Result is { } r2) return r2;
             if (pass == "anya")
             {
                 var img = new EditedImage(Png(8, 8, 1), "image/png");
@@ -417,9 +518,12 @@ public class FacePassChainTests
     }
 
     private (ImageEditJobService Jobs, string JobId, PartialResultEditor Editor) StartPartial(string passOutcome, string dir,
-        bool lateRunning = false)
+        bool lateRunning = false, ImageEditResult? pass1Result = null, ImageEditResult? pass2Result = null)
     {
-        var editor = new PartialResultEditor { PassOutcome = passOutcome, LateRunning = lateRunning };
+        var editor = new PartialResultEditor
+        {
+            PassOutcome = passOutcome, LateRunning = lateRunning, Pass1Result = pass1Result, Pass2Result = pass2Result,
+        };
         var jobs = new ImageEditJobService([editor], new ImageEditWorkspace(dir),
             NullLogger<ImageEditJobService>.Instance);
         var quote = new ImageEditQuoteRequest(
@@ -516,6 +620,57 @@ public class FacePassChainTests
             var job = await WaitDone(jobs, jobId);
             job.Status.Should().Be(ImageEditJobStatus.Cancelled, "отмена после прохода 1 — Cancelled");
             job.Variants.Should().ContainSingle("версия — выход прохода 1 пережил поздний Running");
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // ── Д2 на уровне задачи: сбой прохода результатом финализирует, как исключение ─────────
+    // Запуск нити выводится из задачи (ImageThreadService: Completed + версия → done)
+
+    // (10) Проход 2 сообщил сбой результатом: Completed, Outcome=Ok, одна версия, Error прохода 2, done/failed
+    [Theory]
+    [InlineData(EditOutcome.Failed)]
+    [InlineData(EditOutcome.Unavailable)]
+    [InlineData(EditOutcome.Ok)]
+    [InlineData(EditOutcome.Cancelled)]
+    public async Task Сбой_прохода_2_результатом_задача_Completed_с_версией(EditOutcome pass2)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, editor) = StartPartial("ok", dir,
+            pass2Result: new ImageEditResult(pass2, [], null, null, null, "сбой прохода 2"));
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Completed, "упал проход 2 — задача не падает");
+            job.Outcome.Should().Be(EditOutcome.Ok);
+            job.Variants.Should().ContainSingle("версия — выход прохода 1");
+            job.Error.Should().Be("сбой прохода 2", "текст сбоя прохода 2 в Error");
+            job.FaceResults!.Select(r => r.Status).Should().Equal("done", "failed");
+            editor.Calls.Should().Be(2);
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // (11) Проход 1 сообщил сбой результатом: версии нет → FailAsync с Outcome прохода, failed/cancelled,
+    // проход 2 не вызван. Cancelled без отмены задачи — Failed, а не Cancelled задачи
+    [Theory]
+    [InlineData(EditOutcome.Failed, EditOutcome.Failed)]
+    [InlineData(EditOutcome.Unavailable, EditOutcome.Unavailable)]
+    [InlineData(EditOutcome.Cancelled, EditOutcome.Failed)]
+    public async Task Сбой_прохода_1_результатом_задача_Failed_без_версий(EditOutcome pass1, EditOutcome expected)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, editor) = StartPartial("ok", dir,
+            pass1Result: new ImageEditResult(pass1, [], null, null, null, "сбой прохода 1"));
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Failed);
+            job.Outcome.Should().Be(expected);
+            job.Variants.Should().BeEmpty("сбой прохода 1 — версии нет");
+            job.Error.Should().Be("сбой прохода 1");
+            job.FaceResults!.Select(r => r.Status).Should().Equal("failed", "cancelled");
+            editor.Calls.Should().Be(1, "проход 2 не вызывается");
         }
         finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
     }

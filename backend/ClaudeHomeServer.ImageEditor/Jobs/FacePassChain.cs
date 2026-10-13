@@ -37,6 +37,8 @@ public sealed class FacePassChain
         var current = requests[0].Source!;
         var last = default(ImageEditResult);
         var chain = new ChainProgress(progress, n);
+        // Сбой, о котором драйвер сообщил результатом (Local, fal, Higgsfield не бросают)
+        ImageEditResult? failure = null;
         try
         {
             for (; k < n; k++)
@@ -45,10 +47,15 @@ public sealed class FacePassChain
                 var request = requests[k] with { Source = current };
                 chain.Advance(k);
                 last = await editor.RunAsync(request, chain, ct);
+                // Отмена задачи, о которой драйвер сообщил результатом, — та же ветка, что исключение отмены
+                if (last.Outcome == EditOutcome.Cancelled) ct.ThrowIfCancellationRequested();
+                failure = PassFailure(last);
+                // k не двигаем: ветка «проход k упал» ниже пишет failed именно этому лицу
+                if (failure is not null) break;
                 // Выход прохода k — исходник прохода k+1 (промежуточный выход версиями не становится)
-                if (last.Images is { Count: > 0 } imgs)
-                    current = new ImageBytes(imgs[0].Bytes, imgs[0].ContentType);
-                onResult?.Invoke(new FacePassResult(pass.Face, "done", last.Images is { Count: > 0 } ? last.Images[0].Similarity : null));
+                var img = last.Images[0];
+                current = new ImageBytes(img.Bytes, img.ContentType);
+                onResult?.Invoke(new FacePassResult(pass.Face, "done", img.Similarity));
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -61,16 +68,39 @@ public sealed class FacePassChain
         }
         catch
         {
-            // Проход k начался и упал; последующие не начинались — cancelled (ADR-028, §9)
-            onResult?.Invoke(new FacePassResult(passes[k].Face, "failed", null));
-            for (var i = k + 1; i < n; i++) onResult?.Invoke(new FacePassResult(passes[i].Face, "cancelled", null));
-            // Падение прохода k: выход прохода k−1 (если был) становится версией (В1)
-            chain.ReleaseHeld();
+            // Исключение прохода k (кроме отмены по ct) — проход упал; текст сбоя соберёт задача
+            PassFailed(k);
             throw;
+        }
+        if (failure is not null)
+        {
+            PassFailed(k);
+            return failure;
         }
         // N ≥ 1 гарантирует FaceTargetRules: цикл прошёл хотя бы раз, last присвоен
         return last!;
+
+        // Ветка «проход k упал» — одна для исключения и для сбоя результатом (ADR-028, §8–9):
+        // лицу k — failed, последующие не начинались — cancelled; выход прохода k−1 (если был)
+        // становится версией (В1)
+        void PassFailed(int failed)
+        {
+            onResult?.Invoke(new FacePassResult(passes[failed].Face, "failed", null));
+            for (var i = failed + 1; i < n; i++) onResult?.Invoke(new FacePassResult(passes[i].Face, "cancelled", null));
+            chain.ReleaseHeld();
+        }
     }
+
+    // Сбой прохода результатом (ADR-028, §8): Outcome ≠ Ok либо Ok без картинок. null — проход удался.
+    // Cancelled сюда доходит только без отмены задачи (прервали снаружи, например на узле) — это
+    // сбой: человек ничего не отменял, поэтому в задачу уходит Failed, а не Cancelled
+    private static ImageEditResult? PassFailure(ImageEditResult result) => result switch
+    {
+        { Outcome: EditOutcome.Ok, Images.Count: > 0 } => null,
+        { Outcome: EditOutcome.Ok } => result with { Outcome = EditOutcome.Failed, Error = result.Error ?? "Проход не вернул картинку" },
+        { Outcome: EditOutcome.Cancelled } => result with { Outcome = EditOutcome.Failed, Error = result.Error ?? "Проход прерван вне задачи" },
+        _ => result,
+    };
 
     // Обёртка прогресса: гасит Ready у непоследних проходов (промежуточные выходы версиями не
     // становятся), стадия — «проход k из N» (Run = k+1, Runs = N). Удержанный Ready последнего

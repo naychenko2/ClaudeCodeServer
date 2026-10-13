@@ -72,6 +72,18 @@ describe('faceSwapView: canSubmit', () => {
   it('отказ «близко» (7) → false, пока выбор не изменится', () => {
     expect(faceSwapView(base({ selectedFace: 1, selectedCharacter: 'marina', facesTooClose: true })).canSubmit).toBe(false);
   });
+  it('этап 3: отказ по номеру лица (faceRefused) → false; после снятия назначения (clearFailures) → снова true', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    const ui = fullUi();
+    const f = launchFailure('invalid_request', text, 2);
+    if (f.kind !== 'faceRefused') throw new Error('ожидался faceRefused');
+    const refused = { ...ui, refusedFace: f.face, refusedText: f.message };
+    const viewOf = (u: FaceUi, a = assignCharacter(assignCharacter(emptyAssignments, 1, 'marina'), 2, 'olga')) =>
+      faceSwapView(base({ assignments: a, refusedFace: u.refusedFace, refusedText: u.refusedText })).canSubmit;
+    expect(viewOf(refused)).toBe(false);
+    // «Снять назначение с лица 2»: назначение убрано, отказ сброшен — кнопка оживает
+    expect(viewOf(clearFailures(refused), assignCharacter(emptyAssignments, 1, 'marina'))).toBe(true);
+  });
 });
 
 // ── Плашка режима (шаг) ──────────────────────────────────────────────────────
@@ -229,6 +241,12 @@ describe('launchFailure: код → состояние', () => {
   it('invalid_request без face (или face не число) → generic, тост как раньше', () => {
     expect(launchFailure('invalid_request', 'плохой запрос')).toEqual({ kind: 'generic', message: 'плохой запрос' });
     expect(launchFailure('invalid_request', 'плохой запрос', '2')).toEqual({ kind: 'generic', message: 'плохой запрос' });
+  });
+  it('номер лица — только положительное целое: NaN, 0, -1, 1.5, null, \'2\' → generic; 2 → faceRefused', () => {
+    for (const bad of [NaN, 0, -1, 1.5, null, '2']) {
+      expect(launchFailure('invalid_request', 'плохой запрос', bad)).toEqual({ kind: 'generic', message: 'плохой запрос' });
+    }
+    expect(launchFailure('invalid_request', 'Лицо 2', 2)).toEqual({ kind: 'faceRefused', face: 2, message: 'Лицо 2' });
   });
 });
 

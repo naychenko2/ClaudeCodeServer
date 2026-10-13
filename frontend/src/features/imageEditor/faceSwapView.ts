@@ -218,7 +218,8 @@ export type LaunchFailure =
 export function launchFailure(code: string | null, message: string | null, face?: unknown): LaunchFailure {
   switch (code) {
     case 'invalid_request':
-      return typeof face === 'number'
+      // Номер лица — только положительное целое: typeof пропустил бы NaN, 0, -1, 1.5
+      return typeof face === 'number' && Number.isInteger(face) && face >= 1
         ? { kind: 'faceRefused', face, message: message ?? '' }
         : { kind: 'generic', message: message ?? '' };
     case 'faces_too_close': return { kind: 'facesTooClose' };
@@ -384,7 +385,9 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     // Отказ «близко» (7): неактивна, пока выбор не изменится
     && !facesTooClose
     // Этап 3: отказ «вне кадра» тоже блокирует (привязан к номеру лица)
-    && !faceOutOfFrame;
+    && !faceOutOfFrame
+    // Этап 3: отказ по номеру лица (мелкое лицо) — тоже блокирует до снятия назначения (clearFailures)
+    && !(refusedText && refusedFace != null);
 
   // ── Список персонажей: доступен, когда есть к чему подставлять ──
   // Этап 3: пикер виден, пока есть активное лицо; этап 2 — как раньше

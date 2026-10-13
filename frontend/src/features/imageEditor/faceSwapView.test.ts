@@ -227,7 +227,7 @@ describe('launchFailure: код → состояние', () => {
 // ── Сброс флагов отказов (этап 2 · шаг 10d) ───────────────────────────────────
 const fullUi = (over: Partial<FaceUi> = {}): FaceUi => ({
   tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
-  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false,
+  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null,
   ...over,
 });
 

@@ -14,10 +14,10 @@ import { imageEditorApi, type ImageTransformBase, type ImageTransformOp, type Im
 import { AdjustPanel } from '../AdjustPanel';
 import { CropBar } from '../CropBar';
 import { EditorCanvas } from '../EditorCanvas';
-import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
+import { FaceOverlay, FaceSearchScrim, type FaceLabel } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, faceQuoteChip, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
+import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, faceQuoteChip, overlayTap, refusalFaces, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -118,13 +118,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   // Локальное состояние экрана: мелкое лицо (тап), отказы запуска, «локальные на этот запуск», запуск
   const [faceUi, setFaceUi] = useState<FaceUi>({
     tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
-    providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false,
+    providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null,
   });
   // Вход в режим / смена версии-нити: новый поиск лиц + сброс переходных состояний (устаревший ответ не применяется)
   useEffect(() => {
     if (!faceSwapMode) return;
     void faceSwap.search();
-    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false }));
+    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, refusedFace: null }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceSwapMode, threadId, viewedVersionId]);
   const viewedSrc = useMemo(() => {
@@ -189,6 +189,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     hasMask: hasMaskMark(marks),
     assignments: faceSwap.state.assignments,
     searchFailure: faceSwap.state.searchFailure,
+    refusedFace: faceUi.refusedFace,
   }) : null;
 
   // Правка открытой не текущей версии: сначала она становится текущей
@@ -259,6 +260,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const baseName = thread.file ? defaultStem(splitPath(thread.file).name) : 'kartinka';
   const format: ImageEncodeFormat = thread.file && /\.jpe?g$/i.test(thread.file) ? 'jpeg' : thread.file && /\.webp$/i.test(thread.file) ? 'webp' : 'png';
 
+  // Ярлыки назначенных лиц на холсте: имя персонажа (удалён — slug) и первое фото
+  const faceLabels = new Map<number, FaceLabel>();
+  for (const [n, slug] of faceSwap.state.assignments.assignments) {
+    const c = faceCharacters?.find(x => x.slug === slug);
+    const file = c?.photos[0]?.file;
+    faceLabels.set(n, { name: c?.name?.trim() || slug, avatar: file ? api.characterPhotoUrl(projectId, slug, file) : null });
+  }
   // «Подставить персонажа»: оверлей поверх картинки — поиск (scrim) или рамки лиц
   const faceOverlayNode = faceSwapMode && dims ? (
     faceSwap.state.phase === 'loading'
@@ -267,13 +275,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         ? <FaceOverlay
             faces={faceSwap.state.faces} width={faceSwap.state.width} height={faceSwap.state.height}
             selectedFace={faceSwap.state.assignments.active} tappedSmall={faceUi.tappedSmall}
-            errorFaces={faceUi.tooClose ? faceSwap.state.faces.map(f => f.n) : []}
+            errorFaces={refusalFaces(faceUi, faceSwap.state.faces)}
+            labels={faceLabels} limitFace={faceSwap.state.assignments.limit}
             mobile={mobile}
-            onSelect={n => {
-              const f = faceSwap.state.faces.find(x => x.n === n);
-              if (f?.small) setFaceUi(u => ({ ...u, tappedSmall: n }));
-              else { faceSwap.tap(n); setFaceUi(u => ({ ...clearFaceChange(u), tappedSmall: null })); }
-            }} />
+            onSelect={n => overlayTap(n, faceSwap.state.faces, {
+              small: m => setFaceUi(u => ({ ...u, tappedSmall: m })),
+              tap: m => { faceSwap.tap(m); setFaceUi(u => ({ ...clearFaceChange(u), tappedSmall: null })); },
+            })} />
         : null
   ) : null;
 
@@ -287,7 +295,9 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
       const ok = await launchFaceSwap(projectId, sessionId, thread, target, viewedVersionId, dims);
       if (ok) setFaceSwapMode(false); // новая версия ляжет в ленту; режим закрывается
     } catch (e) {
-      const err = e as { status?: number; body?: { code?: string; error?: string; facesKey?: string; faces?: unknown } } | null;
+      const err = e as { status?: number; body?: { code?: string; error?: string; face?: unknown; facesKey?: string; faces?: unknown } } | null;
+      // Номер лица в теле отказа «близко»/«вне кадра» (ADR-028); нет — отказ без привязки к лицу
+      const refusedFace = typeof err?.body?.face === 'number' ? err.body.face : null;
       const code = typeof err?.body?.code === 'string' ? err.body.code : null;
       // Бэкенд шлёт { error, code }; поля body.message нет (всегда undefined)
       const msg = typeof err?.body?.error === 'string' ? err.body.error : (e as Error).message;
@@ -306,8 +316,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         // Реакция на прочие отказы запуска — по коду (launchFailure), не по тексту сообщения
         const f = launchFailure(code, msg);
         switch (f.kind) {
-        case 'facesTooClose': setFaceUi(u => ({ ...u, tooClose: true })); break;
-        case 'faceOutOfFrame': setFaceUi(u => ({ ...u, faceOutOfFrame: true })); break;
+        case 'facesTooClose': setFaceUi(u => ({ ...u, tooClose: true, refusedFace })); break;
+        case 'faceOutOfFrame': setFaceUi(u => ({ ...u, faceOutOfFrame: true, refusedFace })); break;
         case 'busy': setFaceUi(u => ({ ...u, busy: true })); break;
         case 'providerUnavailable': setFaceUi(u => ({ ...u, providerUnavailable: true })); break;
         case 'facesChanged': setFaceUi(u => ({ ...u, facesChanged: true })); break;

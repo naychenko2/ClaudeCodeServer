@@ -168,6 +168,8 @@ export interface FaceSwapViewInput {
   assignments?: FaceAssignments;
   // Причина отказа ПОИСКА лиц (busy/provider_unavailable/…): плашка, пока не повторят поиск
   searchFailure?: { code: string; text: string } | null;
+  // Номер лица из тела отказа (FaceUi.refusedFace): известен — текст и «Снять назначение» только по нему
+  refusedFace?: number | null;
 }
 
 export type NoticeTone = 'info' | 'warning' | 'danger';
@@ -245,19 +247,21 @@ export interface FaceUi {
   facesChanged: boolean;
   useLocalOnce: boolean;
   submitting: boolean;
+  // Номер лица из тела отказа «близко»/«вне кадра» (поле face, ADR-028); null — сервер номер не отдал
+  refusedFace: number | null;
 }
 
 // Сброс ВСЕХ флагов отказов (в начале запуска, вместе с submitting: true):
 // иначе старый отказ (например face_out_of_frame) висит поверх нового (busy) —
 // две противоречащие плашки. Остальные поля (tappedSmall/useLocalOnce) не трогаем.
 export function clearFailures(ui: FaceUi): FaceUi {
-  return { ...ui, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false };
+  return { ...ui, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, refusedFace: null };
 }
 
 // Смена выбранного лица: «вне картинки» и «близко» гасятся (человек выбрал другое
 // лицо); остальные флаги (busy/providerUnavailable/facesChanged) — нет.
 export function clearFaceChange(ui: FaceUi): FaceUi {
-  return { ...ui, faceOutOfFrame: false, tooClose: false };
+  return { ...ui, faceOutOfFrame: false, tooClose: false, refusedFace: null };
 }
 
 // Чистое вычисление состояния экрана. canSubmit — по матрице макета: лицо и персонаж
@@ -265,7 +269,7 @@ export function clearFaceChange(ui: FaceUi): FaceUi {
 export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
   const { phase, faces, selectedFace, error, provider, localAvailable, useLocalOnce,
     tappedSmall, over8, facesTooClose, faceOutOfFrame, busy, providerUnavailable, facesChanged, hasMask,
-    assignments, searchFailure } = i;
+    assignments, searchFailure, refusedFace } = i;
 
   // Исполнитель запуска: локальные модели, либо переключены на этот запуск
   const local = useLocalOnce || provider === 'local';
@@ -314,10 +318,12 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     if (tappedSmall != null) {
       notices.push({ tone: 'warning', icon: 'alert', text: FS_TEXT.small, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
     }
-    // Этап 3: отказ ведёт к «Снять назначение с лица n». Сервер номер лица в теле не отдаёт,
-    // поэтому при одном назначении номер однозначен (текст по номеру), при двух — общий
-    // текст и кнопка снятия на каждое назначенное лицо
-    const asgFaces = assignments ? [...assignments.assignments.keys()].sort((a, b) => a - b) : [];
+    // Этап 3: отказ ведёт к «Снять назначение с лица n». Номер лица из тела отказа (refusedFace)
+    // — текст и кнопка по нему; без номера при одном назначении номер однозначен, при двух —
+    // общий текст и кнопка снятия на каждое назначенное лицо
+    const asgFaces = !assignments ? []
+      : refusedFace != null && assignments.assignments.has(refusedFace) ? [refusedFace]
+        : [...assignments.assignments.keys()].sort((a, b) => a - b);
     const refusal = (byN: (n: number) => string, general: string, legacy: string) => {
       if (!assignments || asgFaces.length === 0) {
         notices.push({ tone: 'danger', icon: 'alert', text: legacy, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
@@ -378,20 +384,56 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
 }
 
 // ── Состояние рамки одного лица (для FaceOverlay) ─────────────────────────────
-// normal / selected / dim (остальные при выбранной) / small (пунктир, не выбрать) /
-// smallTapped (тапнули мелкое — warning) / error (близко — danger)
-export type FaceVisual = 'normal' | 'selected' | 'dim' | 'small' | 'smallTapped' | 'error';
+// normal (свободная) / selected (активная) / assigned (назначена, с ярлыком) / dim (свободные,
+// пока другое лицо активно) / limit (тап по третьему при двух назначениях — C.warning) /
+// small (пунктир, не выбрать) / smallTapped (тапнули мелкое — warning) / error (отказ — danger)
+export type FaceVisual = 'normal' | 'selected' | 'assigned' | 'dim' | 'limit' | 'small' | 'smallTapped' | 'error';
 
 export function faceVisual(f: DetectedFace, i: {
   selectedFace: number | null;
   tappedSmall: number | null;
   errorFaces: readonly number[];
+  // Этап 3: назначенные лица и лицо, вызвавшее плашку лимита
+  assigned?: readonly number[];
+  limitFace?: number | null;
 }): FaceVisual {
   if (f.small) return i.tappedSmall === f.n ? 'smallTapped' : 'small';
   if (i.errorFaces.includes(f.n)) return 'error';
+  if (i.limitFace === f.n) return 'limit';
   if (i.selectedFace === f.n) return 'selected';
+  if (i.assigned?.includes(f.n)) return 'assigned';
   if (i.selectedFace != null) return 'dim';
   return 'normal';
+}
+
+// Лица, окрашенные отказом: номер из тела отказа известен — только оно; иначе «близко» красит
+// все рамки (как в этапе 2), «вне кадра» без номера рамки не красит
+export function refusalFaces(ui: Pick<FaceUi, 'tooClose' | 'faceOutOfFrame' | 'refusedFace'>, faces: readonly DetectedFace[]): number[] {
+  if (!ui.tooClose && !ui.faceOutOfFrame) return [];
+  if (ui.refusedFace != null) return [ui.refusedFace];
+  return ui.tooClose ? faces.map(f => f.n) : [];
+}
+
+// aria-label рамки (тексты v2-notes): свободная — «назначить», назначенная — имя и «Переназначить»
+export function faceAria(n: number, small: boolean, name: string | null): string {
+  if (small) return `Лицо ${n}: слишком мелкое`;
+  return name ? `Лицо ${n}: ${name}. Переназначить` : `Лицо ${n}: назначить персонажа`;
+}
+
+// Положение ярлыка с именем относительно рамки (доли картинки): по центру под рамкой;
+// у правого края картинки (центр правее 84 %) — прижат к правому краю рамки, у левого (левее
+// 16 %) — к левому; у нижнего края (низ рамки ниже 90 %) — внутри рамки у её низа, чтобы не
+// вылезать за холст
+export type LabelPlace = { h: 'center' | 'left' | 'right'; inside: boolean };
+export function labelPlace(r: FaceRect): LabelPlace {
+  const cx = r.x + r.width / 2;
+  return { h: cx > 0.84 ? 'right' : cx < 0.16 ? 'left' : 'center', inside: r.y + r.height > 0.9 };
+}
+
+// Тап по рамке на холсте: мелкое лицо — только подсветка (small), иначе — tap по логике назначений
+export function overlayTap(n: number, faces: readonly DetectedFace[], h: { small: (n: number) => void; tap: (n: number) => void }): void {
+  if (faces.find(x => x.n === n)?.small) h.small(n);
+  else h.tap(n);
 }
 
 // ── Назначения «лицо → персонаж» (ADR-028, этап 3) ─────────────────────────────

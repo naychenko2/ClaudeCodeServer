@@ -174,8 +174,9 @@ public sealed class DifyToolset(
                     var dataset = await catalog.ResolveReadableAsync(username, id);
                     if (dataset is null) return Deny($"База {id} не найдена или недоступна.");
                     // Привязанные базы (заметки/проекты/память персон) не удаляются и из UI —
-                    // их удаляют разделы-владельцы; публичные — только админу
-                    if (!catalog.IsDeletable(dataset, username, IsAdmin(context.OwnerId)))
+                    // их удаляют разделы-владельцы; публичные — только админу, и не на
+                    // делегированном ходу (ход процесса, chats_send): права админа — у человека
+                    if (!catalog.IsDeletable(dataset, username, IsAdmin(context.OwnerId) && !DelegatedTurn(context)))
                         return Deny("Удаление этой базы недоступно: она привязана к другому разделу "
                             + "(заметки/проект/память персоны), а для публичной нужны права администратора.");
                     await knowledge.DeleteDatasetAsync(id);
@@ -416,6 +417,13 @@ public sealed class DifyToolset(
     }
 
     private bool IsAdmin(string ownerId) => users.GetById(ownerId)?.Role == "admin";
+
+    // Ход-вызыватель делегированный, ход-реакция на доклад исполнителя (или вызывателя нет) —
+    // админ-права хода не дают (docs/architecture/mcp-toolsets.md, п. 10), тот же набор, что у AdminByStoreHandler
+    private bool DelegatedTurn(McpToolCallContext context) =>
+        !ClaudeHomeServer.Filters.DelegatedTurnGate.Decide(sessions, context.OwnerId, context.CallerSessionId,
+            "Удаление публичной базы", alsoWhenExecutorSuppressed: true, allowInTeamImplement: false,
+            failOpenWhenUnknown: false).Allowed;
 
     // base64-файл из аргументов: пустой/кривой base64 — внятный отказ, а не исключение
     private static bool TryFileArgs(JsonObject arguments,

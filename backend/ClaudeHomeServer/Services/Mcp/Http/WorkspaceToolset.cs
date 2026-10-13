@@ -304,10 +304,15 @@ public sealed partial class WorkspaceToolset(
     // [DenyOnDelegatedTurn] на REST-эндпоинтах (фильтр на McpTransportController не
     // применяется вовсе). fail-closed без вызывателя: заголовки кладёт наш конфиг хода всегда
     // (ветка формально недостижима — сессию резолвит TryResolve раньше; защита на будущее).
-    private string? DelegatedDenied(McpToolCallContext context, Session callerSession, string action) =>
+    // alsoWhenExecutorSuppressed — admin-действия (выкатка): закрыты и на ходе-реакции на доклад
+    // исполнителя, как у AdminByStoreHandler — у такого хода тоже нет заказавшего его человека.
+    // allowOnStickyRun — отчёт наверх: разрешён, когда делегированным чат держат лишь живые
+    // фоновые агенты прошлого делегированного хода, а текущий ход — глубины 0.
+    private string? DelegatedDenied(McpToolCallContext context, Session callerSession, string action,
+        bool alsoWhenExecutorSuppressed = false, bool allowOnStickyRun = false) =>
         DelegatedTurnGate.Decide(sessions, context.OwnerId, callerSession.Id, action,
-            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
-            failOpenWhenUnknown: false) is { Allowed: false } gate
+            alsoWhenExecutorSuppressed, allowInTeamImplement: false,
+            failOpenWhenUnknown: false, allowOnStickyRun: allowOnStickyRun) is { Allowed: false } gate
             ? gate.DenyText
             : null;
 
@@ -1543,7 +1548,7 @@ public sealed partial class WorkspaceToolset(
                 if (text.Length == 0) return Deny("Пустой текст отчёта");
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на
                 // SessionMessagesController.ReportUp
-                if (DelegatedDenied(context, session, "Отчёт в вышестоящий чат") is { } gateDenied)
+                if (DelegatedDenied(context, session, "Отчёт в вышестоящий чат", allowOnStickyRun: true) is { } gateDenied)
                     return Deny(gateDenied);
                 // Адресат — родительский чат, его вычисляет сервер по текущей сессии (хвосту)
                 var blocker = arguments["blocker"] is JsonValue bv
@@ -1659,6 +1664,13 @@ public sealed partial class WorkspaceToolset(
     private async Task<McpToolCallResult> DeployCall(string tool, JsonObject arguments,
         McpToolCallContext context, Session session, CancellationToken ct)
     {
+        // Выкатка — admin-ручка: на делегированном ходу (ход процесса, chats_send) её нет, как и
+        // у REST-ветки (AdminByStoreHandler, docs/architecture/mcp-toolsets.md, п. 10) — права админа у человека, а не у хода
+        if (DelegatedDenied(context, session, "Выкатка прода", alsoWhenExecutorSuppressed: true) is { } gateDenied)
+        {
+            Console.Error.WriteLine($"[WorkspaceToolset] Гейт делегированного хода: {tool} отклонён (чат {session.Id})");
+            return Deny(gateDenied);
+        }
         switch (tool)
         {
             case "deploy_start":

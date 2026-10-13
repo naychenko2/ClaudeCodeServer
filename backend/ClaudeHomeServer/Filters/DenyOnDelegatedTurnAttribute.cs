@@ -51,6 +51,12 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public bool AllowInTeamImplement { get; init; }
 
+    /// <summary>
+    /// Разрешить на «липкой» части делегированности: текущий ход глубины 0, а делегированным
+    /// чат держат только живые фоновые агенты прошлого делегированного хода (отчёт наверх).
+    /// </summary>
+    public bool AllowOnStickyRun { get; init; }
+
     // Цикл «До готово» (work-loop) больше НЕ имеет квоты запусков: квота дырявилась вместе
     // с двумя лимитами по 20 и заменена инкрементом Iteration на возврате waiting→working в
     // ContinueWorkLoopAsync (SessionManager.cs). Запуск из обычного чата с включённым циклом
@@ -74,7 +80,7 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
             http.RequestServices.GetService<SessionManager>(),
             http.User.FindFirstValue(JwtRegisteredClaimNames.Sub),
             http.Request.Headers[CallerHeader].FirstOrDefault(),
-            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement);
+            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement, allowOnStickyRun: AllowOnStickyRun);
         if (decision.Allowed)
         {
             // Списанную квоту запоминаем для возврата в OnActionExecuted при неудаче
@@ -154,7 +160,8 @@ internal static class DelegatedTurnGate
         SessionManager? sessions, string? ownerId, string? callerSessionId,
         string action, bool alsoWhenExecutorSuppressed,
         bool allowInTeamImplement,
-        bool failOpenWhenUnknown = true)
+        bool failOpenWhenUnknown = true,
+        bool allowOnStickyRun = false)
     {
         if (string.IsNullOrEmpty(callerSessionId) || sessions is null || string.IsNullOrEmpty(ownerId))
             return failOpenWhenUnknown
@@ -167,7 +174,11 @@ internal static class DelegatedTurnGate
                 };
 
         var turn = sessions.GetActiveTurnDelegation(callerSessionId, ownerId);
-        var delegated = DenyOnDelegatedTurnAttribute.IsDelegated(turn);
+        // allowOnStickyRun — действие разрешено, когда делегированность держится лишь живыми
+        // фоновыми агентами прошлого делегированного хода, а текущий ход — глубины 0 (отчёт
+        // наверх: человек или авто-ход вправе доложить постановщику). На самом делегированном
+        // ходу — запрет, как раньше.
+        var delegated = DenyOnDelegatedTurnAttribute.IsDelegated(turn) && !(allowOnStickyRun && turn.RunOnly);
 
         // Квота вместо запрета — на ЛЮБОМ неделегированном ходу штаба, а не только на
         // реакционном: обычный ход координатора запускает исполнителей той же кнопкой, и

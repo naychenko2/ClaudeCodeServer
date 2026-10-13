@@ -141,8 +141,10 @@ public static class EditRequestComposer
 
         // Вуаль (ADR-028, решение 12): модель видит серую заливку вместо белой маски, поэтому
         // строки «выделено кистью…» из пометок не нужны (место уже видно), а текст человека
-        // оборачивается: модель должна понять, что серое — это то, что править
-        var veil = mask is not null && annotated is null && model.Caps.Mask == MaskSupport.Veil;
+        // оборачивается: модель должна понять, что серое — это то, что править. При подстановке на
+        // лицо (FaceCrop) маска уходит каналом KeepMask, а не в канал вуали — заливки модель не
+        // видит, поэтому и текста о ней нет (ADR-028, Д3)
+        var veil = mask is not null && annotated is null && !faceCrop && model.Caps.Mask == MaskSupport.Veil;
         var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split || veil ? MarksScope.WithoutBrush : MarksScope.All);
         var prompt = veil
             ? Join(VeilHead + input.Prompt?.Trim(), marks, notes.Prepend(VeilNote))

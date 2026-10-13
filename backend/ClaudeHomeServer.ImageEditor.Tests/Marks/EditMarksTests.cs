@@ -178,6 +178,22 @@ public class EditMarksTests
         req.Prompt.Should().Contain(EditRequestComposer.VeilNote, "примечание о вуали дописано");
     }
 
+    // Подстановка на лицо (FaceCrop) на модели с вуалью: маска уходит каналом KeepMask, а не в
+    // канал вуали, — промпт без VeilHead/VeilNote (ADR-028, Д3). Мутация «убрать !faceCrop» → красный
+    [Fact]
+    public void Вуаль_ПриКропеЛица_ПромптБезВуали()
+    {
+        var png = TestImages.Png(10, 10);
+        var input = Input(png, mask: png) with { FaceCrop = new LocalImageCrop(0, 0, 10, 10, 16, 16) };
+
+        var req = EditRequestComposer.Compose(input, ImageEditOp.Edit, VeilModel, 1).Value!;
+
+        req.KeepMask.Should().NotBeNull("при кропе маска — канал KeepMask");
+        req.Mask.Should().BeNull("при кропе канала вуали нет");
+        req.Prompt.Should().NotStartWith(EditRequestComposer.VeilHead, "заливки модель не видит — текст не оборачивается");
+        req.Prompt.Should().NotContain(EditRequestComposer.VeilNote, "примечания о серой заливке нет");
+    }
+
     // Текст вуали — дословно из прогона Артёма 13.10 (вариант д2): на этих формулировках держится
     // результат модели, перефразировка или урезание должны краснеть
     [Fact]

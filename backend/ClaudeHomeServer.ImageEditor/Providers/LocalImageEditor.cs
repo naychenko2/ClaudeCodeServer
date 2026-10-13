@@ -165,9 +165,12 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             }
             case ImageEditOp.Edit or ImageEditOp.Inpaint:
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
-                // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference)
+                // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference),
+                // кроме подстановки на лицо (ADR-028, решение 12): там маска — явный канал KeepMask,
+                // а не образец, и модель видит кроп (Crop), а не маску
                 run = new LocalImageRequest(LocalImageOp.Edit, WithTrigger(req.Prompt, req), [req.Source.Bytes, .. references], null, 1,
-                    KeepMask: KeepMaskOf(req),
+                    KeepMask: req.KeepMask?.Bytes ?? KeepMaskOf(req),
+                    Crop: req.FaceCrop,
                     Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;

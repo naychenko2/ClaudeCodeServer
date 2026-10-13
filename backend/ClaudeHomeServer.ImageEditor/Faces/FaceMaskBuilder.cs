@@ -19,6 +19,12 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
     public const int NeighborMarginPx = 30;
     // Доля площади эллипса, оставшаяся после вычитания соседей: меньше — «лица слишком близко».
     public const double MinRemainingShare = 0.6;
+    // Запас вокруг цели для кропа (ADR-028, решение 12): модель видит кроп, а не маску, поэтому
+    // запас щедрый — лицо должно оказаться в центре кропа
+    public const int CropMarginPx = 64;
+    // Целевая площадь увеличения кропа (≈1 Мп): мелкий кроп увеличивается до неё, крупный не
+    // уменьшается
+    public const long CropTargetPixels = 1_048_576;
 
     public const string FaceNotFound = "Такого лица нет на картинке.";
     public const string FacesTooClose = "Лица стоят слишком близко — закрасьте лицо кистью.";
@@ -43,8 +49,57 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         if (s == 0) return new FaceMaskResult(null, FaceOutsideImage, FaceMaskReason.OutOfFrame);
         if (sPrime < MinRemainingShare * s) return new FaceMaskResult(null, FacesTooClose, FaceMaskReason.TooClose);
 
-        return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null);
+        var crop = ComputeCrop(width, height, ellipse);
+        return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null, Crop: crop);
     }
+
+    // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + CropMarginPx
+    // с каждой стороны, обрезанная холстом; X, Y вниз на 8; Width/Height так, чтобы кроп ⊇ рамка
+    // маски + NeighborMarginPx, обрезанная холстом (иначе мягкий шов — GrowMask 8 + размытие ≈ 23 px —
+    // будет срезан); Scaled — только вверх до CropTargetPixels, кратно 16, пропорции кропа
+    // сохраняются; кроп уже ≥ цели не уменьшается
+    private static LocalImageCrop ComputeCrop(int width, int height, MaskEllipse e)
+    {
+        // Рамка ненулевой части маски (эллипс), обрезанная холстом
+        var left = Math.Max(0, (int)Math.Floor(e.Cx - e.Rx));
+        var top = Math.Max(0, (int)Math.Floor(e.Cy - e.Ry));
+        var right = Math.Min(width, (int)Math.Ceiling(e.Cx + e.Rx));
+        var bottom = Math.Min(height, (int)Math.Ceiling(e.Cy + e.Ry));
+
+        // Кроп = рамка + CropMarginPx с каждой стороны, обрезанный холстом
+        var cropLeft = Math.Max(0, left - CropMarginPx);
+        var cropTop = Math.Max(0, top - CropMarginPx);
+        var cropRight = Math.Min(width, right + CropMarginPx);
+        var cropBottom = Math.Min(height, bottom + CropMarginPx);
+
+        // X, Y вниз на 8
+        var x = (cropLeft / 8) * 8;
+        var y = (cropTop / 8) * 8;
+
+        // Width/Height: кроп ⊇ рамка + NeighborMarginPx (обрезанная холстом); запас 64 > 30,
+        // поэтому правая/нижняя граница кропа уже за рамкой + 30
+        var cropWidth = cropRight - x;
+        var cropHeight = cropBottom - y;
+
+        // Scaled: только вверх до CropTargetPixels, кратно 16, пропорции сохраняются
+        var (scaledWidth, scaledHeight) = ScaleUp(cropWidth, cropHeight);
+        return new LocalImageCrop(x, y, cropWidth, cropHeight, scaledWidth, scaledHeight);
+    }
+
+    // Увеличение кропа: кратно 16, пропорции сохраняются; до CropTargetPixels включительно,
+    // если кроп уже ≥ цели — его размер (округлённый вверх до 16), не уменьшаем
+    private static (int Width, int Height) ScaleUp(int width, int height)
+    {
+        if (width <= 0 || height <= 0) return (16, 16);
+        var area = (long)width * height;
+        if (area >= CropTargetPixels)
+            return (RoundUp16(width), RoundUp16(height));
+
+        var scale = Math.Sqrt((double)CropTargetPixels / area);
+        return (RoundUp16((int)(width * scale)), RoundUp16((int)(height * scale)));
+    }
+
+    private static int RoundUp16(int v) => (int)((Math.Ceiling(v / 16.0)) * 16);
 
     // Эллипс по bbox целевого лица и прямоугольники вычитания по bbox всех остальных
     // (расширенные на NeighborMarginPx; целевое лицо из себя не вычитается).
@@ -117,5 +172,7 @@ public enum FaceMaskReason { NotFound, TooClose, OutOfFrame }
 
 // Итог построения маски: Png — непрозрачный PNG (чёрный фон, белые эллипсы минус прямоугольники),
 // Error — человекочитаемая причина, по которой маску строить не стали (Png = null),
-// Reason — машинная причина (для кода ошибки в ответе); null — успех
-public sealed record FaceMaskResult(byte[]? Png, string? Error, FaceMaskReason? Reason = null);
+// Reason — машинная причина (для кода ошибки в ответе); null — успех.
+// Crop — кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — кропа нет
+// (маска не построена)
+public sealed record FaceMaskResult(byte[]? Png, string? Error, FaceMaskReason? Reason = null, LocalImageCrop? Crop = null);

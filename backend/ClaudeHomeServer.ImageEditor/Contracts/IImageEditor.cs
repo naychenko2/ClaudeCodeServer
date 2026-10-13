@@ -158,7 +158,12 @@ public record ImageEditRequest(
     string? Instruction = null,
     // Действующий формат (ADR-025): ступень и размер, которые драйвер переводит в параметры модели;
     // AspectRatio остаётся производным от него (откат и старые вызовы)
-    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null,
+    // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — обычный путь
+    LocalImageCrop? FaceCrop = null,
+    // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал подстановки на лицо;
+    // null — драйвер берёт её из References по метке mask, как раньше
+    ImageBytes? KeepMask = null);
 
 // Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
 public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);

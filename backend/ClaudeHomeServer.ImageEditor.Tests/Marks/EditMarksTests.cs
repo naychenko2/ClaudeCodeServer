@@ -102,6 +102,46 @@ public class EditMarksTests
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
     }
 
+    // Кроп вокруг цели (ADR-028, решение 12): маска не уходит образцом (модель видит кроп, а не
+    // маску), а явным каналом KeepMask; FaceCrop прокидывается в запрос. Мутация «вернуть маску
+    // в references» → красный
+    [Fact]
+    public void Кроп_Маска_ВКаналKeepMask_АНеВОбразцы()
+    {
+        var png = TestImages.Png(10, 10);
+        var input = Input(png, mask: png) with
+        {
+            FaceCrop = new LocalImageCrop(0, 0, 10, 10, 16, 16),
+        };
+
+        var req = EditRequestComposer.Compose(input, ImageEditOp.Edit, ReferenceMask, 1).Value!;
+
+        // Маска не среди образцов модели
+        req.References.Should().NotContain(r => r.Label == EditRequestComposer.MaskLabel,
+            "при кропе модель видит кроп, а не маску");
+        // Явный канал KeepMask доехал
+        req.KeepMask.Should().NotBeNull("маска — явный канал, не метка в References");
+        req.KeepMask!.Bytes.Should().Equal(png);
+        // Кроп прокинут
+        req.FaceCrop.Should().Be(new LocalImageCrop(0, 0, 10, 10, 16, 16));
+        // Роль «маска: белое — область, которую менять…» не написана
+        req.Prompt.Should().NotContain("белое — область, которую менять");
+    }
+
+    // Кисть (без кропа) не изменилась: маска по-прежнему образец, KeepMask из References, кропа нет
+    [Fact]
+    public void Кисть_БезКропа_МаскаОбразцом_КропаНет()
+    {
+        var png = TestImages.Png(10, 10);
+
+        var req = EditRequestComposer.Compose(Input(png, mask: png), ImageEditOp.Edit, ReferenceMask, 1).Value!;
+
+        req.References.Should().ContainSingle(r => r.Label == EditRequestComposer.MaskLabel,
+            "кисть: маска — образец, как раньше");
+        req.KeepMask.Should().BeNull("кисть: явного канала KeepMask нет — драйвер возьмёт из References");
+        req.FaceCrop.Should().BeNull("кисть: кропа нет");
+    }
+
     [Fact]
     public void Размеры_JpegИзМаркераSof()
     {

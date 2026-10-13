@@ -331,6 +331,30 @@ public class FaceTargetLaunchTests : IDisposable
         input.FaceTarget!.CharacterSlug.Should().Be(_charB);
     }
 
+    // Кроп вокруг цели (ADR-028, решение 12): сборщик кладёт FaceCrop и KeepMask во вход;
+    // маска — явный канал, не метка в References. Мутация «не положить кроп/канал» → красный
+    [Fact]
+    public async Task Кроп_Сборщик_КладётFaceCrop_ИKeepMask_МаскаНеВReferences()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var media = FakeMedia(faces);
+        var req = Request(_charB, FaceTargetJson(_facesKey));
+
+        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var input = result.Value!;
+
+        // Кроп построен и кладётся во вход
+        input.FaceCrop.Should().NotBeNull("сборщик кладёт кроп во вход");
+        // Маска — явный канал KeepMask (та же, что в Mask)
+        input.KeepMask.Should().NotBeNull("маска — явный канал, не метка в References");
+        input.KeepMask!.Bytes.Should().Equal(input.Mask!.Bytes, "KeepMask = та же маска, что в Mask");
+        // Образцы — только персонаж (маски среди них нет)
+        input.References.Should().OnlyContain(r => r.Role == ReferenceRole.Character,
+            "маска не в References — модель видит кроп, а не маску");
+    }
+
     // ── Без FaceTarget — как раньше (регресс) ─────────────────────────────────────
 
     [Fact]

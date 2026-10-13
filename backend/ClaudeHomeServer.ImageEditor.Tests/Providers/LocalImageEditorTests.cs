@@ -615,6 +615,37 @@ public class LocalImageEditorTests : IDisposable
         sent.Images.Should().HaveCount(faces.Count + (source is null ? 0 : 1), "фото эталона в Images не входят");
     }
 
+    // Кроп вокруг цели (ADR-028, решение 12): KeepMask — явный канал (не из References), Crop
+    // прокидывается в LocalImageRequest; маска не среди образцов модели. Мутация «потерять канал»
+    // (KeepMask не прокинуть) → красный; «вернуть маску в references» → красный
+    [Fact]
+    public async Task Подстановка_KeepMask_ИКроп_Доезжают_МаскаНеСредиОбразцов()
+    {
+        var media = new FakeMedia();
+        var source = TestImages.Png(8, 8, 1);
+        var mask = TestImages.Png(8, 8, 2);
+        var face = TestImages.Png(8, 8, 3);
+        var request = new ImageEditRequest(ImageEditOp.Edit, "заменить лицо",
+            new ImageBytes(source, "image/png"), null,
+            [new ReferenceImage(face, "image/png", ReferenceRole.Character, "Боря")],
+            1, null, null, LocalImageEditor.QwenImage, null,
+            FaceCrop: new LocalImageCrop(0, 0, 8, 8, 16, 16),
+            KeepMask: new ImageBytes(mask, "image/png"));
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        // Маска не среди образцов: только холст + фото персонажа
+        sent.Images.Should().HaveCount(2, "холст + фото персонажа, маски нет");
+        sent.Images[0].Should().Equal(source, "холст — первый");
+        sent.Images[1].Should().Equal(face, "фото персонажа — второй");
+        // KeepMask доехал явным каналом
+        sent.KeepMask.Should().Equal(mask, "KeepMask — явный канал, не из References");
+        // Кроп прокинут
+        sent.Crop.Should().Be(new LocalImageCrop(0, 0, 8, 8, 16, 16));
+    }
+
     [Fact]
     public async Task БезПерсонажа_FaceReferencesНет()
     {

@@ -369,17 +369,19 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(code, maskResult.Error ?? "Не удалось построить маску лица");
         }
 
-        // g. Промпт: серверная константа + необязательное пожелание человека
+        // g. Промпт: серверная константа + необязательное пожелание человека. Модель видит кроп
+        // (ADR-028, решение 12), поэтому лицо — «в центре первой картинки», а не «в выделенной области»
         var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, faceTarget.Faces[0].CharacterSlug);
         if (character is null)
             return Invalid("Персонаж не найден");
-        var prompt = $"Лицо человека в выделенной области заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.";
+        var prompt = $"Лицо человека в центре первой картинки заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.";
         if (!string.IsNullOrWhiteSpace(req.Prompt))
             prompt += " " + req.Prompt!.Trim();
 
         // h. Входы: Source = нормализованные байты версии (EXIF применён, тег обнулён), Mask = PNG,
         // Op = Edit, образцы = только персонаж. Нормализация гарантирует, что маска (по bbox детекции)
-        // и исходник в одной системе координат — той, что видит пользователь
+        // и исходник в одной системе координат — той, что видит пользователь. Кроп (ADR-028, решение 12)
+        // и маска идут отдельным каналом: модель видит кроп, а не маску; маска — «вне неё вернуть исходник»
         var source = new ImageBytes(normalizedSource, "image/png");
         var mask = new ImageBytes(maskResult.Png, "image/png");
         var references = new List<ReferenceImage>(character.Photos);
@@ -408,7 +410,9 @@ public sealed class ImageEditLaunchAssembler(
             ThreadId: req.ThreadId,
             BaseVersionId: faceTarget.VersionId,
             CharacterPicker: null,
-            FaceTarget: threadFaceTarget));
+            FaceTarget: threadFaceTarget,
+            FaceCrop: maskResult.Crop,
+            KeepMask: mask));
     }
 
     // Байты версии: текущий шаг (рабочая папка), у исходника — файл проекта. null — картинки нет

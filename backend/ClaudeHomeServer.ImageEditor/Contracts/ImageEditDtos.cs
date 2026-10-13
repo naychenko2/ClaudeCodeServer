@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 namespace ClaudeHomeServer.Services.ImageEditor;
 
@@ -109,7 +110,9 @@ public record ImageEditQuoteDto(
     // Действующий формат запуска (ADR-025): то, что уйдёт в модель и учтено в цене; null — «Как у модели»
     ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null,
     // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка.
-    // UI показывает «N прохода» (шаг 16); для N > 1 вариантов ровно 1
+    // UI показывает «N прохода» (шаг 16); для N > 1 вариантов ровно 1.
+    // null (обычная правка) не пишется в JSON: без атрибута клиент видел бы «facePasses: null»
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     int? FacePasses = null);
 
 public static class ImageEditEstimateSources
@@ -154,7 +157,13 @@ public record ImageEditJobInput(
     // облака — у облака первым остаётся главное фото, как до подбора
     Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null,
     // Подстановка персонажа на лицо (ADR-028, этап 2): запись в нить для подписи карточки
-    ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null);
+    ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null,
+    // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — обычный путь
+    // (кисть, «удали», дорисовка). Отдельный канал, не метка в References
+    LocalImageCrop? FaceCrop = null,
+    // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал для подстановки на
+    // лицо; null — драйвер берёт её из References по метке mask, как раньше
+    ImageBytes? KeepMask = null);
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);

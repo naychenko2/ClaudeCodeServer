@@ -67,6 +67,7 @@ public static class EditRequestComposer
         if (source is not null) roles.Add("исходная картинка, её и нужно править");
         var notes = new List<string>();
         ImageBytes? maskChannel = null;
+        ImageBytes? keepMask = null;
 
         if (annotated is not null && model.Caps.MaxReferences > 0)
         {
@@ -79,9 +80,17 @@ public static class EditRequestComposer
                   "куда смотреть; в результат пометки не переносить");
         }
 
+        // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску, поэтому маска
+        // не уходит образцом и роль «маска: белое — область, которую менять…» не пишется; маска
+        // идёт явным каналом KeepMask (вне неё вернуть исходник). Кисть и «удали» — без изменений
+        var faceCrop = input.FaceCrop is not null;
         if (mask is not null && !split)
         {
-            if (model.Caps.Mask == MaskSupport.Native)
+            if (faceCrop)
+            {
+                keepMask = mask;
+            }
+            else if (model.Caps.Mask == MaskSupport.Native)
             {
                 maskChannel = mask;
             }
@@ -153,7 +162,8 @@ public static class EditRequestComposer
 
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
             op, prompt, source, maskChannel, references, count, aspectRatio, outpaint, model.Id, input.Character, maskPass,
-            Instruction: input.Prompt?.Trim(), Format: format));
+            Instruction: input.Prompt?.Trim(), Format: format,
+            FaceCrop: input.FaceCrop, KeepMask: keepMask));
     }
 
     private const string MaskRole = "маска: белое — область, которую менять, чёрное — не трогать";

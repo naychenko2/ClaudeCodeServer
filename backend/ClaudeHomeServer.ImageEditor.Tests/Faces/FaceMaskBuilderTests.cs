@@ -139,6 +139,62 @@ public class FaceMaskBuilderTests
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
+    // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + 64 px,
+    // обрезанная холстом; X, Y вниз на 8; кроп ⊇ рамка + 30; Scaled — вверх до ≈1 Мп, кратно 16
+    [Fact]
+    public void Кроп_Геометрия_ВнутриХолста_Кратно8_ПокрываетМаску_СкалитсяДоМп()
+    {
+        var (builder, _) = Create();
+        // bbox (10,10)-(100,100) на холсте 200×200: эллипс cx=55 cy=55 rx=67.5 ry=72
+        var result = builder.Build(200, 200, [Face(1, 10, 10, 100, 100)], 1);
+
+        result.Error.Should().BeNull();
+        result.Crop.Should().NotBeNull();
+        var crop = result.Crop!;
+
+        // Внутри холста
+        crop.X.Should().BeGreaterOrEqualTo(0);
+        crop.Y.Should().BeGreaterOrEqualTo(0);
+        (crop.X + crop.Width).Should().BeLessOrEqualTo(200);
+        (crop.Y + crop.Height).Should().BeLessOrEqualTo(200);
+
+        // X, Y кратны 8
+        (crop.X % 8).Should().Be(0);
+        (crop.Y % 8).Should().Be(0);
+
+        // Кроп ⊇ рамка маски + 30 (обрезанная холстом): рамка эллипса (0,0)-(123,127)
+        crop.X.Should().BeLessOrEqualTo(0);
+        crop.Y.Should().BeLessOrEqualTo(0);
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(123 + 30);
+        (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(127 + 30);
+
+        // Scaled ≥ кропа, кратно 16; для мелкого кропа (35.7 Кп) ≈1 Мп
+        crop.ScaledWidth.Should().BeGreaterOrEqualTo(crop.Width);
+        crop.ScaledHeight.Should().BeGreaterOrEqualTo(crop.Height);
+        (crop.ScaledWidth % 16).Should().Be(0);
+        (crop.ScaledHeight % 16).Should().Be(0);
+        ((long)crop.ScaledWidth * crop.ScaledHeight).Should().BeGreaterOrEqualTo(FaceMaskBuilder.CropTargetPixels);
+    }
+
+    // Кроп уже ≥ 1 Мп — Scaled = размер кропа (округлённый вверх до 16), не уменьшаем
+    [Fact]
+    public void Кроп_Крупный_Скалится_Равен_Кропу()
+    {
+        var (builder, _) = Create();
+        // Большой bbox (100,100)-(1100,1100) на холсте 1200×1200: кроп = весь холст = 1.44 Мп ≥ 1 Мп
+        var result = builder.Build(1200, 1200, [Face(1, 100, 100, 1100, 1100)], 1);
+
+        result.Error.Should().BeNull();
+        result.Crop.Should().NotBeNull();
+        var crop = result.Crop!;
+        var area = (long)crop.Width * crop.Height;
+        area.Should().BeGreaterOrEqualTo(FaceMaskBuilder.CropTargetPixels, "кроп крупный");
+        crop.ScaledWidth.Should().Be(crop.Width, "крупный кроп не уменьшается");
+        crop.ScaledHeight.Should().Be(crop.Height, "крупный кроп не уменьшается");
+        (crop.ScaledWidth % 16).Should().Be(0);
+        (crop.ScaledHeight % 16).Should().Be(0);
+    }
+
     // Фейк растра: записывает аргументы RenderMask, возвращает заглушку; прочие методы не
     // используются (Build зовёт только RenderMask)
     private sealed class FakeRaster : IImageRaster

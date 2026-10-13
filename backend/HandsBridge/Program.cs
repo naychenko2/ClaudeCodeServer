@@ -55,7 +55,8 @@ HandsLog.Write($"мост {serverVersion} запущен: args=[{string.Join(' '
 // Руки: гейт до старта хоста. Границы «только свои окна» нет (решение владельца 2026-09-27,
 // ADR-016 §7), поэтому имя Job хода мосту не передаётся: Job хода нужен только агенту для KillTree.
 var browserProfile = GetOption(args, HandsBridgeArgs.BrowserProfile);
-HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent));
+HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent),
+    GetOption(args, HandsBridgeArgs.BusyEvent), GetOption(args, HandsBridgeArgs.TurnEndEvent));
 BrowserHost.Configure(browserProfile);
 
 var builder = Host.CreateApplicationBuilder(args);

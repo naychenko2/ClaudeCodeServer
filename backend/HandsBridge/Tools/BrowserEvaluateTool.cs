@@ -44,7 +44,10 @@ public static partial class BrowserEvaluateTool
             return HandsGate.Deny(HandsTools.BrowserEvaluate, gate);
         }
 
-        HandsGate.Acted(HandsTools.BrowserEvaluate);
+        if (HandsGate.Acted(HandsTools.BrowserEvaluate) is { } busy)
+        {
+            return busy;
+        }
 
         var reply = await BrowserHost.Session.EvaluateAsync(script, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserEvaluate, reply);

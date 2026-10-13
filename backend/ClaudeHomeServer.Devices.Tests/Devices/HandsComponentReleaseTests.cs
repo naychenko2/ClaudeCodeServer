@@ -144,4 +144,27 @@ public class DeviceHubHandsReportTests : IDisposable
         notifier.Verify(n => n.HandsStatusAsync(_owner, "dev-1", "chat-2", HandsChatStates.Stopped, null,
             Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
     }
+
+    // Замок машины берёт мост при первом действии: «занято» агент доносит по ходу, а не отказом запуска
+    [Fact]
+    public async Task Занятые_руки_от_устройства_только_с_причиной_busy_и_только_пока_ход_жив()
+    {
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.Register(_owner, "dev-1", "turn-5", "chat-5");
+        var notifier = new Moq.Mock<ILocalHandsNotifier>();
+
+        await NewHub(notifier.Object, "dev-1").ReportHandsStatus(
+            new DeviceHandsReport("turn-5", HandsChatStates.Unavailable, HandsEndReason.Busy));
+        var noReason = () => NewHub(notifier.Object, "dev-1").ReportHandsStatus(new DeviceHandsReport("turn-5", HandsChatStates.Unavailable));
+
+        await noReason.Should().ThrowAsync<Microsoft.AspNetCore.SignalR.HubException>("«недоступны» без busy устройство не шлёт");
+        notifier.Verify(n => n.HandsStatusAsync(_owner, "dev-1", "chat-5", HandsChatStates.Unavailable, HandsEndReason.Busy,
+            Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
+        notifier.VerifyNoOtherCalls();
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.ChatStateOf(_owner, "dev-1", "chat-5")
+            .Should().Be((HandsChatStates.Unavailable, HandsEndReason.Busy));
+
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.End(_owner, "dev-1", "turn-5");
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.ChatStateOf(_owner, "dev-1", "chat-5").State
+            .Should().Be(HandsChatStates.Allowed, "ход кончился — руки больше не заняты для этого чата");
+    }
 }

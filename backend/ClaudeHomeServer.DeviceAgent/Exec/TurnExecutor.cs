@@ -167,6 +167,8 @@ internal sealed class TurnExecutor
         // плашку не зажигает. Под замком с отпусканием рук, чтобы «действует» не обогнал итог хода
         var handsSync = new Lock();
         var handsReleased = false;
+        // Бейдж показывает «заняты другим ходом»: мост упёрся в замок машины, до конца хода в выводе CLI
+        var handsBusy = false;
         if (hands is not null)
         {
             _log.LogInformation("Ход {TurnId}: руки подключены (Job {Job})", turnId, setup.Hands!.JobName);
@@ -175,14 +177,42 @@ internal sealed class TurnExecutor
                 lock (handsSync)
                 {
                     if (handsReleased || !hands.Registry.MarkActing(turnId)) return;
+                    handsBusy = false;
                     _log.LogInformation("Ход {TurnId}: руки начали действовать", turnId);
                     Report(hands, new DeviceHandsReport(turnId, HandsChatStates.Active));
                 }
             }, CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+            setup.Hands.Activity?.OnBusy(() =>
+            {
+                lock (handsSync)
+                {
+                    if (handsReleased || handsBusy) return;
+                    handsBusy = true;
+                    _log.LogInformation("Ход {TurnId}: руки заняты другим ходом — действие моста не прошло", turnId);
+                    Report(hands, new DeviceHandsReport(turnId, HandsChatStates.Unavailable, HandsEndReason.Busy));
+                }
+            });
         }
 
-        // Руки отпускаются, как только дерево хода мертво, — не дожидаясь подтверждения конца
-        // вывода сервером: оно может ждать связи минутами, а трей и следующий ход — нет
+        // Конец хода в выводе CLI (строка result): мост отпускает замок машины, процесс CLI живёт
+        // дальше и ждёт следующего ввода; следующее действие рук возьмёт замок заново
+        void HandsTurnEnded()
+        {
+            if (hands is null) return;
+            lock (handsSync)
+            {
+                if (handsReleased) return;
+                setup.Hands!.Activity?.EndTurn();
+                if (!handsBusy) return;
+                handsBusy = false;
+                var acting = hands.Registry.Active.Any(t => t.TurnId == turnId && t.IsActing);
+                Report(hands, new DeviceHandsReport(turnId, acting ? HandsChatStates.Active : HandsChatStates.Allowed));
+            }
+        }
+
+        // Руки отцепляются, как только дерево хода мертво, — не дожидаясь подтверждения конца
+        // вывода сервером: оно может ждать связи минутами, а трей и следующий ход — нет. Замок
+        // машины держит мост, а не агент: мёртвый мост бросает мьютекс, и следующий его забирает
         string? ReleaseHands()
         {
             if (hands is null) return null;
@@ -205,7 +235,8 @@ internal sealed class TurnExecutor
             await link.SendAsync(DeviceExecFrameChannel.Info,
                 DeviceExecJson.Serialize(new { pid = process.Id, cliVersion = setup.Cli.Version }), ct);
 
-            var stdout = PumpAsync(process.StandardOutput, DeviceExecFrameChannel.Stdout, link);
+            var stdout = PumpAsync(process.StandardOutput, DeviceExecFrameChannel.Stdout, link,
+                hands is null ? null : HandsTurnEnded);
             var stderr = PumpAsync(process.StandardError, DeviceExecFrameChannel.Stderr, link);
             if (!control.Spawn!.RedirectStdin) process.StandardInput.Close();
             var input = PumpInputAsync(link, process, turnId, Kill);
@@ -359,14 +390,20 @@ internal sealed class TurnExecutor
         catch (OperationCanceledException) { }
     }
 
-    private static async Task PumpAsync(Stream source, DeviceExecFrameChannel channel, ExecLink link)
+    /// <param name="onResult">Строка конца хода (<see cref="ResultLineScanner"/>) прошла в вывод; null — не следим.</param>
+    private static async Task PumpAsync(Stream source, DeviceExecFrameChannel channel, ExecLink link, Action? onResult = null)
     {
         var buffer = new byte[64 * 1024];
+        var results = onResult is null ? null : new ResultLineScanner();
         try
         {
             int n;
             while ((n = await source.ReadAsync(buffer)) > 0)
+            {
                 await link.SendAsync(channel, buffer.AsMemory(0, n));
+                // После отправки: сервер видит итог хода не позже, чем мост отпускает руки
+                if (results is not null && results.Feed(buffer.AsSpan(0, n)) > 0) onResult!();
+            }
         }
         catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException)
         {

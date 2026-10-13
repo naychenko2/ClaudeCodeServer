@@ -86,6 +86,8 @@ public class HandsBridgeSourceGuardTests
 
         Assert.True(actedAt >= 0, $"{tool}: нет HandsGate.Acted — первое действие не зажжёт плашку");
         Assert.Contains($"HandsGate.Acted(HandsTools.{ToolConstant(tool)}", body);
+        // Отказ по замку машины — ответ этого вызова: действие не идёт, ход продолжается
+        Assert.Matches(@"if \(HandsGate\.Acted\(HandsTools\.\w+(, \w+)?\) is \{ \} busy\)\s*\{\s*return busy;", body);
         Assert.True(gateAt >= 0 && actedAt > denyAt, $"{tool}: сигнал раньше отказа гейта");
         Assert.True(firstAwait < 0 || actedAt < firstAwait, $"{tool}: сигнал после действия");
     }
@@ -95,13 +97,15 @@ public class HandsBridgeSourceGuardTests
     {
         var windows = Read("Tools/WindowManagementTool.cs");
         Assert.Contains("HandsPolicy.CheckWindowAction(windowAction);", windows);
-        Assert.Contains("HandsGate.Acted(HandsTools.WindowManagement, windowAction);", windows);
-        Assert.Contains("HandsGate.Acted(HandsTools.ScreenshotControl, action);", Read("Tools/ScreenshotControlTool.cs"));
+        Assert.Contains("HandsGate.Acted(HandsTools.WindowManagement, windowAction)", windows);
+        Assert.Contains("HandsGate.Acted(HandsTools.ScreenshotControl, action)", Read("Tools/ScreenshotControlTool.cs"));
     }
 
     [Fact]
-    public void Bridge_passes_the_activity_event_to_the_gate() =>
-        Assert.Contains("HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent));", Read("Program.cs"));
+    public void Bridge_passes_the_turn_events_to_the_gate() =>
+        Assert.Contains("HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent),\n" +
+            "    GetOption(args, HandsBridgeArgs.BusyEvent), GetOption(args, HandsBridgeArgs.TurnEndEvent));",
+            Read("Program.cs").Replace("\r\n", "\n"));
 
     private static string ToolConstant(string tool) =>
         typeof(HandsTools).GetFields().Single(f => f.IsLiteral && (string?)f.GetRawConstantValue() == tool).Name;

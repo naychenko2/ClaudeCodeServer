@@ -61,7 +61,10 @@ public static partial class AppTool
             return HandsGate.Deny(HandsTools.App, gate.Reason!);
         }
 
-        HandsGate.Acted(HandsTools.App);
+        if (HandsGate.Acted(HandsTools.App) is { } busy)
+        {
+            return busy;
+        }
 
         try
         {

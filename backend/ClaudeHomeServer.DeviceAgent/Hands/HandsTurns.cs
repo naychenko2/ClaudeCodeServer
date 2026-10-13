@@ -6,60 +6,6 @@ using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Hands;
 
-/// <summary>Одни руки на машину (<see cref="HandsMachineLock"/>): null — руки уже у другого хода.</summary>
-internal interface IHandsMachineLock
-{
-    IDisposable? TryAcquire();
-}
-
-/// <summary>
-/// Windows: именованный семафор <c>Local\AiHome.Hands.Active</c> — общий для всех агентов
-/// сеанса входа. Семафор, а не мьютекс: мьютекс привязан к потоку, а ход освобождает руки
-/// из другого потока, чем взял.
-/// </summary>
-[SupportedOSPlatform("windows")]
-internal sealed class NamedHandsMachineLock : IHandsMachineLock
-{
-    public IDisposable? TryAcquire()
-    {
-        var semaphore = new Semaphore(1, 1, HandsMachineLock.Name);
-        if (semaphore.WaitOne(0)) return new Lease(semaphore);
-        semaphore.Dispose();
-        return null;
-    }
-
-    private sealed class Lease(Semaphore semaphore) : IDisposable
-    {
-        private int _released;
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 1) return;
-            semaphore.Release();
-            semaphore.Dispose();
-        }
-    }
-}
-
-/// <summary>Замок внутри процесса: тесты и платформы, где рук нет.</summary>
-internal sealed class InProcessHandsMachineLock : IHandsMachineLock
-{
-    private int _taken;
-
-    public IDisposable? TryAcquire() =>
-        Interlocked.CompareExchange(ref _taken, 1, 0) == 0 ? new Lease(this) : null;
-
-    private sealed class Lease(InProcessHandsMachineLock owner) : IDisposable
-    {
-        private int _released;
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 0) Volatile.Write(ref owner._taken, 0);
-        }
-    }
-}
-
 /// <summary>Донесения о руках серверу (боевое — канал управления); не доставлено — не беда, бейдж перечитает.</summary>
 internal interface IHandsStatusSink
 {
@@ -171,14 +117,16 @@ internal sealed class HandsRegistry
 /// <summary>Всё, что нужно ходу для рук. Нет у агента — руки на этом устройстве не поддерживаются.</summary>
 internal sealed record HandsRuntime(
     HandsComponent Component,
-    IHandsMachineLock MachineLock,
     HandsRegistry Registry,
     IHandsStatusSink? Status = null,
     string? BrowserProfilesRoot = null,
     IHandsActivityEvents? Activity = null);
 
-/// <summary>Руки, подключённые к ходу: замок машины, имя Job и событие действия хода живут до конца хода.</summary>
-internal sealed class HandsTurnLease(IDisposable machineLock, string jobName, IReadOnlyList<DeviceExecFile> files,
+/// <summary>
+/// Руки, подключённые к ходу: имя Job и события хода живут до конца хода. Замка машины здесь нет —
+/// его берёт мост при первом действии (<see cref="HandsMachineLock"/>).
+/// </summary>
+internal sealed class HandsTurnLease(string jobName, IReadOnlyList<DeviceExecFile> files,
     IHandsActivityWait? activity = null) : IDisposable
 {
     public string JobName { get; } = jobName;
@@ -186,22 +134,20 @@ internal sealed class HandsTurnLease(IDisposable machineLock, string jobName, IR
     /// <summary>Файлы spec с узлом моста вместо маркера.</summary>
     public IReadOnlyList<DeviceExecFile> Files { get; } = files;
 
-    /// <summary>Событие «мост подействовал»; null — у агента нет событий, ход «управляющим» не станет.</summary>
+    /// <summary>События хода с мостом; null — у агента нет событий, ход «управляющим» не станет.</summary>
     public IHandsActivityWait? Activity { get; } = activity;
 
-    public void Dispose()
-    {
-        Activity?.Dispose();
-        machineLock.Dispose();
-    }
+    public void Dispose() => Activity?.Dispose();
 }
 
 /// <summary>
 /// Подключение рук к ходу (ADR-016 §7, решение 4 плана): сервер ставит в MCP-конфиг хода только
 /// маркер <see cref="DeviceExecPlaceholders.Hands"/>, а узел <c>hands</c> → свой
 /// <c>HandsBridge.exe</c> подставляет агент. Подставляет, только если мост лежит в каталоге
-/// версии агента, режим прав хода не <c>bypassPermissions</c> и руки машины свободны; иначе ход
-/// честно отказывает (<see cref="ExecRefusedException"/>), а не идёт молча без рук.
+/// версии агента и режим прав хода не <c>bypassPermissions</c>; иначе ход честно отказывает
+/// (<see cref="ExecRefusedException"/>), а не идёт молча без рук. Занятость рук другим ходом запуск
+/// не останавливает: замок машины берёт мост при первом действии и отпускает по концу хода, так что
+/// несколько чатов с руками стартуют одновременно (<see cref="HandsMachineLock"/>).
 /// </summary>
 internal static class HandsAttach
 {
@@ -214,7 +160,7 @@ internal static class HandsAttach
         files.Any(f => f.Content?.Contains(DeviceExecPlaceholders.Hands, StringComparison.Ordinal) == true);
 
     /// <summary>
-    /// Подключить руки: проверки по порядку, затем замок машины, затем подмена маркера.
+    /// Подключить руки: проверки по порядку, затем подмена маркера. Замок машины не берётся.
     /// null — рук ход не просил. <paramref name="projectRoot"/> — корень проекта, уже сверенный
     /// агентом с корнями машины (а не сырой каталог из spec): от него считается профиль браузера.
     /// </summary>
@@ -235,23 +181,12 @@ internal static class HandsAttach
         var browserProfile = runtime.BrowserProfilesRoot is { } profiles && projectRoot is not null
             ? HandsBrowserProfile.PathFor(profiles, projectRoot)
             : null;
-        // Имя события — свойство хода, а не чата: узел моста живёт только в файлах хода на машине,
+        // Имена событий — свойство хода, а не чата: узел моста живёт только в файлах хода на машине,
         // серверная сигнатура запуска CLI его не видит
-        var activityName = runtime.Activity is null
-            ? null
-            : HandsBridgeArgs.ActivityEventPrefix + turnId + "." + Guid.NewGuid().ToString("N")[..8];
-        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile, activityName);
+        var events = runtime.Activity is null ? null : HandsEventNames.For(turnId);
+        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile, events);
 
-        var lease = runtime.MachineLock.TryAcquire() ?? throw new ExecRefusedException(HandsMachineLock.BusyText, HandsEndReason.Busy);
-        try
-        {
-            return new HandsTurnLease(lease, jobName, rewritten, activityName is null ? null : runtime.Activity!.Create(activityName));
-        }
-        catch
-        {
-            lease.Dispose();
-            throw;
-        }
+        return new HandsTurnLease(jobName, rewritten, events is null ? null : runtime.Activity!.Create(events));
     }
 
     /// <summary>
@@ -259,7 +194,7 @@ internal static class HandsAttach
     /// Любое другое вхождение — отказ, а не «подставим, где нашли».
     /// </summary>
     internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath, string? browserProfile = null,
-        string? activityEvent = null)
+        HandsEventNames? events = null)
     {
         var result = new List<DeviceExecFile>(files.Count);
         var replaced = 0;
@@ -295,10 +230,14 @@ internal static class HandsAttach
                 args.Add(HandsBridgeArgs.BrowserProfile);
                 args.Add(browserProfile);
             }
-            if (activityEvent is not null)
+            if (events is not null)
             {
                 args.Add(HandsBridgeArgs.ActivityEvent);
-                args.Add(activityEvent);
+                args.Add(events.Acted);
+                args.Add(HandsBridgeArgs.BusyEvent);
+                args.Add(events.Busy);
+                args.Add(HandsBridgeArgs.TurnEndEvent);
+                args.Add(events.TurnEnd);
             }
             servers[DeviceExecPlaceholders.HandsServerName] = new JsonObject
             {

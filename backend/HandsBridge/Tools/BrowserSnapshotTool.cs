@@ -34,7 +34,10 @@ public static partial class BrowserSnapshotTool
             return HandsGate.Deny(HandsTools.BrowserSnapshot, gate);
         }
 
-        HandsGate.Acted(HandsTools.BrowserSnapshot);
+        if (HandsGate.Acted(HandsTools.BrowserSnapshot) is { } busy)
+        {
+            return busy;
+        }
 
         var reply = await BrowserHost.Session.SnapshotAsync(@ref, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserSnapshot, reply);

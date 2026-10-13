@@ -83,7 +83,10 @@ public static partial class WindowManagementTool
             return HandsGate.Deny(HandsTools.WindowManagement, gate);
         }
 
-        HandsGate.Acted(HandsTools.WindowManagement, windowAction);
+        if (HandsGate.Acted(HandsTools.WindowManagement, windowAction) is { } busy)
+        {
+            return busy;
+        }
 
         try
         {

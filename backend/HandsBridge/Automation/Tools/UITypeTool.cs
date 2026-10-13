@@ -75,7 +75,10 @@ public static partial class UITypeTool
             return HandsGate.Deny(HandsTools.UiType, gate);
         }
 
-        HandsGate.Acted(HandsTools.UiType);
+        if (HandsGate.Acted(HandsTools.UiType) is { } busy)
+        {
+            return busy;
+        }
 
         if (string.IsNullOrWhiteSpace(windowHandle))
         {

@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.DeviceAgent.Tests.Hands;
 /// <summary>
 /// Ход с руками целиком (Unix, фейковый CLI): мост — потомок CLI, как у настоящего CLI со
 /// stdio-узлом MCP; у фейка его роль играет долгоживущий внук. «Стоп» из трея гасит дерево хода
-/// вместе с ним, причина уходит серверу; руки машины — одни на всех.
+/// вместе с ним, причина уходит серверу. Замок машины держит мост, а не агент: агент только
+/// говорит мосту «ход окончен» по строке result в выводе CLI.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
 public class HandsTurnExecutorTests : IDisposable
@@ -74,10 +75,6 @@ public class HandsTurnExecutorTests : IDisposable
         stopped.Should().Be(new DeviceHandsReport("turn-hands", HandsChatStates.Stopped, HandsEndReason.StoppedFromTray));
         hands.Registry.Active.Should().BeEmpty();
         h.Cli.Open.Should().Be(0);
-
-        // Следующий ход снова может взять руки: «Стоп» гасит ход, а не руки машины навсегда
-        using var next = hands.MachineLock.TryAcquire();
-        next.Should().NotBeNull();
     }
 
     [SkippableFact]
@@ -102,8 +99,6 @@ public class HandsTurnExecutorTests : IDisposable
         await WaitDeadAsync(bridge);
         await sink.WaitAsync(r => r.State == HandsChatStates.Stopped, Wait);
         hands.Registry.Active.Should().BeEmpty("трей не показывает руки занятыми, пока агент ждёт сервер");
-        using (var free = hands.MachineLock.TryAcquire())
-            free.Should().NotBeNull("руки машины отпущены сразу, а не по подтверждению сервера");
 
         // Связи нет дольше обычного ожидания подтверждения — кадр конца хода не брошен
         await Task.Delay(TimeSpan.FromMilliseconds(1500));
@@ -117,7 +112,7 @@ public class HandsTurnExecutorTests : IDisposable
     }
 
     [SkippableFact]
-    public async Task Ход_кончился_сам_руки_доступны_и_замок_свободен()
+    public async Task Ход_кончился_сам_руки_доступны()
     {
         _fx.WithBridge();
         var sink = new RecordingSink();
@@ -133,31 +128,79 @@ public class HandsTurnExecutorTests : IDisposable
         (await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait)).TurnId.Should().Be("turn-own");
         sink.Reports.Should().ContainSingle("ход без действия рук доносит только итог — «действует руками» не уходит")
             .Which.State.Should().Be(HandsChatStates.Allowed);
-        using var next = hands.MachineLock.TryAcquire();
-        next.Should().NotBeNull("конец хода отдаёт руки машины");
     }
 
     [SkippableFact]
-    public async Task Второй_ход_с_руками_на_той_же_машине_получает_отказ()
+    public async Task Два_хода_с_руками_на_одной_машине_стартуют_одновременно()
     {
         _fx.WithBridge();
-        // Два агента одной машины делят один замок — как именованный семафор сеанса входа
-        var machine = new InProcessHandsMachineLock();
-        await using var first = NewHarness(_fx.Runtime(machine));
-        await using var second = NewHarness(_fx.Runtime(machine));
+        // Два исполнителя над одним реестром и одними событиями — как два чата на одной машине
+        var hands = _fx.Runtime();
+        await using var first = NewHarness(hands);
+        await using var second = NewHarness(hands);
 
         await first.StartAsync(HandsSpawn(first), turnId: "turn-a");
         await first.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
-
         await second.StartAsync(HandsSpawn(second), turnId: "turn-b");
-        var frames = await second.Server.ReadUntilExitAsync(Wait);
-        await second.Run!.WaitAsync(Wait);
+        await second.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
 
-        var exit = TurnHarness.ExitOf(frames);
-        exit.Code.Should().Be(TurnExecutor.RefusedExitCode);
-        exit.Error.Should().Be(HandsMachineLock.BusyText);
-        second.Cli.Acquired.Should().Be(0, "отказ по рукам не занимает копию CLI");
-        Directory.Exists(Path.Combine(second.TurnsRoot, "turn-b")).Should().BeFalse();
+        // Замок машины берёт мост при первом действии, а не агент на старте: отказа запуска нет
+        hands.Registry.Active.Select(t => t.TurnId).Should().BeEquivalentTo("turn-a", "turn-b");
+        _fx.Activity.Names.Should().HaveCount(2);
+    }
+
+    [SkippableFact]
+    public async Task Конец_хода_в_выводе_CLI_отпускает_руки_моста_а_процесс_живёт_дальше()
+    {
+        _fx.WithBridge();
+        var sink = new RecordingSink();
+        var hands = _fx.Runtime(sink: sink);
+        await using var h = NewHarness(hands);
+
+        await h.StartAsync(HandsSpawn(h), turnId: "turn-end");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+        var name = _fx.Activity.Names.Should().ContainSingle().Subject;
+        _fx.Activity.TurnEnds(name).Should().Be(0, "ход ещё идёт — мост держит замок, если уже действовал");
+
+        // Первый ход разговора кончился: мост отпускает замок, CLI ждёт следующего ввода
+        var ended = TurnEnded(name);
+        await h.SendStdinAsync("result\n");
+        await ended.WaitAsync(Wait);
+        _fx.Activity.TurnEnds(name).Should().Be(1);
+        await h.SendStdinAsync("ping\n");
+        await h.WaitStdoutAsync("echo:ping", new StringBuilder(), Wait);
+        hands.Registry.Active.Should().ContainSingle("конец хода в выводе не гасит процесс и не отцепляет руки");
+
+        // Следующий ход — снова свой конец
+        ended = TurnEnded(name);
+        await h.SendStdinAsync("result\n");
+        await ended.WaitAsync(Wait);
+        _fx.Activity.TurnEnds(name).Should().Be(2);
+        sink.Reports.Should().BeEmpty("без действий и занятости донесений нет");
+    }
+
+    [SkippableFact]
+    public async Task Занятые_руки_доносятся_серверу_и_снимаются_концом_хода()
+    {
+        _fx.WithBridge();
+        var sink = new RecordingSink();
+        var hands = _fx.Runtime(sink: sink);
+        await using var h = NewHarness(hands);
+
+        await h.StartAsync(HandsSpawn(h), turnId: "turn-busy");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+        var name = _fx.Activity.Names.Should().ContainSingle().Subject;
+
+        // Мост дважды упёрся в замок другого хода — бейдж «занято» уходит один раз
+        _fx.Activity.RaiseBusy(name).Should().BeTrue();
+        _fx.Activity.RaiseBusy(name).Should().BeTrue();
+        (await sink.WaitAsync(r => r.State == HandsChatStates.Unavailable, Wait))
+            .Should().Be(new DeviceHandsReport("turn-busy", HandsChatStates.Unavailable, HandsEndReason.Busy));
+
+        await h.SendStdinAsync("result\n");
+        await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait);
+        sink.Reports.Select(r => r.State).Should().Equal(HandsChatStates.Unavailable, HandsChatStates.Allowed);
+        hands.Registry.Active.Should().ContainSingle("занятость не отцепляет руки и не гасит ход");
     }
 
     [SkippableFact]
@@ -173,7 +216,7 @@ public class HandsTurnExecutorTests : IDisposable
         await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
 
         hands.Registry.Active.Should().BeEmpty();
-        using (var free = hands.MachineLock.TryAcquire()) free.Should().NotBeNull("ход без рук замок машины не берёт");
+        _fx.Activity.Names.Should().BeEmpty("ход без рук событий моста не создаёт");
         await h.SendStdinAsync("exit\n");
         await h.Server.ReadUntilExitAsync(Wait);
         sink.Reports.Should().BeEmpty();
@@ -234,6 +277,14 @@ public class HandsTurnExecutorTests : IDisposable
         await h.Run!.WaitAsync(Wait);
         await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait);
         sink.Reports.Should().NotContain(r => r.State == HandsChatStates.Active);
+    }
+
+    /// <summary>Агент поднимет «ход окончен» для хода с этим событием «подействовал».</summary>
+    private Task TurnEnded(string name)
+    {
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fx.Activity.TurnEnded += n => { if (n == name) ended.TrySetResult(); };
+        return ended.Task;
     }
 
     /// <summary>Мост подействовал: поднять событие хода и дождаться «действует руками».</summary>

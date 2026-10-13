@@ -91,7 +91,10 @@ public static partial class ScreenshotControlTool
             return HandsGate.Deny(HandsTools.ScreenshotControl, gate);
         }
 
-        HandsGate.Acted(HandsTools.ScreenshotControl, action);
+        if (HandsGate.Acted(HandsTools.ScreenshotControl, action) is { } busy)
+        {
+            return busy;
+        }
 
         try
         {

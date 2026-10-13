@@ -93,8 +93,12 @@ public static class HandsChatStates
     /// <summary>Руки отцепились от хода не по его концу: <c>Reason</c> — <see cref="HandsEndReason"/>.</summary>
     public const string Stopped = "stopped";
 
-    /// <summary>Состояния, которые присылает агент (<see cref="DeviceHandsReport"/>); прочие считает сервер.</summary>
-    public static readonly IReadOnlyList<string> FromDevice = [Active, Allowed, Stopped];
+    /// <summary>
+    /// Состояния, которые присылает агент (<see cref="DeviceHandsReport"/>); прочие считает сервер.
+    /// <see cref="Unavailable"/> агент шлёт только с <see cref="HandsEndReason.Busy"/>: действие
+    /// моста упёрлось в замок машины другого хода.
+    /// </summary>
+    public static readonly IReadOnlyList<string> FromDevice = [Active, Allowed, Stopped, Unavailable];
 }
 
 /// <summary>Мост рук на машине. Сервер его не видит и не правит.</summary>
@@ -156,6 +160,27 @@ public static class HandsBridgeArgs
     public const string ActivityEventPrefix = @"Local\AiHome.Hands.Acted.";
 
     /// <summary>
+    /// Именованное событие хода «руки заняты»: мост поднимает его, когда действие упёрлось в
+    /// <see cref="HandsMachineLock"/> другого хода, и агент доносит серверу «занято» для бейджа.
+    /// Имя создаёт агент (<see cref="BusyEventPrefix"/> + ход).
+    /// </summary>
+    public const string BusyEvent = "--busy-event";
+
+    /// <summary>Префикс имени события <see cref="BusyEvent"/>.</summary>
+    public const string BusyEventPrefix = @"Local\AiHome.Hands.Busy.";
+
+    /// <summary>
+    /// Именованное событие хода «ход окончен»: агент поднимает его, увидев в выводе CLI строку
+    /// <c>{"type":"result"}</c>, и мост отпускает <see cref="HandsMachineLock"/>. Процесс CLI при
+    /// этом живёт дальше; следующее действие рук берёт замок заново. Имя создаёт агент
+    /// (<see cref="TurnEndEventPrefix"/> + ход).
+    /// </summary>
+    public const string TurnEndEvent = "--turn-end-event";
+
+    /// <summary>Префикс имени события <see cref="TurnEndEvent"/>.</summary>
+    public const string TurnEndEventPrefix = @"Local\AiHome.Hands.TurnEnd.";
+
+    /// <summary>
     /// Префикс имени Job хода с руками. Мосту имя больше не передаётся (<c>--turn-job</c> снят вместе
     /// с границей «только свои окна», ADR-016 §7): Job хода нужен только агенту — <c>KillTree</c>
     /// по концу хода гасит всё, что ход открыл; имя остаётся для журнала.
@@ -174,8 +199,12 @@ public static class HandsVision
 }
 
 /// <summary>
-/// Одни руки на машину: второй ход с руками на той же машине (и в том же сеансе входа)
-/// получает честный отказ, а не делит мышь и клавиатуру с первым.
+/// Одни руки на машину: замок держится на время действий руками в пределах хода. Берёт его мост
+/// при первом действии ввода или управления окнами и программами, отпускает по концу хода
+/// (<see cref="HandsBridgeArgs.TurnEndEvent"/>) или смертью процесса — именованный мьютекс при
+/// смерти владельца становится брошенным и достаётся следующему. Действие второго хода на той же
+/// машине (и в том же сеансе входа) получает отказ инструмента, а не делит мышь и клавиатуру с первым.
+/// <see cref="BusyText"/> — отказ запуска хода агентом старой версии, который брал замок на старте.
 /// </summary>
 public static class HandsMachineLock
 {
@@ -196,9 +225,10 @@ public static class HandsEndReason
     public const string HandsDisabled = "disabled";
     public const string AgentStopping = "agent-stopping";
     /// <summary>
-    /// Ход не получил руки: их держит другой ход на этой машине (<see cref="HandsMachineLock"/>).
-    /// Приходит кодом отказа <see cref="DeviceExecExit.Refusal"/>, в чат — <c>Reason</c> у
-    /// <see cref="HandsChatStates.Unavailable"/>.
+    /// Руки держит другой ход на этой машине (<see cref="HandsMachineLock"/>). Нынешний агент
+    /// доносит это <see cref="DeviceHandsReport"/> с <see cref="HandsChatStates.Unavailable"/>, когда
+    /// действие моста упёрлось в замок; старый — кодом отказа запуска <see cref="DeviceExecExit.Refusal"/>.
+    /// В чат — <c>Reason</c> у <see cref="HandsChatStates.Unavailable"/>.
     /// </summary>
     public const string Busy = "busy";
 }
@@ -298,7 +328,7 @@ public sealed record HandsPipeMessage(
 /// <summary>Что показывает трей.</summary>
 /// <param name="Installed">Мост рук лежит в каталоге версии агента.</param>
 /// <param name="ActiveTurns">
-/// Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>);
+/// Ходы, к которым сейчас подключены руки (действует из них в моменте один — <see cref="HandsMachineLock"/>);
 /// «ИИ управляет компьютером» — только у тех, где <see cref="HandsActiveTurn.IsActing"/>.
 /// </param>
 /// <param name="ServerOnline">Связь агента с сервером — «Стоп» работает и без неё.</param>

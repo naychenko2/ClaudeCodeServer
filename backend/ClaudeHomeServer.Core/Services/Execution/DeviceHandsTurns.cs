@@ -87,8 +87,8 @@ public static class DeviceHandsTurns
         Last.GetValueOrDefault(DeviceKey(ownerId, deviceId));
 
     /// <summary>
-    /// Состояние бейджа чата по донесениям устройства: «действует руками» — только пока ход жив,
-    /// «остановлено» — пока не пришло новое донесение; иначе — «доступны».
+    /// Состояние бейджа чата по донесениям устройства: «действует руками» и «заняты другим ходом» —
+    /// только пока ход жив, «остановлено» — пока не пришло новое донесение; иначе — «доступны».
     /// </summary>
     public static (string State, string? Reason) ChatStateOf(string ownerId, string deviceId, string sessionId)
     {
@@ -97,6 +97,7 @@ public static class DeviceHandsTurns
         return last.State switch
         {
             HandsChatStates.Active when IsLive(ownerId, deviceId, last.TurnId) => (HandsChatStates.Active, null),
+            HandsChatStates.Unavailable when IsLive(ownerId, deviceId, last.TurnId) => (HandsChatStates.Unavailable, last.Reason),
             HandsChatStates.Stopped => (HandsChatStates.Stopped, last.Reason),
             _ => (HandsChatStates.Allowed, null),
         };

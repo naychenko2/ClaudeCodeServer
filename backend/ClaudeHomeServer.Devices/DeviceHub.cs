@@ -120,7 +120,7 @@ public sealed class DeviceHub(
 
     /// <summary>
     /// Донесение агента о руках хода (ADR-016 §7): «ход действует руками», «руки доступны»,
-    /// «остановлено из трея». Принимается только по ходу с руками, который сервер сам отправил
+    /// «остановлено из трея», «заняты другим ходом». Принимается только по ходу с руками, который сервер сам отправил
     /// ЭТОМУ устройству, — чужой чат устройство «пошевелить» не может. Состояние запоминается
     /// у устройства (первая отрисовка бейджа) и уходит в чат хода.
     /// </summary>
@@ -133,10 +133,16 @@ public sealed class DeviceHub(
         if (DeviceHandsTurns.SessionOf(ownerId, deviceId, report.TurnId ?? "") is not { } sessionId)
             throw new HubException($"Ход {report.TurnId} с руками этому устройству не отправлялся");
 
+        // «Недоступны» от устройства — только «заняты другим ходом» (мост упёрся в замок машины)
+        if (report.State == HandsChatStates.Unavailable && report.Reason != HandsEndReason.Busy)
+            throw new HubException("Незнакомое состояние рук");
         // Причина — только из известного набора: текст с устройства в чат как есть не едет
-        var reason = report.State == HandsChatStates.Stopped && KnownEndReasons.Contains(report.Reason ?? "")
-            ? report.Reason
-            : null;
+        var reason = report.State switch
+        {
+            HandsChatStates.Stopped when KnownEndReasons.Contains(report.Reason ?? "") => report.Reason,
+            HandsChatStates.Unavailable => HandsEndReason.Busy,
+            _ => null,
+        };
         DeviceHandsTurns.SetLast(ownerId, deviceId,
             new DeviceHandsLastState(sessionId, report.TurnId!, report.State, reason, DateTimeOffset.UtcNow));
         DeviceHandsTurns.Accepted(ownerId, deviceId, report.TurnId!, report.State);

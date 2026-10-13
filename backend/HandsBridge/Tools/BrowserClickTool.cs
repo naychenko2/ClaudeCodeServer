@@ -31,7 +31,10 @@ public static partial class BrowserClickTool
             return HandsGate.Deny(HandsTools.BrowserClick, gate);
         }
 
-        HandsGate.Acted(HandsTools.BrowserClick);
+        if (HandsGate.Acted(HandsTools.BrowserClick) is { } busy)
+        {
+            return busy;
+        }
 
         var reply = await BrowserHost.Session.ClickAsync(@ref, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserClick, reply);

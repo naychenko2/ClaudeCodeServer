@@ -113,11 +113,17 @@ public sealed class FacePassChain
                 // выход этого прохода — итоговая версия. Последний проход отпускаем как есть
                 if (!last)
                 {
-                    _held = value.Ready;
-                    _heldIndex = _index;
+                    // Удержанное не стираем промежуточным отчётом без Ready (Queued/Running следующего
+                    // прохода или поздний отчёт этого же): иначе падение дальше теряет версию (В1)
+                    if (value.Ready is not null)
+                    {
+                        _held = value.Ready;
+                        _heldIndex = _index;
+                    }
                     ready = null;
                 }
-                releaseHeld = !last && value.Ready is null;
+                // Авто-выпуск — только на стадии завершения без картинок
+                releaseHeld = !last && value.Stage == EditStage.Downloading && value.Ready is null;
             }
             if (releaseHeld)
             {

@@ -256,6 +256,106 @@ public class FacePassChainTests
         progress.ReadyCount.Should().Be(1, "ровно одна версия — выход последнего прохода");
     }
 
+    // ── Поздний отчёт без Ready не затирает удержанный выход (ревью этапа 3) ─────
+    // Проход 1 шлёт Downloading(Ready=[v1]), затем Running без Ready; удержанный v1 обязан
+    // пережить этот отчёт, иначе падение/отмена прохода 2 оставляет задачу без версии (В1)
+
+    // Подменный редактор: проход 1 — Ready, потом поздний Running без Ready; проход 2 — pass2
+    private static FakeEditor LateReportEditor(
+        Func<IProgress<EditProgress>, CancellationToken, Task<ImageEditResult>> pass2) =>
+        new((req, prog, ct) =>
+        {
+            if (req.Character!.Slug == "anya")
+            {
+                var img = new EditedImage(Png(8, 8, 1), "image/png");
+                prog.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 1, Ready: [img]));
+                prog.Report(new EditProgress(EditStage.Running, Run: 1, Runs: 1));
+                return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
+            }
+            return pass2(prog, ct);
+        });
+
+    // (1) Падение прохода 2 после позднего Running: версия — выход прохода 1, лица done/failed
+    [Fact]
+    public async Task Поздний_отчёт_без_Ready_падение_прохода_2_версия_прохода_1()
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var editor = LateReportEditor((_, _) => throw new InvalidOperationException("сбой прохода 2"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m",
+                progress, default, results.Add));
+
+        progress.ReadyCount.Should().Be(1, "удержанный выход прохода 1 пережил поздний Running");
+        progress.Reports.Single(r => r.Ready is not null).Ready![0].Bytes.Should().Equal(Png(8, 8, 1));
+        results.Select(r => r.Status).Should().Equal("done", "failed");
+    }
+
+    // (2) Отмена между проходами после позднего Running: версия есть, лица done/cancelled
+    [Fact]
+    public async Task Поздний_отчёт_без_Ready_отмена_между_проходами_версия_есть()
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var cts = new CancellationTokenSource();
+        var editor = LateReportEditor((_, ct) =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(ct);
+        });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m",
+                progress, cts.Token, results.Add));
+
+        progress.ReadyCount.Should().Be(1, "отмена после прохода 1 — версия с его выходом");
+        results.Select(r => r.Status).Should().Equal("done", "cancelled");
+    }
+
+    // (3) Успех после позднего Running: ровно одна версия — Running не выпускает удержанное
+    // (мутация «авто-выпуск на любой стадии» даёт две версии)
+    [Fact]
+    public async Task Поздний_отчёт_без_Ready_успех_ровно_одна_версия()
+    {
+        var progress = new RecordingProgress();
+        var editor = LateReportEditor((prog, _) =>
+        {
+            // Проход 2 отдаёт свою версию через Ready, как боевой драйвер
+            var img2 = new EditedImage(Png(8, 8, 2), "image/png");
+            prog.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 1, Ready: [img2]));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img2], null, true, null, null));
+        });
+
+        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default);
+
+        progress.ReadyCount.Should().Be(1, "только выход последнего прохода");
+        progress.Reports.Single(r => r.Ready is not null).Ready![0].Bytes.Should().Equal(Png(8, 8, 2));
+    }
+
+    // (4) Проход 1 завершился без картинок (Downloading без Ready): удерживать нечего — версий нет
+    [Fact]
+    public async Task Завершение_прохода_1_без_картинок_версий_нет()
+    {
+        var progress = new RecordingProgress();
+        var editor = new FakeEditor((req, prog, ct) =>
+        {
+            if (req.Character!.Slug == "anya")
+            {
+                prog.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 1));
+                return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [], null, true, null, null));
+            }
+            throw new InvalidOperationException("сбой прохода 2");
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default));
+
+        progress.ReadyCount.Should().Be(0, "проход 1 картинок не дал — версии нет");
+        progress.Reports.Should().Contain(r => r.Stage == EditStage.Downloading && r.Run == 1 && r.Runs == 2,
+            "стадия завершения прохода 1 дошла наружу");
+    }
+
     // ── Шаг 10: финализация задачи (ImageEditJobService) ─────────────────────────
     // Цепочка + финал: упал проход 2 → задача Completed (Outcome=Ok) с версией; отмена после
     // прохода 1 → Cancelled с версией. Гоняем через настоящий исполнитель с подменным редактором
@@ -268,6 +368,8 @@ public class FacePassChainTests
 
         // passOutcome: "ok" — оба прохода прошли; "fail2" — второй упал; "cancel2" — отмена во втором
         public string PassOutcome { get; init; } = "ok";
+        // Проход 1 после Ready шлёт ещё Running без Ready (поздний отчёт не должен затереть удержанное)
+        public bool LateRunning { get; init; }
         // Сигнал: первый проход завершён (тест отменяет задачу после него)
         public TaskCompletionSource Pass1Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -285,6 +387,7 @@ public class FacePassChainTests
             {
                 var img = new EditedImage(Png(8, 8, 1), "image/png");
                 progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 2, Ready: [img]));
+                if (LateRunning) progress.Report(new EditProgress(EditStage.Running, Run: 1, Runs: 2));
                 Pass1Done.TrySetResult();
                 return new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null);
             }
@@ -306,9 +409,10 @@ public class FacePassChainTests
         public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
     }
 
-    private (ImageEditJobService Jobs, string JobId, PartialResultEditor Editor) StartPartial(string passOutcome, string dir)
+    private (ImageEditJobService Jobs, string JobId, PartialResultEditor Editor) StartPartial(string passOutcome, string dir,
+        bool lateRunning = false)
     {
-        var editor = new PartialResultEditor { PassOutcome = passOutcome };
+        var editor = new PartialResultEditor { PassOutcome = passOutcome, LateRunning = lateRunning };
         var jobs = new ImageEditJobService([editor], new ImageEditWorkspace(dir),
             NullLogger<ImageEditJobService>.Instance);
         var quote = new ImageEditQuoteRequest(
@@ -373,6 +477,38 @@ public class FacePassChainTests
             var job = await WaitDone(jobs, jobId);
             job.Status.Should().Be(ImageEditJobStatus.Cancelled, "отмена после прохода 1 — Cancelled");
             job.Variants.Should().ContainSingle("версия — выход прохода 1");
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // (8) Поздний Running после Ready прохода 1, проход 2 упал: задача Completed с одной версией
+    [Fact]
+    public async Task Поздний_отчёт_падение_прохода_2_задача_Completed_с_версией()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, _) = StartPartial("fail2", dir, lateRunning: true);
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Completed, "упал проход 2 — задача не падает");
+            job.Variants.Should().ContainSingle("версия — выход прохода 1 пережил поздний Running");
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // (9) Поздний Running после Ready прохода 1, отмена во втором: Cancelled с одной версией
+    [Fact]
+    public async Task Поздний_отчёт_отмена_после_прохода_1_задача_Cancelled_с_версией()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, editor) = StartPartial("cancel2", dir, lateRunning: true);
+        try
+        {
+            await editor.Pass1Done.Task;
+            await jobs.CancelAsync("owner", "p1", jobId, default);
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Cancelled, "отмена после прохода 1 — Cancelled");
+            job.Variants.Should().ContainSingle("версия — выход прохода 1 пережил поздний Running");
         }
         finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
     }

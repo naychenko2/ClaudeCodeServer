@@ -203,7 +203,9 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.source) form.append('source', input.source, 'source');
   if (input.mask) form.append('mask', input.mask, 'mask.png');
   if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
-  if (input.characterSlug) form.append('characterSlug', input.characterSlug);
+  // «Подставить персонажа» (ADR-028, этап 3): персонажи живут в faceTarget.faces, поэтому
+  // верхнеуровневого characterSlug рядом с faceTarget не едет (иначе сервер видит двусмысленный вход)
+  if (input.characterSlug && !input.faceTarget) form.append('characterSlug', input.characterSlug);
   for (const f of input.characterPhotos ?? []) form.append('characterPhotos', f);
   for (const r of input.references ?? []) {
     form.append('references', r.file, r.name);

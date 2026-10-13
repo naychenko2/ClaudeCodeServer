@@ -217,3 +217,48 @@ describe('facesError: разбор по кодам/статусам', () => {
     expect(facesError(new Error('сеть'))).toEqual({ code: 'other' });
   });
 });
+
+// ── Этап 3: 409 faces_changed сбрасывает назначения; отказ поиска → searchFailure ──
+const respKey = (faces: number[], key: string): FacesResponse =>
+  ({ facesKey: key, width: 100, height: 100, faces: faces.map(n => face(n)) });
+
+describe('faceSwapReducer: 409 faces_changed сбрасывает ВСЕ назначения (этап 3)', () => {
+  it('новый facesKey из тела, назначений нет, выбор сброшен (мутация: не сбрасывать → краснеет)', () => {
+    let s = searchOk(resp([1, 2]));
+    s = faceSwapReducer(s, { type: 'assign', face: 1, slug: 'm' });
+    s = faceSwapReducer(s, { type: 'assign', face: 2, slug: 'i' });
+    expect(s.assignments.assignments.size).toBe(2);
+    // 409: свежий список с НОВЫМ facesKey
+    const after = faceSwapReducer(s, { type: 'facesChanged', response: respKey([3, 4], 'fk-new'), requestId: 1 });
+    expect(after.facesKey).toBe('fk-new');
+    expect(after.faces.map(f => f.n)).toEqual([3, 4]);
+    expect(after.assignments.assignments.size).toBe(0);
+    expect(after.selectedFace).toBeNull();
+  });
+});
+
+describe('faceSwapReducer: отказ поиска → searchFailure (этап 3)', () => {
+  it('busy → searchFailure с кодом; повторный поиск сбрасывает (мутация: не сбрасывать → краснеет)', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchError', code: 'busy', text: 'Видеокарта занята…', requestId: 1 });
+    expect(s.phase).toBe('error');
+    expect(s.searchFailure).toEqual({ code: 'busy', text: 'Видеокарта занята…' });
+    // повторный поиск сбрасывает причину
+    const s2 = faceSwapReducer(s, { type: 'searchStart' });
+    expect(s2.searchFailure).toBeNull();
+  });
+
+  it('provider_unavailable → searchFailure с кодом', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchError', code: 'provider_unavailable', text: 'x', requestId: 1 });
+    expect(s.searchFailure).toMatchObject({ code: 'provider_unavailable' });
+  });
+
+  it('успешный поиск сбрасывает searchFailure', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchError', code: 'busy', text: 'x', requestId: 1 });
+    const ok = faceSwapReducer(s, { type: 'searchOk', response: resp([1]), requestId: 1 });
+    expect(ok.searchFailure).toBeNull();
+    expect(ok.phase).toBe('ready');
+  });
+});

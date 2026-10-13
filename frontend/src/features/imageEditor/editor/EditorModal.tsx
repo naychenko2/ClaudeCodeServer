@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, launchFailure, clearFailures, clearFaceChange, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
+import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -278,13 +278,25 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         viewedVersionId, dims);
       if (ok) setFaceSwapMode(false); // новая версия ляжет в ленту; режим закрывается
     } catch (e) {
-      const err = e as { body?: { code?: string; error?: string } };
+      const err = e as { status?: number; body?: { code?: string; error?: string; facesKey?: string; faces?: unknown } } | null;
       const code = typeof err?.body?.code === 'string' ? err.body.code : null;
       // Бэкенд шлёт { error, code }; поля body.message нет (всегда undefined)
       const msg = typeof err?.body?.error === 'string' ? err.body.error : (e as Error).message;
-      // Реакция на отказ — по коду (launchFailure), не по тексту сообщения
-      const f = launchFailure(code, msg);
-      switch (f.kind) {
+      // 409 faces_changed: тело — свежий ImageThreadFacesResponse (facesKey + faces), не {code, error}.
+      // Обновляем facesKey/список и сбрасываем ВСЕ назначения — иначе повторный запуск уходит со
+      // старым facesKey → вечный цикл 409 (дефект high приёмки этапа 2)
+      if (err?.status === 409 && typeof err.body?.facesKey === 'string' && Array.isArray(err.body?.faces)) {
+        const fresh = parseFacesChangedBody(err.body);
+        if (fresh) {
+          faceSwap.applyFacesChanged(fresh);
+          setFaceUi(u => ({ ...u, facesChanged: true }));
+        } else {
+          showToast(`Запуск не удался: ${msg}`, '', 'error');
+        }
+      } else {
+        // Реакция на прочие отказы запуска — по коду (launchFailure), не по тексту сообщения
+        const f = launchFailure(code, msg);
+        switch (f.kind) {
         case 'facesTooClose': setFaceUi(u => ({ ...u, tooClose: true })); break;
         case 'faceOutOfFrame': setFaceUi(u => ({ ...u, faceOutOfFrame: true })); break;
         case 'busy': setFaceUi(u => ({ ...u, busy: true })); break;
@@ -301,6 +313,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
           const _exhaustive: never = f;
           void _exhaustive;
           break;
+        }
         }
       }
     } finally {

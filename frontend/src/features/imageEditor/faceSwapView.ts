@@ -2,7 +2,7 @@
 // bbox→доли, видимость входа, состояния (плашка/плашки/canSubmit/подпись). Разделена от
 // React, чтобы тестировать без DOM. React-обвязка — FaceOverlay/FaceSwapBar/FaceSwapPanel.
 
-import type { DetectedFace } from './api';
+import type { DetectedFace, FaceTarget, FacesResponse } from './api';
 import type { FaceSwapPhase } from './thread/faceSwap';
 
 // ── Тексты (Софья, дословно из макета character-face-swap-v1.html) ─────────────
@@ -146,6 +146,19 @@ export function launchFailure(code: string | null, message: string | null): Laun
   }
 }
 
+// Текст причины отказа ПОИСКА лиц (не запуска) — для плашки шага 16. busy → очередь
+// видеокарты, provider_unavailable → локальные недоступны, прочие → общий. Чистая функция:
+// без React, без DOM.
+export function searchFailureText(code: string): string {
+  switch (code) {
+    case 'busy': return FS_TEXT.queue;
+    case 'provider_unavailable': return FS_TEXT.localUnavailable;
+    case 'not_found': return FS_TEXT.provider;
+    case 'feature_disabled': return FS_TEXT.featureDisabled;
+    default: return 'Не удалось найти лица. Попробуйте позже';
+  }
+}
+
 // ── Локальное состояние экрана «Подставить персонажа» (EditorModal) ──────────
 // tappedSmall — мелкое лицо, которое тапнули; флаги отказов запуска; useLocalOnce —
 // «локальные на этот запуск»; submitting — идёт запуск.
@@ -264,4 +277,85 @@ export function faceVisual(f: DetectedFace, i: {
   if (i.selectedFace === f.n) return 'selected';
   if (i.selectedFace != null) return 'dim';
   return 'normal';
+}
+
+// ── Назначения «лицо → персонаж» (ADR-028, этап 3) ─────────────────────────────
+// Чистая модель без React: assignments — максимум MAX_FACE_PASSES (лимит MaxFacePasses);
+// active — лицо, на котором сейчас выбираем персонажа; limit — лицо, вызвавшее плашку
+// лимита (тап по свободной рамке при полном наборе). Все операции — чистые функции:
+// возвращают новое состояние, исходный объект не мутируют.
+export const MAX_FACE_PASSES = 2;
+
+export interface FaceAssignments {
+  assignments: Map<number, string>; // faceN → characterSlug
+  active: number | null;
+  limit: number | null;
+}
+
+export const emptyAssignments: FaceAssignments = { assignments: new Map(), active: null, limit: null };
+
+// Есть ли назначения — для будущего подтверждения кисти («Кисть работает с одним лицом —
+// назначения сбросятся», шаг 16)
+export const hasAssignments = (a: FaceAssignments): boolean => a.assignments.size > 0;
+
+// Персонаж, уже стоящий на ДРУГОМ лице, недоступен (занят): один персонаж — одно лицо.
+// Снятие назначения с того лица освобождает его.
+export function isCharacterTaken(a: FaceAssignments, slug: string, forFace: number): boolean {
+  for (const [face, s] of a.assignments) if (face !== forFace && s === slug) return true;
+  return false;
+}
+
+// Назначить персонажа лицу: создаёт или ЗАМЕНЯЕТ назначение (не добавляет второе);
+// active сбрасывается (остаёмся на месте, Р1 а) и плашка лимита снимается (любое изменение
+// назначений её гасит).
+export function assignCharacter(a: FaceAssignments, face: number, slug: string): FaceAssignments {
+  const assignments = new Map(a.assignments);
+  assignments.set(face, slug);
+  return { ...a, assignments, active: null, limit: null };
+}
+
+// Снять назначение с лица: освобождает персонажа; если это было активное лицо — active
+// сбрасывается; плашка лимита снимается. Идемпотентно: нет назначения — состояние не меняется.
+export function removeAssignment(a: FaceAssignments, face: number): FaceAssignments {
+  if (!a.assignments.has(face)) return a;
+  const assignments = new Map(a.assignments);
+  assignments.delete(face);
+  return { ...a, assignments, active: a.active === face ? null : a.active, limit: null };
+}
+
+// Тап по лицу. faces — полный список (для проверки small). Правила:
+//  - мелкое → не трогать (UI ведёт tappedSmall, как в этапе 2);
+//  - тап по назначенной: повторный тап по активной → active = null, иначе → active = n (переназначение);
+//  - 2 назначения и тап по свободной → limit = n (active не меняется) — плашка лимита;
+//  - иначе (свободная при <2) → active = n.
+// Любое изменение назначений / тап по назначенной снимает плашку лимита.
+export function tapFace(a: FaceAssignments, face: number, faces: readonly DetectedFace[]): FaceAssignments {
+  const f = faces.find(x => x.n === face);
+  if (f?.small) return a;
+  if (a.assignments.has(face)) {
+    if (a.active === face) return { ...a, active: null, limit: null };
+    return { ...a, active: face, limit: null };
+  }
+  if (a.assignments.size >= MAX_FACE_PASSES) return { ...a, limit: face };
+  return { ...a, active: face, limit: null };
+}
+
+// Цель подстановки (ADR-028): {versionId, facesKey, faces:[{face, characterSlug}]}
+// в порядке возрастания номера лица; без назначений → null (запуска нет)
+export function faceTargetFromAssignments(a: FaceAssignments, versionId: string, facesKey: string): FaceTarget | null {
+  if (a.assignments.size === 0) return null;
+  const faces = [...a.assignments.entries()]
+    .sort((x, y) => x[0] - y[0])
+    .map(([face, characterSlug]) => ({ face, characterSlug }));
+  return { versionId, facesKey, faces };
+}
+
+// Тело 409 faces_changed при ЗАПУСКЕ — свежий ImageThreadFacesResponse (facesKey + faces),
+// НЕ {code, error} (в отличие от прочих отказов запуска). Разбор в FacesResponse, чтобы
+// редьюсер обновил facesKey/список и сбросил назначения; null — тело не похоже на список лиц.
+export function parseFacesChangedBody(body: unknown): FacesResponse | null {
+  const r = body as FacesResponse | null | undefined;
+  if (!r || typeof r !== 'object') return null;
+  if (typeof r.facesKey !== 'string' || !Array.isArray(r.faces)) return null;
+  return r;
 }

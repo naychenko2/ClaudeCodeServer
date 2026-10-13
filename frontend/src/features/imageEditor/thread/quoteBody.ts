@@ -29,9 +29,9 @@ export interface QuoteBodyInput {
   context?: { sessionId: string; contextRevision: number } | null;
   // Формат генерации (ADR-025): желание проекта; undefined — флаг выключен, поле в тело не кладётся
   format?: MediaFormatWish | null;
-  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки и персонаж; с ними context не едет
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки (персонажи — в faces);
+  // с ней context не едет
   faceTarget?: FaceTarget | null;
-  characterSlug?: string | null;
 }
 
 export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
@@ -47,6 +47,6 @@ export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
     width: i.size?.w ?? null, height: i.size?.h ?? null,
     ...(face ? null : i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),
     ...(i.format !== undefined ? { format: i.format } : null),
-    ...(face ? { faceTarget: i.faceTarget, characterSlug: i.characterSlug ?? null } : null),
+    ...(face ? { faceTarget: i.faceTarget } : null),
   };
 }

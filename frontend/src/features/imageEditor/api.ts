@@ -95,10 +95,9 @@ export interface ImageEditQuoteRequest {
   // Формат генерации (ADR-025): желание проекта; без него сервер берёт сохранённое, но общий кэш котировок
   // ключуется телом, поэтому выбранный формат уходит явно
   format?: MediaFormatWish | null;
-  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки; с ней ContextRevision не едет
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки; персонажи живут в faces,
+  // верхнеуровневого characterSlug нет; с ней ContextRevision не едет
   faceTarget?: FaceTarget | null;
-  // Персонаж, лицо которого подставляется; обязателен, когда задан faceTarget
-  characterSlug?: string | null;
 }
 
 export interface ImageEditEstimate {
@@ -184,7 +183,8 @@ export interface ImageEditJobInput {
   versionId?: string;
   // Ревизия контекста чата (ADR-023 §Д2.1): сервер берёт входы из стора, не совпала — 409 context_changed
   contextRevision?: number;
-  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки; с ней contextRevision/mask/annotated
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки; персонажи живут в faces,
+  // верхнеуровневый characterSlug при подстановке не едет; с ней contextRevision/mask/annotated
   // и референсы контекста в тело не кладутся (сборка — buildQuoteBody/buildJobBody)
   faceTarget?: FaceTarget | null;
 }
@@ -221,8 +221,9 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.baseStepId) form.append('baseStepId', input.baseStepId);
   if (input.versionId) form.append('versionId', input.versionId);
   if (input.contextRevision != null) form.append('contextRevision', String(input.contextRevision));
-  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки — объект {versionId, face, facesKey},
-  // уходит JSON-строкой (как photoLabels); сервер десериализует в FaceTarget
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки — объект
+  // {versionId, facesKey, faces: [{face, characterSlug}]}, уходит JSON-строкой (как photoLabels);
+  // сервер десериализует в FaceTarget
   if (input.faceTarget) form.append('faceTarget', JSON.stringify(input.faceTarget));
   return form;
 }
@@ -405,12 +406,18 @@ export interface FacesResponse {
   faces: DetectedFace[];
 }
 
-// Цель подстановки персонажа (этап 2 · шаг 10a): версия, номер лица (n) и ключ ревизии лиц.
+// Назначение персонажа на лицо (ADR-028, этап 3): номер лица (с 1) и персонаж, которого ставят на него
+export interface FaceAssignment {
+  face: number;
+  characterSlug: string;
+}
+
+// Цель подстановки персонажей (ADR-028, этап 3): версия, ключ ревизии лиц и назначения «лицо → персонаж».
 // Уходит в котировку и запуск; вместе с ним ContextRevision/Mask/Annotated/референсы не едут
 export interface FaceTarget {
   versionId: string;
-  face: number;
   facesKey: string;
+  faces: FaceAssignment[];
 }
 
 // Коды ошибок «найти лица»: различимо типизированы, чтобы экран назвал причину отказа

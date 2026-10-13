@@ -264,7 +264,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         : null
   ) : null;
 
-  // Запуск подстановки: тем же путём (quote + startJob), faceTarget + characterSlug
+  // Запуск подстановки: тем же путём (quote + startJob), faceTarget с faces (ADR-028, этап 3)
   const launchFaceSwapNow = async () => {
     const ft = faceSwap.state.selectedFace;
     const ch = faceSwap.state.selectedCharacter;
@@ -273,8 +273,9 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     setFaceUi(u => ({ ...clearFailures(u), submitting: true }));
     try {
       const ok = await launchFaceSwap(projectId, sessionId, thread,
-        { versionId: viewedVersionId ?? '', face: ft, facesKey: faceSwap.state.facesKey ?? '' },
-        ch, viewedVersionId, dims);
+        { versionId: viewedVersionId ?? '', facesKey: faceSwap.state.facesKey ?? '',
+          faces: [{ face: ft, characterSlug: ch }] },
+        viewedVersionId, dims);
       if (ok) setFaceSwapMode(false); // новая версия ляжет в ленту; режим закрывается
     } catch (e) {
       const err = e as { body?: { code?: string; error?: string } };

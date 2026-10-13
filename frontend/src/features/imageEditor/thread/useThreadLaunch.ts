@@ -239,12 +239,13 @@ export async function launchThread(
   }
 }
 
-// «Подставить персонажа» (этап 2 · шаг 10b): запуск с faceTarget + characterSlug. Котировка и
-// запуск — тем же путём, что обычный (buildQuoteBody + startJob), только исполнитель — локальные
-// модели (подстановка работает только на них), маска лица строится сервером. true — задача запущена.
+// «Подставить персонажа» (ADR-028, этап 3): запуск с faceTarget (faces: [{face, characterSlug}]).
+// Котировка и запуск — тем же путём, что обычный (buildQuoteBody + startJob), только исполнитель
+// — локальные модели (подстановка работает только на них), маска лица строится сервером.
+// true — задача запущена.
 export async function launchFaceSwap(
   projectId: string, sessionId: string, thread: ImageThread,
-  faceTarget: FaceTarget, characterSlug: string,
+  faceTarget: FaceTarget,
   versionId: string | null, size: { w: number; h: number } | null,
 ): Promise<boolean> {
   const api = imageEditorApi();
@@ -265,11 +266,11 @@ export async function launchFaceSwap(
   const q = await api.quote(projectId, buildQuoteBody({
     provider: 'local', model: m.id, mode: 'auto', op: 'inpaint', count: 1,
     hasImage: true, marks: [], withMask: false, removal: false, references: 0, hasCharacter: true,
-    size, context: null, faceTarget, characterSlug,
+    size, context: null, faceTarget,
   }));
   await api.startJob(projectId, {
     quoteId: q.quoteId, prompt: '',
-    source, characterSlug,
+    source,
     sessionId, threadId: thread.id,
     versionId: version?.id,
     faceTarget,

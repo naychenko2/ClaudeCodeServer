@@ -82,7 +82,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();
-        // Кэш детекции лиц (ADR-027, §4, этап 2): повторный запрос на те же байты не дублирует
+        // Кэш детекции лиц (ADR-028, этап 2): повторный запрос на те же байты не дублирует
         // прогон ComfyUI; в кэш — только успешные результаты
         services.AddSingleton<Faces.FaceDetectionCache>();
         services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();

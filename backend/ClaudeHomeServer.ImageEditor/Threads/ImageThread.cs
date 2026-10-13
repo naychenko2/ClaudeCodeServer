@@ -120,11 +120,11 @@ public sealed record ImageThreadLaunch(
     string? Prompt,
     ImageThreadCharacter? Character = null,
     string? Op = null,
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): номер лица, bbox и slug персонажа
+    // Подстановка персонажа на лицо (ADR-028, этап 2): номер лица, bbox и slug персонажа
     // для подписи карточки «Тест Мария → лицо 2»; null — запуск без подстановки (старые нити)
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] ImageThreadFaceTarget? FaceTarget = null);
 
-// Подстановка персонажа на лицо в запуске нити (ADR-027, §4, этап 2): N — номер лица (с 1),
+// Подстановка персонажа на лицо в запуске нити (ADR-028, этап 2): N — номер лица (с 1),
 // BBox — [x1, y1, x2, y2] в пикселях, CharacterSlug — slug персонажа. Для подписи карточки
 // «Тест Мария → лицо 2» и как фундамент этапа 3
 public sealed record ImageThreadFaceTarget(int N, int[] BBox, string CharacterSlug);

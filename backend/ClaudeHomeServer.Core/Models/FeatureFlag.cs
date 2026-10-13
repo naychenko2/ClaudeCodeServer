@@ -38,7 +38,7 @@ public static class FeatureFlagKeys
     // автоподбор. Гейтится на сервере. Dark launch, выключено по умолчанию
     public const string CharacterSmartPhotos = "character-smart-photos";
 
-    // Этап 2 «Подставить персонажа на лицо» (ADR-027, §4): тап по лицу на картинке, выбор
+    // Этап 2 «Подставить персонажа на лицо» (ADR-028): тап по лицу на картинке, выбор
     // персонажа, замена лица. Гейтится на сервере. Dark launch, выключено по умолчанию
     public const string CharacterFaceSwap = "character-face-swap";
 }

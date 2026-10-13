@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor;
 
-// Запуск с FaceTarget: HTTP-статусы отказов (ADR-027 §4, этап 2).
+// Запуск с FaceTarget: HTTP-статусы отказов (ADR-028, этап 2).
 // faces_changed → 409, feature_disabled → 404, busy → 503, provider_unavailable → 409,
 // version_not_found → 404, invalid_request → 400.
 public class FaceTargetLaunchHttpTests : IDisposable

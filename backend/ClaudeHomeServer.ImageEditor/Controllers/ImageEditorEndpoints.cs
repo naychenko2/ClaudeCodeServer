@@ -125,7 +125,7 @@ public abstract class ImageEditorEndpoints(
                 $"Число вариантов — от 1 до {maxCount}");
         if (jobs is null) return JobsUnavailable();
 
-        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): проверки a, b; детекция — только на запуске
+        // Подстановка персонажа на лицо (ADR-028, этап 2): проверки a, b; детекция — только на запуске
         if (req.FaceTarget is not null)
         {
             if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
@@ -318,7 +318,7 @@ public abstract class ImageEditorEndpoints(
         // Ревизия контекста чата (ADR-023 §Д2.1): с ней входы берутся из стора, а Source, References,
         // ReferencePaths, CharacterSlug, ThreadId и VersionId тела игнорируются; не совпала — 409 context_changed
         public long? ContextRevision { get; set; }
-        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): JSON-строка {versionId, face, facesKey}
+        // Подстановка персонажа на лицо (ADR-028, этап 2): JSON-строка {versionId, face, facesKey}
         public string? FaceTarget { get; set; }
     }
 

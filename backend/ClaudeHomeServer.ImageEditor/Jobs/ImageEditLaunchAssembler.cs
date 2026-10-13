@@ -82,7 +82,7 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
-        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): отдельный путь, контекст игнорируется
+        // Подстановка персонажа на лицо (ADR-028, этап 2): отдельный путь, контекст игнорируется
         if (req.FaceTarget is { } faceTarget)
             return await AssembleFaceTargetAsync(ownerId, scope, req, faceTarget, ct);
         if (req.ContextRevision is { } revision)
@@ -270,7 +270,7 @@ public sealed class ImageEditLaunchAssembler(
         });
     }
 
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): контекст чата игнорируется целиком,
+    // Подстановка персонажа на лицо (ADR-028, этап 2): контекст чата игнорируется целиком,
     // образцы — только персонаж, маска строится сервером по bbox детектора.
     // Порядок: a. флаг → b. личная область/входы → c. версия → d. детекция/facesKey →
     // e. номер/размер лица → f. маска → g. промпт → h. входы → i. LoRA → j. запись в нить
@@ -494,6 +494,6 @@ public sealed record ImageEditLaunchRequest(
     long? ContextRevision = null,
     // Явный список фото персонажа (имена файлов манифеста, порядок значим); null — подбор как обычно
     IReadOnlyList<string>? CharacterPhotos = null,
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): при наличии контекст чата игнорируется
+    // Подстановка персонажа на лицо (ADR-028, этап 2): при наличии контекст чата игнорируется
     // целиком, образцы — только персонаж, маска строится сервером
     FaceTarget? FaceTarget = null);

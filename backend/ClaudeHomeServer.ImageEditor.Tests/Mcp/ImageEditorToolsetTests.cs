@@ -1154,7 +1154,7 @@ public class ImageEditorToolsetTests : IDisposable
         }
     }
 
-    // ── image_find_faces и face у image_generate (ADR-027, §4, этап 2) ───────────
+    // ── image_find_faces и face у image_generate (ADR-028, этап 2) ───────────
 
     private static IFeatureFlagGate Flags(bool faceSwapOn)
     {

@@ -48,7 +48,7 @@ public static class ImageEditCatalogReasons
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
-// Цель подстановки персонажа на лицо (ADR-027, §4, этап 2): VersionId — версия нити,
+// Цель подстановки персонажа на лицо (ADR-028, этап 2): VersionId — версия нити,
 // Face — номер лица (с 1), FacesKey — детерминирован по байтам версии (сверка 7b)
 public sealed record FaceTarget(string VersionId, int Face, string FacesKey);
 
@@ -78,7 +78,7 @@ public record ImageEditQuoteRequest(
     ClaudeHomeServer.Services.Media.MediaFormat? Format = null,
     // Заполняет сервер перед обращением к драйверу котировки; из тела запроса игнорируется
     ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null,
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): при наличии — запуск считает как
+    // Подстановка персонажа на лицо (ADR-028, этап 2): при наличии — запуск считает как
     // обычную локальную правку (бесплатно, ETA правки); персонаж обязателен
     FaceTarget? FaceTarget = null,
     string? CharacterSlug = null);
@@ -144,7 +144,7 @@ public record ImageEditJobInput(
     // CharacterPhotoPicker.LocalConfidentScore для local (MaxCharacterPhotos=1), int.MaxValue для
     // облака — у облака первым остаётся главное фото, как до подбора
     Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null,
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): запись в нить для подписи карточки
+    // Подстановка персонажа на лицо (ADR-028, этап 2): запись в нить для подписи карточки
     ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null);
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити

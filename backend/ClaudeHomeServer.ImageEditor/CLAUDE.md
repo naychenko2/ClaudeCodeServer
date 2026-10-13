@@ -220,7 +220,7 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   Main на проде не найдётся. Нужен пакет (как SkiaSharp) — он ложится в `Images` за швом, а не
   сюда. Сторож — `DynamicModulePackagesGuardTests`.
 
-**Подстановка персонажа на лицо (ADR-027, §4, этап 2).** Запуск с `FaceTarget` — отдельный путь
+**Подстановка персонажа на лицо (ADR-028, этап 2).** Запуск с `FaceTarget` — отдельный путь
 `ImageEditLaunchAssembler.AssembleFaceTargetAsync`, инварианты:
 
 - **Главный: контекст чата игнорируется целиком.** Образец — только явно выбранный персонаж

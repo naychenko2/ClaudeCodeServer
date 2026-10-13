@@ -597,7 +597,7 @@ public class LocalImageMediaAdapterTests
         graph.ContainsKey("overlay").Should().BeFalse();
     }
 
-    // Детекция лиц (ADR-027, §4): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
+    // Детекция лиц (ADR-028): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
     // POST /prompt получает prompt-1, поэтому ответ кладём в историю заранее, без гонок
     private void AnswerDetect(string text)
     {

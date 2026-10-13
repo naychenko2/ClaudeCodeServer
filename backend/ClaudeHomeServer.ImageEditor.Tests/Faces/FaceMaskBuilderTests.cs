@@ -4,7 +4,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Faces;
 
-// Маска лица на сервере (ADR-027, §4, этап 2): эллипс по bbox целевого лица (полуоси 0.75·w ×
+// Маска лица на сервере (ADR-028, этап 2): эллипс по bbox целевого лица (полуоси 0.75·w ×
 // 0.8·h, формула разведки), вычитание bbox всех остальных лиц (расширенных на 30 px), контроль
 // остатка (меньше 60 % — «слишком близко»). Фейк растра записывает аргументы RenderMask.
 public class FaceMaskBuilderTests

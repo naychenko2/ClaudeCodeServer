@@ -266,7 +266,7 @@ public class ThreadsController(
         [FromBody] ImageThreadSettingsRequest req) =>
         Gate(projectId, sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, threadId, req) : denied;
 
-    // «Найти лица на версии» (ADR-027, §4, этап 2): детекция ComfyUI по байтам версии, результат —
+    // «Найти лица на версии» (ADR-028, этап 2): детекция ComfyUI по байтам версии, результат —
     // список лиц (n с 1, bbox, score, small) + facesKey (детерминирован по байтам, для сверки 7b).
     // Детекция — не запуск: версию не создаёт, трату не пишет, в ленту не кладёт. Только проектная
     // область: в личной (PersonalThreadsController) маршрута нет — 404.
@@ -359,12 +359,12 @@ public sealed record ImageThreadCropResponse(int Width, int Height, string Aspec
 
 public sealed record ImageThreadSettingsRequest(ImageThreadSettings? Settings, long Revision);
 
-// «Найти лица на версии» (ADR-027, §4, этап 2): FacesKey — детерминирован по байтам (для сверки
+// «Найти лица на версии» (ADR-028, этап 2): FacesKey — детерминирован по байтам (для сверки
 // 7b), Width/Height — размер картинки по ответу воркера, Faces — в порядке ответа (n с 1)
 public sealed record ImageThreadFacesResponse(
     string FacesKey, int Width, int Height, IReadOnlyList<ImageThreadFaceDto> Faces)
 {
-    // Единая сборка ответа из результата детекции (ADR-027, §4, этап 2): ручка faces,
+    // Единая сборка ответа из результата детекции (ADR-028, этап 2): ручка faces,
     // faces_changed ассемблера и MCP-инструмент image_find_faces — один формат, одна точка
     public static ImageThreadFacesResponse FromDetection(byte[] image, LocalFaceDetectResult result) =>
         new(ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache.FacesKey(image), result.Width, result.Height,

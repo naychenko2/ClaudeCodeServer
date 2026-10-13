@@ -17,7 +17,7 @@ using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Jobs;
 
-// Подстановка персонажа на лицо (ADR-027, §4, этап 2): каждый отказ из п.2 a–f,
+// Подстановка персонажа на лицо (ADR-028, этап 2): каждый отказ из п.2 a–f,
 // тест шва (образцы только персонаж B, не A из контекста), запись FaceTarget в нить
 public class FaceTargetLaunchTests : IDisposable
 {

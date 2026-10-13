@@ -448,7 +448,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var referencesGiven = args["references"] is JsonArray;
         var characterGiven = args.ContainsKey("character");
         var references = ReferencesArg(args);
-        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): входы явные — версия, лицо, персонаж;
+        // Подстановка персонажа на лицо (ADR-028, этап 2): входы явные — версия, лицо, персонаж;
         // контекст чата не читается вовсе (ассемблер отвергнет ContextRevision вместе с FaceTarget).
         // Провайдер — только local, выбор человека в строке контекста не подменяем молча (ADR-023)
         if (Int(args, "face") is { } face)
@@ -575,7 +575,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         });
     }
 
-    // Запуск «подставить персонажа на лицо» (ADR-027, §4, этап 2): та же котировка и тот же
+    // Запуск «подставить персонажа на лицо» (ADR-028, этап 2): та же котировка и тот же
     // ImageEditLaunchAssembler, что у обычного image_generate, но входы явные — версия, лицо,
     // персонаж; образцы и персонаж контекста чата не едут, маску строит сервер. Ключ берётся из
     // свежей детекции версии: агенту его передавать не нужно, номера лиц — те же, что в

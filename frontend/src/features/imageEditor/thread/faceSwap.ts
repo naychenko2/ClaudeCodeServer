@@ -5,9 +5,10 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { findFaces, facesError, type DetectedFace, type FacesResponse } from '../api';
 import {
-  assignCharacter, emptyAssignments, pruneAssignments, removeAssignment, searchFailureText, tapFace,
+  assignCharacter, emptyAssignments, faceCaption, pruneAssignments, removeAssignment, searchFailureText, tapFace,
   type FaceAssignments,
 } from '../faceSwapView';
+import type { ImageThreadFaceTarget, ImageThreadLaunch } from './threadsApi';
 
 // Фаза поиска лиц: idle — ещё не искали, loading — запрос в пути, ready — список получен,
 // error — отказ (код в state.error)
@@ -202,5 +203,84 @@ export function useFaceSwap(
     remove,
     tap,
     clearAssignments,
+  };
+}
+
+// ── Карточка запуска с лицами (ADR-028, этап 3 · шаг 17) ─────────────────────────
+// Тексты — дословно из v2-notes («Лента»). Кнопки «Повторить для лица 2» нет (ADR-028),
+// поэтому у плашки частичного результата только первое предложение.
+
+// Лица запуска в порядке проходов: faceTargets; старый ответ — одиночный faceTarget как
+// массив из одного элемента (сходство тогда у самой версии); нет подстановки — []
+export function launchFaces(launch: Pick<ImageThreadLaunch, 'faceTarget' | 'faceTargets'> | null | undefined): ImageThreadFaceTarget[] {
+  if (!launch) return [];
+  if (launch.faceTargets?.length) return launch.faceTargets;
+  return launch.faceTarget ? [launch.faceTarget] : [];
+}
+
+// Имя персонажа по slug: нашёлся в каталоге проекта — имя, удалён — сам slug
+type NameOf = (slug: string) => string | null | undefined;
+const pairOf = (f: ImageThreadFaceTarget, nameOf: NameOf) => faceCaption(nameOf(f.characterSlug)?.trim() || f.characterSlug, f.n);
+
+// Подпись пар: «Мария → лицо 1, Иван → лицо 2»; одно лицо — как в этапе 2; нет лиц — null
+export function facePairsCaption(faces: ImageThreadFaceTarget[], nameOf: NameOf): string | null {
+  return faces.length ? faces.map(f => pairOf(f, nameOf)).join(', ') : null;
+}
+
+const simText = (n: number) => n.toFixed(2).replace('.', ',');
+
+export interface FaceResultRow {
+  n: number;
+  pair: string;
+  status: 'done' | 'failed' | 'cancelled';
+  // Значок в кружке: ✓ — подставлено, ✕ — не удалось или отменено
+  mark: '✓' | '✕';
+  // «сходство 0,81» | «не удалось» | «отменено»; у done без сходства — ''
+  result: string;
+}
+
+// Строки результата по лицам — только для N > 1 и только когда итог известен (у всех лиц
+// есть status); N = 1 — прежняя строка этапа 2 со сходством версии
+export function faceResultRows(faces: ImageThreadFaceTarget[], nameOf: NameOf): FaceResultRow[] {
+  if (faces.length < 2 || faces.some(f => !f.status)) return [];
+  return faces.map(f => {
+    const status = f.status!;
+    const result = status === 'failed' ? 'не удалось' : status === 'cancelled' ? 'отменено'
+      : typeof f.similarity === 'number' ? `сходство ${simText(f.similarity)}` : '';
+    return { n: f.n, pair: pairOf(f, nameOf), status, mark: status === 'done' ? '✓' : '✕', result };
+  });
+}
+
+// Общее сходство версии показывается только при одном лице: при N > 1 его нет (ADR-028)
+export const versionSimilarityShown = (faces: ImageThreadFaceTarget[]) => faces.length < 2;
+
+const nums = (fs: ImageThreadFaceTarget[]) => fs.map(f => f.n).join(', ');
+
+// Плашка частичного результата: часть лиц подставлена, остальные не удались или отменены;
+// null — не частичный (все готовы, ни одного или одно лицо)
+export function partialNotice(faces: ImageThreadFaceTarget[]): string | null {
+  if (faces.length < 2) return null;
+  const done = faces.filter(f => f.status === 'done');
+  const failed = faces.filter(f => f.status === 'failed');
+  const cancelled = faces.filter(f => f.status === 'cancelled');
+  if (!done.length || (!failed.length && !cancelled.length)) return null;
+  if (failed.length) return `Лицо ${nums(failed)} не подставилось — версия сохранена с лицом ${nums(done)}.`;
+  return `Запуск отменён после лица ${nums(done)} — версия сохранена с ним.`;
+}
+
+export type PassSegment = 'done' | 'current' | 'ahead';
+
+// Стадия «Проход k из N · лицо n»: k/N — run/runs из событий прогресса задачи. Нет их или
+// лицо одно — null (обычная строка «Рисуем…», ничего не выдумываем)
+export function passStage(faces: ImageThreadFaceTarget[], run: number | null | undefined, runs: number | null | undefined) {
+  if (faces.length < 2 || typeof run !== 'number' || typeof runs !== 'number' || run < 1 || runs < 1) return null;
+  const face = faces[run - 1];
+  const before = faces.slice(0, run - 1);
+  const segments: PassSegment[] = Array.from({ length: runs }, (_, i) => i + 1 < run ? 'done' : i + 1 === run ? 'current' : 'ahead');
+  return {
+    text: `Проход ${run} из ${runs}${face ? ` · лицо ${face.n}` : ''}`,
+    // Подсказка со второго прохода: отмена сохранит версию с уже подставленными лицами
+    hint: before.length ? `Если отменить сейчас, версия сохранится с лицом ${nums(before)}` : null,
+    segments,
   };
 }

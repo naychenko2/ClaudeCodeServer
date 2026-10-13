@@ -216,6 +216,10 @@ describe('кисть и назначения', () => {
     // Текст отказа сервера — причина как есть; неназначенное лицо в строки не попадает
     const srv = assignmentRefusals({ tooClose: false, faceOutOfFrame: false, refusedFace: 3, refusedText: 'Лицо 3 слишком мелкое' }, [...faces, face(3)], a.assignments);
     expect(srv.size).toBe(0);
+    // Назначенное лицо: в строку отказа попадает ровно текст сервера, а не текст по умолчанию (m-T1)
+    const srvAssigned = assignmentRefusals({ tooClose: true, faceOutOfFrame: false, refusedFace: 2, refusedText: 'Лицо 2 слишком мелкое' }, faces, a.assignments);
+    expect(srvAssigned.get(2)).toBe('Лицо 2 слишком мелкое');
+    expect(srvAssigned.get(1)).toBeUndefined();
     const out = assignmentRefusals({ tooClose: false, faceOutOfFrame: true, refusedFace: 1 }, faces, a.assignments);
     expect(out.get(1)).toBe(FS_TEXT.outWhy);
   });
@@ -226,8 +230,17 @@ describe('кисть и назначения', () => {
 
   it('«Уже на лице N» — читаемая подпись, приглушены только аватар и имя (m6)', () => {
     const html = render(asg([[1, 'maria']], 2));
-    const i = html.indexOf(FS_TEXT.takenOn(1) + '<');
-    expect(html.slice(i - 80, i)).toContain('var(--c-text-secondary)');
+    // Тег подписи «Уже на лице 1» (не title кнопки): читаемая, без приглушения
+    const i = html.indexOf('>' + FS_TEXT.takenOn(1) + '<');
+    const capTag = html.slice(html.lastIndexOf('<span', i), i);
+    expect(capTag).toContain('var(--c-text-secondary)');
+    expect(capTag).not.toContain('opacity');
+    // Приглушены аватар (обёртка перед ним) и имя занятого персонажа
+    const nameEnd = html.indexOf('>Мария<');
+    const nameTag = html.slice(html.lastIndexOf('<span', nameEnd), nameEnd);
+    expect(nameTag).toContain('opacity:0.5');
+    const btn = html.slice(html.lastIndexOf('<button', nameEnd), nameEnd);
+    expect(btn.match(/opacity:0\.5/g)).toHaveLength(2);
   });
 
   it('текст подтверждения — по макету', () => {

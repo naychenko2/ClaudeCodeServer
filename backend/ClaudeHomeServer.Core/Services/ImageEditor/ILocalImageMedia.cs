@@ -61,6 +61,11 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // Несовместима с EraseMask и Pad; маска — PNG того же размера, что холст
 // Crop — только у Edit, вместе с KeepMask (ADR-028, решение 12): модели не показываем маску,
 // а даём кроп вокруг цели; результат вклеивается по той же маске
+// VeilMask — только у Edit (ADR-028, решение 12): «вуаль» для кисти. Белую маску-образец
+// Qwen-Image перерисовывает в результат (белые полосы, заливка вне мазка), поэтому модели её не
+// показываем: место правки закрашивается полупрозрачным серым (128, α 0,6) на отдельной копии
+// холста (modelCanvas), а склейка «вне маски — исходник» идёт по KeepMask с ЧИСТЫМ холстом.
+// Несовместима с EraseMask, Pad и Crop (подстановка на лицо остаётся на кропе)
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
 // Lora — только у Edit и у Generate с образцами
@@ -80,7 +85,8 @@ public sealed record LocalImageRequest(
     LocalImageLora? Lora = null,
     IReadOnlyList<byte[]>? FaceReferences = null,
     byte[]? KeepMask = null,
-    LocalImageCrop? Crop = null);
+    LocalImageCrop? Crop = null,
+    byte[]? VeilMask = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);

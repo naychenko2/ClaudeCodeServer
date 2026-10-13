@@ -703,6 +703,100 @@ public class LocalImageMediaAdapterTests
         overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec_fit");
     }
 
+    // (г) Вуаль: модель видит холст с серой вуалью (img1_veil), а не белую маску-образец;
+    // склейка «вне маски — исходник» берёт ЧИСТЫЙ img1. Мутация «destination = veil» → красный
+    [Fact]
+    public async Task Вуаль_Граф_ЭнкодерВуаль_СклейкаЧистый()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+        var image = RealPng(8, 8);
+        var mask = RealPng(8, 8);
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [image],
+            KeepMask = mask,
+            VeilMask = mask,
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        // Энкодер: первая картинка — вуаль, а не чистый холст
+        graph["enc"]!["inputs"]!.AsObject()["images.image_1"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1_veil");
+        // Склейка: destination — чистый img1, source — результат модели
+        var overlay = graph["overlay"]!["inputs"]!.AsObject();
+        overlay["destination"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1");
+        overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec");
+        // Вуаль загружена как отдельный вход
+        _comfy.Uploads.Should().Contain(u => u.EndsWith("-veil.png"));
+    }
+
+    // Вуаль несовместима со стиранием: адаптер отказывает до постановки в очередь
+    [Fact]
+    public async Task Вуаль_Стирание_Отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            EraseMask = RealPng(8, 8),
+            VeilMask = RealPng(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Вуаль — только для правки без стирания, дорисовки и подстановки на лицо.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Вуаль несовместима с дорисовкой: адаптер отказывает до постановки в очередь
+    [Fact]
+    public async Task Вуаль_Дорисовка_Отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            Pad = new LocalImagePad(1, 0, 1, 0),
+            VeilMask = RealPng(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Вуаль — только для правки без стирания, дорисовки и подстановки на лицо.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Без растра вуаль недоступна: отказ до постановки
+    [Fact]
+    public async Task Вуаль_БезРастра_Отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            VeilMask = RealPng(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Вуаль здесь недоступна.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Маска вуали другого размера, чем холст: отказ, а не сдвиг заливки
+    [Fact]
+    public async Task Вуаль_РазмерМаскиНеСовпал_Отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            VeilMask = RealPng(16, 16),
+        }, default);
+
+        submitted.Error.Should().Contain("Вуаль не удалось наложить");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
     // Детекция лиц (ADR-028): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
     // POST /prompt получает prompt-1, поэтому ответ кладём в историю заранее, без гонок
     private void AnswerDetect(string text)

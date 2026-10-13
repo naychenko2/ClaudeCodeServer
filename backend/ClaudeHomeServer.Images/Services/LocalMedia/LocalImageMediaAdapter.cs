@@ -16,6 +16,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     // Живость ComfyUI для каталога: свежий ответ держим 30 с, опрос — не дольше 2 с
     private static readonly TimeSpan ProbeTtl = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+    // Вуаль (ADR-028, решение 12): серая заливка места правки на копии холста, α — прозрачность
+    private const double VeilAlpha = 0.6;
 
     private readonly ComfyClient comfy;
     private readonly IConfiguration config;
@@ -207,6 +209,23 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Маска не совпадает размером с первой картинкой.");
         }
 
+        // Вуаль (ADR-028, решение 12): место правки закрашивается серым на КОПИИ холста, а не
+        // образцом. Только у Edit, несовместима со стиранием, дорисовкой и кропом (у кропа модель
+        // видит кроп, а склейка «вне маски — исходник» идёт по KeepMask)
+        byte[]? veiledBytes = null;
+        if (request.VeilMask is { Length: > 0 } veilMask)
+        {
+            if (request.Op != LocalImageOp.Edit || request.EraseMask is not null || request.Pad is not null || request.Crop is not null)
+                return LocalImageSubmitted.Fail("Вуаль — только для правки без стирания, дорисовки и подстановки на лицо.");
+            if (raster is null)
+                return LocalImageSubmitted.Fail("Вуаль здесь недоступна.");
+            var veiled = raster.VeilMasked(images[0], veilMask, VeilAlpha);
+            if (!veiled.Ok)
+                return LocalImageSubmitted.Fail("Вуаль не удалось наложить: " + veiled.Message,
+                    busy: veiled.Error == RasterError.Busy);
+            veiledBytes = veiled.Image!.Bytes;
+        }
+
         // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску-образец.
         // Только у Edit, вместе с KeepMask; прямоугольник — внутри холста, X/Y/Width/Height
         // кратны 8 (узлы ImageCrop/CropMask), размер увеличения — кратно 16 (латент VAE)
@@ -303,13 +322,18 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             if (request.KeepMask is { Length: > 0 } maskBytes)
                 maskName = await UploadTrackedAsync(uploaded, maskBytes, $"{jobId}-mask.png", ct);
 
+            // Вуаль: копия холста с серой заливкой — тем же префиксом, чтобы забрала чистка
+            string? modelCanvas = null;
+            if (veiledBytes is not null)
+                modelCanvas = await UploadTrackedAsync(uploaded, veiledBytes, $"{jobId}-veil.png", ct);
+
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;
             var graph = request.Op switch
             {
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop, modelCanvas),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);

@@ -172,14 +172,17 @@ public class LocalImageEditorTests : IDisposable
         provider.Label.Should().Be("Локальные модели");
         provider.PriceUnit.Should().Be(ImageEditPriceUnits.Free);
         var qwen = provider.Models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps!;
-        qwen.Mask.Should().Be(MaskSupport.AsReference, "отдельного канала маски у Qwen-Image нет");
+        qwen.Mask.Should().Be(MaskSupport.Veil, "вуаль: место правки закрашивается серым, а не маской-образцом");
         qwen.MaxInputSide.Should().Be(1664);
         provider.Models.Single(m => m.Id == LocalImageEditor.FaceDetailer).Caps!.Ops
             .Should().Equal(ImageEditOp.EnhanceFaces);
     }
 
+    // Вуаль (ADR-028, решение 12): Qwen-Image перерисовывает белую маску-образец, поэтому место
+    // правки уходит серой вуалью (VeilMask) на копии холста, а не образцом; склейка «вне маски —
+    // исходник» — по той же маске (KeepMask)
     [Fact]
-    public async Task Правка_МаскаУходитОбразцом_АНеКаналом()
+    public async Task Правка_Кисть_МаскаВуалью_АНеОбразцом()
     {
         var media = new FakeMedia();
         var service = Service(Editor(media));
@@ -191,10 +194,10 @@ public class LocalImageEditorTests : IDisposable
         var sent = media.Submitted.Should().ContainSingle().Subject;
         sent.Op.Should().Be(LocalImageOp.Edit);
         sent.EraseMask.Should().BeNull();
-        sent.Images.Should().HaveCount(2);
-        sent.Images[1].Should().Equal(mask, "маска — вторая картинка после холста");
-        sent.KeepMask.Should().Equal(mask, "кисть без пометок — граф склеит «вне маски — исходник»");
-        sent.Prompt.Should().Contain("маска: белое — область, которую менять");
+        sent.Images.Should().ContainSingle("вуаль: маска не образец — в запросе только холст");
+        sent.VeilMask.Should().Equal(mask, "вуаль: место правки — серая заливка на копии холста");
+        sent.KeepMask.Should().Equal(mask, "склейка «вне маски — исходник» — по той же маске");
+        sent.Prompt.Should().Contain(EditRequestComposer.VeilHead, "текст человека оборачивается вуалью");
     }
 
     // Живой прогон 2026-09-26: маску-образец Qwen-Image прочла как «убери фон». Стирание уходит
@@ -214,6 +217,60 @@ public class LocalImageEditorTests : IDisposable
         sent.KeepMask.Should().BeNull("стирание и склейка «вне маски» несовместимы — адаптер бы отказал");
         sent.Images.Should().ContainSingle("размеченная копия и маска-образец стираемое только показали бы");
         sent.Prompt.Should().StartWith("удали").And.Contain(LocalImageEditor.EraseNote);
+    }
+
+    // (в) «Удали» у вуали: маска — каналом (req.Mask), а не образцом; мутация «взять только из
+    // References» → EraseMask = null → кейс стирания не сработал бы → красный. Удаление не вуаль
+    [Fact]
+    public async Task Вуаль_Удали_МаскаСтирания_ИзКанала_АНеВуаль()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var mask = TestImages.Png(8, 8, 7);
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Edit, mask: true), Input("удали", mask));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.EraseMask.Should().Equal(mask, "стирание берёт маску из канала, а не из References");
+        sent.VeilMask.Should().BeNull("«удали» — стирание серым, вуаль не нужна");
+    }
+
+    // Вуаль: обычная правка кистью — маска каналом, и она же вуаль (VeilMask) и склейка (KeepMask)
+    [Fact]
+    public async Task Вуаль_Кисть_VeilMask_ИKeepMask_ИзКанала()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var mask = TestImages.Png(8, 8, 7);
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Edit, mask: true), Input("перекрась в синий", mask));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.VeilMask.Should().Equal(mask, "вуаль: место правки закрашивается серым на отдельной копии холста");
+        sent.KeepMask.Should().Equal(mask, "склейка «вне маски — исходник» берёт ту же маску из канала");
+        sent.EraseMask.Should().BeNull("обычная правка — не стирание");
+    }
+
+    // Пункт 7 (ADR-028): путь с размеченной копией Артём с вуалью НЕ проверял — вуаль не включаем
+    // (VeilMask = null, как раньше AsReference); склейки тоже нет (KeepMask = null)
+    [Fact]
+    public async Task Вуаль_СРазмеченнойКопией_ВуальНеВключается()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var mask = TestImages.Png(8, 8, 7);
+        var annotated = TestImages.Png(8, 8, 8);
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Edit, mask: true),
+            new ImageEditJobInput("", "перекрась", null, new ImageBytes(TestImages.Png(8, 8), "image/png"),
+                new ImageBytes(mask, "image/png"), new ImageBytes(annotated, "image/png"), [], "images/hero.png"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.VeilMask.Should().BeNull("путь с размеченной копией: вуаль не проверена — не включаем");
+        sent.KeepMask.Should().BeNull("размеченная копия: склейки «вне маски» нет");
     }
 
     // Живой прогон 2026-09-28 (w15-*): серые поля Qwen-Image достраивает без швов — дорисовка в каталоге
@@ -467,14 +524,16 @@ public class LocalImageEditorTests : IDisposable
 
         job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
         var sent = media.Submitted.Should().ContainSingle().Subject;
-        sent.Images.Should().HaveCount(4);
+        // Путь с размеченной копией (ADR-028, п.7): вуаль не включается (VeilMask = null, как
+        // раньше AsReference), маска не образец — в запросе 3 картинки
+        sent.Images.Should().HaveCount(3);
         sent.Images[0].Should().Equal(source, "холст — исходник, а не фото персонажа");
         sent.Images[1].Should().Equal(annotated);
-        sent.Images[2].Should().Equal(mask);
-        sent.Images[3].Should().Equal(faces[0].Bytes);
+        sent.Images[2].Should().Equal(faces[0].Bytes);
+        sent.VeilMask.Should().BeNull("путь с размеченной копией: вуаль не проверена — не включаем");
         sent.KeepMask.Should().BeNull("размеченная копия может просить правку вне кисти — склейка выбросила бы её");
         sent.Prompt.Should().Contain("1) исходная картинка").And.Contain("2) та же картинка с пометками")
-            .And.Contain("3) маска").And.Contain("4) фото лица — персонаж «Тимур»");
+            .And.Contain("3) фото лица — персонаж «Тимур»");
     }
 
     // ── Режим B: LoRA персонажа плюс фото-образец ──

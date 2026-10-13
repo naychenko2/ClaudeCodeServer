@@ -46,8 +46,9 @@ public enum ImageEditOp { Generate, Edit, Inpaint, Outpaint, RemoveBackground, U
 public enum EditMode { Auto, Fast, Precise, Photoreal }
 
 // Канал маски у модели: Native — настоящий инпейнт, AsReference — маска уходит образцом
-// с подписью «Точность границ ниже», None — модель маску не принимает
-public enum MaskSupport { None, Native, AsReference }
+// с подписью «Точность границ ниже», Veil — место правки закрашивается серой вуалью на копии
+// холста (модель маски не видит, ADR-028), None — модель маску не принимает
+public enum MaskSupport { None, Native, AsReference, Veil }
 
 public enum ReferenceRole { Character, Style, Object }
 

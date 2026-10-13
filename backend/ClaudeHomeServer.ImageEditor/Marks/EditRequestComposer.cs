@@ -90,7 +90,7 @@ public static class EditRequestComposer
             {
                 keepMask = mask;
             }
-            else if (model.Caps.Mask == MaskSupport.Native)
+            else if (model.Caps.Mask is MaskSupport.Native or MaskSupport.Veil)
             {
                 maskChannel = mask;
             }
@@ -137,8 +137,14 @@ public static class EditRequestComposer
         else if (character is not null)
             notes.Add($"Персонаж «{character.Name}»: сохранить лицо и черты.");
 
-        var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split ? MarksScope.WithoutBrush : MarksScope.All);
-        var prompt = Join(input.Prompt, marks, notes);
+        // Вуаль (ADR-028, решение 12): модель видит серую заливку вместо белой маски, поэтому
+        // строки «выделено кистью…» из пометок не нужны (место уже видно), а текст человека
+        // оборачивается: модель должна понять, что серое — это то, что править
+        var veil = mask is not null && model.Caps.Mask == MaskSupport.Veil;
+        var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split || veil ? MarksScope.WithoutBrush : MarksScope.All);
+        var prompt = veil
+            ? Join(VeilHead + input.Prompt?.Trim(), marks, notes.Prepend(VeilNote))
+            : Join(input.Prompt, marks, notes);
 
         // Первый проход: исходник и маска, один вариант — все варианты второго прохода растут
         // из одного и того же стёртого или перерисованного места
@@ -167,6 +173,12 @@ public static class EditRequestComposer
     }
 
     private const string MaskRole = "маска: белое — область, которую менять, чёрное — не трогать";
+
+    // Вуаль (ADR-028, решение 12): серая заливка на первой картинке — место правки
+    public const string VeilHead =
+        "На первой картинке место правки закрашено полупрозрачной серой заливкой. Что сделать с этим местом: ";
+    public const string VeilNote =
+        "Серая заливка на первой картинке — место, которое нужно править. Всё вне неё оставь без изменений.";
 
     private const string FirstPassNote =
         "Это первый шаг правки: выполнить только ту часть запроса, которая относится к закрашенному кистью " +

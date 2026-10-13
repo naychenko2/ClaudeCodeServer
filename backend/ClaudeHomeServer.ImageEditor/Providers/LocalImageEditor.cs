@@ -66,7 +66,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     [
         new(QwenImage, "Qwen-Image 2.1",
             new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
-                MaskSupport.AsReference,
+                MaskSupport.Veil,
                 MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         new(FaceDetailer, "Улучшить лица",
@@ -165,12 +165,14 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             }
             case ImageEditOp.Edit or ImageEditOp.Inpaint:
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
-                // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference),
-                // кроме подстановки на лицо (ADR-028, решение 12): там маска — явный канал KeepMask,
-                // а не образец, и модель видит кроп (Crop), а не маску
+                // Вуаль (ADR-028, решение 12): Qwen-Image перерисовывает белую маску-образец,
+                // поэтому место правки уходит серой вуалью (VeilMask) на копии холста, а не образцом.
+                // Исключения: подстановка на лицо (модель видит кроп, а не вуаль) и путь с
+                // размеченной копией (вуаль там не проверена — вуаль не включаем, как раньше AsReference)
                 run = new LocalImageRequest(LocalImageOp.Edit, WithTrigger(req.Prompt, req), [req.Source.Bytes, .. references], null, 1,
                     KeepMask: req.KeepMask?.Bytes ?? KeepMaskOf(req),
                     Crop: req.FaceCrop,
+                    VeilMask: VeilMaskOf(req),
                     Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
@@ -274,18 +276,26 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         return any;
     }
 
-    // Маска стирания: маска среди образцов и просьба — стереть отмеченное
+    // Маска стирания: просьба — стереть отмеченное; маска — каналом (вуаль/Native) или образцом
+    // (AsReference). У вуали композитор кладёт маску в req.Mask, а не в References
     private static byte[]? EraseMaskOf(ImageEditRequest req) =>
         EditIntent.IsRemoval(req.Instruction)
-            ? req.References.FirstOrDefault(r => r.Label == EditRequestComposer.MaskLabel)?.Bytes
+            ? req.Mask?.Bytes ?? req.References.FirstOrDefault(r => r.Label == EditRequestComposer.MaskLabel)?.Bytes
             : null;
 
-    // Маска «вне маски вернуть исходник»: маска-образец есть, а размеченной копии нет — иначе
-    // стрелки/рамки могут просить правку вне кисти, и склейка молча выбросила бы её
+    // Маска «вне маски вернуть исходник»: маска есть (каналом или образцом), а размеченной копии
+    // нет — иначе стрелки/рамки могут просить правку вне кисти, и склейка молча выбросила бы её
     private static byte[]? KeepMaskOf(ImageEditRequest req) =>
         req.References.Any(r => r.Label == EditRequestComposer.AnnotatedLabel)
             ? null
-            : req.References.FirstOrDefault(r => r.Label == EditRequestComposer.MaskLabel)?.Bytes;
+            : req.Mask?.Bytes ?? req.References.FirstOrDefault(r => r.Label == EditRequestComposer.MaskLabel)?.Bytes;
+
+    // Вуаль (ADR-028, решение 12): серая заливка места правки на копии холста. Не включается при
+    // подстановке на лицо (модель видит кроп) и на пути с размеченной копией (вуаль там не проверена)
+    private static byte[]? VeilMaskOf(ImageEditRequest req) =>
+        req.FaceCrop is not null || req.References.Any(r => r.Label == EditRequestComposer.AnnotatedLabel)
+            ? null
+            : req.Mask?.Bytes;
 
     internal const string EraseNote =
         "Серая заливка на картинке закрывает то, что нужно удалить. Замени серую область продолжением фона " +

@@ -262,6 +262,33 @@ public class ComfyWorkflowsTests
         withNull.ToJsonString().Should().Be(plain.ToJsonString());
     }
 
+    // Вуаль (ADR-028, решение 12): модель видит копию холста с серой заливкой места правки,
+    // а не чистый холст; склейка «вне маски — исходник» идёт по чистому холсту (img1)
+    [Fact]
+    public void Правка_СВуалью_МодельВидитКопию_СклейкаПоЧистомуХолсту()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", modelCanvas: "veil.png");
+
+        // Энкодер: первая картинка — вуаль-копия, а не чистый холст
+        Inputs(wf, "enc")["images.image_1"]!.ToJsonString().Should().Be("[\"img1_veil\",0]", "модель видит вуаль-копию");
+        Class(wf, "img1_veil").Should().Be("LoadImage");
+        Inputs(wf, "img1_veil")["image"]!.GetValue<string>().Should().Be("veil.png");
+
+        // Склейка: фон — ЧИСТЫЙ холст (img1), а не вуаль-копия; внутри — сгенерированное
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — чистый холст, а не вуаль");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]");
+    }
+
+    // Вуаль null — граф байт-в-байт прежний (явный null не отличим от опущнутого параметра)
+    [Fact]
+    public void Правка_ВуальNull_ГрафБайтВБайтБезВуали()
+    {
+        var withNull = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", modelCanvas: null);
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        withNull.ToJsonString().Should().Be(plain.ToJsonString());
+    }
+
     // Сборка EditImage до правки: загрузчики Qwen-модели плюс те же ноды, что в текущей
     // (QwenLoaders/KSampler/AddDecodeAndSave приватные, поэтому загрузчики собраны руками)
     private static JsonObject OldEditGraph(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,

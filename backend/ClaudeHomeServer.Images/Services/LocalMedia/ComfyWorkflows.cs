@@ -96,7 +96,8 @@ public static partial class ComfyWorkflows
     // а не всю первую картинку; без crop граф байт-в-байт прежний
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
         long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
-        IReadOnlyList<string>? faceReferences = null, string? mask = null, LocalImageCrop? crop = null)
+        IReadOnlyList<string>? faceReferences = null, string? mask = null, LocalImageCrop? crop = null,
+        string? modelCanvas = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
@@ -150,6 +151,13 @@ public static partial class ComfyWorkflows
                 ["crop"] = "disabled",
             });
             enc["images.image_1"] = Link("crop_scale");
+        }
+        if (modelCanvas is { } mc)
+        {
+            // Вуаль (ADR-028, решение 12): модель видит копию холста с серой заливкой места правки,
+            // а не чистый холст. Склейка «вне маски — исходник» ниже идёт по img1 (чистому холсту)
+            wf["img1_veil"] = Node("LoadImage", new JsonObject { ["image"] = mc });
+            enc["images.image_1"] = Link("img1_veil");
         }
         wf["enc"] = Node("TextEncodeQwenImage21", enc);
 

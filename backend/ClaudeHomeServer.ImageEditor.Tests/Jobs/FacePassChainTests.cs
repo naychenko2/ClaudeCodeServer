@@ -708,4 +708,47 @@ public class FacePassChainTests
         }
         finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
     }
+
+    // (12) Внешний Cancelled результатом (задачу НЕ отменяли — прервали снаружи, например на узле):
+    // это сбой прохода, а не отмена. Проход 1: задача Failed (не Cancelled), лица failed/cancelled,
+    // версий нет, проход 2 не вызван
+    [Fact]
+    public async Task Внешний_Cancelled_прохода_1_задача_Failed_а_не_Cancelled()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, editor) = StartPartial("ok", dir,
+            pass1Result: new ImageEditResult(EditOutcome.Cancelled, [], null, null, null, "прервано на узле"));
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Failed, "задачу не отменяли — внешний Cancelled это сбой");
+            job.Outcome.Should().Be(EditOutcome.Failed);
+            job.Variants.Should().BeEmpty("сбой прохода 1 — версии нет");
+            job.Error.Should().Be("прервано на узле");
+            job.FaceResults!.Select(r => r.Status).Should().Equal("failed", "cancelled");
+            editor.Calls.Should().Be(1, "проход 2 не вызывается");
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // (13) Внешний Cancelled результатом на проходе 2: задача Completed с версией прохода 1, Error заполнен,
+    // лицо 2 — failed (не cancelled: человек ничего не отменял)
+    [Fact]
+    public async Task Внешний_Cancelled_прохода_2_задача_Completed_лицо_2_failed()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_partial_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, editor) = StartPartial("ok", dir,
+            pass2Result: new ImageEditResult(EditOutcome.Cancelled, [], null, null, null, "прервано на узле"));
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Status.Should().Be(ImageEditJobStatus.Completed, "задачу не отменяли — упал проход 2");
+            job.Outcome.Should().Be(EditOutcome.Ok);
+            job.Variants.Should().ContainSingle("версия — выход прохода 1");
+            job.Error.Should().Be("прервано на узле");
+            job.FaceResults!.Select(r => r.Status).Should().Equal("done", "failed");
+            editor.Calls.Should().Be(2);
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
 }

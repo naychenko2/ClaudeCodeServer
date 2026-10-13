@@ -378,3 +378,18 @@ public sealed record ImageThreadFaceDto(
     [property: System.Text.Json.Serialization.JsonPropertyName("bbox")] int[] BBox,
     double Score,
     bool Small);
+
+// Тело 409 faces_changed (ADR-028, этап 3): свежий список лиц (ImageThreadFacesResponse) плюс явные
+// code и error — клиент и агент (MCP) видят код отказа, а не общий «Conflict». Ручка faces отвечает
+// прежним ImageThreadFacesResponse (без code) — обёртка существует только для отказа
+public sealed record FacesChangedResponse(
+    string Code,
+    string Error,
+    string FacesKey,
+    int Width,
+    int Height,
+    IReadOnlyList<ImageThreadFaceDto> Faces)
+{
+    public static FacesChangedResponse From(ImageThreadFacesResponse faces, string error) =>
+        new(ImageEditErrorCodes.FacesChanged, error, faces.FacesKey, faces.Width, faces.Height, faces.Faces);
+}

@@ -379,7 +379,15 @@ public abstract class ImageEditorEndpoints(
             _ => StatusCodes.Status400BadRequest,
         };
         // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата
-        if (result.Payload is { } payload) return StatusCode(status, payload);
+        if (result.Payload is { } payload)
+        {
+            // faces_changed: свежий список лиц плюс явные code и error (ADR-028, этап 3).
+            // Текст — константа, не result.Error: ассемблер (чужой файл) может его сменить, а
+            // контракт HTTP обязан быть стабильным
+            if (code == ImageEditErrorCodes.FacesChanged && payload is ImageThreadFacesResponse faces)
+                return StatusCode(status, FacesChangedResponse.From(faces, "Картинка изменилась — лица найдены заново"));
+            return StatusCode(status, payload);
+        }
         return Error(status, code, result.Error ?? "Запрос не выполнен");
     }
 

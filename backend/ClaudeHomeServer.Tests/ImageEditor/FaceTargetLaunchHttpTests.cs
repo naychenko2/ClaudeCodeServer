@@ -150,10 +150,37 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var resp = await Start(FaceTargetJson("stale:v1"));
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict, await resp.Content.ReadAsStringAsync());
-        // Тело 409 — свежий ImageThreadFacesResponse (facesKey + faces), не {error, code}
+        // Тело 409 — свежий список лиц плюс явные code и error (ADR-028, этап 3)
+        var body = await Json(resp);
+        body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.FacesChanged);
+        body.GetProperty("error").GetString().Should().NotBeNullOrEmpty();
+        // Свежая детекция: facesKey по байтам исходника, размер и лица — из OkMedia (200×200, одно лицо)
+        body.GetProperty("facesKey").GetString().Should().Be(_facesKey);
+        body.GetProperty("width").GetInt32().Should().Be(200);
+        body.GetProperty("height").GetInt32().Should().Be(200);
+        var faces = body.GetProperty("faces").EnumerateArray().ToList();
+        faces.Should().NotBeEmpty();
+        faces[0].GetProperty("n").GetInt32().Should().Be(1);
+    }
+
+    // Ручка faces отвечает прежним ImageThreadFacesResponse — без code и error (ADR-028, этап 3)
+    [Fact]
+    public async Task Faces_ручка_отвечает_без_code()
+    {
+        SetFlag(true);
+        var resp = await _client.PostAsync(
+            $"/api/projects/{_projectId}/image-editor/sessions/{_chatId}/threads/{_threadId}/versions/origin/faces",
+            new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
         var body = await Json(resp);
         body.GetProperty("facesKey").GetString().Should().NotBeNullOrEmpty();
+        body.GetProperty("width").GetInt32().Should().Be(200);
+        body.GetProperty("height").GetInt32().Should().Be(200);
         body.GetProperty("faces").EnumerateArray().Should().NotBeEmpty();
+        // Обёртка FacesChangedResponse — только для 409; у faces её нет
+        body.TryGetProperty("code", out _).Should().BeFalse();
+        body.TryGetProperty("error", out _).Should().BeFalse();
     }
 
     // ── feature_disabled → 404 ───────────────────────────────────────────────────

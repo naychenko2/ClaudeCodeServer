@@ -130,6 +130,12 @@ public static class TurnErrorClassifier
     // формулировке в Text гибель не опознать
     public const string ProcessKilledMarker = "[Process:killed]";
 
+    // Маркер «остановлен сервером»: ClaudeSession ставит его первым токеном Details в ветке
+    // disposing ProcessDeathMessage (DisposeAsync: остановка сервера / реанимация / замена
+    // адаптера). Не oom-kill и не мёртвый эндпоинт: смена пары «модель × подписка» не лечит,
+    // поэтому класс None (фолбэк не запускается), а не Unreachable.
+    public const string ProcessStoppedByServerMarker = "[Process:stopped-by-server]";
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -178,6 +184,13 @@ public static class TurnErrorClassifier
         // эндпоинт ни при чём, а смена пары не лечит нехватку памяти на нашей машине
         if (outcome.ErrorText?.StartsWith(ProcessKilledMarker, StringComparison.Ordinal) == true)
             return FallbackErrorClass.ProcessKilled;
+
+        // Процесс остановлен самим сервером (DisposeAsync: остановка/реанимация/замена адаптера)
+        // — тоже ДО ветки "без result → Unreachable": не oom-kill и не мёртвый эндпоинт, смена
+        // пары «модель × подписка» не лечит. Класс None: фолбэк не запускается, ход завершается
+        // честной ошибкой. Маркер ставит ClaudeSession первым токеном Details (ProcessDeathMessage).
+        if (outcome.ErrorText?.StartsWith(ProcessStoppedByServerMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.None;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;

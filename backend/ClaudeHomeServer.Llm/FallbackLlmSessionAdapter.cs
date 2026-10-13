@@ -467,6 +467,22 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             ? text[TurnErrorClassifier.ProcessKilledMarker.Length..].TrimStart()
             : text;
 
+    // Снимает маркер «остановлен сервером» из видимых «Подробностей» (классификатор уже отработал
+    // и выдал None → FailClosedAsync). Без снятия человек читал бы «[Process:stopped-by-server]
+    // процесс агента остановлен сервером…» в «Подробностях» — технический шум.
+    private static string? StripProcessStoppedByServerMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.ProcessStoppedByServerMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.ProcessStoppedByServerMarker.Length..].TrimStart()
+            : text;
+
+    // Снимает маркер «остановлен сервером» из Details ErrorMessage перед отправкой в ленту
+    // (FailClosedAsync: класс None, маркер нужен только классификатору).
+    private static ErrorMessage StripStoppedByServerMarker(ErrorMessage em) =>
+        em.Details is not null
+            && em.Details.StartsWith(TurnErrorClassifier.ProcessStoppedByServerMarker, StringComparison.Ordinal)
+            ? em with { Details = StripProcessStoppedByServerMarker(em.Details) }
+            : em;
+
     // Сырые тексты задержанных ошибок попытки — в «Подробности» маркера подмены.
     // null — гасить было нечего (ошибка не приходила).
     private static string? HeldErrorDetails(IEnumerable<ServerMessage> held)
@@ -1684,11 +1700,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // ТРЕБОВАНИЕ К СЛЕДУЮЩЕЙ ПОД-ЗАДАЧЕ (SessionManager, его тут не правим): парная логика
         // остаётся корректной — при подмене НИ ошибка, НИ result попытки downstream не идут,
         // так что флаг не выставляется и не остаётся висеть.
+        // Маркер «остановлен сервером» (класс None) снимаем из Details: он нужен только
+        // классификатору, в ленту человек его читать не должен.
         foreach (var m in held.OfType<ErrorMessage>().Where(e => e.ExpectResultFollows))
-            await _downstream(m);
+            await _downstream(StripStoppedByServerMarker(m));
         await _downstream(result);
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
-            await _downstream(m);
+            await _downstream(m is ErrorMessage em ? StripStoppedByServerMarker(em) : m);
     }
 
     /// <summary>

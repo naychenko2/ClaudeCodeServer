@@ -207,7 +207,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // (SIGKILL, exit=137). Без флага своё убийство неотличимо от oom-kill, и человек читал
     // «не хватило памяти» при простом перезапуске. Ставится в начале DisposeAsync ДО Kill,
     // сброса не имеет: после Dispose сессия мёртва. ProcessDeathMessage по нему отдаёт
-    // TurnFailureText.ProcessStoppedByServer вместо ProcessKilled (без маркера [Process:killed]).
+    // TurnFailureText.ProcessStoppedByServer с маркером [Process:stopped-by-server] (не
+    // [Process:killed]): классификатор даёт None, фолбэк не подменяет модель.
     private volatile bool _disposing;
     // Глубина делегирования текущего хода: > 0 — ход инициирован агентом из другой сессии
     // (chats_send). Выставляется в начале RunTurnAsync и сбрасывается после хода;
@@ -4733,7 +4734,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // ОС (systemd-oomd / cgroup) — модель ни при чём, и СВОЙ Kill из DisposeAsync (остановка
     // сервера, реанимация чата, замена адаптера) — сервер убил процесс сам. «Стоп» пользователя
     // гасится раньше _interruptedByUser, но свой Kill из DisposeAsync ДОХОДИТ досюда — отличает
-    // его флаг _disposing в ProcessDeathMessage (отдельный текст, без маркера [Process:killed]).
+    // его флаг _disposing в ProcessDeathMessage (отдельный текст и маркер [Process:stopped-by-server],
+    // а не [Process:killed]).
     private const int SigKillExitCode = 137;
 
     // Ошибка обрыва активного хода по смерти процесса. Гибель от сигнала несёт маркер в Details
@@ -4748,10 +4750,12 @@ public class ClaudeSession : ILlmSessionAdapter
         if (exitCode == SigKillExitCode)
         {
             // Свой Kill (DisposeAsync: остановка сервера / реанимация чата) — НЕ oom-kill, поэтому
-            // текст не должен говорить «не хватило памяти». Маркера [Process:killed] НЕТ: класс не
-            // ProcessKilled, фолбэк не подменяет модель, ход завершается честной ошибкой.
+            // текст не должен говорить «не хватило памяти». Маркер [Process:stopped-by-server] (не
+            // [Process:killed]): классификатор даёт None, фолбэк не подменяет модель, ход
+            // завершается честной ошибкой.
             if (disposing)
-                return new ErrorMessage(TurnFailureText.ProcessStoppedByServer);
+                return new ErrorMessage(TurnFailureText.ProcessStoppedByServer,
+                    Details: $"{TurnErrorClassifier.ProcessStoppedByServerMarker} процесс агента остановлен сервером (перезапуск или восстановление чата)");
             return new ErrorMessage(TurnFailureText.ProcessKilled,
                 Details: $"{TurnErrorClassifier.ProcessKilledMarker} процесс CLI убит сигналом (exit={exitCode})");
         }

@@ -511,4 +511,34 @@ public class TurnErrorClassifierTests
     public void СетевойОбрыв_БезResult_ОстаётсяUnreachable()
         => TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false, ErrorText = "fetch failed: ECONNRESET" })
             .Should().Be(FallbackErrorClass.Unreachable);
+
+    // ===== Остановлен сервером (DisposeAsync): не oom-kill и не мёртвый эндпоинт =====
+    // Блокер (задача 9ef116dc): ProcessStoppedByServer без маркера уходил в ветку
+    // "!HasResult → Unreachable" и фолбэк подменял модель. Маркер [Process:stopped-by-server]
+    // первым токеном Details → класс None: фолбэк не запускается, ход завершается error.
+    // Тест красный, если убрать проверку маркера из Classify (ветка !HasResult выигрывает).
+    [Fact]
+    public void ОстановленСервером_БезResult_Маркер_КлассNone()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = $"{TurnErrorClassifier.ProcessStoppedByServerMarker} процесс агента остановлен сервером (перезапуск или восстановление чата)",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "маркер [Process:stopped-by-server] — свой Kill сервера, не Unreachable: фолбэк не запускается");
+    }
+
+    // Без маркера (маркер не дошёл) — по-прежнему Unreachable: ветка !HasResult не перехватывается.
+    [Fact]
+    public void ОстановленСервером_БезResult_БезМаркера_ОстаётсяUnreachable()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "процесс агента остановлен сервером (перезапуск или восстановление чата)",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.Unreachable,
+            "без маркера — обычный обрыв без result, Unreachable");
+    }
 }

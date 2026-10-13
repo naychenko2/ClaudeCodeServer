@@ -11,9 +11,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // дерево CLI (SIGKILL, exit=137), а обработчик смерти, не отличая своё убийство от oom-kill,
 // отдавал TurnFailureText.ProcessKilled («не хватило памяти»). Фикс: флаг _disposing (ставится
 // в начале DisposeAsync) передаётся в ProcessDeathMessage, который при нём возвращает отдельный
-// текст без маркера [Process:killed] — классификатор не даёт ProcessKilled, фолбэк модель не
-// подменяет, ход завершается честной ошибкой. Настоящий oom-kill (exit=137 без dispose) — как
-// раньше: ProcessKilled + маркер.
+// текст с маркером [Process:stopped-by-server] (не [Process:killed]) — классификатор даёт None
+// (не Unreachable), фолбэк модель не подменяет, ход завершается честной ошибкой. Настоящий
+// oom-kill (exit=137 без dispose) — как раньше: ProcessKilled + маркер [Process:killed].
 public class ClaudeSessionDisposeDeathMessageTests
 {
     // _disposing — приватное поле; читаем через reflection (тот же приём, что в
@@ -25,10 +25,10 @@ public class ClaudeSessionDisposeDeathMessageTests
     // ===== Ветки ProcessDeathMessage (чистая функция — детерминированно, без жизненного цикла) =====
 
     // Свой Kill (DisposeAsync: остановка сервера / реанимация чата) — НЕ oom-kill: текст не
-    // «не хватило памяти», и маркера [Process:killed] НЕТ (класс не ProcessKilled → фолбэк
-    // модель не подменяет, ход завершается error).
+    // «не хватило памяти», маркер [Process:stopped-by-server] (не [Process:killed]): классификатор
+    // даёт None (не Unreachable), фолбэк модель не подменяет, ход завершается error.
     [Fact]
-    public void ProcessDeathMessage_СвойKill_ТекстОстановкиСервером_БезМаркера()
+    public void ProcessDeathMessage_СвойKill_ТекстОстановкиСервером_МаркерStoppedByServer()
     {
         var msg = ClaudeSession.ProcessDeathMessage(pendingControlResponse: false, exitCode: 137, disposing: true);
 
@@ -36,8 +36,11 @@ public class ClaudeSessionDisposeDeathMessageTests
             "свой Kill не должен выдавать «не хватило памяти» — причина: сервер остановил процесс");
         msg.Text.Should().NotBe(TurnFailureText.ProcessKilled,
             "ложное «не хватило памяти» — ровно то, что чинит задача");
-        (msg.Details ?? string.Empty).Should().NotContain(TurnErrorClassifier.ProcessKilledMarker,
-            "без маркера классификатор не даёт ProcessKilled — фолбэк модель не подменяет");
+        msg.Details.Should().NotBeNull("маркер [Process:stopped-by-server] — первый токен Details");
+        msg.Details!.Should().StartWith(TurnErrorClassifier.ProcessStoppedByServerMarker,
+            "маркер первым токеном Details: классификатор даёт None, не Unreachable");
+        msg.Details.Should().NotContain(TurnErrorClassifier.ProcessKilledMarker,
+            "не [Process:killed]: это не oom-kill, а свой Kill сервера");
     }
 
     // Настоящий oom-kill (exit=137, dispose не было): как раньше — ProcessKilled + маркер,

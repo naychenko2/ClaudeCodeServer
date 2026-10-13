@@ -3405,4 +3405,46 @@ public class FallbackLlmSessionAdapterTests
         CallStripWin32Marker(null).Should().BeNull("null на входе — null на выходе");
         CallStripWin32Marker("").Should().Be(string.Empty);
     }
+
+    // ===== StripProcessStoppedByServerMarker: снятие маркера «[Process:stopped-by-server]» =====
+    //
+    // Маркер ставит ClaudeSession (ProcessDeathMessage, ветка disposing) первым токеном Details.
+    // Классификатор по нему даёт None → FailClosedAsync; маркер нужен только классификатору,
+    // в ленту человек его читать не должен. Мутация «не снимать маркер» (FailClosedAsync шлёт
+    // ErrorMessage как есть) обязана покрасить тест: человек читал бы «[Process:stopped-by-server]
+    // процесс агента остановлен сервером…» в «Подробностях».
+    private static string? CallStripProcessStoppedByServerMarker(string? text)
+    {
+        var m = typeof(FallbackLlmSessionAdapter).GetMethod(
+            "StripProcessStoppedByServerMarker",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        m.Should().NotBeNull("StripProcessStoppedByServerMarker — шов Details, переименование ломает видимый текст");
+        return (string?)m!.Invoke(null, [text]);
+    }
+
+    [Fact]
+    public void StripProcessStoppedByServerMarker_МаркерПервым_Снимается()
+    {
+        CallStripProcessStoppedByServerMarker(
+                "[Process:stopped-by-server] процесс агента остановлен сервером (перезапуск или восстановление чата)")
+            .Should().Be("процесс агента остановлен сервером (перезапуск или восстановление чата)",
+                "префикс [Process:stopped-by-server] снят, остаток текста доходит до Details как есть");
+    }
+
+    [Fact]
+    public void StripProcessStoppedByServerMarker_МаркерНеПервым_НеТрогается()
+    {
+        CallStripProcessStoppedByServerMarker("ошибка\n[Process:stopped-by-server] вторая")
+            .Should().Be("ошибка\n[Process:stopped-by-server] вторая",
+                "StartsWith: серединный маркер не снимается");
+    }
+
+    [Fact]
+    public void StripProcessStoppedByServerMarker_БезМаркера_ТекстЦеликом()
+    {
+        CallStripProcessStoppedByServerMarker("процесс агента остановлен сервером")
+            .Should().Be("процесс агента остановлен сервером");
+        CallStripProcessStoppedByServerMarker(null).Should().BeNull("null на входе — null на выходе");
+        CallStripProcessStoppedByServerMarker("").Should().Be(string.Empty);
+    }
 }

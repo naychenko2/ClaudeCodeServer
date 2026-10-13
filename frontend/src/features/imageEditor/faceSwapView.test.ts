@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedFace } from './api';
 import {
-  faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
+  FS_TEXT, faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
   clearFailures, clearFaceChange,
   assignCharacter, emptyAssignments, faceTargetFromAssignments, hasAssignments, isCharacterTaken,
   MAX_FACE_PASSES, parseFacesChangedBody, removeAssignment, searchFailureText, tapFace,
@@ -415,5 +415,46 @@ describe('searchFailureText: причина отказа поиска', () => {
   });
   it('прочий код → общий текст', () => {
     expect(searchFailureText('other')).toBe('Не удалось найти лица. Попробуйте позже');
+  });
+});
+
+// ── Хвосты перепроверки Майи (n3, n4) ────────────────────────────────────────
+describe('faceSwapView: полоса режима при отказе (n3)', () => {
+  const two = () => assignCharacter(assignCharacter(emptyAssignments, 1, 'marina'), 2, 'olga');
+
+  it('без отказа два назначения — «можно подставлять»', () => {
+    const a = two();
+    expect(a.active).toBeNull();
+    expect(faceSwapView(base({ assignments: a })).bar).toBe(FS_TEXT.barTwo);
+  });
+
+  it('отказ «близко» по лицу 2 — полоса повторяет отказ, а не зовёт подставлять (мутация: вернуть barTwo → краснеет)', () => {
+    const v = faceSwapView(base({ assignments: two(), facesTooClose: true, refusedFace: 2 }));
+    expect(v.canSubmit).toBe(false);
+    expect(v.bar).toBe(FS_TEXT.closeN(2));
+  });
+
+  it('отказ «вне кадра» без номера при двух назначениях — общий текст отказа', () => {
+    expect(faceSwapView(base({ assignments: two(), faceOutOfFrame: true })).bar).toBe(FS_TEXT.outOfFrame);
+  });
+
+  it('отказ сервера по лицу (faceRefused) — его текст', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    expect(faceSwapView(base({ assignments: two(), refusedFace: 2, refusedText: text })).bar).toBe(text);
+  });
+
+  it('одно назначение с отказом — не «подставить сразу»', () => {
+    const a = assignCharacter(emptyAssignments, 1, 'marina');
+    expect(faceSwapView(base({ assignments: a, facesTooClose: true })).bar).toBe(FS_TEXT.closeN(1));
+  });
+});
+
+describe('тексты режима: номер лица не отрывается от слова (n4)', () => {
+  it('между «лица/лице» и номером — неразрывный пробел (мутация: обычный пробел → краснеет)', () => {
+    for (const s of [FS_TEXT.pickFor(1), FS_TEXT.barPick(1), FS_TEXT.barReassign(1),
+      FS_TEXT.takenOn(1), FS_TEXT.busyTile(1), FS_TEXT.unassignN(1)]) {
+      expect(s).toMatch(/лиц[ае]\u00A01/);
+      expect(s).not.toMatch(/лиц[ае] 1/);
+    }
   });
 });

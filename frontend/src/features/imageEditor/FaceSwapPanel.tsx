@@ -250,7 +250,7 @@ export function FaceSwapPanel({ api, projectId, characters, assignments, refusal
 
   // ── Пикер персонажей: только пока есть активное лицо ──
   const picker: ReactNode = active != null ? (
-    <div ref={pickerRef} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+    <div ref={pickerRef} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, scrollMarginTop: mobile ? SP.sm : SP.lg }}>
       <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{FS_TEXT.pickFor(active)}</div>
       {mobile ? (
         <div role="radiogroup" aria-label={FS_TEXT.pickFor(active)} style={{

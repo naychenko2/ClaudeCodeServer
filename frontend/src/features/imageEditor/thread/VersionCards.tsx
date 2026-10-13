@@ -33,6 +33,7 @@ import {
 } from './model';
 import { recordOf } from './records';
 import { CharacterPhotosStrip } from './CharacterPhotosStrip';
+import { TouchHit } from '../TouchHit';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
@@ -298,9 +299,10 @@ function RunningLine({ projectId, jobId, model, faces }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary, flexWrap: 'wrap' }}>
         <Dot color={C.accent} />{stage ? stage.text : `Рисуем…${model ? ` · ${model}` : ''}`}{queueText(progress.queuePosition)}
-        {/* Мобила: зона касания 44 при той же компактной кнопке xs (24) — отрицательные поля не раздувают строку */}
-        <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}
-          style={mobile ? { height: 44, minHeight: 44, marginBlock: (24 - 44) / 2 } : undefined}>Отменить</Button>
+        {/* Мобила: зона касания 44 — невидимым слоем, рамка кнопки xs остаётся 24 и не наезжает на полосу проходов (n1) */}
+        <TouchHit on={mobile} onTap={() => { void cancel(); }}>
+          <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
+        </TouchHit>
       </div>
       {stage
         ? <PassBar segments={stage.segments} run={status?.run ?? 0} />

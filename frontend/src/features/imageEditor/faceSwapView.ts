@@ -32,12 +32,13 @@ export const FS_TEXT = {
   go: 'Подставить',
   localOnce: 'Локальные модели · этот запуск',
   // ── Этап 3 (ADR-028): назначения, лимит, отказы по номеру лица ──
+  // Номер лица — через неразрывный пробел: на 320 «1» не уезжает на новую строку (n4)
   // Заголовок выбора персонажа
-  pickFor: (n: number) => `Кто будет на лице ${n}?`,
+  pickFor: (n: number) => `Кто будет на лице\u00A0${n}?`,
   // Плашка режима: лицо активно, не назначено
-  barPick: (n: number) => `Выберите персонажа для лица ${n}`,
+  barPick: (n: number) => `Выберите персонажа для лица\u00A0${n}`,
   // Плашка режима: лицо активно, уже назначено (переназначение)
-  barReassign: (n: number) => `Выберите другого персонажа для лица ${n} — или снимите назначение`,
+  barReassign: (n: number) => `Выберите другого персонажа для лица\u00A0${n} — или снимите назначение`,
   // Плашка режима: одно назначение
   barOne: 'Можно назначить ещё одно лицо — или подставить сразу',
   // Плашка режима: два назначения
@@ -57,9 +58,9 @@ export const FS_TEXT = {
   // aria-label кнопки ✕
   removeAria: (n: number) => `Снять назначение с лица ${n}`,
   // Занятый персонаж: строка в списке
-  takenOn: (n: number) => `Уже на лице ${n}`,
+  takenOn: (n: number) => `Уже на лице\u00A0${n}`,
   // Занятый персонаж: плитка мобилы
-  busyTile: (n: number) => `на лице ${n}`,
+  busyTile: (n: number) => `на лице\u00A0${n}`,
   // Плашка лимита
   limit: 'Не больше 2 лиц за раз. Снимите одно назначение, чтобы выбрать это лицо',
   // Отказ: лицо слишком близко (по номеру)
@@ -71,7 +72,7 @@ export const FS_TEXT = {
   // Причина отказа «вне кадра» в строке назначения
   outWhy: 'выходит за край картинки',
   // Кнопка в плашке отказа: снять назначение
-  unassignN: (n: number) => `Снять назначение с лица ${n}`,
+  unassignN: (n: number) => `Снять назначение с лица\u00A0${n}`,
   // 409 faces_changed: назначения сброшены
   changed2: 'Картинка изменилась — лица найдены заново. Назначьте персонажей ещё раз',
   // Кнопка при двух назначениях
@@ -321,6 +322,8 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
 
   // ── Плашки (notices) ──
   const notices: NoticeSpec[] = [];
+  // Текст первого отказа по назначенным лицам — полоса пишет его вместо «можно подставлять» (n3)
+  let refusalBar: string | null = null;
   if (phase === 'ready') {
     if (faces.length === 0) {
       notices.push({ tone: 'info', icon: 'info', text: FS_TEXT.none, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
@@ -337,6 +340,7 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
       : refusedFace != null && assignments.assignments.has(refusedFace) ? [refusedFace]
         : [...assignments.assignments.keys()].sort((a, b) => a - b);
     const refusal = (byN: (n: number) => string, general: string, legacy: string) => {
+      refusalBar ??= asgFaces.length === 1 ? byN(asgFaces[0]) : general;
       if (!assignments || asgFaces.length === 0) {
         notices.push({ tone: 'danger', icon: 'alert', text: legacy, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
       } else {
@@ -374,6 +378,9 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
         ? { tone: 'info', icon: 'cpu', text: searchFailure.text }
         : { tone: 'danger', icon: 'alert', text: searchFailure.text });
   }
+
+  // Есть отказ, лицо не выбрано — полоса не зовёт подставлять, а повторяет отказ из словаря v2 (n3)
+  if (refusalBar && assignments && assignments.active == null && assignments.assignments.size > 0) bar = refusalBar;
 
   // ── canSubmit: по матрице ──
   // Этап 3: назначения ≥ 1 + локальные модели + нет отказов по текущему набору

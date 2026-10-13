@@ -4,6 +4,7 @@
 import { Clock, ScanFace, X } from 'lucide-react';
 import { Button, C, R, SHADOW, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { BarIcon } from './faceSwapView';
+import { TouchHit } from './TouchHit';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -19,7 +20,7 @@ function StepIcon({ icon }: { icon: BarIcon }) {
   return ic(ScanFace);
 }
 
-export function FaceSwapBar({ text, icon, onCancel }: {
+export function FaceSwapBar({ text, icon, mobile, onCancel }: {
   text: string;
   icon: BarIcon;
   mobile: boolean;
@@ -35,7 +36,10 @@ export function FaceSwapBar({ text, icon, onCancel }: {
     }}>
       <span style={{ color: C.accent, display: 'inline-flex', flexShrink: 0 }}><StepIcon icon={icon} /></span>
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
-      <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={onCancel}>Отмена</Button>
+      {/* Мобила: главный выход из режима — зона касания 44 невидимым слоем, вид кнопки прежний (n2) */}
+      <TouchHit on={mobile} onTap={onCancel}>
+        <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={onCancel}>Отмена</Button>
+      </TouchHit>
     </div>
   );
 }

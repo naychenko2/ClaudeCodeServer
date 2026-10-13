@@ -4,6 +4,7 @@
 import { Clock, ScanFace, X } from 'lucide-react';
 import { Button, C, R, SHADOW, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { BarIcon } from './faceSwapView';
+import { TouchHit } from './TouchHit';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -30,11 +31,15 @@ export function FaceSwapBar({ text, icon, mobile, onCancel }: {
       display: 'flex', alignItems: 'center', gap: SP.sm,
       padding: SP.sm, background: C.bgPanel, border: `1px solid ${C.borderLight}`,
       borderRadius: R.lg, boxShadow: SHADOW.card, fontSize: 12, color: C.textPrimary, lineHeight: 1.4,
-      width: mobile ? '100%' : 520, maxWidth: '100%',
+      // Ширина по колонке холста, не больше 520: жёсткие 520 на планшете распирали колонку на панель (B1)
+      width: '100%', maxWidth: 520, boxSizing: 'border-box',
     }}>
       <span style={{ color: C.accent, display: 'inline-flex', flexShrink: 0 }}><StepIcon icon={icon} /></span>
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
-      <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={onCancel}>Отмена</Button>
+      {/* Мобила: главный выход из режима — зона касания 44 невидимым слоем, вид кнопки прежний (n2) */}
+      <TouchHit on={mobile} onTap={onCancel}>
+        <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={onCancel}>Отмена</Button>
+      </TouchHit>
     </div>
   );
 }

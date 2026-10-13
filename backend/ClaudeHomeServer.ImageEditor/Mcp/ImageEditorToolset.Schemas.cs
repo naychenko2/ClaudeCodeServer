@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.ImageEditor.Faces;
 using ClaudeHomeServer.Services.Mcp.Http;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
@@ -136,6 +137,25 @@ public sealed partial class ImageEditorToolset
                     ["description"] = "Номер лица из image_find_faces, на которое подставить персонажа. Только вместе с character, "
                         + "только для локальных моделей (provider local). Маску строит сервер, свою не передавай. "
                         + "Персонаж из строки контекста на чужое лицо не подставляется сам — укажи character явно.",
+                },
+                // Несколько лиц за один запуск (ADR-028, этап 3): массив {face, character}; лимит — MaxFacePasses
+                ["faces"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["minItems"] = 1,
+                    ["maxItems"] = FaceTargetRules.MaxFacePasses,
+                    ["description"] = "До двух лиц за один запуск, каждому — свой персонаж: face из image_find_faces и character. "
+                        + "Нельзя вместе с face/character. Только для локальных моделей (provider local).",
+                    ["items"] = Obj(new JsonObject
+                    {
+                        ["face"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["description"] = "Номер лица из image_find_faces",
+                        },
+                        ["character"] = Str("Персонаж проекта (slug), которого подставить на это лицо"),
+                    }, "face", "character"),
                 },
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
                     + "только local); crop — обрезать картинку под пропорции aspect без ИИ и бесплатно (результат — новая версия); "

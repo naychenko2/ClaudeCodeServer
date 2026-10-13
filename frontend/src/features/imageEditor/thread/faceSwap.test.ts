@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { facesError, type FacesResponse } from '../api';
 import {
+  facePairsCaption, faceResultRows, launchFaces, partialNotice, passStage, versionSimilarityShown,
   faceSwapCanSubmit, faceSwapReducer, faceSelectable, initialFaceSwap, selectableFaces,
   type FaceSwapState,
 } from './faceSwap';
@@ -215,5 +216,143 @@ describe('facesError: разбор по кодам/статусам', () => {
 
   it('нет ни кода, ни статуса → other', () => {
     expect(facesError(new Error('сеть'))).toEqual({ code: 'other' });
+  });
+});
+
+// ── Этап 3: 409 faces_changed сбрасывает назначения; отказ поиска → searchFailure ──
+const respKey = (faces: number[], key: string): FacesResponse =>
+  ({ facesKey: key, width: 100, height: 100, faces: faces.map(n => face(n)) });
+
+describe('faceSwapReducer: 409 faces_changed сбрасывает ВСЕ назначения (этап 3)', () => {
+  it('новый facesKey из тела, назначений нет, выбор сброшен (мутация: не сбрасывать → краснеет)', () => {
+    let s = searchOk(resp([1, 2]));
+    s = faceSwapReducer(s, { type: 'assign', face: 1, slug: 'm' });
+    s = faceSwapReducer(s, { type: 'assign', face: 2, slug: 'i' });
+    expect(s.assignments.assignments.size).toBe(2);
+    // 409: свежий список с НОВЫМ facesKey
+    const after = faceSwapReducer(s, { type: 'facesChanged', response: respKey([3, 4], 'fk-new'), requestId: 1 });
+    expect(after.facesKey).toBe('fk-new');
+    expect(after.faces.map(f => f.n)).toEqual([3, 4]);
+    expect(after.assignments.assignments.size).toBe(0);
+    expect(after.selectedFace).toBeNull();
+  });
+});
+
+describe('faceSwapReducer: отказ поиска → searchFailure (этап 3)', () => {
+  it('busy → searchFailure с кодом; повторный поиск сбрасывает (мутация: не сбрасывать → краснеет)', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchError', code: 'busy', text: 'Видеокарта занята…', requestId: 1 });
+    expect(s.phase).toBe('error');
+    expect(s.searchFailure).toEqual({ code: 'busy', text: 'Видеокарта занята…' });
+    // повторный поиск сбрасывает причину
+    const s2 = faceSwapReducer(s, { type: 'searchStart' });
+    expect(s2.searchFailure).toBeNull();
+  });
+
+  it('provider_unavailable → searchFailure с кодом', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchError', code: 'provider_unavailable', text: 'x', requestId: 1 });
+    expect(s.searchFailure).toMatchObject({ code: 'provider_unavailable' });
+  });
+
+  it('успешный поиск сбрасывает searchFailure', () => {
+    let s = faceSwapReducer(initialFaceSwap, { type: 'searchStart' });
+    s = faceSwapReducer(s, { type: 'searchError', code: 'busy', text: 'x', requestId: 1 });
+    const ok = faceSwapReducer(s, { type: 'searchOk', response: resp([1]), requestId: 1 });
+    expect(ok.searchFailure).toBeNull();
+    expect(ok.phase).toBe('ready');
+  });
+});
+
+// ── Карточка запуска с лицами (ADR-028, этап 3 · шаг 17) ─────────────────────────
+type St = 'done' | 'failed' | 'cancelled';
+const ft = (n: number, slug: string, status?: St, similarity?: number) => ({ n, bBox: [0, 0, 10, 10], characterSlug: slug, status, similarity });
+const names: Record<string, string> = { maria: 'Мария', ivan: 'Иван' };
+const nameOf = (slug: string) => names[slug];
+
+describe('launchFaces: новый массив и старый одиночный формат', () => {
+  it('faceTargets читаются как есть, в порядке проходов', () => {
+    expect(launchFaces({ faceTargets: [ft(1, 'maria'), ft(2, 'ivan')] }).map(f => f.n)).toEqual([1, 2]);
+  });
+  it('старый одиночный faceTarget — массив из одного лица', () => {
+    const faces = launchFaces({ faceTarget: { n: 3, characterSlug: 'maria' } });
+    expect(faces).toEqual([{ n: 3, characterSlug: 'maria' }]);
+    expect(facePairsCaption(faces, nameOf)).toBe('Мария → лицо 3');
+  });
+  it('нет подстановки — пусто, подписи нет', () => {
+    expect(launchFaces({})).toEqual([]);
+    expect(launchFaces(null)).toEqual([]);
+    expect(facePairsCaption([], nameOf)).toBeNull();
+  });
+});
+
+describe('facePairsCaption: подпись пар', () => {
+  it('у каждого лица свой персонаж: «Мария → лицо 1, Иван → лицо 2»', () => {
+    expect(facePairsCaption([ft(1, 'maria'), ft(2, 'ivan')], nameOf)).toBe('Мария → лицо 1, Иван → лицо 2');
+  });
+  it('удалённый персонаж — сам slug', () => {
+    expect(facePairsCaption([ft(1, 'maria'), ft(2, 'gone')], nameOf)).toBe('Мария → лицо 1, gone → лицо 2');
+  });
+});
+
+describe('faceResultRows: отметки и сходство по лицам', () => {
+  it('done/done: ✓ у обоих, сходство у каждого своё', () => {
+    const rows = faceResultRows([ft(1, 'maria', 'done', 0.81), ft(2, 'ivan', 'done', 0.77)], nameOf);
+    expect(rows.map(r => [r.pair, r.mark, r.result])).toEqual([
+      ['Мария → лицо 1', '✓', 'сходство 0,81'],
+      ['Иван → лицо 2', '✓', 'сходство 0,77'],
+    ]);
+  });
+  it('done/failed: у второго ✕ и «не удалось»', () => {
+    const rows = faceResultRows([ft(1, 'maria', 'done', 0.81), ft(2, 'ivan', 'failed')], nameOf);
+    expect(rows.map(r => [r.mark, r.result])).toEqual([['✓', 'сходство 0,81'], ['✕', 'не удалось']]);
+  });
+  it('done/cancelled: у второго ✕ и «отменено»', () => {
+    const rows = faceResultRows([ft(1, 'maria', 'done', 0.81), ft(2, 'ivan', 'cancelled')], nameOf);
+    expect(rows.map(r => [r.mark, r.result])).toEqual([['✓', 'сходство 0,81'], ['✕', 'отменено']]);
+  });
+  it('пока итога нет (запуск идёт) или лицо одно — строк нет', () => {
+    expect(faceResultRows([ft(1, 'maria', 'done'), ft(2, 'ivan')], nameOf)).toEqual([]);
+    expect(faceResultRows([ft(1, 'maria', 'done', 0.8)], nameOf)).toEqual([]);
+  });
+});
+
+describe('versionSimilarityShown: общего сходства при N > 1 нет', () => {
+  it('одно лицо или старый формат — показываем, два — нет', () => {
+    expect(versionSimilarityShown([ft(1, 'maria', 'done', 0.8)])).toBe(true);
+    expect(versionSimilarityShown([])).toBe(true);
+    expect(versionSimilarityShown([ft(1, 'maria', 'done', 0.8), ft(2, 'ivan', 'done', 0.7)])).toBe(false);
+  });
+});
+
+describe('partialNotice: частичный результат', () => {
+  it('ошибка второго прохода', () => {
+    expect(partialNotice([ft(1, 'maria', 'done'), ft(2, 'ivan', 'failed')]))
+      .toBe('Лицо 2 не подставилось — версия сохранена с лицом 1.');
+  });
+  it('отмена после первого прохода', () => {
+    expect(partialNotice([ft(1, 'maria', 'done'), ft(2, 'ivan', 'cancelled')]))
+      .toBe('Запуск отменён после лица 1 — версия сохранена с ним.');
+  });
+  it('все готовы, ни одного или одно лицо — плашки нет', () => {
+    expect(partialNotice([ft(1, 'maria', 'done'), ft(2, 'ivan', 'done')])).toBeNull();
+    expect(partialNotice([ft(1, 'maria', 'failed'), ft(2, 'ivan', 'cancelled')])).toBeNull();
+    expect(partialNotice([ft(1, 'maria', 'failed')])).toBeNull();
+  });
+});
+
+describe('passStage: «Проход k из N · лицо n»', () => {
+  const two = [ft(1, 'maria'), ft(3, 'ivan')];
+  it('первый проход: текст, отрезки, без подсказки', () => {
+    expect(passStage(two, 1, 2)).toEqual({ text: 'Проход 1 из 2 · лицо 1', hint: null, segments: ['current', 'ahead'] });
+  });
+  it('второй проход: лицо по порядку проходов и подсказка про отмену', () => {
+    expect(passStage(two, 2, 2)).toEqual({
+      text: 'Проход 2 из 2 · лицо 3', hint: 'Если отменить сейчас, версия сохранится с лицом 1', segments: ['done', 'current'],
+    });
+  });
+  it('нет run/runs или одно лицо — стадии нет', () => {
+    expect(passStage(two, null, null)).toBeNull();
+    expect(passStage([ft(1, 'maria')], 1, 1)).toBeNull();
   });
 });

@@ -4,7 +4,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Faces;
 
-// Кэш детекции лиц (ADR-027, §4, этап 2): LRU в памяти, single-flight на параллельные запросы,
+// Кэш детекции лиц (ADR-028, этап 2): LRU в памяти, single-flight на параллельные запросы,
 // в кэш — только успешные результаты (без Error и без Busy), facesKey детерминирован по байтам.
 public class FaceDetectionCacheTests
 {

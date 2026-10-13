@@ -4857,5 +4857,260 @@
   "output": [],
   "output_is_list": [],
   "output_name": []
+ },
+ "ImageCrop": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "width": [
+     "INT",
+     {
+      "default": 512,
+      "min": 8,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 512,
+      "min": 8,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "x": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "y": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 16384,
+      "step": 8
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "width",
+    "height",
+    "x",
+    "y"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "ImageCrop",
+  "display_name": "Image Crop",
+  "description": "",
+  "python_module": "comfy_extras.nodes_image",
+  "category": "image/image",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "ImageScale": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "upscale_method": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "nearest-exact",
+       "bilinear",
+       "area",
+       "bicubic",
+       "lanczos"
+      ]
+     }
+    ],
+    "width": [
+     "INT",
+     {
+      "default": 512,
+      "min": 8,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 512,
+      "min": 8,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "crop": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "disabled",
+       "center",
+       "resize-only"
+      ]
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "upscale_method",
+    "width",
+    "height",
+    "crop"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "ImageScale",
+  "display_name": "Image Scale",
+  "description": "",
+  "python_module": "comfy_extras.nodes_image",
+  "category": "image/image",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "CropMask": {
+  "input": {
+   "required": {
+    "mask": [
+     "MASK",
+     {}
+    ],
+    "width": [
+     "INT",
+     {
+      "default": 512,
+      "min": 8,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 512,
+      "min": 8,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "x": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 16384,
+      "step": 8
+     }
+    ],
+    "y": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 16384,
+      "step": 8
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "mask",
+    "width",
+    "height",
+    "x",
+    "y"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "MASK"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "MASK"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "CropMask",
+  "display_name": "Crop Mask",
+  "description": "",
+  "python_module": "comfy_extras.nodes_mask",
+  "category": "image/mask",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
  }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 namespace ClaudeHomeServer.Services.ImageEditor;
 
@@ -48,9 +49,14 @@ public static class ImageEditCatalogReasons
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
-// Цель подстановки персонажа на лицо (ADR-027, §4, этап 2): VersionId — версия нити,
-// Face — номер лица (с 1), FacesKey — детерминирован по байтам версии (сверка 7b)
-public sealed record FaceTarget(string VersionId, int Face, string FacesKey);
+// Назначение персонажа на лицо (ADR-028, этап 3): Face — номер лица (с 1),
+// CharacterSlug — персонаж, которого ставят на это лицо
+public sealed record FaceAssignment(int Face, string CharacterSlug);
+
+// Цель подстановки персонажей на лица (ADR-028, этап 3): VersionId — версия нити,
+// FacesKey — детерминирован по байтам версии (сверка), Faces — назначения «лицо → персонаж».
+// Этап 2 — частный случай Faces.Count == 1; этап 3 — до MaxFacePasses = 2
+public sealed record FaceTarget(string VersionId, string FacesKey, IReadOnlyList<FaceAssignment> Faces);
 
 // Выбор человека (поставщик + модель или «auto» с режимом) и признаки запроса.
 // HasAnnotations — стрелки, рамки, подписи на холсте (кисть сюда не входит — это HasMask);
@@ -78,8 +84,9 @@ public record ImageEditQuoteRequest(
     ClaudeHomeServer.Services.Media.MediaFormat? Format = null,
     // Заполняет сервер перед обращением к драйверу котировки; из тела запроса игнорируется
     ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null,
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): при наличии — запуск считает как
-    // обычную локальную правку (бесплатно, ETA правки); персонаж обязателен
+    // Подстановка персонажа на лицо (ADR-028, этап 3): при наличии — запуск считает как
+    // обычную локальную правку (бесплатно, ETA правки). Персонаж задаётся внутри FaceTarget.Faces;
+    // верхний CharacterSlug при FaceTarget не требуется — прислан вместе с FaceTarget, это двусмысленный вход
     FaceTarget? FaceTarget = null,
     string? CharacterSlug = null);
 
@@ -101,7 +108,12 @@ public record ImageEditQuoteDto(
     // Строки исполнителей для «Чем» строки и панели контекста (ADR-023 §Д2.1, Р2); null — котировка без контекста
     IReadOnlyList<Protocol.ExecutorRowDto>? Executors = null,
     // Действующий формат запуска (ADR-025): то, что уйдёт в модель и учтено в цене; null — «Как у модели»
-    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null,
+    // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка.
+    // UI показывает «N прохода» (шаг 16); для N > 1 вариантов ровно 1.
+    // null (обычная правка) не пишется в JSON: без атрибута клиент видел бы «facePasses: null»
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? FacePasses = null);
 
 public static class ImageEditEstimateSources
 {
@@ -115,6 +127,21 @@ public static class ImageEditEstimateSources
 
 // То, что контроллер собрал из multipart: байты уже прочитаны, пути образцов из проекта
 // уже разрешены через SafePath.Join. Вертикаль ProjectManager не видит.
+// Один проход подстановки (ADR-028, этап 3): лицо, персонаж, маска, кроп, образцы.
+// Проходы идут по возрастанию номера лица; каждый собирается заново из СВОЕГО персонажа
+// (фото, LoRA, эталоны сходства), от прохода к проходу ничего не переносится. Character
+// (Slug/Name/Description/Lora/FacePhotos) — персонаж прохода; References — его фото образцами.
+public sealed record FacePass(
+    int Face,
+    ImageBytes Mask,
+    LocalImageCrop? Crop,
+    ImageBytes? KeepMask,
+    CharacterRef Character,
+    IReadOnlyList<ReferenceImage> References,
+    ImageThreadFaceTarget ThreadFaceTarget,
+    // Промпт прохода: имя персонажа подставляется (ADR-028, решение 12: «лицо персонажа «…»»)
+    string Prompt);
+
 // Character — подключённый персонаж; его фото уже лежат в References с ролью Character.
 public record ImageEditJobInput(
     string QuoteId,
@@ -144,8 +171,35 @@ public record ImageEditJobInput(
     // CharacterPhotoPicker.LocalConfidentScore для local (MaxCharacterPhotos=1), int.MaxValue для
     // облака — у облака первым остаётся главное фото, как до подбора
     Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null,
-    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): запись в нить для подписи карточки
-    ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null);
+    // Подстановка персонажа на лицо (ADR-028, этап 2): запись в нить для подписи карточки
+    ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null,
+    // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — обычный путь
+    // (кисть, «удали», дорисовка). Отдельный канал, не метка в References
+    LocalImageCrop? FaceCrop = null,
+    // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал для подстановки на
+    // лицо; null — драйвер берёт её из References по метке mask, как раньше
+    ImageBytes? KeepMask = null,
+    // Проходы подстановки (ADR-028, этап 3): N = число лиц. N = 1 — один элемент (те же данные,
+    // что в FaceCrop/KeepMask/Character/References/FaceTarget); N > 1 — цепочка. null — обычная правка
+    IReadOnlyList<FacePass>? FacePasses = null)
+{
+    // Вход прохода подстановки (ADR-028, этап 3): поля прохода поверх базового входа. Единственная
+    // точка подстановки — и для верхних полей N = 1 (сборщик), и для каждого прохода цепочки, —
+    // поэтому проход по составу запроса не отличается от одиночного запуска на том же лице.
+    // References — только фото персонажа прохода (с верхними не смешиваются); подбор фото у
+    // проходов не выполняется
+    public ImageEditJobInput ForPass(FacePass pass) => this with
+    {
+        Prompt = pass.Prompt,
+        Mask = pass.Mask,
+        KeepMask = pass.KeepMask,
+        FaceCrop = pass.Crop,
+        Character = pass.Character,
+        References = pass.References,
+        FaceTarget = pass.ThreadFaceTarget,
+        CharacterPicker = null,
+    };
+}
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);
@@ -194,7 +248,10 @@ public record ImageEditJobDto(
     IReadOnlyDictionary<int, double>? Similarities = null,
     // Операция запуска (generate / edit / inpaint / outpaint / …), camelCase; null — запуск без
     // операции (обрезка, local-media)
-    string? Op = null);
+    string? Op = null,
+    // Итоги проходов подстановки по лицам (ADR-028, §9); null — не цепочка проходов
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<FacePassChain.FacePassResult>? FaceResults = null);
 
 public static class ImageEditSizeNotes
 {
@@ -300,6 +357,11 @@ public static class ImageEditErrorCodes
     // 400: лицо вне картинки
     public const string FaceOutOfFrame = "face_out_of_frame";
 }
+
+// Тело отказа по конкретному лицу (ADR-028, этап 3): прежние {error, code} плюс face — номер лица
+// (N из списка лиц, 1-based, как ImageThreadFaceTarget.N), на котором отказ. Отказы без привязки
+// к лицу этим телом не отвечают — у них поля face нет вовсе
+public sealed record FaceRefusalResponse(string Error, string Code, int Face);
 
 // Результат вызова шва: Value при успехе, иначе код ImageEditErrorCodes.* и текст
 // Payload — тело отказа, если оно не {error, code}: у context_changed это свежий ChatContextDto

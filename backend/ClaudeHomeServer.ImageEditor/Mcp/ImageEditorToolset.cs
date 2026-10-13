@@ -448,9 +448,12 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var referencesGiven = args["references"] is JsonArray;
         var characterGiven = args.ContainsKey("character");
         var references = ReferencesArg(args);
-        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): входы явные — версия, лицо, персонаж;
+        // Подстановка персонажа на лицо (ADR-028): входы явные — версия, лицо, персонаж;
         // контекст чата не читается вовсе (ассемблер отвергнет ContextRevision вместе с FaceTarget).
         // Провайдер — только local, выбор человека в строке контекста не подменяем молча (ADR-023)
+        // Конфликт: faces и face/character несовместимы — проверка до обеих веток
+        if (args["faces"] is JsonArray && (Int(args, "face") is not null || Str(args, "character") is not null))
+            return Deny("Укажите либо faces, либо face и character");
         if (Int(args, "face") is { } face)
         {
             if (scope.Project is null)
@@ -459,7 +462,40 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                 return Deny("Укажи персонажа: персонаж из строки контекста на чужое лицо не подставляется");
             if (Str(args, "provider") is not "local")
                 return Deny("Подставлять персонажа можно только локальными моделями: укажи provider local");
-            return await FaceTargetAsync(ownerId, session, scope, thread, version, faceCharacter, face, prompt, ct);
+            return await FaceTargetAsync(ownerId, session, scope, thread, version,
+                [new FaceAssignment(face, faceCharacter)], prompt, ct);
+        }
+        // Несколько лиц за один запуск (ADR-028, этап 3): массив {face, character};
+        // несовместим с одиночным face/character; те же проверки local + проект, один TryReserveLaunch
+        if (args["faces"] is JsonArray facesArray)
+        {
+            if (scope.Project is null)
+                return Deny("Подстановка персонажей на лица — только в чате проекта");
+            if (Str(args, "provider") is not "local")
+                return Deny("Подставлять персонажей можно только локальными моделями: укажи provider local");
+            // Пустой массив иначе дошёл бы до правил и получил бы «Не больше 2 лиц за раз» — не та причина
+            if (facesArray.Count == 0)
+                return Deny("faces пуст: укажите хотя бы одно лицо {face, character}");
+            var assignments = new List<FaceAssignment>();
+            foreach (var node in facesArray)
+            {
+                // Элемент не-объект не выбрасываем молча: иначе вызов ушёл бы с меньшим числом лиц
+                if (node is not JsonObject item)
+                    return Deny("Каждый элемент faces — объект {face, character}");
+                // Явный отказ до общего прогона правил: отсутствующий face или пустой/пробельный
+                // character (Str → null) иначе тихо проглатывались, и агент видел «Не больше 2 лиц
+                // за раз» вместо причины — «укажи персонажа» (как на одиночном пути)
+                var faceNo = Int(item, "face");
+                if (faceNo is null || faceNo < 1)
+                    return Deny("Укажите номер лица (face) — целое число от 1");
+                if (Str(item, "character") is not { } c)
+                    return Deny($"Для лица {faceNo.Value} укажи персонажа (character)");
+                assignments.Add(new FaceAssignment(faceNo.Value, c));
+            }
+            // Правила — та же чистая функция, что котировка и сборщик; FacesKey для проверки не нужен
+            var rules = Faces.FaceTargetRules.Validate(new FaceTarget(version.Id, "", assignments));
+            if (!rules.Ok) return Deny(rules.Error!);
+            return await FaceTargetAsync(ownerId, session, scope, thread, version, assignments, prompt, ct);
         }
         // Проектные аргументы в личном чате — отказ до котировки (сборщик отказал бы тоже, но позже)
         if (scope.Project is null && (references.Count > 0 || Str(args, "character") is not null))
@@ -575,13 +611,13 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         });
     }
 
-    // Запуск «подставить персонажа на лицо» (ADR-027, §4, этап 2): та же котировка и тот же
+    // Запуск «подставить персонажа на лицо» (ADR-028, этап 2): та же котировка и тот же
     // ImageEditLaunchAssembler, что у обычного image_generate, но входы явные — версия, лицо,
     // персонаж; образцы и персонаж контекста чата не едут, маску строит сервер. Ключ берётся из
     // свежей детекции версии: агенту его передавать не нужно, номера лиц — те же, что в
     // image_find_faces (один кэш, один порядок)
     private async Task<McpToolCallResult> FaceTargetAsync(string ownerId, Session session, ImageEditScope scope,
-        ImageThread thread, ImageThreadVersion version, string character, int face, string prompt,
+        ImageThread thread, ImageThreadVersion version, IReadOnlyList<FaceAssignment> faces, string prompt,
         CancellationToken ct)
     {
         // Байты версии: шаг версии, иначе файл проекта (у исходника)
@@ -601,6 +637,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (source is null)
             return Deny("У версии ещё нет изображения");
 
+        // Одна цель на вызов: одно лицо (этап 2) или несколько (этап 3, ADR-028).
+        // Персонаж — только в FaceTarget.Faces: верхний CharacterSlug не едет, иначе
+        // StartIn отвергнет запуск как «персонаж задаётся в faceTarget.faces»
+        var faceTarget = new FaceTarget(version.Id, Faces.FaceDetectionCache.FacesKey(source.Bytes), faces);
         var quoteRequest = new ImageEditQuoteRequest(LocalImageEditor.ProviderKey, ImageEditCatalog.AutoModelId,
             EditMode.Auto, ImageEditOp.Edit, 1,
             HasMask: true,
@@ -608,8 +648,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             HasCharacter: true,
             Width: ImageDimensions.Read(source.Bytes)?.Width,
             Height: ImageDimensions.Read(source.Bytes)?.Height,
-            FaceTarget: new FaceTarget(version.Id, face,
-                Faces.FaceDetectionCache.FacesKey(source.Bytes)));
+            FaceTarget: faceTarget);
         var quote = await _jobs!.QuoteAsync(ownerId, scope.Key, quoteRequest, ct);
         if (quote.Value is not { } q)
             return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct, face: true);
@@ -618,14 +657,14 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             q.QuoteId, prompt, MarksJson: null, thread.File, source, Mask: null, Annotated: null,
             Uploaded: [],
             ReferencePaths: [],
-            character,
+            null,
             MatchSourceSize: true,
             BaseStepId: baseStepId,
             Initiator: ImageEditInitiator.Agent,
             ThreadSessionId: session.Id,
             ThreadId: thread.Id,
             VersionId: version.Id,
-            FaceTarget: new FaceTarget(version.Id, face, Faces.FaceDetectionCache.FacesKey(source.Bytes)));
+            FaceTarget: faceTarget);
         var started = await _launcher.LaunchAsync(ownerId, scope, request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct, face: true);

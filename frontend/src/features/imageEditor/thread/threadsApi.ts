@@ -60,9 +60,21 @@ export interface ImageThreadLaunch {
   // Операция запуска (generate / edit / inpaint / outpaint / …); null — старые нити
   // и запуски без операции (обрезка, local-media)
   op?: string | null;
-  // Подстановка персонажа на лицо (ADR-027, §4, этап 2): номер лица, bbox и slug персонажа
+  // Подстановка персонажа на лицо (ADR-028, этап 2): номер лица, bbox и slug персонажа
   // для подписи карточки «{Имя} → лицо {n}»; null — запуск без подстановки (старые нити)
   faceTarget?: { n: number; bBox?: number[]; characterSlug: string } | null;
+  // Подстановка нескольких персонажей (ADR-028, этап 3): по элементу на лицо в порядке проходов;
+  // similarity — сходство лица (null — не считалось), status — итог прохода (нет — запуск идёт).
+  // Старый одиночный faceTarget читается рядом — на случай ответа старого сервера
+  faceTargets?: ImageThreadFaceTarget[] | null;
+}
+
+export interface ImageThreadFaceTarget {
+  n: number;
+  bBox?: number[];
+  characterSlug: string;
+  similarity?: number | null;
+  status?: 'done' | 'failed' | 'cancelled' | null;
 }
 
 export interface ImageThreadSettings {

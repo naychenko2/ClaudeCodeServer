@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 using FluentAssertions;
 
@@ -22,7 +23,7 @@ public class ComfyWorkflowsTests
         "ManualSigmas", "MMH3TemporalSplitParamsV10", "MMH3SpatialSplitParamsV10", "MMH3SplitUpscale",
         "ModelPatchLoader", "LoadVideo", "GetVideoComponents", "LoadImageMask", "MiniMaxH3FunControlNetApply",
         "MiniMaxH3ReferenceToVideo", "LoadAudio", "GrowMask", "MaskToImage", "ImageBlur", "ImageToMask",
-        "ImageFromBatch", "ImageCompositeMasked",
+        "ImageFromBatch", "ImageCompositeMasked", "ImageCrop", "ImageScale", "CropMask",
         // Аудио (ADR-020): музыка нативными нодами, остальное — узел CcsAudioWorker
         "ModelSamplingAuraFlow", "DualCLIPLoader", "TextEncodeAceStepAudio1.5", "ConditioningZeroOut",
         "EmptyAceStep1.5LatentAudio", "SaveAudioMP3", "CheckpointLoaderSimple", "YuE2GenerateABC", "YuE2GenerateMusic",
@@ -195,6 +196,99 @@ public class ComfyWorkflowsTests
         wf.ContainsKey("sim").Should().BeFalse();
     }
 
+    // Подстановка на лицо (ADR-028, решение 12): модель видит кроп вокруг цели, а не маску-образец;
+    // результат приводится к размеру кропа и вклеивается в его место по вырезанной мягкой маске
+    [Fact]
+    public void Правка_СКропом_МодельВидитКроп_СклейкаВМестеКропа()
+    {
+        var crop = new LocalImageCrop(8, 16, 64, 32, 128, 64);
+        var wf = ComfyWorkflows.EditImage("x", ["a.png", "b.png"], null, 7, "p",
+            faceReferences: ["r1.png"], mask: "m.png", crop: crop);
+
+        // Кроп режется из холста и увеличивается только вверх (размер считает C#, кратно 16)
+        Class(wf, "crop").Should().Be("ImageCrop");
+        Inputs(wf, "crop")["image"]!.ToJsonString().Should().Be("[\"img1\",0]");
+        Inputs(wf, "crop")["x"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "crop")["y"]!.GetValue<int>().Should().Be(16);
+        Inputs(wf, "crop")["width"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "crop")["height"]!.GetValue<int>().Should().Be(32);
+        Class(wf, "crop_scale").Should().Be("ImageScale");
+        Inputs(wf, "crop_scale")["image"]!.ToJsonString().Should().Be("[\"crop\",0]");
+        Inputs(wf, "crop_scale")["upscale_method"]!.GetValue<string>().Should().Be("lanczos");
+        Inputs(wf, "crop_scale")["width"]!.GetValue<int>().Should().Be(128);
+        Inputs(wf, "crop_scale")["height"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "crop_scale")["crop"]!.GetValue<string>().Should().Be("disabled");
+
+        // Энкодер: первая картинка — увеличенный кроп, остальные образцы не тронуты
+        Inputs(wf, "enc")["images.image_1"]!.ToJsonString().Should().Be("[\"crop_scale\",0]", "модель видит кроп, а не холст");
+        Inputs(wf, "enc")["images.image_2"]!.ToJsonString().Should().Be("[\"img2\",0]");
+
+        // Выход модели приводится к размеру кропа, мягкая маска вырезается тем же прямоугольником
+        Class(wf, "dec_fit").Should().Be("ImageScale");
+        Inputs(wf, "dec_fit")["image"]!.ToJsonString().Should().Be("[\"dec\",0]");
+        Inputs(wf, "dec_fit")["upscale_method"]!.GetValue<string>().Should().Be("lanczos");
+        Inputs(wf, "dec_fit")["width"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "dec_fit")["height"]!.GetValue<int>().Should().Be(32);
+        Inputs(wf, "dec_fit")["crop"]!.GetValue<string>().Should().Be("disabled");
+        Class(wf, "mask_crop").Should().Be("CropMask");
+        Inputs(wf, "mask_crop")["mask"]!.ToJsonString().Should().Be("[\"mask_soft\",0]");
+        Inputs(wf, "mask_crop")["x"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "mask_crop")["y"]!.GetValue<int>().Should().Be(16);
+        Inputs(wf, "mask_crop")["width"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "mask_crop")["height"]!.GetValue<int>().Should().Be(32);
+
+        // Склейка в месте кропа: вне кропа холст не трогается вовсе (resize_source = false)
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — загруженный холст");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec_fit\",0]", "внутри кропа — сгенерированное");
+        Inputs(wf, "overlay")["x"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "overlay")["y"]!.GetValue<int>().Should().Be(16);
+        Inputs(wf, "overlay")["resize_source"]!.GetValue<bool>().Should().BeFalse();
+        Inputs(wf, "overlay")["mask"]!.ToJsonString().Should().Be("[\"mask_crop\",0]");
+        Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]", "сохраняется результат склейки");
+
+        // Сходство — на всём холсте с полной маской: от кропа не зависит
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Inputs(wf, "save")["images"]!.ToJsonString());
+        Inputs(wf, "sim")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]", "полная маска, а не вырезанная");
+    }
+
+    // Без кропа граф байт-в-байт прежний: явный null не отличим от опущнутого параметра
+    [Fact]
+    public void Правка_КропNull_ГрафБайтВБайтБезКропа()
+    {
+        var withNull = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", crop: null);
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        withNull.ToJsonString().Should().Be(plain.ToJsonString());
+    }
+
+    // Вуаль (ADR-028, решение 12): модель видит копию холста с серой заливкой места правки,
+    // а не чистый холст; склейка «вне маски — исходник» идёт по чистому холсту (img1)
+    [Fact]
+    public void Правка_СВуалью_МодельВидитКопию_СклейкаПоЧистомуХолсту()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", modelCanvas: "veil.png");
+
+        // Энкодер: первая картинка — вуаль-копия, а не чистый холст
+        Inputs(wf, "enc")["images.image_1"]!.ToJsonString().Should().Be("[\"img1_veil\",0]", "модель видит вуаль-копию");
+        Class(wf, "img1_veil").Should().Be("LoadImage");
+        Inputs(wf, "img1_veil")["image"]!.GetValue<string>().Should().Be("veil.png");
+
+        // Склейка: фон — ЧИСТЫЙ холст (img1), а не вуаль-копия; внутри — сгенерированное
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — чистый холст, а не вуаль");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]");
+    }
+
+    // Вуаль null — граф байт-в-байт прежний (явный null не отличим от опущнутого параметра)
+    [Fact]
+    public void Правка_ВуальNull_ГрафБайтВБайтБезВуали()
+    {
+        var withNull = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", modelCanvas: null);
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        withNull.ToJsonString().Should().Be(plain.ToJsonString());
+    }
+
     // Сборка EditImage до правки: загрузчики Qwen-модели плюс те же ноды, что в текущей
     // (QwenLoaders/KSampler/AddDecodeAndSave приватные, поэтому загрузчики собраны руками)
     private static JsonObject OldEditGraph(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
@@ -325,6 +419,9 @@ public class ComfyWorkflowsTests
             ("edit-size", ComfyWorkflows.EditImage("a", ["x.png"], (1664, 928), 1, "p")),
             // Без эталона лица: склейка вне маски, но без узла сходства (он не в object_info)
             ("edit-mask", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png")),
+            // Подстановка на лицо (ADR-028, решение 12): кроп вокруг цели, склейка в месте кропа
+            ("edit-crop", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png",
+                crop: new LocalImageCrop(8, 16, 64, 32, 128, 64))),
             ("face", ComfyWorkflows.FaceDetail("x.png", 1, "p")),
             ("face-detect", ComfyWorkflows.FaceDetect("x.png")),
             ("t2v", ComfyWorkflows.TextToVideo("a", 1344, 768, 124, 1, false, "p", "l")),

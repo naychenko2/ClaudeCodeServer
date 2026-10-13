@@ -46,8 +46,9 @@ public enum ImageEditOp { Generate, Edit, Inpaint, Outpaint, RemoveBackground, U
 public enum EditMode { Auto, Fast, Precise, Photoreal }
 
 // Канал маски у модели: Native — настоящий инпейнт, AsReference — маска уходит образцом
-// с подписью «Точность границ ниже», None — модель маску не принимает
-public enum MaskSupport { None, Native, AsReference }
+// с подписью «Точность границ ниже», Veil — место правки закрашивается серой вуалью на копии
+// холста (модель маски не видит, ADR-028), None — модель маску не принимает
+public enum MaskSupport { None, Native, AsReference, Veil }
 
 public enum ReferenceRole { Character, Style, Object }
 
@@ -77,6 +78,9 @@ public record ImageEditCaps(
     int? MaxInputSide = null,
     double? MaxInputMegapixels = null,
     double? MaxInputMb = null,
+    // Потолок веса холста при подстановке на лицо (кроп) (ADR-028, Ш3): модель видит только кроп,
+    // поэтому холст не пережимается до общего потолка загрузки. null — использовать MaxInputMb
+    double? MaxCanvasMb = null,
     // Сколько фото персонажа модель берёт как ОДНОГО человека; null — все. Qwen-Image рисует по
     // человеку на каждое фото, и текст запроса это не лечит (живой прогон 2026-09-26)
     int? MaxCharacterPhotos = null,
@@ -158,7 +162,12 @@ public record ImageEditRequest(
     string? Instruction = null,
     // Действующий формат (ADR-025): ступень и размер, которые драйвер переводит в параметры модели;
     // AspectRatio остаётся производным от него (откат и старые вызовы)
-    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null,
+    // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — обычный путь
+    LocalImageCrop? FaceCrop = null,
+    // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал подстановки на лицо;
+    // null — драйвер берёт её из References по метке mask, как раньше
+    ImageBytes? KeepMask = null);
 
 // Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
 public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);

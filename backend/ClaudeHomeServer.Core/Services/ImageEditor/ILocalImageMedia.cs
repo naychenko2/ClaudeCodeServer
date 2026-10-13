@@ -42,7 +42,7 @@ public interface ILocalImageMedia
     Task<LocalFacePoseResult> FacePoseAsync(IReadOnlyList<byte[]> images, CancellationToken ct) =>
         Task.FromResult(new LocalFacePoseResult(null, "Определение ракурса здесь не поддерживается."));
 
-    // Лица на картинке (ADR-027, §4): узел ComfyUI CcsFaceDetect, ответ — bbox по порядку слева
+    // Лица на картинке (ADR-028): узел ComfyUI CcsFaceDetect, ответ — bbox по порядку слева
     // направо. Faces — в порядке ответа воркера, N — номер с 1 (присваивает бэкенд); Error — сбой
     // или неожиданный ответ, Busy — очередь занята или ComfyUI не ответил. Реализация по умолчанию
     // — «не поддерживается»: подсистема images ещё не подключена
@@ -59,6 +59,13 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // модели («удали» кистью). Маску-образец Qwen-Image не понимает, а серую заливку — да.
 // KeepMask — только у Edit: вне маски вернуть исходник (схожесть мерится внутри маски).
 // Несовместима с EraseMask и Pad; маска — PNG того же размера, что холст
+// Crop — только у Edit, вместе с KeepMask (ADR-028, решение 12): модели не показываем маску,
+// а даём кроп вокруг цели; результат вклеивается по той же маске
+// VeilMask — только у Edit (ADR-028, решение 12): «вуаль» для кисти. Белую маску-образец
+// Qwen-Image перерисовывает в результат (белые полосы, заливка вне мазка), поэтому модели её не
+// показываем: место правки закрашивается полупрозрачным серым (128, α 0,6) на отдельной копии
+// холста (modelCanvas), а склейка «вне маски — исходник» идёт по KeepMask с ЧИСТЫМ холстом.
+// Несовместима с EraseMask, Pad и Crop (подстановка на лицо остаётся на кропе)
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
 // Lora — только у Edit и у Generate с образцами
@@ -77,13 +84,20 @@ public sealed record LocalImageRequest(
     int? Height = null,
     LocalImageLora? Lora = null,
     IReadOnlyList<byte[]>? FaceReferences = null,
-    byte[]? KeepMask = null);
+    byte[]? KeepMask = null,
+    LocalImageCrop? Crop = null,
+    byte[]? VeilMask = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);
 
 // Поля в пикселях холста по сторонам
 public sealed record LocalImagePad(int Left, int Top, int Right, int Bottom);
+
+// Кроп вокруг цели (ADR-028, решение 12): модель видит кусок холста (X, Y, Width×Height),
+// увеличенный до ScaledWidth×ScaledHeight (только вверх, кратно 16); результат приводится
+// обратно к Width×Height и вклеивается в X, Y по той же маске. Только у Edit, вместе с KeepMask
+public sealed record LocalImageCrop(int X, int Y, int Width, int Height, int ScaledWidth, int ScaledHeight);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: это «попробуй позже», а не ошибка запроса
 public sealed record LocalImageSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)
@@ -114,7 +128,7 @@ public sealed record LocalFacePoseResult(IReadOnlyList<LocalFacePose?>? Poses, s
 // Углы головы в градусах; осям соответствуют имена полей, а не позиции
 public sealed record LocalFacePose(double Yaw, double Pitch, double Roll);
 
-// Лицо, найденное детектором (ADR-027, §4): N — номер с 1 (индекс в списке + 1, присваивает
+// Лицо, найденное детектором (ADR-028): N — номер с 1 (индекс в списке + 1, присваивает
 // бэкенд, воркер номеров не отдаёт), X1/Y1/X2/Y2 — bbox в пикселях, Score — уверенность 0..1,
 // Small — короткая сторона < 64 px
 public sealed record LocalDetectedFace(int N, int X1, int Y1, int X2, int Y2, double Score, bool Small);

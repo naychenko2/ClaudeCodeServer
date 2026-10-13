@@ -16,6 +16,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     // Живость ComfyUI для каталога: свежий ответ держим 30 с, опрос — не дольше 2 с
     private static readonly TimeSpan ProbeTtl = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+    // Вуаль (ADR-028, решение 12): серая заливка места правки на копии холста, α — прозрачность
+    private const double VeilAlpha = 0.6;
 
     private readonly ComfyClient comfy;
     private readonly IConfiguration config;
@@ -207,6 +209,49 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Маска не совпадает размером с первой картинкой.");
         }
 
+        // Вуаль (ADR-028, решение 12): место правки закрашивается серым на КОПИИ холста, а не
+        // образцом. Только у Edit, несовместима со стиранием, дорисовкой и кропом (у кропа модель
+        // видит кроп, а склейка «вне маски — исходник» идёт по KeepMask)
+        byte[]? veiledBytes = null;
+        if (request.VeilMask is { Length: > 0 } veilMask)
+        {
+            if (request.Op != LocalImageOp.Edit || request.EraseMask is not null || request.Pad is not null || request.Crop is not null)
+                return LocalImageSubmitted.Fail("Вуаль — только для правки без стирания, дорисовки и подстановки на лицо.");
+            if (raster is null)
+                return LocalImageSubmitted.Fail("Вуаль здесь недоступна.");
+            var veiled = raster.VeilMasked(images[0], veilMask, VeilAlpha);
+            if (!veiled.Ok)
+                return LocalImageSubmitted.Fail("Вуаль не удалось наложить: " + veiled.Message,
+                    busy: veiled.Error == RasterError.Busy);
+            veiledBytes = veiled.Image!.Bytes;
+        }
+
+        // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску-образец.
+        // Только у Edit, вместе с KeepMask; прямоугольник — внутри холста, X/Y/Width/Height
+        // кратны 8, размер увеличения — кратно 16 (латент VAE). Кроп, прижатый к правому/нижнему
+        // краю холста, может быть некратен 8 по ширине/высоте: округление вниз срезало бы маску
+        // у края, а узлам ImageCrop/CropMask кратность не нужна (step: 1)
+        if (request.Crop is { } crop)
+        {
+            if (request.Op != LocalImageOp.Edit || request.KeepMask is not { Length: > 0 })
+                return LocalImageSubmitted.Fail("Кроп вокруг цели — только для правки с возвратом исходника вне маски.");
+            if (crop.Width <= 0 || crop.Height <= 0)
+                return LocalImageSubmitted.Fail("Размер кропа должен быть положительным.");
+            var canvasSize = ImageDimensions.Read(images[0]);
+            if (canvasSize is null)
+                return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
+            var (canvasWidth, canvasHeight) = canvasSize.Value;
+            if (crop.X % 8 != 0 || crop.Y % 8 != 0
+                || (crop.Width % 8 != 0 && crop.X + crop.Width != canvasWidth)
+                || (crop.Height % 8 != 0 && crop.Y + crop.Height != canvasHeight))
+                return LocalImageSubmitted.Fail("Координаты и размер кропа должны быть кратны 8.");
+            if (crop.ScaledWidth % 16 != 0 || crop.ScaledHeight % 16 != 0)
+                return LocalImageSubmitted.Fail("Размер увеличения кропа должен быть кратно 16.");
+            if (crop.X < 0 || crop.Y < 0
+                || crop.X + crop.Width > canvasWidth || crop.Y + crop.Height > canvasHeight)
+                return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
+        }
+
         if (request.Lora is { } requested)
         {
             var name = requested.Name ?? "";
@@ -259,8 +304,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             {
                 var ext = ImageFormatSniffer.DetectExtension(images[k]);
                 if (ext is null) return LocalImageSubmitted.Fail($"Картинка {k + 1} — не PNG, JPEG или WebP.");
-                if (images[k].Length > LocalMediaService.MaxInputBytes)
-                    return LocalImageSubmitted.Fail($"Картинка {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+                // Холст (images[0]) с кропом лица не ужимается JPEG до потолка загрузки узла:
+                // его лимит поднимается до MaxMediaInputBytes (90 МБ); остальные входы — по-прежнему 30 МБ
+                var limit = k == 0 && request.Crop is not null
+                    ? LocalMediaService.MaxMediaInputBytes
+                    : LocalMediaService.MaxInputBytes;
+                if (images[k].Length > limit)
+                    return LocalImageSubmitted.Fail($"Картинка {k + 1} больше {limit / 1024 / 1024} МБ.");
                 names.Add(await UploadTrackedAsync(uploaded, images[k], $"{jobId}-in{k + 1}{ext}", ct));
             }
 
@@ -282,13 +332,18 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             if (request.KeepMask is { Length: > 0 } maskBytes)
                 maskName = await UploadTrackedAsync(uploaded, maskBytes, $"{jobId}-mask.png", ct);
 
+            // Вуаль: копия холста с серой заливкой — тем же префиксом, чтобы забрала чистка
+            string? modelCanvas = null;
+            if (veiledBytes is not null)
+                modelCanvas = await UploadTrackedAsync(uploaded, veiledBytes, $"{jobId}-veil.png", ct);
+
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;
             var graph = request.Op switch
             {
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop, modelCanvas),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
@@ -539,8 +594,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     {
         var options = LocalMediaOptions.Read(config);
         if (!options.Enabled) return new LocalFaceDetectResult(0, 0, [], "Локальные модели выключены на этом сервере.");
-        if (image.Length > LocalMediaService.MaxInputBytes)
-            return new LocalFaceDetectResult(0, 0, [], $"Картинка больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        // Холст для детекции принимается до потолка загрузки узла (MaxMediaInputBytes, 90 МБ):
+        // детекция — не MCP-инструмент с пересылкой по сети, а загрузка на узел (ADR-028, Ш2)
+        if (image.Length > LocalMediaService.MaxMediaInputBytes)
+            return new LocalFaceDetectResult(0, 0, [], $"Картинка больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
         var ext = ImageFormatSniffer.DetectExtension(image);
         if (ext is null) return new LocalFaceDetectResult(0, 0, [], "Картинка — не PNG, JPEG, WebP или GIF.");
 

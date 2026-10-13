@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedFace } from './api';
 import {
-  faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
+  FS_TEXT, faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
   clearFailures, clearFaceChange,
+  assignCharacter, emptyAssignments, faceTargetFromAssignments, hasAssignments, isCharacterTaken,
+  MAX_FACE_PASSES, parseFacesChangedBody, removeAssignment, searchFailureText, tapFace,
   type FaceSwapViewInput, type FaceUi,
 } from './faceSwapView';
 
@@ -69,6 +71,18 @@ describe('faceSwapView: canSubmit', () => {
   });
   it('отказ «близко» (7) → false, пока выбор не изменится', () => {
     expect(faceSwapView(base({ selectedFace: 1, selectedCharacter: 'marina', facesTooClose: true })).canSubmit).toBe(false);
+  });
+  it('этап 3: отказ по номеру лица (faceRefused) → false; после снятия назначения (clearFailures) → снова true', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    const ui = fullUi();
+    const f = launchFailure('invalid_request', text, 2);
+    if (f.kind !== 'faceRefused') throw new Error('ожидался faceRefused');
+    const refused = { ...ui, refusedFace: f.face, refusedText: f.message };
+    const viewOf = (u: FaceUi, a = assignCharacter(assignCharacter(emptyAssignments, 1, 'marina'), 2, 'olga')) =>
+      faceSwapView(base({ assignments: a, refusedFace: u.refusedFace, refusedText: u.refusedText })).canSubmit;
+    expect(viewOf(refused)).toBe(false);
+    // «Снять назначение с лица 2»: назначение убрано, отказ сброшен — кнопка оживает
+    expect(viewOf(clearFailures(refused), assignCharacter(emptyAssignments, 1, 'marina'))).toBe(true);
   });
 });
 
@@ -220,19 +234,35 @@ describe('launchFailure: код → состояние', () => {
   it('код null (нет кода в теле) → generic', () => {
     expect(launchFailure(null, 'сеть')).toEqual({ kind: 'generic', message: 'сеть' });
   });
+  it('invalid_request + face (мелкое лицо между запусками) → отказ по лицу с текстом сервера', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    expect(launchFailure('invalid_request', text, 2)).toEqual({ kind: 'faceRefused', face: 2, message: text });
+  });
+  it('invalid_request без face (или face не число) → generic, тост как раньше', () => {
+    expect(launchFailure('invalid_request', 'плохой запрос')).toEqual({ kind: 'generic', message: 'плохой запрос' });
+    expect(launchFailure('invalid_request', 'плохой запрос', '2')).toEqual({ kind: 'generic', message: 'плохой запрос' });
+  });
+  it('номер лица — только положительное целое: NaN, 0, -1, 1.5, null, \'2\' → generic; 2 → faceRefused', () => {
+    for (const bad of [NaN, 0, -1, 1.5, null, '2']) {
+      expect(launchFailure('invalid_request', 'плохой запрос', bad)).toEqual({ kind: 'generic', message: 'плохой запрос' });
+    }
+    expect(launchFailure('invalid_request', 'Лицо 2', 2)).toEqual({ kind: 'faceRefused', face: 2, message: 'Лицо 2' });
+  });
 });
 
 // ── Сброс флагов отказов (этап 2 · шаг 10d) ───────────────────────────────────
 const fullUi = (over: Partial<FaceUi> = {}): FaceUi => ({
   tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
-  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false,
+  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null, refusedText: null,
   ...over,
 });
 
 describe('clearFailures: сброс всех флагов отказов (в начале запуска)', () => {
   it('все флаги отказов → false; tappedSmall/useLocalOnce/submitting не трогаем', () => {
-    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, tappedSmall: 3, useLocalOnce: true, submitting: true });
+    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, tappedSmall: 3, useLocalOnce: true, submitting: true, refusedFace: 2, refusedText: 'Лицо 2 слишком мелкое' });
     const r = clearFailures(ui);
+    expect(r.refusedFace).toBeNull();
+    expect(r.refusedText).toBeNull();
     expect(r.tooClose).toBe(false);
     expect(r.faceOutOfFrame).toBe(false);
     expect(r.busy).toBe(false);
@@ -249,12 +279,182 @@ describe('clearFailures: сброс всех флагов отказов (в н�
 
 describe('clearFaceChange: смена выбранного лица', () => {
   it('faceOutOfFrame и tooClose → false; busy/providerUnavailable/facesChanged не трогаем', () => {
-    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true });
+    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, refusedFace: 2, refusedText: 'Лицо 2 слишком мелкое' });
     const r = clearFaceChange(ui);
+    expect(r.refusedFace).toBeNull();
+    expect(r.refusedText).toBeNull();
     expect(r.tooClose).toBe(false);
     expect(r.faceOutOfFrame).toBe(false);
     expect(r.busy).toBe(true);
     expect(r.providerUnavailable).toBe(true);
     expect(r.facesChanged).toBe(true);
+  });
+});
+
+// ── Назначения «лицо → персонаж» (ADR-028, этап 3) ─────────────────────────────
+const faces3 = [face(1), face(2), face(3)];
+
+describe('tapFace: тап по лицу', () => {
+  it('свободная рамка при <2 назначений → active, limit нет', () => {
+    const a = tapFace(emptyAssignments, 1, faces3);
+    expect(a.active).toBe(1);
+    expect(a.limit).toBeNull();
+  });
+
+  it('повторный тап по активной (назначенной) → active = null', () => {
+    const assigned = assignCharacter(emptyAssignments, 1, 'm');
+    const a1 = tapFace(assigned, 1, faces3); // тап по назначенной → active
+    expect(a1.active).toBe(1);
+    const a2 = tapFace(a1, 1, faces3); // повторный тап по активной → null
+    expect(a2.active).toBeNull();
+  });
+
+  it('2 назначения + тап по свободной → limit = n, active не меняется (мутация: не ставить limit → краснеет)', () => {
+    let a = assignCharacter(emptyAssignments, 1, 'm');
+    a = assignCharacter(a, 2, 'i');
+    expect(a.active).toBeNull();
+    const r = tapFace(a, 3, faces3);
+    expect(r.limit).toBe(3);
+    expect(r.active).toBeNull();
+    // назначений не прибавилось
+    expect(r.assignments.size).toBe(2);
+  });
+
+  it('тап по назначенной → active (переназначение), limit снимается', () => {
+    let a = assignCharacter(emptyAssignments, 1, 'm');
+    a = { ...a, limit: 3 };
+    const r = tapFace(a, 1, faces3);
+    expect(r.active).toBe(1);
+    expect(r.limit).toBeNull();
+  });
+
+  it('мелкое лицо → состояние не меняется (как этап 2)', () => {
+    const r = tapFace(emptyAssignments, 1, [face(1, true)]);
+    expect(r).toBe(emptyAssignments);
+  });
+});
+
+describe('isCharacterTaken: занятый персонаж', () => {
+  it('персонаж на другом лице недоступен (мутация: не исключать занятого → краснеет)', () => {
+    const a = assignCharacter(emptyAssignments, 1, 'm');
+    expect(isCharacterTaken(a, 'm', 2)).toBe(true);
+    // на том же лице — не «занят»
+    expect(isCharacterTaken(a, 'm', 1)).toBe(false);
+    // другой персонаж — свободен
+    expect(isCharacterTaken(a, 'i', 2)).toBe(false);
+  });
+
+  it('снятие назначения освобождает персонажа', () => {
+    let a = assignCharacter(emptyAssignments, 1, 'm');
+    a = removeAssignment(a, 1);
+    expect(isCharacterTaken(a, 'm', 2)).toBe(false);
+  });
+});
+
+describe('assignCharacter: переназначение заменяет, не добавляет', () => {
+  it('повторное назначение тому же лицу → одно назначение (мутация: добавлять → краснеет)', () => {
+    let a = assignCharacter(emptyAssignments, 1, 'm');
+    a = assignCharacter(a, 1, 'i'); // заменяет, не добавляет
+    expect(a.assignments.size).toBe(1);
+    expect(a.assignments.get(1)).toBe('i');
+    expect(a.active).toBeNull();
+  });
+
+  it('назначение на второе лицо → два (лимит MAX_FACE_PASSES)', () => {
+    let a = assignCharacter(emptyAssignments, 1, 'm');
+    a = assignCharacter(a, 2, 'i');
+    expect(a.assignments.size).toBe(2);
+    expect(MAX_FACE_PASSES).toBe(2);
+  });
+});
+
+describe('faceTargetFromAssignments: сборка цели', () => {
+  it('faces в порядке возрастания номера лица (мутация: не сортировать → краснеет)', () => {
+    let a = assignCharacter(emptyAssignments, 2, 'i');
+    a = assignCharacter(a, 1, 'm');
+    const t = faceTargetFromAssignments(a, 'v1', 'fk');
+    expect(t).toEqual({ versionId: 'v1', facesKey: 'fk', faces: [{ face: 1, characterSlug: 'm' }, { face: 2, characterSlug: 'i' }] });
+  });
+
+  it('одно лицо → faces из одного элемента', () => {
+    const a = assignCharacter(emptyAssignments, 1, 'm');
+    const t = faceTargetFromAssignments(a, 'v1', 'fk');
+    expect(t).toEqual({ versionId: 'v1', facesKey: 'fk', faces: [{ face: 1, characterSlug: 'm' }] });
+  });
+
+  it('без назначений → null (запуска нет)', () => {
+    expect(faceTargetFromAssignments(emptyAssignments, 'v1', 'fk')).toBeNull();
+  });
+});
+
+describe('hasAssignments', () => {
+  it('нет назначений → false; есть → true', () => {
+    expect(hasAssignments(emptyAssignments)).toBe(false);
+    expect(hasAssignments(assignCharacter(emptyAssignments, 1, 'm'))).toBe(true);
+  });
+});
+
+describe('parseFacesChangedBody: тело 409 при запуске', () => {
+  it('facesKey + faces → FacesResponse', () => {
+    const body = { facesKey: 'fk2', width: 100, height: 100, faces: [{ n: 1, bbox: [0, 0, 10, 10], score: 0.9, small: false }] };
+    expect(parseFacesChangedBody(body)).toEqual(body);
+  });
+  it('без facesKey / без массива faces → null', () => {
+    expect(parseFacesChangedBody({ facesKey: 'fk' })).toBeNull();
+    expect(parseFacesChangedBody({ faces: [] })).toBeNull();
+    expect(parseFacesChangedBody(null)).toBeNull();
+  });
+});
+
+describe('searchFailureText: причина отказа поиска', () => {
+  it('busy → очередь видеокарты', () => {
+    expect(searchFailureText('busy')).toContain('Видеокарта занята');
+  });
+  it('provider_unavailable → локальные недоступны', () => {
+    expect(searchFailureText('provider_unavailable')).toContain('Локальные модели');
+  });
+  it('прочий код → общий текст', () => {
+    expect(searchFailureText('other')).toBe('Не удалось найти лица. Попробуйте позже');
+  });
+});
+
+// ── Хвосты перепроверки Майи (n3, n4) ────────────────────────────────────────
+describe('faceSwapView: полоса режима при отказе (n3)', () => {
+  const two = () => assignCharacter(assignCharacter(emptyAssignments, 1, 'marina'), 2, 'olga');
+
+  it('без отказа два назначения — «можно подставлять»', () => {
+    const a = two();
+    expect(a.active).toBeNull();
+    expect(faceSwapView(base({ assignments: a })).bar).toBe(FS_TEXT.barTwo);
+  });
+
+  it('отказ «близко» по лицу 2 — полоса повторяет отказ, а не зовёт подставлять (мутация: вернуть barTwo → краснеет)', () => {
+    const v = faceSwapView(base({ assignments: two(), facesTooClose: true, refusedFace: 2 }));
+    expect(v.canSubmit).toBe(false);
+    expect(v.bar).toBe(FS_TEXT.closeN(2));
+  });
+
+  it('отказ «вне кадра» без номера при двух назначениях — общий текст отказа', () => {
+    expect(faceSwapView(base({ assignments: two(), faceOutOfFrame: true })).bar).toBe(FS_TEXT.outOfFrame);
+  });
+
+  it('отказ сервера по лицу (faceRefused) — его текст', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    expect(faceSwapView(base({ assignments: two(), refusedFace: 2, refusedText: text })).bar).toBe(text);
+  });
+
+  it('одно назначение с отказом — не «подставить сразу»', () => {
+    const a = assignCharacter(emptyAssignments, 1, 'marina');
+    expect(faceSwapView(base({ assignments: a, facesTooClose: true })).bar).toBe(FS_TEXT.closeN(1));
+  });
+});
+
+describe('тексты режима: номер лица не отрывается от слова (n4)', () => {
+  it('между «лица/лице» и номером — неразрывный пробел (мутация: обычный пробел → краснеет)', () => {
+    for (const s of [FS_TEXT.pickFor(1), FS_TEXT.barPick(1), FS_TEXT.barReassign(1),
+      FS_TEXT.takenOn(1), FS_TEXT.busyTile(1), FS_TEXT.unassignN(1)]) {
+      expect(s).toMatch(/лиц[ае]\u00A01/);
+      expect(s).not.toMatch(/лиц[ае] 1/);
+    }
   });
 });

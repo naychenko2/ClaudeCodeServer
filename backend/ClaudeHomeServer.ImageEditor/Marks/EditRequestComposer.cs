@@ -67,6 +67,7 @@ public static class EditRequestComposer
         if (source is not null) roles.Add("исходная картинка, её и нужно править");
         var notes = new List<string>();
         ImageBytes? maskChannel = null;
+        ImageBytes? keepMask = null;
 
         if (annotated is not null && model.Caps.MaxReferences > 0)
         {
@@ -79,9 +80,19 @@ public static class EditRequestComposer
                   "куда смотреть; в результат пометки не переносить");
         }
 
+        // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску, поэтому маска
+        // не уходит образцом и роль «маска: белое — область, которую менять…» не пишется; маска
+        // идёт явным каналом KeepMask (вне неё вернуть исходник). Кисть и «удали» — без изменений
+        var faceCrop = input.FaceCrop is not null;
         if (mask is not null && !split)
         {
-            if (model.Caps.Mask == MaskSupport.Native)
+            if (faceCrop)
+            {
+                keepMask = mask;
+            }
+            // Вуаль с размеченной копией не включается (LocalImageEditor.VeilMaskOf): маска идёт
+            // образцом, как до вуали, — иначе до модели она не дошла бы вовсе
+            else if (model.Caps.Mask == MaskSupport.Native || (model.Caps.Mask == MaskSupport.Veil && annotated is null))
             {
                 maskChannel = mask;
             }
@@ -128,8 +139,16 @@ public static class EditRequestComposer
         else if (character is not null)
             notes.Add($"Персонаж «{character.Name}»: сохранить лицо и черты.");
 
-        var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split ? MarksScope.WithoutBrush : MarksScope.All);
-        var prompt = Join(input.Prompt, marks, notes);
+        // Вуаль (ADR-028, решение 12): модель видит серую заливку вместо белой маски, поэтому
+        // строки «выделено кистью…» из пометок не нужны (место уже видно), а текст человека
+        // оборачивается: модель должна понять, что серое — это то, что править. При подстановке на
+        // лицо (FaceCrop) маска уходит каналом KeepMask, а не в канал вуали — заливки модель не
+        // видит, поэтому и текста о ней нет (ADR-028, Д3)
+        var veil = mask is not null && annotated is null && !faceCrop && model.Caps.Mask == MaskSupport.Veil;
+        var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split || veil ? MarksScope.WithoutBrush : MarksScope.All);
+        var prompt = veil
+            ? Join(VeilHead + input.Prompt?.Trim(), marks, notes.Prepend(VeilNote))
+            : Join(input.Prompt, marks, notes);
 
         // Первый проход: исходник и маска, один вариант — все варианты второго прохода растут
         // из одного и того же стёртого или перерисованного места
@@ -153,10 +172,19 @@ public static class EditRequestComposer
 
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
             op, prompt, source, maskChannel, references, count, aspectRatio, outpaint, model.Id, input.Character, maskPass,
-            Instruction: input.Prompt?.Trim(), Format: format));
+            Instruction: input.Prompt?.Trim(), Format: format,
+            FaceCrop: input.FaceCrop, KeepMask: keepMask));
     }
 
     private const string MaskRole = "маска: белое — область, которую менять, чёрное — не трогать";
+
+    // Вуаль (ADR-028, решение 12): серая заливка на первой картинке — место правки
+    public const string VeilHead =
+        "На первой картинке место правки закрашено полупрозрачной серой заливкой. Что сделать с этим местом: ";
+    public const string VeilNote =
+        "Полупрозрачная серая заливка на первой картинке отмечает место правки; под ней видно, что там сейчас. " +
+        "Измени отмеченное место так, как просят, сохранив форму и детали того, что под заливкой. Серой дымки в результате " +
+        "остаться не должно. Всё вне отмеченного места оставь без изменений.";
 
     private const string FirstPassNote =
         "Это первый шаг правки: выполнить только ту часть запроса, которая относится к закрашенному кистью " +

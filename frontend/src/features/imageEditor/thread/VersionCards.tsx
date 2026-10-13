@@ -11,11 +11,15 @@ import {
   AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, Sparkles, Target, X,
 } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, Menu, MenuItem, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
+  Badge, Button, Dot, IconButton, Menu, MenuItem, Notice, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
   FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import { stripVisible } from './characterPhotos';
-import { faceTargetCaption } from '../faceSwapView';
+import {
+  faceResultRows, facePairsCaption, launchFaces, partialNotice, passStage, versionSimilarityShown,
+  type FaceResultRow, type PassSegment,
+} from './faceSwap';
+import type { ImageThreadFaceTarget } from './threadsApi';
 import { useCharacters } from '../characters/useCharacters';
 import { useCatalog } from './catalog';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
@@ -29,6 +33,7 @@ import {
 } from './model';
 import { recordOf } from './records';
 import { CharacterPhotosStrip } from './CharacterPhotosStrip';
+import { TouchHit } from '../TouchHit';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
@@ -101,6 +106,35 @@ function Picture({ src, onOpen }: { src: string | null; onOpen?: () => void }) {
   );
 }
 
+// Строка результата по лицу (v2-notes, «Карточки в ленте»): кружок 18 с ✓/✕, пара и итог
+function FaceResult({ row }: { row: FaceResultRow }) {
+  const ok = row.status === 'done';
+  return (
+    <div data-face-result={row.status} style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0 }}>
+      <span aria-hidden style={{
+        width: 18, height: 18, flex: '0 0 18px', borderRadius: R.full, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: FS.xs, fontWeight: 700, background: ok ? C.successBg : C.dangerBg, color: ok ? C.successText : C.dangerText,
+      }}>{row.mark}</span>
+      <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{row.pair}</span>
+      {row.result && (
+        <span style={{ fontSize: FS.xs, color: row.status === 'failed' ? C.dangerText : C.textMuted }}>{row.result}</span>
+      )}
+    </div>
+  );
+}
+
+// Полоска из N отрезков стадии «Проход k из N»: готовый — success, текущий — accent, впереди — дорожка
+const SEGMENT_COLOR: Record<PassSegment, string> = { done: C.success, current: C.accent, ahead: C.progressTrack };
+
+function PassBar({ segments, run }: { segments: PassSegment[]; run: number }) {
+  return (
+    <div role="progressbar" aria-valuemin={0} aria-valuemax={segments.length} aria-valuenow={run}
+      style={{ display: 'flex', gap: SP.xs }}>
+      {segments.map((s, i) => <span key={i} style={{ flex: 1, height: 4, borderRadius: R.max, background: SEGMENT_COLOR[s] }} />)}
+    </div>
+  );
+}
+
 // Карточка версии: шапка, картинка, подпись «вариант 1 из 2 · от исходника · модель», действия.
 export function VersionCard({ projectId, sessionId, thread, version, focused, model, cropNote, best }: {
   projectId: string; sessionId: string; thread: ImageThread; version: ImageThreadVersion; focused: boolean;
@@ -117,12 +151,15 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const src = versionSrc(projectId, thread, version);
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
-  const sim = typeof version.similarity === 'number' ? `сходство ${simText(version.similarity)}`
-    : version.jobId && launchVersions(thread, version.jobId).some(x => typeof x.similarity === 'number') ? 'лицо не найдено' : '';
   const done = versionDone(thread, version);
   // Блок «Фото персонажа» (ADR-027, шаг 18): не у исходника, не у обрезки без ИИ, только с персонажем
   const smart = useFeature(FLAGS.characterSmartPhotos);
   const launch = version.jobId ? launchOf(thread, version.jobId) : null;
+  // Лица запуска (ADR-028): при N > 1 общего сходства версии нет — оно у каждого лица в строках
+  const faces = launchFaces(launch);
+  const sim = !versionSimilarityShown(faces) ? ''
+    : typeof version.similarity === 'number' ? `сходство ${simText(version.similarity)}`
+    : version.jobId && launchVersions(thread, version.jobId).some(x => typeof x.similarity === 'number') ? 'лицо не найдено' : '';
   const character = stripVisible({ smart, versionId: version.id, cropNote: cropNote ?? null, character: launch?.character ?? null })
     ? (launch?.character ?? null) : null;
   const personal = isPersonalScope(projectId);
@@ -134,10 +171,13 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   // за флагом, при персонажах в проекте и доступных локальных моделях. Нет условия — нет и «⋯»
   const faceFlag = useFeature(FLAGS.characterFaceSwap);
   const { list: faceChars } = useCharacters(projectId);
-  // «Подставить персонажа» (этап 2 · шаг 10c): подпись «{Имя} → лицо {n}»; имя — по slug
-  // персонажа из списка проекта, персонажа больше нет — сам slug
-  const ft = launch?.faceTarget ?? null;
-  const faceCap = faceTargetCaption(ft, ft ? faceChars?.find(c => c.slug === ft.characterSlug)?.name ?? null : null);
+  // «Подставить персонажа» (этап 2 · шаг 10c, этап 3 · шаг 17): подпись «Мария → лицо 1, Иван → лицо 2»;
+  // имя — по slug персонажа из списка проекта, персонажа больше нет — сам slug. Есть итог по
+  // лицам (N > 1) — пары уходят в строки результата, а не в мету
+  const nameOf = (slug: string) => faceChars?.find(c => c.slug === slug)?.name;
+  const faceRows = faceResultRows(faces, nameOf);
+  const partial = partialNotice(faces);
+  const faceCap = faceRows.length ? null : facePairsCaption(faces, nameOf);
   const meta = cropNote ?? [faceCap, versionMeta(thread, version, null), sim, model ?? ''].filter(Boolean).join(' · ');
   const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const faceCatalog = useCatalog(projectId);
@@ -164,6 +204,12 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
       </div>
       {done && <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{done}</div>}
       <Picture src={src} onOpen={open} />
+      {faceRows.length > 0 && (
+        <div data-face-results="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+          {faceRows.map(r => <FaceResult key={r.n} row={r} />)}
+        </div>
+      )}
+      {partial && <Notice tone="warning" icon={AlertTriangle} data-face-partial="">{partial}</Notice>}
       {meta && (
         <div title={metaTitle} style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {meta}
@@ -240,17 +286,28 @@ function estimateText(e: unknown): string | null {
   return `${x.approx ? '≈ ' : ''}${money(x.amount, x.unit)}`;
 }
 
-function RunningLine({ projectId, jobId, model }: { projectId: string; jobId: string; model: string | null }) {
+function RunningLine({ projectId, jobId, model, faces }: {
+  projectId: string; jobId: string; model: string | null; faces: ImageThreadFaceTarget[];
+}) {
   const { status, cancel } = useJobStatus(projectId, jobId);
+  const mobile = useIsMobile();
   const running = (status?.phase ?? 'run') === 'run';
   const progress = useProgress(status, running);
+  // Несколько лиц (ADR-028): «Проход k из N · лицо n» по run/runs из событий задачи; их нет — «Рисуем…»
+  const stage = passStage(faces, status?.run, status?.runs);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary }}>
-        <Dot color={C.accent} />Рисуем…{model ? ` · ${model}` : ''}{queueText(progress.queuePosition)}
-        <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary, flexWrap: 'wrap' }}>
+        <Dot color={C.accent} />{stage ? stage.text : `Рисуем…${model ? ` · ${model}` : ''}`}{queueText(progress.queuePosition)}
+        {/* Мобила: зона касания 44 — невидимым слоем, рамка кнопки xs остаётся 24 и не наезжает на полосу проходов (n1) */}
+        <TouchHit on={mobile} onTap={() => { void cancel(); }}>
+          <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
+        </TouchHit>
       </div>
-      <ProgressBar value={progress.percent} transition="width .5s linear" />
+      {stage
+        ? <PassBar segments={stage.segments} run={status?.run ?? 0} />
+        : <ProgressBar value={progress.percent} transition="width .5s linear" />}
+      {stage?.hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{stage.hint}</div>}
     </div>
   );
 }
@@ -285,12 +342,12 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const agent = (str(data.initiator) ?? launch?.initiator) === 'agent';
   const head = base && versionHasImage(thread, base) ? `Правка ${fromVersion(base)}` : 'Генерация';
   const info = [model, variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
-  // «Подставить персонажа» (этап 2 · шаг 10c): подпись «{Имя} → лицо {n}» в строке запуска;
-  // имя — по slug персонажа из списка проекта, персонажа больше нет — сам slug
-  const ft = launch?.faceTarget ?? null;
-  const faceCap = faceTargetCaption(ft, ft ? faceChars?.find(c => c.slug === ft.characterSlug)?.name ?? null : null);
+  // «Подставить персонажа» (этап 2 · шаг 10c, этап 3 · шаг 17): подпись пар «Мария → лицо 1, Иван → лицо 2»
+  // в строке запуска; имя — по slug персонажа из списка проекта, персонажа больше нет — сам slug
+  const faces = launchFaces(launch);
+  const faceCap = facePairsCaption(faces, slug => faceChars?.find(c => c.slug === slug)?.name);
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
-  const endNote = launchEndNote(status, versions.length, count);
+  const endNote = launchEndNote(status, versions.length, count, faces.length);
   // Обрезка без ИИ (ADR-025): та же карточка версии, над ней строка «Вы обрезали…» / «✦ Claude обрезал…» из записи
   const crop = model === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
   const cropNote = crop ? `${crop.width}×${crop.height} · ${crop.aspect} · обрезано без ИИ${agent ? ' · ✦ Claude' : ''}` : null;
@@ -325,7 +382,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
             <span>{threadName(thread)}{faceCap ? ` · ${faceCap}` : ''} · {info}</span>
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
-          <RunningLine projectId={projectId} jobId={jobId} model={model} />
+          <RunningLine projectId={projectId} jobId={jobId} model={model} faces={faces} />
           <div className="cc-skel" style={{ aspectRatio: PREVIEW_RATIO, maxHeight: PREVIEW_MAX_HEIGHT, borderRadius: R.md }} />
         </Shell>
       )}

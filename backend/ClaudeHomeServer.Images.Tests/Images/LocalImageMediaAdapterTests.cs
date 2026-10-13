@@ -597,7 +597,375 @@ public class LocalImageMediaAdapterTests
         graph.ContainsKey("overlay").Should().BeFalse();
     }
 
-    // Детекция лиц (ADR-027, §4): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
+    // Кроп вокруг цели (ADR-028, решение 12): только у Edit, вместе с KeepMask;
+    // прямоугольник внутри холста, X/Y/Width/Height кратны 8, размер увеличения кратно 16
+    [Fact]
+    public async Task Кроп_БезМаски_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Crop = new LocalImageCrop(0, 0, 8, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Кроп вокруг цели — только для правки с возвратом исходника вне маски.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_ВнеХолста_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 16, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Кроп выходит за пределы холста.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_НулевойРазмер_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 0, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Размер кропа должен быть положительным.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_НеКратноВосеми_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(4, 0, 8, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Координаты и размер кропа должны быть кратны 8.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_УвеличениеНеКратноШестнадцати_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 8, 8, 8, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Размер увеличения кропа должен быть кратно 16.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Кроп у правого/нижнего края холста некратной ширины/высоты (холст 13×11): проходит проверку
+    // и доходит до графа с тем же прямоугольником — округление вниз срезало бы маску у края
+    // (живой прогон 13.10: полоса старого лица). Мутация «кратность 8 везде» → красный
+    [Fact]
+    public async Task Кроп_УКраяХолста_НеКратныйВосьми_доходитДоГрафа()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(13, 11)],
+            KeepMask = LocalMediaTestImages.Png(13, 11),
+            Crop = new LocalImageCrop(8, 8, 5, 3, 16, 16),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        var crop = graph["crop"]!["inputs"]!.AsObject();
+        crop["width"]!.GetValue<int>().Should().Be(5);
+        crop["height"]!.GetValue<int>().Should().Be(3);
+        var maskCrop = graph["mask_crop"]!["inputs"]!.AsObject();
+        maskCrop["width"]!.GetValue<int>().Should().Be(5);
+        maskCrop["height"]!.GetValue<int>().Should().Be(3);
+        graph["dec_fit"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(5);
+    }
+
+    // Внутри холста (не у края) некратная ширина по-прежнему отказ
+    [Fact]
+    public async Task Кроп_ВнутриХолста_НеКратнаяШирина_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(16, 8)],
+            KeepMask = LocalMediaTestImages.Png(16, 8),
+            Crop = new LocalImageCrop(0, 0, 12, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Координаты и размер кропа должны быть кратны 8.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Валидный кроп: граф режет кроп из холста, увеличивает его, вклеивает результат в месте кропа
+    [Fact]
+    public async Task Кроп_Валидный_граф_режет_увеличивает_и_вклеивает()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 8, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["crop"]!["class_type"]!.GetValue<string>().Should().Be("ImageCrop");
+        graph["crop_scale"]!["class_type"]!.GetValue<string>().Should().Be("ImageScale");
+        graph["dec_fit"]!["class_type"]!.GetValue<string>().Should().Be("ImageScale");
+        graph["mask_crop"]!["class_type"]!.GetValue<string>().Should().Be("CropMask");
+        var overlay = graph["overlay"]!["inputs"]!.AsObject();
+        overlay["x"]!.GetValue<int>().Should().Be(0);
+        overlay["y"]!.GetValue<int>().Should().Be(0);
+        overlay["resize_source"]!.GetValue<bool>().Should().BeFalse();
+        overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec_fit");
+    }
+
+    // Холст нужного веса: PNG-сигнатура + IHDR (размер для проверки кропа), остаток — нули.
+    // Не декодируем реальную картинку такого веса — проверяем только проверку веса входов
+    private static byte[] PngOf(int length)
+    {
+        var png = LocalMediaTestImages.Png(16, 16);
+        var result = new byte[length];
+        Array.Copy(png, result, png.Length);
+        return result;
+    }
+
+    // Д-1 (ADR-028, Ш2): холст (images[0]) с кропом лица не ужимается JPEG до потолка загрузки
+    // узла — его лимит поднимается до MaxMediaInputBytes (90 МБ). 40 МБ с Crop уходит в загрузку
+    [Fact]
+    public async Task Кроп_Холст40МБ_уходит_в_загрузку()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [PngOf(40 * 1024 * 1024)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+            Crop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    // 40 МБ без Crop → прежний лимит 30 МБ: «Картинка 1 больше 30 МБ»
+    [Fact]
+    public async Task Холст40МБ_БезКропа_отказ_30МБ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [PngOf(40 * 1024 * 1024)],
+        }, default);
+
+        submitted.Error.Should().Be($"Картинка 1 больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // 95 МБ с Crop → тот же потолок узла 90 МБ: отказ
+    [Fact]
+    public async Task Кроп_Холст95МБ_отказ_90МБ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [PngOf(95 * 1024 * 1024)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+            Crop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be($"Картинка 1 больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Образец (второй вход) больше 30 МБ при Crop → лимит поднимается только для images[0]: отказ
+    [Fact]
+    public async Task Кроп_Образец40МБ_отказ_30МБ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(16, 16), PngOf(40 * 1024 * 1024)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+            Crop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be($"Картинка 2 больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Д5 (ADR-028), сквозной путь сервера до адаптера: исходник 2400×1800 (больше лимита Qwen 1,8 Мп),
+    // лицо у правого края → FaceMaskBuilder (кроп по лимитам модели) → InputFitter (исходник с кропом
+    // не ужимается) → Compose → адаптер. Кроп внутри холста и на месте лица, адаптер не отказывает,
+    // граф уменьшает/увеличивает кроп ровно до Scaled. До правки фиттер ужимал холст до 1549×1161,
+    // а кроп оставался в пикселях 2400×1800 — «Кроп выходит за пределы холста»
+    [Fact]
+    public async Task Кроп_Исходник_2400x1800_ЛицоСправа_доходитДоГрафа()
+    {
+        var raster = new SkiaImageRaster();
+        var qwen = ImageEditCatalog.WithInputLimits(
+            new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage));
+        var face = new LocalDetectedFace(1, 2150, 700, 2390, 1000, 0.9, false);
+        var built = new FaceMaskBuilder(raster).Build(2400, 1800, [face], 1, qwen.Caps);
+        built.Error.Should().BeNull();
+        var mask = new ImageBytes(built.Png!, "image/png");
+        // Настоящий PNG: растр должен его распознать, иначе фиттер пропустит исходник как есть
+        using var bitmap = new SKBitmap(new SKImageInfo(2400, 1800, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        bitmap.Erase(SKColors.SteelBlue);
+        using var png = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+        var input = new ImageEditJobInput("q", "заменить лицо", null,
+            new ImageBytes(png.ToArray(), "image/png"), mask, null, [], "images/hero.png",
+            FaceCrop: built.Crop, KeepMask: mask);
+
+        var fitted = await new InputFitter(raster).FitAsync(input, qwen.Caps, default);
+        fitted.Value.Should().NotBeNull(fitted.Error);
+        var composed = EditRequestComposer.Compose(fitted.Value!.Input, ImageEditOp.Edit, qwen, 1);
+        composed.Value.Should().NotBeNull(composed.Error);
+        var request = composed.Value!;
+        var crop = request.FaceCrop!;
+
+        var submitted = await Build().SubmitAsync(Edit() with
+        {
+            Images = [request.Source!.Bytes],
+            KeepMask = request.KeepMask!.Bytes,
+            Crop = crop,
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var canvas = raster.Probe(request.Source.Bytes)!;
+        (canvas.Width, canvas.Height).Should().Be((2400, 1800), "холст не ужат");
+        crop.X.Should().BeLessOrEqualTo(face.X1, "кроп на месте лица");
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(face.X2).And.BeLessOrEqualTo(canvas.Width);
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["crop"]!["inputs"]!["x"]!.GetValue<int>().Should().Be(crop.X);
+        graph["crop_scale"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(crop.ScaledWidth);
+        graph["crop_scale"]!["inputs"]!["height"]!.GetValue<int>().Should().Be(crop.ScaledHeight);
+    }
+
+    // (г) Вуаль: модель видит холст с серой вуалью (img1_veil), а не белую маску-образец;
+    // склейка «вне маски — исходник» берёт ЧИСТЫЙ img1. Мутация «destination = veil» → красный
+    [Fact]
+    public async Task Вуаль_Граф_ЭнкодерВуаль_СклейкаЧистый()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+        var image = RealPng(8, 8);
+        var mask = RealPng(8, 8);
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [image],
+            KeepMask = mask,
+            VeilMask = mask,
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        // Энкодер: первая картинка — вуаль, а не чистый холст
+        graph["enc"]!["inputs"]!.AsObject()["images.image_1"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1_veil");
+        // Склейка: destination — чистый img1, source — результат модели
+        var overlay = graph["overlay"]!["inputs"]!.AsObject();
+        overlay["destination"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1");
+        overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec");
+        // Вуаль загружена как отдельный вход
+        _comfy.Uploads.Should().Contain(u => u.EndsWith("-veil.png"));
+    }
+
+    // Вуаль несовместима со стиранием: адаптер отказывает до постановки в очередь
+    [Fact]
+    public async Task Вуаль_Стирание_Отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            EraseMask = RealPng(8, 8),
+            VeilMask = RealPng(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Вуаль — только для правки без стирания, дорисовки и подстановки на лицо.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Вуаль несовместима с дорисовкой: адаптер отказывает до постановки в очередь
+    [Fact]
+    public async Task Вуаль_Дорисовка_Отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            Pad = new LocalImagePad(1, 0, 1, 0),
+            VeilMask = RealPng(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Вуаль — только для правки без стирания, дорисовки и подстановки на лицо.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Без растра вуаль недоступна: отказ до постановки
+    [Fact]
+    public async Task Вуаль_БезРастра_Отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            VeilMask = RealPng(8, 8),
+        }, default);
+
+        submitted.Error.Should().Be("Вуаль здесь недоступна.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Маска вуали другого размера, чем холст: отказ, а не сдвиг заливки
+    [Fact]
+    public async Task Вуаль_РазмерМаскиНеСовпал_Отказ()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [RealPng(8, 8)],
+            VeilMask = RealPng(16, 16),
+        }, default);
+
+        submitted.Error.Should().Contain("Вуаль не удалось наложить");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Детекция лиц (ADR-028): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
     // POST /prompt получает prompt-1, поэтому ответ кладём в историю заранее, без гонок
     private void AnswerDetect(string text)
     {
@@ -812,5 +1180,30 @@ public class LocalImageMediaAdapterTests
         store.ListByOp(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaOps.EditorInputs)
             .Should().ContainSingle().Subject.ComfyInputs.Should().Contain(u => u.EndsWith("-detect.png"));
         ClaudeHomeServer.Tests.Helpers.TestFs.DeleteDirectoryResilient(tempDir);
+    }
+
+    // Дефект 8d2556e5 (ADR-028, Ш2): холст для детекции принимается до потолка загрузки узла
+    // (MaxMediaInputBytes, 90 МБ). 40 МБ проходит проверку веса и уходит в загрузку, а не
+    // «больше 30 МБ»; 95 МБ → тот же потолок узла 90 МБ: отказ. Лимит — ссылка на символ,
+    // не дублированное число (потолок загрузки узла — та же константа, что в SubmitAsync).
+    [Fact]
+    public async Task Детекция_Холст40МБ_уходит_в_загрузку()
+    {
+        AnswerDetect("ccs_face_detect={\"width\":16,\"height\":16,\"faces\":[]}");
+        var result = await Build().DetectFacesAsync(PngOf(40 * 1024 * 1024), CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    // 95 МБ → тот же потолок узла 90 МБ: отказ «Картинка больше 90 МБ.»
+    [Fact]
+    public async Task Детекция_Холст95МБ_отказ_90МБ()
+    {
+        var result = await Build().DetectFacesAsync(PngOf(95 * 1024 * 1024), CancellationToken.None);
+
+        result.Error.Should().Be($"Картинка больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
     }
 }

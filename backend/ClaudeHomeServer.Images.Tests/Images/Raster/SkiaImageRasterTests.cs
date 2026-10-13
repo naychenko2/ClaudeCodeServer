@@ -190,6 +190,48 @@ public class SkiaImageRasterTests
             "маска другого размера — отказ, а не сдвиг заливки");
     }
 
+    // Вуаль (ADR-028, решение 12): белое на маске закрашивается полупрозрачным серым на копии.
+    // Смешивание, а не замена: p' = p·(1−α) + 128·α. Белое (255) → 255·0,4 + 128·0,6 = 178;
+    // чёрное (0) → 0·0,4 + 128·0,6 = 76. Вне маски (чёрное) пиксель не тронут
+    [Fact]
+    public void Вуаль_смешивает_с_исходным_а_не_заменяет()
+    {
+        var image = Png(Solid(8, 4, SKColors.White));
+        var mask = Png(Split(8, 4, SKColors.White, SKColors.Black));
+
+        var outcome = _raster.VeilMasked(image, mask, 0.6);
+
+        outcome.Ok.Should().BeTrue(outcome.Message);
+        using var result = SKBitmap.Decode(outcome.Image!.Bytes);
+        result.GetPixel(1, 1).Should().Be(new SKColor(178, 178, 178), "белое → 255·0,4 + 128·0,6 = 178");
+        result.GetPixel(6, 2).Should().Be(SKColors.White, "вне маски (чёрное) — исходник");
+    }
+
+    // Вуаль с чёрным исходником: 0·0,4 + 128·0,6 = 76 — заливка видна и на тёмном
+    [Fact]
+    public void Вуаль_на_тёмном_исходнике_даёт_76()
+    {
+        var image = Png(Solid(8, 4, SKColors.Black));
+        var mask = Png(Split(8, 4, SKColors.White, SKColors.Black));
+
+        var outcome = _raster.VeilMasked(image, mask, 0.6);
+
+        outcome.Ok.Should().BeTrue(outcome.Message);
+        using var result = SKBitmap.Decode(outcome.Image!.Bytes);
+        result.GetPixel(1, 1).Should().Be(new SKColor(76, 76, 76), "чёрное → 0·0,4 + 128·0,6 = 76");
+        result.GetPixel(6, 2).Should().Be(SKColors.Black, "вне маски (чёрное) — исходник");
+    }
+
+    // Маска другого размера — отказ, а не сдвиг заливки (как у EraseMasked)
+    [Fact]
+    public void Вуаль_маска_другого_размера_отказ()
+    {
+        var image = Png(Solid(8, 4, SKColors.White));
+
+        _raster.VeilMasked(image, Png(Solid(4, 4, SKColors.White)), 0.6).Error.Should().Be(RasterError.InvalidOp,
+            "маска другого размера — отказ, а не сдвиг заливки");
+    }
+
     // Потолок мегапикселей у маски — как у картинки: по заголовку, до декодирования пикселей
     [Fact]
     public void Стирание_маской_больше_потолка_отказ_по_заголовку()

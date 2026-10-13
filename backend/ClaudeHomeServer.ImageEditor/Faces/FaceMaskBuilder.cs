@@ -3,7 +3,7 @@ using ClaudeHomeServer.Services.Images.Editing.Raster;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// Маска лица на сервере (ADR-027, §4, этап 2): человек тапает на лицо, сервер сам строит эллипс
+// Маска лица на сервере (ADR-028, этап 2): человек тапает на лицо, сервер сам строит эллипс
 // по bbox детектора и вычитает bbox всех остальных лиц. Чистая арифметика + один вызов растра
 // (IImageRaster из Core — модуль на Images/Skia не ссылается, правило границ вертикалей).
 // Ошибки — не исключения, а FaceMaskResult.Error: вызывающий (ручка) переводит их в ответ.
@@ -19,6 +19,17 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
     public const int NeighborMarginPx = 30;
     // Доля площади эллипса, оставшаяся после вычитания соседей: меньше — «лица слишком близко».
     public const double MinRemainingShare = 0.6;
+    // Запас вокруг цели для кропа (ADR-028, решение 12): модель видит кроп, а не маску, поэтому
+    // запас щедрый — лицо должно оказаться в центре кропа
+    public const int CropMarginPx = 64;
+    // Поле кропа как доля рамки лица (max(w, h) эллипса, обрезанного холстом): для крупных лиц
+    // (4000×3000) фиксированные 64 px дают узкий кадр без окружения — сходство падает; 15 % рамки
+    // даёт широкий кадр (A/B: 0,819 против 0,723). Нижняя граница — CropMarginPx (64).
+    public const double CropMarginShare = 0.15;
+    // Рабочая площадь кропа (≈1 Мп): кроп масштабируется к ней в обе стороны — мелкий
+    // увеличивается, крупный уменьшается (решение A: на 4000×3000 кроп ≈1,8 Мп шёл вдвое дольше
+    // без выигрыша в сходстве). Лимит входа модели (Д5) — страховка поверх
+    public const long CropTargetPixels = 1_048_576;
 
     public const string FaceNotFound = "Такого лица нет на картинке.";
     public const string FacesTooClose = "Лица стоят слишком близко — закрасьте лицо кистью.";
@@ -26,7 +37,11 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
 
     // Маска по целевому лицу: эллипс по его bbox, вычитание bbox всех остальных лиц
     // (расширенных на NeighborMarginPx). width/height <= 0 — баг вызывающего.
-    public FaceMaskResult Build(int width, int height, IReadOnlyList<LocalDetectedFace> faces, int targetN)
+    // inputLimits — лимиты входа модели (MaxInputSide/MaxInputMegapixels): модель видит только кроп,
+    // исходник при кропе не ужимается (InputFitter), поэтому размер кропа под лимит приводит здесь
+    // Scaled (Д5); null — лимитов нет, Scaled — только рабочая площадь CropTargetPixels
+    public FaceMaskResult Build(int width, int height, IReadOnlyList<LocalDetectedFace> faces, int targetN,
+        ImageEditCaps? inputLimits = null)
     {
         if (width <= 0 || height <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), "Размер холста должен быть положительным");
@@ -43,8 +58,77 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         if (s == 0) return new FaceMaskResult(null, FaceOutsideImage, FaceMaskReason.OutOfFrame);
         if (sPrime < MinRemainingShare * s) return new FaceMaskResult(null, FacesTooClose, FaceMaskReason.TooClose);
 
-        return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null);
+        var crop = ComputeCrop(width, height, ellipse, inputLimits);
+        return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null, Crop: crop);
     }
+
+    // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + поле
+    // (margin = max(CropMarginPx, CropMarginShare × max(w, h) рамки)) с каждой стороны,
+    // обрезанная холстом; X, Y вниз на 8; Width/Height так, чтобы кроп ⊇ рамка
+    // маски + NeighborMarginPx, обрезанная холстом (иначе мягкий шов — GrowMask 8 + размытие ≈ 23 px —
+    // будет срезан); Scaled — к CropTargetPixels в обе стороны, кратно 16, пропорции кропа
+    // сохраняются; если и так выше лимита входа модели (узкий длинный кроп) — вниз до лимита
+    private static LocalImageCrop ComputeCrop(int width, int height, MaskEllipse e, ImageEditCaps? inputLimits)
+    {
+        // Рамка ненулевой части маски (эллипс), обрезанная холстом
+        var left = Math.Max(0, (int)Math.Floor(e.Cx - e.Rx));
+        var top = Math.Max(0, (int)Math.Floor(e.Cy - e.Ry));
+        var right = Math.Min(width, (int)Math.Ceiling(e.Cx + e.Rx));
+        var bottom = Math.Min(height, (int)Math.Ceiling(e.Cy + e.Ry));
+
+        // Поле кропа: max(64 px, 15 % рамки лица) — для крупных лиц (4000×3000) фиксированные
+        // 64 px дают узкий кадр; 15 % рамки — широкий кадр с окружением (A/B: 0,819 против 0,723)
+        var w = right - left;
+        var h = bottom - top;
+        var margin = Math.Max(CropMarginPx, (int)Math.Round(CropMarginShare * Math.Max(w, h)));
+
+        // Кроп = рамка + margin с каждой стороны, обрезанный холстом
+        var cropLeft = Math.Max(0, left - margin);
+        var cropTop = Math.Max(0, top - margin);
+        var cropRight = Math.Min(width, right + margin);
+        var cropBottom = Math.Min(height, bottom + margin);
+
+        // X, Y вниз на 8
+        var x = (cropLeft / 8) * 8;
+        var y = (cropTop / 8) * 8;
+
+        // Width/Height: кроп ⊇ рамка + NeighborMarginPx (обрезанная холстом); запас margin ≥ 64 > 30,
+        // поэтому правая/нижняя граница кропа уже за рамкой + 30. Внутри холста cropRight/cropBottom
+        // округляем вниз до кратного 8 (x/y уже кратны 8, поэтому width/height тоже кратны 8); потеря
+        // до 7 px не задевает инвариант, т.к. запас margin − 7 ≥ 57 > 30. Прижатую к краю холста границу
+        // не округляем: запаса там нет, и округление срезало бы саму маску (полоса старого лица)
+        var cropRight8 = cropRight == width ? width : (cropRight / 8) * 8;
+        var cropBottom8 = cropBottom == height ? height : (cropBottom / 8) * 8;
+        var cropWidth = cropRight8 - x;
+        var cropHeight = cropBottom8 - y;
+
+        // Scaled: к CropTargetPixels, кратно 16; больше лимита модели — вниз до лимита
+        var (scaledWidth, scaledHeight) = FitToLimits(ScaleToTarget(cropWidth, cropHeight), inputLimits);
+        return new LocalImageCrop(x, y, cropWidth, cropHeight, scaledWidth, scaledHeight);
+    }
+
+    // Уменьшение до лимита входа модели (Д5): тот же расчёт размера, что ужатие исходника
+    // (InputFitter.TargetSize), затем вниз до кратного 16 — после округления лимит не превышен
+    private static (int Width, int Height) FitToLimits((int Width, int Height) scaled, ImageEditCaps? inputLimits)
+    {
+        if (inputLimits is null || InputFitter.TargetSize(scaled.Width, scaled.Height, inputLimits) is not { } t)
+            return scaled;
+        return (RoundDown16(t.Width), RoundDown16(t.Height));
+    }
+
+    private static int RoundDown16(int v) => Math.Max(16, v / 16 * 16);
+
+    // Масштаб кропа к рабочей площади CropTargetPixels в обе стороны: кратно 16 (каждая ось
+    // вверх до 16), пропорции сохраняются
+    private static (int Width, int Height) ScaleToTarget(int width, int height)
+    {
+        if (width <= 0 || height <= 0) return (16, 16);
+        var area = (long)width * height;
+        var scale = Math.Sqrt((double)CropTargetPixels / area);
+        return (RoundUp16((int)(width * scale)), RoundUp16((int)(height * scale)));
+    }
+
+    private static int RoundUp16(int v) => (int)((Math.Ceiling(v / 16.0)) * 16);
 
     // Эллипс по bbox целевого лица и прямоугольники вычитания по bbox всех остальных
     // (расширенные на NeighborMarginPx; целевое лицо из себя не вычитается).
@@ -117,5 +201,7 @@ public enum FaceMaskReason { NotFound, TooClose, OutOfFrame }
 
 // Итог построения маски: Png — непрозрачный PNG (чёрный фон, белые эллипсы минус прямоугольники),
 // Error — человекочитаемая причина, по которой маску строить не стали (Png = null),
-// Reason — машинная причина (для кода ошибки в ответе); null — успех
-public sealed record FaceMaskResult(byte[]? Png, string? Error, FaceMaskReason? Reason = null);
+// Reason — машинная причина (для кода ошибки в ответе); null — успех.
+// Crop — кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — кропа нет
+// (маска не построена)
+public sealed record FaceMaskResult(byte[]? Png, string? Error, FaceMaskReason? Reason = null, LocalImageCrop? Crop = null);

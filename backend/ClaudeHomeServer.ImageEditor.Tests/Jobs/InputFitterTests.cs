@@ -148,6 +148,69 @@ public class InputFitterTests : IDisposable
         _raster.Probe(service.OpenVariant("u", Project, job.JobId, 1)!.Bytes)!.Width.Should().Be(512);
     }
 
+    // Боевая модель подстановки на лицо с курируемыми лимитами входа (1664 px, 1,8 Мп)
+    private static readonly ImageEditModelInfo Qwen = ImageEditCatalog.WithInputLimits(
+        new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage));
+
+    // Д5 (ADR-028): кроп лица посчитан в пикселях базовой версии, поэтому исходник 2400×1800 (4,3 Мп,
+    // больше лимита модели) с кропом не ужимается; маска и KeepMask остаются ему в размер, кроп —
+    // внутри холста и на месте лица, Compose проходит. Мутация «ужимать и при FaceCrop» → красный
+    [Theory]
+    [InlineData(2150, 700, 2390, 1000)] // лицо у правого края: после ужатия кроп ушёл бы за холст
+    [InlineData(10, 700, 250, 1000)]    // лицо у левого края: после ужатия кроп молча съехал бы с лица
+    public async Task Кроп_лица_исходник_2400x1800_не_ужимается_маски_в_размер_Compose_проходит(
+        int x1, int y1, int x2, int y2)
+    {
+        var built = new FaceMaskBuilder(_raster).Build(2400, 1800,
+            [new LocalDetectedFace(1, x1, y1, x2, y2, 0.9, false)], 1, Qwen.Caps);
+        built.Error.Should().BeNull();
+        var mask = new ImageBytes(built.Png!, "image/png");
+        var crop = built.Crop!;
+        var input = Input(Png(2400, 1800, SKColors.SteelBlue)) with { Mask = mask, KeepMask = mask, FaceCrop = crop };
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!.Input;
+        var source = _raster.Probe(fitted.Source!.Bytes)!;
+        (source.Width, source.Height).Should().Be((2400, 1800), "исходник с кропом лица не ужимается");
+        fitted.Mask!.Bytes.Should().Equal(mask.Bytes, "маска прежняя");
+        var keep = _raster.Probe(fitted.KeepMask!.Bytes)!;
+        (keep.Width, keep.Height).Should().Be((source.Width, source.Height), "KeepMask в размер исходника");
+        var fittedMask = _raster.Probe(fitted.Mask.Bytes)!;
+        (fittedMask.Width, fittedMask.Height).Should().Be((source.Width, source.Height));
+
+        // Кроп внутри холста и на месте лица — те же проверки, что у адаптера
+        fitted.FaceCrop.Should().Be(crop);
+        (crop.X + crop.Width).Should().BeLessOrEqualTo(source.Width);
+        (crop.Y + crop.Height).Should().BeLessOrEqualTo(source.Height);
+        crop.X.Should().BeLessOrEqualTo(x1);
+        crop.Y.Should().BeLessOrEqualTo(y1);
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(x2);
+        (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(y2);
+
+        var composed = EditRequestComposer.Compose(fitted, ImageEditOp.Edit, Qwen, 1);
+        composed.Value.Should().NotBeNull(composed.Error);
+        composed.Value!.FaceCrop.Should().Be(crop);
+    }
+
+    // Регрессия: без кропа лица тот же исходник 2400×1800 ужимается под лимит модели, маска — следом
+    [Fact]
+    public async Task Без_кропа_лица_исходник_2400x1800_ужимается_как_раньше()
+    {
+        var input = Input(Png(2400, 1800, SKColors.SteelBlue), mask: StripedMask(2400, 1800));
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!.Input;
+        var source = _raster.Probe(fitted.Source!.Bytes)!;
+        // 1,8 Мп: масштаб √(1,8e6 / 4,32e6) ≈ 0,6455 → 1549×1161
+        (source.Width, source.Height).Should().Be((1549, 1161));
+        var mask = _raster.Probe(fitted.Mask!.Bytes)!;
+        (mask.Width, mask.Height).Should().Be((source.Width, source.Height));
+    }
+
     [Fact]
     public void Каталог_отдаёт_курируемые_лимиты_входа()
     {
@@ -159,6 +222,73 @@ public class InputFitterTests : IDisposable
         caps.MaxInputSide.Should().Be(2048);
         caps.MaxInputMegapixels.Should().NotBeNull();
         caps.MaxInputMb.Should().NotBeNull();
+    }
+
+    // Ш3 (ADR-028): холст 40 МБ с кропом лица не пережимается — модель видит кроп, а не холст,
+    // поэтому потолок холста (MaxCanvasMb = 90) выше 40 МБ: байты те же (PNG, без перекодирования)
+    [Fact]
+    public async Task Холст40МБ_С_Кропом_НеПережимается()
+    {
+        var canvas = PngOf(40 * 1024 * 1024);
+        var input = Input(canvas) with { FaceCrop = new LocalImageCrop(0, 0, 8, 8, 16, 16) };
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        result.Value!.Input.Source!.Bytes.Should().Equal(canvas, "40 МБ ≤ 90 МБ — без перекодирования");
+    }
+
+    // Ш3 (ADR-028): тот же холст 40 МБ БЕЗ кропа — потолок холста (MaxCanvasMb) не действует,
+    // действует общий потолок загрузки (MaxInputMb = 30): 40 > 30 → перекодировано, как раньше.
+    // Заглушка (16×16 + нули) при перекодировании становится маленьким PNG: проверяем, что вес
+    // упал под 30 МБ (регрессия: без кропа потолок 30 МБ по-прежнему действует)
+    [Fact]
+    public async Task Холст40МБ_Без_Кропа_Ужимается_До30МБ()
+    {
+        var canvas = PngOf(40 * 1024 * 1024);
+        var input = Input(canvas);
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!.Input.Source!;
+        fitted.Bytes.Should().NotEqual(canvas, "40 МБ > 30 МБ — перекодировано");
+        fitted.Bytes.LongLength.Should().BeLessThanOrEqualTo(30 * 1024 * 1024, "под общим потолком загрузки");
+    }
+
+    // Ш3 (ADR-028): FitWeightAsync — выход прохода k легче потолка холста (MaxCanvasMb) — байты
+    // те же, без перекодирования. Шумный PNG 256×192 (~150 КБ) с MaxCanvasMb = 0.5 (500 КБ)
+    [Fact]
+    public async Task FitWeight_Легче_Потолка_Холста_Без_Перекодирования()
+    {
+        var heavy = NoisePng(256, 192);
+        heavy.LongLength.Should().BeLessThan(500 * 1024, "предусловие: легче потолка холста");
+        var caps = Qwen.Caps with { MaxCanvasMb = 0.5 };
+
+        var result = await new InputFitter(_raster).FitWeightAsync(new ImageBytes(heavy, "image/png"), caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        result.Value!.Bytes.Should().Equal(heavy, "легче потолка холста — без перекодирования");
+    }
+
+    // Ш3 (ADR-028): FitWeightAsync — выход прохода k тяжелее потолка холста (MaxCanvasMb) —
+    // лестница JPEG: вес уменьшился, размер тот же. Шумный PNG 256×192 (~150 КБ) с MaxCanvasMb = 0.1
+    [Fact]
+    public async Task FitWeight_Тяжелее_Потолка_Холста_Лестница_РазмерТотЖе()
+    {
+        var heavy = NoisePng(256, 192);
+        heavy.LongLength.Should().BeGreaterThan(100 * 1024, "предусловие: тяжелее потолка холста");
+        var caps = Qwen.Caps with { MaxCanvasMb = 0.1 };
+        var before = _raster.Probe(heavy)!;
+
+        var result = await new InputFitter(_raster).FitWeightAsync(new ImageBytes(heavy, "image/png"), caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!;
+        fitted.Bytes.LongLength.Should().BeLessThan(heavy.LongLength, "вес уменьшился");
+        fitted.Bytes.LongLength.Should().BeLessThanOrEqualTo(100 * 1024, "под потолком холста");
+        var after = _raster.Probe(fitted.Bytes)!;
+        (after.Width, after.Height).Should().Be((before.Width, before.Height), "размер тот же");
     }
 
     // ── Хелперы ──────────────────────────────────────────────────────────────────
@@ -247,6 +377,29 @@ public class InputFitterTests : IDisposable
         using var bitmap = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Opaque));
         bitmap.Erase(color);
         using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    // Холст нужного веса: настоящий маленький PNG + нули до длины. Не декодируем реальную картинку
+    // такого веса — растр читает только заголовок (размер) и длину файла
+    private static byte[] PngOf(int length)
+    {
+        var png = Png(16, 16, SKColors.SteelBlue);
+        var result = new byte[length];
+        Array.Copy(png, result, Math.Min(png.Length, length));
+        return result;
+    }
+
+    // Настоящий PNG из шума: не сжимается, вес ≈ 3 байта на пиксель
+    private static byte[] NoisePng(int w, int h)
+    {
+        var rnd = new Random(42);
+        using var bitmap = new SKBitmap(w, h);
+        for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+                bitmap.SetPixel(x, y, new SKColor((byte)rnd.Next(256), (byte)rnd.Next(256), (byte)rnd.Next(256)));
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();
     }
 

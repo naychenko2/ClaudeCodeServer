@@ -127,7 +127,48 @@ public sealed class SkiaImageRaster : IImageRaster
             }
         });
 
+    // Вуаль (ADR-028, решение 12): белое на маске закрашивается полупрозрачным серым (128) на
+    // копии. Та же детекция, что у EraseMasked (яркость > половины); отличие — смешивание с
+    // исходным цветом, а не замена: p' = p·(1−α) + 128·α. Модель видит «здесь править», а не
+    // белую заливку, которую Qwen-Image перерисовывает в результат
+    public RasterOutcome VeilMasked(byte[] image, byte[] mask, double alpha) =>
+        Run(image, unpremul: false, (bitmap, _) =>
+        {
+            using (bitmap)
+            {
+                using var codec = CreateCodec(mask)
+                    ?? throw new RasterFailure(RasterError.Unsupported, "Формат маски не распознан");
+                var header = codec.Info;
+                if ((long)header.Width * header.Height > _maxPixels)
+                    throw new RasterFailure(RasterError.TooLarge,
+                        $"Маска слишком большая: {header.Width}×{header.Height}, потолок — {_maxPixels / 1_000_000} Мп");
+                var (maskWidth, maskHeight) = (int)codec.EncodedOrigin is >= 5 and <= 8
+                    ? (header.Height, header.Width)
+                    : (header.Width, header.Height);
+                if (maskWidth != bitmap.Width || maskHeight != bitmap.Height)
+                    throw new RasterFailure(RasterError.InvalidOp,
+                        $"Размер маски {maskWidth}×{maskHeight} не совпадает с картинкой {bitmap.Width}×{bitmap.Height}");
+                var decoded = Decode(codec, unpremul: true);
+                using var maskBitmap = Orient(decoded, codec.EncodedOrigin);
+                if (!ReferenceEquals(maskBitmap, decoded)) decoded.Dispose();
+
+                var pixels = bitmap.GetPixelSpan();
+                var marks = maskBitmap.GetPixelSpan();
+                for (var i = 0; i < marks.Length; i += 4)
+                {
+                    var lit = (marks[i] + marks[i + 1] + marks[i + 2]) / 3 * marks[i + 3] / 255;
+                    if (lit <= 127) continue;
+                    pixels[i] = (byte)(pixels[i] * (1 - alpha) + VeilGray * alpha);
+                    pixels[i + 1] = (byte)(pixels[i + 1] * (1 - alpha) + VeilGray * alpha);
+                    pixels[i + 2] = (byte)(pixels[i + 2] * (1 - alpha) + VeilGray * alpha);
+                    pixels[i + 3] = 255;
+                }
+                return Success(bitmap, ImageEncodeFormat.Png, MaxQuality);
+            }
+        });
+
     private const byte EraseGray = 128;
+    private const byte VeilGray = 128;
 
     // Маска из эллипсов с вычитанием прямоугольников: непрозрачный PNG, чёрный фон, белые эллипсы
     // без сглаживания, затем по ним чёрные прямоугольники. Не через Run: контракт — исключение

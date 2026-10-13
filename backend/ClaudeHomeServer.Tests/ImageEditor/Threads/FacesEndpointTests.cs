@@ -16,7 +16,7 @@ using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
-// «Найти лица на версии» (ADR-027, §4, этап 2): POST .../threads/{threadId}/versions/{versionId}/faces.
+// «Найти лица на версии» (ADR-028, этап 2): POST .../threads/{threadId}/versions/{versionId}/faces.
 // Флаг character-face-swap гейтит ручку (выключен — 404 feature_disabled), 200 — список лиц + facesKey,
 // повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
 // версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).

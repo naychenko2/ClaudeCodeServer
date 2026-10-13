@@ -147,7 +147,8 @@ MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.
 [ADR-022](adr/ADR-022-video-editor.md) (модуль «Видео»: сцены между двумя кадрами и фильм, `local` / fal / Higgsfield),
 [ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md)),
 [ADR-024](adr/ADR-024-spheres.md) (сферы: зона персоны `PersonaZone` и две полки памяти над проектами, fail-closed, членство меняет только человек; описание — [features/spheres.md](features/spheres.md)),
-[ADR-027](adr/ADR-027-character-smart-photos.md) (умный подбор фото персонажа под сюжет: метки ракурса и эмоции в манифесте, места разметки с картинками на вход, маршрут `face-pose`, шов `IImageLabeler`, фолбэк к прежнему порядку байт в байт; за флагом `character-smart-photos`);
+[ADR-027](adr/ADR-027-character-smart-photos.md) (умный подбор фото персонажа под сюжет: метки ракурса и эмоции в манифесте, места разметки с картинками на вход, маршрут `face-pose`, шов `IImageLabeler`, фолбэк к прежнему порядку байт в байт; за флагом `character-smart-photos`),
+[ADR-028](adr/ADR-028-multi-character-faces.md) (подстановка персонажей на лица картинки, этапы 1–3: одна детекция и цепочка проходов в задаче, одна версия на запрос, частичный результат, MCP `faces`; за флагом `character-face-swap`);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

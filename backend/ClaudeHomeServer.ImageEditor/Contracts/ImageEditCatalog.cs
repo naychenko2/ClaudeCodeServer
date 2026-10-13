@@ -22,15 +22,16 @@ public static class ImageEditCatalog
 
     public static readonly ImageEditLimitsDto DefaultLimits = new(MaxFileMb: 20, MaxReferences: 6, MaxCount: 4);
 
-    // Лимиты входа моделей для автоуменьшения (ADR-018 §9): длинная сторона, мегапиксели, вес.
+    // Лимиты входа моделей для автоуменьшения (ADR-018 §9): длинная сторона, мегапиксели, вес,
+    // вес холста при подстановке на лицо (null — как вес).
     // Курируются здесь, а не в драйверах, как и остальные caps каталога. Значения
     // консервативные: 2048 px по длинной стороне модели правки держат без потери качества
     // результата, а 48 Мп с телефона гонять к поставщику незачем. Модели улучшения качества
     // (Topaz) нет в таблице намеренно: ужатие входа съело бы смысл операции.
-    private static readonly (int Side, double Megapixels, double Mb) EditInput = (2048, 4.2, 10);
+    private static readonly (int Side, double Megapixels, double Mb, double? CanvasMb) EditInput = (2048, 4.2, 10, null);
 
-    public static readonly IReadOnlyDictionary<string, (int Side, double Megapixels, double Mb)> InputLimits =
-        new Dictionary<string, (int, double, double)>(StringComparer.OrdinalIgnoreCase)
+    public static readonly IReadOnlyDictionary<string, (int Side, double Megapixels, double Mb, double? CanvasMb)> InputLimits =
+        new Dictionary<string, (int, double, double, double?)>(StringComparer.OrdinalIgnoreCase)
         {
             // fal
             ["fal-ai/nano-banana-2/edit"] = EditInput,
@@ -53,9 +54,11 @@ public static class ImageEditCatalog
             // Локальные модели. Энкодер правки Qwen-Image берёт холст в его размере (resolution 0),
             // поэтому держим его у верхней границы родной сетки модели: 1664 по длинной стороне
             // (16:9 — 1664×928), 1,8 Мп (1:1 — 1328×1328). FaceDetailer работает кропами лиц, ему
-            // крупный холст по силам; 30 МБ — потолок входа local-media
-            ["qwen-image-2.1"] = (1664, 1.8, 30),
-            ["face-detailer"] = (4096, 16.8, 30),
+            // крупный холст по силам; 30 МБ — потолок входа local-media. Холст с кропом лица
+            // (90 МБ) — потолок загрузки узла (LocalMediaService.MaxMediaInputBytes, зеркало в
+            // MediaFormatDriversTests): модель видит только кроп, холст не пережимается
+            ["qwen-image-2.1"] = (1664, 1.8, 30, 90),
+            ["face-detailer"] = (4096, 16.8, 30, null),
         };
 
     // Модель с курируемыми лимитами входа; лимит, заданный драйвером явно, не перетирается
@@ -70,6 +73,7 @@ public static class ImageEditCatalog
                 MaxInputSide = caps.MaxInputSide ?? limit.Side,
                 MaxInputMegapixels = caps.MaxInputMegapixels ?? limit.Megapixels,
                 MaxInputMb = caps.MaxInputMb ?? limit.Mb,
+                MaxCanvasMb = caps.MaxCanvasMb ?? limit.CanvasMb,
             },
         };
     }

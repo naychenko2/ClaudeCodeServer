@@ -239,12 +239,28 @@ export async function launchThread(
   }
 }
 
-// «Подставить персонажа» (этап 2 · шаг 10b): запуск с faceTarget + characterSlug. Котировка и
-// запуск — тем же путём, что обычный (buildQuoteBody + startJob), только исполнитель — локальные
-// модели (подстановка работает только на них), маска лица строится сервером. true — задача запущена.
+// Тело котировки подстановки (ADR-028): одно на чип подвала и на запуск, чтобы чип показывал
+// то же число проходов и время, что уйдёт в запуск. null — локальных моделей нет в каталоге
+export function faceSwapQuoteBody(
+  catalog: ImageEditCatalog | null, faceTarget: FaceTarget, size: { w: number; h: number } | null,
+): ImageEditQuoteRequest | null {
+  const local = catalog?.providers.find(p => p.key === 'local');
+  const m = local ? currentModel(local, local.models[0]?.id ?? AUTO_MODEL) : null;
+  if (!m) return null;
+  return buildQuoteBody({
+    provider: 'local', model: m.id, mode: 'auto', op: 'inpaint', count: 1,
+    hasImage: true, marks: [], withMask: false, removal: false, references: 0, hasCharacter: true,
+    size, context: null, faceTarget,
+  });
+}
+
+// «Подставить персонажа» (ADR-028, этап 3): запуск с faceTarget (faces: [{face, characterSlug}]).
+// Котировка и запуск — тем же путём, что обычный (buildQuoteBody + startJob), только исполнитель
+// — локальные модели (подстановка работает только на них), маска лица строится сервером.
+// true — задача запущена.
 export async function launchFaceSwap(
   projectId: string, sessionId: string, thread: ImageThread,
-  faceTarget: FaceTarget, characterSlug: string,
+  faceTarget: FaceTarget,
   versionId: string | null, size: { w: number; h: number } | null,
 ): Promise<boolean> {
   const api = imageEditorApi();
@@ -262,14 +278,12 @@ export async function launchFaceSwap(
   const version = versionId ? findVersion(thread, versionId) ?? currentVersion(thread) : currentVersion(thread);
   const src = version ? versionSrc(projectId, thread, version) : activeSrc(projectId, thread);
   const source = src ? await fetch(src).then(r => r.blob()) : undefined;
-  const q = await api.quote(projectId, buildQuoteBody({
-    provider: 'local', model: m.id, mode: 'auto', op: 'inpaint', count: 1,
-    hasImage: true, marks: [], withMask: false, removal: false, references: 0, hasCharacter: true,
-    size, context: null, faceTarget, characterSlug,
-  }));
+  const body = faceSwapQuoteBody(catalog, faceTarget, size);
+  if (!body) return false;
+  const q = await api.quote(projectId, body);
   await api.startJob(projectId, {
     quoteId: q.quoteId, prompt: '',
-    source, characterSlug,
+    source,
     sessionId, threadId: thread.id,
     versionId: version?.id,
     faceTarget,

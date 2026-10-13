@@ -230,34 +230,63 @@ public class FaceMaskBuilderTests
     private static readonly ImageEditCaps QwenLimits = ImageEditCatalog.WithInputLimits(
         new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage)).Caps;
 
-    // Кроп ≥ 1 Мп, но в пределах лимита модели — Scaled = размер кропа (округлённый вверх до 16),
-    // не уменьшаем. До Д5 тест звучал «крупный кроп не уменьшается» без лимита: исходник ужимался
-    // фиттером, и кроп больше лимита не встречался. Теперь исходник при кропе не ужимается, и кроп
-    // больше лимита уменьшается (тест ниже) — здесь держим, что ниже лимита уменьшения нет.
+    // Решение A: кроп ≥ 1 Мп в пределах лимита модели уменьшается к рабочей площади CropTargetPixels.
+    // Был тест Ш4 «Кроп_Крупный_в_пределах_лимита_модели_Скалится_Равен_Кропу»: он держал «крупный
+    // кроп не уменьшается, пока не выше лимита» — на 4000×3000 это давало кроп ≈1,8 Мп и проход
+    // вдвое дольше (57–65 с против 34 с) без выигрыша в сходстве. Теперь Scaled ≈ 1 Мп в обе стороны.
     // Параметризовано: (canvasW, canvasH, x1, y1, x2, y2) — включая холст с шириной, не кратной 16
     [Theory]
     [InlineData(1200, 1200, 100, 100, 1100, 1100)]  // кроп = весь холст 1200×1200 = 1.44 Мп
-    [InlineData(1100, 1100, 100, 100, 1000, 1000)]  // холст 1100 (1100%16=4): кроп ~1100 → Scaled = RoundUp16
-    public void Кроп_Крупный_в_пределах_лимита_модели_Скалится_Равен_Кропу(int canvasW, int canvasH, int x1, int y1, int x2, int y2)
+    [InlineData(1100, 1100, 100, 100, 1000, 1000)]  // холст 1100 (1100%16=4)
+    public void Кроп_Крупный_в_пределах_лимита_модели_уменьшается_к_рабочей_площади(int canvasW, int canvasH, int x1, int y1, int x2, int y2)
     {
         var (builder, _) = Create();
         var result = builder.Build(canvasW, canvasH, [Face(1, x1, y1, x2, y2)], 1, QwenLimits);
 
         result.Error.Should().BeNull();
-        result.Crop.Should().NotBeNull();
         var crop = result.Crop!;
-        var area = (long)crop.Width * crop.Height;
-        area.Should().BeGreaterOrEqualTo(FaceMaskBuilder.CropTargetPixels, "кроп крупный");
-        // Крупный кроп не уменьшается: Scaled ≥ кропа (RoundUp16 не даёт меньше)
-        crop.ScaledWidth.Should().BeGreaterOrEqualTo(crop.Width, "крупный кроп не уменьшается");
-        crop.ScaledHeight.Should().BeGreaterOrEqualTo(crop.Height, "крупный кроп не уменьшается");
+        ((long)crop.Width * crop.Height).Should().BeGreaterThan(FaceMaskBuilder.CropTargetPixels, "кроп крупный");
+        crop.ScaledWidth.Should().BeLessThan(crop.Width, "крупный кроп уменьшается");
+        crop.ScaledHeight.Should().BeLessThan(crop.Height, "крупный кроп уменьшается");
+        ((long)crop.ScaledWidth * crop.ScaledHeight).Should().BeInRange(
+            (long)(FaceMaskBuilder.CropTargetPixels * 0.97), (long)(FaceMaskBuilder.CropTargetPixels * 1.03), "≈ рабочая площадь");
+        (crop.ScaledWidth % 16).Should().Be(0);
+        (crop.ScaledHeight % 16).Should().Be(0);
+    }
+
+    // Решение A: кроп 2000×2000 → Scaled 1024×1024 (ровно CropTargetPixels); с лимитом модели и без —
+    // одинаково: рабочая площадь ниже лимита. Мутация «вверх-only (прежний ScaleUp)» → 2000×2000, красный
+    [Fact]
+    public void Кроп_2000_уменьшается_до_1024()
+    {
+        var (builder, _) = Create();
+        var faces = new[] { Face(1, 100, 100, 1900, 1900) };
+
+        var crop = builder.Build(2000, 2000, faces, 1, QwenLimits).Crop!;
+
+        (crop.Width, crop.Height).Should().Be((2000, 2000), "предусловие: кроп — весь холст");
+        (crop.ScaledWidth, crop.ScaledHeight).Should().Be((1024, 1024));
+        builder.Build(2000, 2000, faces, 1).Crop.Should().Be(crop, "без лимита — та же рабочая площадь");
+    }
+
+    // Страховка лимитом (Д5): узкий длинный кроп после приведения к рабочей площади всё ещё длиннее
+    // MaxInputSide — FitToLimits уменьшает до лимита стороны, кратно 16
+    [Fact]
+    public void Узкий_кроп_после_рабочей_площади_не_превышает_лимит_модели()
+    {
+        var (builder, _) = Create();
+
+        var crop = builder.Build(4000, 300, [Face(1, 100, 50, 3900, 250)], 1, QwenLimits).Crop!;
+
+        Math.Max(crop.ScaledWidth, crop.ScaledHeight).Should().BeLessOrEqualTo(QwenLimits.MaxInputSide!.Value, "сторона в лимите");
+        ((long)crop.ScaledWidth * crop.ScaledHeight).Should().BeLessOrEqualTo(FaceMaskBuilder.CropTargetPixels, "площадь не выше рабочей");
         (crop.ScaledWidth % 16).Should().Be(0);
         (crop.ScaledHeight % 16).Should().Be(0);
     }
 
     // Д5: кроп больше лимита модели (лицо крупным планом на 4000×3000 — кроп ≈1,6×2 тыс. px, ≈3,3 Мп)
-    // уменьшается до лимита: площадь ≤ 1,8 Мп, сторона ≤ 1664, кратно 16, пропорции ≈ кропа.
-    // Без лимита (null) — как раньше, не уменьшается. Мутация «не уменьшать вниз» → красный
+    // уменьшается: площадь ≤ 1,8 Мп, сторона ≤ 1664, кратно 16, пропорции ≈ кропа.
+    // Мутация «не уменьшать вниз» → красный
     [Fact]
     public void Кроп_Больше_лимита_модели_уменьшается_до_лимита_кратно_16()
     {
@@ -274,10 +303,12 @@ public class FaceMaskBuilderTests
         (crop.ScaledHeight % 16).Should().Be(0);
         ((double)crop.ScaledWidth / crop.ScaledHeight).Should().BeApproximately((double)crop.Width / crop.Height, 0.02);
 
+        // Решение A: рабочая площадь ниже лимита, поэтому без лимита (null) кроп уменьшается так же —
+        // прежнее «без лимита не уменьшается» больше не верно
+        ((long)crop.ScaledWidth * crop.ScaledHeight).Should().BeLessOrEqualTo(
+            (long)(FaceMaskBuilder.CropTargetPixels * 1.03), "≈ рабочая площадь, а не лимит");
         var unlimited = builder.Build(4000, 3000, faces, 1).Crop!;
-        unlimited.ScaledWidth.Should().BeGreaterOrEqualTo(unlimited.Width, "без лимита кроп не уменьшается");
-        (unlimited with { ScaledWidth = 0, ScaledHeight = 0 }).Should().Be(crop with { ScaledWidth = 0, ScaledHeight = 0 },
-            "лимит меняет только размер увеличения, не прямоугольник кропа");
+        unlimited.Should().Be(crop, "без лимита — та же рабочая площадь и тот же прямоугольник кропа");
     }
 
     // Граница: Scaled ровно на лимите стороны — не уменьшается; лимит на 1 px меньше — уменьшается

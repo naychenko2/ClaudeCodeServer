@@ -270,12 +270,24 @@ public sealed class ImageEditLaunchAssembler(
         });
     }
 
-    // Подстановка персонажа на лицо (ADR-028, этап 2): контекст чата игнорируется целиком,
+    // Подстановка персонажа на лицо (ADR-028, этап 3): контекст чата игнорируется целиком,
     // образцы — только персонаж, маска строится сервером по bbox детектора.
     // Порядок: a. флаг → b. личная область/входы → c. версия → d. детекция/facesKey →
-    // e. номер/размер лица → f. маска → g. промпт → h. входы → i. LoRA → j. запись в нить
+    // e. промпт → f. проходы (одна детекция, N масок/кропов, по возрастанию номера лица) →
+    // g. входы (N = 1 — старые поля, N > 1 — FacePasses)
+    // Публичный путь (AssembleAsync): временный отказ N > 1 (шаг 12). Тест N > 1 — через
+    // AssembleFaceTargetForTestAsync (allowMultipleFaces: true), который снимает только этот отказ
     private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetAsync(
         string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
+        => await AssembleFaceTargetCoreAsync(ownerId, scope, req, faceTarget, allowMultipleFaces: false, ct);
+
+    internal async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetForTestAsync(
+        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
+        => await AssembleFaceTargetCoreAsync(ownerId, scope, req, faceTarget, allowMultipleFaces: true, ct);
+
+    private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetCoreAsync(
+        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget,
+        bool allowMultipleFaces, CancellationToken ct)
     {
         // a. Флаг выключен — как в 7a
         if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
@@ -296,8 +308,8 @@ public sealed class ImageEditLaunchAssembler(
         if (faceTarget.Faces.Count != (quote.FacePasses ?? 0))
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
-        // Временный отказ: цепочка N > 1 — шаг 12
-        if (faceTarget.Faces.Count > 1)
+        // Временный отказ: цепочка N > 1 — шаг 12 снимет только эту строку
+        if (!allowMultipleFaces && faceTarget.Faces.Count > 1)
             return Invalid("Несколько лиц за раз пока не поддерживается");
         if (req.Mask is not null || req.Annotated is not null)
             return Invalid("При подстановке на лицо маску и разметку не указывают");
@@ -345,63 +357,67 @@ public sealed class ImageEditLaunchAssembler(
             return ImageEditCallResult<ImageEditJobInput>.Fail(ImageEditErrorCodes.FacesChanged, "Список лиц изменился",
                 ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFacesResponse.FromDetection(sourceBytes, result));
 
-        // e. Номер лица вне диапазона или лицо мелкое
-        var targetFace = faceTarget.Faces[0].Face;
-        var face = result.Faces.FirstOrDefault(f => f.N == targetFace);
-        if (face is null)
-            return Invalid($"Лицо {targetFace} не найдено: на картинке {result.Faces.Count} лиц");
-        if (face.Small)
-            return Invalid("Лицо слишком мелкое для подстановки персонажа");
-
-        // f. Маска: FaceMaskBuilder по bbox детекции
+        // e. Проходы: детекция одна (по базовой версии), все маски и кропы — до постановки в очередь.
+        // Порядок — по возрастанию номера лица (ADR-028, решение 2); отказ маски называет номер лица.
+        // Каждый проход собирается заново из СВОЕГО персонажа (CharacterStore.ForRequest), поэтому
+        // VisibleTo проверяется на каждом слаге, а образцы от прохода к проходу не переносятся.
+        // Промпт — на проход: имя персонажа подставляется (ADR-028, решение 12: «лицо персонажа «…»»),
+        // модель видит кроп, поэтому лицо — «в центре первой картинки», а не «в выделенной области»
         var maskBuilder = raster is null ? null : new FaceMaskBuilder(raster);
         if (maskBuilder is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена");
-        var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, targetFace);
-        if (maskResult.Png is null)
+        var source = new ImageBytes(normalizedSource, "image/png");
+        var extra = string.IsNullOrWhiteSpace(req.Prompt) ? "" : " " + req.Prompt!.Trim();
+        var passes = new List<FacePass>();
+        foreach (var assignment in faceTarget.Faces.OrderBy(fa => fa.Face))
         {
-            var code = maskResult.Reason switch
+            var face = result.Faces.FirstOrDefault(f => f.N == assignment.Face);
+            if (face is null)
+                return Invalid($"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц");
+            if (face.Small)
+                return Invalid($"Лицо {assignment.Face} слишком мелкое для подстановки персонажа");
+            var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, assignment.Face);
+            if (maskResult.Png is null)
             {
-                FaceMaskReason.TooClose => ImageEditErrorCodes.FacesTooClose,
-                FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
-                _ => ImageEditErrorCodes.InvalidRequest,
-            };
-            return Fail<ImageEditJobInput>(code, maskResult.Error ?? "Не удалось построить маску лица");
+                var code = maskResult.Reason switch
+                {
+                    FaceMaskReason.TooClose => ImageEditErrorCodes.FacesTooClose,
+                    FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
+                    _ => ImageEditErrorCodes.InvalidRequest,
+                };
+                return Fail<ImageEditJobInput>(code, $"{assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}");
+            }
+            var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, assignment.CharacterSlug);
+            if (character is null)
+                return Invalid($"Персонаж {assignment.CharacterSlug} не найден");
+            var mask = new ImageBytes(maskResult.Png, "image/png");
+            var prompt = $"Лицо человека в центре первой картинки заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.{extra}";
+            passes.Add(new FacePass(
+                assignment.Face,
+                mask,
+                maskResult.Crop,
+                mask,
+                character.Ref,
+                character.Photos,
+                new ImageThreadFaceTarget(assignment.Face, [face.X1, face.Y1, face.X2, face.Y2], assignment.CharacterSlug),
+                prompt));
         }
 
-        // g. Промпт: серверная константа + необязательное пожелание человека. Модель видит кроп
-        // (ADR-028, решение 12), поэтому лицо — «в центре первой картинки», а не «в выделенной области»
-        var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, faceTarget.Faces[0].CharacterSlug);
-        if (character is null)
-            return Invalid("Персонаж не найден");
-        var prompt = $"Лицо человека в центре первой картинки заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.";
-        if (!string.IsNullOrWhiteSpace(req.Prompt))
-            prompt += " " + req.Prompt!.Trim();
-
-        // h. Входы: Source = нормализованные байты версии (EXIF применён, тег обнулён), Mask = PNG,
-        // Op = Edit, образцы = только персонаж. Нормализация гарантирует, что маска (по bbox детекции)
-        // и исходник в одной системе координат — той, что видит пользователь. Кроп (ADR-028, решение 12)
-        // и маска идут отдельным каналом: модель видит кроп, а не маску; маска — «вне неё вернуть исходник»
-        var source = new ImageBytes(normalizedSource, "image/png");
-        var mask = new ImageBytes(maskResult.Png, "image/png");
-        var references = new List<ReferenceImage>(character.Photos);
-
-        // i. LoRA — как у любого запуска с персонажем (CharacterStore.ForRequest уже проверил VisibleTo)
-        var characterRef = character.Ref;
-
-        // j. Запись в нить: FaceTarget { N, BBox, CharacterSlug }
-        var threadFaceTarget = new ImageThreadFaceTarget(targetFace, [face.X1, face.Y1, face.X2, face.Y2], faceTarget.Faces[0].CharacterSlug);
-
+        // f. Входы: Source = нормализованные байты версии (EXIF применён, тег обнулён), образцы = персонаж
+        // первого прохода (общий путь N = 1). Кроп и маска — отдельным каналом: модель видит кроп, а не
+        // маску; маска — «вне неё вернуть исходник». Для N = 1 старые поля (FaceCrop/KeepMask/Character/
+        // References/FaceTarget) дублируют первый проход, чтобы путь этапа 2 и 7б не менялся
+        var first = passes[0];
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
             req.QuoteId!.Trim(),
-            prompt,
+            first.Prompt,
             req.MarksJson,
             source,
-            mask,
+            first.Mask,
             null,
-            references,
+            first.References,
             req.SourcePath,
-            characterRef,
+            first.Character,
             MatchSourceSize: req.MatchSourceSize,
             ChatSessionId: req.ThreadSessionId,
             Initiator: req.Initiator,
@@ -410,9 +426,10 @@ public sealed class ImageEditLaunchAssembler(
             ThreadId: req.ThreadId,
             BaseVersionId: faceTarget.VersionId,
             CharacterPicker: null,
-            FaceTarget: threadFaceTarget,
-            FaceCrop: maskResult.Crop,
-            KeepMask: mask));
+            FaceTarget: first.ThreadFaceTarget,
+            FaceCrop: first.Crop,
+            KeepMask: first.KeepMask,
+            FacePasses: passes));
     }
 
     // Байты версии: текущий шаг (рабочая папка), у исходника — файл проекта. null — картинки нет

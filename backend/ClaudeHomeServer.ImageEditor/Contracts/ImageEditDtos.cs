@@ -127,6 +127,21 @@ public static class ImageEditEstimateSources
 
 // То, что контроллер собрал из multipart: байты уже прочитаны, пути образцов из проекта
 // уже разрешены через SafePath.Join. Вертикаль ProjectManager не видит.
+// Один проход подстановки (ADR-028, этап 3): лицо, персонаж, маска, кроп, образцы.
+// Проходы идут по возрастанию номера лица; каждый собирается заново из СВОЕГО персонажа
+// (фото, LoRA, эталоны сходства), от прохода к проходу ничего не переносится. Character
+// (Slug/Name/Description/Lora/FacePhotos) — персонаж прохода; References — его фото образцами.
+public sealed record FacePass(
+    int Face,
+    ImageBytes Mask,
+    LocalImageCrop? Crop,
+    ImageBytes? KeepMask,
+    CharacterRef Character,
+    IReadOnlyList<ReferenceImage> References,
+    ImageThreadFaceTarget ThreadFaceTarget,
+    // Промпт прохода: имя персонажа подставляется (ADR-028, решение 12: «лицо персонажа «…»»)
+    string Prompt);
+
 // Character — подключённый персонаж; его фото уже лежат в References с ролью Character.
 public record ImageEditJobInput(
     string QuoteId,
@@ -163,7 +178,10 @@ public record ImageEditJobInput(
     LocalImageCrop? FaceCrop = null,
     // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал для подстановки на
     // лицо; null — драйвер берёт её из References по метке mask, как раньше
-    ImageBytes? KeepMask = null);
+    ImageBytes? KeepMask = null,
+    // Проходы подстановки (ADR-028, этап 3): N = число лиц. N = 1 — один элемент (те же данные,
+    // что в FaceCrop/KeepMask/Character/References/FaceTarget); N > 1 — цепочка. null — обычная правка
+    IReadOnlyList<FacePass>? FacePasses = null);
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);

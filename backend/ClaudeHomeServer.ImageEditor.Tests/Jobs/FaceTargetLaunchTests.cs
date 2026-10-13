@@ -588,4 +588,175 @@ public class FaceTargetLaunchTests : IDisposable
         var app1 = new byte[] { 0xFF, 0xE1, (byte)(length >> 8), (byte)length }.Concat(payload);
         return jpeg.Take(2).Concat(app1).Concat(jpeg.Skip(2)).ToArray();
     }
+
+    // ── Этап 3: N проходов (шаг 8) ─────────────────────────────────────────────
+
+    // Два лица: лицо 2 достаточно близко, чтобы вычитание bbox+30 срезало заметную часть эллипса
+    // лица 1 (остаток всё же > 60 %, маски строятся); правая граница эллипса лица 1 (x=122) входит
+    // в bbox+30 лица 2 (x=100..), поэтому «не вычитать соседей» меняет маску
+    private static ILocalImageMedia TwoFacesMedia()
+    {
+        var faces = new[] {
+            new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false),
+            new LocalDetectedFace(2, 130, 10, 220, 100, 0.85, false)
+        };
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(new LocalFaceDetectResult(400, 200, faces)));
+        return media.Object;
+    }
+
+    private IImageEditJobs QuoteJobsN(int n)
+    {
+        var jobs = new Mock<IImageEditJobs>();
+        jobs.Setup(j => j.QuoteInfo(Owner, "p1", "q1"))
+            .Returns(new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local", FacePasses: n));
+        return jobs.Object;
+    }
+
+    private static string TwoFaceJson(string facesKey, (int Face, string Slug)[] assignments)
+    {
+        var faces = string.Join(",", assignments.Select(a => $"{{\"face\":{a.Face},\"characterSlug\":\"{a.Slug}\"}}"));
+        return $"{{\"versionId\":\"origin\",\"facesKey\":\"{facesKey}\",\"faces\":[{faces}]}}";
+    }
+
+    // N > 1: обход временного отказа (AssembleFaceTargetForTestAsync), котировка на N лиц
+    private async Task<ImageEditJobInput> AssembleNAsync(ILocalImageMedia media, string faceTargetJson, int n)
+    {
+        var req = Request(null, faceTargetJson);
+        var result = await Assembler(media: media, jobs: QuoteJobsN(n))
+            .AssembleFaceTargetForTestAsync(Owner, _scope, req, req.FaceTarget!, default);
+        result.Value.Should().NotBeNull(result.Error);
+        return result.Value!;
+    }
+
+    // (1) Образцы не смешиваются: у каждого прохода фото, LoRA и эталоны сходства только своего персонажа
+    [Fact]
+    public async Task Два_лица_проходы_собраны_каждый_из_своего_персонажа()
+    {
+        var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2);
+
+        input.FacePasses.Should().HaveCount(2);
+        var p1 = input.FacePasses[0];
+        var p2 = input.FacePasses[1];
+        // Порядок по возрастанию номера лица
+        p1.Face.Should().Be(1);
+        p2.Face.Should().Be(2);
+        // Каждый проход — свой персонаж
+        p1.Character.Slug.Should().Be(_charA);
+        p2.Character.Slug.Should().Be(_charB);
+        // Образцы — только своего персонажа
+        p1.References.Should().NotBeEmpty();
+        p1.References.Should().OnlyContain(r => r.Role == ReferenceRole.Character);
+        p2.References.Should().NotBeEmpty();
+        p2.References.Should().OnlyContain(r => r.Role == ReferenceRole.Character);
+        // ThreadFaceTarget — своё лицо и свой персонаж
+        p1.ThreadFaceTarget.N.Should().Be(1);
+        p1.ThreadFaceTarget.CharacterSlug.Should().Be(_charA);
+        p2.ThreadFaceTarget.N.Should().Be(2);
+        p2.ThreadFaceTarget.CharacterSlug.Should().Be(_charB);
+        // Кроп и маска у каждого
+        p1.Crop.Should().NotBeNull();
+        p2.Crop.Should().NotBeNull();
+        p1.Mask.Should().NotBeNull();
+        p2.Mask.Should().NotBeNull();
+        // N = 1: старые поля дублируют первый проход
+        input.FaceCrop.Should().Be(p1.Crop);
+        input.KeepMask!.Bytes.Should().Equal(p1.Mask.Bytes);
+        input.Character!.Slug.Should().Be(_charA);
+    }
+
+    // (2) Маска k равна нулю на bbox+30 px любого другого лица: вычитание соседей.
+    // Мутация «не вычитать соседей» (маска по одному лицу) красит: точка (110,60) внутри эллипса
+    // лица 1 И внутри bbox+30 лица 2 — без вычитания она была бы белой
+    [Fact]
+    public async Task Два_лица_маска_первого_нулевая_на_соседе_с_запасом()
+    {
+        var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2);
+        var p1 = input.FacePasses[0];
+        var p2 = input.FacePasses[1];
+
+        var (w, h) = MaskSize(p1.Mask!.Bytes);
+        w.Should().Be(400);
+        h.Should().Be(200);
+        // bbox+30 лица 2 = (100,-20,250,130). Точки внутри этой рамки, что и внутри эллипса лица 1
+        // (x до ~122), обязаны быть нулевыми: именно их вычитание соседа делает чёрными
+        for (var x = 100; x <= 122; x += 4)
+            for (var y = 20; y <= 100; y += 8)
+                MaskPixel(p1.Mask!.Bytes, x, y).Should().Be(0, "маска 1 нулевая на bbox+30 лица 2");
+        // И наоборот: bbox+30 лица 1 = (-20,-20,130,130); маска 2 нулевая на его части в эллипсе лица 2
+        for (var x = 100; x <= 130; x += 4)
+            for (var y = 20; y <= 100; y += 8)
+                MaskPixel(p2.Mask!.Bytes, x, y).Should().Be(0, "маска 2 нулевая на bbox+30 лица 1");
+    }
+
+    // (3) Детектор вызывается ровно один раз на запуск (single-flight, без двойного прогона)
+    [Fact]
+    public async Task Два_лица_детектор_вызван_ровно_один_раз()
+    {
+        var faces = new[] {
+            new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false),
+            new LocalDetectedFace(2, 130, 10, 220, 100, 0.85, false)
+        };
+        var detectCount = 0;
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Callback(() => Interlocked.Increment(ref detectCount))
+            .Returns(Task.FromResult(new LocalFaceDetectResult(400, 200, faces)));
+
+        var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
+        var result = await Assembler(media: media.Object, jobs: QuoteJobsN(2))
+            .AssembleFaceTargetForTestAsync(Owner, _scope, req, req.FaceTarget!, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        Volatile.Read(ref detectCount).Should().Be(1, "детекция одна на запуск, не по числу лиц");
+    }
+
+    // (4) Кроп прохода посчитан по базовой геометрии (по bbox лица на базовой версии), не по выходу
+    // другого прохода: кроп 1 привязан к лицу 1 (левая часть холста), кроп 2 — к лицу 2 (правая)
+    [Fact]
+    public async Task Два_лица_кроп_каждого_прохода_по_базовой_геометрии()
+    {
+        var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2);
+        var p1 = input.FacePasses[0];
+        var p2 = input.FacePasses[1];
+
+        // Кроп 1: вокруг bbox лица 1 (10,10)-(100,100) → левый край холста (X=0)
+        p1.Crop!.X.Should().Be(0, "кроп 1 привязан к лицу 1 (левый край)");
+        // Кроп 2: вокруг bbox лица 2 (130,10)-(220,100) → правее кропа 1 (X=40 > 0), правый край дальше
+        p2.Crop!.X.Should().BeGreaterThan(p1.Crop!.X, "кроп 2 привязан к лицу 2 (правее кропа 1)");
+        (p2.Crop!.X + p2.Crop!.Width).Should().BeGreaterThan(p1.Crop!.X + p1.Crop!.Width,
+            "правый край кропа 2 дальше, чем у кропа 1");
+        (p2.Crop!.X + p2.Crop!.Width).Should().BeLessOrEqualTo(400, "кроп 2 внутри холста");
+        // Кропы могут перекрываться (ADR-028, решение 12): маска 2 вычитает bbox+30 лица 1,
+        // поэтому подставленное лицо 1 остаётся побайтовым; перекрытие кропов это не ломает
+    }
+
+    // (5) Порядок проходов — по возрастанию номера лица, независимо от порядка в запросе
+    [Fact]
+    public async Task Два_лица_порядок_проходов_по_номеру_не_порядку_в_запросе()
+    {
+        // В запросе лицо 2 первым, лицо 1 вторым — в проходах всё равно 1, потом 2
+        var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(2, _charB), (1, _charA)]), 2);
+
+        input.FacePasses[0].Face.Should().Be(1);
+        input.FacePasses[0].Character.Slug.Should().Be(_charA);
+        input.FacePasses[1].Face.Should().Be(2);
+        input.FacePasses[1].Character.Slug.Should().Be(_charB);
+    }
+
+    // Чтение пикселя PNG-маски: маска Opaque (альфа 255 везде), белый (255,255,255) — внутри,
+    // чёрный (0,0,0) — вне. 0 — вне, 255 — внутри
+    private static (int Width, int Height) MaskSize(byte[] png)
+    {
+        using var bmp = SKBitmap.Decode(png);
+        return (bmp!.Width, bmp.Height);
+    }
+
+    private static int MaskPixel(byte[] png, int x, int y)
+    {
+        using var bmp = SKBitmap.Decode(png);
+        var color = bmp.GetPixel(x, y);
+        return color.Red > 127 ? 255 : 0;
+    }
 }

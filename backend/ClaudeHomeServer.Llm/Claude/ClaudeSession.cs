@@ -202,6 +202,13 @@ public class ClaudeSession : ILlmSessionAdapter
     // гонку с ложной ошибкой. Обратная сторона — залипший флаг заглушил бы настоящую смерть
     // процесса (P27: чат висит в «ожидании» до watchdog), поэтому точка сброса ровно одна.
     private volatile bool _interruptedByUser;
+    // Адаптер утилизируется (DisposeAsync: остановка сервера, реанимация зависшего чата,
+    // замена устаревшего адаптера) — процесс CLI убивает САМ сервер через _launcher.Kill
+    // (SIGKILL, exit=137). Без флага своё убийство неотличимо от oom-kill, и человек читал
+    // «не хватило памяти» при простом перезапуске. Ставится в начале DisposeAsync ДО Kill,
+    // сброса не имеет: после Dispose сессия мёртва. ProcessDeathMessage по нему отдаёт
+    // TurnFailureText.ProcessStoppedByServer вместо ProcessKilled (без маркера [Process:killed]).
+    private volatile bool _disposing;
     // Глубина делегирования текущего хода: > 0 — ход инициирован агентом из другой сессии
     // (chats_send). Выставляется в начале RunTurnAsync и сбрасывается после хода;
     // при глубине >= 1 BuildTurnMcpConfig урезает инструменты делегирования (анти-рекурсия)
@@ -4699,7 +4706,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // P30: pending control_response завис бы карточкой до 60-минутного таймаута
                     if (pendingControlResponse) CancelPendingControlResponses();
-                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode)); }
+                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode, _disposing)); }
                     catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
                 }
             }
@@ -4722,20 +4729,32 @@ public class ClaudeSession : ILlmSessionAdapter
             await _onMessage(new ExitedMessage(Interlocked.Read(ref run.LastTurnSeq)));
     }
 
-    // exit 137 = 128 + SIGKILL: процесс убит сигналом ОС (systemd-oomd / oom-kill cgroup), а не
-    // упал сам. Свой Kill (watchdog, «Стоп») сюда не попадает — DeathDiagnosed/_interruptedByUser
-    // гасят ветку раньше.
+    // exit 137 = 128 + SIGKILL: процесс убит сигналом, а не упал сам. Два источника: oom-kill
+    // ОС (systemd-oomd / cgroup) — модель ни при чём, и СВОЙ Kill из DisposeAsync (остановка
+    // сервера, реанимация чата, замена адаптера) — сервер убил процесс сам. «Стоп» пользователя
+    // гасится раньше _interruptedByUser, но свой Kill из DisposeAsync ДОХОДИТ досюда — отличает
+    // его флаг _disposing в ProcessDeathMessage (отдельный текст, без маркера [Process:killed]).
     private const int SigKillExitCode = 137;
 
     // Ошибка обрыва активного хода по смерти процесса. Гибель от сигнала несёт маркер в Details
     // (классификатор фолбэка работает с сырым текстом): фолбэк такой ход не подменяет, модель не меняется.
-    private static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode)
+    // internal для тестов (InternalsVisibleTo): две ветки — свой Kill из DisposeAsync (disposing=true,
+    // новый текст без маркера) и настоящий oom-kill (disposing=false, ProcessKilled + маркер) —
+    // проверяются напрямую, без жизненного цикла процесса.
+    internal static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode, bool disposing)
     {
         if (pendingControlResponse)
             return new ErrorMessage("Процесс модели завершился во время ожидания разрешения — ход прерван");
         if (exitCode == SigKillExitCode)
+        {
+            // Свой Kill (DisposeAsync: остановка сервера / реанимация чата) — НЕ oom-kill, поэтому
+            // текст не должен говорить «не хватило памяти». Маркера [Process:killed] НЕТ: класс не
+            // ProcessKilled, фолбэк не подменяет модель, ход завершается честной ошибкой.
+            if (disposing)
+                return new ErrorMessage(TurnFailureText.ProcessStoppedByServer);
             return new ErrorMessage(TurnFailureText.ProcessKilled,
                 Details: $"{TurnErrorClassifier.ProcessKilledMarker} процесс CLI убит сигналом (exit={exitCode})");
+        }
         return new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен");
     }
 
@@ -4799,7 +4818,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // рядом с ним лжёт. Pending control при этом чистит сам Interrupt.
         if (!willRetry && !_interruptedByUser)
         {
-            var message = ProcessDeathMessage(pendingControlResponse, exitCode);
+            var message = ProcessDeathMessage(pendingControlResponse, exitCode, _disposing);
             // Отменяем ожидающие control_response: иначе DecidePermissionAsync держит граф до
             // 60-минутного таймаута, карточка в ленте «Claude ждёт ответа» зависает навсегда (P30).
             if (pendingControlResponse) CancelPendingControlResponses();
@@ -6917,6 +6936,10 @@ public class ClaudeSession : ILlmSessionAdapter
 
     public async ValueTask DisposeAsync()
     {
+        // Флаг СВОЕГО убийства: ставится ПЕРВЫМ, до Kill дерева ниже, чтобы ProcessDeathMessage
+        // (по Exited/EOF после Kill) отличил остановку сервером от oom-kill и не дал ложное
+        // «не хватило памяти». volatile — Exited-обработчик может прийти с другого потока.
+        _disposing = true;
         // Ход в полёте на момент уборки адаптера — ненормально: он упадёт на диспознутых
         // семафорах (гасится в QueueTurnAsync). Строка в логе — след для разбора
         if (_run is not null || Volatile.Read(ref _queuedTurns) > 0)

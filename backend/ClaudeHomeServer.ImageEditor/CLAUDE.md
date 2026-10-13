@@ -220,8 +220,24 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   Main на проде не найдётся. Нужен пакет (как SkiaSharp) — он ложится в `Images` за швом, а не
   сюда. Сторож — `DynamicModulePackagesGuardTests`.
 
-**Подстановка персонажа на лицо (ADR-028, этап 2).** Запуск с `FaceTarget` — отдельный путь
-`ImageEditLaunchAssembler.AssembleFaceTargetAsync`, инварианты:
+**Подстановка персонажа на лицо ([ADR-028](../../docs/adr/ADR-028-multi-character-faces.md), этапы 2–3).**
+Запуск с `FaceTarget` — отдельный путь `ImageEditLaunchAssembler.AssembleFaceTargetAsync`; цель —
+`FaceTarget(VersionId, FacesKey, Faces[])`, в нити — `ImageThreadLaunch.FaceTargets[]`. Инварианты:
+
+- **Несколько лиц — цепочка проходов в задаче** (`FacePassChain`), драйвер однопроходный. Детекция одна, по
+  базовой версии; все маски, кропы и запросы проходов собираются до очереди, отказ называет номер лица.
+- **`ImageEditJobInput.ForPass` — единственная точка сборки прохода**, запрос — общий `PrepareAsync`
+  (`InputFitter` + `EditRequestComposer`); у N = 1 тот же `ForPass`. Своей сборки у прохода не заводить.
+- **Правила запроса — только `FaceTargetRules.Validate`** (котировка, запуск, MCP): не больше
+  `MaxFacePasses = 2` лиц, лицо и персонаж не повторяются; всё — `invalid_request`.
+- **Одна версия на запрос:** обёртка прогресса гасит `Ready` непоследних проходов и держит последний
+  погашенный. На падении или отмене после прохода 1 он уходит версией (частичный результат В1), потому что
+  `FailAsync` хвост `Images` не сохраняет. Облако `Ready` не шлёт: ему удержание брать из `result.Images`.
+- **Статусы лиц пишутся только при финале запуска**; перезапуск посреди цепочки — `interrupted` без версии
+  и без статусов. Читатель статуса лица терпит значения вне `done | failed | cancelled` (старые нити).
+- **Модель маску не видит** (решение 12): подстановка — кроп вокруг цели ≈ 1,05 Мп со склейкой по `KeepMask`
+  с чистым холстом; исходник с кропом ужимается только по весу. Кисть local — серая вуаль на копии
+  холста; это поведение ВСЕЙ кисти local, вне флага, и с `FaceCrop` вуаль не включается.
 
 - **Главный: контекст чата игнорируется целиком.** Образец — только явно выбранный персонаж
   (`CharacterStore.ForRequest`), а не персонаж контекста хода: тот — обычно первый человек в кадре,
@@ -238,8 +254,9 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
 - **Код → статус** (единая точка `ImageEditorEndpoints.Map`): `provider_unavailable` → 409,
   `faces_changed` → 409, `feature_disabled` → 404, `busy` → 503, `faces_too_close` /
   `face_out_of_frame` → 400.
-- **Инструменты агента:** новый read-only `image_find_faces` (номера лиц версии) и аргумент `face`
-  у `image_generate` — статичная схема. `image_find_faces` в `tools/list` всегда (`ToolsOfInstance`
+- **Инструменты агента:** новый read-only `image_find_faces` (номера лиц версии) и аргументы `face`
+  и `faces: [{face, character}]` у `image_generate` — статичная схема; `faces` несовместим с
+  `face`/`character`, один вызов — один запуск в счёт `MaxLaunchesPerTurn`. `image_find_faces` в `tools/list` всегда (`ToolsOfInstance`
   держит его и в урезанном наборе, при `ImageEditor:AgentLaunch=false`); флаг пользователя
   `character-face-swap` на список не влияет — он даёт только отказ `feature_disabled` (404) на вызове.
 

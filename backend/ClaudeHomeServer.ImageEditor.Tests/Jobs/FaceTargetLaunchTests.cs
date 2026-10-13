@@ -793,6 +793,42 @@ public class FaceTargetLaunchTests : IDisposable
         result.Error!.Should().Contain("другое число лиц");
     }
 
+    // Публичный LaunchAsync до записи запуска в нить: задача «стартует» сразу, промпт запуска — в нити
+    private async Task<ImageThreadLaunch> LaunchNAsync(string faceTargetJson, int n, string? prompt)
+    {
+        var jobs = new Mock<IImageEditJobs>();
+        jobs.Setup(j => j.QuoteInfo(Owner, "p1", "q1"))
+            .Returns(new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local", FacePasses: n));
+        jobs.Setup(j => j.StartAsync(Owner, "p1", It.IsAny<ImageEditJobInput>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto("job-launch")));
+        var result = await Assembler(media: TwoFacesMedia(), jobs: jobs.Object)
+            .LaunchAsync(Owner, _scope, Request(null, faceTargetJson, prompt), default);
+        result.Value.Should().NotBeNull(result.Error);
+        return _store.Get(Owner, Chat).Threads.Single(t => t.Id == _threadId).Launches.Single();
+    }
+
+    // Промпт запуска на два лица называет обоих персонажей и дополнение человека — и в запуске нити,
+    // и в журнале агента; промпт прохода 1 («…персонажа «Аня»…») туда не идёт
+    [Fact]
+    public async Task Запуск_на_два_лица_называет_обоих_персонажей()
+    {
+        var launch = await LaunchNAsync(TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2, "  в стиле нуар ");
+
+        launch.Prompt.Should().Be("Подстановка на лица: 1 — «Аня», 2 — «Боря». в стиле нуар");
+        _store.Get(Owner, Chat).Events
+            .Should().Contain(e => e.JobId == "job-launch" && e.Text.Contains("«Подстановка на лица: 1 — «Аня», 2 — «Боря». в стиле нуар»"));
+    }
+
+    // N = 1 — промпт запуска прежний: промпт подстановки на лицо с дополнением человека, байт-в-байт
+    [Fact]
+    public async Task Запуск_на_одно_лицо_промпт_прежний()
+    {
+        var launch = await LaunchNAsync(FaceTargetJson(_facesKey, 1, _charB), 1, "в стиле нуар");
+
+        launch.Prompt.Should().Be(
+            "Лицо человека в центре первой картинки заменить на лицо персонажа «Боря», всё остальное оставить как есть. в стиле нуар");
+    }
+
     // Чтение пикселя PNG-маски: маска Opaque (альфа 255 везде), белый (255,255,255) — внутри,
     // чёрный (0,0,0) — вне. 0 — вне, 255 — внутри
     private static (int Width, int Height) MaskSize(byte[] png)

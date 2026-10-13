@@ -55,7 +55,7 @@ public sealed class ImageEditLaunchAssembler(
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
         {
             await threads.OnLaunchedAsync(ownerId, scope.Key, chatId, threadId, jobs.Get(ownerId, scope.Key, created.JobId),
-                created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct,
+                created.JobId, LaunchPrompt(input, req), input.Initiator, input.BaseVersionId, input.BaseStepId, ct,
                 input.FacePasses?.Select(p => p.ThreadFaceTarget).ToList());
             // Быстрый поставщик мог закончить задачу раньше, чем запуск лёг в нить: Finished тогда не
             // нашёл запуска, и карточка висела бы в «Рисуем…». Финал догоняется здесь; событие, пришедшее
@@ -65,6 +65,18 @@ public sealed class ImageEditLaunchAssembler(
                 await threads.OnJobFinishedAsync(ownerId, done);
         }
         return started;
+    }
+
+    // Промпт запуска для нити (карточка запуска, журнал агента). У запуска на несколько лиц промпт
+    // задачи — промпт прохода 1 с одним персонажем, поэтому запуск называет все лица и их персонажей
+    // (ADR-028) + дополнение человека, как у проходов. Иначе — промпт задачи как есть
+    private static string LaunchPrompt(ImageEditJobInput input, ImageEditLaunchRequest req)
+    {
+        if (input.FacePasses is not { Count: > 1 } passes) return input.Prompt;
+        var faces = string.Join(", ", passes.Select(p =>
+            $"{p.Face} — «{(string.IsNullOrWhiteSpace(p.Character.Name) ? p.Character.Slug : p.Character.Name)}»"));
+        var extra = string.IsNullOrWhiteSpace(req.Prompt) ? "" : " " + req.Prompt!.Trim();
+        return $"Подстановка на лица: {faces}.{extra}";
     }
 
     // Вход задачи без запуска: всё проверено, байты прочитаны, нить своя или её нет. Диск проекта

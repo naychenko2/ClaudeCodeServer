@@ -80,7 +80,8 @@ public sealed class FacePassChain
             chain.ReleaseHeld();
             throw;
         }
-        return last;
+        // N ≥ 1 гарантирует FaceTargetRules: цикл прошёл хотя бы раз, last присвоен
+        return last!;
     }
 
     // Обёртка прогресса: гасит Ready у непоследних проходов (промежуточные выходы версиями не

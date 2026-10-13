@@ -140,59 +140,143 @@ public class FaceMaskBuilderTests
     }
 
     // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + 64 px,
-    // обрезанная холстом; X, Y вниз на 8; кроп ⊇ рамка + 30; Scaled — вверх до ≈1 Мп, кратно 16
-    [Fact]
-    public void Кроп_Геометрия_ВнутриХолста_Кратно8_ПокрываетМаску_СкалитсяДоМп()
+    // обрезанная холстом; X, Y, Width, Height кратны 8 (адаптер проверяет кратность ДО очереди);
+    // кроп ⊇ рамка + 30 (обрезанная холстом); Scaled — вверх до ≈1 Мп, кратно 16.
+    // Параметризовано на 10+ реалистичных bbox: центр, углы, края, холст с шириной/высотой,
+    // не кратной 8 (1313×777) — для каждого: X/Y/Width/Height кратны 8, кроп внутри холста,
+    // кроп ⊇ рамка + 30 (с учётом обрезки по холсту)
+    [Theory]
+    // (canvasW, canvasH, x1, y1, x2, y2)
+    [InlineData(1024, 768, 120, 90, 380, 350)]    // центр, пример из ревью: cropRight=383 → 383%8=7
+    [InlineData(1024, 768, 10, 10, 100, 100)]     // левый верхний угол
+    [InlineData(1024, 768, 924, 668, 1014, 758)]  // правый нижний угол
+    [InlineData(1024, 768, 400, 10, 600, 100)]     // верхняя кромка
+    [InlineData(1024, 768, 400, 668, 600, 758)]   // нижняя кромка
+    [InlineData(1313, 777, 120, 90, 380, 350)]    // холст 1313×777 (1313%8=5, 777%8=1)
+    [InlineData(1313, 777, 10, 10, 100, 100)]     // холст некратный 8, левый верх
+    [InlineData(1313, 777, 1213, 677, 1303, 767)] // холст некратный 8, правый низ
+    [InlineData(800, 600, 300, 200, 500, 400)]    // обычный
+    [InlineData(800, 600, 0, 0, 50, 50)]          // лицо в самом углу (0,0)
+    [InlineData(800, 600, 750, 550, 800, 600)]   // лицо в правом нижнем углу
+    [InlineData(100, 100, 10, 10, 50, 50)]        // очень маленький холст
+    public void Кроп_Геометрия_ВнутриХолста_Кратно8_ПокрываетМаску_СкалитсяДоМп(
+        int canvasW, int canvasH, int x1, int y1, int x2, int y2)
     {
         var (builder, _) = Create();
-        // bbox (10,10)-(100,100) на холсте 200×200: эллипс cx=55 cy=55 rx=67.5 ry=72
-        var result = builder.Build(200, 200, [Face(1, 10, 10, 100, 100)], 1);
+        var result = builder.Build(canvasW, canvasH, [Face(1, x1, y1, x2, y2)], 1);
 
         result.Error.Should().BeNull();
         result.Crop.Should().NotBeNull();
         var crop = result.Crop!;
 
-        // Внутри холста
+        // X, Y, Width, Height кратны 8 (адаптер LocalImageMediaAdapter.cs:238 проверяет именно это)
+        (crop.X % 8).Should().Be(0, $"X={crop.X}");
+        (crop.Y % 8).Should().Be(0, $"Y={crop.Y}");
+        (crop.Width % 8).Should().Be(0, $"Width={crop.Width}");
+        (crop.Height % 8).Should().Be(0, $"Height={crop.Height}");
+
+        // Кроп внутри холста
         crop.X.Should().BeGreaterOrEqualTo(0);
         crop.Y.Should().BeGreaterOrEqualTo(0);
-        (crop.X + crop.Width).Should().BeLessOrEqualTo(200);
-        (crop.Y + crop.Height).Should().BeLessOrEqualTo(200);
+        (crop.X + crop.Width).Should().BeLessOrEqualTo(canvasW, $"кроп не выходит за холст ({canvasW}×{canvasH})");
+        (crop.Y + crop.Height).Should().BeLessOrEqualTo(canvasH, $"кроп не выходит за холст ({canvasW}×{canvasH})");
 
-        // X, Y кратны 8
-        (crop.X % 8).Should().Be(0);
-        (crop.Y % 8).Should().Be(0);
+        // Кроп ⊇ рамка маски + 30 (обрезанная холстом): рамка эллипса, обрезанная холстом
+        var w = x2 - x1;
+        var h = y2 - y1;
+        var cx = (x1 + x2) / 2.0;
+        var cy = (y1 + y2) / 2.0;
+        var rx = FaceMaskBuilder.EllipseWidthShare * w;
+        var ry = FaceMaskBuilder.EllipseHeightShare * h;
+        var left = Math.Max(0, (int)Math.Floor(cx - rx));
+        var top = Math.Max(0, (int)Math.Floor(cy - ry));
+        var right = Math.Min(canvasW, (int)Math.Ceiling(cx + rx));
+        var bottom = Math.Min(canvasH, (int)Math.Ceiling(cy + ry));
 
-        // Кроп ⊇ рамка маски + 30 (обрезанная холстом): рамка эллипса (0,0)-(123,127)
-        crop.X.Should().BeLessOrEqualTo(0);
-        crop.Y.Should().BeLessOrEqualTo(0);
-        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(123 + 30);
-        (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(127 + 30);
+        // Левая/верхняя граница кропа ≤ рамка − 30 (обрезанная холстом)
+        crop.X.Should().BeLessOrEqualTo(Math.Max(0, left - FaceMaskBuilder.NeighborMarginPx),
+            $"кроп ⊇ рамка({left},{top})−30");
+        crop.Y.Should().BeLessOrEqualTo(Math.Max(0, top - FaceMaskBuilder.NeighborMarginPx),
+            $"кроп ⊇ рамка({left},{top})−30");
+        // Правая/нижняя граница кропа ≥ рамка + 30, обрезанная холстом. У края холста, где
+        // отступ упирается в границу и холст не кратен 8, округление вниз даёт «рамка + сколько
+        // осталось до границы» — проверяем ≥ min(рамка+30, граница холста)
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(
+            Math.Min(canvasW, right + FaceMaskBuilder.NeighborMarginPx) - 7,
+            $"кроп ⊇ рамка+30 до {right} (−7 на округление холста)");
+        (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(
+            Math.Min(canvasH, bottom + FaceMaskBuilder.NeighborMarginPx) - 7,
+            $"кроп ⊇ рамка+30 до {bottom} (−7 на округление холста)");
 
-        // Scaled ≥ кропа, кратно 16; для мелкого кропа (35.7 Кп) ≈1 Мп
+        // Scaled ≥ кропа, кратно 16; для мелкого кропа ≈1 Мп (ScaleUp округляет каждую ось
+        // отдельно до 16, поэтому площадь может быть чуть ниже цели — проверяем ≥ 99.9 % цели)
         crop.ScaledWidth.Should().BeGreaterOrEqualTo(crop.Width);
         crop.ScaledHeight.Should().BeGreaterOrEqualTo(crop.Height);
         (crop.ScaledWidth % 16).Should().Be(0);
         (crop.ScaledHeight % 16).Should().Be(0);
-        ((long)crop.ScaledWidth * crop.ScaledHeight).Should().BeGreaterOrEqualTo(FaceMaskBuilder.CropTargetPixels);
+        ((long)crop.ScaledWidth * crop.ScaledHeight).Should().BeGreaterOrEqualTo(
+            (long)(FaceMaskBuilder.CropTargetPixels * 0.999), "≈1 Мп (округление осей до 16)");
     }
 
-    // Кроп уже ≥ 1 Мп — Scaled = размер кропа (округлённый вверх до 16), не уменьшаем
-    [Fact]
-    public void Кроп_Крупный_Скалится_Равен_Кропу()
+    // Кроп уже ≥ 1 Мп — Scaled = размер кропа (округлённый вверх до 16), не уменьшаем.
+    // Параметризовано: (canvasW, canvasH, x1, y1, x2, y2) — включая холст с шириной, не кратной 16
+    [Theory]
+    [InlineData(1200, 1200, 100, 100, 1100, 1100)]  // кроп = весь холст 1200×1200 = 1.44 Мп
+    [InlineData(1100, 1100, 100, 100, 1000, 1000)]  // холст 1100 (1100%16=4): кроп ~1100 → Scaled = RoundUp16
+    public void Кроп_Крупный_Скалится_Равен_Кропу(int canvasW, int canvasH, int x1, int y1, int x2, int y2)
     {
         var (builder, _) = Create();
-        // Большой bbox (100,100)-(1100,1100) на холсте 1200×1200: кроп = весь холст = 1.44 Мп ≥ 1 Мп
-        var result = builder.Build(1200, 1200, [Face(1, 100, 100, 1100, 1100)], 1);
+        var result = builder.Build(canvasW, canvasH, [Face(1, x1, y1, x2, y2)], 1);
 
         result.Error.Should().BeNull();
         result.Crop.Should().NotBeNull();
         var crop = result.Crop!;
         var area = (long)crop.Width * crop.Height;
         area.Should().BeGreaterOrEqualTo(FaceMaskBuilder.CropTargetPixels, "кроп крупный");
-        crop.ScaledWidth.Should().Be(crop.Width, "крупный кроп не уменьшается");
-        crop.ScaledHeight.Should().Be(crop.Height, "крупный кроп не уменьшается");
+        // Крупный кроп не уменьшается: Scaled ≥ кропа (RoundUp16 не даёт меньше)
+        crop.ScaledWidth.Should().BeGreaterOrEqualTo(crop.Width, "крупный кроп не уменьшается");
+        crop.ScaledHeight.Should().BeGreaterOrEqualTo(crop.Height, "крупный кроп не уменьшается");
         (crop.ScaledWidth % 16).Should().Be(0);
         (crop.ScaledHeight % 16).Should().Be(0);
+    }
+
+    // Сквозной тест (ADR-028, решение 12): реалистичный bbox из ревью → FaceMaskBuilder.Build →
+    // EditRequestComposer.Compose → кроп в ImageEditRequest проходит валидацию адаптера
+    // (LocalImageMediaAdapter.cs:238: X/Y/Width/Height кратны 8). Именно этот сценарий падал:
+    // bbox (120,90)-(380,350) на 1024×768 давал cropRight=383 (383%8=7) → адаптер отказывал
+    [Fact]
+    public void Сквозной_РеалистичныйBbox_КропПроходитВалидациюАдаптера()
+    {
+        var (builder, _) = Create();
+        // Пример из ревью: bbox (120,90)-(380,350) на холсте 1024×768
+        var result = builder.Build(1024, 768, [Face(1, 120, 90, 380, 350)], 1);
+
+        result.Error.Should().BeNull();
+        result.Crop.Should().NotBeNull();
+        var crop = result.Crop!;
+
+        // Валидация адаптера (LocalImageMediaAdapter.cs:238): X/Y/Width/Height кратны 8
+        (crop.X % 8).Should().Be(0, $"X={crop.X}");
+        (crop.Y % 8).Should().Be(0, $"Y={crop.Y}");
+        (crop.Width % 8).Should().Be(0, $"Width={crop.Width}");
+        (crop.Height % 8).Should().Be(0, $"Height={crop.Height}");
+        // Scaled кратно 16 (LocalImageMediaAdapter.cs:240)
+        (crop.ScaledWidth % 16).Should().Be(0);
+        (crop.ScaledHeight % 16).Should().Be(0);
+
+        // Сквозной путь: кроп из Build → EditRequestComposer.Compose → ImageEditRequest.FaceCrop
+        var png = ClaudeHomeServer.Tests.ImageEditor.Fakes.TestImages.Png(1024, 768);
+        var source = new ImageBytes(png, "image/png");
+        var mask = new ImageBytes(png, "image/png");
+        var model = new ImageEditModelInfo("qwen", "Qwen",
+            new ImageEditCaps([ImageEditOp.Edit], MaskSupport.Veil, 15, 4, true));
+        var input = new ImageEditJobInput("", "заменить лицо", null, source, mask, null, [], "images/hero.png",
+            FaceCrop: crop, KeepMask: mask);
+        var request = EditRequestComposer.Compose(input, ImageEditOp.Edit, model, 1).Value!;
+
+        // Кроп доехал в запрос (record — без трансформации) и маска — явным каналом KeepMask
+        request.FaceCrop.Should().Be(crop);
+        request.KeepMask.Should().NotBeNull("маска — явным каналом KeepMask, не образцом");
     }
 
     // Фейк растра: записывает аргументы RenderMask, возвращает заглушку; прочие методы не

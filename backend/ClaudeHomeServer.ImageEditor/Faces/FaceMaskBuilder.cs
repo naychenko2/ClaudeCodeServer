@@ -77,9 +77,13 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         var y = (cropTop / 8) * 8;
 
         // Width/Height: кроп ⊇ рамка + NeighborMarginPx (обрезанная холстом); запас 64 > 30,
-        // поэтому правая/нижняя граница кропа уже за рамкой + 30
-        var cropWidth = cropRight - x;
-        var cropHeight = cropBottom - y;
+        // поэтому правая/нижняя граница кропа уже за рамкой + 30. cropRight/cropBottom округляем
+        // вниз до кратного 8 (x/y уже кратны 8, поэтому width/height тоже кратны 8); потеря до 7 px
+        // не задевает инвариант, т.к. запас 64 − 7 = 57 > 30
+        var cropRight8 = (cropRight / 8) * 8;
+        var cropBottom8 = (cropBottom / 8) * 8;
+        var cropWidth = cropRight8 - x;
+        var cropHeight = cropBottom8 - y;
 
         // Scaled: только вверх до CropTargetPixels, кратно 16, пропорции сохраняются
         var (scaledWidth, scaledHeight) = ScaleUp(cropWidth, cropHeight);

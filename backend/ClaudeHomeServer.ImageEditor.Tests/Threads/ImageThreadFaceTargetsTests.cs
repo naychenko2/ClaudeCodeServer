@@ -139,7 +139,11 @@ public class ImageThreadFaceTargetsTests : IDisposable
         new ImageThreadFaceTarget(face, [x, 0, x + 8, 8], slug), "Заменить на " + slug);
 
     // Запуск двух лиц от входа через цепочку и задачу до записи в нить; возвращает нить после финала
-    private async Task<ImageThreadLaunch> RunTwoFacesAsync(bool failPass2)
+    private Task<ImageThreadLaunch> RunTwoFacesAsync(bool failPass2) => RunFacesAsync(2, failPass2, launchAfterFinish: false);
+
+    // faces — сколько лиц (1 или 2). launchAfterFinish: запуск ложится в нить уже после конца задачи
+    // (быстрый поставщик, ImageEditLaunchAssembler.LaunchAsync) — версия рождается в финале, а не по Ready
+    private async Task<ImageThreadLaunch> RunFacesAsync(int faces, bool failPass2, bool launchAfterFinish)
     {
         var editor = new GatedEditor { FailPass2 = failPass2 };
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
@@ -157,9 +161,9 @@ public class ImageThreadFaceTargetsTests : IDisposable
         var id = Opened();
         var quote = await jobs.QuoteAsync(Owner, Project, new ImageEditQuoteRequest(GatedEditor.ProviderKey, "m",
             EditMode.Auto, ImageEditOp.Inpaint, 1, true, 0, false, null, null,
-            FaceTarget: new FaceTarget("origin", "key", [new FaceAssignment(1, "anya"), new FaceAssignment(2, "borya")])), default);
+            FaceTarget: new FaceTarget("origin", "key", [.. new[] { new FaceAssignment(1, "anya"), new FaceAssignment(2, "borya") }.Take(faces)])), default);
         quote.Value.Should().NotBeNull(quote.Error);
-        FacePass[] passes = [Pass(1, "anya", 0), Pass(2, "borya", 8)];
+        FacePass[] passes = [.. new[] { Pass(1, "anya", 0), Pass(2, "borya", 8) }.Take(faces)];
         var input = new ImageEditJobInput(quote.Value!.QuoteId, "подстановка", null, new ImageBytes(Png(SKColors.Black), "image/png"),
             passes[0].Mask, null, passes[0].References, null, passes[0].Character, ChatSessionId: Chat, ThreadId: id,
             BaseVersionId: ImageThreadVersion.OriginId, FaceTarget: passes[0].ThreadFaceTarget, FaceCrop: passes[0].Crop,
@@ -167,12 +171,26 @@ public class ImageThreadFaceTargetsTests : IDisposable
         var started = await jobs.StartAsync(Owner, Project, input, default);
         started.Value.Should().NotBeNull(started.Error);
 
-        await threads.OnLaunchedAsync(Owner, Project, Chat, id, jobs.Get(Owner, Project, started.Value!.JobId),
-            started.Value.JobId, "подстановка", ImageEditInitiator.Human, ImageThreadVersion.OriginId, null, default,
+        var jobId = started.Value!.JobId;
+        if (launchAfterFinish)
+        {
+            editor.Go.SetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        await threads.OnLaunchedAsync(Owner, Project, Chat, id, jobs.Get(Owner, Project, jobId),
+            jobId, "подстановка", ImageEditInitiator.Human, ImageThreadVersion.OriginId, null, default,
             passes.Select(p => p.ThreadFaceTarget).ToList());
-        Thread(id).Launches.Single().FaceTargets.Should().HaveCount(2, "запуск лёг в нить с обоими лицами");
-        editor.Go.SetResult();
-        await finished.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Thread(id).Launches.Single().FaceTargets.Should().HaveCount(faces, "запуск лёг в нить со всеми лицами");
+        if (launchAfterFinish)
+        {
+            Thread(id).Versions.Where(v => !v.IsOrigin).Should().BeEmpty("по Ready запуска в нити ещё не было");
+            await threads.OnJobFinishedAsync(Owner, jobs.Get(Owner, Project, jobId)!);
+        }
+        else
+        {
+            editor.Go.SetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
         return Thread(id).Launches.Single();
     }
 
@@ -199,6 +217,36 @@ public class ImageThreadFaceTargetsTests : IDisposable
             .Should().Equal((1, "done", 0.81), (2, "failed", (double?)null));
         var versions = Thread(Thread0()).Versions.Where(v => !v.IsOrigin).ToList();
         versions.Should().ContainSingle("ровно одна версия — выход прохода 1");
+    }
+
+    // Д4 (ADR-028, §11): у версии на два лица общего сходства нет ни на одном из путей записи —
+    // ни по Ready последнего прохода (OnVariantReadyAsync), ни в финале (OnJobFinishedAsync);
+    // сходство каждого лица остаётся в FaceTargets[]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Версия_на_два_лица_без_общего_сходства_а_сходство_лиц_на_месте(bool launchAfterFinish)
+    {
+        var launch = await RunFacesAsync(2, failPass2: false, launchAfterFinish);
+
+        var version = Thread(Thread0()).Versions.Where(v => !v.IsOrigin).Should().ContainSingle().Subject;
+        version.Similarity.Should().BeNull("общего сходства версии при N > 1 нет");
+        version.MostSimilar.Should().BeFalse();
+        launch.FaceTargets!.Select(f => (f.N, f.Status, f.Similarity))
+            .Should().Equal((1, "done", 0.81), (2, "done", 0.77));
+    }
+
+    // N = 1 — как раньше: у версии сходство её варианта на обоих путях записи
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Версия_на_одно_лицо_хранит_сходство(bool launchAfterFinish)
+    {
+        var launch = await RunFacesAsync(1, failPass2: false, launchAfterFinish);
+
+        var version = Thread(Thread0()).Versions.Where(v => !v.IsOrigin).Should().ContainSingle().Subject;
+        version.Similarity.Should().Be(0.81);
+        launch.FaceTargets!.Select(f => (f.N, f.Status, f.Similarity)).Should().Equal((1, "done", 0.81));
     }
 
     private string Thread0() => _store.Get(Owner, Chat).Threads.Single().Id;

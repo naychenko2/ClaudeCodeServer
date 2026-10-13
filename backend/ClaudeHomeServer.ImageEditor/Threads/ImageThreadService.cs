@@ -639,16 +639,19 @@ public sealed class ImageThreadService(
     }
 
     // Варианты задачи, ещё не ставшие версиями, — шагами рабочей папки. Уже взятые пропускаются ДО
-    // TakeVariant: иначе в рабочей папке остался бы лишний шаг
+    // TakeVariant: иначе в рабочей папке остался бы лишний шаг. У версии запуска на несколько лиц
+    // общего сходства нет (ADR-028, §11): сходство каждого лица — в FaceTargets[] из итогов проходов
     private List<(int Variant, string StepId, double? Similarity)> TakeVariants(string ownerId, ImageEditJobDto job, ImageThread thread,
         ImageThreadLaunch launch)
     {
         var taken = new List<(int Variant, string StepId, double? Similarity)>();
+        var noSimilarity = launch.FaceTargets is { Count: > 1 };
         foreach (var n in job.Variants)
         {
             if (thread.Versions.Any(v => v.JobId == job.JobId && v.Variant == n)) continue;
             var step = steps!.TakeVariant(ownerId, job.ProjectId, job.JobId, n, launch.BaseStepId, thread.File);
-            if (step.Value is { } s) taken.Add((n, s.StepId, job.Similarities is { } sim && sim.TryGetValue(n, out var similarity) ? similarity : null));
+            if (step.Value is { } s) taken.Add((n, s.StepId,
+                !noSimilarity && job.Similarities is { } sim && sim.TryGetValue(n, out var similarity) ? similarity : null));
             else log.LogWarning("Редактор картинок: вариант {Variant} задачи {JobId} не стал версией: {Error}",
                 n, job.JobId, step.Error);
         }

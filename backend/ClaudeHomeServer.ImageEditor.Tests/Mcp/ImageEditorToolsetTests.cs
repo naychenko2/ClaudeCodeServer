@@ -50,7 +50,7 @@ public class ImageEditorToolsetTests : IDisposable
     private readonly List<ImageEditJobService> _services = [];
     private readonly ImageThreadStore _store;
     private readonly ImageProjectPrefsStore _prefsStore;
-    private ImageEditJobService _jobs = null!;
+    private IImageEditJobs _jobs = null!;
 
     public ImageEditorToolsetTests()
     {
@@ -80,12 +80,20 @@ public class ImageEditorToolsetTests : IDisposable
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
         IImagePlaceSettings? placeSettings = null, IFeatureFlagGate? flags = null,
         ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
-        ILocalImageMedia? localMedia = null)
+        ILocalImageMedia? localMedia = null, IImageEditJobs? jobsOverride = null)
     {
         editors ??= [HiggsfieldImageEditorTests.Create().Editor];
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
-        _jobs = new ImageEditJobService(editors, workspace, NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster);
-        _services.Add(_jobs);
+        if (jobsOverride is not null)
+        {
+            _jobs = jobsOverride;
+        }
+        else
+        {
+            var realJobs = new ImageEditJobService(editors, workspace, NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster);
+            _jobs = realJobs;
+            _services.Add(realJobs);
+        }
 
         var directory = new Mock<ISessionDirectory>();
         directory.Setup(d => d.GetById(It.IsAny<string>())).Returns((string id) => _sessions.GetValueOrDefault(id));
@@ -1486,6 +1494,264 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("контекста", "персонаж из контекста на чужое лицо не подставляется");
+    }
+
+    // ── faces: несколько лиц за один запуск (ADR-028, этап 3) ───────────────────
+
+    // Фейк IImageEditJobs: записывает quote request (с FaceTarget) и launch request (CharacterSlug),
+    // возвращает успех. В QuoteAsync читает счётчик запусков хода — доказательство «ровно один TryReserveLaunch».
+    private sealed class RecordingJobs : IImageEditJobs
+    {
+        public ImageEditQuoteRequest? LastQuoteRequest;
+        public ImageEditJobInput? LastLaunchInput;
+        public int? LaunchCountAtQuote;
+        private ImageEditorToolset? _toolset;
+
+        public void SetToolset(ImageEditorToolset toolset) => _toolset = toolset;
+
+        public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
+            string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct)
+        {
+            LastQuoteRequest = request;
+            LaunchCountAtQuote = _toolset is null ? 0 : LaunchCount(_toolset);
+            var dto = new ImageEditQuoteDto("q1", "local", "auto",
+                new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false, ImageEditEstimateSources.Provider),
+                DateTime.UtcNow.AddMinutes(10), 60);
+            return Task.FromResult(ImageEditCallResult<ImageEditQuoteDto>.Ok(dto));
+        }
+
+        public Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
+            string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct)
+        {
+            LastLaunchInput = input;
+            return Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto("j1")));
+        }
+
+        public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId)
+            => new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local");
+
+        public ImageEditJobDto? Get(string ownerId, string projectId, string jobId) => null;
+
+        public Task<ImageEditJobDto?> CancelAsync(string ownerId, string projectId, string jobId, CancellationToken ct)
+            => Task.FromResult<ImageEditJobDto?>(null);
+
+        public EditedImage? OpenVariant(string ownerId, string projectId, string jobId, int variant) => null;
+
+        private static int LaunchCount(ImageEditorToolset toolset)
+        {
+            var field = typeof(ImageEditorToolset).GetField("_launches",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var dict = (System.Collections.IDictionary)field.GetValue(toolset)!;
+            var total = 0;
+            foreach (System.Collections.DictionaryEntry entry in dict)
+                total += (int)entry.Value;
+            return total;
+        }
+    }
+
+    // Toolset с фейковым IImageEditJobs: quote request перехватывается, запуск «уходит» в фейк
+    private (ImageEditorToolset, RecordingJobs) FacesToolset(
+        IFeatureFlagGate? flags = null,
+        ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
+        ILocalImageMedia? localMedia = null)
+    {
+        var media = new LocalImageEditorTests.FakeMedia();
+        var recordingJobs = new RecordingJobs();
+        var toolset = Toolset(
+            [HiggsfieldImageEditorTests.Create().Editor,
+             new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }],
+            flags: flags, faces: faces, localMedia: localMedia, jobsOverride: recordingJobs);
+        recordingJobs.SetToolset(toolset);
+        return (toolset, recordingJobs);
+    }
+
+    private static JsonObject FacesArg(params (int face, string character)[] faces)
+    {
+        var array = new JsonArray();
+        foreach (var (face, character) in faces)
+            array.Add(new JsonObject { ["face"] = face, ["character"] = character });
+        return new JsonObject { ["faces"] = array };
+    }
+
+    // faces на 2 лица расходует 1 из MaxLaunchesPerTurn (мутация «резерв на каждое лицо» → краснеет)
+    [Fact]
+    public async Task faces_на_2_лица_расходует_1_запуск()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        var faces = new[] {
+            new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
+            new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
+        };
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, slugA), (2, slugB));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        // Запуск может упасть в сборщик (N>1 пока не поддерживается), но котировка ушла
+        jobs.LastQuoteRequest.Should().NotBeNull("quote request записан");
+        jobs.LastQuoteRequest!.FaceTarget!.Faces.Should().HaveCount(2);
+        jobs.LastQuoteRequest!.FaceTarget!.Faces[0].Face.Should().Be(1);
+        jobs.LastQuoteRequest!.FaceTarget!.Faces[0].CharacterSlug.Should().Be(slugA);
+        jobs.LastQuoteRequest!.FaceTarget!.Faces[1].Face.Should().Be(2);
+        jobs.LastQuoteRequest!.FaceTarget!.Faces[1].CharacterSlug.Should().Be(slugB);
+        // Ровно один TryReserveLaunch: счётчик = 1, не 2
+        jobs.LaunchCountAtQuote.Should().Be(1, "faces на 2 лица расходует 1 запуск, не 2");
+    }
+
+    // faces + face/character → отказ
+    [Fact]
+    public async Task faces_и_face_вместе_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, slugA));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+        args["face"] = 1;
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("либо faces, либо face");
+    }
+
+    // повтор персонажа → отказ
+    [Fact]
+    public async Task faces_повтор_персонажа_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var faces = new[] {
+            new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
+            new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
+        };
+        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, slugA), (2, slugA));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("свой персонаж");
+    }
+
+    // три лица → отказ
+    [Fact]
+    public async Task faces_три_лица_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        var slugC = CreateCharacter("Вера");
+        var faces = new[] {
+            new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
+            new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
+            new LocalDetectedFace(3, 1, 1, 3, 3, 0.9, false),
+        };
+        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, slugA), (2, slugB), (3, slugC));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("2 лиц");
+    }
+
+    // повтор номера лица → отказ
+    [Fact]
+    public async Task faces_повтор_номера_лица_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        var faces = new[] {
+            new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
+            new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
+        };
+        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, slugA), (1, slugB));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("указано дважды");
+    }
+
+    // faces без provider local → отказ как у одиночной подстановки
+    [Fact]
+    public async Task faces_без_provider_local_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        var faces = new[] {
+            new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
+            new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
+        };
+        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, slugA), (2, slugB));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "fal";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("локальными");
+    }
+
+    // Замечание Глеба (b8cca6705): в запросе запуска CharacterSlug == null,
+    // FaceTarget.Faces содержит ожидаемый элемент
+    [Fact]
+    public async Task face_успех_CharacterSlug_null_Faces_содержит_элемент()
+    {
+        var slug = CreateCharacter("Тест");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slug, ["provider"] = "local" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        jobs.LastQuoteRequest.Should().NotBeNull();
+        jobs.LastQuoteRequest!.FaceTarget.Should().NotBeNull();
+        jobs.LastQuoteRequest!.FaceTarget!.Faces.Should().ContainSingle();
+        jobs.LastQuoteRequest!.FaceTarget!.Faces[0].Face.Should().Be(1);
+        jobs.LastQuoteRequest!.FaceTarget!.Faces[0].CharacterSlug.Should().Be(slug);
+        // Верхний CharacterSlug не едет: персонаж — только в FaceTarget.Faces
+        jobs.LastQuoteRequest!.CharacterSlug.Should().BeNull(
+            "персонаж задаётся в FaceTarget.Faces, верхний CharacterSlug — null");
     }
 
     private sealed class FakeTurnBus : ITurnEventBus

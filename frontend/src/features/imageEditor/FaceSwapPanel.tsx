@@ -5,7 +5,7 @@
 //  4. Footer — чип котировки + кнопка «Подставить» / «Подставить (2)»
 // На мобиле подвал прилипает к низу, зона касания ≥ 44.
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { AlertTriangle, Cpu, Info, RefreshCw, ScanFace, Clock, X } from 'lucide-react';
 import { Badge, Button, IconButton, MetaChip, C, R, SP, FS, ICON_SIZE, ICON_STROKE, useIsMobile } from 'aihome_shell/kit';
 import type { ImageEditCharacter, ImageEditorApi } from './api';
@@ -79,13 +79,14 @@ function CharacterRow({ api, projectId, c, selected, inContext, taken, onPick }:
         border: `1px solid ${selected ? C.accent : 'transparent'}`,
         background: selected ? C.accentLight : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer', color: C.textPrimary, textAlign: 'left',
-        opacity: disabled ? 0.5 : 1, fontFamily: 'inherit',
+        fontFamily: 'inherit',
       }}
     >
-      <Avatar api={api} projectId={projectId} c={c} size={32} />
+      {/* Занятый: приглушены аватар и имя, подпись «Уже на лице N» — читаемая (m6) */}
+      <span style={{ display: 'inline-flex', opacity: disabled ? 0.5 : 1 }}><Avatar api={api} projectId={projectId} c={c} size={32} /></span>
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <span style={{ fontSize: FS.base, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-        {taken != null && <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.3 }}>{FS_TEXT.takenOn(taken)}</span>}
+        <span style={{ fontSize: FS.base, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: disabled ? 0.5 : 1 }}>{c.name}</span>
+        {taken != null && <span style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.3 }}>{FS_TEXT.takenOn(taken)}</span>}
       </span>
       {inContext && taken == null && <Badge tone="neutral">в контексте</Badge>}
       <span aria-hidden style={{
@@ -117,30 +118,34 @@ function CharacterTile({ api, projectId, c, selected, inContext, taken, onPick }
         border: `1px solid ${selected ? C.accent : 'transparent'}`,
         background: selected ? C.accentLight : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer', color: C.textPrimary, minWidth: 0, minHeight: 84,
-        opacity: disabled ? 0.5 : 1, fontFamily: 'inherit',
+        fontFamily: 'inherit',
       }}
     >
-      <Avatar api={api} projectId={projectId} c={c} size={44} />
-      <span style={{ fontSize: FS.xs, fontWeight: 600, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+      <span style={{ display: 'inline-flex', opacity: disabled ? 0.5 : 1 }}><Avatar api={api} projectId={projectId} c={c} size={44} /></span>
+      <span style={{ fontSize: FS.xs, fontWeight: 600, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: disabled ? 0.5 : 1 }}>{c.name}</span>
       {taken != null
-        ? <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1 }}>{FS_TEXT.busyTile(taken)}</span>
+        ? <span style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1 }}>{FS_TEXT.busyTile(taken)}</span>
         : inContext && <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1 }}>в контексте</span>}
     </button>
   );
 }
 
 // ── Строка списка назначений ───────────────────────────────────────────────────
-function AssignmentRow({ api, projectId, faceN, character, active, mobile, onRemove, onTap }: {
+function AssignmentRow({ api, projectId, faceN, character, active, refusal, mobile, onRemove, onTap }: {
   api: ImageEditorApi; projectId: string; faceN: number;
   // null — лицо активно, персонаж ещё не выбран
-  character: ImageEditCharacter | null; active: boolean; mobile: boolean;
+  character: ImageEditCharacter | null; active: boolean;
+  // Причина отказа по этому лицу (макет v2): строка красная, причина под именем
+  refusal: string | null;
+  mobile: boolean;
   onRemove: () => void; onTap: () => void;
 }) {
-  const rowBg = active ? C.accentLight : C.bgCard;
-  const rowBorder = active ? C.accent : C.border;
+  const rowBg = refusal ? C.dangerBg : active ? C.accentLight : C.bgCard;
+  const rowBorder = refusal ? C.dangerBorder : active ? C.accent : C.border;
   return (
     <div
       role="listitem"
+      data-face-refused={refusal ? '' : undefined}
       onClick={onTap}
       style={{
         display: 'flex', alignItems: 'center', gap: SP.sm,
@@ -149,11 +154,14 @@ function AssignmentRow({ api, projectId, faceN, character, active, mobile, onRem
         cursor: 'pointer', color: C.textPrimary,
       }}
     >
-      <Badge tone="accent">{FS_TEXT.face(faceN)}</Badge>
+      <Badge tone={refusal ? 'danger' : 'accent'}>{FS_TEXT.face(faceN)}</Badge>
       {character != null ? (
         <>
           <Avatar api={api} projectId={projectId} c={character} size={24} />
-          <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.name}</span>
+          <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontSize: FS.base, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{character.name}</span>
+            {refusal && <span style={{ fontSize: FS.xs, color: C.dangerText, lineHeight: 1.3 }}>{refusal}</span>}
+          </span>
           <IconButton size="lg" ariaLabel={FS_TEXT.removeAria(faceN)} title={FS_TEXT.removeAria(faceN)}
             style={mobile ? { width: 44, height: 44 } : undefined}
             onClick={e => { e.stopPropagation(); onRemove(); }}>
@@ -191,12 +199,14 @@ function Footer({ quote, facePasses, canSubmit, submitting, mobile, onSubmit }: 
 }
 
 // ── Панель целиком ─────────────────────────────────────────────────────────────
-export function FaceSwapPanel({ api, projectId, characters, assignments, facePasses, canSubmit, quote, localOnce, submitting, notices, onPick, onRemove, onTapFace, onNoticeAction, onSubmit }: {
+export function FaceSwapPanel({ api, projectId, characters, assignments, refusals, facePasses, canSubmit, quote, localOnce, submitting, notices, onPick, onRemove, onTapFace, onNoticeAction, onSubmit }: {
   api: ImageEditorApi;
   projectId: string;
   characters: readonly ImageEditCharacter[];
   // Назначения «лицо → персонаж» (ADR-028, этап 3)
   assignments: FaceAssignments;
+  // Отказы по назначенным лицам: номер лица → причина (assignmentRefusals)
+  refusals: ReadonlyMap<number, string>;
   // Число проходов из котировки
   facePasses: number | null;
   canSubmit: boolean;
@@ -216,6 +226,13 @@ export function FaceSwapPanel({ api, projectId, characters, assignments, facePas
   const mobile = useIsMobile();
   const { active, assignments: asgMap } = assignments;
   const asgCount = asgMap.size;
+  // Мобила 320: выбор персонажа после тапа по лицу уходил за нижний край — подкручиваем к нему (M2)
+  const pickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active != null) pickerRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [active]);
+  // Отступы содержимого — те же токены, что у подвала (M1)
+  const padX = mobile ? SP.md : SP.lg;
 
   // Персонажи, занятые на другом лице: slug → номер лица
   const takenBy = new Map<string, number>();
@@ -233,7 +250,7 @@ export function FaceSwapPanel({ api, projectId, characters, assignments, facePas
 
   // ── Пикер персонажей: только пока есть активное лицо ──
   const picker: ReactNode = active != null ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+    <div ref={pickerRef} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{FS_TEXT.pickFor(active)}</div>
       {mobile ? (
         <div role="radiogroup" aria-label={FS_TEXT.pickFor(active)} style={{
@@ -279,6 +296,7 @@ export function FaceSwapPanel({ api, projectId, characters, assignments, facePas
             <AssignmentRow key={n} api={api} projectId={projectId}
               faceN={n} character={character} mobile={mobile}
               active={active === n}
+              refusal={refusals.get(n) ?? null}
               onRemove={() => onRemove(n)}
               onTap={() => onTapFace(n)} />
           );
@@ -303,17 +321,23 @@ export function FaceSwapPanel({ api, projectId, characters, assignments, facePas
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minHeight: 0, flex: 1 }}>
       {notices.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, padding: mobile ? `${SP.sm}px ${padX}px 0` : `${SP.lg}px ${padX}px 0` }}>
           {notices.map((n, i) => <Notice key={i} n={n} mobile={mobile} onAction={onNoticeAction} onUnassign={onRemove} />)}
         </div>
       )}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, flex: 1, minHeight: 0, overflowY: mobile ? undefined : 'auto' }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: SP.sm, flex: 1, minHeight: 0, overflowY: mobile ? undefined : 'auto',
+        // Над плашками отступ уже есть (gap), без них — свой верхний
+        padding: `${notices.length > 0 ? 0 : mobile ? SP.sm : SP.lg}px ${padX}px 0`,
+      }}>
         {picker}
         {list}
       </div>
       <div style={{
         flex: '0 0 auto', borderTop: `1px solid ${C.borderLight}`,
         padding: mobile ? `${SP.sm}px ${SP.md}px` : `${SP.md}px ${SP.lg}px`, background: C.bgPanel,
+        // Мобила: общего подвала редактора в режиме нет (M2) — нижний safe-area берёт подвал панели
+        ...(mobile ? { paddingBottom: `calc(${SP.sm}px + env(safe-area-inset-bottom))` } : null),
         // Мобила: блок прокручивается вместе с телом окна — подвал прилипает к низу (дефект Майи)
         ...(mobile ? { position: 'sticky' as const, bottom: 0, zIndex: 1 } : null),
       }}>

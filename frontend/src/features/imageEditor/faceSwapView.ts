@@ -430,6 +430,19 @@ export function refusalFaces(ui: Pick<FaceUi, 'tooClose' | 'faceOutOfFrame' | 'r
   return ui.tooClose ? faces.map(f => f.n) : [];
 }
 
+// Причины отказа по назначенным лицам — для красной строки «Лицо n — Имя» (макет v2): лица — те же,
+// что красит refusalFaces; причина — текст отказа сервера, «близко» или «вне кадра». Неназначенные лица не входят
+export function assignmentRefusals(
+  ui: Pick<FaceUi, 'tooClose' | 'faceOutOfFrame' | 'refusedFace'> & { refusedText?: string | null },
+  faces: readonly DetectedFace[],
+  assigned: ReadonlyMap<number, string>,
+): Map<number, string> {
+  const why = ui.refusedText ? ui.refusedText : ui.tooClose ? FS_TEXT.closeWhy : FS_TEXT.outWhy;
+  const out = new Map<number, string>();
+  for (const n of refusalFaces(ui, faces)) if (assigned.has(n)) out.set(n, why);
+  return out;
+}
+
 // aria-label рамки (тексты v2-notes): свободная — «назначить», назначенная — имя и «Переназначить»
 export function faceAria(n: number, small: boolean, name: string | null): string {
   if (small) return `Лицо ${n}: слишком мелкое`;

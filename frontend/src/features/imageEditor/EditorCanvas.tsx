@@ -38,7 +38,8 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   // Плашка снизу по центре (панель обрезки)
   overlay?: ReactNode;
   // Подсказка сверху вместо подсказки инструмента
-  hint?: string;
+  // null — плашки-подсказки на холсте нет (режим подстановки: подсказка уже в полосе под холстом)
+  hint?: string | null;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -168,13 +169,13 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
         <img src={src} alt="" style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
           onLoad={e => onImageLoad(e.currentTarget)} />
       )}
-      <div style={{
+      {hint !== null && <div style={{
         position: 'absolute', top: SP.sm, left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none',
         background: C.glass, color: C.textSecondary, fontSize: FS.sm, padding: `${SP.xs}px ${SP.md}px`,
         borderRadius: R.max, whiteSpace: 'nowrap', maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>
         {hint ?? TOOL_HINT[tool]}
-      </div>
+      </div>}
 
       <div
         onPointerDown={e => e.stopPropagation()}
@@ -200,7 +201,7 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   // Плашка под холстом, а не поверх: на телефоне поверх она закрывала бы углы рамки.
   // Обёртка есть всегда — иначе холст пересоздастся и наблюдатель размера потеряет его
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {stageEl}
       {overlay && (
         <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'center', padding: SP.sm, background: C.bgInset }}>

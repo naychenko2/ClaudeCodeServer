@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FaceSwapPanel } from './FaceSwapPanel';
 import {
-  assignCharacter, emptyAssignments, faceQuoteChip, faceSwapView, FS_TEXT, hasAssignments, passesWord, pruneAssignments,
+  assignCharacter, assignmentRefusals, emptyAssignments, faceQuoteChip, faceSwapView, FS_TEXT, hasAssignments, passesWord, pruneAssignments,
   type FaceAssignments, type FaceSwapViewInput,
 } from './faceSwapView';
 import { faceSwapReducer, initialFaceSwap } from './thread/faceSwap';
@@ -31,11 +31,12 @@ const view = (over: Partial<FaceSwapViewInput> = {}) => faceSwapView({
   facesChanged: false, hasMask: false, ...over,
 });
 
-const render = (a: FaceAssignments, over: Partial<FaceSwapViewInput> = {}, quote: string | null = null) => {
+const render = (a: FaceAssignments, over: Partial<FaceSwapViewInput> = {}, quote: string | null = null,
+  refusals: ReadonlyMap<number, string> = new Map()) => {
   const v = view({ assignments: a, ...over });
   const n = a.assignments.size;
   return renderToStaticMarkup(createElement(FaceSwapPanel, {
-    api, projectId: 'p', characters: chars, assignments: a, facePasses: n > 0 ? n : null,
+    api, projectId: 'p', characters: chars, assignments: a, refusals, facePasses: n > 0 ? n : null,
     canSubmit: v.canSubmit, quote, localOnce: false, submitting: false, notices: v.notices,
     onPick: () => {}, onRemove: () => {}, onTapFace: () => {}, onNoticeAction: () => {}, onSubmit: () => {},
   }));
@@ -134,7 +135,7 @@ describe('faceSwapView (этап 3): плашки', () => {
   it('отказ поиска попадает в рендер панели', () => {
     const v = view({ phase: 'error', searchFailure: { code: 'other', text: 'Не удалось найти лица. Попробуйте позже' } });
     const html = renderToStaticMarkup(createElement(FaceSwapPanel, {
-      api, projectId: 'p', characters: chars, assignments: emptyAssignments, facePasses: null, canSubmit: false,
+      api, projectId: 'p', characters: chars, assignments: emptyAssignments, refusals: new Map(), facePasses: null, canSubmit: false,
       quote: null, localOnce: false, submitting: false, notices: v.notices,
       onPick: () => {}, onRemove: () => {}, onTapFace: () => {}, onNoticeAction: () => {}, onSubmit: () => {},
     }));
@@ -195,6 +196,38 @@ describe('кисть и назначения', () => {
     expect(hasAssignments(s.assignments)).toBe(true);
     s = faceSwapReducer(s, { type: 'clearAssignments' });
     expect(hasAssignments(s.assignments)).toBe(false);
+  });
+
+  it('отказ по назначенному лицу: строка красная, причина под именем, бейдж danger (m1)', () => {
+    const a = asg([[1, 'maria'], [2, 'ivan']]);
+    const faces = [face(1), face(2)];
+    const refusals = assignmentRefusals({ tooClose: true, faceOutOfFrame: false, refusedFace: 2 }, faces, a.assignments);
+    expect([...refusals]).toEqual([[2, FS_TEXT.closeWhy]]);
+    const html = render(a, { facesTooClose: true, refusedFace: 2 }, null, refusals);
+    // Красная только строка лица 2, причина под именем
+    expect(html.match(/data-face-refused/g)).toHaveLength(1);
+    const row2 = html.slice(html.indexOf('data-face-refused'));
+    // Фон и рамка — у самой строки (её открывающий тег), а не только у бейджа
+    const rowTag = row2.slice(0, row2.indexOf('>'));
+    expect(rowTag).toContain('background:var(--c-danger-bg)');
+    expect(rowTag).toContain('var(--c-danger-border)');
+    expect(row2).toContain('Иван');
+    expect(row2).toContain(FS_TEXT.closeWhy);
+    // Текст отказа сервера — причина как есть; неназначенное лицо в строки не попадает
+    const srv = assignmentRefusals({ tooClose: false, faceOutOfFrame: false, refusedFace: 3, refusedText: 'Лицо 3 слишком мелкое' }, [...faces, face(3)], a.assignments);
+    expect(srv.size).toBe(0);
+    const out = assignmentRefusals({ tooClose: false, faceOutOfFrame: true, refusedFace: 1 }, faces, a.assignments);
+    expect(out.get(1)).toBe(FS_TEXT.outWhy);
+  });
+
+  it('без отказа строки не красные', () => {
+    expect(render(asg([[1, 'maria']]))).not.toContain('data-face-refused');
+  });
+
+  it('«Уже на лице N» — читаемая подпись, приглушены только аватар и имя (m6)', () => {
+    const html = render(asg([[1, 'maria']], 2));
+    const i = html.indexOf(FS_TEXT.takenOn(1) + '<');
+    expect(html.slice(i - 80, i)).toContain('var(--c-text-secondary)');
   });
 
   it('текст подтверждения — по макету', () => {

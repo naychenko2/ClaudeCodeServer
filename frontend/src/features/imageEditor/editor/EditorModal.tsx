@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim, type FaceLabel } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, faceQuoteChip, overlayTap, refusalFaces, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
+import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, faceQuoteChip, overlayTap, refusalFaces, assignmentRefusals, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -343,14 +343,15 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   };
 
   const canvas = shownSrc ? (
-    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
       <EditorCanvas src={shownSrc} size={preview && !before ? null : dims} marks={preview && !before ? [] : marks}
         onMarksChange={setMarks} tool={preview || faceSwapMode ? 'hand' : tool}
         onTextAt={(x, y) => setLabelAt({ x, y, text: '' })}
         onImageLoad={onImageLoad}
         crop={crop} onCropChange={rect => setCrop(c => (c ? { ...c, rect } : c))}
         faceOverlay={faceOverlayNode}
-        hint={faceSwapMode ? (faceView?.bar ?? FS_TEXT.search) : preview ? (before ? 'До: текущий шаг' : 'После: выбранный вариант') : crop ? 'Тяните рамку или её углы' : transforming ? 'Сохраняем правку…' : undefined}
+        // Режим подстановки: подсказка — в полосе под холстом, плашку на холсте не дублируем (m3)
+        hint={faceSwapMode ? null : preview ? (before ? 'До: текущий шаг' : 'После: выбранный вариант') : crop ? 'Тяните рамку или её углы' : transforming ? 'Сохраняем правку…' : undefined}
         overlay={faceSwapMode && faceView ? (
           <FaceSwapBar text={faceView.bar} icon={faceView.barIcon} mobile={mobile} onCancel={() => setFaceSwapMode(false)} />
         ) : crop && dims ? (
@@ -398,11 +399,14 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
       display: 'flex', flexDirection: 'column', width: mobile ? '100%' : 310, flexShrink: 0,
       boxSizing: 'border-box', borderLeft: mobile ? undefined : `1px solid ${C.borderLight}`,
       background: C.bgPanel, minHeight: 0,
+      // Мобила: тело панели тянется до низа — липкий подвал не висит посреди экрана (m7)
+      ...(mobile ? { flex: 1 } : null),
     }}>
       <FaceSwapPanel
         api={api} projectId={projectId}
         characters={faceCharacters ?? []}
         assignments={faceSwap.state.assignments}
+        refusals={assignmentRefusals(faceUi, faceSwap.state.faces, faceSwap.state.assignments.assignments)}
         facePasses={facePasses > 0 ? facePasses : null}
         canSubmit={faceView.canSubmit}
         quote={faceView.canSubmit ? faceQuote : null}
@@ -509,7 +513,9 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     <>
       <Modal size="fullscreen" title={`Редактор · ${threadName(thread)}`} subtitle={subtitle} onClose={closeEditor}
         closeOnBackdrop={false}
-        footer={(
+        // Мобила, режим подстановки: общий подвал не нужен (выход — «Отмена» в полосе), он отнимал
+        // высоту у выбора персонажа на 320×640 (M2). Десктоп — подвал как есть
+        footer={mobile && faceSwapMode ? undefined : (
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', width: '100%', justifyContent: 'flex-end' }}>
             {!mobile && (
               <span style={{ marginRight: 'auto', fontSize: FS.xs, color: C.textMuted }}>
@@ -537,7 +543,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
           </div>
         )}>
         {/* Телефон: холст фиксированной высоты, секции ниже прокручиваются вместе с телом окна */}
-        <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', flex: mobile ? 'none' : 1, minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', flex: mobile ? (faceSwapMode ? '1 0 auto' : 'none') : 1, minHeight: 0 }}>
           <div style={{
             display: 'flex', background: C.bgInset, minWidth: 0,
             ...(mobile ? { height: 360, flexShrink: 0 } : { flex: 1, minHeight: 0 }),

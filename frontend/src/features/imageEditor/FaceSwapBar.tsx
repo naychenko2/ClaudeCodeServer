@@ -19,7 +19,7 @@ function StepIcon({ icon }: { icon: BarIcon }) {
   return ic(ScanFace);
 }
 
-export function FaceSwapBar({ text, icon, mobile, onCancel }: {
+export function FaceSwapBar({ text, icon, onCancel }: {
   text: string;
   icon: BarIcon;
   mobile: boolean;
@@ -30,7 +30,8 @@ export function FaceSwapBar({ text, icon, mobile, onCancel }: {
       display: 'flex', alignItems: 'center', gap: SP.sm,
       padding: SP.sm, background: C.bgPanel, border: `1px solid ${C.borderLight}`,
       borderRadius: R.lg, boxShadow: SHADOW.card, fontSize: 12, color: C.textPrimary, lineHeight: 1.4,
-      width: mobile ? '100%' : 520, maxWidth: '100%',
+      // Ширина по колонке холста, не больше 520: жёсткие 520 на планшете распирали колонку на панель (B1)
+      width: '100%', maxWidth: 520, boxSizing: 'border-box',
     }}>
       <span style={{ color: C.accent, display: 'inline-flex', flexShrink: 0 }}><StepIcon icon={icon} /></span>
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>

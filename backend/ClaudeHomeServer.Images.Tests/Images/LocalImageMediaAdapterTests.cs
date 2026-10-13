@@ -1181,4 +1181,29 @@ public class LocalImageMediaAdapterTests
             .Should().ContainSingle().Subject.ComfyInputs.Should().Contain(u => u.EndsWith("-detect.png"));
         ClaudeHomeServer.Tests.Helpers.TestFs.DeleteDirectoryResilient(tempDir);
     }
+
+    // Дефект 8d2556e5 (ADR-028, Ш2): холст для детекции принимается до потолка загрузки узла
+    // (MaxMediaInputBytes, 90 МБ). 40 МБ проходит проверку веса и уходит в загрузку, а не
+    // «больше 30 МБ»; 95 МБ → тот же потолок узла 90 МБ: отказ. Лимит — ссылка на символ,
+    // не дублированное число (потолок загрузки узла — та же константа, что в SubmitAsync).
+    [Fact]
+    public async Task Детекция_Холст40МБ_уходит_в_загрузку()
+    {
+        AnswerDetect("ccs_face_detect={\"width\":16,\"height\":16,\"faces\":[]}");
+        var result = await Build().DetectFacesAsync(PngOf(40 * 1024 * 1024), CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    // 95 МБ → тот же потолок узла 90 МБ: отказ «Картинка больше 90 МБ.»
+    [Fact]
+    public async Task Детекция_Холст95МБ_отказ_90МБ()
+    {
+        var result = await Build().DetectFacesAsync(PngOf(95 * 1024 * 1024), CancellationToken.None);
+
+        result.Error.Should().Be($"Картинка больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
 }

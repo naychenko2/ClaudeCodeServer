@@ -594,8 +594,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     {
         var options = LocalMediaOptions.Read(config);
         if (!options.Enabled) return new LocalFaceDetectResult(0, 0, [], "Локальные модели выключены на этом сервере.");
-        if (image.Length > LocalMediaService.MaxInputBytes)
-            return new LocalFaceDetectResult(0, 0, [], $"Картинка больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        // Холст для детекции принимается до потолка загрузки узла (MaxMediaInputBytes, 90 МБ):
+        // детекция — не MCP-инструмент с пересылкой по сети, а загрузка на узел (ADR-028, Ш2)
+        if (image.Length > LocalMediaService.MaxMediaInputBytes)
+            return new LocalFaceDetectResult(0, 0, [], $"Картинка больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
         var ext = ImageFormatSniffer.DetectExtension(image);
         if (ext is null) return new LocalFaceDetectResult(0, 0, [], "Картинка — не PNG, JPEG, WebP или GIF.");
 

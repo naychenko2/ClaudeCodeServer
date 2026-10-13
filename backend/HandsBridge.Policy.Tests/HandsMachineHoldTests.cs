@@ -71,6 +71,37 @@ public class HandsMachineHoldTests
         Assert.True(a.TryHold(tool, action), "снимок проходит, пока руками действует другой ход");
     }
 
+    [Theory]
+    [InlineData(HandsTools.BrowserSnapshot)]
+    [InlineData(HandsTools.BrowserQuery)]
+    [InlineData(HandsTools.BrowserWait)]
+    public void Браузерное_чтение_замок_не_берёт_и_при_занятых_руках_проходит(string tool)
+    {
+        var (a, b) = TwoBridges();
+
+        Assert.True(a.TryHold(tool));
+        Assert.False(a.Held, "чтение через CDP не трогает фокус и ввод");
+
+        Assert.True(b.TryHold(HandsTools.UiClick));
+        Assert.True(a.TryHold(tool), "чтение проходит, пока руками действует другой ход");
+    }
+
+    [Theory]
+    [InlineData(HandsTools.BrowserNavigate)]
+    [InlineData(HandsTools.BrowserTabs)]
+    [InlineData(HandsTools.BrowserClick)]
+    [InlineData(HandsTools.BrowserType)]
+    [InlineData(HandsTools.BrowserEvaluate)]
+    public void Браузерное_действие_берёт_замок_и_при_занятых_руках_получает_отказ(string tool)
+    {
+        var (a, b) = TwoBridges();
+
+        Assert.True(a.TryHold(tool));
+        Assert.True(a.Held);
+
+        Assert.False(b.TryHold(tool), "действие другого хода при занятых руках");
+    }
+
     [Fact]
     public void Именованный_мьютекс_один_на_машину_и_отпускается_из_любого_потока()
     {

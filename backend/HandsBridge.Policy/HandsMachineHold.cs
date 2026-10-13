@@ -37,10 +37,11 @@ public sealed class HandsMachineHold(IHandsMachineMutex mutex)
 
     /// <summary>
     /// Нужен ли вызову замок: всё, что трогает машину (<see cref="HandsActivity.TouchesMachine"/>),
-    /// кроме снимков (<see cref="HandsVision.ImageTools"/>) — снимок не трогает ввод и соседу не мешает.
+    /// кроме снимков и браузерных чтений (<see cref="HandsVision.ReadOnlyTools"/>) — они не трогают
+    /// ввод и соседу не мешают.
     /// </summary>
     public static bool Needs(string tool, string? action = null) =>
-        HandsActivity.TouchesMachine(tool, action) && !HandsVision.ImageTools.Contains(tool);
+        HandsActivity.TouchesMachine(tool, action) && !HandsVision.ReadOnlyTools.Contains(tool);
 
     /// <summary>
     /// Вызов прошёл гейт и сейчас подействует. false — замок у другого хода, действовать нельзя.

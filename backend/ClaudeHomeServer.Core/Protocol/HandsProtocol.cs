@@ -196,6 +196,14 @@ public static class HandsBridgeArgs
 public static class HandsVision
 {
     public static readonly IReadOnlyList<string> ImageTools = ["screenshot_control", "browser_screenshot"];
+
+    /// <summary>
+    /// Инструменты, которым замок машины (<see cref="HandsMachineLock"/>) не нужен: снимки
+    /// (<see cref="ImageTools"/>) и браузерные чтения через CDP — ни фокус, ни ввод они не трогают
+    /// и соседнему ходу не мешают.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ReadOnlyTools =
+        [.. ImageTools, "browser_snapshot", "browser_query", "browser_wait"];
 }
 
 /// <summary>

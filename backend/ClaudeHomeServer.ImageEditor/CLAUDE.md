@@ -188,7 +188,7 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
 - **Состав `tools/list` не зависит от хода, фокуса и нитей**: сервер `image-editor` едет в любой чат
   владельца — проектный и личный — при тулсете в реестре
   (`BuildImageEditorContext` в Main). Иначе CLI перезапустится со всеми MCP-серверами. Инструменты: `image_state`, `image_focus`, `image_new`,
-  `image_suggest_prompt` и — при `ImageEditor:AgentLaunch=true` — `image_generate`, `image_cancel`.
+  `image_suggest_prompt`, `image_find_faces` и — при `ImageEditor:AgentLaunch=true` — `image_generate`, `image_cancel`.
   Без выбранной картинки инструмент отвечает отказом, а не исчезает.
 - **Сохранить в проект — только человек** (ADR-019, решение 1): ручка `save`, инструмента у агента
   нет и не заводим. Агент сам берёт картинку в работу, заводит черновик и выбирает версию-основу
@@ -239,9 +239,9 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   `faces_changed` → 409, `feature_disabled` → 404, `busy` → 503, `faces_too_close` /
   `face_out_of_frame` → 400.
 - **Инструменты агента:** новый read-only `image_find_faces` (номера лиц версии) и аргумент `face`
-  у `image_generate` — статичная схема. `image_find_faces` в `tools/list` при
-  `ImageEditor:AgentLaunch=true` (`ToolsOfInstance`); флаг пользователя `character-face-swap`
-  на список не влияет — он даёт только отказ `feature_disabled` (404) на вызове.
+  у `image_generate` — статичная схема. `image_find_faces` в `tools/list` всегда (`ToolsOfInstance`
+  держит его и в урезанном наборе, при `ImageEditor:AgentLaunch=false`); флаг пользователя
+  `character-face-swap` на список не влияет — он даёт только отказ `feature_disabled` (404) на вызове.
 
 Поставщики (`Providers/`), каталог моделей с `caps` — `ImageEditCatalog`:
 

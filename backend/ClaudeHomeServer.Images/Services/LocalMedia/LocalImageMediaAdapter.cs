@@ -544,9 +544,9 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         var ext = ImageFormatSniffer.DetectExtension(image);
         if (ext is null) return new LocalFaceDetectResult(0, 0, [], "Картинка — не PNG, JPEG, WebP или GIF.");
 
-        // Нормализация EXIF: воркер (cv2) применяет EXIF-поворот, а ImageDimensions и LoadImage ComfyUI — нет.
-        // Чтобы рамки, маска и исходник были в одной системе координат (той, что видит пользователь),
-        // применяем EXIF-поворот и обнуляем тег до отправки узлу. Orientation 1 (или нет EXIF) — байты не трогаем.
+        // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег на стороне бэкенда, чтобы размеры
+        // и рамки не зависели от того, как загрузчик узла/воркера трактует EXIF (воркер cv2 применяет
+        // поворот, а ImageDimensions — нет). Orientation 1 (или нет EXIF) — байты не трогаем.
         var normalized = NormalizeExif(image);
 
         var jobId = LocalMediaService.JobIdPrefix + Guid.NewGuid().ToString("N");
@@ -605,8 +605,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
     }
 
-    // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег, чтобы воркер (cv2), ImageDimensions
-    // и LoadImage ComfyUI видели картинку в одной системе координат. Orientation 1 (или нет EXIF) —
+    // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег на стороне бэкенда, чтобы размеры
+    // и рамки не зависели от того, как загрузчик узла/воркера трактует EXIF. Orientation 1 (или нет EXIF) —
     // байты не трогаем (перекодировка впустую). raster = null (подсистема images выключена) — как раньше.
     // Сбой Apply (потолок мегапикселей, битый файл) — исходные байты: детекция по ним откажет сама.
     private byte[] NormalizeExif(byte[] image)

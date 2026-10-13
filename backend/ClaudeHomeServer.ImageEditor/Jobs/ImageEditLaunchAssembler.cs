@@ -314,9 +314,9 @@ public sealed class ImageEditLaunchAssembler(
         if (sourceBytes is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "У версии ещё нет изображения");
 
-        // Нормализация EXIF: воркер (cv2) применяет EXIF-поворот, а LoadImage ComfyUI — нет.
-        // Чтобы маска (по bbox детекции) и исходник были в одной системе координат (той, что видит
-        // пользователь), применяем EXIF-поворот и обнуляем тег. facesKey — по сырым байтам (фронт
+        // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег на стороне бэкенда, чтобы маска
+        // (по bbox детекции) и исходник были в одной системе координат (той, что видит пользователь),
+        // независимо от того, как загрузчик узла/воркера трактует EXIF. facesKey — по сырым байтам (фронт
         // считает его на исходнике), поэтому сверка facesKey идёт до нормализации.
         var normalizedSource = NormalizeExif(sourceBytes);
 

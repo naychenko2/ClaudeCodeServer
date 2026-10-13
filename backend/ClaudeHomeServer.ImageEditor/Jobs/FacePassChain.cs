@@ -17,8 +17,9 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // ровно одна версия. Отмена/падение ВО ВРЕМЯ прохода 1 — версий нет (удержанного Ready ещё нет).
 public sealed class FacePassChain
 {
-    // Итог одного прохода: результат и признак отмены (для шага 10)
-    public sealed record PassOutcome(ImageEditResult Result, bool Cancelled);
+    // Итог одного прохода (ADR-028, §9): N — номер лица, Status — done | failed | cancelled,
+    // Similarity — сходство лица, измеренное внутри маски этого прохода (null — не считалось)
+    public sealed record FacePassResult(int N, string Status, double? Similarity);
 
     public static async Task<ImageEditResult> RunAsync(
         IImageEditor editor,
@@ -26,15 +27,17 @@ public sealed class FacePassChain
         ImageBytes source,
         string modelId,
         IProgress<EditProgress> progress,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<FacePassResult>? onResult = null)
     {
         var n = passes.Count;
+        var k = 0;
         var current = source;
         var last = default(ImageEditResult);
         var chain = new ChainProgress(progress, n);
         try
         {
-            for (var k = 0; k < n; k++)
+            for (; k < n; k++)
             {
                 var pass = passes[k];
                 var request = new ImageEditRequest(
@@ -57,16 +60,22 @@ public sealed class FacePassChain
                 // Выход прохода k — исходник прохода k+1 (промежуточный выход версиями не становится)
                 if (last.Images is { Count: > 0 } imgs)
                     current = new ImageBytes(imgs[0].Bytes, imgs[0].ContentType);
+                onResult?.Invoke(new FacePassResult(pass.Face, "done", last.Images is { Count: > 0 } ? last.Images[0].Similarity : null));
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // Проход k отменён на ходу, последующие не начинались — тоже cancelled
+            for (var i = k; i < n; i++) onResult?.Invoke(new FacePassResult(passes[i].Face, "cancelled", null));
             // Отмена: если прошёл хотя бы один проход — его выход становится версией (В1)
             chain.ReleaseHeld();
             throw;
         }
         catch
         {
+            // Проход k начался и упал; последующие не начинались — cancelled (ADR-028, §9)
+            onResult?.Invoke(new FacePassResult(passes[k].Face, "failed", null));
+            for (var i = k + 1; i < n; i++) onResult?.Invoke(new FacePassResult(passes[i].Face, "cancelled", null));
             // Падение прохода k: выход прохода k−1 (если был) становится версией (В1)
             chain.ReleaseHeld();
             throw;

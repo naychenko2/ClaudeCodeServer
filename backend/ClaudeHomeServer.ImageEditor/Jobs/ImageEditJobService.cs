@@ -118,6 +118,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public int? EtaSeconds { get; set; }
         public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
+        // Итоги проходов подстановки (ADR-028, §9): статус и сходство каждого лица; пусто — не цепочка
+        public List<FacePassChain.FacePassResult> FaceResults { get; } = [];
         // Сходство лица по номеру варианта; записи нет, если драйвер его не посчитал
         public Dictionary<int, double> Similarities { get; } = [];
         public EditCost? Cost { get; set; }
@@ -240,7 +242,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         // Сверка числа проходов (ADR-028, этап 3): число лиц при запуске ≠ N котировки —
         // отказ, но котировка НЕ расходуется (остаётся в хранилище, клиент пересчитает ту же).
         // Порядок «сначала сверить N, потом удалять» — до _quotes.TryRemove ниже
-        var launchPasses = input.FacePasses is null ? 0 : input.FacePasses.Count;
+        var launchPasses = input.FacePasses?.Count ?? (input.FaceTarget is null ? 0 : 1);
         if (launchPasses != (quote.FacePasses ?? 0))
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
@@ -316,7 +318,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 // Цепочка проходов (ADR-028, этап 3): исходник каждого прохода — выход предыдущего,
                 // N = 1 идёт прежним путём (поведение этапа 2 не меняется)
                 result = await FacePassChain.RunAsync(editor, facePasses, request.Source!, request.Model,
-                    new JobProgress(this, job), job.Cts.Token);
+                    new JobProgress(this, job), job.Cts.Token,
+                    r => { lock (job.Gate) job.FaceResults.Add(r); });
             }
             else
             {
@@ -798,7 +801,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
                 j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
                 j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null,
-                Op: OpName(j.Quote.Op));
+                Op: OpName(j.Quote.Op),
+                FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null);
     }
 
     // camelCase-имя операции запуска (generate / edit / inpaint / outpaint / …); как у AudioEditJobService

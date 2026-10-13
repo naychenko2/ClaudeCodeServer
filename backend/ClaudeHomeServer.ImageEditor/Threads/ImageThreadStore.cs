@@ -296,7 +296,8 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // при перезапуске) — ничего не меняет. log получает ВСЕ версии запуска, а не только прирост
     public ImageThreadWrite FinishLaunch(string ownerId, string sessionId, string threadId, string jobId, string status,
         IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants,
-        Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null) =>
+        Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null,
+        IReadOnlyList<(int N, string Status, double? Similarity)>? faceResults = null) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
@@ -305,7 +306,9 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             var (grown, added) = WithLaunchVersions(thread, launch, variants);
             var after = grown with
             {
-                Launches = [.. grown.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
+                Launches = [.. grown.Launches.Select(l => l.JobId == jobId
+                    ? l with { Status = status, FaceTargets = WithFaceResults(l.FaceTargets, faceResults) }
+                    : l)],
             };
             (after, var moved) = WithMostSimilar(after, launch);
             List<ImageThreadVersion> all = [.. after.Versions.Where(v => v.JobId == jobId)];
@@ -590,6 +593,28 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
         return ImageThreadsState.Empty;
     }
 
+    // Статус и сходство лиц по номеру (ADR-028, §9–11); лицо без итога остаётся как было
+    private static IReadOnlyList<ImageThreadFaceTarget>? WithFaceResults(IReadOnlyList<ImageThreadFaceTarget>? targets,
+        IReadOnlyList<(int N, string Status, double? Similarity)>? results) =>
+        targets is null || results is null
+            ? targets
+            : [.. targets.Select(t => results.FirstOrDefault(r => r.N == t.N) is { Status: not null } r
+                ? t with { Status = r.Status, Similarity = r.Similarity }
+                : t)];
+
+    // Одиночное «faceTarget» этапа 2 читается как массив из одного элемента (ADR-028, §10): статус — по
+    // статусу запуска (done у done, иначе статус запуска), сходство — старого поля версии запуска
+    private static ImageThreadLaunch NormalizeLaunch(ImageThreadLaunch l, IReadOnlyList<ImageThreadVersion> versions)
+    {
+        if (l.FaceTargets is not null || l.FaceTarget is not { } old) return l;
+        var similarity = versions.FirstOrDefault(v => v.JobId == l.JobId && v.Similarity != null)?.Similarity;
+        return l with
+        {
+            FaceTarget = null,
+            FaceTargets = [old with { Status = l.Status, Similarity = old.Similarity ?? similarity }],
+        };
+    }
+
     // Миграция на чтении: у нити до 27.09 версий нет — ей достаётся исходник в работе, чья картинка
     // — текущий шаг стопки (ImageThread.ImageStepOf). Стопки остаются как были: их якоря в ленте
     // продолжают разрешаться, а файл перепишется в новом виде при следующей записи
@@ -604,7 +629,7 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             Stacks = [.. (t.Stacks ?? []).Select(s => s with { Steps = s.Steps ?? [] })],
             Versions = versions,
             CurrentVersionId = versions.Any(v => v.Id == t.CurrentVersionId) ? t.CurrentVersionId : ImageThreadVersion.OriginId,
-            Launches = t.Launches ?? [],
+            Launches = [.. (t.Launches ?? []).Select(l => NormalizeLaunch(l, versions))],
         };
     }
 

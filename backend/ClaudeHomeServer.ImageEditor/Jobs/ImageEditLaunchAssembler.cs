@@ -55,7 +55,8 @@ public sealed class ImageEditLaunchAssembler(
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
         {
             await threads.OnLaunchedAsync(ownerId, scope.Key, chatId, threadId, jobs.Get(ownerId, scope.Key, created.JobId),
-                created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct, input.FaceTarget);
+                created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct,
+                input.FacePasses?.Select(p => p.ThreadFaceTarget).ToList());
             // Быстрый поставщик мог закончить задачу раньше, чем запуск лёг в нить: Finished тогда не
             // нашёл запуска, и карточка висела бы в «Рисуем…». Финал догоняется здесь; событие, пришедшее
             // следом, увидит закрытый запуск и ничего не сделает

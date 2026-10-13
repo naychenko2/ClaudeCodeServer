@@ -230,7 +230,10 @@ public record ImageEditJobDto(
     IReadOnlyDictionary<int, double>? Similarities = null,
     // Операция запуска (generate / edit / inpaint / outpaint / …), camelCase; null — запуск без
     // операции (обрезка, local-media)
-    string? Op = null);
+    string? Op = null,
+    // Итоги проходов подстановки по лицам (ADR-028, §9); null — не цепочка проходов
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<FacePassChain.FacePassResult>? FaceResults = null);
 
 public static class ImageEditSizeNotes
 {

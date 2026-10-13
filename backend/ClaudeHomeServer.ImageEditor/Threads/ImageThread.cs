@@ -121,13 +121,19 @@ public sealed record ImageThreadLaunch(
     ImageThreadCharacter? Character = null,
     string? Op = null,
     // Подстановка персонажа на лицо (ADR-028, этап 2): номер лица, bbox и slug персонажа
-    // для подписи карточки «Тест Мария → лицо 2»; null — запуск без подстановки (старые нити)
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] ImageThreadFaceTarget? FaceTarget = null);
+    // для подписи карточки «Тест Мария → лицо 2»; null — запуск без подстановки (старые нити).
+    // Этап 3: FaceTargets — массив (по лицу), FaceTarget — только чтение старых данных
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] ImageThreadFaceTarget? FaceTarget = null,
+    // Подстановка нескольких персонажей (ADR-028, этап 3): по одному элементу на лицо, с
+    // сходством и статусом прохода; null — запуск без подстановки или старые нити (этап 2)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] IReadOnlyList<ImageThreadFaceTarget>? FaceTargets = null);
 
-// Подстановка персонажа на лицо в запуске нити (ADR-028, этап 2): N — номер лица (с 1),
-// BBox — [x1, y1, x2, y2] в пикселях, CharacterSlug — slug персонажа. Для подписи карточки
-// «Тест Мария → лицо 2» и как фундамент этапа 3
-public sealed record ImageThreadFaceTarget(int N, int[] BBox, string CharacterSlug);
+// Подстановка персонажа на лицо в запуске нити (ADR-028): N — номер лица (с 1),
+// BBox — [x1, y1, x2, y2] в пикселях базовой версии, CharacterSlug — slug персонажа.
+// Similarity — сходство лица с эталоном персонажа (0..1), null — не считалось;
+// Status — done | failed | cancelled (ADR-028, §9), null — пока задача идёт или старые нити
+public sealed record ImageThreadFaceTarget(int N, int[] BBox, string CharacterSlug,
+    double? Similarity = null, string? Status = null);
 
 // Photos — имена файлов манифеста в порядке отправки драйверу, байтов не храним.
 // Pick: auto — подобрано по сцене; manual — явный список человека; fallback — нынешний порядок

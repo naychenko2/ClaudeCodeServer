@@ -471,7 +471,7 @@ public sealed class ImageThreadService(
     // запуске из журнала; якорь модель не видит
     public async Task OnLaunchedAsync(string ownerId, string projectId, string sessionId, string threadId,
         ImageEditJobDto? job, string jobId, string prompt, ImageEditInitiator initiator, string? baseVersionId,
-        string? baseStepId, CancellationToken ct, ImageThreadFaceTarget? faceTarget = null)
+        string? baseStepId, CancellationToken ct, IReadOnlyList<ImageThreadFaceTarget>? faceTargets = null)
     {
         try
         {
@@ -485,7 +485,7 @@ public sealed class ImageThreadService(
             var written = store.AddLaunch(ownerId, sessionId, threadId,
                 new ImageThreadLaunch(jobId, baseVersionId, baseStepId, store.Now(), ImageThreadLaunchStatus.Running,
                     agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim(), Op: job?.Op,
-                    FaceTarget: faceTarget),
+                    FaceTargets: faceTargets),
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
                     $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;
@@ -574,9 +574,18 @@ public sealed class ImageThreadService(
                     _ => ImageThreadLaunchStatus.Done,
                 };
 
+                // Статус и сходство каждого лица (ADR-028, §9–11): цепочка отдаёт итоги проходов, одиночный
+                // запуск — по статусу запуска и сходству его варианта
+                var faceResults = job.FaceResults is { Count: > 0 } fr
+                    ? fr.Select(r => (r.N, r.Status, r.Similarity)).ToList()
+                    : launch.FaceTargets is { Count: 1 } one
+                        ? [(one[0].N, status == ImageThreadLaunchStatus.Done ? "done" : status,
+                            job.Similarities is { Count: > 0 } sims ? sims.Values.First() : (double?)null)]
+                        : null;
                 written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
                     (after, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
-                        VersionsText(after, launch, all, job), threadId, job.JobId));
+                        VersionsText(after, launch, all, job), threadId, job.JobId),
+                    faceResults);
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)

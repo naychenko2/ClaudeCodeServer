@@ -118,13 +118,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   // Локальное состояние экрана: мелкое лицо (тап), отказы запуска, «локальные на этот запуск», запуск
   const [faceUi, setFaceUi] = useState<FaceUi>({
     tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
-    providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null,
+    providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null, refusedText: null,
   });
   // Вход в режим / смена версии-нити: новый поиск лиц + сброс переходных состояний (устаревший ответ не применяется)
   useEffect(() => {
     if (!faceSwapMode) return;
     void faceSwap.search();
-    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, refusedFace: null }));
+    setFaceUi(u => ({ ...u, tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, refusedFace: null, refusedText: null }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceSwapMode, threadId, viewedVersionId]);
   const viewedSrc = useMemo(() => {
@@ -190,6 +190,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     assignments: faceSwap.state.assignments,
     searchFailure: faceSwap.state.searchFailure,
     refusedFace: faceUi.refusedFace,
+    refusedText: faceUi.refusedText,
   }) : null;
 
   // Правка открытой не текущей версии: сначала она становится текущей
@@ -314,10 +315,11 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         }
       } else {
         // Реакция на прочие отказы запуска — по коду (launchFailure), не по тексту сообщения
-        const f = launchFailure(code, msg);
+        const f = launchFailure(code, msg, err?.body?.face);
         switch (f.kind) {
         case 'facesTooClose': setFaceUi(u => ({ ...u, tooClose: true, refusedFace })); break;
         case 'faceOutOfFrame': setFaceUi(u => ({ ...u, faceOutOfFrame: true, refusedFace })); break;
+        case 'faceRefused': setFaceUi(u => ({ ...u, refusedFace: f.face, refusedText: f.message })); break;
         case 'busy': setFaceUi(u => ({ ...u, busy: true })); break;
         case 'providerUnavailable': setFaceUi(u => ({ ...u, providerUnavailable: true })); break;
         case 'facesChanged': setFaceUi(u => ({ ...u, facesChanged: true })); break;

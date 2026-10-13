@@ -143,6 +143,22 @@ describe('логика рамок (чистые функции)', () => {
     expect(faceSwapView(base).notices.find(x => x.unassign)?.unassign).toEqual([1, 2]);
   });
 
+  it('отказ invalid_request с номером лица: плашка danger с текстом сервера, снятие и рамка только по нему', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    const v = faceSwapView({
+      phase: 'ready', faces, selectedFace: null, selectedCharacter: null, error: null, provider: 'local',
+      localAvailable: true, useLocalOnce: false, tappedSmall: null, over8: false, facesTooClose: false,
+      faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, hasMask: false,
+      assignments: { assignments: new Map([[1, 'maria'], [2, 'ivan']]), active: null, limit: null },
+      refusedFace: 2, refusedText: text,
+    });
+    const n = v.notices.find(x => x.unassign);
+    expect(n?.tone).toBe('danger');
+    expect(n?.text).toBe(text);
+    expect(n?.unassign).toEqual([2]);
+    expect(refusalFaces({ tooClose: false, faceOutOfFrame: false, refusedFace: 2, refusedText: text }, faces)).toEqual([2]);
+  });
+
   it('faceAria: тексты из v2-notes', () => {
     expect(faceAria(1, false, null)).toBe('Лицо 1: назначить персонажа');
     expect(faceAria(1, false, 'Мария')).toBe('Лицо 1: Мария. Переназначить');

@@ -170,6 +170,8 @@ export interface FaceSwapViewInput {
   searchFailure?: { code: string; text: string } | null;
   // Номер лица из тела отказа (FaceUi.refusedFace): известен — текст и «Снять назначение» только по нему
   refusedFace?: number | null;
+  // Текст отказа invalid_request с номером лица (мелкое лицо между запусками) — из тела ответа
+  refusedText?: string | null;
 }
 
 export type NoticeTone = 'info' | 'warning' | 'danger';
@@ -208,10 +210,17 @@ export type LaunchFailure =
   | { kind: 'providerUnavailable' }  // provider_unavailable → плашка 9 / нейтрально
   | { kind: 'facesChanged' }         // faces_changed → обновление рамок + сброс выбора
   | { kind: 'featureDisabled' }      // feature_disabled → закрытие режима
+  | { kind: 'faceRefused'; face: number; message: string } // invalid_request + face → отказ по лицу
   | { kind: 'generic'; message: string }; // неизвестный код → общая ошибка
 
-export function launchFailure(code: string | null, message: string | null): LaunchFailure {
+// face — поле face тела отказа (unknown: тело не типизировано). invalid_request с числом face
+// (лицо стало мелким между запусками) — отказ по лицу с текстом сервера; без face — общая ошибка.
+export function launchFailure(code: string | null, message: string | null, face?: unknown): LaunchFailure {
   switch (code) {
+    case 'invalid_request':
+      return typeof face === 'number'
+        ? { kind: 'faceRefused', face, message: message ?? '' }
+        : { kind: 'generic', message: message ?? '' };
     case 'faces_too_close': return { kind: 'facesTooClose' };
     case 'face_out_of_frame': return { kind: 'faceOutOfFrame' };
     case 'busy': return { kind: 'busy' };
@@ -249,19 +258,21 @@ export interface FaceUi {
   submitting: boolean;
   // Номер лица из тела отказа «близко»/«вне кадра» (поле face, ADR-028); null — сервер номер не отдал
   refusedFace: number | null;
+  // Текст отказа по лицу (invalid_request + face); null — такого отказа нет
+  refusedText: string | null;
 }
 
 // Сброс ВСЕХ флагов отказов (в начале запуска, вместе с submitting: true):
 // иначе старый отказ (например face_out_of_frame) висит поверх нового (busy) —
 // две противоречащие плашки. Остальные поля (tappedSmall/useLocalOnce) не трогаем.
 export function clearFailures(ui: FaceUi): FaceUi {
-  return { ...ui, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, refusedFace: null };
+  return { ...ui, tooClose: false, faceOutOfFrame: false, busy: false, providerUnavailable: false, facesChanged: false, refusedFace: null, refusedText: null };
 }
 
 // Смена выбранного лица: «вне картинки» и «близко» гасятся (человек выбрал другое
 // лицо); остальные флаги (busy/providerUnavailable/facesChanged) — нет.
 export function clearFaceChange(ui: FaceUi): FaceUi {
-  return { ...ui, faceOutOfFrame: false, tooClose: false, refusedFace: null };
+  return { ...ui, faceOutOfFrame: false, tooClose: false, refusedFace: null, refusedText: null };
 }
 
 // Чистое вычисление состояния экрана. canSubmit — по матрице макета: лицо и персонаж
@@ -269,7 +280,7 @@ export function clearFaceChange(ui: FaceUi): FaceUi {
 export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
   const { phase, faces, selectedFace, error, provider, localAvailable, useLocalOnce,
     tappedSmall, over8, facesTooClose, faceOutOfFrame, busy, providerUnavailable, facesChanged, hasMask,
-    assignments, searchFailure, refusedFace } = i;
+    assignments, searchFailure, refusedFace, refusedText } = i;
 
   // Исполнитель запуска: локальные модели, либо переключены на этот запуск
   const local = useLocalOnce || provider === 'local';
@@ -333,6 +344,8 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     };
     if (facesTooClose) refusal(FS_TEXT.closeN, FS_TEXT.close, FS_TEXT.close);
     if (faceOutOfFrame) refusal(FS_TEXT.outN, FS_TEXT.outOfFrame, FS_TEXT.outOfFrame);
+    // Отказ по лицу с текстом сервера (invalid_request + face): текст уже несёт номер лица
+    if (refusedText) refusal(() => refusedText, refusedText, refusedText);
     if (assignments?.limit != null) {
       notices.push({ tone: 'warning', icon: 'alert', text: FS_TEXT.limit });
     }
@@ -408,8 +421,8 @@ export function faceVisual(f: DetectedFace, i: {
 
 // Лица, окрашенные отказом: номер из тела отказа известен — только оно; иначе «близко» красит
 // все рамки (как в этапе 2), «вне кадра» без номера рамки не красит
-export function refusalFaces(ui: Pick<FaceUi, 'tooClose' | 'faceOutOfFrame' | 'refusedFace'>, faces: readonly DetectedFace[]): number[] {
-  if (!ui.tooClose && !ui.faceOutOfFrame) return [];
+export function refusalFaces(ui: Pick<FaceUi, 'tooClose' | 'faceOutOfFrame' | 'refusedFace'> & { refusedText?: string | null }, faces: readonly DetectedFace[]): number[] {
+  if (!ui.tooClose && !ui.faceOutOfFrame && !ui.refusedText) return [];
   if (ui.refusedFace != null) return [ui.refusedFace];
   return ui.tooClose ? faces.map(f => f.n) : [];
 }

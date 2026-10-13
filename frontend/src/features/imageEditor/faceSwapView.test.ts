@@ -222,19 +222,29 @@ describe('launchFailure: код → состояние', () => {
   it('код null (нет кода в теле) → generic', () => {
     expect(launchFailure(null, 'сеть')).toEqual({ kind: 'generic', message: 'сеть' });
   });
+  it('invalid_request + face (мелкое лицо между запусками) → отказ по лицу с текстом сервера', () => {
+    const text = 'Лицо 2 слишком мелкое';
+    expect(launchFailure('invalid_request', text, 2)).toEqual({ kind: 'faceRefused', face: 2, message: text });
+  });
+  it('invalid_request без face (или face не число) → generic, тост как раньше', () => {
+    expect(launchFailure('invalid_request', 'плохой запрос')).toEqual({ kind: 'generic', message: 'плохой запрос' });
+    expect(launchFailure('invalid_request', 'плохой запрос', '2')).toEqual({ kind: 'generic', message: 'плохой запрос' });
+  });
 });
 
 // ── Сброс флагов отказов (этап 2 · шаг 10d) ───────────────────────────────────
 const fullUi = (over: Partial<FaceUi> = {}): FaceUi => ({
   tappedSmall: null, tooClose: false, faceOutOfFrame: false, busy: false,
-  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null,
+  providerUnavailable: false, facesChanged: false, useLocalOnce: false, submitting: false, refusedFace: null, refusedText: null,
   ...over,
 });
 
 describe('clearFailures: сброс всех флагов отказов (в начале запуска)', () => {
   it('все флаги отказов → false; tappedSmall/useLocalOnce/submitting не трогаем', () => {
-    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, tappedSmall: 3, useLocalOnce: true, submitting: true });
+    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, tappedSmall: 3, useLocalOnce: true, submitting: true, refusedFace: 2, refusedText: 'Лицо 2 слишком мелкое' });
     const r = clearFailures(ui);
+    expect(r.refusedFace).toBeNull();
+    expect(r.refusedText).toBeNull();
     expect(r.tooClose).toBe(false);
     expect(r.faceOutOfFrame).toBe(false);
     expect(r.busy).toBe(false);
@@ -251,8 +261,10 @@ describe('clearFailures: сброс всех флагов отказов (в н�
 
 describe('clearFaceChange: смена выбранного лица', () => {
   it('faceOutOfFrame и tooClose → false; busy/providerUnavailable/facesChanged не трогаем', () => {
-    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true });
+    const ui = fullUi({ tooClose: true, faceOutOfFrame: true, busy: true, providerUnavailable: true, facesChanged: true, refusedFace: 2, refusedText: 'Лицо 2 слишком мелкое' });
     const r = clearFaceChange(ui);
+    expect(r.refusedFace).toBeNull();
+    expect(r.refusedText).toBeNull();
     expect(r.tooClose).toBe(false);
     expect(r.faceOutOfFrame).toBe(false);
     expect(r.busy).toBe(true);

@@ -493,6 +493,27 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
+        // Живы ли фоновые агенты прогона (см. ILlmSessionAdapter.HasLiveBgAgents) — тот же учёт,
+        // что у HasTrackedBg, но fail-closed: нераспознанный запуск (PendingBgUnknown) считается
+        // агентом. Плюс ход-продолжение: идущее (ContinuationActive) или ещё возможное — агенты
+        // в прогоне были, ход закончен, а stdin открыт (CLI ответит на task_notification
+        // завершившегося агента ходом, которого мы не подавали). Закрытый stdin (продолжение
+        // отыграно) или смерть процесса снимают признак.
+        public bool HasLiveBgAgents
+        {
+            get
+            {
+                lock (PendingBg)
+                {
+                    var agents = !BgTasksEmptySnapshot
+                        && (PendingBgUnknown || PendingBg.Any(kv => AgenticBgToolUses.Contains(kv.Value)));
+                    var continuation = ContinuationActive
+                        || (TurnDone && !StdinClosed && AgenticBgToolUses.Count > 0);
+                    return agents || continuation;
+                }
+            }
+        }
+
         // Последнее опубликованное наружу присутствие фона — гейт события bg_agents_presence:
         // список чатов интересует только СМЕНА состояния, а не каждая задача. Битовая пара
         // (1 — агенты, 2 — фоновая команда), поле (а не свойство) — читается-пишется через
@@ -558,6 +579,12 @@ public class ClaudeSession : ILlmSessionAdapter
     public bool HasPendingBg
     {
         get { var run = _run; return run is not null && run.HasPendingBg; }
+    }
+
+    // Живые фоновые агенты прогона — держат делегированность прогона (см. ILlmSessionAdapter.HasLiveBgAgents)
+    public bool HasLiveBgAgents
+    {
+        get { var run = _run; return run is not null && run.HasLiveBgAgents; }
     }
 
     // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт

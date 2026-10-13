@@ -746,6 +746,83 @@ public class LocalImageMediaAdapterTests
         overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec_fit");
     }
 
+    // Холст нужного веса: PNG-сигнатура + IHDR (размер для проверки кропа), остаток — нули.
+    // Не декодируем реальную картинку такого веса — проверяем только проверку веса входов
+    private static byte[] PngOf(int length)
+    {
+        var png = LocalMediaTestImages.Png(16, 16);
+        var result = new byte[length];
+        Array.Copy(png, result, png.Length);
+        return result;
+    }
+
+    // Д-1 (ADR-028, Ш2): холст (images[0]) с кропом лица не ужимается JPEG до потолка загрузки
+    // узла — его лимит поднимается до MaxMediaInputBytes (90 МБ). 40 МБ с Crop уходит в загрузку
+    [Fact]
+    public async Task Кроп_Холст40МБ_уходит_в_загрузку()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [PngOf(40 * 1024 * 1024)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+            Crop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    // 40 МБ без Crop → прежний лимит 30 МБ: «Картинка 1 больше 30 МБ»
+    [Fact]
+    public async Task Холст40МБ_БезКропа_отказ_30МБ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [PngOf(40 * 1024 * 1024)],
+        }, default);
+
+        submitted.Error.Should().Be($"Картинка 1 больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // 95 МБ с Crop → тот же потолок узла 90 МБ: отказ
+    [Fact]
+    public async Task Кроп_Холст95МБ_отказ_90МБ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [PngOf(95 * 1024 * 1024)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+            Crop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be($"Картинка 1 больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Образец (второй вход) больше 30 МБ при Crop → лимит поднимается только для images[0]: отказ
+    [Fact]
+    public async Task Кроп_Образец40МБ_отказ_30МБ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(16, 16), PngOf(40 * 1024 * 1024)],
+            KeepMask = LocalMediaTestImages.Png(16, 16),
+            Crop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be($"Картинка 2 больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
     // Д5 (ADR-028), сквозной путь сервера до адаптера: исходник 2400×1800 (больше лимита Qwen 1,8 Мп),
     // лицо у правого края → FaceMaskBuilder (кроп по лимитам модели) → InputFitter (исходник с кропом
     // не ужимается) → Compose → адаптер. Кроп внутри холста и на месте лица, адаптер не отказывает,

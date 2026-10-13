@@ -304,8 +304,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             {
                 var ext = ImageFormatSniffer.DetectExtension(images[k]);
                 if (ext is null) return LocalImageSubmitted.Fail($"Картинка {k + 1} — не PNG, JPEG или WebP.");
-                if (images[k].Length > LocalMediaService.MaxInputBytes)
-                    return LocalImageSubmitted.Fail($"Картинка {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+                // Холст (images[0]) с кропом лица не ужимается JPEG до потолка загрузки узла:
+                // его лимит поднимается до MaxMediaInputBytes (90 МБ); остальные входы — по-прежнему 30 МБ
+                var limit = k == 0 && request.Crop is not null
+                    ? LocalMediaService.MaxMediaInputBytes
+                    : LocalMediaService.MaxInputBytes;
+                if (images[k].Length > limit)
+                    return LocalImageSubmitted.Fail($"Картинка {k + 1} больше {limit / 1024 / 1024} МБ.");
                 names.Add(await UploadTrackedAsync(uploaded, images[k], $"{jobId}-in{k + 1}{ext}", ct));
             }
 

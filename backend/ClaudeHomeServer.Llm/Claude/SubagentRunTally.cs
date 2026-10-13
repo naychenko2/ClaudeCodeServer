@@ -36,9 +36,14 @@ internal sealed class SubagentRunTally(string agentId)
     /// <summary>
     /// Обрыв на середине: последнее сообщение модели закончилось вызовом инструмента и
     /// продолжения не последовало (факт 2 разбора — см. <see cref="SubagentRunLog"/>).
-    /// Отчёт агента всегда приходит с end_turn, поэтому признак однозначен.
+    /// Отчёт агента приходит либо текстом с end_turn, либо (CLI 2.1.29x+) вызовом
+    /// инструмента <see cref="HandbackTool"/>: этот вызов сам завершает прогон и несёт отчёт,
+    /// продолжения после него не бывает — обрывом его не считаем.
     /// </summary>
-    public bool Truncated => LastStopReason == "tool_use";
+    public bool Truncated => LastStopReason == "tool_use" && LastTool != HandbackTool;
+
+    // Инструмент сдачи отчёта сабагента: «The call ends your run» (system-reminder CLI)
+    internal const string HandbackTool = "SubagentHandback";
 
     public void Feed(JsonElement root)
     {

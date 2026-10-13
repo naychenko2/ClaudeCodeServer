@@ -78,6 +78,22 @@ public class SubagentRunTallyTests
     }
 
     [Fact]
+    public void ОтчётЧерезSubagentHandback_ОбрывомНеСчитается()
+    {
+        // CLI 2.1.29x сдаёт отчёт вызовом SubagentHandback: вызов завершает прогон, и
+        // транскрипт кончается парой tool_use → tool_result без end_turn
+        var tally = Feed("a2h",
+            Prompt("2026-10-13T03:02:00.000Z", "Задача"),
+            ToolCall("2026-10-13T03:02:10.000Z", "Read"),
+            ToolResult("2026-10-13T03:02:11.000Z"),
+            ToolCall("2026-10-13T03:05:00.000Z", "SubagentHandback"),
+            ToolResult("2026-10-13T03:05:01.000Z"));
+
+        tally.Truncated.Should().BeFalse();
+        tally.LastTool.Should().Be("SubagentHandback");
+    }
+
+    [Fact]
     public void ДобитыйАгент_ПродолжаетТотЖеТранскрипт_СчитаетсяВтороеСообщение()
     {
         var tally = Feed("a3",

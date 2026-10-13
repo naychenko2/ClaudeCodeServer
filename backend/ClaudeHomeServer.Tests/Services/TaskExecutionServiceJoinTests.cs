@@ -417,6 +417,41 @@ public class TaskExecutionServiceJoinTests : IDisposable
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1);
     }
 
+    // Блокер финального ревью a0514eeeb: в многоходовой задаче ClaudeResult не сбрасывается.
+    // Ход 1 кончается без закрытия (R → ClaudeResult="success"), ход 2 (напоминание/chats_send)
+    // зовёт tasks_complete посреди хода (D, статус Working): доставка проходит, но
+    // StopClosedExecutorProcess отказывает по Working. Повторный R хода 2 раньше уходил в
+    // «уже доставлено» и процесс не гасил — инцидент 13.10 для задач с напоминанием/доработкой.
+    [Fact]
+    public async Task OnSessionMessageAsync_ПовторныйRПослеДоставкиПоD_ГаситПроцессРовноОдинРаз()
+    {
+        // Ход 2 идёт (статус Working), фоновая работа жива
+        var (task, adapter) = await CreateExecutorWithBgProcessAsync(SessionStatus.Working);
+
+        // Ход 1: R пришёл, задача ещё не Done — ClaudeResult="success", доставки не было
+        _tasks.MarkClaudeResult(task.Id, "success");
+        var afterTurn1 = _tasks.GetById(task.Id)!;
+        afterTurn1.CompletionDelivered.Should().BeFalse("ход 1 не закрыл задачу — доставки ещё не было");
+        adapter.Verify(a => a.DisposeAsync(), Times.Never, "ход 1 не гасит: задача не Done");
+
+        // Ход 2: D посреди хода (статус Working) — доставка прошла, процесс не снят (Working)
+        afterTurn1.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(afterTurn1);
+        _tasks.GetById(task.Id)!.CompletionDelivered.Should().BeTrue("D + R из прошлого хода — доставка прошла");
+        adapter.Verify(a => a.DisposeAsync(), Times.Never, "статус Working — StopClosedExecutorProcess отказал, процесс ещё жив");
+
+        // Ход 2 кончается: повторный R. Статус уже не Working (конец хода) — процесс гасит.
+        // ClaudeResult сбрасываем: ход 2 — новый запуск (MarkClaudeStarted), ждём его R;
+        // сессия — та же, что в SessionManager (GetById возвращает ту же ссылку, entry.Info).
+        _tasks.MarkClaudeResult(task.Id, null!);
+        var session = _sessions.GetById(task.LinkedSessionId!)!;
+        session.Status = SessionStatus.Active;
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        adapter.Verify(a => a.DisposeAsync(), Times.Once, "повторный R конца хода 2 гасит процесс ровно один раз");
+        _tasks.GetById(task.Id)!.CompletionDelivered.Should().BeTrue();
+    }
+
     // ─── (г) провал хода: L0 «не выполнена», доклад Z не шлётся ─────────────
 
     [Fact]

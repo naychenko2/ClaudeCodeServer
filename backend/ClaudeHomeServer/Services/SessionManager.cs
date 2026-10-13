@@ -6477,7 +6477,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // чаты держат процесс ради HasPendingBg/продолжений как раньше. Идёт через уборку адаптера
     // (DisposeAsync → Kill всего дерева), как ReviveStuckSession: статус и UpdatedAt не трогаем —
     // ExitedMessage переведёт Active→Finished штатно, без сдвига UpdatedAt. Идущий ход
-    // (Starting/Working/Waiting) не рвём: гасить рано, процесс остановят по его концу.
+    // (Starting/Working/Waiting) не рвём: гасить рано — по его концу ход гасит повторный R
+    // (TaskExecutionService.OnSessionMessageAsync, ветка ResultMessage), когда статус уже не Working.
     // Возвращает true, если процесс был и снят.
     internal bool StopClosedExecutorProcess(string sessionId, string taskId)
     {

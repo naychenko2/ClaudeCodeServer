@@ -937,6 +937,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                         // от сигнала D (Status=Done). Промежуточные успешные ходы многошаговой
                         // задачи (Status ещё не Done) молча пропускаются гейтом внутри — не спамят.
                         await TryDeliverCompletionAsync(updated);
+                        // Повторный конец хода (R) после доставки по D посреди хода: TryDeliverCompletionAsync
+                        // выше вернул «уже доставлено» и StopExecutorProcess не вызвал, а StopClosedExecutorProcess
+                        // тогда отказал по статусу Working. Ход кончился (статус уже не Working) — гасим процесс
+                        // здесь, иначе инцидент 13.10: фоновая работа живого процесса будит закрытую задачу.
+                        if (updated.Status == TaskItemStatus.Done && updated.CompletionDelivered)
+                            StopExecutorProcess(updated);
                     }
                     break;
                 }

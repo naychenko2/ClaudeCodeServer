@@ -370,6 +370,106 @@ public class FaceMaskBuilderTests
         request.KeepMask.Should().NotBeNull("маска — явным каналом KeepMask, не образцом");
     }
 
+    // Поле кропа как доля рамки лица (Ш1, ADR-028): на 4000×3000 лицо 800×900 → рамка эллипса
+    // 1200×1440 → margin = max(64, round(0.15 × 1440)) = 216. Мутация margin = CropMarginPx (64)
+    // → crop.X = 1336 (вне диапазона [1177, 1184]) → красный
+    [Fact]
+    public void Поле_кропа_доля_рамки_крупное_лицо_4000()
+    {
+        var (builder, _) = Create();
+        // bbox 800×900, центр (2000, 1500)
+        var result = builder.Build(4000, 3000, [Face(1, 1600, 1050, 2400, 1950)], 1);
+
+        result.Error.Should().BeNull();
+        var crop = result.Crop!;
+
+        // Рамка эллипса: left=1400, top=780, right=2600, bottom=2220
+        // margin = max(64, round(0.15 × max(1200, 1440))) = max(64, 216) = 216
+        // crop.X = floor((1400−216)/8)×8 = floor(1184/8)×8 = 1184
+        // crop.Y = floor((780−216)/8)×8 = floor(564/8)×8 = 560
+        // Диапазон: [left−216−7, left−216] = [1177, 1184]; [top−216−7, top−216] = [557, 564]
+        crop.X.Should().BeInRange(1177, 1184, $"crop.X={crop.X} (margin=216)");
+        crop.Y.Should().BeInRange(557, 564, $"crop.Y={crop.Y} (margin=216)");
+        (crop.X % 8).Should().Be(0);
+        (crop.Y % 8).Should().Be(0);
+    }
+
+    // Мелкое лицо на 1472: рамка эллипса мала → margin = 64 (нижняя граница, поведение прежнее)
+    [Fact]
+    public void Поле_кропа_мелкое_лицо_1472_останется_64()
+    {
+        var (builder, _) = Create();
+        // bbox 100×100 на холсте 1472×1472: эллипс Rx=75, Ry=80
+        // Рамка: left≈cx−75, top≈cy−80, right≈cx+75, bottom≈cy+80 → w≈150, h≈160
+        // margin = max(64, round(0.15 × 160)) = max(64, 24) = 64
+        var result = builder.Build(1472, 1472, [Face(1, 686, 686, 786, 786)], 1);
+
+        result.Error.Should().BeNull();
+        var crop = result.Crop!;
+
+        // cx=736, cy=736; left=floor(736−75)=661, top=floor(736−80)=656
+        // cropLeft = max(0, 661−64) = 597; x = floor(597/8)×8 = 592
+        // cropTop = max(0, 656−64) = 592; y = floor(592/8)×8 = 592
+        crop.X.Should().BeInRange(597 - 7, 597, $"crop.X={crop.X} (margin=64)");
+        crop.Y.Should().BeInRange(592 - 7, 592, $"crop.Y={crop.Y} (margin=64)");
+        (crop.X % 8).Should().Be(0);
+        (crop.Y % 8).Should().Be(0);
+    }
+
+    // Лицо у края холста: кроп не выходит за холст, прижатая граница без округления
+    [Fact]
+    public void Поле_кропа_лицо_у_края_кроп_в_холсте()
+    {
+        var (builder, _) = Create();
+        // bbox 200×200 в правом нижнем углу холста 800×600: (600,400)-(800,600)
+        // Эллипс: cx=700, cy=500, Rx=150, Ry=160
+        // Рамка: left=550, top=340, right=min(800,850)=800, bottom=min(600,660)=600
+        // w=250, h=260 → margin = max(64, round(0.15×260)) = max(64, 39) = 64
+        // cropRight = min(800, 800+64) = 800 → прижат к холсту, без округления
+        var result = builder.Build(800, 600, [Face(1, 600, 400, 800, 600)], 1);
+
+        result.Error.Should().BeNull();
+        var crop = result.Crop!;
+
+        // Кроп не выходит за холст
+        (crop.X + crop.Width).Should().BeLessOrEqualTo(800);
+        (crop.Y + crop.Height).Should().BeLessOrEqualTo(600);
+        // Прижатая правая граница = 800 (width холста), без округления вниз
+        (crop.X + crop.Width).Should().Be(800, "правая граница прижата к холсту");
+        // Нижняя граница = 600 (height холста)
+        (crop.Y + crop.Height).Should().Be(600, "нижняя граница прижата к холсту");
+    }
+
+    // Два близких лица (N=2): маска прохода k остаётся 0 на bbox+30 px чужого лица —
+    // инвариант не ломается ростом поля (margin не влияет на excludeRects)
+    [Fact]
+    public void Поле_кропа_два_лица_маска_прохода_не_ломается()
+    {
+        var (builder, raster) = Create();
+        // Лицо 1 (цель): bbox 200×200, центр (400, 300) → (300,200)-(500,400)
+        // Лицо 2 (сосед): bbox 100×100, центр (550, 300) → (500,250)-(600,350)
+        // Сосед расширен на 30: (470,220)-(630,380)
+        var result = builder.Build(800, 600, [Face(1, 300, 200, 500, 400), Face(2, 500, 250, 600, 350)], 1);
+
+        result.Error.Should().BeNull();
+        var crop = result.Crop!;
+
+        // Exclude rect для соседа: (470, 220, 630, 380)
+        var exclude = raster.LastExcludeRects.Should().ContainSingle().Subject;
+        exclude.X1.Should().Be(470);
+        exclude.Y1.Should().Be(220);
+        exclude.X2.Should().Be(630);
+        exclude.Y2.Should().Be(380);
+
+        // Маска прохода: на bbox+30 px чужого лица маска = 0 (вычтено)
+        // Проверяем, что exclude rect покрывает bbox+30 соседа
+        var neighborBbox = (500, 250, 600, 350);
+        exclude.X1.Should().BeLessOrEqualTo(neighborBbox.Item1 - 30 + 1);
+        exclude.X2.Should().BeGreaterOrEqualTo(neighborBbox.Item3 + 30 - 1);
+        exclude.Y1.Should().BeLessOrEqualTo(neighborBbox.Item2 - 30 + 1);
+        exclude.Y2.Should().BeGreaterOrEqualTo(neighborBbox.Item4 + 30 - 1);
+    }
+
     // Фейк растра: записывает аргументы RenderMask, возвращает заглушку; прочие методы не
     // используются (Build зовёт только RenderMask)
     private sealed class FakeRaster : IImageRaster

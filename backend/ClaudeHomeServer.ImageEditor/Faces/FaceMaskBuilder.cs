@@ -22,6 +22,10 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
     // Запас вокруг цели для кропа (ADR-028, решение 12): модель видит кроп, а не маску, поэтому
     // запас щедрый — лицо должно оказаться в центре кропа
     public const int CropMarginPx = 64;
+    // Поле кропа как доля рамки лица (max(w, h) эллипса, обрезанного холстом): для крупных лиц
+    // (4000×3000) фиксированные 64 px дают узкий кадр без окружения — сходство падает; 15 % рамки
+    // даёт широкий кадр (A/B: 0,819 против 0,723). Нижняя граница — CropMarginPx (64).
+    public const double CropMarginShare = 0.15;
     // Рабочая площадь кропа (≈1 Мп): кроп масштабируется к ней в обе стороны — мелкий
     // увеличивается, крупный уменьшается (решение A: на 4000×3000 кроп ≈1,8 Мп шёл вдвое дольше
     // без выигрыша в сходстве). Лимит входа модели (Д5) — страховка поверх
@@ -58,8 +62,9 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null, Crop: crop);
     }
 
-    // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + CropMarginPx
-    // с каждой стороны, обрезанная холстом; X, Y вниз на 8; Width/Height так, чтобы кроп ⊇ рамка
+    // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + поле
+    // (margin = max(CropMarginPx, CropMarginShare × max(w, h) рамки)) с каждой стороны,
+    // обрезанная холстом; X, Y вниз на 8; Width/Height так, чтобы кроп ⊇ рамка
     // маски + NeighborMarginPx, обрезанная холстом (иначе мягкий шов — GrowMask 8 + размытие ≈ 23 px —
     // будет срезан); Scaled — к CropTargetPixels в обе стороны, кратно 16, пропорции кропа
     // сохраняются; если и так выше лимита входа модели (узкий длинный кроп) — вниз до лимита
@@ -71,20 +76,26 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         var right = Math.Min(width, (int)Math.Ceiling(e.Cx + e.Rx));
         var bottom = Math.Min(height, (int)Math.Ceiling(e.Cy + e.Ry));
 
-        // Кроп = рамка + CropMarginPx с каждой стороны, обрезанный холстом
-        var cropLeft = Math.Max(0, left - CropMarginPx);
-        var cropTop = Math.Max(0, top - CropMarginPx);
-        var cropRight = Math.Min(width, right + CropMarginPx);
-        var cropBottom = Math.Min(height, bottom + CropMarginPx);
+        // Поле кропа: max(64 px, 15 % рамки лица) — для крупных лиц (4000×3000) фиксированные
+        // 64 px дают узкий кадр; 15 % рамки — широкий кадр с окружением (A/B: 0,819 против 0,723)
+        var w = right - left;
+        var h = bottom - top;
+        var margin = Math.Max(CropMarginPx, (int)Math.Round(CropMarginShare * Math.Max(w, h)));
+
+        // Кроп = рамка + margin с каждой стороны, обрезанный холстом
+        var cropLeft = Math.Max(0, left - margin);
+        var cropTop = Math.Max(0, top - margin);
+        var cropRight = Math.Min(width, right + margin);
+        var cropBottom = Math.Min(height, bottom + margin);
 
         // X, Y вниз на 8
         var x = (cropLeft / 8) * 8;
         var y = (cropTop / 8) * 8;
 
-        // Width/Height: кроп ⊇ рамка + NeighborMarginPx (обрезанная холстом); запас 64 > 30,
+        // Width/Height: кроп ⊇ рамка + NeighborMarginPx (обрезанная холстом); запас margin ≥ 64 > 30,
         // поэтому правая/нижняя граница кропа уже за рамкой + 30. Внутри холста cropRight/cropBottom
         // округляем вниз до кратного 8 (x/y уже кратны 8, поэтому width/height тоже кратны 8); потеря
-        // до 7 px не задевает инвариант, т.к. запас 64 − 7 = 57 > 30. Прижатую к краю холста границу
+        // до 7 px не задевает инвариант, т.к. запас margin − 7 ≥ 57 > 30. Прижатую к краю холста границу
         // не округляем: запаса там нет, и округление срезало бы саму маску (полоса старого лица)
         var cropRight8 = cropRight == width ? width : (cropRight / 8) * 8;
         var cropBottom8 = cropBottom == height ? height : (cropBottom / 8) * 8;

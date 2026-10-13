@@ -3063,12 +3063,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // Режим прав у claude CLI задаётся флагом --permission-mode (значения: default,
         // acceptEdits, plan, auto, dontAsk, bypassPermissions), а НЕ --mode (такого флага нет).
         // После одобрения плана один ход выполняем без plan, чтобы Claude реализовал, а не планировал заново.
+        // Делегированный ход (agentDepth >= 1: chats_send, ход процесса flow:*) этим ходом не
+        // бывает: он идёт с явным режимом чата (для процесса — режимом блока) и признак не
+        // тратит — «реализуй одобренный план», обогнанный им, получит его следом. Без флага
+        // CLI взял бы defaultMode из .claude/settings*.json проекта, а там может стоять bypass.
+        var forceNonPlan = _forceNonPlanNextTurn && agentDepth < 1;
         if (handsActive)
         {
             // Ход с руками идёт с явным режимом всегда: без флага CLI взял бы defaultMode из
             // .claude/settings*.json проекта, а там может стоять bypassPermissions
-            var mode = _forceNonPlanNextTurn && Info.Mode == ClaudeMode.Plan ? ClaudeMode.Default : Info.Mode;
-            _forceNonPlanNextTurn = false;
+            var mode = forceNonPlan && Info.Mode == ClaudeMode.Plan ? ClaudeMode.Default : Info.Mode;
+            if (forceNonPlan) _forceNonPlanNextTurn = false;
             args.AddRange(["--permission-mode", HandsPermissionMode(mode).ToCliFlag()]);
             if (mode != ClaudeMode.Bypass) _bypassDowngradeNoticed = false;
             else if (!_bypassDowngradeNoticed)
@@ -3077,7 +3082,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 await _onMessage(new HandsNoticeMessage(HandsTurnRules.BypassDowngradedText));
             }
         }
-        else if (_forceNonPlanNextTurn)
+        else if (forceNonPlan)
             _forceNonPlanNextTurn = false;
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);

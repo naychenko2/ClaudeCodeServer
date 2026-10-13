@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Jobs;
 // Цепочка проходов подстановки (ADR-028, этап 3): исходник прохода k — выход прохода k−1,
 // обёртка прогресса гасит Ready у непоследних (промежуточные выходы версиями не становятся),
 // стадии «проход k из N». Тесты гоняют цепочку напрямую с подменным редактором;
-// сквозной боевой путь по HTTP — FaceTargetLaunchHttpTests
+// сквозной боевой путь по HTTP — FaceTargetLaunchHttpTwoFacesTests
 public class FacePassChainTests
 {
     private static byte[] Png(int w, int h, byte tag) => TestImages.Png(w, h, tag);

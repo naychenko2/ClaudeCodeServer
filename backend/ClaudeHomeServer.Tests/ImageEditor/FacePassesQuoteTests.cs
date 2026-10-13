@@ -112,6 +112,30 @@ public class FacePassesQuoteTests : IDisposable
         _service.QuoteInfo(Owner, Project, quote.QuoteId).Should().NotBeNull();
     }
 
+    // ── (б2) Сверка в StartAsync сама по себе: FacePasses.Count ≠ N котировки ──────
+    // Синтетический вход без сборщика: три прохода по котировке на два лица → тот же
+    // quote_not_found, что у сборщика; котировка не расходуется, значит задача не создана
+    // (TryRemove котировки стоит до создания задачи)
+    private static FacePass Pass(int face) =>
+        new(face, new ImageBytes([0x89, 0x50, 0x4E, 0x47], "image/png"), null, null,
+            new CharacterRef("c" + face, "Персонаж " + face, null), [],
+            new ImageThreadFaceTarget(face, [10, 10, 100, 100], "c" + face), "prompt");
+
+    [Fact]
+    public async Task Запуск_FacePasses_3_по_котировке_2_лица_404_без_сборщика()
+    {
+        var quote = (await _service.QuoteAsync(Owner, Project, QuoteRequest(1, FaceTarget(2)), CancellationToken.None))
+            .Value!;
+        var input = JobInput(quote.QuoteId, 1) with { FacePasses = [Pass(1), Pass(2), Pass(3)] };
+
+        var start = await _service.StartAsync(Owner, Project, input, CancellationToken.None);
+
+        start.Value.Should().BeNull();
+        start.ErrorCode.Should().Be(ImageEditErrorCodes.QuoteNotFound);
+        start.Error!.Should().Contain("другое число лиц");
+        _service.QuoteInfo(Owner, Project, quote.QuoteId).Should().NotBeNull("котировка не потрачена — задачи нет");
+    }
+
     // ── (в) Котировка на 1 лицо + запуск на 1 → совпадение, запуск проходит ───────
 
     [Fact]

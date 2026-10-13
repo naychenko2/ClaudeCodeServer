@@ -291,7 +291,8 @@ public sealed class ImageEditLaunchAssembler(
         if (!rules.Ok)
             return Fail<ImageEditJobInput>(rules.ErrorCode!, rules.Error!);
         // Котировка: сверка числа проходов (ADR-028, этап 3) — цена и ETA посчитаны на N лиц;
-        // при отказе котировка не расходуется
+        // при отказе котировка не расходуется. Почему две сверки (здесь и в StartAsync): здесь —
+        // до детекции и сборки проходов, там — защита в глубину для вызовов мимо сборщика
         var quote = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
         if (quote is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound, "Котировка устарела");

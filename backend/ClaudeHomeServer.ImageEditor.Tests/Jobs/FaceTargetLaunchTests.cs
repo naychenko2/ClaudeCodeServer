@@ -778,6 +778,21 @@ public class FaceTargetLaunchTests : IDisposable
         input.FacePasses[1].Character.Slug.Should().Be(_charB);
     }
 
+    // (6) Сверка N в сборщике сама по себе: котировка на 1 лицо, запрос на 2 → quote_not_found.
+    // jobs подменный (Mock) — сверки StartAsync тут нет вовсе, ловит только сборщик. Медиа отдаёт
+    // два лица: без сверки сборка прошла бы целиком и тест покраснел бы на Value
+    [Fact]
+    public async Task Два_лица_по_котировке_на_одно_quote_not_found_в_сборщике()
+    {
+        var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
+        var result = await Assembler(media: TwoFacesMedia(), jobs: QuoteJobsN(1))
+            .AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.QuoteNotFound);
+        result.Error!.Should().Contain("другое число лиц");
+    }
+
     // Чтение пикселя PNG-маски: маска Opaque (альфа 255 везде), белый (255,255,255) — внутри,
     // чёрный (0,0,0) — вне. 0 — вне, 255 — внутри
     private static (int Width, int Height) MaskSize(byte[] png)

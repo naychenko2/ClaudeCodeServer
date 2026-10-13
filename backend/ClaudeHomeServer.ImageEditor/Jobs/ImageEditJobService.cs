@@ -241,7 +241,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
         // Сверка числа проходов (ADR-028, этап 3): число лиц при запуске ≠ N котировки —
         // отказ, но котировка НЕ расходуется (остаётся в хранилище, клиент пересчитает ту же).
-        // Порядок «сначала сверить N, потом удалять» — до _quotes.TryRemove ниже
+        // Порядок «сначала сверить N, потом удалять» — до _quotes.TryRemove ниже.
+        // Почему две сверки: StartAsync зовут не только через сборщик, его сверка — защита в глубину
         var launchPasses = input.FacePasses?.Count ?? (input.FaceTarget is null ? 0 : 1);
         if (launchPasses != (quote.FacePasses ?? 0))
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,

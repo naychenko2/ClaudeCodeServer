@@ -421,9 +421,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         }
     }
 
-    // Подготовка исходника прохода k+1 (ADR-028): выход прохода k — полноразмерный файл модели,
-    // ужимается по весу под MaxInputMb, размер тот же (кроп и маска прохода — в пикселях базовой
-    // версии). Без растра (тесты) — тождественно
+    // Подготовка исходника прохода k+1 (ADR-028, Ш3): выход прохода k — полноразмерный файл модели,
+    // ужимается по весу под потолок холста (MaxCanvasMb ?? MaxInputMb), размер тот же (кроп и маска
+    // прохода — в пикселях базовой версии): lossless-выход прохода k сам становится img1, и склейка
+    // в графе остаётся единственной точкой шва. Без растра (тесты) — тождественно
     private Func<ImageBytes, CancellationToken, Task<ImageEditCallResult<ImageBytes>>> PassSourcePreparer(Job job)
     {
         if (_fitter is not { } fitter)

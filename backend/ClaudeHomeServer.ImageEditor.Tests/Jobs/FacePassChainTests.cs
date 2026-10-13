@@ -825,6 +825,40 @@ public class FacePassChainTests
         editor.Requests[1].Source!.Bytes.Should().Equal(light, "легче лимита — без перекодирования");
     }
 
+    // Ш3 (ADR-028): выход прохода 1 (40 МБ) легче потолка холста (MaxCanvasMb = 90) — проход 2
+    // получает его как есть, без JPEG. Мутация «MaxInputMb вместо MaxCanvasMb ?? MaxInputMb» → красный
+    // (40 > 30 → JPEG, байты разойдутся)
+    [Fact]
+    public async Task Выход_Прохода_1_40МБ_Легче_Потолка_Холста_Проход_2_Получает_Как_Есть()
+    {
+        var raster = new SkiaImageRaster();
+        var fitter = new InputFitter(raster);
+        var canvas = PngOf(40 * 1024 * 1024);
+        var caps = QwenCanvasCaps;
+        var editor = Pass1OutputEditor(canvas);
+
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), new RecordingProgress(), default,
+            prepareSource: (src, ct) => fitter.FitWeightAsync(src, caps, ct));
+
+        editor.Requests[1].Source!.Bytes.Should().Equal(canvas, "40 МБ ≤ 90 МБ — без перекодирования");
+    }
+
+    // Лимиты Qwen-Image из каталога: MaxCanvasMb = 90, MaxInputMb = 30
+    private static readonly ImageEditCaps QwenCanvasCaps = ImageEditCatalog.WithInputLimits(
+        new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage)).Caps;
+
+    // Холст нужного веса: настоящий PNG (SKBitmap, распознаётся растром) + нули до длины
+    private static byte[] PngOf(int length)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(16, 16, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        bitmap.Erase(SKColors.SteelBlue);
+        using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+        var png = data.ToArray();
+        var result = new byte[length];
+        Array.Copy(png, result, Math.Min(png.Length, length));
+        return result;
+    }
+
     // Растр, который распознаёт картинку, но отказывает в перекодировании
     private sealed class RefusingRaster : IImageRaster
     {

@@ -78,6 +78,9 @@ public record ImageEditCaps(
     int? MaxInputSide = null,
     double? MaxInputMegapixels = null,
     double? MaxInputMb = null,
+    // Потолок веса холста при подстановке на лицо (кроп) (ADR-028, Ш3): модель видит только кроп,
+    // поэтому холст не пережимается до общего потолка загрузки. null — использовать MaxInputMb
+    double? MaxCanvasMb = null,
     // Сколько фото персонажа модель берёт как ОДНОГО человека; null — все. Qwen-Image рисует по
     // человеку на каждое фото, и текст запроса это не лечит (живой прогон 2026-09-26)
     int? MaxCharacterPhotos = null,

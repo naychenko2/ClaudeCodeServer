@@ -224,6 +224,73 @@ public class InputFitterTests : IDisposable
         caps.MaxInputMb.Should().NotBeNull();
     }
 
+    // Ш3 (ADR-028): холст 40 МБ с кропом лица не пережимается — модель видит кроп, а не холст,
+    // поэтому потолок холста (MaxCanvasMb = 90) выше 40 МБ: байты те же (PNG, без перекодирования)
+    [Fact]
+    public async Task Холст40МБ_С_Кропом_НеПережимается()
+    {
+        var canvas = PngOf(40 * 1024 * 1024);
+        var input = Input(canvas) with { FaceCrop = new LocalImageCrop(0, 0, 8, 8, 16, 16) };
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        result.Value!.Input.Source!.Bytes.Should().Equal(canvas, "40 МБ ≤ 90 МБ — без перекодирования");
+    }
+
+    // Ш3 (ADR-028): тот же холст 40 МБ БЕЗ кропа — потолок холста (MaxCanvasMb) не действует,
+    // действует общий потолок загрузки (MaxInputMb = 30): 40 > 30 → перекодировано, как раньше.
+    // Заглушка (16×16 + нули) при перекодировании становится маленьким PNG: проверяем, что вес
+    // упал под 30 МБ (регрессия: без кропа потолок 30 МБ по-прежнему действует)
+    [Fact]
+    public async Task Холст40МБ_Без_Кропа_Ужимается_До30МБ()
+    {
+        var canvas = PngOf(40 * 1024 * 1024);
+        var input = Input(canvas);
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!.Input.Source!;
+        fitted.Bytes.Should().NotEqual(canvas, "40 МБ > 30 МБ — перекодировано");
+        fitted.Bytes.LongLength.Should().BeLessThanOrEqualTo(30 * 1024 * 1024, "под общим потолком загрузки");
+    }
+
+    // Ш3 (ADR-028): FitWeightAsync — выход прохода k легче потолка холста (MaxCanvasMb) — байты
+    // те же, без перекодирования. Шумный PNG 256×192 (~150 КБ) с MaxCanvasMb = 0.5 (500 КБ)
+    [Fact]
+    public async Task FitWeight_Легче_Потолка_Холста_Без_Перекодирования()
+    {
+        var heavy = NoisePng(256, 192);
+        heavy.LongLength.Should().BeLessThan(500 * 1024, "предусловие: легче потолка холста");
+        var caps = Qwen.Caps with { MaxCanvasMb = 0.5 };
+
+        var result = await new InputFitter(_raster).FitWeightAsync(new ImageBytes(heavy, "image/png"), caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        result.Value!.Bytes.Should().Equal(heavy, "легче потолка холста — без перекодирования");
+    }
+
+    // Ш3 (ADR-028): FitWeightAsync — выход прохода k тяжелее потолка холста (MaxCanvasMb) —
+    // лестница JPEG: вес уменьшился, размер тот же. Шумный PNG 256×192 (~150 КБ) с MaxCanvasMb = 0.1
+    [Fact]
+    public async Task FitWeight_Тяжелее_Потолка_Холста_Лестница_РазмерТотЖе()
+    {
+        var heavy = NoisePng(256, 192);
+        heavy.LongLength.Should().BeGreaterThan(100 * 1024, "предусловие: тяжелее потолка холста");
+        var caps = Qwen.Caps with { MaxCanvasMb = 0.1 };
+        var before = _raster.Probe(heavy)!;
+
+        var result = await new InputFitter(_raster).FitWeightAsync(new ImageBytes(heavy, "image/png"), caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!;
+        fitted.Bytes.LongLength.Should().BeLessThan(heavy.LongLength, "вес уменьшился");
+        fitted.Bytes.LongLength.Should().BeLessThanOrEqualTo(100 * 1024, "под потолком холста");
+        var after = _raster.Probe(fitted.Bytes)!;
+        (after.Width, after.Height).Should().Be((before.Width, before.Height), "размер тот же");
+    }
+
     // ── Хелперы ──────────────────────────────────────────────────────────────────
 
     private readonly FinishBroadcaster _finished = new();
@@ -310,6 +377,29 @@ public class InputFitterTests : IDisposable
         using var bitmap = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Opaque));
         bitmap.Erase(color);
         using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    // Холст нужного веса: настоящий маленький PNG + нули до длины. Не декодируем реальную картинку
+    // такого веса — растр читает только заголовок (размер) и длину файла
+    private static byte[] PngOf(int length)
+    {
+        var png = Png(16, 16, SKColors.SteelBlue);
+        var result = new byte[length];
+        Array.Copy(png, result, Math.Min(png.Length, length));
+        return result;
+    }
+
+    // Настоящий PNG из шума: не сжимается, вес ≈ 3 байта на пиксель
+    private static byte[] NoisePng(int w, int h)
+    {
+        var rnd = new Random(42);
+        using var bitmap = new SKBitmap(w, h);
+        for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+                bitmap.SetPixel(x, y, new SKColor((byte)rnd.Next(256), (byte)rnd.Next(256), (byte)rnd.Next(256)));
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();
     }
 

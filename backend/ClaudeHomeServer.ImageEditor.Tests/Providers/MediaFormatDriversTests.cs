@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Images.LocalMedia;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
@@ -176,5 +177,17 @@ public class MediaFormatDriversTests
         LocalImageEditor.QwenSizes.Keys.Should().BeEquivalentTo(source.Keys);
         foreach (var (aspect, size) in LocalImageEditor.QwenSizes)
             (size.W, size.H).Should().Be(source[aspect], aspect);
+    }
+
+    // Зеркало потолка холста (ADR-028, Ш3): MaxCanvasMb у Qwen-Image = потолок загрузки узла
+    // (LocalMediaService.MaxMediaInputBytes, 90 МБ) — адаптер принимает холст с кропом до него,
+    // поэтому редактор не пережимает его; расхождение чисел 90 ↔ адаптер → красный
+    [Fact]
+    public void Потолок_Холста_Qwen_совпадает_С_Загрузкой_Узла()
+    {
+        var qwen = ImageEditCatalog.WithInputLimits(
+            new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage));
+
+        qwen.Caps.MaxCanvasMb.Should().Be(LocalMediaService.MaxMediaInputBytes / 1024 / 1024);
     }
 }

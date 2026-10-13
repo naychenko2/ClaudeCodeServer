@@ -249,7 +249,7 @@ public class FaceMaskBuilderTests
 
     // Сквозной тест (ADR-028, решение 12): реалистичный bbox из ревью → FaceMaskBuilder.Build →
     // EditRequestComposer.Compose → кроп в ImageEditRequest проходит валидацию адаптера
-    // (LocalImageMediaAdapter.cs:238: X/Y/Width/Height кратны 8). Именно этот сценарий падал:
+    // (проверка кратности кропа в адаптере LocalImageMediaAdapter: X/Y/Width/Height кратны 8). Именно этот сценарий падал:
     // bbox (120,90)-(380,350) на 1024×768 давал cropRight=383 (383%8=7) → адаптер отказывал
     [Fact]
     public void Сквозной_РеалистичныйBbox_КропПроходитВалидациюАдаптера()
@@ -262,12 +262,12 @@ public class FaceMaskBuilderTests
         result.Crop.Should().NotBeNull();
         var crop = result.Crop!;
 
-        // Валидация адаптера (LocalImageMediaAdapter.cs:238): X/Y/Width/Height кратны 8
+        // Проверка кратности кропа в адаптере LocalImageMediaAdapter: X/Y/Width/Height кратны 8
         (crop.X % 8).Should().Be(0, $"X={crop.X}");
         (crop.Y % 8).Should().Be(0, $"Y={crop.Y}");
         (crop.Width % 8).Should().Be(0, $"Width={crop.Width}");
         (crop.Height % 8).Should().Be(0, $"Height={crop.Height}");
-        // Scaled кратно 16 (LocalImageMediaAdapter.cs:240)
+        // Scaled кратно 16 (та же проверка кратности кропа в адаптере)
         (crop.ScaledWidth % 16).Should().Be(0);
         (crop.ScaledHeight % 16).Should().Be(0);
 

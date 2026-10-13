@@ -122,7 +122,11 @@ public sealed class FacePassChain
                     }
                     ready = null;
                 }
-                // Авто-выпуск — только на стадии завершения без картинок
+                // Авто-выпуск — только на стадии завершения без картинок.
+                // На текущих драйверах ветка — no-op: Local шлёт Downloading вместе с Ready, fal/Higgsfield
+                // Ready не шлют вовсе. Она для будущих драйверов, что пришлют Downloading без картинок ПОСЛЕ
+                // Ready непоследнего прохода, — чтобы выход прохода k не потерялся (ADR-028, В1).
+                // Падение и отмену цепочки закрывает ReleaseHeld() в RunAsync
                 releaseHeld = !last && value.Stage == EditStage.Downloading && value.Ready is null;
             }
             if (releaseHeld)

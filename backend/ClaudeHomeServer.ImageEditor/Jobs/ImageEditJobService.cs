@@ -240,7 +240,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         // Сверка числа проходов (ADR-028, этап 3): число лиц при запуске ≠ N котировки —
         // отказ, но котировка НЕ расходуется (остаётся в хранилище, клиент пересчитает ту же).
         // Порядок «сначала сверить N, потом удалять» — до _quotes.TryRemove ниже
-        var launchPasses = input.FaceTarget is null ? 0 : 1;
+        var launchPasses = input.FacePasses is null ? 0 : input.FacePasses.Count;
         if (launchPasses != (quote.FacePasses ?? 0))
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
@@ -340,9 +340,26 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         lock (job.Gate) pipeline = job.Pipeline;
         await pipeline;
 
+        // Частичный результат (ADR-028, В1): цепочка отпустила версию (выход прохода 1) — задача
+        // не падает, даже если последний проход упал или отмена пришла после него
+        bool hasVersion;
+        lock (job.Gate) hasVersion = job.Variants.Count > 0;
+
         try
         {
-            if (!cancelled && result.Outcome == EditOutcome.Ok && result.Images.Count > 0)
+            if (hasVersion && facePasses is { Count: > 1 })
+            {
+                // Упал последний проход (версия из предыдущего уже в задаче): Completed + Outcome=Ok,
+                // текст ошибки — в Error. Отмена после прохода 1: Cancelled, версия остаётся
+                if (cancelled)
+                    await CancelPartialAsync(job, result);
+                else
+                {
+                    lock (job.Gate) job.Error = result.Error;
+                    await CompleteAsync(job, result with { Outcome = EditOutcome.Ok });
+                }
+            }
+            else if (!cancelled && result.Outcome == EditOutcome.Ok && result.Images.Count > 0)
                 await CompleteAsync(job, result);
             else
                 await FailAsync(job, editor, cancelled ? result with { Outcome = EditOutcome.Cancelled } : result);
@@ -544,6 +561,36 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         await NotifyFinishedAsync(job);
         await Broadcast(job.OwnerId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
+                job.ChatSessionId, job.Initiator, job.ThreadId));
+    }
+
+    // Отмена после прохода 1 (ADR-028, В1): задача Cancelled, но версия (выход прохода 1) остаётся.
+    // Повторяет правило «отмена оставляет готовое»: запуск cancelled с версией. Событие —
+    // ImageEditFailedMessage(Outcome=Cancelled), как у обычной отмены; RetryQuote не строится
+    private async Task CancelPartialAsync(Job job, ImageEditResult result)
+    {
+        bool? charged;
+        bool written;
+        double? recorded;
+        lock (job.Gate)
+        {
+            charged = result.Charged ?? (job.Accepted ? null : false);
+            written = job.SpendWritten;
+            recorded = job.RecordedAmount;
+        }
+        if (charged == false && written)
+            WriteSpend(job, -recorded, -job.Quote.Count);
+
+        lock (job.Gate)
+        {
+            job.Status = ImageEditJobStatus.Cancelled;
+            job.Outcome = EditOutcome.Cancelled;
+            job.Charged = charged;
+            job.Error = result.Error;
+        }
+        await NotifyFinishedAsync(job);
+        await Broadcast(job.OwnerId,
+            new ImageEditFailedMessage(job.Id, job.ProjectId, EditOutcome.Cancelled, charged, result.Error, null,
                 job.ChatSessionId, job.Initiator, job.ThreadId));
     }
 

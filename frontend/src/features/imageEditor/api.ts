@@ -118,6 +118,8 @@ export interface ImageEditQuote {
   estimate: ImageEditEstimate;
   expiresAt: string;
   expectedSeconds?: number | null;
+  // Число проходов подстановки (ADR-028, этап 3): N = число лиц в faceTarget; у обычной правки поля нет
+  facePasses?: number | null;
 }
 
 export interface EditCost { amount: number; unit: string }

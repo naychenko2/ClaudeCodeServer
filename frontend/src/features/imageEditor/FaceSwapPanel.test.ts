@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FaceSwapPanel } from './FaceSwapPanel';
 import {
-  assignCharacter, emptyAssignments, faceSwapView, FS_TEXT, hasAssignments, pruneAssignments,
+  assignCharacter, emptyAssignments, faceQuoteChip, faceSwapView, FS_TEXT, hasAssignments, passesWord, pruneAssignments,
   type FaceAssignments, type FaceSwapViewInput,
 } from './faceSwapView';
 import { faceSwapReducer, initialFaceSwap } from './thread/faceSwap';
@@ -80,19 +80,41 @@ describe('FaceSwapPanel: список назначений и выбор пер�
 
 describe('FaceSwapPanel: подвал', () => {
   it('одно назначение — «Подставить», два — «Подставить (2)»', () => {
-    const one = render(asg([[1, 'maria']]), {}, FS_TEXT.quote);
-    const two = render(asg([[1, 'maria'], [2, 'ivan']]), {}, FS_TEXT.quote2);
+    const one = render(asg([[1, 'maria']]), {}, faceQuoteChip({ facePasses: 1, expectedSeconds: 50 }));
+    const two = render(asg([[1, 'maria'], [2, 'ivan']]), {}, faceQuoteChip({ facePasses: 2, expectedSeconds: 100 }));
     expect(one).toContain('>Подставить<');
     expect(one).not.toContain(FS_TEXT.go2);
     expect(two).toContain(FS_TEXT.go2);
   });
 
   it('чип котировки приходит из подвала', () => {
-    expect(render(asg([[1, 'maria'], [2, 'ivan']]), {}, FS_TEXT.quote2)).toContain(FS_TEXT.quote2);
+    expect(render(asg([[1, 'maria'], [2, 'ivan']]), {}, '2 прохода · бесплатно · ~2 мин')).toContain('2 прохода · бесплатно · ~2 мин');
   });
 
   it('без назначений кнопка неактивна', () => {
     expect(render(emptyAssignments)).toMatch(/<button[^>]*disabled[^>]*>.*Подставить/s);
+  });
+});
+
+describe('чип котировки (шаг 16б): число проходов и время — из котировки', () => {
+  it('N и M берутся из котировки: разные ETA — разные подписи', () => {
+    expect(faceQuoteChip({ facePasses: 2, expectedSeconds: 100 })).toBe('2 прохода · бесплатно · ~2 мин');
+    expect(faceQuoteChip({ facePasses: 2, expectedSeconds: 250 })).toBe('2 прохода · бесплатно · ~5 мин');
+    expect(faceQuoteChip({ facePasses: 1, expectedSeconds: 61 })).toBe('1 проход · бесплатно · ~2 мин');
+  });
+
+  it('ETA округляется вверх, не меньше минуты; без facePasses — один проход', () => {
+    expect(faceQuoteChip({ expectedSeconds: 5 })).toBe('1 проход · бесплатно · ~1 мин');
+    expect(faceQuoteChip({ facePasses: 2, expectedSeconds: 0 })).toBe('2 прохода · бесплатно · ~1 мин');
+  });
+
+  it('без ETA — без времени; котировки нет — чипа нет', () => {
+    expect(faceQuoteChip({ facePasses: 2, expectedSeconds: null })).toBe('2 прохода · бесплатно');
+    expect(faceQuoteChip(null)).toBeNull();
+  });
+
+  it('склонение «проход»', () => {
+    expect([1, 2, 4, 5, 11, 21, 22].map(passesWord)).toEqual(['проход', 'прохода', 'прохода', 'проходов', 'проходов', 'проход', 'прохода']);
   });
 });
 

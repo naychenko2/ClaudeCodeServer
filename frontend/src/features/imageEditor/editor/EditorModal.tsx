@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
+import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, faceQuoteChip, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -39,11 +39,12 @@ import {
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads, type EditorTool } from '../thread/threadStore';
-import { imageSrc, launchFaceSwap, launchThread, quickAvailabilityFor, resolveModel, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
+import { faceSwapQuoteBody, imageSrc, launchFaceSwap, launchThread, quickAvailabilityFor, resolveModel, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
 import { useCatalog } from '../thread/catalog';
 import { modeSettings, usePrefs } from '../thread/prefs';
 import { useJobStatus } from '../thread/useJobStatus';
 import { useFaceSwap } from '../thread/faceSwap';
+import { useQuote } from '../useQuote';
 
 const ic = (I: typeof Check, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -132,6 +133,12 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     return v ? versionSrc(projectId, thread, v) : imageSrc(projectId, thread, thread.currentStepId);
   }, [projectId, thread, versionId]);
   const sourceInfo = useSourceInfo(viewedSrc);
+  // Котировка подстановки до запуска (ADR-028, шаг 16б): чип подвала берёт из неё число проходов
+  // и время. Тело — то же, что уйдёт в запуск (faceSwapQuoteBody); хук — до раннего return
+  const faceTargetNow = faceSwapMode && faceSwap.state.phase === 'ready'
+    ? faceTargetFromAssignments(faceSwap.state.assignments, viewedVersionId ?? '', faceSwap.state.facesKey ?? '') : null;
+  const faceDims = size && size.src === viewedSrc ? { w: size.w, h: size.h } : null;
+  const { quote: faceQuoteResp } = useQuote(api, projectId, faceTargetNow ? faceSwapQuoteBody(catalog, faceTargetNow, faceDims) : null);
   // «Повернуть и отразить», «Размер и формат» из панели: раздел «Без ИИ» сразу на виду
   useEffect(() => {
     if (startTool !== 'rotate' && startTool !== 'resize') return;
@@ -372,8 +379,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
       setFaceUi(u => ({ ...u, useLocalOnce: true }));
     }
   };
-  // Чип котировки: N=1 — как в этапе 2, N=2 — «2 прохода · бесплатно · ~2 мин»
-  const faceQuote = facePasses >= 2 ? FS_TEXT.quote2 : facePasses >= 1 ? FS_TEXT.quote : null;
+  // Чип котировки: «N прохода · бесплатно · ~M мин» из котировки; пока она едет — чипа нет
+  const faceQuote = faceQuoteChip(faceQuoteResp);
   const faceSide = faceSwapMode && faceView ? (
     <div style={{
       display: 'flex', flexDirection: 'column', width: mobile ? '100%' : 310, flexShrink: 0,

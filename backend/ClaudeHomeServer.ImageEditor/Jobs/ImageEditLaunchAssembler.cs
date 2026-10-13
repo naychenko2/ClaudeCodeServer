@@ -394,18 +394,17 @@ public sealed class ImageEditLaunchAssembler(
         // f. Входы: Source = нормализованные байты версии (EXIF применён, тег обнулён), образцы = персонаж
         // первого прохода (общий путь N = 1). Кроп и маска — отдельным каналом: модель видит кроп, а не
         // маску; маска — «вне неё вернуть исходник». Для N = 1 старые поля (FaceCrop/KeepMask/Character/
-        // References/FaceTarget) дублируют первый проход, чтобы путь этапа 2 и 7б не менялся
-        var first = passes[0];
-        return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
+        // References/FaceTarget) — первый проход через ForPass: та же подстановка, что у проходов
+        // цепочки, поэтому N = 1 и проход 1 разойтись не могут
+        var baseInput = new ImageEditJobInput(
             req.QuoteId!.Trim(),
-            first.Prompt,
+            "",
             req.MarksJson,
             source,
-            first.Mask,
             null,
-            first.References,
+            null,
+            [],
             req.SourcePath,
-            first.Character,
             MatchSourceSize: req.MatchSourceSize,
             ChatSessionId: req.ThreadSessionId,
             Initiator: req.Initiator,
@@ -414,10 +413,8 @@ public sealed class ImageEditLaunchAssembler(
             ThreadId: req.ThreadId,
             BaseVersionId: faceTarget.VersionId,
             CharacterPicker: null,
-            FaceTarget: first.ThreadFaceTarget,
-            FaceCrop: first.Crop,
-            KeepMask: first.KeepMask,
-            FacePasses: passes));
+            FacePasses: passes);
+        return ImageEditCallResult<ImageEditJobInput>.Ok(baseInput.ForPass(passes[0]));
     }
 
     // Байты версии: текущий шаг (рабочая папка), у исходника — файл проекта. null — картинки нет

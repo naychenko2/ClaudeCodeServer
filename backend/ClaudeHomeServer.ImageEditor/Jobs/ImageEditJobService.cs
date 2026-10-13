@@ -254,27 +254,27 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
                 $"Поставщик «{quote.Provider}» больше недоступен");
 
-        // Ужатие до Compose: сверка размеров маски и исходника идёт уже по ужатым
-        (int Width, int Height)? matchSize = null;
-        if (_fitter is not null)
-        {
-            var fitted = await _fitter.FitAsync(input, ImageEditCatalog.WithInputLimits(quote.Model).Caps, ct);
-            if (fitted.Value is not { } fit)
-                return Fail<ImageEditJobCreatedDto>(fitted.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
-                    fitted.Error ?? "Картинку не удалось подготовить");
-            input = fit.Input;
-            // «Дорисовать за края» и «Улучшить качество» меняют размер по смыслу — возврата нет
-            if (input.MatchSourceSize && quote.Op is not (ImageEditOp.Outpaint or ImageEditOp.Upscale)
-                && fit.SourceWidth is { } w && fit.SourceHeight is { } h)
-                matchSize = (w, h);
-        }
-
+        // Запрос к драйверу: N = 1 — один; цепочка (ADR-028, этап 3) — по запросу на проход, каждый
+        // тем же путём (ужатие + Compose) от базового входа с полями прохода (ForPass). Все готовятся
+        // до постановки в очередь и до траты котировки: отказ любого прохода котировку не расходует.
+        // Размер возврата — по базовому исходнику, он у всех проходов один (берётся у первого)
         var format = ExplicitAspectOver(quote, input.AspectRatio);
-        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count,
-            format?.Aspect ?? input.AspectRatio, format);
-        if (composed.Value is not { } request)
-            return Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
-                composed.Error ?? "Неверный запрос");
+        var passInputs = input.FacePasses is { Count: > 1 } facePasses
+            ? facePasses.Select(input.ForPass).ToList()
+            : [input];
+        var requests = new List<ImageEditRequest>(passInputs.Count);
+        (int Width, int Height)? matchSize = null;
+        foreach (var passInput in passInputs)
+        {
+            var prepared = await PrepareAsync(passInput, quote, format, ct);
+            if (prepared.Value is not { } p)
+                return Fail<ImageEditJobCreatedDto>(prepared.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
+                    passInput.FaceTarget is { } face && passInputs.Count > 1
+                        ? $"Лицо {face.N}: {prepared.Error ?? "Неверный запрос"}"
+                        : prepared.Error ?? "Неверный запрос");
+            if (requests.Count == 0) matchSize = p.MatchSize;
+            requests.Add(p.Request);
+        }
 
         Job job;
         lock (_startLock)
@@ -298,17 +298,49 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 Initiator = input.Initiator,
             };
             _jobs[job.Id] = job;
-            job.Completion = Task.Run(() => RunAsync(job, editor, request, input.CharacterPicker, input.FacePasses));
+            job.Completion = Task.Run(() => RunAsync(job, editor, requests, input.CharacterPicker, input.FacePasses));
         }
 
         _workspace.Sweep(Now());
         return ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto(job.Id));
     }
 
-    private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request,
+    // Ужатие под лимиты модели и сборка запроса (Compose) — один путь для одиночного запуска и для
+    // каждого прохода цепочки. MatchSize — размер исходника до ужатия, куда вернуть результат
+    private sealed record PreparedRequest(ImageEditRequest Request, (int Width, int Height)? MatchSize);
+
+    private async Task<ImageEditCallResult<PreparedRequest>> PrepareAsync(
+        ImageEditJobInput input, Quote quote, ResolvedFormat? format, CancellationToken ct)
+    {
+        // Ужатие до Compose: сверка размеров маски и исходника идёт уже по ужатым
+        (int Width, int Height)? matchSize = null;
+        if (_fitter is not null)
+        {
+            var fitted = await _fitter.FitAsync(input, ImageEditCatalog.WithInputLimits(quote.Model).Caps, ct);
+            if (fitted.Value is not { } fit)
+                return ImageEditCallResult<PreparedRequest>.Fail(
+                    fitted.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, fitted.Error ?? "Картинку не удалось подготовить");
+            input = fit.Input;
+            // «Дорисовать за края» и «Улучшить качество» меняют размер по смыслу — возврата нет
+            if (input.MatchSourceSize && quote.Op is not (ImageEditOp.Outpaint or ImageEditOp.Upscale)
+                && fit.SourceWidth is { } w && fit.SourceHeight is { } h)
+                matchSize = (w, h);
+        }
+
+        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count,
+            format?.Aspect ?? input.AspectRatio, format);
+        if (composed.Value is not { } request)
+            return ImageEditCallResult<PreparedRequest>.Fail(
+                composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, composed.Error ?? "Неверный запрос");
+        return ImageEditCallResult<PreparedRequest>.Ok(new PreparedRequest(request, matchSize));
+    }
+
+    // requests — один запрос (N = 1 и обычная правка) или по запросу на проход цепочки (N > 1)
+    private async Task RunAsync(Job job, IImageEditor editor, IReadOnlyList<ImageEditRequest> requests,
         Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker,
         IReadOnlyList<FacePass>? facePasses)
     {
+        var request = requests[0];
         ImageEditResult result;
         var cancelled = false;
         try
@@ -318,7 +350,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             {
                 // Цепочка проходов (ADR-028, этап 3): исходник каждого прохода — выход предыдущего,
                 // N = 1 идёт прежним путём (поведение этапа 2 не меняется)
-                result = await FacePassChain.RunAsync(editor, facePasses, request.Source!, request.Model,
+                result = await FacePassChain.RunAsync(editor, facePasses, requests,
                     new JobProgress(this, job), job.Cts.Token,
                     r => { lock (job.Gate) job.FaceResults.Add(r); });
             }

@@ -181,7 +181,25 @@ public record ImageEditJobInput(
     ImageBytes? KeepMask = null,
     // Проходы подстановки (ADR-028, этап 3): N = число лиц. N = 1 — один элемент (те же данные,
     // что в FaceCrop/KeepMask/Character/References/FaceTarget); N > 1 — цепочка. null — обычная правка
-    IReadOnlyList<FacePass>? FacePasses = null);
+    IReadOnlyList<FacePass>? FacePasses = null)
+{
+    // Вход прохода подстановки (ADR-028, этап 3): поля прохода поверх базового входа. Единственная
+    // точка подстановки — и для верхних полей N = 1 (сборщик), и для каждого прохода цепочки, —
+    // поэтому проход по составу запроса не отличается от одиночного запуска на том же лице.
+    // References — только фото персонажа прохода (с верхними не смешиваются); подбор фото у
+    // проходов не выполняется
+    public ImageEditJobInput ForPass(FacePass pass) => this with
+    {
+        Prompt = pass.Prompt,
+        Mask = pass.Mask,
+        KeepMask = pass.KeepMask,
+        FaceCrop = pass.Crop,
+        Character = pass.Character,
+        References = pass.References,
+        FaceTarget = pass.ThreadFaceTarget,
+        CharacterPicker = null,
+    };
+}
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);

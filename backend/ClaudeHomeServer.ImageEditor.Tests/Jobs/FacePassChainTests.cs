@@ -63,6 +63,13 @@ public class FacePassChainTests
         ];
     }
 
+    // Готовые запросы проходов (в задаче их собирает PrepareAsync: ужатие + Compose); исходник у
+    // всех — базовый, цепочка сама подставляет выход прохода k−1 во вход прохода k
+    private static IReadOnlyList<ImageEditRequest> Requests(IReadOnlyList<FacePass> passes) =>
+        passes.Select(p => new ImageEditRequest(ImageEditOp.Inpaint, p.Prompt, new ImageBytes(Png(8, 8, 0), "image/png"),
+            null, p.References, 1, null, null, "m", p.Character, null,
+            Instruction: p.Prompt, FaceCrop: p.Crop, KeepMask: p.KeepMask)).ToList();
+
     // (1) Два прохода дают РОВНО ОДНУ версию: Ready гасится у первого, только последний — версия
     [Fact]
     public async Task Два_прохода_дают_ровно_одну_версию()
@@ -75,7 +82,7 @@ public class FacePassChainTests
             return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
         });
 
-        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default);
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default);
 
         progress.ReadyCount.Should().Be(1, "только последний проход стал версией");
     }
@@ -93,7 +100,7 @@ public class FacePassChainTests
             return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
         });
 
-        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", new RecordingProgress(), default);
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), new RecordingProgress(), default);
 
         // Вход прохода 2 (req[1].Source) = выход прохода 1 (req[0] отда img с tag=1)
         editor.Requests.Should().HaveCount(2);
@@ -109,7 +116,7 @@ public class FacePassChainTests
             Task.FromResult(new ImageEditResult(EditOutcome.Ok,
                 [new EditedImage(Png(8, 8, 1), "image/png")], null, true, null, null)));
 
-        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", new RecordingProgress(), default);
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), new RecordingProgress(), default);
 
         var req2 = editor.Requests[1];
         req2.Character!.Slug.Should().Be("borya", "проход 2 — персонаж 2");
@@ -130,7 +137,7 @@ public class FacePassChainTests
                 [new EditedImage(Png(8, 8, 1), "image/png")], null, true, null, null));
         });
 
-        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default);
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default);
 
         // Обёртка выставила Run/Runs: первый отчёт — Run=1, Runs=2; второй — Run=2, Runs=2
         var reports = progress.Reports;
@@ -154,7 +161,7 @@ public class FacePassChainTests
             return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
         });
 
-        await FacePassChain.RunAsync(editor, passes, new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default);
+        await FacePassChain.RunAsync(editor, passes, Requests(passes), progress, default);
 
         progress.ReadyCount.Should().Be(1, "единственный проход — версия");
         progress.Reports.Should().OnlyContain(r => r.Runs == 1, "стадия «1 из 1»");
@@ -182,7 +189,7 @@ public class FacePassChainTests
         });
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default));
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default));
         ex.Message.Should().Be("сбой прохода 2");
         progress.ReadyCount.Should().Be(1, "выход прохода 1 отпущен как итоговая версия");
     }
@@ -206,7 +213,7 @@ public class FacePassChainTests
         });
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, cts.Token));
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, cts.Token));
         progress.ReadyCount.Should().Be(1, "отмена после прохода 1 — версия с выходом прохода 1");
     }
 
@@ -223,7 +230,7 @@ public class FacePassChainTests
         });
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, cts.Token));
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, cts.Token));
         progress.ReadyCount.Should().Be(0, "отмена во время прохода 1 — версии нет");
     }
 
@@ -235,7 +242,7 @@ public class FacePassChainTests
         var editor = new FakeEditor((req, prog, ct) => throw new InvalidOperationException("сбой прохода 1"));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default));
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default));
         progress.ReadyCount.Should().Be(0, "падение прохода 1 — версии нет");
     }
 
@@ -251,7 +258,7 @@ public class FacePassChainTests
             return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
         });
 
-        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default);
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default);
 
         progress.ReadyCount.Should().Be(1, "ровно одна версия — выход последнего прохода");
     }
@@ -284,7 +291,7 @@ public class FacePassChainTests
         var editor = LateReportEditor((_, _) => throw new InvalidOperationException("сбой прохода 2"));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m",
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()),
                 progress, default, results.Add));
 
         progress.ReadyCount.Should().Be(1, "удержанный выход прохода 1 пережил поздний Running");
@@ -306,7 +313,7 @@ public class FacePassChainTests
         });
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m",
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()),
                 progress, cts.Token, results.Add));
 
         progress.ReadyCount.Should().Be(1, "отмена после прохода 1 — версия с его выходом");
@@ -327,7 +334,7 @@ public class FacePassChainTests
             return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img2], null, true, null, null));
         });
 
-        await FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default);
+        await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default);
 
         progress.ReadyCount.Should().Be(1, "только выход последнего прохода");
         progress.Reports.Single(r => r.Ready is not null).Ready![0].Bytes.Should().Equal(Png(8, 8, 2));
@@ -349,7 +356,7 @@ public class FacePassChainTests
         });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            FacePassChain.RunAsync(editor, TwoPasses(), new ImageBytes(Png(8, 8, 0), "image/png"), "m", progress, default));
+            FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default));
 
         progress.ReadyCount.Should().Be(0, "проход 1 картинок не дал — версии нет");
         progress.Reports.Should().Contain(r => r.Stage == EditStage.Downloading && r.Run == 1 && r.Runs == 2,

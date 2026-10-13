@@ -2,10 +2,12 @@ using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// Цепочка проходов подстановки (ADR-028, этап 3): проход k вызывает editor.RunAsync со своим
-// ImageEditRequest — исходник = выход прохода k−1 (проход 1 — исходник базовой версии),
-// маска/кроп/персонаж/образцы — прохода k. Обёртка прогресса гасит Ready у непоследних проходов
-// (промежуточные выходы версиями не становятся), стадия — «проход k из N» (Run/Runs).
+// Цепочка проходов подстановки (ADR-028, этап 3): проход k вызывает editor.RunAsync с готовым
+// запросом requests[k] (собран задачей тем же путём, что одиночный запуск: ужатие + Compose),
+// подменяется только исходник — выход прохода k−1 (проход 1 — исходник своего запроса).
+// Сама цепочка запрос не собирает: иначе проход разошёлся бы с одиночным запуском по составу.
+// Обёртка прогресса гасит Ready у непоследних проходов (промежуточные выходы версиями не
+// становятся), стадия — «проход k из N» (Run/Runs).
 // Проходы идут по возрастанию номера лица.
 //
 // Частичный результат (ADR-028, В1, шаг 10): выход прохода 1 удерживается, а не теряется.
@@ -24,15 +26,15 @@ public sealed class FacePassChain
     public static async Task<ImageEditResult> RunAsync(
         IImageEditor editor,
         IReadOnlyList<FacePass> passes,
-        ImageBytes source,
-        string modelId,
+        IReadOnlyList<ImageEditRequest> requests,
         IProgress<EditProgress> progress,
         CancellationToken ct,
         Action<FacePassResult>? onResult = null)
     {
         var n = passes.Count;
         var k = 0;
-        var current = source;
+        // Исходник прохода 1 — тот, что в его запросе (базовая версия, ужатая под модель)
+        var current = requests[0].Source!;
         var last = default(ImageEditResult);
         var chain = new ChainProgress(progress, n);
         try
@@ -40,21 +42,7 @@ public sealed class FacePassChain
             for (; k < n; k++)
             {
                 var pass = passes[k];
-                var request = new ImageEditRequest(
-                    ImageEditOp.Inpaint,
-                    pass.Prompt,
-                    current,
-                    pass.Mask,
-                    pass.References,
-                    1,
-                    null,
-                    null,
-                    modelId,
-                    pass.Character,
-                    null,
-                    Instruction: pass.Prompt,
-                    FaceCrop: pass.Crop,
-                    KeepMask: pass.KeepMask);
+                var request = requests[k] with { Source = current };
                 chain.Advance(k);
                 last = await editor.RunAsync(request, chain, ct);
                 // Выход прохода k — исходник прохода k+1 (промежуточный выход версиями не становится)

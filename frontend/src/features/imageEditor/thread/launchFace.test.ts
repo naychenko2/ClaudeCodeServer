@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { imageEditorApi } from '../api';
 import { LaunchAnchor, VersionCard } from './VersionCards';
 import { putCharacter } from '../characters/useCharacters';
 import { __applyThreads, __resetThreadStore } from './threadStore';
@@ -101,5 +102,35 @@ describe('LaunchAnchor: строка идущего запуска', () => {
     }));
     expect(html).not.toContain('→ лицо');
     expect(html).toContain('hero.png · Qwen-Image · 1 вариант');
+  });
+});
+
+// Личный чат вне проекта (регрессия naychenko.me): ctx.projectId = null → область 'personal'.
+// useCharacters('personal') не должен дёргать проектную ручку персонажей (projectBase бросает
+// синхронно) — рендер якоря/карточки в личной области идёт без броска и без /characters.
+describe('LaunchAnchor / VersionCard: личный чат (ctx.projectId = null)', () => {
+  it('LaunchAnchor: рендер без броска, в /characters не ходит', async () => {
+    const listChars = vi.spyOn(imageEditorApi(), 'listCharacters');
+    const t = thread([launch({ status: 'running' })]);
+    __applyThreads('s1', 'personal', state(t));
+    const html = renderToStaticMarkup(createElement(LaunchAnchor, {
+      ctx: {
+        item: { kind: 'module_record', module: 'imageeditor', recordType: 'image_launch_versions',
+          data: { threadId: 't1', jobId: 'j1', model: 'Qwen-Image', count: 1 }, fallback: null } as never,
+        online: true, projectId: null, sessionId: 's1', persona: null,
+      },
+    }));
+    expect(html).toContain('hero.png');
+    await new Promise<void>(r => setTimeout(r, 0));
+    expect(listChars).not.toHaveBeenCalled();
+  });
+
+  it('VersionCard: projectId = personal рендерится без броска', () => {
+    putCharacter('personal', marina);
+    const t = thread([launch()]);
+    const html = renderToStaticMarkup(createElement(VersionCard, {
+      projectId: 'personal', sessionId: 's1', thread: t, version: t.versions[0], focused: false,
+    }));
+    expect(html).toContain('hero.png');
   });
 });

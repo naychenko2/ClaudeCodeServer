@@ -164,4 +164,28 @@ public class FacePassRequestParityTests : IDisposable
         }
         editor.Requests.Should().BeEmpty("до редактора дело не дошло");
     }
+
+    // Страховочный отказ: подбор фото и цепочка на два лица в одном входе (мимо сборщика — из
+    // HTTP/MCP недостижимо) — отказ до подготовки запросов, котировка жива, редактор не звали.
+    // Мутация «убрать проверку в StartAsync» → красный
+    [Fact]
+    public async Task Подбор_фото_с_цепочкой_на_два_лица_отказ_котировка_жива()
+    {
+        var editor = new RecordingEditor();
+        var (jobs, quoteId) = await Quote(editor, 1, 2);
+        using (jobs)
+        {
+            var input = Input(quoteId, [PassAnya(), PassBorya()]) with
+            {
+                CharacterPicker = (_, _) => Task.FromResult<CharacterPickOutcome>(null!),
+            };
+            var started = await jobs.StartAsync(Owner, Project, input, default);
+
+            started.Value.Should().BeNull("задача не создана");
+            started.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+            started.Error.Should().Be("Подбор фото несовместим с подстановкой на несколько лиц");
+            jobs.QuoteInfo(Owner, Project, quoteId).Should().NotBeNull("котировка не потрачена");
+        }
+        editor.Requests.Should().BeEmpty("до редактора дело не дошло");
+    }
 }

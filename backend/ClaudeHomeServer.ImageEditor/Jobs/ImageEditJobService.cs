@@ -248,6 +248,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (launchPasses != (quote.FacePasses ?? 0))
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
+        // Подбор фото персонажа (CharacterPicker) рассчитан на один запрос, у проходов цепочки его
+        // нет (ADR-028 §5). Сборщик их не смешивает; это защита в глубину для вызовов мимо него —
+        // отказ до подготовки запросов и до траты котировки
+        if (input.CharacterPicker is not null && (input.FacePasses?.Count ?? 0) > 1)
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.InvalidRequest,
+                "Подбор фото несовместим с подстановкой на несколько лиц");
 
         // Ровно поставщик котировки: пропал — отказ, а не сосед
         var editor = ImageEditCatalog.FindAvailable(_editors, quote.Provider);

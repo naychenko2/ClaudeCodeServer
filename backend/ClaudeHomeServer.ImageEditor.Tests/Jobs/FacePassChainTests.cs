@@ -430,6 +430,40 @@ public class FacePassChainTests
         progress.ReadyCount.Should().Be(0, "сбой прохода 1 — версии нет");
     }
 
+    // (2а) Ok со списком картинок null (тип non-nullable, рантайм не защищён): сбой прохода, как Ok с [] —
+    // проход 1: failed/cancelled, проход 2 не вызван; проход 2: done/failed, версия — выход прохода 1
+    [Fact]
+    public async Task Ok_без_списка_картинок_на_проходе_1_сбой_прохода()
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var editor = new FakeEditor((_, _, _) =>
+            Task.FromResult(new ImageEditResult(EditOutcome.Ok, null!, null, null, null, null)));
+
+        var result = await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default, results.Add);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Error.Should().Be("Проход не вернул картинку");
+        editor.Requests.Should().HaveCount(1, "проход 2 не вызывается");
+        results.Select(r => r.Status).Should().Equal("failed", "cancelled");
+        progress.ReadyCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ok_без_списка_картинок_на_проходе_2_сбой_прохода()
+    {
+        var progress = new RecordingProgress();
+        var results = new List<FacePassChain.FacePassResult>();
+        var editor = Pass2ResultEditor(new ImageEditResult(EditOutcome.Ok, null!, null, null, null, null));
+
+        var result = await FacePassChain.RunAsync(editor, TwoPasses(), Requests(TwoPasses()), progress, default, results.Add);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Error.Should().Be("Проход не вернул картинку");
+        results.Select(r => r.Status).Should().Equal("done", "failed");
+        progress.ReadyCount.Should().Be(1, "удержанный выход прохода 1 отпущен как итоговая версия");
+    }
+
     // (3) Cancelled результатом при ОТМЕНЁННОМ ct — настоящая отмена: cancelled, исключение отмены
     [Fact]
     public async Task Cancelled_результатом_при_отмене_задачи_остаётся_отменой()

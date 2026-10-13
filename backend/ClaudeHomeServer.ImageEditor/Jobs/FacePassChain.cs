@@ -96,7 +96,8 @@ public sealed class FacePassChain
     // сбой: человек ничего не отменял, поэтому в задачу уходит Failed, а не Cancelled
     private static ImageEditResult? PassFailure(ImageEditResult result) => result switch
     {
-        { Outcome: EditOutcome.Ok, Images.Count: > 0 } => null,
+        // Images non-nullable по типу, но драйвер может вернуть null: Ok без списка — тоже сбой прохода
+        { Outcome: EditOutcome.Ok, Images: { Count: > 0 } } => null,
         { Outcome: EditOutcome.Ok } => result with { Outcome = EditOutcome.Failed, Error = result.Error ?? "Проход не вернул картинку" },
         { Outcome: EditOutcome.Cancelled } => result with { Outcome = EditOutcome.Failed, Error = result.Error ?? "Проход прерван вне задачи" },
         _ => result,

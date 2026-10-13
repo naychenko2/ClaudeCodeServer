@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createMockApi, imageEditErrorCode, MOCK_SOURCE_SIZE, nameTakenSuggestion,
+  createMockApi, findFaces, facesError, imageEditErrorCode, MOCK_SOURCE_SIZE, nameTakenSuggestion,
   type ImageEditorApi,
 } from './api';
+
+// findFaces вызывает request из aihome_shell/kit — моким, чтобы проверить URL
+vi.mock('aihome_shell/kit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('aihome_shell/kit')>();
+  return { ...actual, request: vi.fn() };
+});
 
 const P = 'p1';
 
@@ -122,5 +128,30 @@ describe('мок transform', () => {
       base: { path: 'a.png' }, ops: [{ type: 'rotate', degrees: 45 as 90 }],
     }));
     expect((e as { status: number }).status).toBe(400);
+  });
+});
+
+// ── findFaces: маршрут и личная область ──────────────────────────────────────
+describe('findFaces', () => {
+  it('проектная область: URL через threadsBase, POST', async () => {
+    const { request } = await import('aihome_shell/kit');
+    (request as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      facesKey: 'fk', width: 100, height: 100,
+      faces: [{ n: 1, bbox: [0, 0, 10, 10] as [number, number, number, number], score: 0.9, small: false }],
+    });
+    await findFaces('p1', 's1', 't1', 'v1');
+    expect(request).toHaveBeenCalledWith(
+      '/projects/p1/image-editor/sessions/s1/threads/t1/versions/v1/faces',
+      { method: 'POST' },
+    );
+  });
+
+  it('личная область: not_found без сетевого запроса', async () => {
+    const { request } = await import('aihome_shell/kit');
+    (request as ReturnType<typeof vi.fn>).mockClear();
+    const e = await rejection(findFaces('personal', 's1', 't1', 'v1'));
+    expect((e as { status: number }).status).toBe(404);
+    expect(facesError(e).code).toBe('not_found');
+    expect(request).not.toHaveBeenCalled();
   });
 });

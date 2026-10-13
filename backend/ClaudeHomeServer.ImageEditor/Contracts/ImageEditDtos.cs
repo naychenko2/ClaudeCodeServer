@@ -48,6 +48,10 @@ public static class ImageEditCatalogReasons
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
+// Цель подстановки персонажа на лицо (ADR-027, §4, этап 2): VersionId — версия нити,
+// Face — номер лица (с 1), FacesKey — детерминирован по байтам версии (сверка 7b)
+public sealed record FaceTarget(string VersionId, int Face, string FacesKey);
+
 // Выбор человека (поставщик + модель или «auto» с режимом) и признаки запроса.
 // HasAnnotations — стрелки, рамки, подписи на холсте (кисть сюда не входит — это HasMask);
 // Removal — запрос просит стереть отмеченное (фронт считает так же, как EditIntent.IsRemoval).
@@ -73,7 +77,11 @@ public record ImageEditQuoteRequest(
     // Действующий формат под модель считает сервер (MediaFormatResolver), а не клиент
     ClaudeHomeServer.Services.Media.MediaFormat? Format = null,
     // Заполняет сервер перед обращением к драйверу котировки; из тела запроса игнорируется
-    ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null);
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null,
+    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): при наличии — запуск считает как
+    // обычную локальную правку (бесплатно, ETA правки); персонаж обязателен
+    FaceTarget? FaceTarget = null,
+    string? CharacterSlug = null);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
 // EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
@@ -135,7 +143,9 @@ public record ImageEditJobInput(
     // запуске; null — флаг выключен или персонажа нет. Первый аргумент — порог уверенности ракурса:
     // CharacterPhotoPicker.LocalConfidentScore для local (MaxCharacterPhotos=1), int.MaxValue для
     // облака — у облака первым остаётся главное фото, как до подбора
-    Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null);
+    Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null,
+    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): запись в нить для подписи карточки
+    ClaudeHomeServer.Services.ImageEditor.Threads.ImageThreadFaceTarget? FaceTarget = null);
 
 // Photos — фото персонажа в новом порядке (null — порядок прежний); Launch — что записать в запуск нити
 public sealed record CharacterPickOutcome(IReadOnlyList<ReferenceImage>? Photos, ImageThreadCharacter Launch);
@@ -267,6 +277,8 @@ public static class ImageEditErrorCodes
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)
     public const string ThreadNotFound = "thread_not_found";
     public const string VersionNotFound = "version_not_found";
+    // 404: фича скрыта флагом (ручка есть, но выключена) — неотличима от «ручки нет»
+    public const string FeatureDisabled = "feature_disabled";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
     // 409: запись нитей чата со старой revision; в теле ещё state — актуальное
@@ -279,6 +291,14 @@ public static class ImageEditErrorCodes
     public const string RasterUnavailable = "raster_unavailable";
     // 409: ревизия контекста чата устарела (ADR-023 §Д2.1); в теле — свежий ChatContextDto
     public const string ContextChanged = "context_changed";
+    // 409: список лиц версии изменился (facesKey не совпал); в теле — свежий ImageThreadFacesResponse
+    public const string FacesChanged = "faces_changed";
+    // 503: видеокарта занята долгой задачей (детекция лиц)
+    public const string Busy = "busy";
+    // 400: лица стоят слишком близко — закрасьте лицо кистью
+    public const string FacesTooClose = "faces_too_close";
+    // 400: лицо вне картинки
+    public const string FaceOutOfFrame = "face_out_of_frame";
 }
 
 // Результат вызова шва: Value при успехе, иначе код ImageEditErrorCodes.* и текст

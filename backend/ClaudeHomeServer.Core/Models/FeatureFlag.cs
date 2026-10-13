@@ -37,6 +37,10 @@ public static class FeatureFlagKeys
     // Умный подбор фото персонажа под сюжет (ADR-027): метки ракурса и эмоции у фото,
     // автоподбор. Гейтится на сервере. Dark launch, выключено по умолчанию
     public const string CharacterSmartPhotos = "character-smart-photos";
+
+    // Этап 2 «Подставить персонажа на лицо» (ADR-027, §4): тап по лицу на картинке, выбор
+    // персонажа, замена лица. Гейтится на сервере. Dark launch, выключено по умолчанию
+    public const string CharacterFaceSwap = "character-face-swap";
 }
 
 /// <summary>
@@ -81,6 +85,13 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.CharacterSmartPhotos,
             Title: "Умный подбор фото персонажа",
             Description: "AI Home сам выбирает фото персонажа под сюжет: для «в профиль у окна» возьмёт фото в профиль, для «смеётся» — где он смеётся. Фото размечаются автоматически, метку можно поправить.",
+            Default: false,
+            Stage: "dev"),
+
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.CharacterFaceSwap,
+            Title: "Подставить персонажа на лицо",
+            Description: "На картинке тапаете по лицу и выбираете персонажа — лицо заменяется, остальное остаётся.",
             Default: false,
             Stage: "dev"),
     ];

@@ -5,7 +5,9 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Эталоны стенда, скопированные в тесты: ComfyReference/*.json — графы из
 // ~/ComfyUI-h3-tools/workflows (прошли validate_prompt ComfyUI), object_info_subset.json — схема
-// тех классов нод, что вообще бывают в наших графах (офлайн-снимок dump_object_info.py)
+// тех классов нод, что вообще бывают в наших графах (офлайн-снимок dump_object_info.py).
+// Запись CcsFaceDetect снята с боевого стенда curl'ом /object_info/CcsFaceDetect (2026-10-12),
+// оставлены те же ключи, что у CcsAudioWorker.
 public static class ComfyReferenceFiles
 {
     private static readonly Lazy<JsonObject> _objectInfo = new(() => Load("object_info_subset.json"));

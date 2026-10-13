@@ -8,13 +8,16 @@
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, RotateCcw, Save, ScanFace, Sparkles, Target, X,
+  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, Sparkles, Target, X,
 } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
+  Badge, Button, Dot, IconButton, Menu, MenuItem, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
   FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import { stripVisible } from './characterPhotos';
+import { faceTargetCaption } from '../faceSwapView';
+import { useCharacters } from '../characters/useCharacters';
+import { useCatalog } from './catalog';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
@@ -116,8 +119,6 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const name = `${threadName(thread)} · ${versionName(version)}`;
   const sim = typeof version.similarity === 'number' ? `сходство ${simText(version.similarity)}`
     : version.jobId && launchVersions(thread, version.jobId).some(x => typeof x.similarity === 'number') ? 'лицо не найдено' : '';
-  const meta = cropNote ?? [versionMeta(thread, version, null), sim, model ?? ''].filter(Boolean).join(' · ');
-  const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const done = versionDone(thread, version);
   // Блок «Фото персонажа» (ADR-027, шаг 18): не у исходника, не у обрезки без ИИ, только с персонажем
   const smart = useFeature(FLAGS.characterSmartPhotos);
@@ -129,6 +130,20 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const save = () => { if (src) void download(src, mime => downloadName(thread, version, mime)); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); setBusy(false); };
   const open = () => openEditor(sessionId, thread.id, version.id);
+  // «Подставить персонажа» (этап 2 · шаг 10b): вход — пункт меню «⋯», виден только в проекте,
+  // за флагом, при персонажах в проекте и доступных локальных моделях. Нет условия — нет и «⋯»
+  const faceFlag = useFeature(FLAGS.characterFaceSwap);
+  const { list: faceChars } = useCharacters(projectId);
+  // «Подставить персонажа» (этап 2 · шаг 10c): подпись «{Имя} → лицо {n}»; имя — по slug
+  // персонажа из списка проекта, персонажа больше нет — сам slug
+  const ft = launch?.faceTarget ?? null;
+  const faceCap = faceTargetCaption(ft, ft ? faceChars?.find(c => c.slug === ft.characterSlug)?.name ?? null : null);
+  const meta = cropNote ?? [faceCap, versionMeta(thread, version, null), sim, model ?? ''].filter(Boolean).join(' · ');
+  const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
+  const faceCatalog = useCatalog(projectId);
+  const faceLocal = faceCatalog ? (faceCatalog.providers.find(p => p.key === 'local')?.available ?? true) : false;
+  const faceEntryVisible = !personal && faceFlag && (faceChars?.length ?? 0) > 0 && faceLocal;
+  const [faceMenu, setFaceMenu] = useState(false);
 
   return (
     <Shell current={current} testId={String(version.number)}
@@ -171,13 +186,26 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Button>
         )}
         <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />
-        {src && primary !== 'download' && (
-          <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
+          {src && primary !== 'download' && (
             <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
               {ic(Download)}
             </IconButton>
-          </span>
-        )}
+          )}
+          {faceEntryVisible && (
+            <span style={{ position: 'relative', display: 'inline-flex' }}>
+              <IconButton size="xs" title="Ещё" ariaLabel="Ещё" active={faceMenu} onClick={() => setFaceMenu(v => !v)}>
+                {ic(MoreHorizontal)}
+              </IconButton>
+              {faceMenu && (
+                <Menu onClose={() => setFaceMenu(false)} align="right" bottom={30} minWidth={200}>
+                  <MenuItem icon={ic(ScanFace)} label="Подставить персонажа"
+                    onClick={() => { setFaceMenu(false); openEditor(sessionId, thread.id, version.id, { tool: 'faceSwap' }); }} />
+                </Menu>
+              )}
+            </span>
+          )}
+        </span>
       </div>
     </Shell>
   );
@@ -240,6 +268,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const mobile = useIsMobile();
   const { primary } = useChatContext(ctx.sessionId ?? '');
+  const { list: faceChars } = useCharacters(projectId);
   const data = (rec?.data ?? {}) as LaunchData;
   const jobId = str(data.jobId);
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
@@ -256,6 +285,10 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const agent = (str(data.initiator) ?? launch?.initiator) === 'agent';
   const head = base && versionHasImage(thread, base) ? `Правка ${fromVersion(base)}` : 'Генерация';
   const info = [model, variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
+  // «Подставить персонажа» (этап 2 · шаг 10c): подпись «{Имя} → лицо {n}» в строке запуска;
+  // имя — по slug персонажа из списка проекта, персонажа больше нет — сам slug
+  const ft = launch?.faceTarget ?? null;
+  const faceCap = faceTargetCaption(ft, ft ? faceChars?.find(c => c.slug === ft.characterSlug)?.name ?? null : null);
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
   const endNote = launchEndNote(status, versions.length, count);
   // Обрезка без ИИ (ADR-025): та же карточка версии, над ней строка «Вы обрезали…» / «✦ Claude обрезал…» из записи
@@ -289,7 +322,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
           <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm, color: C.textSecondary }}>
             <span style={{ display: 'inline-flex', alignSelf: 'center', color: C.textMuted }}>{ic(Sparkles)}</span>
             <b style={{ color: C.textHeading }}>{agent ? `Claude: ${head.charAt(0).toLowerCase()}${head.slice(1)}` : head}</b>
-            <span>{threadName(thread)} · {info}</span>
+            <span>{threadName(thread)}{faceCap ? ` · ${faceCap}` : ''} · {info}</span>
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
           <RunningLine projectId={projectId} jobId={jobId} model={model} />

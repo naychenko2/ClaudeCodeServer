@@ -7,7 +7,7 @@
 import { useCallback, useMemo } from 'react';
 import { api as appApi, clearGenDraft, followChat, showToast } from 'aihome_shell/kit';
 import {
-  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
+  AUTO_MODEL, imageEditorApi, type FaceTarget, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
 } from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, variantsWord,
@@ -30,7 +30,7 @@ import { loadCatalog, useCatalog } from './catalog';
 import { getPrefs, modeSettings, setModeSettings, usePrefs } from './prefs';
 import { effectiveImageMode, getStoredImageMode, useImageModeVersion, type ImageMode } from './modeState';
 import { activeStepOf } from './actions';
-import { currentVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
+import { currentVersion, findVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
@@ -237,6 +237,45 @@ export async function launchThread(
     showToast(`Генерация не запущена: ${(e as Error).message}`, '', 'error');
     return false;
   }
+}
+
+// «Подставить персонажа» (этап 2 · шаг 10b): запуск с faceTarget + characterSlug. Котировка и
+// запуск — тем же путём, что обычный (buildQuoteBody + startJob), только исполнитель — локальные
+// модели (подстановка работает только на них), маска лица строится сервером. true — задача запущена.
+export async function launchFaceSwap(
+  projectId: string, sessionId: string, thread: ImageThread,
+  faceTarget: FaceTarget, characterSlug: string,
+  versionId: string | null, size: { w: number; h: number } | null,
+): Promise<boolean> {
+  const api = imageEditorApi();
+  const catalog = await loadCatalog(projectId);
+  const local = catalog?.providers.find(p => p.key === 'local');
+  if (!local) {
+    showToast('Локальные модели недоступны', '', 'error');
+    return false;
+  }
+  const m = currentModel(local, local.models[0]?.id ?? AUTO_MODEL);
+  if (!m) {
+    showToast('Рисовать нечем: администратор не настроил поставщиков картинок', '', 'error');
+    return false;
+  }
+  const version = versionId ? findVersion(thread, versionId) ?? currentVersion(thread) : currentVersion(thread);
+  const src = version ? versionSrc(projectId, thread, version) : activeSrc(projectId, thread);
+  const source = src ? await fetch(src).then(r => r.blob()) : undefined;
+  const q = await api.quote(projectId, buildQuoteBody({
+    provider: 'local', model: m.id, mode: 'auto', op: 'inpaint', count: 1,
+    hasImage: true, marks: [], withMask: false, removal: false, references: 0, hasCharacter: true,
+    size, context: null, faceTarget, characterSlug,
+  }));
+  await api.startJob(projectId, {
+    quoteId: q.quoteId, prompt: '',
+    source, characterSlug,
+    sessionId, threadId: thread.id,
+    versionId: version?.id,
+    faceTarget,
+  });
+  followChat(sessionId);
+  return true;
 }
 
 export function useThreadLaunch(projectId: string, sessionId: string | null, thread: ImageThread | null) {

@@ -3,7 +3,7 @@
 // hasAnnotations: true, а запуск — с false. Теперь «что уйдёт вместе с запуском» решает одна функция.
 
 import type { MediaFormatWish } from 'aihome_shell/kit';
-import type { EditMode, ImageEditOp, ImageEditQuoteRequest } from '../api';
+import type { EditMode, FaceTarget, ImageEditOp, ImageEditQuoteRequest } from '../api';
 import { hasAnnotationMark, type Mark } from '../marks';
 
 // Пометки уходят запуску только у правки: «Изменить» и «Изменить отмеченное»; быстрым операциям
@@ -29,9 +29,15 @@ export interface QuoteBodyInput {
   context?: { sessionId: string; contextRevision: number } | null;
   // Формат генерации (ADR-025): желание проекта; undefined — флаг выключен, поле в тело не кладётся
   format?: MediaFormatWish | null;
+  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки и персонаж; с ними context не едет
+  faceTarget?: FaceTarget | null;
+  characterSlug?: string | null;
 }
 
 export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
+  // FaceTarget и ContextRevision несовместимы: сервер вернёт invalid_request, поэтому с целью
+  // подстановки ревизию контекста (и его образцы/персонажа) в тело не кладём
+  const face = i.faceTarget != null;
   return {
     provider: i.provider, model: i.model, mode: i.mode, op: i.op, count: i.count,
     hasMask: i.withMask,
@@ -39,7 +45,8 @@ export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
     removal: i.removal,
     references: i.references, hasCharacter: i.hasCharacter,
     width: i.size?.w ?? null, height: i.size?.h ?? null,
-    ...(i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),
+    ...(face ? null : i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),
     ...(i.format !== undefined ? { format: i.format } : null),
+    ...(face ? { faceTarget: i.faceTarget, characterSlug: i.characterSlug ?? null } : null),
   };
 }

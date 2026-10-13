@@ -19,6 +19,8 @@ public sealed partial class ImageEditorToolset
     public const string ToolFocus = "image_focus";
     public const string ToolNew = "image_new";
     public const string ToolGenerate = "image_generate";
+    // Имя с запасом от image_focus, чтобы LLM их не путала (правило про однокоренные имена)
+    public const string ToolFindFaces = "image_find_faces";
     public const string ToolSuggestPrompt = "image_suggest_prompt";
     public const string ToolCancel = "image_cancel";
 
@@ -127,6 +129,14 @@ public sealed partial class ImageEditorToolset
                 },
                 ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
                     + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
+                ["face"] = new JsonObject
+                {
+                    ["type"] = "integer",
+                    ["minimum"] = 1,
+                    ["description"] = "Номер лица из image_find_faces, на которое подставить персонажа. Только вместе с character, "
+                        + "только для локальных моделей (provider local). Маску строит сервер, свою не передавай. "
+                        + "Персонаж из строки контекста на чужое лицо не подставляется сам — укажи character явно.",
+                },
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
                     + "только local); crop — обрезать картинку под пропорции aspect без ИИ и бесплатно (результат — новая версия); "
                     + "по умолчанию — правка, а у новой картинки без файла — generate"),
@@ -152,6 +162,16 @@ public sealed partial class ImageEditorToolset
                     ["type"] = "boolean",
                     ["description"] = "Вернуть вариантам размер исходника, если пропорции совпадают",
                 },
+            }, "threadId")),
+
+        new(ToolFindFaces,
+            "Находит лица на картинке версии и возвращает их номера слева направо. Нужен перед image_generate "
+            + "с аргументом face. Ничего не меняет и бесплатен.",
+            Obj(new JsonObject
+            {
+                ["threadId"] = Str("Картинка этого чата (threadId из image_state)"),
+                ["versionId"] = Str("Версия картинки (versionId из image_state), на которой искать лица; "
+                    + "не указана — текущая"),
             }, "threadId")),
 
         new(ToolSuggestPrompt,

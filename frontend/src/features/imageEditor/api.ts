@@ -11,7 +11,7 @@
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
 import { mockFormatState, mockTierFactor } from './mockFormat';
-import { projectBase, scopeBase } from './scope';
+import { isPersonalScope, projectBase, scopeBase, threadsBase } from './scope';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -95,6 +95,10 @@ export interface ImageEditQuoteRequest {
   // Формат генерации (ADR-025): желание проекта; без него сервер берёт сохранённое, но общий кэш котировок
   // ключуется телом, поэтому выбранный формат уходит явно
   format?: MediaFormatWish | null;
+  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки; с ней ContextRevision не едет
+  faceTarget?: FaceTarget | null;
+  // Персонаж, лицо которого подставляется; обязателен, когда задан faceTarget
+  characterSlug?: string | null;
 }
 
 export interface ImageEditEstimate {
@@ -180,6 +184,9 @@ export interface ImageEditJobInput {
   versionId?: string;
   // Ревизия контекста чата (ADR-023 §Д2.1): сервер берёт входы из стора, не совпала — 409 context_changed
   contextRevision?: number;
+  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки; с ней contextRevision/mask/annotated
+  // и референсы контекста в тело не кладутся (сборка — buildQuoteBody/buildJobBody)
+  faceTarget?: FaceTarget | null;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -214,6 +221,9 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.baseStepId) form.append('baseStepId', input.baseStepId);
   if (input.versionId) form.append('versionId', input.versionId);
   if (input.contextRevision != null) form.append('contextRevision', String(input.contextRevision));
+  // «Подставить персонажа» (этап 2 · шаг 10a): цель подстановки — объект {versionId, face, facesKey},
+  // уходит JSON-строкой (как photoLabels); сервер десериализует в FaceTarget
+  if (input.faceTarget) form.append('faceTarget', JSON.stringify(input.faceTarget));
   return form;
 }
 
@@ -374,6 +384,86 @@ export function imageEditErrorCode(e: unknown): ImageEditErrorCode | null {
 export function nameTakenSuggestion(e: unknown): string | null {
   const body = (e as { body?: { code?: unknown; suggestion?: unknown } } | null)?.body;
   return body?.code === 'name_taken' && typeof body.suggestion === 'string' ? body.suggestion : null;
+}
+
+// ── «Подставить персонажа» на лицо (этап 2 · шаг 10a) ─────────────────────────
+// Лицо, найденное на картинке версии. n — номер с 1 слева направо; bbox — рамка
+// [x1, y1, x2, y2] в пикселях картинки; small — мелкое лицо (короче 64 px), выбрать нельзя
+export interface DetectedFace {
+  n: number;
+  bbox: [number, number, number, number];
+  score: number;
+  small: boolean;
+}
+
+// Ответ «найти лица»: геометрия и facesKey — ключ ревизии, по которому сервер сверит выбор
+// лица при запуске (сменилась картинка — 409 faces_changed со свежим списком)
+export interface FacesResponse {
+  facesKey: string;
+  width: number;
+  height: number;
+  faces: DetectedFace[];
+}
+
+// Цель подстановки персонажа (этап 2 · шаг 10a): версия, номер лица (n) и ключ ревизии лиц.
+// Уходит в котировку и запуск; вместе с ним ContextRevision/Mask/Annotated/референсы не едут
+export interface FaceTarget {
+  versionId: string;
+  face: number;
+  facesKey: string;
+}
+
+// Коды ошибок «найти лица»: различимо типизированы, чтобы экран назвал причину отказа
+export type FacesErrorCode =
+  | 'busy'                  // 503: видеокарта занята долгой задачей
+  | 'provider_unavailable'  // локальные модели выключены / ComfyUI недоступен
+  | 'faces_changed'         // 409: картинка изменилась, в теле свежий список лиц
+  | 'version_not_found'
+  | 'not_found'             // 404: личная область (ручки нет) или нить/версия не найдены
+  | 'feature_disabled'      // флаг character-face-swap выключен
+  | 'other';
+
+export interface FacesError {
+  code: FacesErrorCode;
+  // 409 faces_changed: свежий список лиц (тот же формат) — экран обновляет рамки и сбрасывает выбор
+  faces?: FacesResponse | null;
+}
+
+// Разбор отказа «найти лица» по коду/статусу. faces_changed (409) отдаёт свежий список
+// в теле — прикладываем его; прочий отказ — код по body.code, иначе по статусу
+export function facesError(e: unknown): FacesError {
+  const err = e as { status?: number; body?: { code?: unknown; faces?: unknown } } | null;
+  const code = typeof err?.body?.code === 'string' ? err.body.code : null;
+  const faces = parseFacesResponse(err?.body?.faces);
+  if (code === 'busy' || code === 'provider_unavailable' || code === 'faces_changed'
+    || code === 'version_not_found' || code === 'not_found' || code === 'feature_disabled') {
+    return { code, ...(code === 'faces_changed' && faces ? { faces } : null) };
+  }
+  if (code) return { code: 'other' };
+  if (err?.status === 404) return { code: 'not_found' };
+  if (err?.status === 503) return { code: 'busy' };
+  return { code: 'other' };
+}
+
+// Тело 409 faces_changed: свежий список лиц в том же формате
+function parseFacesResponse(v: unknown): FacesResponse | null {
+  const r = v as FacesResponse | null | undefined;
+  if (!r || typeof r !== 'object') return null;
+  if (typeof r.facesKey !== 'string' || !Array.isArray(r.faces)) return null;
+  return r;
+}
+
+// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces.
+// Только проектная область: в личной области персонажей нет по построению → типизированный
+// отказ not_found без сетевого запроса. Отказ — типизированный FacesError (facesError)
+export function findFaces(scope: string, sessionId: string, threadId: string, versionId: string): Promise<FacesResponse> {
+  if (isPersonalScope(scope)) {
+    return Promise.reject(Object.assign(new Error('not_found'), { status: 404, body: { code: 'not_found' } }));
+  }
+  return request<FacesResponse>(
+    `${threadsBase(scope, sessionId)}/${encodeURIComponent(threadId)}/versions/${encodeURIComponent(versionId)}/faces`,
+    { method: 'POST' },
+  );
 }
 
 export interface ImageEditorApi {

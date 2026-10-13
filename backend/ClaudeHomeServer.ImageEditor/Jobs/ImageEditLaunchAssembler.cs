@@ -35,7 +35,9 @@ public sealed class ImageEditLaunchAssembler(
     ImageContextLaunch? context = null,
     IFeatureFlagGate? flags = null,
     CharacterSceneParser? sceneParser = null,
-    CharacterPhotoLabeling? labeling = null)
+    CharacterPhotoLabeling? labeling = null,
+    Faces.FaceDetectionCache? faces = null,
+    ILocalImageMedia? localMedia = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -53,7 +55,7 @@ public sealed class ImageEditLaunchAssembler(
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
         {
             await threads.OnLaunchedAsync(ownerId, scope.Key, chatId, threadId, jobs.Get(ownerId, scope.Key, created.JobId),
-                created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct);
+                created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct, input.FaceTarget);
             // Быстрый поставщик мог закончить задачу раньше, чем запуск лёг в нить: Finished тогда не
             // нашёл запуска, и карточка висела бы в «Рисуем…». Финал догоняется здесь; событие, пришедшее
             // следом, увидит закрытый запуск и ничего не сделает
@@ -80,6 +82,9 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
+        // Подстановка персонажа на лицо (ADR-027, §4, этап 2): отдельный путь, контекст игнорируется
+        if (req.FaceTarget is { } faceTarget)
+            return await AssembleFaceTargetAsync(ownerId, scope, req, faceTarget, ct);
         if (req.ContextRevision is { } revision)
         {
             var applied = await ApplyContextAsync(ownerId, scope, req, revision, ct);
@@ -265,6 +270,162 @@ public sealed class ImageEditLaunchAssembler(
         });
     }
 
+    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): контекст чата игнорируется целиком,
+    // образцы — только персонаж, маска строится сервером по bbox детектора.
+    // Порядок: a. флаг → b. личная область/входы → c. версия → d. детекция/facesKey →
+    // e. номер/размер лица → f. маска → g. промпт → h. входы → i. LoRA → j. запись в нить
+    private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetAsync(
+        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
+    {
+        // a. Флаг выключен — как в 7a
+        if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.FeatureDisabled, "Подстановка персонажа на лицо выключена");
+
+        // b. Личная область, входы
+        if (scope.Project is null)
+            return Invalid("Подстановка персонажа на лицо — только в проекте");
+        if (req.CharacterSlug is not { Length: > 0 })
+            return Invalid("Укажите персонажа");
+        if (req.Mask is not null || req.Annotated is not null)
+            return Invalid("При подстановке на лицо маску и разметку не указывают");
+        var quote = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
+        if (quote is null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound, "Котировка устарела");
+        // Провайдер — только local
+        if (quote.Provider is not "local")
+            return Invalid("Подставлять персонажа можно только локальными моделями");
+        if (req.ContextRevision is not null)
+            return Invalid("Подстановка на лицо несовместима с контекстом чата");
+        if (req.ReferencePaths.Count > 0 || req.Uploaded.Count > 0)
+            return Invalid("При подстановке на лицо образцы из тела не указывают");
+
+        // c. Версия в нити
+        if (threads is null || !threads.OwnThread(ownerId, scope.Key, req.ThreadSessionId, req.ThreadId))
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
+        var thread = threads.Get(ownerId, req.ThreadSessionId!.Trim()).Threads.FirstOrDefault(t => t.Id == req.ThreadId!.Trim());
+        if (thread is null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
+        var version = thread.Version(faceTarget.VersionId);
+        if (version is null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке");
+
+        // Байты версии: шаг версии, иначе файл проекта
+        var sourceBytes = await VersionBytesAsync(ownerId, scope, thread, version, ct);
+        if (sourceBytes is null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "У версии ещё нет изображения");
+
+        // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег на стороне бэкенда, чтобы маска
+        // (по bbox детекции) и исходник были в одной системе координат (той, что видит пользователь),
+        // независимо от того, как загрузчик узла/воркера трактует EXIF. facesKey — по сырым байтам (фронт
+        // считает его на исходнике), поэтому сверка facesKey идёт до нормализации.
+        var normalizedSource = NormalizeExif(sourceBytes);
+
+        // d. Детекция: кэш по нормализованным байтам, промах — детектор
+        var detector = faces ?? new Faces.FaceDetectionCache();
+        Func<Task<LocalFaceDetectResult>> detect = localMedia is null
+            ? () => Task.FromResult(new LocalFaceDetectResult(0, 0, [], "Детекция лиц здесь не поддерживается."))
+            : () => localMedia.DetectFacesAsync(normalizedSource, CancellationToken.None);
+        var result = await detector.GetOrDetectAsync(ownerId, normalizedSource, detect, ct);
+        if (result.Busy)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.Busy, "Видеокарта занята долгой задачей. Попробуйте чуть позже");
+        if (result.Error is not null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.ProviderUnavailable, result.Error);
+        // facesKey не совпал — 409 со свежим списком (та же сборка, что в 7a); сверка по сырым байтам
+        if (Faces.FaceDetectionCache.FacesKey(sourceBytes) != faceTarget.FacesKey)
+            return ImageEditCallResult<ImageEditJobInput>.Fail(ImageEditErrorCodes.FacesChanged, "Список лиц изменился",
+                ClaudeHomeServer.Services.ImageEditor.Controllers.ImageThreadFacesResponse.FromDetection(sourceBytes, result));
+
+        // e. Номер лица вне диапазона или лицо мелкое
+        var face = result.Faces.FirstOrDefault(f => f.N == faceTarget.Face);
+        if (face is null)
+            return Invalid($"Лицо {faceTarget.Face} не найдено: на картинке {result.Faces.Count} лиц");
+        if (face.Small)
+            return Invalid("Лицо слишком мелкое для подстановки персонажа");
+
+        // f. Маска: FaceMaskBuilder по bbox детекции
+        var maskBuilder = raster is null ? null : new FaceMaskBuilder(raster);
+        if (maskBuilder is null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена");
+        var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, faceTarget.Face);
+        if (maskResult.Png is null)
+        {
+            var code = maskResult.Reason switch
+            {
+                FaceMaskReason.TooClose => ImageEditErrorCodes.FacesTooClose,
+                FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
+                _ => ImageEditErrorCodes.InvalidRequest,
+            };
+            return Fail<ImageEditJobInput>(code, maskResult.Error ?? "Не удалось построить маску лица");
+        }
+
+        // g. Промпт: серверная константа + необязательное пожелание человека
+        var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, req.CharacterSlug!);
+        if (character is null)
+            return Invalid("Персонаж не найден");
+        var prompt = $"Лицо человека в выделенной области заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.";
+        if (!string.IsNullOrWhiteSpace(req.Prompt))
+            prompt += " " + req.Prompt!.Trim();
+
+        // h. Входы: Source = нормализованные байты версии (EXIF применён, тег обнулён), Mask = PNG,
+        // Op = Edit, образцы = только персонаж. Нормализация гарантирует, что маска (по bbox детекции)
+        // и исходник в одной системе координат — той, что видит пользователь
+        var source = new ImageBytes(normalizedSource, "image/png");
+        var mask = new ImageBytes(maskResult.Png, "image/png");
+        var references = new List<ReferenceImage>(character.Photos);
+
+        // i. LoRA — как у любого запуска с персонажем (CharacterStore.ForRequest уже проверил VisibleTo)
+        var characterRef = character.Ref;
+
+        // j. Запись в нить: FaceTarget { N, BBox, CharacterSlug }
+        var threadFaceTarget = new ImageThreadFaceTarget(faceTarget.Face, [face.X1, face.Y1, face.X2, face.Y2], req.CharacterSlug!);
+
+        return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
+            req.QuoteId!.Trim(),
+            prompt,
+            req.MarksJson,
+            source,
+            mask,
+            null,
+            references,
+            req.SourcePath,
+            characterRef,
+            MatchSourceSize: req.MatchSourceSize,
+            ChatSessionId: req.ThreadSessionId,
+            Initiator: req.Initiator,
+            BaseStepId: null,
+            AspectRatio: null,
+            ThreadId: req.ThreadId,
+            BaseVersionId: faceTarget.VersionId,
+            CharacterPicker: null,
+            FaceTarget: threadFaceTarget));
+    }
+
+    // Байты версии: текущий шаг (рабочая папка), у исходника — файл проекта. null — картинки нет
+    private async Task<byte[]?> VersionBytesAsync(string ownerId, ImageEditScope scope, ImageThread thread,
+        ImageThreadVersion version, CancellationToken ct)
+    {
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(ownerId, scope.Key, stepId) is { } found)
+            return found.Image.Bytes;
+        if (thread.File is { Length: > 0 } file && scope.Project is { } project)
+        {
+            var read = await ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            return read.Value?.Bytes;
+        }
+        return null;
+    }
+
+    // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег, чтобы маска (по bbox детекции)
+    // и исходник были в одной системе координат. Orientation 1 (или нет EXIF) — байты не трогаем.
+    // raster = null (подсистема images выключена) — исходные байты; маска всё равно не построится.
+    private byte[] NormalizeExif(byte[] image)
+    {
+        if (raster is null) return image;
+        var probe = raster.Probe(image);
+        if (probe is null || probe.Orientation <= 1) return image;
+        var outcome = raster.Apply(image, [], null);
+        return outcome.Image is { } img ? img.Bytes : image;
+    }
+
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
 
     // Картинка проекта по пути — единственное чтение с диска для запуска (образцы и файл нити
@@ -332,4 +493,7 @@ public sealed record ImageEditLaunchRequest(
     // Ревизия контекста чата, на которой человек видел цену (ADR-023 §Д2.1); null — запуск без контекста
     long? ContextRevision = null,
     // Явный список фото персонажа (имена файлов манифеста, порядок значим); null — подбор как обычно
-    IReadOnlyList<string>? CharacterPhotos = null);
+    IReadOnlyList<string>? CharacterPhotos = null,
+    // Подстановка персонажа на лицо (ADR-027, §4, этап 2): при наличии контекст чата игнорируется
+    // целиком, образцы — только персонаж, маска строится сервером
+    FaceTarget? FaceTarget = null);

@@ -38,7 +38,7 @@ public class ImageEditorController(
     IFeatureFlagGate? flags = null,
     CharacterPhotoLabeling? labeling = null,
     CharacterLoraRuns? loraRuns = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
+    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context, flags)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string projectId) =>
@@ -198,7 +198,7 @@ public class ImageEditorController(
     private const long MaxCharacterBodyBytes = 100L * 1024 * 1024;
 
     // Флаг «умного подбора фото» у владельца (ADR-027 §10): гейт меток в DTO и в PUT персонажа
-    private bool SmartPhotos => flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterSmartPhotos) == true;
+    private bool SmartPhotos => Flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterSmartPhotos) == true;
 
     [HttpGet("characters")]
     public IActionResult Characters(string projectId)

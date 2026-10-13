@@ -95,8 +95,9 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     }
 
     // preview_method=latent2rgb — ОБЯЗАТЕЛЬНО: без него TAEHV-превью под DynamicVRAM роняет
-    // процесс ComfyUI на H3 (README ноды), а процесс общий для всех
-    public async Task<ComfyQueued> QueuePromptAsync(JsonObject graph, CancellationToken ct)
+    // процесс ComfyUI на H3 (README ноды), а процесс общий для всех. front — в голову очереди
+    // (штатная возможность ComfyUI: ключ "front" в теле POST /prompt); при false ключа в теле нет
+    public async Task<ComfyQueued> QueuePromptAsync(JsonObject graph, CancellationToken ct, bool front = false)
     {
         var body = new JsonObject
         {
@@ -104,6 +105,7 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             ["client_id"] = ClientId,
             ["extra_data"] = new JsonObject { ["preview_method"] = "latent2rgb" },
         };
+        if (front) body["front"] = true;
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         var json = await SendJsonAsync(c => c.PostAsync("prompt", content, ct), "постановка задачи", ct);
         var id = json?["prompt_id"]?.GetValue<string>();

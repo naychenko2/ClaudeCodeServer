@@ -360,6 +360,126 @@ public class SkiaImageRasterTests
         gate.CurrentCount.Should().Be(1, "операция обязана вернуть слот");
     }
 
+    // ── RenderMask: маска из эллипсов с вычитанием прямоугольников ─────────────
+
+    // PNG нужного размера, непрозрачный (alpha=255 везде); центр эллипса белый, угол холста чёрный
+    [Fact]
+    public void RenderMask_размер_и_непрозрачность_центр_белый_угол_чёрный()
+    {
+        var png = _raster.RenderMask(10, 10, [new MaskEllipse(5, 5, 3, 3)], []);
+
+        using var b = SKBitmap.Decode(png);
+        (b.Width, b.Height).Should().Be((10, 10));
+        b.GetPixel(5, 5).Should().Be(new SKColor(255, 255, 255), "центр эллипса — белый");
+        b.GetPixel(0, 0).Should().Be(new SKColor(0, 0, 0), "угол холста — чёрный фон");
+        b.Pixels.Select(p => p.Alpha).Distinct().Should().Equal([255], "маска непрозрачная: alpha=255 везде");
+    }
+
+    // Вычитание: пиксель эллипса, попавший в excludeRect, — чёрный; пиксель эллипса вне прямоугольника — белый
+    [Fact]
+    public void RenderMask_вычитание_прямоугольника_закрашивает_чёрным()
+    {
+        // Эллипс (5,5) R=4: (x-5)²+(y-5)²≤16. (5,5) и (2,5) внутри; прямоугольник [4,4,6,6] кроит (5,5)
+        var png = _raster.RenderMask(10, 10, [new MaskEllipse(5, 5, 4, 4)], [new MaskRect(4, 4, 6, 6)]);
+
+        using var b = SKBitmap.Decode(png);
+        b.GetPixel(5, 5).Should().Be(new SKColor(0, 0, 0), "внутри эллипса и внутри прямоугольника — вычтено");
+        b.GetPixel(2, 5).Should().Be(new SKColor(255, 255, 255), "внутри эллипса, вне прямоугольника — белый");
+    }
+
+    // MaskRect как углы: X2/Y2 — исключающие границы, рисуется [X1,X2)×[Y1,Y2). Эллипс покрывает весь
+    // холст 64×64 (всё белое), прямоугольник (10,20,40,30) вычитает x∈[10,40), y∈[20,30). Старая
+    // перегрузка DrawRect(x,y,w,h) рисовала бы [10,50)×[20,50) — этот кейс её отличает: (40,29) и (39,30)
+    // были бы чёрными, а по семантике углов — белыми.
+    [Fact]
+    public void RenderMask_прямоугольник_как_углы_исключающие_границы()
+    {
+        var png = _raster.RenderMask(64, 64, [new MaskEllipse(32, 32, 32, 32)], [new MaskRect(10, 20, 40, 30)]);
+
+        using var b = SKBitmap.Decode(png);
+        b.GetPixel(10, 20).Should().Be(new SKColor(0, 0, 0), "левый верх прямоугольника — вычтено");
+        b.GetPixel(39, 29).Should().Be(new SKColor(0, 0, 0), "последний пиксель внутри [X1,X2)×[Y1,Y2) — вычтено");
+        b.GetPixel(40, 29).Should().Be(new SKColor(255, 255, 255), "x=X2 — уже вне, белый");
+        b.GetPixel(39, 30).Should().Be(new SKColor(255, 255, 255), "y=Y2 — уже вне, белый");
+    }
+
+    // Вырожденный прямоугольник (X2<=X1 или Y2<=Y1) — пустой, маску не меняет
+    [Fact]
+    public void RenderMask_вырожденный_прямоугольник_маску_не_меняет()
+    {
+        var full = _raster.RenderMask(10, 10, [new MaskEllipse(5, 5, 4, 4)], []);
+        var degenerate = _raster.RenderMask(10, 10, [new MaskEllipse(5, 5, 4, 4)],
+            [new MaskRect(4, 4, 4, 6), new MaskRect(2, 2, 6, 2)]);
+
+        using var a = SKBitmap.Decode(full);
+        using var b = SKBitmap.Decode(degenerate);
+        b.Pixels.Zip(a.Pixels).All(p => p.First == p.Second).Should().BeTrue(
+            "вырожденный прямоугольник (X2<=X1 или Y2<=Y1) ничего не вычитает");
+    }
+
+    // Эллипс, частично вылезающий за холст: без исключения, видимая часть белая
+    [Fact]
+    public void RenderMask_эллипс_за_границей_холста_обрезается_без_исключения()
+    {
+        // Центр (2,2) R=5: эллипс уходит за левый верх холста (x,y<0); видимая часть белая,
+        // дальний угол (9,9) на расстоянии √98≈9.9 > 5 — вне эллипса, чёрный
+        var png = _raster.RenderMask(10, 10, [new MaskEllipse(2, 2, 5, 5)], []);
+
+        using var b = SKBitmap.Decode(png);
+        (b.Width, b.Height).Should().Be((10, 10));
+        b.GetPixel(2, 2).Should().Be(new SKColor(255, 255, 255), "видимая часть эллипса — белая");
+        b.GetPixel(5, 5).Should().Be(new SKColor(255, 255, 255), "внутри эллипса, ближе к центру — белая");
+        b.GetPixel(9, 9).Should().Be(new SKColor(0, 0, 0), "дальний угол вне эллипса — чёрный");
+    }
+
+    // Два эллипса — оба белые
+    [Fact]
+    public void RenderMask_два_эллипса_оба_белые()
+    {
+        var png = _raster.RenderMask(12, 12,
+            [new MaskEllipse(3, 3, 2, 2), new MaskEllipse(9, 9, 2, 2)], []);
+
+        using var b = SKBitmap.Decode(png);
+        b.GetPixel(3, 3).Should().Be(new SKColor(255, 255, 255), "центр первого эллипса — белый");
+        b.GetPixel(9, 9).Should().Be(new SKColor(255, 255, 255), "центр второго эллипса — белый");
+        b.GetPixel(6, 6).Should().Be(new SKColor(0, 0, 0), "между эллипсами — чёрный фон");
+    }
+
+    // Пустой список эллипсов — вся маска чёрная
+    [Fact]
+    public void RenderMask_пустые_эллипсы_вся_маска_чёрная()
+    {
+        var png = _raster.RenderMask(8, 8, [], []);
+
+        using var b = SKBitmap.Decode(png);
+        b.Pixels.Select(p => (p.Red, p.Green, p.Blue)).Distinct().Should().Equal([(0, 0, 0)], "без эллипсов — только чёрный фон");
+    }
+
+    // Размер вне 1–MaxSide (включая верхнюю границу) — ArgumentOutOfRangeException
+    [Theory]
+    [InlineData(0, 10)]
+    [InlineData(10, 0)]
+    [InlineData(-1, 10)]
+    [InlineData(10, -1)]
+    [InlineData(20000, 10)]
+    [InlineData(10, 20000)]
+    public void RenderMask_размер_вне_1_до_MaxSide_исключение(int w, int h)
+    {
+        var act = () => _raster.RenderMask(w, h, [new MaskEllipse(5, 5, 3, 3)], []);
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    // Потолок мегапикселей: 16384×16384 проходит проверку стороны (== MaxSide), но даёт канву ~1 ГБ
+    [Fact]
+    public void RenderMask_размер_больше_потолка_мегапикселей_исключение()
+    {
+        var act = () => _raster.RenderMask(SkiaImageRaster.MaxSide, SkiaImageRaster.MaxSide,
+            [new MaskEllipse(8192, 8192, 10, 10)], []);
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
     // ── Сборка картинок ─────────────────────────────────────────────────────────
 
     private static readonly byte[] ExifHeader = Encoding.ASCII.GetBytes("Exif\0\0");

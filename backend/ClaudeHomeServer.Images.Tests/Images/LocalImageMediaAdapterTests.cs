@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using System.Text;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -559,5 +562,255 @@ public class LocalImageMediaAdapterTests
         var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
         graph.ContainsKey("mask").Should().BeFalse();
         graph.ContainsKey("overlay").Should().BeFalse();
+    }
+
+    // Маска сверх лимита входов → отказ до загрузки: в input ComfyUI ничего не легло
+    [Fact]
+    public async Task Маска_вне_маски_сверх_лимита_отказ_до_загрузки()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            KeepMask = new byte[LocalMediaService.MaxInputBytes + 1],
+        }, default);
+
+        submitted.Error.Should().Be($"Маска больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+        _comfy.Uploads.Should().BeEmpty("отказ случился до загрузки файлов");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Пустой массив маски = «маски нет»: обычная правка проходит, склейки в графе нет
+    [Fact]
+    public async Task Маска_вне_маски_пустой_массив_как_без_маски()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            KeepMask = [],
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph.ContainsKey("mask").Should().BeFalse();
+        graph.ContainsKey("overlay").Should().BeFalse();
+    }
+
+    // Детекция лиц (ADR-027, §4): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
+    // POST /prompt получает prompt-1, поэтому ответ кладём в историю заранее, без гонок
+    private void AnswerDetect(string text)
+    {
+        _comfy.History["prompt-1"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["status"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["status_str"] = "success",
+                ["completed"] = true,
+                ["messages"] = new System.Text.Json.Nodes.JsonArray(),
+            },
+            ["outputs"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["detect"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["text"] = new System.Text.Json.Nodes.JsonArray(text),
+                },
+            },
+        };
+    }
+
+    [Fact]
+    public async Task Детекция_два_лица_порядок_номера_и_флаг_мелкого()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[1,1,3,3],\"score\":0.9,\"small\":false},{\"bbox\":[4,4,6,6],\"score\":0.7,\"small\":true}]}");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Width.Should().Be(8);
+        result.Height.Should().Be(8);
+        result.Faces.Should().HaveCount(2);
+        result.Faces[0].Should().Be(new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false));
+        result.Faces[1].Should().Be(new LocalDetectedFace(2, 4, 4, 6, 6, 0.7, true));
+    }
+
+    [Fact]
+    public async Task Детекция_без_лиц_успех_с_пустыми_Faces_и_без_ошибки()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[]}");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Faces.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Детекция_error_узла_это_ошибка_а_не_лица_нет()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect=error");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().NotBeNullOrEmpty();
+        result.Faces.Should().BeEmpty();
+    }
+
+    // Битый JSON, нулевой/отрицательный размер, нечисловой и вырожденный bbox — «неожиданный
+    // ответ» (null), а не «лиц нет»: адаптер превратит null в Error
+    [Theory]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":")]
+    [InlineData("ccs_face_detect={\"width\":0,\"height\":8,\"faces\":[]}")]
+    [InlineData("ccs_face_detect={\"width\":-1,\"height\":8,\"faces\":[]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[3,3,1,1],\"score\":0.9,\"small\":false}]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[\"a\",1,3,3],\"score\":0.9,\"small\":false}]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[{\"bbox\":[1,1,3],\"score\":0.9,\"small\":false}]}")]
+    [InlineData("ccs_face_detect={\"width\":8,\"height\":8}")]
+    public void Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(string text)
+    {
+        LocalImageMediaAdapter.ParseFaces([text], LocalMediaTestImages.Png(8, 8)).Should().BeNull();
+    }
+
+    // EXIF-поворот: воркер (cv2) повернул JPEG, ImageDimensions — нет; размер не совпал → отказ
+    [Fact]
+    public async Task Детекция_размер_воркера_не_совпал_с_байтами_отказ_сопоставить()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":16,\"height\":8,\"faces\":[]}");
+
+        var result = await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().Be("Не удалось сопоставить лица с картинкой.");
+        result.Faces.Should().BeEmpty();
+    }
+
+    // EXIF Orientation 6 (iPhone): сырые байты 1312×640, воркер (cv2) поворачивает → 640×1312.
+    // Нормализация в DetectFacesAsync применяет EXIF и обнуляет тег → ImageDimensions.Read видит
+    // 640×1312, совпадает с воркером → детекция проходит, а не «Не удалось сопоставить»
+    [Fact]
+    public async Task Детекция_EXIF6_нормализация_поворачивает_и_детекция_проходит()
+    {
+        var image = JpegWithExif(1312, 640, orientation: 6);
+        AnswerDetect("ccs_face_detect={\"width\":640,\"height\":1312,\"faces\":[{\"bbox\":[10,10,100,100],\"score\":0.9,\"small\":false}]}");
+
+        var result = await Build(raster: new SkiaImageRaster()).DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Width.Should().Be(640);
+        result.Height.Should().Be(1312);
+        result.Faces.Should().HaveCount(1);
+    }
+
+    // EXIF Orientation 8 (iPhone, поворот в другую сторону): та же нормализация, детекция проходит
+    [Fact]
+    public async Task Детекция_EXIF8_нормализация_поворачивает_и_детекция_проходит()
+    {
+        var image = JpegWithExif(1312, 640, orientation: 8);
+        AnswerDetect("ccs_face_detect={\"width\":640,\"height\":1312,\"faces\":[]}");
+
+        var result = await Build(raster: new SkiaImageRaster()).DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Busy.Should().BeFalse();
+        result.Width.Should().Be(640);
+        result.Height.Should().Be(1312);
+    }
+
+    // Orientation 1 (без EXIF-поворота): нормализация no-op, детекция как раньше — регрессия
+    [Fact]
+    public async Task Детекция_Orientation1_без_EXIF_нормализация_noop_регрессия()
+    {
+        var image = JpegWithExif(800, 600, orientation: 1);
+        AnswerDetect("ccs_face_detect={\"width\":800,\"height\":600,\"faces\":[]}");
+
+        var result = await Build(raster: new SkiaImageRaster()).DetectFacesAsync(image, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Width.Should().Be(800);
+        result.Height.Should().Be(600);
+    }
+
+    // JPEG с EXIF Orientation: SkiaSharp кодирует bitmap → JPEG, вставляем APP1/EXIF после SOI
+    private static byte[] JpegWithExif(int width, int height, int orientation)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Gray);
+        canvas.Flush();
+        using var pixmap = bitmap.PeekPixels();
+        using var data = pixmap.Encode(new SKJpegEncoderOptions(90, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore));
+        var jpeg = data!.ToArray();
+
+        // TIFF little-endian: II + 00 2A + offset IFD0=8, 1 entry (Orientation)
+        // Tag 0x0112 — тот же, что в SkiaImageRasterTests.WithExif (SkiaSharp читает ориентацию оттуда)
+        var tiff = new List<byte> { (byte)'I', (byte)'I', 0x2A, 0x00, 8, 0, 0, 0 };
+        Le16(tiff, 1); // 1 entry
+        Le16(tiff, 0x0112); // tag Orientation (тот же, что в WithExif)
+        Le16(tiff, 3); // type SHORT
+        Le32(tiff, 1); // count
+        Le32(tiff, (uint)orientation); // value
+        Le32(tiff, 0); // next IFD offset = 0
+
+        var payload = "Exif\0\0"u8.ToArray().Concat(tiff).ToArray();
+        var length = payload.Length + 2;
+        var app1 = new byte[] { 0xFF, 0xE1, (byte)(length >> 8), (byte)length }.Concat(payload);
+        return jpeg.Take(2).Concat(app1).Concat(jpeg.Skip(2)).ToArray();
+
+        static void Le16(List<byte> b, int v) { b.Add((byte)v); b.Add((byte)(v >> 8)); }
+        static void Le32(List<byte> b, uint v) { for (var i = 0; i < 4; i++) b.Add((byte)(v >> (8 * i))); }
+    }
+
+    // Таймаут: потолок ожидания укорочен, история не появляется — Busy, а не исключение
+    [Fact]
+    public async Task Детекция_потолок_ожидания_это_Busy()
+    {
+        var adapter = Build();
+        adapter.FaceDetectTimeoutOverride = TimeSpan.FromMilliseconds(200);
+
+        var result = await adapter.DetectFacesAsync(LocalMediaTestImages.Png(8, 8), CancellationToken.None);
+
+        result.Busy.Should().BeTrue();
+    }
+
+    // Детекцию запускает человек — задача в голову очереди: ключ front в теле POST /prompt
+    [Fact]
+    public async Task Детекция_ставится_в_голову_очереди_front()
+    {
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[]}");
+
+        await Build().DetectFacesAsync(image, CancellationToken.None);
+
+        _comfy.Prompts.Should().ContainSingle();
+        _comfy.Prompts[0].ContainsKey("front").Should().BeTrue();
+        _comfy.Prompts[0]["front"]!.GetValue<bool>().Should().BeTrue();
+    }
+
+    // Вход — биометрия: имя {id}-detect.<ext> записано в стор на общую чистку
+    [Fact]
+    public async Task Детекция_вход_зарегистрирован_на_чистку()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "detect_" + Guid.NewGuid().ToString("N"));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tempDir, "data", "projects.json"),
+        }).Build();
+        var store = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaJobStore(config);
+        var adapter = Build(store: store);
+        var image = LocalMediaTestImages.Png(8, 8);
+        AnswerDetect("ccs_face_detect={\"width\":8,\"height\":8,\"faces\":[]}");
+
+        await adapter.DetectFacesAsync(image, CancellationToken.None);
+
+        _comfy.Uploads.Should().ContainSingle().Which.Should().StartWith("lm_").And.EndWith("-detect.png");
+        store.ListByOp(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaOps.EditorInputs)
+            .Should().ContainSingle().Subject.ComfyInputs.Should().Contain(u => u.EndsWith("-detect.png"));
+        ClaudeHomeServer.Tests.Helpers.TestFs.DeleteDirectoryResilient(tempDir);
     }
 }

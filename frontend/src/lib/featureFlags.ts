@@ -15,6 +15,8 @@ export const FLAGS = {
   spheres: 'spheres',
   // Умный подбор фото персонажа под сюжет (ADR-027): метки ракурса/эмоции, подбор, «Заменить».
   characterSmartPhotos: 'character-smart-photos',
+  // «Подставить персонажа» на лицо (этап 2): тап по лицу на картинке версии → выбор персонажа.
+  characterFaceSwap: 'character-face-swap',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

@@ -45,5 +45,6 @@ public interface IImageEditSaver
         string projectRoot, string? folder, string? fileName, string extension);
 }
 
-// Что запуск по ревизии знает о своей котировке: операция раскладывает входы, ревизия — сверка
-public sealed record ImageEditQuoteInfo(ImageEditOp Op, long? ContextRevision);
+// Что запуск по ревизии знает о своей котировке: операция раскладывает входы, ревизия — сверка,
+// Provider — ключ поставщика (для проверки «только local» при подстановке на лицо)
+public sealed record ImageEditQuoteInfo(ImageEditOp Op, long? ContextRevision, string? Provider = null);

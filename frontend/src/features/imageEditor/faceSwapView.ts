@@ -5,7 +5,7 @@
 import type { DetectedFace, FaceTarget, FacesResponse } from './api';
 import type { FaceSwapPhase } from './thread/faceSwap';
 
-// ── Тексты (Софья, дословно из макета character-face-swap-v1.html) ─────────────
+// ── Тексты (Софья, дословно из макетов character-face-swap-v1.html и v2-notes.md) ─
 export const FS_TEXT = {
   action: 'Подставить персонажа',
   search: 'Ищу лица на картинке…',
@@ -19,7 +19,7 @@ export const FS_TEXT = {
   over8: 'Показаны 8 самых крупных лиц',
   small: 'Лицо слишком мелкое — персонаж получится непохожим. Закрасьте его кистью или увеличьте картинку',
   close: 'Лица стоят слишком близко — закрасьте нужное кистью',
-  // face_out_of_frame (этап 2 · шаг 10d): тире, как у соседних (утверждено продактом)
+  // face_out_of_frame (этап 2 · шаг 10d): тире, как у соседных (утверждено продактом)
   outOfFrame: 'Лицо вне картинки — выберите другое лицо или закрасьте нужное кистью',
   busy: 'Видеокарта занята долгой задачей. Попробуйте чуть позже',
   provider: 'Подставлять персонажа можно только локальными моделями',
@@ -32,6 +32,55 @@ export const FS_TEXT = {
   go: 'Подставить',
   quote: 'бесплатно · ~1 мин',
   localOnce: 'Локальные модели · этот запуск',
+  // ── Этап 3 (ADR-028): назначения, лимит, отказы по номеру лица ──
+  // Заголовок выбора персонажа
+  pickFor: (n: number) => `Кто будет на лице ${n}?`,
+  // Плашка режима: лицо активно, не назначено
+  barPick: (n: number) => `Выберите персонажа для лица ${n}`,
+  // Плашка режима: лицо активно, уже назначено (переназначение)
+  barReassign: (n: number) => `Выберите другого персонажа для лица ${n} — или снимите назначение`,
+  // Плашка режима: одно назначение
+  barOne: 'Можно назначить ещё одно лицо — или подставить сразу',
+  // Плашка режима: два назначения
+  barTwo: 'Два лица назначены — можно подставлять',
+  // Заголовок секции назначений
+  asgTitle: 'Назначения',
+  // Счётчик назначений
+  asgMeta: (k: number) => `${k} из 2`,
+  // Пустое состояние списка назначений
+  asgEmpty: 'Пока никого не назначили. Нажмите на лицо на картинке',
+  // Слот после первого назначения
+  asgSlot: 'Нажмите на другое лицо, чтобы назначить второго персонажа',
+  // Строка активного неназначенного лица
+  asgPicking: 'выберите персонажа',
+  // Бейдж «Лицо n»
+  face: (n: number) => `Лицо ${n}`,
+  // aria-label кнопки ✕
+  removeAria: (n: number) => `Снять назначение с лица ${n}`,
+  // Занятый персонаж: строка в списке
+  takenOn: (n: number) => `Уже на лице ${n}`,
+  // Занятый персонаж: плитка мобилы
+  busyTile: (n: number) => `на лице ${n}`,
+  // Плашка лимита
+  limit: 'Не больше 2 лиц за раз. Снимите одно назначение, чтобы выбрать это лицо',
+  // Отказ: лицо слишком близко (по номеру)
+  closeN: (n: number) => `Лицо ${n} стоит слишком близко к соседнему — его не подставить`,
+  // Причина отказа «близко» в строке назначения
+  closeWhy: 'слишком близко к соседнему',
+  // Отказ: лицо вне кадра (по номеру)
+  outN: (n: number) => `Лицо ${n} выходит за край картинки — его не подставить`,
+  // Причина отказа «вне кадра» в строке назначения
+  outWhy: 'выходит за край картинки',
+  // Кнопка в плашке отказа: снять назначение
+  unassignN: (n: number) => `Снять назначение с лица ${n}`,
+  // 409 faces_changed: назначения сброшены
+  changed2: 'Картинка изменилась — лица найдены заново. Назначьте персонажей ещё раз',
+  // Кнопка при двух назначениях
+  go2: 'Подставить (2)',
+  // Чип котировки: два прохода
+  quote2: '2 прохода · бесплатно · ~2 мин',
+  // Подтверждение кисти при существующих назначениях
+  brushConfirm: 'Кисть работает с одним лицом — назначения сбросятся',
 } as const;
 
 // Подпись карточки запуска/версии: «{Имя} → лицо {n}»
@@ -99,10 +148,19 @@ export interface FaceSwapViewInput {
   facesChanged: boolean;
   // «Лиц нет» (состояние 2): «Подставить» активна, когда есть закрашенная область
   hasMask: boolean;
+  // Этап 3 (ADR-028): назначения «лицо → персонаж»; undefined — режим этапа 2
+  assignments?: FaceAssignments;
+  // Причина отказа ПОИСКА лиц (busy/provider_unavailable/…): плашка, пока не повторят поиск
+  searchFailure?: { code: string; text: string } | null;
 }
 
 export type NoticeTone = 'info' | 'warning' | 'danger';
-export interface NoticeSpec { tone: NoticeTone; icon: 'info' | 'alert' | 'clock' | 'cpu' | 'redo'; text: string; action?: { label: string; kind: 'ghostAccent' | 'secondary' } }
+export interface NoticeSpec {
+  tone: NoticeTone; icon: 'info' | 'alert' | 'clock' | 'cpu' | 'redo'; text: string;
+  action?: { label: string; kind: 'ghostAccent' | 'secondary' };
+  // Номера лиц, с которых плашка предлагает «Снять назначение с лица n» (этап 3)
+  unassign?: number[];
+}
 
 // Иконка плашки режима: search (спиннер) / clock (очередь) / scan (обычный шаг)
 export type BarIcon = 'search' | 'clock' | 'scan';
@@ -189,8 +247,9 @@ export function clearFaceChange(ui: FaceUi): FaceUi {
 // Чистое вычисление состояния экрана. canSubmit — по матрице макета: лицо и персонаж
 // выбраны, исполнитель — локальные (или переключены на этот запуск).
 export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
-  const { phase, faces, selectedFace, selectedCharacter, error, provider, localAvailable, useLocalOnce,
-    tappedSmall, over8, facesTooClose, faceOutOfFrame, busy, providerUnavailable, facesChanged, hasMask } = i;
+  const { phase, faces, selectedFace, error, provider, localAvailable, useLocalOnce,
+    tappedSmall, over8, facesTooClose, faceOutOfFrame, busy, providerUnavailable, facesChanged, hasMask,
+    assignments, searchFailure } = i;
 
   // Исполнитель запуска: локальные модели, либо переключены на этот запуск
   const local = useLocalOnce || provider === 'local';
@@ -206,6 +265,20 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
   } else if (phase === 'error') {
     barIcon = 'scan';
     bar = FS_TEXT.action;
+  } else if (assignments) {
+    // Этап 3: текст зависит от состояния назначений
+    barIcon = 'scan';
+    if (assignments.active != null) {
+      bar = assignments.assignments.has(assignments.active)
+        ? FS_TEXT.barReassign(assignments.active)
+        : FS_TEXT.barPick(assignments.active);
+    } else if (assignments.assignments.size === 0) {
+      bar = faces.length === 1 ? FS_TEXT.one : FS_TEXT.many;
+    } else if (assignments.assignments.size === 1) {
+      bar = FS_TEXT.barOne;
+    } else {
+      bar = FS_TEXT.barTwo;
+    }
   } else if (faces.length === 1) {
     barIcon = 'scan';
     bar = FS_TEXT.one;
@@ -225,17 +298,27 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     if (tappedSmall != null) {
       notices.push({ tone: 'warning', icon: 'alert', text: FS_TEXT.small, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
     }
-    if (facesTooClose) {
-      notices.push({ tone: 'danger', icon: 'alert', text: FS_TEXT.close, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
-    }
-    if (faceOutOfFrame) {
-      notices.push({ tone: 'danger', icon: 'alert', text: FS_TEXT.outOfFrame, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
+    // Этап 3: отказ ведёт к «Снять назначение с лица n». Сервер номер лица в теле не отдаёт,
+    // поэтому при одном назначении номер однозначен (текст по номеру), при двух — общий
+    // текст и кнопка снятия на каждое назначенное лицо
+    const asgFaces = assignments ? [...assignments.assignments.keys()].sort((a, b) => a - b) : [];
+    const refusal = (byN: (n: number) => string, general: string, legacy: string) => {
+      if (!assignments || asgFaces.length === 0) {
+        notices.push({ tone: 'danger', icon: 'alert', text: legacy, action: { label: FS_TEXT.brush, kind: 'ghostAccent' } });
+      } else {
+        notices.push({ tone: 'danger', icon: 'alert', text: asgFaces.length === 1 ? byN(asgFaces[0]) : general, unassign: asgFaces });
+      }
+    };
+    if (facesTooClose) refusal(FS_TEXT.closeN, FS_TEXT.close, FS_TEXT.close);
+    if (faceOutOfFrame) refusal(FS_TEXT.outN, FS_TEXT.outOfFrame, FS_TEXT.outOfFrame);
+    if (assignments?.limit != null) {
+      notices.push({ tone: 'warning', icon: 'alert', text: FS_TEXT.limit });
     }
     if (busy) {
       notices.push({ tone: 'danger', icon: 'clock', text: FS_TEXT.busy });
     }
     if (facesChanged) {
-      notices.push({ tone: 'info', icon: 'redo', text: FS_TEXT.changed });
+      notices.push({ tone: 'info', icon: 'redo', text: assignments ? FS_TEXT.changed2 : FS_TEXT.changed });
     }
     // provider_unavailable: локальные модели реально недоступны → нейтральная плашка
     // (действие «использовать локальные» не помогает). Независимо от localOk: кнопка
@@ -247,17 +330,33 @@ export function faceSwapView(i: FaceSwapViewInput): FaceSwapView {
     } else if (!localOk) {
       notices.push({ tone: 'warning', icon: 'cpu', text: FS_TEXT.provider, action: { label: FS_TEXT.useLocal, kind: 'secondary' } });
     }
+  } else if (phase === 'error' && searchFailure) {
+    // Отказ ПОИСКА лиц не «немой» (дефект приёмки Майи): busy — очередь, provider_unavailable — локальные недоступны
+    notices.push(searchFailure.code === 'busy'
+      ? { tone: 'info', icon: 'clock', text: searchFailure.text }
+      : searchFailure.code === 'provider_unavailable'
+        ? { tone: 'info', icon: 'cpu', text: searchFailure.text }
+        : { tone: 'danger', icon: 'alert', text: searchFailure.text });
   }
 
   // ── canSubmit: по матрице ──
-  // Лицо выбрано (или закрашено кистью, когда лиц нет) + персонаж + локальные модели
-  const faceReady = selectedFace != null || (faces.length === 0 && hasMask);
-  const canSubmit = phase === 'ready' && faceReady && selectedCharacter != null && localOk
+  // Этап 3: назначения ≥ 1 + локальные модели + нет отказов по текущему набору
+  // Этап 2 (без assignments): лицо выбрано + персонаж + локальные
+  const faceReady = assignments
+    ? assignments.assignments.size >= 1
+    : (selectedFace != null || (faces.length === 0 && hasMask)) && i.selectedCharacter != null;
+  const canSubmit = phase === 'ready' && faceReady && localOk
     // Отказ «близко» (7): неактивна, пока выбор не изменится
-    && !facesTooClose;
+    && !facesTooClose
+    // Этап 3: отказ «вне кадра» тоже блокирует (привязан к номеру лица)
+    && !faceOutOfFrame;
 
   // ── Список персонажей: доступен, когда есть к чему подставлять ──
-  const listEnabled = phase === 'ready' && (selectedFace != null || faces.length === 0);
+  // Этап 3: пикер виден, пока есть активное лицо; этап 2 — как раньше
+  const listEnabled = phase === 'ready' && (
+    assignments ? assignments.active != null
+                : selectedFace != null || faces.length === 0
+  );
 
   return { bar, barIcon, notices, canSubmit, listEnabled, localOnce: useLocalOnce && localOk };
 }
@@ -297,6 +396,17 @@ export const emptyAssignments: FaceAssignments = { assignments: new Map(), activ
 // Есть ли назначения — для будущего подтверждения кисти («Кисть работает с одним лицом —
 // назначения сбросятся», шаг 16)
 export const hasAssignments = (a: FaceAssignments): boolean => a.assignments.size > 0;
+
+// Отсечка при смене списка лиц (поиск заново, 409): назначения, active и limit на лица, которых
+// нет в новом списке, отбрасываются. Ничего не отброшено — возвращается тот же объект
+export function pruneAssignments(a: FaceAssignments, faces: readonly DetectedFace[]): FaceAssignments {
+  const has = (n: number | null) => n != null && faces.some(f => f.n === n);
+  const kept = new Map([...a.assignments].filter(([face]) => has(face)));
+  const active = has(a.active) ? a.active : null;
+  const limit = has(a.limit) ? a.limit : null;
+  if (kept.size === a.assignments.size && active === a.active && limit === a.limit) return a;
+  return { assignments: kept, active, limit };
+}
 
 // Персонаж, уже стоящий на ДРУГОМ лице, недоступен (занят): один персонаж — одно лицо.
 // Снятие назначения с того лица освобождает его.

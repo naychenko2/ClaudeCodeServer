@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { findFaces, facesError, type DetectedFace, type FacesResponse } from '../api';
 import {
-  assignCharacter, emptyAssignments, removeAssignment, searchFailureText, tapFace,
+  assignCharacter, emptyAssignments, pruneAssignments, removeAssignment, searchFailureText, tapFace,
   type FaceAssignments,
 } from '../faceSwapView';
 
@@ -79,6 +79,8 @@ export type FaceSwapAction =
   | { type: 'remove'; face: number }
   // Тап по лицу (активация / переназначение / лимит)
   | { type: 'tap'; face: number }
+  // Сбросить все назначения (кисть работает с одним лицом)
+  | { type: 'clearAssignments' }
   // Размонтирование хука: обнуляет requestSeq, чтобы висящий ответ не применился
   | { type: 'unmount' };
 
@@ -97,6 +99,8 @@ export function faceSwapReducer(s: FaceSwapState, a: FaceSwapAction): FaceSwapSt
         ...s, phase: 'ready', faces: a.response.faces, facesKey: a.response.facesKey,
         width: a.response.width, height: a.response.height, error: null, searchFailure: null,
         selectedFace: a.reset ? null : keep ? s.selectedFace : autoSelect(a.response.faces),
+        // Назначения на лица, которых нет в новом списке, отбрасываются (ревью шага 15)
+        assignments: pruneAssignments(s.assignments, a.response.faces),
       };
     }
     case 'searchError': {
@@ -123,6 +127,8 @@ export function faceSwapReducer(s: FaceSwapState, a: FaceSwapAction): FaceSwapSt
       return { ...s, assignments: removeAssignment(s.assignments, a.face) };
     case 'tap':
       return { ...s, assignments: tapFace(s.assignments, a.face, s.faces) };
+    case 'clearAssignments':
+      return { ...s, assignments: emptyAssignments };
     case 'unmount':
       return { ...s, requestSeq: 0 };
     default:
@@ -183,6 +189,7 @@ export function useFaceSwap(
   const assign = useCallback((face: number, slug: string) => dispatch({ type: 'assign', face, slug }), []);
   const remove = useCallback((face: number) => dispatch({ type: 'remove', face }), []);
   const tap = useCallback((face: number) => dispatch({ type: 'tap', face }), []);
+  const clearAssignments = useCallback(() => dispatch({ type: 'clearAssignments' }), []);
 
   return {
     state,
@@ -194,5 +201,6 @@ export function useFaceSwap(
     assign,
     remove,
     tap,
+    clearAssignments,
   };
 }

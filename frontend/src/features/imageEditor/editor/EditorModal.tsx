@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Download, Eye, Save } from 'lucide-react';
 import {
-  Button, Chip, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
+  Button, Chip, ConfirmDialog, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
 } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageTransformBase, type ImageTransformOp, type ImageEncodeSpec, type ImageEncodeFormat } from '../api';
 import { AdjustPanel } from '../AdjustPanel';
@@ -17,7 +17,7 @@ import { EditorCanvas } from '../EditorCanvas';
 import { FaceOverlay, FaceSearchScrim } from '../FaceOverlay';
 import { FaceSwapBar } from '../FaceSwapBar';
 import { FaceSwapPanel } from '../FaceSwapPanel';
-import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
+import { faceSwapView, launchFailure, clearFailures, clearFaceChange, parseFacesChangedBody, hasAssignments, faceTargetFromAssignments, FS_TEXT, type NoticeSpec, type FaceUi } from '../faceSwapView';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { isPersonalScope } from '../scope';
@@ -111,6 +111,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const faceProvider = resolveModel(catalog, editSettings).pv?.key ?? null;
   const faceSwap = useFaceSwap(projectId, sessionId, threadId, viewedVersionId, faceProvider);
   const [faceSwapMode, setFaceSwapMode] = useState(startTool === 'faceSwap');
+  // Подтверждение «Кисть работает с одним лицом — назначения сбросятся»
+  const [brushConfirm, setBrushConfirm] = useState(false);
   const { list: faceCharacters } = useCharacters(projectId);
   // Локальное состояние экрана: мелкое лицо (тап), отказы запуска, «локальные на этот запуск», запуск
   const [faceUi, setFaceUi] = useState<FaceUi>({
@@ -159,6 +161,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   const canSave = !!viewedStep && !transforming;
   // «Подставить персонажа»: состояние экрана (faceSwapView) — плашка, плашки, canSubmit, список
   const localAvailable = !!catalog && (catalog.providers.find(p => p.key === 'local')?.available ?? true);
+  // Этап 3: число проходов = число назначений (0, 1 или 2)
+  const facePasses = faceSwapMode ? faceSwap.state.assignments.assignments.size : 0;
   const faceView = faceSwapMode ? faceSwapView({
     phase: faceSwap.state.phase,
     faces: faceSwap.state.faces,
@@ -176,6 +180,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     providerUnavailable: faceUi.providerUnavailable,
     facesChanged: faceUi.facesChanged,
     hasMask: hasMaskMark(marks),
+    assignments: faceSwap.state.assignments,
+    searchFailure: faceSwap.state.searchFailure,
   }) : null;
 
   // Правка открытой не текущей версии: сначала она становится текущей
@@ -253,29 +259,25 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
       : faceSwap.state.phase === 'ready' && faceSwap.state.faces.length > 0
         ? <FaceOverlay
             faces={faceSwap.state.faces} width={faceSwap.state.width} height={faceSwap.state.height}
-            selectedFace={faceSwap.state.selectedFace} tappedSmall={faceUi.tappedSmall}
+            selectedFace={faceSwap.state.assignments.active} tappedSmall={faceUi.tappedSmall}
             errorFaces={faceUi.tooClose ? faceSwap.state.faces.map(f => f.n) : []}
             mobile={mobile}
             onSelect={n => {
               const f = faceSwap.state.faces.find(x => x.n === n);
               if (f?.small) setFaceUi(u => ({ ...u, tappedSmall: n }));
-              else { faceSwap.selectFace(n); setFaceUi(clearFaceChange); }
+              else { faceSwap.tap(n); setFaceUi(u => ({ ...clearFaceChange(u), tappedSmall: null })); }
             }} />
         : null
   ) : null;
 
-  // Запуск подстановки: тем же путём (quote + startJob), faceTarget с faces (ADR-028, этап 3)
+  // Запуск подстановки: тем же путём (quote + startJob), faceTarget из назначений (ADR-028, этап 3)
   const launchFaceSwapNow = async () => {
-    const ft = faceSwap.state.selectedFace;
-    const ch = faceSwap.state.selectedCharacter;
-    if (ft == null || !ch) return;
+    const target = faceTargetFromAssignments(faceSwap.state.assignments, viewedVersionId ?? '', faceSwap.state.facesKey ?? '');
+    if (!target) return;
     // Новый запуск: сброс ВСЕХ флагов отказов (иначе старый отказ висит поверх нового)
     setFaceUi(u => ({ ...clearFailures(u), submitting: true }));
     try {
-      const ok = await launchFaceSwap(projectId, sessionId, thread,
-        { versionId: viewedVersionId ?? '', facesKey: faceSwap.state.facesKey ?? '',
-          faces: [{ face: ft, characterSlug: ch }] },
-        viewedVersionId, dims);
+      const ok = await launchFaceSwap(projectId, sessionId, thread, target, viewedVersionId, dims);
       if (ok) setFaceSwapMode(false); // новая версия ляжет в ленту; режим закрывается
     } catch (e) {
       const err = e as { status?: number; body?: { code?: string; error?: string; facesKey?: string; faces?: unknown } } | null;
@@ -356,18 +358,22 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
     </div>
   );
 
-  // «Подставить персонажа»: панель выбора персонажа + подвал вместо обычного контента
+  // «Подставить персонажа»: панель назначений + подвал вместо обычного контента
+  // Выход в кисть: режим закрывается, кисть включается (назначения при этом уже сброшены/пусты)
+  const startBrush = () => { setFaceSwapMode(false); setTool('mask'); };
   const onFaceNoticeAction = (n: NoticeSpec) => {
     if (!n.action) return;
     if (n.action.kind === 'ghostAccent') {
-      // «Закрасить кистью»: выходим из режима, включаем кисть — человек закрашивает лицо сам
-      setFaceSwapMode(false);
-      setTool('mask');
+      // «Закрасить кистью»: при существующих назначениях — подтверждение (этап 3)
+      if (hasAssignments(faceSwap.state.assignments)) setBrushConfirm(true);
+      else startBrush();
     } else {
       // «Использовать локальные для этого запуска» (состояние 9): явное действие, тихой подмены нет
       setFaceUi(u => ({ ...u, useLocalOnce: true }));
     }
   };
+  // Чип котировки: N=1 — как в этапе 2, N=2 — «2 прохода · бесплатно · ~2 мин»
+  const faceQuote = facePasses >= 2 ? FS_TEXT.quote2 : facePasses >= 1 ? FS_TEXT.quote : null;
   const faceSide = faceSwapMode && faceView ? (
     <div style={{
       display: 'flex', flexDirection: 'column', width: mobile ? '100%' : 310, flexShrink: 0,
@@ -377,15 +383,21 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
       <FaceSwapPanel
         api={api} projectId={projectId}
         characters={faceCharacters ?? []}
-        selectedCharacter={faceSwap.state.selectedCharacter}
-        inContextSlug={prefs.characterSlug}
-        listEnabled={faceView.listEnabled}
+        assignments={faceSwap.state.assignments}
+        facePasses={facePasses > 0 ? facePasses : null}
         canSubmit={faceView.canSubmit}
-        quote={faceView.canSubmit ? FS_TEXT.quote : null}
+        quote={faceView.canSubmit ? faceQuote : null}
         localOnce={faceView.localOnce}
         submitting={faceUi.submitting}
         notices={faceView.notices}
-        onPick={slug => faceSwap.selectCharacter(slug)}
+        onPick={slug => {
+          const active = faceSwap.state.assignments.active;
+          if (active == null) return;
+          faceSwap.assign(active, slug);
+          setFaceUi(u => ({ ...clearFaceChange(u), tappedSmall: null }));
+        }}
+        onRemove={face => { faceSwap.remove(face); setFaceUi(clearFailures); }}
+        onTapFace={face => faceSwap.tap(face)}
         onNoticeAction={onFaceNoticeAction}
         onSubmit={() => { void launchFaceSwapNow(); }} />
     </div>
@@ -523,6 +535,11 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
               onEnter={() => { if (labelAt.text.trim()) { setMarks([...marks, { type: 'text', x: labelAt.x, y: labelAt.y, text: labelAt.text.trim() }]); setLabelAt(null); } }} />
           </Field>
         </Modal>
+      )}
+      {brushConfirm && (
+        <ConfirmDialog title={FS_TEXT.brushConfirm} confirmLabel={FS_TEXT.brush}
+          onCancel={() => setBrushConfirm(false)}
+          onConfirm={() => { setBrushConfirm(false); faceSwap.clearAssignments(); startBrush(); }} />
       )}
       {saveAs && !personal && (
         <SaveAsDialog projectId={projectId} sourcePath={thread.file}

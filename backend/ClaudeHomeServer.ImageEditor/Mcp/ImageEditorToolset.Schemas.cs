@@ -144,8 +144,8 @@ public sealed partial class ImageEditorToolset
                     ["type"] = "array",
                     ["minItems"] = 1,
                     ["maxItems"] = FaceTargetRules.MaxFacePasses,
-                    ["description"] = "Подставить разных персонажей на разные лица за один запуск; нельзя вместе с face/character; "
-                        + "один персонаж — одно лицо. Только для локальных моделей (provider local).",
+                    ["description"] = "До двух лиц за один запуск, каждому — свой персонаж: face из image_find_faces и character. "
+                        + "Нельзя вместе с face/character. Только для локальных моделей (provider local).",
                     ["items"] = Obj(new JsonObject
                     {
                         ["face"] = new JsonObject

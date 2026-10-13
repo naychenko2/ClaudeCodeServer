@@ -1634,6 +1634,94 @@ public class ImageEditorToolsetTests : IDisposable
         jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
     }
 
+    // faces + одиночный character (без face) → тот же отказ о несовместимости
+    [Fact]
+    public async Task faces_и_character_вместе_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
+
+        var args = FacesArg((1, slugA));
+        args["threadId"] = Thread();
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+        args["character"] = slugB;
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("либо faces, либо face");
+        jobs.LastQuoteRequest.Should().BeNull("до котировки не дошло");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
+    }
+
+    // Пустой faces → отказ про пустой массив, а не «Не больше 2 лиц за раз»
+    [Fact]
+    public async Task faces_пустой_отказ()
+    {
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
+
+        var args = FacesArg();
+        args["threadId"] = Thread();
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("faces пуст");
+        jobs.LastQuoteRequest.Should().BeNull("до котировки не дошло");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
+    }
+
+    // Элемент faces не-объект не выбрасывается молча (иначе ушло бы меньше лиц, чем просил агент)
+    [Fact]
+    public async Task faces_элемент_не_объект_отказ()
+    {
+        var slugA = CreateCharacter("Аня");
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
+
+        var args = FacesArg((1, slugA));
+        args["faces"]!.AsArray().Add(2);
+        args["threadId"] = Thread();
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("объект {face, character}");
+        jobs.LastQuoteRequest.Should().BeNull("до котировки не дошло");
+    }
+
+    // Порядок назначений — как у агента, не по номеру лица: (2 → Боря), (1 → Аня)
+    [Fact]
+    public async Task faces_порядок_назначений_как_в_аргументе()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia([
+                new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
+                new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false)]));
+
+        var args = FacesArg((2, slugB), (1, slugA));
+        args["threadId"] = Thread();
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        jobs.LastQuoteRequest.Should().NotBeNull();
+        jobs.LastQuoteRequest!.FaceTarget!.Faces.Select(f => (f.Face, f.CharacterSlug))
+            .Should().Equal((2, slugB), (1, slugA));
+        jobs.LastQuoteRequest!.CharacterSlug.Should().BeNull("персонаж — только в FaceTarget.Faces");
+    }
+
     // повтор персонажа → отказ
     [Fact]
     public async Task faces_повтор_персонажа_отказ()

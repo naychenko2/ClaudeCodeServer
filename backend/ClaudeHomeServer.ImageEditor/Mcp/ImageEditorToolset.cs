@@ -473,9 +473,15 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                 return Deny("Подстановка персонажей на лица — только в чате проекта");
             if (Str(args, "provider") is not "local")
                 return Deny("Подставлять персонажей можно только локальными моделями: укажи provider local");
+            // Пустой массив иначе дошёл бы до правил и получил бы «Не больше 2 лиц за раз» — не та причина
+            if (facesArray.Count == 0)
+                return Deny("faces пуст: укажите хотя бы одно лицо {face, character}");
             var assignments = new List<FaceAssignment>();
-            foreach (var item in facesArray.OfType<JsonObject>())
+            foreach (var node in facesArray)
             {
+                // Элемент не-объект не выбрасываем молча: иначе вызов ушёл бы с меньшим числом лиц
+                if (node is not JsonObject item)
+                    return Deny("Каждый элемент faces — объект {face, character}");
                 // Явный отказ до общего прогона правил: отсутствующий face или пустой/пробельный
                 // character (Str → null) иначе тихо проглатывались, и агент видел «Не больше 2 лиц
                 // за раз» вместо причины — «укажи персонажа» (как на одиночном пути)

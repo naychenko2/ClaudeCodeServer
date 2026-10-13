@@ -228,22 +228,27 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
         // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску-образец.
         // Только у Edit, вместе с KeepMask; прямоугольник — внутри холста, X/Y/Width/Height
-        // кратны 8 (узлы ImageCrop/CropMask), размер увеличения — кратно 16 (латент VAE)
+        // кратны 8, размер увеличения — кратно 16 (латент VAE). Кроп, прижатый к правому/нижнему
+        // краю холста, может быть некратен 8 по ширине/высоте: округление вниз срезало бы маску
+        // у края, а узлам ImageCrop/CropMask кратность не нужна (step: 1)
         if (request.Crop is { } crop)
         {
             if (request.Op != LocalImageOp.Edit || request.KeepMask is not { Length: > 0 })
                 return LocalImageSubmitted.Fail("Кроп вокруг цели — только для правки с возвратом исходника вне маски.");
             if (crop.Width <= 0 || crop.Height <= 0)
                 return LocalImageSubmitted.Fail("Размер кропа должен быть положительным.");
-            if (crop.X % 8 != 0 || crop.Y % 8 != 0 || crop.Width % 8 != 0 || crop.Height % 8 != 0)
-                return LocalImageSubmitted.Fail("Координаты и размер кропа должны быть кратны 8.");
-            if (crop.ScaledWidth % 16 != 0 || crop.ScaledHeight % 16 != 0)
-                return LocalImageSubmitted.Fail("Размер увеличения кропа должен быть кратно 16.");
             var canvasSize = ImageDimensions.Read(images[0]);
             if (canvasSize is null)
                 return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
+            var (canvasWidth, canvasHeight) = canvasSize.Value;
+            if (crop.X % 8 != 0 || crop.Y % 8 != 0
+                || (crop.Width % 8 != 0 && crop.X + crop.Width != canvasWidth)
+                || (crop.Height % 8 != 0 && crop.Y + crop.Height != canvasHeight))
+                return LocalImageSubmitted.Fail("Координаты и размер кропа должны быть кратны 8.");
+            if (crop.ScaledWidth % 16 != 0 || crop.ScaledHeight % 16 != 0)
+                return LocalImageSubmitted.Fail("Размер увеличения кропа должен быть кратно 16.");
             if (crop.X < 0 || crop.Y < 0
-                || crop.X + crop.Width > canvasSize.Value.Width || crop.Y + crop.Height > canvasSize.Value.Height)
+                || crop.X + crop.Width > canvasWidth || crop.Y + crop.Height > canvasHeight)
                 return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
         }
 

@@ -140,11 +140,12 @@ public class FaceMaskBuilderTests
     }
 
     // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + 64 px,
-    // обрезанная холстом; X, Y, Width, Height кратны 8 (адаптер проверяет кратность ДО очереди);
-    // кроп ⊇ рамка + 30 (обрезанная холстом); Scaled — вверх до ≈1 Мп, кратно 16.
-    // Параметризовано на 10+ реалистичных bbox: центр, углы, края, холст с шириной/высотой,
-    // не кратной 8 (1313×777) — для каждого: X/Y/Width/Height кратны 8, кроп внутри холста,
-    // кроп ⊇ рамка + 30 (с учётом обрезки по холсту)
+    // обрезанная холстом; X, Y кратны 8; Width, Height кратны 8 внутри холста, а прижатые к
+    // правому/нижнему краю — до самого края (адаптер проверяет то же ДО очереди); кроп покрывает
+    // всю маску и ⊇ рамка + 30 (обрезанная холстом); Scaled — вверх до ≈1 Мп, кратно 16.
+    // Параметризовано на реалистичных bbox: центр, углы, края, холсты с шириной/высотой,
+    // не кратной 8 (1313×777, 439×640). Живой прогон 13.10: округление вниз у края срезало
+    // маску — полоса старого лица 7 px при ширине 439 и 1 строка при высоте 777
     [Theory]
     // (canvasW, canvasH, x1, y1, x2, y2)
     [InlineData(1024, 768, 120, 90, 380, 350)]    // центр, пример из ревью: cropRight=383 → 383%8=7
@@ -159,6 +160,10 @@ public class FaceMaskBuilderTests
     [InlineData(800, 600, 0, 0, 50, 50)]          // лицо в самом углу (0,0)
     [InlineData(800, 600, 750, 550, 800, 600)]   // лицо в правом нижнем углу
     [InlineData(100, 100, 10, 10, 50, 50)]        // очень маленький холст
+    [InlineData(439, 640, 340, 250, 435, 380)]    // холст 439 (439%8=7), лицо у правого края
+    [InlineData(439, 640, 300, 520, 420, 636)]    // холст 439×640, правый нижний угол
+    [InlineData(1313, 777, 600, 690, 700, 775)]   // холст 1313×777, лицо у нижнего края
+    [InlineData(1313, 777, 1220, 300, 1310, 420)] // холст 1313×777, лицо у правого края
     public void Кроп_Геометрия_ВнутриХолста_Кратно8_ПокрываетМаску_СкалитсяДоМп(
         int canvasW, int canvasH, int x1, int y1, int x2, int y2)
     {
@@ -169,11 +174,12 @@ public class FaceMaskBuilderTests
         result.Crop.Should().NotBeNull();
         var crop = result.Crop!;
 
-        // X, Y, Width, Height кратны 8 (адаптер LocalImageMediaAdapter.cs:238 проверяет именно это)
+        // X, Y кратны 8; Width/Height кратны 8, если кроп не прижат к правому/нижнему краю
+        // (то же проверяет адаптер LocalImageMediaAdapter, раздел «Кроп вокруг цели»)
         (crop.X % 8).Should().Be(0, $"X={crop.X}");
         (crop.Y % 8).Should().Be(0, $"Y={crop.Y}");
-        (crop.Width % 8).Should().Be(0, $"Width={crop.Width}");
-        (crop.Height % 8).Should().Be(0, $"Height={crop.Height}");
+        if (crop.X + crop.Width != canvasW) (crop.Width % 8).Should().Be(0, $"Width={crop.Width}");
+        if (crop.Y + crop.Height != canvasH) (crop.Height % 8).Should().Be(0, $"Height={crop.Height}");
 
         // Кроп внутри холста
         crop.X.Should().BeGreaterOrEqualTo(0);
@@ -198,15 +204,16 @@ public class FaceMaskBuilderTests
             $"кроп ⊇ рамка({left},{top})−30");
         crop.Y.Should().BeLessOrEqualTo(Math.Max(0, top - FaceMaskBuilder.NeighborMarginPx),
             $"кроп ⊇ рамка({left},{top})−30");
-        // Правая/нижняя граница кропа ≥ рамка + 30, обрезанная холстом. У края холста, где
-        // отступ упирается в границу и холст не кратен 8, округление вниз даёт «рамка + сколько
-        // осталось до границы» — проверяем ≥ min(рамка+30, граница холста)
+        // Ни одного пикселя маски вне кропа: рамка маски (обрезанная холстом) целиком в кропе
+        crop.X.Should().BeLessOrEqualTo(left, "маска не срезана слева");
+        crop.Y.Should().BeLessOrEqualTo(top, "маска не срезана сверху");
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(right, $"маска не срезана справа (рамка до {right})");
+        (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(bottom, $"маска не срезана снизу (рамка до {bottom})");
+        // Правая/нижняя граница кропа ≥ рамка + 30, обрезанная холстом (у края — до самого края)
         (crop.X + crop.Width).Should().BeGreaterOrEqualTo(
-            Math.Min(canvasW, right + FaceMaskBuilder.NeighborMarginPx) - 7,
-            $"кроп ⊇ рамка+30 до {right} (−7 на округление холста)");
+            Math.Min(canvasW, right + FaceMaskBuilder.NeighborMarginPx), $"кроп ⊇ рамка+30 до {right}");
         (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(
-            Math.Min(canvasH, bottom + FaceMaskBuilder.NeighborMarginPx) - 7,
-            $"кроп ⊇ рамка+30 до {bottom} (−7 на округление холста)");
+            Math.Min(canvasH, bottom + FaceMaskBuilder.NeighborMarginPx), $"кроп ⊇ рамка+30 до {bottom}");
 
         // Scaled ≥ кропа, кратно 16; для мелкого кропа ≈1 Мп (ScaleUp округляет каждую ось
         // отдельно до 16, поэтому площадь может быть чуть ниже цели — проверяем ≥ 99.9 % цели)

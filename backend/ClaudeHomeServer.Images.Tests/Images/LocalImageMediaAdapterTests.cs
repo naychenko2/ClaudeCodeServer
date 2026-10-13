@@ -677,6 +677,49 @@ public class LocalImageMediaAdapterTests
         _comfy.Prompts.Should().BeEmpty();
     }
 
+    // Кроп у правого/нижнего края холста некратной ширины/высоты (холст 13×11): проходит проверку
+    // и доходит до графа с тем же прямоугольником — округление вниз срезало бы маску у края
+    // (живой прогон 13.10: полоса старого лица). Мутация «кратность 8 везде» → красный
+    [Fact]
+    public async Task Кроп_УКраяХолста_НеКратныйВосьми_доходитДоГрафа()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(13, 11)],
+            KeepMask = LocalMediaTestImages.Png(13, 11),
+            Crop = new LocalImageCrop(8, 8, 5, 3, 16, 16),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        var crop = graph["crop"]!["inputs"]!.AsObject();
+        crop["width"]!.GetValue<int>().Should().Be(5);
+        crop["height"]!.GetValue<int>().Should().Be(3);
+        var maskCrop = graph["mask_crop"]!["inputs"]!.AsObject();
+        maskCrop["width"]!.GetValue<int>().Should().Be(5);
+        maskCrop["height"]!.GetValue<int>().Should().Be(3);
+        graph["dec_fit"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(5);
+    }
+
+    // Внутри холста (не у края) некратная ширина по-прежнему отказ
+    [Fact]
+    public async Task Кроп_ВнутриХолста_НеКратнаяШирина_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(16, 8)],
+            KeepMask = LocalMediaTestImages.Png(16, 8),
+            Crop = new LocalImageCrop(0, 0, 12, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Координаты и размер кропа должны быть кратны 8.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
     // Валидный кроп: граф режет кроп из холста, увеличивает его, вклеивает результат в месте кропа
     [Fact]
     public async Task Кроп_Валидный_граф_режет_увеличивает_и_вклеивает()

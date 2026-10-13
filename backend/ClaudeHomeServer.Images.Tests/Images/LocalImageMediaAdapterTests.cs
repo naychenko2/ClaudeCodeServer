@@ -746,6 +746,54 @@ public class LocalImageMediaAdapterTests
         overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec_fit");
     }
 
+    // Д5 (ADR-028), сквозной путь сервера до адаптера: исходник 2400×1800 (больше лимита Qwen 1,8 Мп),
+    // лицо у правого края → FaceMaskBuilder (кроп по лимитам модели) → InputFitter (исходник с кропом
+    // не ужимается) → Compose → адаптер. Кроп внутри холста и на месте лица, адаптер не отказывает,
+    // граф уменьшает/увеличивает кроп ровно до Scaled. До правки фиттер ужимал холст до 1549×1161,
+    // а кроп оставался в пикселях 2400×1800 — «Кроп выходит за пределы холста»
+    [Fact]
+    public async Task Кроп_Исходник_2400x1800_ЛицоСправа_доходитДоГрафа()
+    {
+        var raster = new SkiaImageRaster();
+        var qwen = ImageEditCatalog.WithInputLimits(
+            new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage));
+        var face = new LocalDetectedFace(1, 2150, 700, 2390, 1000, 0.9, false);
+        var built = new FaceMaskBuilder(raster).Build(2400, 1800, [face], 1, qwen.Caps);
+        built.Error.Should().BeNull();
+        var mask = new ImageBytes(built.Png!, "image/png");
+        // Настоящий PNG: растр должен его распознать, иначе фиттер пропустит исходник как есть
+        using var bitmap = new SKBitmap(new SKImageInfo(2400, 1800, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        bitmap.Erase(SKColors.SteelBlue);
+        using var png = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+        var input = new ImageEditJobInput("q", "заменить лицо", null,
+            new ImageBytes(png.ToArray(), "image/png"), mask, null, [], "images/hero.png",
+            FaceCrop: built.Crop, KeepMask: mask);
+
+        var fitted = await new InputFitter(raster).FitAsync(input, qwen.Caps, default);
+        fitted.Value.Should().NotBeNull(fitted.Error);
+        var composed = EditRequestComposer.Compose(fitted.Value!.Input, ImageEditOp.Edit, qwen, 1);
+        composed.Value.Should().NotBeNull(composed.Error);
+        var request = composed.Value!;
+        var crop = request.FaceCrop!;
+
+        var submitted = await Build().SubmitAsync(Edit() with
+        {
+            Images = [request.Source!.Bytes],
+            KeepMask = request.KeepMask!.Bytes,
+            Crop = crop,
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var canvas = raster.Probe(request.Source.Bytes)!;
+        (canvas.Width, canvas.Height).Should().Be((2400, 1800), "холст не ужат");
+        crop.X.Should().BeLessOrEqualTo(face.X1, "кроп на месте лица");
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(face.X2).And.BeLessOrEqualTo(canvas.Width);
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["crop"]!["inputs"]!["x"]!.GetValue<int>().Should().Be(crop.X);
+        graph["crop_scale"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(crop.ScaledWidth);
+        graph["crop_scale"]!["inputs"]!["height"]!.GetValue<int>().Should().Be(crop.ScaledHeight);
+    }
+
     // (г) Вуаль: модель видит холст с серой вуалью (img1_veil), а не белую маску-образец;
     // склейка «вне маски — исходник» берёт ЧИСТЫЙ img1. Мутация «destination = veil» → красный
     [Fact]

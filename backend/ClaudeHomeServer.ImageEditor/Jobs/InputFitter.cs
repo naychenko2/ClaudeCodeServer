@@ -6,6 +6,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Автоуменьшение входа и возврат размера (ADR-018 §9, п. 3 и 4). Точка одна для всех запусков
 // (ручка, агент, быстрые действия), поэтому закрытый редактор ничего не меняет:
 // - исходник, размеченная копия и образцы ужимаются под лимиты модели (ImageEditCaps.MaxInput*);
+//   исключение — исходник с кропом лица (FaceCrop): его размер не меняется (ADR-028, Д5);
 // - маска приводится к размеру УЖЕ ужатого исходника методом nearest: она остаётся бинарной, а
 //   совпадение размеров (ADR-017 §3) держится после ужатия. Так же растягивается маска с
 //   телефона, снятая в разрешении предпросмотра;
@@ -31,7 +32,12 @@ public sealed class InputFitter(IImageRaster raster)
             return refs.Error is not null ? FailOutcome(refs.Error) : Ok(new FittedInput(input with { References = refs.List! }, null, null));
         }
 
-        var fittedSource = await FitImageAsync(source, probe, caps, ct);
+        // Подстановка на лицо (ADR-028, Д5): модель видит только кроп, а кроп посчитан в пикселях
+        // базовой версии (FaceMaskBuilder). Ужатие исходника сдвинуло бы его с лица, поэтому размер
+        // исходника не трогаем (маска и KeepMask остаются ему в размер), под лимит модели кроп
+        // приводит сам FaceMaskBuilder. Потолок веса (MaxInputMb) действует как прежде
+        var sourceCaps = input.FaceCrop is null ? caps : caps with { MaxInputSide = null, MaxInputMegapixels = null };
+        var fittedSource = await FitImageAsync(source, probe, sourceCaps, ct);
         if (fittedSource.Error is not null) return Fail(fittedSource);
         var fitted = fittedSource.Image!;
         var size = raster.Probe(fitted.Bytes);

@@ -376,7 +376,7 @@ public sealed class ImageEditLaunchAssembler(
                 return Invalid($"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц");
             if (face.Small)
                 return FaceFail(ImageEditErrorCodes.InvalidRequest, $"Лицо {assignment.Face} слишком мелкое для подстановки персонажа", assignment.Face);
-            var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, assignment.Face);
+            var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, assignment.Face, quote.InputCaps);
             if (maskResult.Png is null)
             {
                 var code = maskResult.Reason switch

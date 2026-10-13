@@ -213,7 +213,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
         _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ProjectId == projectId && q.ExpiresAt >= Now()
-            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider, q.FacePasses)
+            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider, q.FacePasses,
+                ImageEditCatalog.WithInputLimits(q.Model).Caps)
             : null;
 
     // Пропорции, которые человек выбрал явно в старом интерфейсе (поле aspectRatio запуска генерации), стоят выше

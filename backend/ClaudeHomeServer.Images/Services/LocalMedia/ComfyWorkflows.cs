@@ -140,8 +140,8 @@ public static partial class ComfyWorkflows
                 ["x"] = c.X,
                 ["y"] = c.Y,
             });
-            // Увеличение только вверх, до ScaledWidth×ScaledHeight (размер считает C#, кратно 16):
-            // на мелком кропе Qwen-Image рисует кашу, в натуральном размере первого холста — нет
+            // Масштаб до ScaledWidth×ScaledHeight (размер считает C#, кратно 16): мелкий кроп
+            // увеличивается — на нём Qwen-Image рисует кашу, крупнее лимита модели — уменьшается
             wf["crop_scale"] = Node("ImageScale", new JsonObject
             {
                 ["image"] = Link("crop"),

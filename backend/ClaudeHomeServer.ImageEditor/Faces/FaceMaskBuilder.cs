@@ -22,8 +22,8 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
     // Запас вокруг цели для кропа (ADR-028, решение 12): модель видит кроп, а не маску, поэтому
     // запас щедрый — лицо должно оказаться в центре кропа
     public const int CropMarginPx = 64;
-    // Целевая площадь увеличения кропа (≈1 Мп): мелкий кроп увеличивается до неё, крупный не
-    // уменьшается
+    // Целевая площадь увеличения кропа (≈1 Мп): мелкий кроп увеличивается до неё; крупный
+    // уменьшается, только если превышает лимит входа модели (Д5)
     public const long CropTargetPixels = 1_048_576;
 
     public const string FaceNotFound = "Такого лица нет на картинке.";
@@ -32,7 +32,11 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
 
     // Маска по целевому лицу: эллипс по его bbox, вычитание bbox всех остальных лиц
     // (расширенных на NeighborMarginPx). width/height <= 0 — баг вызывающего.
-    public FaceMaskResult Build(int width, int height, IReadOnlyList<LocalDetectedFace> faces, int targetN)
+    // inputLimits — лимиты входа модели (MaxInputSide/MaxInputMegapixels): модель видит только кроп,
+    // исходник при кропе не ужимается (InputFitter), поэтому размер кропа под лимит приводит здесь
+    // Scaled (Д5); null — лимитов нет, кроп только увеличивается
+    public FaceMaskResult Build(int width, int height, IReadOnlyList<LocalDetectedFace> faces, int targetN,
+        ImageEditCaps? inputLimits = null)
     {
         if (width <= 0 || height <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), "Размер холста должен быть положительным");
@@ -49,16 +53,16 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         if (s == 0) return new FaceMaskResult(null, FaceOutsideImage, FaceMaskReason.OutOfFrame);
         if (sPrime < MinRemainingShare * s) return new FaceMaskResult(null, FacesTooClose, FaceMaskReason.TooClose);
 
-        var crop = ComputeCrop(width, height, ellipse);
+        var crop = ComputeCrop(width, height, ellipse, inputLimits);
         return new FaceMaskResult(raster.RenderMask(width, height, [ellipse], excludeRects), null, Crop: crop);
     }
 
     // Кроп вокруг цели (ADR-028, решение 12): рамка ненулевой части маски (эллипс) + CropMarginPx
     // с каждой стороны, обрезанная холстом; X, Y вниз на 8; Width/Height так, чтобы кроп ⊇ рамка
     // маски + NeighborMarginPx, обрезанная холстом (иначе мягкий шов — GrowMask 8 + размытие ≈ 23 px —
-    // будет срезан); Scaled — только вверх до CropTargetPixels, кратно 16, пропорции кропа
-    // сохраняются; кроп уже ≥ цели не уменьшается
-    private static LocalImageCrop ComputeCrop(int width, int height, MaskEllipse e)
+    // будет срезан); Scaled — вверх до CropTargetPixels, кратно 16, пропорции кропа сохраняются;
+    // вниз — только до лимита входа модели, если Scaled его превышает
+    private static LocalImageCrop ComputeCrop(int width, int height, MaskEllipse e, ImageEditCaps? inputLimits)
     {
         // Рамка ненулевой части маски (эллипс), обрезанная холстом
         var left = Math.Max(0, (int)Math.Floor(e.Cx - e.Rx));
@@ -86,10 +90,21 @@ public sealed class FaceMaskBuilder(IImageRaster raster)
         var cropWidth = cropRight8 - x;
         var cropHeight = cropBottom8 - y;
 
-        // Scaled: только вверх до CropTargetPixels, кратно 16, пропорции сохраняются
-        var (scaledWidth, scaledHeight) = ScaleUp(cropWidth, cropHeight);
+        // Scaled: вверх до CropTargetPixels, кратно 16; больше лимита модели — вниз до лимита
+        var (scaledWidth, scaledHeight) = FitToLimits(ScaleUp(cropWidth, cropHeight), inputLimits);
         return new LocalImageCrop(x, y, cropWidth, cropHeight, scaledWidth, scaledHeight);
     }
+
+    // Уменьшение до лимита входа модели (Д5): тот же расчёт размера, что ужатие исходника
+    // (InputFitter.TargetSize), затем вниз до кратного 16 — после округления лимит не превышен
+    private static (int Width, int Height) FitToLimits((int Width, int Height) scaled, ImageEditCaps? inputLimits)
+    {
+        if (inputLimits is null || InputFitter.TargetSize(scaled.Width, scaled.Height, inputLimits) is not { } t)
+            return scaled;
+        return (RoundDown16(t.Width), RoundDown16(t.Height));
+    }
+
+    private static int RoundDown16(int v) => Math.Max(16, v / 16 * 16);
 
     // Увеличение кропа: кратно 16, пропорции сохраняются; до CropTargetPixels включительно,
     // если кроп уже ≥ цели — его размер (округлённый вверх до 16), не уменьшаем

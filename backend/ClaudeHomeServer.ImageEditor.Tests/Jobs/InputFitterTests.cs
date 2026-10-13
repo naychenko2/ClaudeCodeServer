@@ -148,6 +148,69 @@ public class InputFitterTests : IDisposable
         _raster.Probe(service.OpenVariant("u", Project, job.JobId, 1)!.Bytes)!.Width.Should().Be(512);
     }
 
+    // Боевая модель подстановки на лицо с курируемыми лимитами входа (1664 px, 1,8 Мп)
+    private static readonly ImageEditModelInfo Qwen = ImageEditCatalog.WithInputLimits(
+        new LocalImageEditor(null).Models.Single(m => m.Id == LocalImageEditor.QwenImage));
+
+    // Д5 (ADR-028): кроп лица посчитан в пикселях базовой версии, поэтому исходник 2400×1800 (4,3 Мп,
+    // больше лимита модели) с кропом не ужимается; маска и KeepMask остаются ему в размер, кроп —
+    // внутри холста и на месте лица, Compose проходит. Мутация «ужимать и при FaceCrop» → красный
+    [Theory]
+    [InlineData(2150, 700, 2390, 1000)] // лицо у правого края: после ужатия кроп ушёл бы за холст
+    [InlineData(10, 700, 250, 1000)]    // лицо у левого края: после ужатия кроп молча съехал бы с лица
+    public async Task Кроп_лица_исходник_2400x1800_не_ужимается_маски_в_размер_Compose_проходит(
+        int x1, int y1, int x2, int y2)
+    {
+        var built = new FaceMaskBuilder(_raster).Build(2400, 1800,
+            [new LocalDetectedFace(1, x1, y1, x2, y2, 0.9, false)], 1, Qwen.Caps);
+        built.Error.Should().BeNull();
+        var mask = new ImageBytes(built.Png!, "image/png");
+        var crop = built.Crop!;
+        var input = Input(Png(2400, 1800, SKColors.SteelBlue)) with { Mask = mask, KeepMask = mask, FaceCrop = crop };
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!.Input;
+        var source = _raster.Probe(fitted.Source!.Bytes)!;
+        (source.Width, source.Height).Should().Be((2400, 1800), "исходник с кропом лица не ужимается");
+        fitted.Mask!.Bytes.Should().Equal(mask.Bytes, "маска прежняя");
+        var keep = _raster.Probe(fitted.KeepMask!.Bytes)!;
+        (keep.Width, keep.Height).Should().Be((source.Width, source.Height), "KeepMask в размер исходника");
+        var fittedMask = _raster.Probe(fitted.Mask.Bytes)!;
+        (fittedMask.Width, fittedMask.Height).Should().Be((source.Width, source.Height));
+
+        // Кроп внутри холста и на месте лица — те же проверки, что у адаптера
+        fitted.FaceCrop.Should().Be(crop);
+        (crop.X + crop.Width).Should().BeLessOrEqualTo(source.Width);
+        (crop.Y + crop.Height).Should().BeLessOrEqualTo(source.Height);
+        crop.X.Should().BeLessOrEqualTo(x1);
+        crop.Y.Should().BeLessOrEqualTo(y1);
+        (crop.X + crop.Width).Should().BeGreaterOrEqualTo(x2);
+        (crop.Y + crop.Height).Should().BeGreaterOrEqualTo(y2);
+
+        var composed = EditRequestComposer.Compose(fitted, ImageEditOp.Edit, Qwen, 1);
+        composed.Value.Should().NotBeNull(composed.Error);
+        composed.Value!.FaceCrop.Should().Be(crop);
+    }
+
+    // Регрессия: без кропа лица тот же исходник 2400×1800 ужимается под лимит модели, маска — следом
+    [Fact]
+    public async Task Без_кропа_лица_исходник_2400x1800_ужимается_как_раньше()
+    {
+        var input = Input(Png(2400, 1800, SKColors.SteelBlue), mask: StripedMask(2400, 1800));
+
+        var result = await new InputFitter(_raster).FitAsync(input, Qwen.Caps, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var fitted = result.Value!.Input;
+        var source = _raster.Probe(fitted.Source!.Bytes)!;
+        // 1,8 Мп: масштаб √(1,8e6 / 4,32e6) ≈ 0,6455 → 1549×1161
+        (source.Width, source.Height).Should().Be((1549, 1161));
+        var mask = _raster.Probe(fitted.Mask!.Bytes)!;
+        (mask.Width, mask.Height).Should().Be((source.Width, source.Height));
+    }
+
     [Fact]
     public void Каталог_отдаёт_курируемые_лимиты_входа()
     {

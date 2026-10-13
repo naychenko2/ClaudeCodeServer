@@ -195,6 +195,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         public List<QueuedMessage>? ExpiredOnRestore;
         // Очередь поднята с диска — чат кандидат на автодренаж после старта.
         public bool PendingRestored;
+        // Делегированность ПРОГОНА: глубина и «ход доклада» подач, чьи фоновые агенты ещё
+        // живы. Признак хода у адаптера гаснет вместе с _turnLock, а фоновые агенты
+        // делегированного хода (Agent run_in_background, Workflow) живут после result и ходят
+        // в MCP с заголовком этого чата — по признаку хода они выглядели бы человеком. Поэтому
+        // гейт берёт максимум из хода и прогона. Снимается, что раньше: подачей человека или
+        // когда у прогона не осталось живых фоновых агентов (ILlmSessionAdapter.HasLiveBgAgents);
+        // без фоновых действует ровно ход. Адаптера нет — живость не узнать, признак держится
+        // (fail-closed). SubmitDelegation — собственный признак последней подачи: пока её ход
+        // в полёте, он делегирован и тогда, когда адаптер ещё не взвёл свой признак.
+        // Под PendingLock: читают его потоки MCP-вызовов.
+        public TurnDelegationState RunDelegation;
+        public TurnDelegationState SubmitDelegation;
         // Прогон, в котором идёт сворачивание контекста (/compact). Обычный ход, но обёртка
         // фолбэка его не оркеструет, а exited убитой компакции глотает — поэтому прерывать
         // компакцию нельзя (чат залип бы в Working навсегда). Хранится идентификатор прогона,
@@ -3513,12 +3525,57 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Session.OwnerId равен null, владелец живёт у проекта. Прямое сравнение с этим полем молча
     // отключало запрет, и делегированный ход спокойно запускал исполнителя — поймано live-тестом,
     // юнит-тесты такое не видят. Один способ резолва владельца на весь класс.
-    public TurnDelegationState GetActiveTurnDelegation(string sessionId, string ownerId) =>
-        GetOwned(sessionId, ownerId) is not null
-            && _sessions.TryGetValue(sessionId, out var entry)
-            && entry.Process is { } adapter
-            ? new TurnDelegationState(adapter.CurrentTurnAgentDepth, adapter.CurrentTurnSuppressTasksExecute)
-            : new TurnDelegationState(0, false);
+    // Признак хода складывается с делегированностью прогона (SessionEntry.RunDelegation):
+    // фоновый агент делегированного хода после его result остаётся делегированным, пока он
+    // жив и пока не подаст ход человек. RunOnly — делегированность держится только прогоном, а
+    // текущий ход сам по себе глубины 0 (на этой «липкой» части разрешён отчёт наверх).
+    public TurnDelegationState GetActiveTurnDelegation(string sessionId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
+            return new TurnDelegationState(0, false);
+        var adapter = entry.Process;
+        // Ход в полёте (подан и не дошёл до терминала): его собственный признак — от подачи
+        var inFlight = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting;
+        TurnDelegationState run, submit;
+        lock (entry.PendingLock)
+        {
+            if (!inFlight && entry.RunDelegation != default && !RunAgentsAlive(adapter))
+                entry.RunDelegation = entry.SubmitDelegation = default;
+            run = entry.RunDelegation;
+            submit = inFlight ? entry.SubmitDelegation : default;
+        }
+        var own = new TurnDelegationState(
+            Math.Max(adapter?.CurrentTurnAgentDepth ?? 0, submit.AgentDepth),
+            (adapter?.CurrentTurnSuppressTasksExecute ?? false) || submit.ExecutorSuppressed);
+        return new TurnDelegationState(Math.Max(own.AgentDepth, run.AgentDepth),
+            own.ExecutorSuppressed || run.ExecutorSuppressed,
+            RunOnly: own.AgentDepth == 0 && run.AgentDepth >= 1);
+    }
+
+    // Живы ли фоновые агенты прогона. Адаптера нет — узнать нечем: считаем живыми (fail-closed)
+    private static bool RunAgentsAlive(ILlmSessionAdapter? adapter) => adapter is null || adapter.HasLiveBgAgents;
+
+    // Подача хода в процесс отмечает делегированность прогона ДО передачи адаптеру: фоновые
+    // агенты этого хода не должны застать окно, где он ещё «человеческий». Подача человека
+    // (не авто, не директива, глубина 0, не доклад) прогон сбрасывает — с неё начинается
+    // новая ответственность. Любая другая подача добавляет свой признак к прогону, если у
+    // того ещё живы фоновые агенты (авто-ход глубины 0 их делегированность не обнуляет), а
+    // без живых агентов прошлое забывается — действует только признак этой подачи.
+    private static void NoteRunDelegation(SessionEntry entry, int agentDepth, bool suppressTasksExecute,
+        bool fromHuman)
+    {
+        var human = fromHuman && agentDepth == 0 && !suppressTasksExecute;
+        var keep = !human && RunAgentsAlive(entry.Process);
+        lock (entry.PendingLock)
+        {
+            var prev = keep ? entry.RunDelegation : default;
+            entry.SubmitDelegation = human ? default : new TurnDelegationState(agentDepth, suppressTasksExecute);
+            entry.RunDelegation = human
+                ? default
+                : new TurnDelegationState(Math.Max(prev.AgentDepth, agentDepth),
+                    prev.ExecutorSuppressed || suppressTasksExecute);
+        }
+    }
 
     // Активен ли цикл «до готово» в чате-вызывателе: гейт анти-рекурсии (DelegatedTurnGate.Decide)
     // спрашивает это, чтобы разрешить ход-реакцию на доклад при активном цикле (единственная точка,
@@ -5153,6 +5210,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // не адресован (MINOR B-п.5) — в карточке остаётся то, что он видел последним.
         if (!systemDirective)
             entry.Info.LastMessage = ChatPreview(text);
+        NoteRunDelegation(entry, agentDepth, suppressTasksExecute, fromHuman: !auto && !systemDirective);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
@@ -5555,6 +5613,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
         // Превью чата — сообщением агента: адаптер его больше не выставляет (см. ChatPreview)
         entry.Info.LastMessage = ChatPreview(text);
+        NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -6075,6 +6134,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
                     senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
             else
+                // Глубина сообщения едет в ход: агентское из очереди так же делегированное,
+                // как поданное сразу (иначе chats_send, отстоявший очередь, получил бы
+                // возможности хода человека)
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,

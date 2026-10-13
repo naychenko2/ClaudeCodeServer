@@ -60,6 +60,12 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public int AllowedDepth { get; init; }
 
+    /// <summary>
+    /// Разрешить на «липкой» части делегированности: текущий ход глубины 0, а делегированным
+    /// чат держат только живые фоновые агенты прошлого делегированного хода (отчёт наверх).
+    /// </summary>
+    public bool AllowOnStickyRun { get; init; }
+
     // Цикл «До готово» (work-loop) больше НЕ имеет квоты запусков: квота дырявилась вместе
     // с двумя лимитами по 20 и заменена инкрементом Iteration на возврате waiting→working в
     // ContinueWorkLoopAsync (SessionManager.cs). Запуск из обычного чата с включённым циклом
@@ -84,7 +90,7 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
             http.User.FindFirstValue(JwtRegisteredClaimNames.Sub),
             http.Request.Headers[CallerHeader].FirstOrDefault(),
             action, AlsoWhenExecutorSuppressed, AllowInTeamImplement,
-            allowedDepth: AllowedDepth);
+            allowedDepth: AllowedDepth, allowOnStickyRun: AllowOnStickyRun);
         if (decision.Allowed)
         {
             // Списанную квоту запоминаем для возврата в OnActionExecuted при неудаче
@@ -165,7 +171,8 @@ internal static class DelegatedTurnGate
         string action, bool alsoWhenExecutorSuppressed,
         bool allowInTeamImplement,
         bool failOpenWhenUnknown = true,
-        int allowedDepth = 0)
+        int allowedDepth = 0,
+        bool allowOnStickyRun = false)
     {
         if (string.IsNullOrEmpty(callerSessionId) || sessions is null || string.IsNullOrEmpty(ownerId))
             return failOpenWhenUnknown
@@ -181,8 +188,12 @@ internal static class DelegatedTurnGate
         // allowedDepth: допустимая глубина хода. По умолчанию 0 (прежнее поведение: любой
         // делегированный ход, depth >= 1, запрещён). Запуск исполнителя задачи передаёт
         // McpEndpoints.RunExecutorAllowedDepth (1): на глубине 1 запуск разрешён, на 2+ —
-        // анти-рекурсия. Ход «делегированный» только когда глубина ПРевышает потолок.
-        var delegated = turn.AgentDepth > allowedDepth;
+        // анти-рекурсия. Ход «делегированный» только когда глубина ПРЕВЫШАЕТ потолок.
+        // allowOnStickyRun — действие разрешено, когда делегированность держится лишь живыми
+        // фоновыми агентами прошлого делегированного хода, а текущий ход — глубины 0 (отчёт
+        // наверх: человек или авто-ход вправе доложить постановщику). На самом делегированном
+        // ходу — запрет, как раньше.
+        var delegated = turn.AgentDepth > allowedDepth && !(allowOnStickyRun && turn.RunOnly);
 
         // Квота вместо запрета — на ЛЮБОМ неделегированном ходу штаба, а не только на
         // реакционном: обычный ход координатора запускает исполнителей той же кнопкой, и

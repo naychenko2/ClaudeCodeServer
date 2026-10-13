@@ -615,11 +615,13 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (quote.Value is not { } q)
             return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct, face: true);
 
+        // Персонаж — только в FaceTarget.Faces: верхний CharacterSlug не едет, иначе
+        // StartIn отвергнет запуск как «персонаж задаётся в faceTarget.faces»
         var request = new ImageEditLaunchRequest(
             q.QuoteId, prompt, MarksJson: null, thread.File, source, Mask: null, Annotated: null,
             Uploaded: [],
             ReferencePaths: [],
-            character,
+            null,
             MatchSourceSize: true,
             BaseStepId: baseStepId,
             Initiator: ImageEditInitiator.Agent,

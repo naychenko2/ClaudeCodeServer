@@ -83,8 +83,9 @@ public record ImageEditQuoteRequest(
     ClaudeHomeServer.Services.Media.MediaFormat? Format = null,
     // Заполняет сервер перед обращением к драйверу котировки; из тела запроса игнорируется
     ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null,
-    // Подстановка персонажа на лицо (ADR-028, этап 2): при наличии — запуск считает как
-    // обычную локальную правку (бесплатно, ETA правки); персонаж обязателен
+    // Подстановка персонажа на лицо (ADR-028, этап 3): при наличии — запуск считает как
+    // обычную локальную правку (бесплатно, ETA правки). Персонаж задаётся внутри FaceTarget.Faces;
+    // верхний CharacterSlug при FaceTarget не требуется — прислан вместе с FaceTarget, это двусмысленный вход
     FaceTarget? FaceTarget = null,
     string? CharacterSlug = null);
 

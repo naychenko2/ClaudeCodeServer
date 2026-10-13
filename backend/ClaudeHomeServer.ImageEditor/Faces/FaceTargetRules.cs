@@ -20,7 +20,7 @@ public static class FaceTargetRules
 
     // Правила:
     //   1 ≤ Faces.Count ≤ MaxFacePasses, иначе «Не больше 2 лиц за раз»;
-    //   номер лица ≥ 1 и не повторяется, иначе «Лицо N указано дважды»;
+    //   номер лица ≥ 1 («Номер лица должен быть не меньше 1») и не повторяется («Лицо N указано дважды»);
     //   персонаж (слаг) не пустой и не повторяется (В3), иначе
     //   «Каждому лицу — свой персонаж: «{slug}» уже стоит на лице {n}».
     public static Result Validate(FaceTarget target)
@@ -36,7 +36,7 @@ public static class FaceTargetRules
         foreach (var fa in faces)
         {
             if (fa.Face < 1)
-                return Result.Fail(ImageEditErrorCodes.InvalidRequest, $"Лицо {fa.Face} указано дважды");
+                return Result.Fail(ImageEditErrorCodes.InvalidRequest, "Номер лица должен быть не меньше 1");
             if (!seenFaces.Add(fa.Face))
                 return Result.Fail(ImageEditErrorCodes.InvalidRequest, $"Лицо {fa.Face} указано дважды");
         }

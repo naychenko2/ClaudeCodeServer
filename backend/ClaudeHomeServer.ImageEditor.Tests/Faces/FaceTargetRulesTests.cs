@@ -97,6 +97,17 @@ public class FaceTargetRulesTests
 
         result.Ok.Should().BeFalse();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
-        result.Error.Should().Be("Лицо 0 указано дважды");
+        result.Error.Should().Be("Номер лица должен быть не меньше 1");
+    }
+
+    [Fact]
+    public void Номер_лица_отрицательный_отказ()
+    {
+        var result = FaceTargetRules.Validate(
+            Target((-1, "maria")));
+
+        result.Ok.Should().BeFalse();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        result.Error.Should().Be("Номер лица должен быть не меньше 1");
     }
 }

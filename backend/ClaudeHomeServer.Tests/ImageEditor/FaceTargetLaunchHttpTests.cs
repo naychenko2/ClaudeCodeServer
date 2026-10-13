@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -119,13 +120,34 @@ public class FaceTargetLaunchHttpTests : IDisposable
     private string FaceTargetJson(string facesKey, int face = 1, string characterSlug = "maria") =>
         $"{{\"versionId\":\"origin\",\"facesKey\":\"{facesKey}\",\"faces\":[{{\"face\":{face},\"characterSlug\":\"{characterSlug}\"}}]}}";
 
+    // Котировка с faceTarget: тело — JSON-объект ImageEditQuoteRequest; faceTarget — вложенный объект
+    private async Task<HttpResponseMessage> Quote(string faceTargetJson, string? characterSlug = null)
+    {
+        var body = new JsonObject
+        {
+            ["provider"] = "local",
+            ["model"] = "auto",
+            ["mode"] = "auto",
+            ["op"] = "edit",
+            ["count"] = 1,
+            ["hasMask"] = true,
+        };
+        if (faceTargetJson is not null)
+            body["faceTarget"] = JsonNode.Parse(faceTargetJson);
+        if (characterSlug is not null)
+            body["characterSlug"] = characterSlug;
+        return await _client.PostAsync($"/api/projects/{_projectId}/image-editor/quote",
+            new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json"));
+    }
+
     // ── faces_changed → 409 (MAJOR) ─────────────────────────────────────────────
 
     [Fact]
     public async Task FacesKey_не_совпал_409_faces_changed()
     {
         SetFlag(true);
-        var resp = await Start(FaceTargetJson("stale:v1"), _charSlug);
+        // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
+        var resp = await Start(FaceTargetJson("stale:v1"));
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict, await resp.Content.ReadAsStringAsync());
         // Тело 409 — свежий ImageThreadFacesResponse (facesKey + faces), не {error, code}
@@ -140,7 +162,8 @@ public class FaceTargetLaunchHttpTests : IDisposable
     public async Task Флаг_выключен_404_feature_disabled()
     {
         SetFlag(false);
-        var resp = await Start(FaceTargetJson(_facesKey), _charSlug);
+        // Верхнего characterSlug нет: персонаж — в faceTarget.faces; флаг проверяется в сборщике
+        var resp = await Start(FaceTargetJson(_facesKey));
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound, await resp.Content.ReadAsStringAsync());
         (await Code(resp)).Should().Be(ImageEditErrorCodes.FeatureDisabled);
@@ -152,21 +175,138 @@ public class FaceTargetLaunchHttpTests : IDisposable
     public async Task Версии_нет_404_version_not_found()
     {
         SetFlag(true);
-        // FaceTarget с несуществующей версией
+        // FaceTarget с несуществующей версией; верхнего characterSlug нет (персонаж — в faces)
         var json = $"{{\"versionId\":\"нет-такой\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":1,\"characterSlug\":\"{_charSlug}\"}}]}}";
-        var resp = await Start(json, _charSlug);
+        var resp = await Start(json);
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound, await resp.Content.ReadAsStringAsync());
         (await Code(resp)).Should().Be(ImageEditErrorCodes.VersionNotFound);
     }
 
-    // ── invalid_request → 400 (нет characterSlug) ─────────────────────────────────
+    // ── Запуск: faceTarget без верхнего characterSlug → 202 (персонаж в faces) ─────
 
     [Fact]
-    public async Task Без_CharacterSlug_400_invalid_request()
+    public async Task Запуск_faceTarget_без_верхнего_слага_202()
     {
         SetFlag(true);
-        var resp = await Start(FaceTargetJson(_facesKey), characterSlug: null);
+        var resp = await Start(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: null);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Accepted, await resp.Content.ReadAsStringAsync());
+    }
+
+    // ── Запуск: faceTarget И верхний characterSlug → 400 (двусмысленный вход) ───────
+
+    [Fact]
+    public async Task Запуск_faceTarget_с_верхним_слагом_400()
+    {
+        SetFlag(true);
+        var resp = await Start(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: _charSlug);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // ── Котировка: faceTarget без верхнего characterSlug → 200 ─────────────────────
+
+    [Fact]
+    public async Task Котировка_faceTarget_без_верхнего_слага_200()
+    {
+        SetFlag(true);
+        var resp = await Quote(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: null);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+    }
+
+    // ── Котировка: faceTarget И верхний characterSlug → 400 ─────────────────────────
+
+    [Fact]
+    public async Task Котировка_faceTarget_с_верхним_слагом_400()
+    {
+        SetFlag(true);
+        var resp = await Quote(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: _charSlug);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // ── Парсер faceTarget: прислано, но не разбилось → 400, не 500 ─────────────────
+
+    // face строкой вместо числа
+    [Fact]
+    public async Task Парсер_face_строкой_400()
+    {
+        SetFlag(true);
+        var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":\"abc\",\"characterSlug\":\"{_charSlug}\"}}]}}";
+        var resp = await Start(json);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // face = null
+    [Fact]
+    public async Task Парсер_face_null_400()
+    {
+        SetFlag(true);
+        var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":null,\"characterSlug\":\"{_charSlug}\"}}]}}";
+        var resp = await Start(json);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // faces не массив
+    [Fact]
+    public async Task Парсер_faces_не_массив_400()
+    {
+        SetFlag(true);
+        var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":\"x\"}}";
+        var resp = await Start(json);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // элемент faces не объект
+    [Fact]
+    public async Task Парсер_элемент_не_объект_400()
+    {
+        SetFlag(true);
+        var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":[1]}}";
+        var resp = await Start(json);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // faceTarget = "" (прислано, но пустое)
+    [Fact]
+    public async Task Парсер_пустая_строка_400()
+    {
+        SetFlag(true);
+        var resp = await Start("");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // faceTarget = "{}" (прислано, но пустой объект)
+    [Fact]
+    public async Task Парсер_пустой_объект_400()
+    {
+        SetFlag(true);
+        var resp = await Start("{}");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // faceTarget = "null" (прислано, но JSON-null)
+    [Fact]
+    public async Task Парсер_null_400()
+    {
+        SetFlag(true);
+        var resp = await Start("null");
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
         (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -218,8 +358,8 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
         png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
         form.Add(png, "source", "test.png");
+        // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
         form.Add(new StringContent(FaceTargetJson(facesKey, 1, slug)), "faceTarget");
-        form.Add(new StringContent(slug), "characterSlug");
         form.Add(new StringContent(chat.Id), "sessionId");
         form.Add(new StringContent(thread.Thread!.Id), "threadId");
 
@@ -274,8 +414,8 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
         png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
         form.Add(png, "source", "test.png");
+        // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
         form.Add(new StringContent(FaceTargetJson(facesKey, 1, slug)), "faceTarget");
-        form.Add(new StringContent(slug), "characterSlug");
         form.Add(new StringContent(chat.Id), "sessionId");
         form.Add(new StringContent(thread.Thread!.Id), "threadId");
 
@@ -343,15 +483,19 @@ public class FaceTargetLaunchHttpTests : IDisposable
         public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
     }
 
-    // Котировка "q1" с провайдером "local" — для AssembleFaceTargetAsync
+    // Котировка "q1" с провайдером "local" — для AssembleFaceTargetAsync; QuoteAsync отвечает
+    // валидной котировкой, чтобы ручка quote с faceTarget прошла (200)
     private sealed class FakeQuoteJobs : IImageEditJobs
     {
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
-            throw new NotSupportedException();
+            Task.FromResult(ImageEditCallResult<ImageEditQuoteDto>.Ok(new ImageEditQuoteDto(
+                "q1", request.Provider, "m",
+                new ImageEditEstimateDto(0.05, ImageEditPriceUnits.Usd, false, ImageEditEstimateSources.Catalog),
+                DateTime.UtcNow.AddMinutes(10), 20)));
         public Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
             string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct) =>
-            throw new NotSupportedException();
+            Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto("job-1")));
         public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
             quoteId == "q1" ? new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local") : null;
         public ImageEditJobDto? Get(string ownerId, string projectId, string jobId) => null;

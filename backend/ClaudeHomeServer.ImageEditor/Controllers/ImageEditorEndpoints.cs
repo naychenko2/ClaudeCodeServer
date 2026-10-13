@@ -133,8 +133,10 @@ public abstract class ImageEditorEndpoints(
             if (scope.Project is null)
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Подстановка персонажа на лицо — только в проекте");
-            if (req.CharacterSlug is not { Length: > 0 })
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Укажите персонажа");
+            // Персонаж задаётся внутри faceTarget.faces: верхний слаг вместе с faceTarget — двусмысленный вход
+            if (req.CharacterSlug is { Length: > 0 })
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "При подстановке на лицо персонаж задаётся в faceTarget.faces");
             if (editor.Key != "local")
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Подставлять персонажа можно только локальными моделями");
@@ -179,6 +181,15 @@ public abstract class ImageEditorEndpoints(
 
     protected async Task<IActionResult> StartIn(ImageEditScope scope, StartJobForm form, CancellationToken ct)
     {
+        // faceTarget: прислано, но не разбилось — явный отказ, не «обычная правка»
+        var (faceTarget, faceTargetAbsent) = ParseFaceTarget(form.FaceTarget);
+        if (!faceTargetAbsent && faceTarget is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не удалось разобрать faceTarget");
+        // Персонаж задаётся внутри faceTarget.faces: верхний слаг вместе с faceTarget — двусмысленный вход
+        if (faceTarget is not null && form.CharacterSlug is { Length: > 0 })
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "При подстановке на лицо персонаж задаётся в faceTarget.faces");
+
         // Проверки и сборка входа — в общем ImageEditLaunchAssembler (ADR-018 §2): тем же путём
         // пойдёт запуск агентом. Здесь только multipart → байты. Пути и персонаж у личной области
         // сборщик отвергает сам, до диска проекта
@@ -205,7 +216,7 @@ public abstract class ImageEditorEndpoints(
             VersionId: form.VersionId,
             ContextRevision: form.ContextRevision,
             CharacterPhotos: form.CharacterPhotos,
-            FaceTarget: ParseFaceTarget(form.FaceTarget));
+            FaceTarget: faceTarget);
 
         var started = await launcher.LaunchAsync(UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -318,7 +329,11 @@ public abstract class ImageEditorEndpoints(
         // Ревизия контекста чата (ADR-023 §Д2.1): с ней входы берутся из стора, а Source, References,
         // ReferencePaths, CharacterSlug, ThreadId и VersionId тела игнорируются; не совпала — 409 context_changed
         public long? ContextRevision { get; set; }
-        // Подстановка персонажа на лицо (ADR-028, этап 2): JSON-строка {versionId, face, facesKey}
+        // Подстановка персонажа на лицо (ADR-028, этап 3): JSON-строка
+        // {versionId, facesKey, faces: [{face, characterSlug}]}. Пустая строка (поле прислано, но
+        // пустое) — не «нет поля»: ConvertEmptyStringToNull=false, чтобы её отличить от отсутствия
+        // и отвергнуть как «Не удалось разобрать faceTarget», а не проглотить как обычную правку
+        [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
         public string? FaceTarget { get; set; }
     }
 
@@ -374,29 +389,43 @@ public abstract class ImageEditorEndpoints(
             ? role
             : ReferenceRole.Object;
 
-    // JSON-строка {versionId, facesKey, faces: [{face, characterSlug}]} → FaceTarget;
-    // null/пусто — null; битый JSON — null (ассемблер проверит наличие и валидность)
-    private static FaceTarget? ParseFaceTarget(string? json)
+    // JSON-строка {versionId, facesKey, faces: [{face, characterSlug}]} → FaceTarget.
+    // Возвращает (цель, absent): absent=true — поля нет (обычная правка); absent=false и цель null —
+    // прислано, но не разбилось (не-JSON, "{}", "null", неверные типы) → явный отказ, не «обычная правка».
+    // Разбор безопасный: любой неверный тип — отказ, а не 500 (GetInt32/GetString на чужом типе бросают).
+    private static (FaceTarget? Target, bool Absent) ParseFaceTarget(string? json)
     {
-        if (string.IsNullOrWhiteSpace(json)) return null;
+        if (json is null) return (null, true);
+        if (string.IsNullOrWhiteSpace(json)) return (null, false);
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return (null, false);
             if (!root.TryGetProperty("versionId", out var vid) ||
                 !root.TryGetProperty("facesKey", out var key) ||
-                !root.TryGetProperty("faces", out var facesArr)) return null;
-            if (facesArr.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+                !root.TryGetProperty("faces", out var facesArr)) return (null, false);
+            if (vid.ValueKind != System.Text.Json.JsonValueKind.String ||
+                key.ValueKind != System.Text.Json.JsonValueKind.String) return (null, false);
+            if (facesArr.ValueKind != System.Text.Json.JsonValueKind.Array) return (null, false);
             var faces = new List<FaceAssignment>();
             foreach (var el in facesArr.EnumerateArray())
             {
+                if (el.ValueKind != System.Text.Json.JsonValueKind.Object) return (null, false);
                 if (!el.TryGetProperty("face", out var face) ||
-                    !el.TryGetProperty("characterSlug", out var slug)) return null;
-                faces.Add(new FaceAssignment(face.GetInt32(), slug.GetString() ?? ""));
+                    !el.TryGetProperty("characterSlug", out var slug)) return (null, false);
+                if (face.ValueKind != System.Text.Json.JsonValueKind.Number ||
+                    !face.TryGetInt32(out var faceNum)) return (null, false);
+                // characterSlug: строка; null — пустой (обязательность проверит FaceTargetRules)
+                string slugStr;
+                if (slug.ValueKind == System.Text.Json.JsonValueKind.String) slugStr = slug.GetString()!;
+                else if (slug.ValueKind == System.Text.Json.JsonValueKind.Null) slugStr = "";
+                else return (null, false);
+                faces.Add(new FaceAssignment(faceNum, slugStr));
             }
-            return new FaceTarget(vid.GetString() ?? "", key.GetString() ?? "", faces);
+            return (new FaceTarget(vid.GetString()!, key.GetString()!, faces), false);
         }
-        catch (System.Text.Json.JsonException) { return null; }
+        catch (System.Text.Json.JsonException) { return (null, false); }
     }
 
     protected static async Task<byte[]> ReadAsync(IFormFile file, CancellationToken ct)

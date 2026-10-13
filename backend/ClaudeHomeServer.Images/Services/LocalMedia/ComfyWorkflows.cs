@@ -23,6 +23,9 @@ public static partial class ComfyWorkflows
     public const int MinSteps = 4;
     public const int MaxSteps = 40;
     public const int DefaultSteps = 25;
+
+    // Turbo-дистиллят: 8 шагов при cfg 1 (замер 2026-10-13, 3090: генерация 8 с против 22 с)
+    public const int TurboSteps = 8;
     public const int MaxCount = 4;
     public const int MaxEditImages = 16;
     public const int MaxPromptLength = 4000;
@@ -60,6 +63,12 @@ public static partial class ComfyWorkflows
     // int8 convrot + SageAttention: на 3090 картинка 1328² за ~20–23 с вместо ~47–50 с у bf16,
     // на пейзаже и портрете с надписью разница видна только при наложении (замер 2026-10-08)
     private const string QwenUnet = "qwen_image_2.1_int8_convrot.safetensors";
+    private const string QwenUnetTurbo = "qwen_image_2.1_turbo_int8_convrot.safetensors";
+
+    // Unet варианта по id из LocalImageModels (null — «качественно»); шаги Turbo — TurboSteps
+    public static bool IsTurbo(string? model) => model == LocalImageModels.Turbo;
+
+    public static int StepsFor(string? model) => IsTurbo(model) ? TurboSteps : DefaultSteps;
     private const string QwenClip = "qwen3vl_8b_int8_convrot.safetensors";
     private const string QwenVae = "qwen_image_2.1_vae_bf16.safetensors";
 
@@ -69,9 +78,9 @@ public static partial class ComfyWorkflows
         + "sharp detailed eyes, natural relaxed expression, realistic soft lighting, subtle film grain.";
 
     public static JsonObject GenerateImage(string prompt, string negativePrompt, int width, int height,
-        long seed, int steps, int count, string filenamePrefix)
+        long seed, int steps, int count, string filenamePrefix, string? model = null)
     {
-        var wf = QwenLoaders();
+        var wf = QwenLoaders(model);
         wf["enc"] = Node("TextEncodeQwenImage21", new JsonObject
         {
             ["clip"] = Link("clip"),
@@ -97,12 +106,12 @@ public static partial class ComfyWorkflows
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
         long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
         IReadOnlyList<string>? faceReferences = null, string? mask = null, LocalImageCrop? crop = null,
-        string? modelCanvas = null)
+        string? modelCanvas = null, string? model = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
 
-        var wf = QwenLoaders();
+        var wf = QwenLoaders(model);
         if (lora is { } l)
         {
             // Персонаж: LoRA применяется к модели перед sage (как узел "lora" стека H3)
@@ -176,7 +185,7 @@ public static partial class ComfyWorkflows
         {
             latent = Link("enc", 2);
         }
-        wf["ks"] = KSampler(latent, seed, DefaultSteps);
+        wf["ks"] = KSampler(latent, seed, StepsFor(model));
         AddDecodeAndSave(wf, filenamePrefix);
         if (mask is { } m)
         {
@@ -750,11 +759,11 @@ public static partial class ComfyWorkflows
         });
     }
 
-    private static JsonObject QwenLoaders() => new()
+    private static JsonObject QwenLoaders(string? model = null) => new()
     {
         ["unet"] = Node("UNETLoaderMultiGPU", new JsonObject
         {
-            ["unet_name"] = QwenUnet,
+            ["unet_name"] = IsTurbo(model) ? QwenUnetTurbo : QwenUnet,
             ["weight_dtype"] = "default",
             ["device"] = "cuda:0",
         }),

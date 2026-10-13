@@ -131,7 +131,7 @@ public class LocalImageEditorTests : IDisposable
 
         quote.Value.Should().NotBeNull(quote.Error);
         quote.Value!.Provider.Should().Be("local");
-        quote.Value.Model.Should().Be(LocalImageEditor.QwenImage);
+        quote.Value.Model.Should().Be(LocalImageEditor.QwenImageTurbo, "авто-выбор — быстрая модель");
         quote.Value.Estimate.Should().Be(new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false,
             ImageEditEstimateSources.Provider, EtaSeconds: 80, QueueLength: 3));
         quote.Value.ExpectedSeconds.Should().Be(80, "время для процентов — то же, что в котировке");
@@ -280,7 +280,37 @@ public class LocalImageEditorTests : IDisposable
         var editor = new LocalImageEditor(new FakeMedia());
 
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
-        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImage);
+        editor.Models.Single(m => m.Id == LocalImageEditor.QwenImageTurbo).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
+        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+    }
+
+    [Fact]
+    public void Каталог_ДвеМоделиQwen_ТурбоПервая_ПодписиСРежимом()
+    {
+        var editor = new LocalImageEditor(new FakeMedia());
+
+        editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "qwen-image-2.1", "face-detailer");
+        editor.Models[0].Label.Should().Be("Qwen-Image 2.1 Turbo — быстро");
+        editor.Models[1].Label.Should().Be("Qwen-Image 2.1 — качественно");
+        foreach (var op in new[] { ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint })
+            editor.PickModel(op, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("qwen-image-2.1-turbo");
+        editor.PickModel(ImageEditOp.EnhanceFaces, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("face-detailer");
+    }
+
+    [Fact]
+    public async Task Запуск_ВыбраннаяМодель_УходитВШов()
+    {
+        foreach (var model in new[] { LocalImageEditor.QwenImage, LocalImageEditor.QwenImageTurbo })
+        {
+            var media = new FakeMedia();
+            var editor = new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) };
+            var req = new ImageEditRequest(ImageEditOp.Generate, "котик", null, null, [], 1, "1:1", null, model, null);
+
+            var result = await editor.RunAsync(req, new Progress<EditProgress>(), default);
+
+            result.Outcome.Should().Be(EditOutcome.Ok);
+            media.Submitted.Single().Model.Should().Be(model);
+        }
     }
 
     [Fact]

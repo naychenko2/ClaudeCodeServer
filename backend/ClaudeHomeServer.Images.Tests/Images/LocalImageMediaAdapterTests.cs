@@ -120,6 +120,42 @@ public class LocalImageMediaAdapterTests
     }
 
     [Fact]
+    public async Task Turbo_правка_и_генерация_едут_с_unet_turbo_и_8_шагами()
+    {
+        var adapter = Build();
+
+        var edit = await adapter.SubmitAsync(Edit() with { Model = LocalImageModels.Turbo }, default);
+        var gen = await adapter.SubmitAsync(
+            new LocalImageRequest(LocalImageOp.Generate, "котик", [], "1:1", 1, Model: LocalImageModels.Turbo), default);
+
+        edit.Error.Should().BeNull();
+        gen.Error.Should().BeNull();
+        _comfy.Prompts.Should().HaveCount(2);
+        foreach (var p in _comfy.Prompts)
+        {
+            var graph = p["prompt"]!.AsObject();
+            graph["unet"]!["inputs"]!["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_turbo_int8_convrot.safetensors");
+            graph["ks"]!["inputs"]!["steps"]!.GetValue<int>().Should().Be(8);
+        }
+        edit.EtaSeconds.Should().BeLessThan(LocalMediaService.EditImageEta(1));
+        adapter.EtaSeconds(LocalImageOp.Generate, 1, 0, LocalImageModels.Turbo)
+            .Should().Be(LocalMediaService.GenerateImageEta(8, 1));
+        adapter.EtaSeconds(LocalImageOp.Generate, 1, 0).Should().Be(LocalMediaService.GenerateImageEta(25, 1), "без модели — качественно");
+    }
+
+    [Fact]
+    public async Task Неизвестная_модель_отвергается_до_очереди()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Model = "qwen-image-9" }, default);
+
+        submitted.Ticket.Should().BeNull();
+        submitted.Error.Should().Contain("Неизвестная модель");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Правка_ставится_в_очередь_и_собирается_картинкой()
     {
         _comfy.Running.Add("чужой");

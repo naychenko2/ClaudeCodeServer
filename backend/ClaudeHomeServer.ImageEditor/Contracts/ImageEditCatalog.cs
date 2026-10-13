@@ -58,6 +58,7 @@ public static class ImageEditCatalog
             // (90 МБ) — потолок загрузки узла (LocalMediaService.MaxMediaInputBytes, зеркало в
             // MediaFormatDriversTests): модель видит только кроп, холст не пережимается
             ["qwen-image-2.1"] = (1664, 1.8, 30, 90),
+            ["qwen-image-2.1-turbo"] = (1664, 1.8, 30, 90),
             ["face-detailer"] = (4096, 16.8, 30, null),
         };
 

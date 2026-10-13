@@ -27,6 +27,10 @@ public interface ILocalImageMedia
     // Ожидаемое время одного запуска по таблице замеров local-media; null — не замерено
     int? EtaSeconds(LocalImageOp op, int count, int images);
 
+    // То же для варианта Qwen-Image (LocalImageModels; null — «качественно»). По умолчанию
+    // вариант не различается: подсистема images переопределяет
+    int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => EtaSeconds(op, count, images);
+
     Task<LocalImageSubmitted> SubmitAsync(LocalImageRequest request, CancellationToken ct);
 
     Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct);
@@ -52,6 +56,17 @@ public interface ILocalImageMedia
 
 public enum LocalImageOp { Generate, Edit, FaceDetail }
 
+// Варианты Qwen-Image 2.1 в локальном шве. Quality — 25 шагов, int8 convrot; Turbo — 8 шагов,
+// дистиллят (замер 2026-10-13, RTX 3090: генерация 8 с против 22 с). Строки совпадают с id
+// моделей каталога редактора; неизвестное значение шов отвергает, а не молча берёт умолчание
+public static class LocalImageModels
+{
+    public const string Quality = "qwen-image-2.1";
+    public const string Turbo = "qwen-image-2.1-turbo";
+
+    public static bool IsKnown(string? model) => model is null or Quality or Turbo;
+}
+
 // Images: у Edit первая — холст, дальше образцы (до 16 всего); у Generate — необязательные
 // образцы (тогда граф правки на пустом холсте размера Aspect); у FaceDetail — ровно одна.
 // Aspect — ключ таблицы размеров Qwen-Image («1:1», «16:9» …); null — по холсту или 1:1.
@@ -68,6 +83,7 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // Несовместима с EraseMask, Pad и Crop (подстановка на лицо остаётся на кропе)
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
+// Model — вариант Qwen-Image (LocalImageModels); null — «качественно», прежнее поведение
 // Lora — только у Edit и у Generate с образцами
 // FaceReferences — фото эталона персонажа только для узла сходства лица (граф правки); в
 // энкодер модели они не идут. У FaceDetail и у генерации без образцов узла сходства нет
@@ -86,7 +102,8 @@ public sealed record LocalImageRequest(
     IReadOnlyList<byte[]>? FaceReferences = null,
     byte[]? KeepMask = null,
     LocalImageCrop? Crop = null,
-    byte[]? VeilMask = null);
+    byte[]? VeilMask = null,
+    string? Model = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);

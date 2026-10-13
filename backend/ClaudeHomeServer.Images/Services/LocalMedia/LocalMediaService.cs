@@ -444,6 +444,9 @@ public sealed partial class LocalMediaService(
 
     public static int EditImageEta(int images) => 60 + 10 * (Math.Max(1, images) - 1);
 
+    // Turbo (8 шагов): правка по замеру 2026-10-13 — 11 с против 36 с; с запасом на загрузку входов
+    public static int EditImageEtaTurbo(int images) => 20 + 4 * (Math.Max(1, images) - 1);
+
     public const int FaceDetailEta = 25;
 
     // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый

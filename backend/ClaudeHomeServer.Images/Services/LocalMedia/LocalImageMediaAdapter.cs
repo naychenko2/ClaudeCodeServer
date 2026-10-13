@@ -133,10 +133,14 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
     }
 
-    public int? EtaSeconds(LocalImageOp op, int count, int images) => op switch
+    public int? EtaSeconds(LocalImageOp op, int count, int images) => EtaSeconds(op, count, images, null);
+
+    public int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => op switch
     {
-        LocalImageOp.Generate when images == 0 => LocalMediaService.GenerateImageEta(ComfyWorkflows.DefaultSteps, Math.Max(1, count)),
-        LocalImageOp.Generate or LocalImageOp.Edit => LocalMediaService.EditImageEta(images),
+        LocalImageOp.Generate when images == 0 => LocalMediaService.GenerateImageEta(ComfyWorkflows.StepsFor(model), Math.Max(1, count)),
+        LocalImageOp.Generate or LocalImageOp.Edit => ComfyWorkflows.IsTurbo(model)
+            ? LocalMediaService.EditImageEtaTurbo(images)
+            : LocalMediaService.EditImageEta(images),
         LocalImageOp.FaceDetail => LocalMediaService.FaceDetailEta,
         _ => null,
     };
@@ -149,6 +153,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         var prompt = (request.Prompt ?? "").Trim();
         if (prompt.Length > ComfyWorkflows.MaxPromptLength)
             return LocalImageSubmitted.Fail($"Запрос длиннее {ComfyWorkflows.MaxPromptLength} символов.");
+        if (!LocalImageModels.IsKnown(request.Model))
+            return LocalImageSubmitted.Fail($"Неизвестная модель «{request.Model}».");
         var images = request.Images ?? [];
         switch (request.Op)
         {
@@ -342,13 +348,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             {
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
-                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop, modelCanvas),
+                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs, model: request.Model),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop, modelCanvas, request.Model),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
             promptId = queued.PromptId;
-            return new LocalImageSubmitted(queued.PromptId, queue.Length, EtaSeconds(request.Op, count, names.Count), null);
+            return new LocalImageSubmitted(queued.PromptId, queue.Length, EtaSeconds(request.Op, count, names.Count, request.Model), null);
         }
         catch (ComfyException ex)
         {
@@ -404,8 +410,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         string prefix)
     {
         var size = CanvasFor(request);
-        return ComfyWorkflows.GenerateImage(prompt, "", size.Width, size.Height, seed, ComfyWorkflows.DefaultSteps,
-            count, prefix);
+        return ComfyWorkflows.GenerateImage(prompt, "", size.Width, size.Height, seed, ComfyWorkflows.StepsFor(request.Model),
+            count, prefix, request.Model);
     }
 
     // Заливка полей дорисовки — тот же нейтральный серый, что у стирания кистью: «замени серое»

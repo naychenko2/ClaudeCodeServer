@@ -21,7 +21,9 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
-    public const string QwenImage = "qwen-image-2.1";
+    // «Качественно» (25 шагов) и «быстро» (Turbo, 8 шагов); умолчание авто-выбора — Turbo
+    public const string QwenImage = LocalImageModels.Quality;
+    public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
 
     // Потолок одного запуска с ожиданием очереди: четыре варианта правки ≈4 мин, плюс чужие прогоны
@@ -64,19 +66,24 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        new(QwenImage, "Qwen-Image 2.1",
-            new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
-                MaskSupport.Veil,
-                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
-            new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
+        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро"),
+        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно"),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
     ];
 
+    private static ImageEditModelInfo QwenModel(string id, string label) =>
+        new(id, label,
+            new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
+                MaskSupport.Veil,
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
+            new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
+
+    // Умолчание авто-выбора — Turbo; «качественно» только по явному выбору человека
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
     {
-        ImageEditOp.EnhanceFaces => Catalog[1],
+        ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),
         ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint => Catalog[0],
         _ => null,
     };
@@ -84,7 +91,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public int? ExpectedSeconds(ImageEditModelInfo model) =>
-        media?.EtaSeconds(model.Id == FaceDetailer ? LocalImageOp.FaceDetail : LocalImageOp.Edit, 1, 1);
+        media?.EtaSeconds(model.Id == FaceDetailer ? LocalImageOp.FaceDetail : LocalImageOp.Edit, 1, 1, QwenVariant(model.Id));
+
+    // Id модели каталога → вариант шва; у FaceDetailer варианта нет
+    private static string? QwenVariant(string id) => id == FaceDetailer ? null : id;
 
     public async Task<ImageEditEstimateDto> EstimateAsync(
         ImageEditModelInfo model, ImageEditQuoteRequest request, CancellationToken ct)
@@ -107,8 +117,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0)
                      + (request.HasCharacter ? 1 : 0);
         if (request.Op == ImageEditOp.Generate)
-            return media!.EtaSeconds(LocalImageOp.Generate, 1, images) * count;
-        return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1) * count;
+            return media!.EtaSeconds(LocalImageOp.Generate, 1, images, model.Id) * count;
+        return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1, model.Id) * count;
     }
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
@@ -141,13 +151,13 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
                 run = new LocalImageRequest(LocalImageOp.Generate, WithTrigger(req.Prompt, req), references, req.AspectRatio, 1,
-                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
+                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint
                 when req.Source is not null && EraseMaskOf(req) is { } eraseMask:
                 run = new LocalImageRequest(LocalImageOp.Edit, ErasePrompt(req.Instruction), [req.Source.Bytes], null, 1,
-                    EraseMask: eraseMask);
+                    EraseMask: eraseMask, Model: req.Model);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Outpaint:
@@ -159,7 +169,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 if (spec is null) return Fail(EditOutcome.Failed, "Не удалось посчитать поля дорисовки");
                 // Холст один, без образцов: образец с другой пропорцией сбил бы модель с полей
                 run = new LocalImageRequest(LocalImageOp.Edit, OutpaintPrompt(req.Instruction), [req.Source.Bytes],
-                    null, 1, Pad: new LocalImagePad(spec.Left, spec.Top, spec.Right, spec.Bottom));
+                    null, 1, Pad: new LocalImagePad(spec.Left, spec.Top, spec.Right, spec.Bottom), Model: req.Model);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             }
@@ -173,7 +183,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                     KeepMask: req.KeepMask?.Bytes ?? KeepMaskOf(req),
                     Crop: req.FaceCrop,
                     VeilMask: VeilMaskOf(req),
-                    Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
+                    Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             default:

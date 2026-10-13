@@ -67,6 +67,46 @@ public class ComfyWorkflowsTests
     }
 
     [Fact]
+    public void Turbo_Генерация_ДругойUnetИВосемьШагов()
+    {
+        var wf = ComfyWorkflows.GenerateImage("x", "", 1328, 1328, 1, ComfyWorkflows.StepsFor(LocalImageModels.Turbo), 1, "p",
+            LocalImageModels.Turbo);
+
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_turbo_int8_convrot.safetensors");
+        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "ks")["cfg"]!.GetValue<double>().Should().Be(1.0);
+    }
+
+    [Fact]
+    public void Turbo_Правка_ДругойUnetИВосемьШагов_ЛораИзСтекаНеТеряется()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", lora: ("l.safetensors", 0.8), model: LocalImageModels.Turbo);
+
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_turbo_int8_convrot.safetensors");
+        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"lora\",0]");
+    }
+
+    [Fact]
+    public void КачественнаяМодель_ИБезМодели_ПрежнийГраф()
+    {
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p");
+        var quality = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", model: LocalImageModels.Quality);
+
+        quality.ToJsonString().Should().Be(plain.ToJsonString());
+        Inputs(plain, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
+        Inputs(plain, "ks")["steps"]!.GetValue<int>().Should().Be(25);
+    }
+
+    [Fact]
+    public void FaceDetail_НеЗависитОтTurbo()
+    {
+        var wf = ComfyWorkflows.FaceDetail("a.png", 1, "p");
+
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
+    }
+
+    [Fact]
     public void Правка_БезРазмера_ХолстИзЭнкодера_РеференсыПоПорядку()
     {
         // Эталон — run_edit.py: resolution 0 и латент enc[2], если размер не задан

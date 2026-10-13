@@ -28,9 +28,8 @@ public class RunDelegationGateTests : IDisposable
 {
     private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory
     {
-        // Признаки ИДУЩЕГО хода: между ходами — 0/false, как у ClaudeSession после finally
+        // Признак ИДУЩЕГО хода: между ходами — 0, как у ClaudeSession после finally
         public volatile int AgentDepth;
-        public volatile bool SuppressTasksExecute;
         // Живые фоновые агенты прогона — держат делегированность прогона после result
         public volatile bool BgAlive;
 
@@ -41,7 +40,8 @@ public class RunDelegationGateTests : IDisposable
     {
         public Session Info => info;
         public int CurrentTurnAgentDepth => owner.AgentDepth;
-        public bool CurrentTurnSuppressTasksExecute => owner.SuppressTasksExecute;
+        // Признак хода доклада между ходами погашен: держит его только память прогона в SessionManager
+        public bool CurrentTurnSuppressTasksExecute => false;
         public bool HasLiveTurn => false;
         public bool HasQueuedTurn => false;
         public bool OrchestrationActive => false;

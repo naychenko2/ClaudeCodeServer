@@ -84,8 +84,9 @@ public class FaceTargetLaunchTests : IDisposable
     private static IImageEditJobs QuoteJobs(ImageEditOp op = ImageEditOp.Edit, string? provider = "local")
     {
         var jobs = new Mock<IImageEditJobs>();
+        // FacePasses = 1: все face-тесты этого файла запускают одно лицо (этап 2)
         jobs.Setup(j => j.QuoteInfo(Owner, "p1", "q1"))
-            .Returns(new ImageEditQuoteInfo(op, null, provider));
+            .Returns(new ImageEditQuoteInfo(op, null, provider, FacePasses: 1));
         return jobs.Object;
     }
 

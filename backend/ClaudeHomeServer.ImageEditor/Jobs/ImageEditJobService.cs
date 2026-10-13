@@ -87,7 +87,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds,
-        long? ContextRevision = null, ResolvedFormat? Format = null);
+        long? ContextRevision = null, ResolvedFormat? Format = null,
+        // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка
+        int? FacePasses = null);
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
@@ -147,6 +149,15 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable,
                 ImageEditCatalog.UnavailableError(_editors, request.Provider));
 
+        // Правила подстановки на лицо (ADR-028, этап 3): лимит лиц, повторы номеров и персонажей.
+        // Котировка и запуск зовут одну и ту же чистую функцию; отказ — invalid_request
+        if (request.FaceTarget is { } faceTarget)
+        {
+            var rules = Faces.FaceTargetRules.Validate(faceTarget);
+            if (!rules.Ok)
+                return Fail<ImageEditQuoteDto>(rules.ErrorCode!, rules.Error!);
+        }
+
         var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
         var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)
@@ -180,9 +191,19 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable, ex.Message);
         }
 
-        var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
+        // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; обычная правка — null.
+        // При N > 1 вариантов ровно 1 (котировка сама ставит Count = 1), ETA = N × ETA одной правки.
+        var facePasses = request.FaceTarget?.Faces.Count;
+        var count = request.Count;
+        if (facePasses is { } n && n > 1)
+        {
+            count = 1;
+            estimate = estimate with { EtaSeconds = estimate.EtaSeconds is { } eta ? eta * n : null };
+        }
+
+        var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, count,
             estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model),
-            request.ContextRevision, format);
+            request.ContextRevision, format, facePasses);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));
@@ -190,7 +211,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
         _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ProjectId == projectId && q.ExpiresAt >= Now()
-            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider)
+            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider, q.FacePasses)
             : null;
 
     // Пропорции, которые человек выбрал явно в старом интерфейсе (поле aspectRatio запуска генерации), стоят выше
@@ -215,6 +236,14 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             || quote.OwnerId != ownerId || quote.ProjectId != projectId || quote.ExpiresAt < Now())
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка устарела — цена пересчитается автоматически");
+
+        // Сверка числа проходов (ADR-028, этап 3): число лиц при запуске ≠ N котировки —
+        // отказ, но котировка НЕ расходуется (остаётся в хранилище, клиент пересчитает ту же).
+        // Порядок «сначала сверить N, потом удалять» — до _quotes.TryRemove ниже
+        var launchPasses = input.FaceTarget is null ? 0 : 1;
+        if (launchPasses != (quote.FacePasses ?? 0))
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
+                "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
 
         // Ровно поставщик котировки: пропал — отказ, а не сосед
         var editor = ImageEditCatalog.FindAvailable(_editors, quote.Provider);
@@ -701,7 +730,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;
 
     private ImageEditQuoteDto ToDto(Quote q) =>
-        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format);
+        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format, FacePasses: q.FacePasses);
 
     private ImageEditJobDto ToDto(Job j)
     {

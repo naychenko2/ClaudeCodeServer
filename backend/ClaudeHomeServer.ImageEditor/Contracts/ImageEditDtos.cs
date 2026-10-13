@@ -107,7 +107,10 @@ public record ImageEditQuoteDto(
     // Строки исполнителей для «Чем» строки и панели контекста (ADR-023 §Д2.1, Р2); null — котировка без контекста
     IReadOnlyList<Protocol.ExecutorRowDto>? Executors = null,
     // Действующий формат запуска (ADR-025): то, что уйдёт в модель и учтено в цене; null — «Как у модели»
-    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null,
+    // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка.
+    // UI показывает «N прохода» (шаг 16); для N > 1 вариантов ровно 1
+    int? FacePasses = null);
 
 public static class ImageEditEstimateSources
 {

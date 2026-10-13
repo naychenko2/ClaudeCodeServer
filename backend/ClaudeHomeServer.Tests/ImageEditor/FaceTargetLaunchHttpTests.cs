@@ -497,7 +497,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
             string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct) =>
             Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto("job-1")));
         public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
-            quoteId == "q1" ? new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local") : null;
+            quoteId == "q1" ? new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local", FacePasses: 1) : null;
         public ImageEditJobDto? Get(string ownerId, string projectId, string jobId) => null;
         public Task<ImageEditJobDto?> CancelAsync(string ownerId, string projectId, string jobId, CancellationToken ct) =>
             Task.FromResult<ImageEditJobDto?>(null);

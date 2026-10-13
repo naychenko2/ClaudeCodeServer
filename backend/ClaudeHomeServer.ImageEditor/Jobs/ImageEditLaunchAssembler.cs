@@ -288,14 +288,19 @@ public sealed class ImageEditLaunchAssembler(
         var rules = Faces.FaceTargetRules.Validate(faceTarget);
         if (!rules.Ok)
             return Fail<ImageEditJobInput>(rules.ErrorCode!, rules.Error!);
+        // Котировка: сверка числа проходов (ADR-028, этап 3) — до временного отказа N > 1,
+        // чтобы несовпадение N не было замаскировано; при отказе котировка не расходуется
+        var quote = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
+        if (quote is null)
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound, "Котировка устарела");
+        if (faceTarget.Faces.Count != (quote.FacePasses ?? 0))
+            return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound,
+                "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
         // Временный отказ: цепочка N > 1 — шаг 12
         if (faceTarget.Faces.Count > 1)
             return Invalid("Несколько лиц за раз пока не поддерживается");
         if (req.Mask is not null || req.Annotated is not null)
             return Invalid("При подстановке на лицо маску и разметку не указывают");
-        var quote = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
-        if (quote is null)
-            return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound, "Котировка устарела");
         // Провайдер — только local
         if (quote.Provider is not "local")
             return Invalid("Подставлять персонажа можно только локальными моделями");

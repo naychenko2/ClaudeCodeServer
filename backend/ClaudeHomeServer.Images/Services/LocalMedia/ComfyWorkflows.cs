@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -90,10 +91,12 @@ public static partial class ComfyWorkflows
     }
 
     // Первая картинка — основная (холст по ней), остальные — дополнительные референсы.
-    // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере)
+    // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере).
+    // crop (ADR-028, решение 12) — только вместе с mask: модель видит кроп вокруг цели,
+    // а не всю первую картинку; без crop граф байт-в-байт прежний
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
         long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
-        IReadOnlyList<string>? faceReferences = null, string? mask = null)
+        IReadOnlyList<string>? faceReferences = null, string? mask = null, LocalImageCrop? crop = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
@@ -123,6 +126,31 @@ public static partial class ComfyWorkflows
             wf[$"img{k}"] = Node("LoadImage", new JsonObject { ["image"] = images[k - 1] });
             enc[$"images.image_{k}"] = Link($"img{k}");
         }
+        if (crop is { } c)
+        {
+            // Подстановка на лицо: модель видит только кроп вокруг цели (в нём одно лицо,
+            // указатель не нужен), а не всю первую картинку. Маску модели не показываем:
+            // белую маску-образец она перерисовывает в результат (ореол, диагностика f0e09907)
+            wf["crop"] = Node("ImageCrop", new JsonObject
+            {
+                ["image"] = Link("img1"),
+                ["width"] = c.Width,
+                ["height"] = c.Height,
+                ["x"] = c.X,
+                ["y"] = c.Y,
+            });
+            // Увеличение только вверх, до ScaledWidth×ScaledHeight (размер считает C#, кратно 16):
+            // на мелком кропе Qwen-Image рисует кашу, в натуральном размере первого холста — нет
+            wf["crop_scale"] = Node("ImageScale", new JsonObject
+            {
+                ["image"] = Link("crop"),
+                ["upscale_method"] = "lanczos",
+                ["width"] = c.ScaledWidth,
+                ["height"] = c.ScaledHeight,
+                ["crop"] = "disabled",
+            });
+            enc["images.image_1"] = Link("crop_scale");
+        }
         wf["enc"] = Node("TextEncodeQwenImage21", enc);
 
         JsonArray latent;
@@ -149,15 +177,49 @@ public static partial class ComfyWorkflows
             // до размера холста до наложения → результат графа ровно размера холста
             wf["mask"] = Node("LoadImageMask", new JsonObject { ["image"] = m, ["channel"] = "red" });
             AddMaskSoftening(wf);
-            wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+            if (crop is { } oc)
             {
-                ["destination"] = Link("img1"),
-                ["source"] = Link("dec"),
-                ["x"] = 0,
-                ["y"] = 0,
-                ["resize_source"] = true,
-                ["mask"] = Link("mask_soft"),
-            });
+                // Склейка в месте кропа: выход модели приводится к размеру кропа, а мягкая маска
+                // вырезается тем же прямоугольником (CropMask). Вне кропа холст не трогается вовсе
+                // (resize_source = false, x/y — место кропа); внутри кропа вне маски — исходник
+                wf["dec_fit"] = Node("ImageScale", new JsonObject
+                {
+                    ["image"] = Link("dec"),
+                    ["upscale_method"] = "lanczos",
+                    ["width"] = oc.Width,
+                    ["height"] = oc.Height,
+                    ["crop"] = "disabled",
+                });
+                wf["mask_crop"] = Node("CropMask", new JsonObject
+                {
+                    ["mask"] = Link("mask_soft"),
+                    ["width"] = oc.Width,
+                    ["height"] = oc.Height,
+                    ["x"] = oc.X,
+                    ["y"] = oc.Y,
+                });
+                wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+                {
+                    ["destination"] = Link("img1"),
+                    ["source"] = Link("dec_fit"),
+                    ["x"] = oc.X,
+                    ["y"] = oc.Y,
+                    ["resize_source"] = false,
+                    ["mask"] = Link("mask_crop"),
+                });
+            }
+            else
+            {
+                wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+                {
+                    ["destination"] = Link("img1"),
+                    ["source"] = Link("dec"),
+                    ["x"] = 0,
+                    ["y"] = 0,
+                    ["resize_source"] = true,
+                    ["mask"] = Link("mask_soft"),
+                });
+            }
             wf["save"]!["inputs"]!["images"] = Link("overlay");
         }
         if (faceReferences is { Count: > 0 })

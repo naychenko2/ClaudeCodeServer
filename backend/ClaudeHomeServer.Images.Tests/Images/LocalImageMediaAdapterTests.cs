@@ -597,6 +597,112 @@ public class LocalImageMediaAdapterTests
         graph.ContainsKey("overlay").Should().BeFalse();
     }
 
+    // Кроп вокруг цели (ADR-028, решение 12): только у Edit, вместе с KeepMask;
+    // прямоугольник внутри холста, X/Y/Width/Height кратны 8, размер увеличения кратно 16
+    [Fact]
+    public async Task Кроп_БезМаски_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Crop = new LocalImageCrop(0, 0, 8, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Кроп вокруг цели — только для правки с возвратом исходника вне маски.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_ВнеХолста_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 16, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Кроп выходит за пределы холста.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_НулевойРазмер_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 0, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Размер кропа должен быть положительным.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_НеКратноВосеми_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(4, 0, 8, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Координаты и размер кропа должны быть кратны 8.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Кроп_УвеличениеНеКратноШестнадцати_отказ()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 8, 8, 8, 16),
+        }, default);
+
+        submitted.Error.Should().Be("Размер увеличения кропа должен быть кратно 16.");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // Валидный кроп: граф режет кроп из холста, увеличивает его, вклеивает результат в месте кропа
+    [Fact]
+    public async Task Кроп_Валидный_граф_режет_увеличивает_и_вклеивает()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [LocalMediaTestImages.Png(8, 8)],
+            KeepMask = LocalMediaTestImages.Png(8, 8),
+            Crop = new LocalImageCrop(0, 0, 8, 8, 16, 16),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["crop"]!["class_type"]!.GetValue<string>().Should().Be("ImageCrop");
+        graph["crop_scale"]!["class_type"]!.GetValue<string>().Should().Be("ImageScale");
+        graph["dec_fit"]!["class_type"]!.GetValue<string>().Should().Be("ImageScale");
+        graph["mask_crop"]!["class_type"]!.GetValue<string>().Should().Be("CropMask");
+        var overlay = graph["overlay"]!["inputs"]!.AsObject();
+        overlay["x"]!.GetValue<int>().Should().Be(0);
+        overlay["y"]!.GetValue<int>().Should().Be(0);
+        overlay["resize_source"]!.GetValue<bool>().Should().BeFalse();
+        overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec_fit");
+    }
+
     // Детекция лиц (ADR-028): узел CcsFaceDetect печатает ccs_face_detect={...}; первый
     // POST /prompt получает prompt-1, поэтому ответ кладём в историю заранее, без гонок
     private void AnswerDetect(string text)

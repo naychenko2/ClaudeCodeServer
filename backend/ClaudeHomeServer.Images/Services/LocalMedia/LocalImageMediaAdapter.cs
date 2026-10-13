@@ -207,6 +207,27 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Маска не совпадает размером с первой картинкой.");
         }
 
+        // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску-образец.
+        // Только у Edit, вместе с KeepMask; прямоугольник — внутри холста, X/Y/Width/Height
+        // кратны 8 (узлы ImageCrop/CropMask), размер увеличения — кратно 16 (латент VAE)
+        if (request.Crop is { } crop)
+        {
+            if (request.Op != LocalImageOp.Edit || request.KeepMask is not { Length: > 0 })
+                return LocalImageSubmitted.Fail("Кроп вокруг цели — только для правки с возвратом исходника вне маски.");
+            if (crop.Width <= 0 || crop.Height <= 0)
+                return LocalImageSubmitted.Fail("Размер кропа должен быть положительным.");
+            if (crop.X % 8 != 0 || crop.Y % 8 != 0 || crop.Width % 8 != 0 || crop.Height % 8 != 0)
+                return LocalImageSubmitted.Fail("Координаты и размер кропа должны быть кратны 8.");
+            if (crop.ScaledWidth % 16 != 0 || crop.ScaledHeight % 16 != 0)
+                return LocalImageSubmitted.Fail("Размер увеличения кропа должен быть кратно 16.");
+            var canvasSize = ImageDimensions.Read(images[0]);
+            if (canvasSize is null)
+                return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
+            if (crop.X < 0 || crop.Y < 0
+                || crop.X + crop.Width > canvasSize.Value.Width || crop.Y + crop.Height > canvasSize.Value.Height)
+                return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
+        }
+
         if (request.Lora is { } requested)
         {
             var name = requested.Name ?? "";
@@ -288,7 +309,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);

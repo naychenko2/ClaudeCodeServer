@@ -59,6 +59,8 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // модели («удали» кистью). Маску-образец Qwen-Image не понимает, а серую заливку — да.
 // KeepMask — только у Edit: вне маски вернуть исходник (схожесть мерится внутри маски).
 // Несовместима с EraseMask и Pad; маска — PNG того же размера, что холст
+// Crop — только у Edit, вместе с KeepMask (ADR-028, решение 12): модели не показываем маску,
+// а даём кроп вокруг цели; результат вклеивается по той же маске
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
 // Lora — только у Edit и у Generate с образцами
@@ -77,13 +79,19 @@ public sealed record LocalImageRequest(
     int? Height = null,
     LocalImageLora? Lora = null,
     IReadOnlyList<byte[]>? FaceReferences = null,
-    byte[]? KeepMask = null);
+    byte[]? KeepMask = null,
+    LocalImageCrop? Crop = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);
 
 // Поля в пикселях холста по сторонам
 public sealed record LocalImagePad(int Left, int Top, int Right, int Bottom);
+
+// Кроп вокруг цели (ADR-028, решение 12): модель видит кусок холста (X, Y, Width×Height),
+// увеличенный до ScaledWidth×ScaledHeight (только вверх, кратно 16); результат приводится
+// обратно к Width×Height и вклеивается в X, Y по той же маске. Только у Edit, вместе с KeepMask
+public sealed record LocalImageCrop(int X, int Y, int Width, int Height, int ScaledWidth, int ScaledHeight);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: это «попробуй позже», а не ошибка запроса
 public sealed record LocalImageSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)

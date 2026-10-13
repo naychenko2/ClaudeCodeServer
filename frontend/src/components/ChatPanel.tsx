@@ -2819,6 +2819,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 activeToolDetail={activeToolDetail}
                 activeToolOnScreen={activeToolOnScreen}
                 activeToolOperation={activeToolOperation}
+                personaId={session.personaId ?? null}
               />
             </div>
             {/* Пилюле — не больше половины строки: иначе на 320px её 300px съедали всё, и у

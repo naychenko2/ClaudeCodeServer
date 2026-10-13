@@ -6470,6 +6470,29 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             $"реанимация зависшего чата ({sessionId})");
     }
 
+    // Гасит процесс CLI сессии-исполнителя ЗАКРЫТОЙ задачи вместе с деревом (фоновые Bash,
+    // агенты, Monitor) — иначе поздний task-notification будит завершённого агента новым ходом
+    // (инцидент 13.10). Зовётся из join-а R+D (TaskExecutionService.TryDeliverCompletionAsync)
+    // ровно один раз: после CAS доставки. Только для сессии-исполнителя этой задачи — обычные
+    // чаты держат процесс ради HasPendingBg/продолжений как раньше. Идёт через уборку адаптера
+    // (DisposeAsync → Kill всего дерева), как ReviveStuckSession: статус и UpdatedAt не трогаем —
+    // ExitedMessage переведёт Active→Finished штатно, без сдвига UpdatedAt. Идущий ход
+    // (Starting/Working/Waiting) не рвём: гасить рано, процесс остановят по его концу.
+    // Возвращает true, если процесс был и снят.
+    internal bool StopClosedExecutorProcess(string sessionId, string taskId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        if (!entry.Info.TaskExecution || entry.Info.TaskId != taskId) return false;
+        if (entry.Info.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting)
+            return false;
+        if (entry.Process is not { } proc) return false;
+        entry.Process = null;
+        _log.LogInformation("Исполнитель закрытой задачи {TaskId}: гашу процесс CLI сессии {Session} с фоновой работой",
+            taskId, sessionId);
+        FireAndForget(proc.DisposeAsync().AsTask(), $"гашение процесса исполнителя закрытой задачи ({sessionId})");
+        return true;
+    }
+
     private async Task ReviveStuckSessionAsync(string sessionId, SessionEntry entry)
     {
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Active);

@@ -10769,6 +10769,65 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
     }
 
+    // --- Гашение процесса исполнителя закрытой задачи (инцидент 13.10) ---
+
+    [Fact]
+    public async Task StopClosedExecutorProcess_ИсполнительХодКончилсяФонЖив_СнимаетПроцессНеТрогаяUpdatedAt()
+    {
+        var session = await MkBusySessionAsync("exec-closed", SessionStatus.Active);
+        session.TaskExecution = true;
+        session.TaskId = "task-closed";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // фоновый dotnet test ещё жив
+        adapter.Setup(a => a.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        SetProcess(entry, adapter.Object);
+        var updatedBefore = session.UpdatedAt;
+
+        var stopped = _sut.StopClosedExecutorProcess(session.Id, "task-closed");
+
+        stopped.Should().BeTrue("задача закрыта, ход кончился — процесс с фоном гасится");
+        adapter.Verify(a => a.DisposeAsync(), Times.Once);
+        entry.GetType().GetField("Process")!.GetValue(entry).Should().BeNull(
+            "адаптер снят: поздний task-notification больше некому принять");
+        session.UpdatedAt.Should().Be(updatedBefore, "остановка — не активность чата");
+    }
+
+    [Fact]
+    public async Task StopClosedExecutorProcess_ОбычныйЧатСФоновымАгентом_ЖивётКакРаньше()
+    {
+        // Панели экспертов и Workflow в обычных чатах держат процесс ради HasPendingBg
+        var session = await MkBusySessionAsync("plain-bg", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true);
+        SetProcess(entry, adapter.Object);
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30));
+
+        _sut.StopClosedExecutorProcess(session.Id, "any-task").Should().BeFalse();
+        _sut.RunStuckActiveSweepForTests();
+
+        adapter.Verify(a => a.DisposeAsync(), Times.Never);
+        AssertSweepSkipped(_sut, session.Id, entry); // HasPendingBg по-прежнему гейтит Finished
+    }
+
+    [Fact]
+    public async Task StopClosedExecutorProcess_ЗадачаЗакрытаАХодИдёт_ПроцессНеСнимается()
+    {
+        // Done пришёл раньше конца хода (статус Working): гасить рано
+        var session = await MkBusySessionAsync("exec-working", SessionStatus.Working);
+        session.TaskExecution = true;
+        session.TaskId = "task-closed";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.StopClosedExecutorProcess(session.Id, "task-closed").Should().BeFalse();
+
+        adapter.Verify(a => a.DisposeAsync(), Times.Never);
+        entry.GetType().GetField("Process")!.GetValue(entry).Should().NotBeNull();
+    }
+
     [Fact]
     public async Task Sweep_ЖивойПрогонБезФоновойРаботы_ПереводитВFinished()
     {

@@ -35,6 +35,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
+    private readonly SessionManager _sessions;
+    private readonly ProjectManager _projects;
     private readonly UserStore _userStore;
     private readonly TestSessionBroadcaster _broadcaster;
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
@@ -74,7 +76,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
 
-        var sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
+        var sessions = _sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
+        _projects = projectManager;
 
         _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
             NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb);
@@ -303,6 +306,60 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
         task.CompletionDelivered.Should().BeTrue();
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1);
+    }
+
+    // ─── гашение процесса исполнителя закрытой задачи (инцидент 13.10) ───────
+
+    private async Task<(TaskItem Task, Mock<ClaudeHomeServer.Services.Llm.ILlmSessionAdapter> Adapter)>
+        CreateExecutorWithBgProcessAsync(SessionStatus status)
+    {
+        var user = _userStore.Add("exec-" + Guid.NewGuid().ToString("N")[..6], "password123", "user");
+        var dir = Path.Combine(_dir, "proj_" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(dir);
+        var project = _projects.Create("P", dir, user.Id, user.Username);
+        var session = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.TaskExecution = true;
+        session.Status = status;
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Исполнитель с фоном"));
+        _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow);
+        session.TaskId = task.Id;
+
+        var adapter = new Mock<ClaudeHomeServer.Services.Llm.ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.Info).Returns(session);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // фоновая команда ещё жива
+        adapter.Setup(a => a.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        var sessionsField = typeof(SessionManager).GetField("_sessions",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var entry = ((System.Collections.IDictionary)sessionsField.GetValue(_sessions)!)[session.Id]!;
+        entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
+        return (_tasks.GetById(task.Id)!, adapter);
+    }
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_RИD_ГасидПроцессИсполнителяСФоном()
+    {
+        var (task, adapter) = await CreateExecutorWithBgProcessAsync(SessionStatus.Active);
+        _tasks.MarkClaudeResult(task.Id, "success");
+        task = _tasks.GetById(task.Id)!;
+        task.Status = TaskItemStatus.Done;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        adapter.Verify(a => a.DisposeAsync(), Times.Once);
+        task.ExecutorStoppedAt.Should().BeNull("задача закрыта штатно — это не «остановлен»");
+    }
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_DБезR_ПроцессНеГасится()
+    {
+        // Done пришёл раньше конца хода: сигнала R нет — доставки нет, процесс жив
+        var (task, adapter) = await CreateExecutorWithBgProcessAsync(SessionStatus.Working);
+        task.Status = TaskItemStatus.Done;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        adapter.Verify(a => a.DisposeAsync(), Times.Never);
     }
 
     // ─── (б) порядок D → R ────────────────────────────────────────────────────

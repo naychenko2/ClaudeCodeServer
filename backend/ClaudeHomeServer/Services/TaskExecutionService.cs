@@ -1117,6 +1117,21 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             await NotifyAsync(task, BuildResultNotification(task, ok: true, persona));
         // Модель Z: активный доклад в чат постановщика (в дополнение к L0-тосту выше)
         await ReportToDelegatorAsync(task, persona);
+        // Задача закрыта и ход кончился — процесс исполнителя с его фоновой работой больше не нужен:
+        // без гашения поздний task-notification будит завершённого агента (инцидент 13.10)
+        StopExecutorProcess(task);
+    }
+
+    // Гашение процесса CLI исполнителя закрытой задачи. Статус задачи и ExecutorStoppedAt не
+    // трогаем — закрыта штатно, это не «остановлен». Ошибка гашения доклад не отменяет.
+    private void StopExecutorProcess(TaskItem task)
+    {
+        if (task.LinkedSessionId is null) return;
+        try { _sessions.StopClosedExecutorProcess(task.LinkedSessionId, task.Id); }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось погасить процесс исполнителя закрытой задачи {TaskId}", task.Id);
+        }
     }
 
     // --- Страховка: ход кончился, а задачу никто не закрыл ---

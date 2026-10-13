@@ -340,6 +340,11 @@ public static class ImageEditErrorCodes
     public const string FaceOutOfFrame = "face_out_of_frame";
 }
 
+// Тело отказа по конкретному лицу (ADR-028, этап 3): прежние {error, code} плюс face — номер лица
+// (N из списка лиц, 1-based, как ImageThreadFaceTarget.N), на котором отказ. Отказы без привязки
+// к лицу этим телом не отвечают — у них поля face нет вовсе
+public sealed record FaceRefusalResponse(string Error, string Code, int Face);
+
 // Результат вызова шва: Value при успехе, иначе код ImageEditErrorCodes.* и текст
 // Payload — тело отказа, если оно не {error, code}: у context_changed это свежий ChatContextDto
 public record ImageEditCallResult<T>(T? Value, string? ErrorCode, string? Error, object? Payload = null)

@@ -378,7 +378,8 @@ public abstract class ImageEditorEndpoints(
                 or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
-        // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата
+        // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата;
+        // отказ по лицу — FaceRefusalResponse {error, code, face}
         if (result.Payload is { } payload)
         {
             // faces_changed: свежий список лиц плюс явные code и error (ADR-028, этап 3).

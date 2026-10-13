@@ -376,7 +376,7 @@ public sealed class ImageEditLaunchAssembler(
             if (face is null)
                 return Invalid($"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц");
             if (face.Small)
-                return Invalid($"Лицо {assignment.Face} слишком мелкое для подстановки персонажа");
+                return FaceFail(ImageEditErrorCodes.InvalidRequest, $"Лицо {assignment.Face} слишком мелкое для подстановки персонажа", assignment.Face);
             var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, assignment.Face);
             if (maskResult.Png is null)
             {
@@ -386,7 +386,7 @@ public sealed class ImageEditLaunchAssembler(
                     FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
                     _ => ImageEditErrorCodes.InvalidRequest,
                 };
-                return Fail<ImageEditJobInput>(code, $"{assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}");
+                return FaceFail(code, $"{assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}", assignment.Face);
             }
             var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, assignment.CharacterSlug);
             if (character is null)
@@ -486,6 +486,10 @@ public sealed class ImageEditLaunchAssembler(
 
     private static ImageEditCallResult<ImageEditJobInput> Invalid(string error) =>
         Fail<ImageEditJobInput>(ImageEditErrorCodes.InvalidRequest, error);
+
+    // Отказ по конкретному лицу: тело {error, code, face} — фронт подсвечивает виновное лицо (ADR-028, этап 3)
+    private static ImageEditCallResult<ImageEditJobInput> FaceFail(string code, string error, int face) =>
+        ImageEditCallResult<ImageEditJobInput>.Fail(code, error, new FaceRefusalResponse(error, code, face));
 
     private static ImageEditCallResult<T> Fail<T>(string? code, string? error) =>
         ImageEditCallResult<T>.Fail(code ?? ImageEditErrorCodes.InvalidRequest, error ?? "Запрос не выполнен");

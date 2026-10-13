@@ -339,6 +339,75 @@ public class FaceTargetLaunchHttpTests : IDisposable
         (await Code(resp)).Should().Be(ImageEditErrorCodes.InvalidRequest);
     }
 
+    // ── Номер лица в теле отказа по лицу (ADR-028, этап 3) ──────────────────────
+
+    // Два лица, лицо 2 мелкое: тело 400 — прежние {error, code} плюс face = 2.
+    // Мутация «не передавать номер» (отказ без Payload) — поля face нет, тест красный
+    [Fact]
+    public async Task Отказ_по_лицу_2_несёт_face_2()
+    {
+        var factory = new TestWebApplicationFactory { UseFrontend = false };
+        factory.ExtraServices = services =>
+        {
+            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
+            services.RemoveAll<ILocalImageMedia>();
+            services.AddSingleton<ILocalImageMedia>(new SmallSecondFaceMedia());
+            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
+        };
+        var client = factory.CreateAuthenticatedClient();
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
+        var ownerId = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var slug = CharacterStore.Create(root, new CharacterDraft("Боря", null,
+            [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(TestImages.Jpeg((byte)i)))]),
+            DateTime.UtcNow).Value!.Manifest.Slug;
+        var chat = factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+        var store = factory.Services.GetRequiredService<ImageThreadStore>();
+        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
+        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
+        factory.Services.GetRequiredService<UserStore>()
+            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
+
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent("q1"), "quoteId" },
+            { new StringContent("тест"), "prompt" },
+            { new StringContent(FaceTargetJson(facesKey, 2, slug)), "faceTarget" },
+            { new StringContent(chat.Id), "sessionId" },
+            { new StringContent(thread.Thread!.Id), "threadId" },
+        };
+        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
+        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        form.Add(png, "source", "test.png");
+        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("face").GetInt32().Should().Be(2);
+        // Старый клиент: code и error на месте, лишних полей, кроме face, нет
+        body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.GetProperty("error").GetString().Should().Contain("мелкое");
+        body.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(["error", "code", "face"]);
+        factory.Dispose();
+    }
+
+    // Отказ без привязки к лицу (лица 3 нет в списке): тело прежнее {error, code}, без face
+    [Fact]
+    public async Task Отказ_без_привязки_к_лицу_без_face()
+    {
+        SetFlag(true);
+        var resp = await Start(FaceTargetJson(_facesKey, 3, _charSlug));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.TryGetProperty("face", out _).Should().BeFalse();
+        body.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(["error", "code"]);
+    }
+
     // ── busy → 503 ───────────────────────────────────────────────────────────────
 
     [Fact]
@@ -470,6 +539,27 @@ public class FaceTargetLaunchHttpTests : IDisposable
         public Task<LocalFaceDetectResult> DetectFacesAsync(byte[] image, CancellationToken ct) =>
             Task.FromResult(new LocalFaceDetectResult(200, 200,
                 [new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false)], null, false));
+        public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
+    }
+
+    // Два лица: первое годное, второе мелкое (Small) — отказ «слишком мелкое» по лицу 2
+    private sealed class SmallSecondFaceMedia : ILocalImageMedia
+    {
+        public bool Configured => true;
+        public bool Available => true;
+        public Task<int?> QueueLengthAsync(CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>?>([]);
+        public int? EtaSeconds(LocalImageOp op, int count, int images) => throw new NotSupportedException();
+        public Task<LocalImageSubmitted> SubmitAsync(LocalImageRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
+        public Task<LocalFacePoseResult> FacePoseAsync(IReadOnlyList<byte[]> images, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<LocalFaceDetectResult> DetectFacesAsync(byte[] image, CancellationToken ct) =>
+            Task.FromResult(new LocalFaceDetectResult(200, 200,
+                [new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false),
+                 new LocalDetectedFace(2, 160, 160, 190, 190, 0.85, true)], null, false));
         public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
     }
 

@@ -291,6 +291,39 @@ public class FaceTargetLaunchTests : IDisposable
         result.Error.Should().Contain("мелкое");
     }
 
+    // Цепочка N = 2: лицо 1 годное, лицо 2 мелкое — отказ несёт номер именно лица 2 (ADR-028, этап 3).
+    // Мутация «не передавать номер» (Invalid без Payload) — Payload null, тест красный
+    [Fact]
+    public async Task Два_лица_отказ_по_второму_несёт_номер_2()
+    {
+        var faces = new[] {
+            new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false),
+            new LocalDetectedFace(2, 160, 160, 190, 190, 0.85, true)
+        };
+        var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
+        var result = await Assembler(media: FakeMedia(faces), jobs: QuoteJobsN(2))
+            .AssembleFaceTargetForTestAsync(Owner, _scope, req, req.FaceTarget!, default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(2);
+        body.Code.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.Error.Should().Be(result.Error);
+    }
+
+    // Отказ без привязки к лицу (лица нет в списке) — тела с номером нет: прежнее {error, code}
+    [Fact]
+    public async Task Отказ_без_привязки_к_лицу_без_Payload()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var req = Request(_charB, FaceTargetJson(_facesKey, 99, _charB));
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        result.Payload.Should().BeNull();
+    }
+
     // ── ТЕСТ ШВА (ключевой) ───────────────────────────────────────────────────────
 
     [Fact]

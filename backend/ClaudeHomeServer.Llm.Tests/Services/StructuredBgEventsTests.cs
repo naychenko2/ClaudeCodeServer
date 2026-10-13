@@ -925,4 +925,66 @@ public class StructuredBgEventsTests : IDisposable
         ClaudeSession.IsAgenticTaskStarted(BashStarted("t", "toolu_1")).Should().BeFalse();
         ClaudeSession.IsAgenticTaskStarted(El("""{"task_id":"t","subagent_type":""}""")).Should().BeFalse();
     }
+
+    // === Живые фоновые агенты прогона — держат делегированность прогона (SessionManager) ===
+
+    private static bool HasLiveBgAgentsOf(object run) =>
+        (bool)CliRunType.GetProperty("HasLiveBgAgents")!.GetValue(run)!;
+
+    private static void SetRunFlag(object run, string field, bool value) =>
+        CliRunType.GetField(field)!.SetValue(run, value);
+
+    [Fact]
+    public async Task HasLiveBgAgents_АгентЖив_ЗавершилсяИПродолжениеОтыграно_Снят()
+    {
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        HasLiveBgAgentsOf(run).Should().BeFalse("фоновых не было");
+
+        InvokeHandleTaskStarted(session, run, AgentStarted("t1", "toolu_1"));
+        HasLiveBgAgentsOf(run).Should().BeTrue("агент жив");
+
+        // Ход закончен, агент завершился, stdin открыт — CLI вот-вот ответит на уведомление
+        // ходом-продолжением, который действует от имени того же прогона
+        SetRunFlag(run, "TurnDone", true);
+        InvokeHandleStructuredTaskNotification(session, run,
+            El("""{"task_id":"t1","tool_use_id":"toolu_1","status":"completed"}"""));
+        await WaitForAsync(() => DoneOf(sent).Count > 0);
+        HasPendingBgOf(run).Should().BeFalse();
+        HasLiveBgAgentsOf(run).Should().BeTrue("окно хода-продолжения");
+
+        SetRunFlag(run, "ContinuationActive", true);
+        HasLiveBgAgentsOf(run).Should().BeTrue("продолжение идёт");
+
+        // Продолжение отыграно: stdin закрыт
+        SetRunFlag(run, "ContinuationActive", false);
+        SetRunFlag(run, "StdinClosed", true);
+        HasLiveBgAgentsOf(run).Should().BeFalse("агентов и продолжения не осталось");
+    }
+
+    [Fact]
+    public void HasLiveBgAgents_ФоноваяКоманда_НеАгент_НераспознанныйЗапуск_FailClosed()
+    {
+        var (session, _) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, BashStarted("b1", "toolu_bash"));
+        HasPendingBgOf(run).Should().BeTrue();
+        HasLiveBgAgentsOf(run).Should().BeFalse("дев-сервер фоном — не агент");
+
+        SetPendingBgUnknown(run, true);
+        HasLiveBgAgentsOf(run).Should().BeTrue("запуск видели, вид не распознали — считаем агентом");
+    }
+
+    [Fact]
+    public void HasLiveBgAgents_ПустойСнэпшотCli_АгентовНет()
+    {
+        var (session, _) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, AgentStarted("t1", "toolu_1"));
+
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+
+        HasLiveBgAgentsOf(run).Should().BeFalse("CLI сказал, что живых задач нет");
+    }
 }

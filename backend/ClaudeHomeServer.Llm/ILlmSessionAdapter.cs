@@ -4,7 +4,9 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // Состояние делегирования идущего хода сессии — то, что бэкенду нужно знать, чтобы гейтить
 // действия MCP-серверов, не трогая состав их инструментов (SessionManager.GetActiveTurnDelegation)
-public readonly record struct TurnDelegationState(int AgentDepth, bool ExecutorSuppressed);
+// RunOnly — делегированность держится лишь «липкой» частью прогона (живые фоновые агенты
+// прошлого делегированного хода), а сам текущий ход — человека или авто глубины 0.
+public readonly record struct TurnDelegationState(int AgentDepth, bool ExecutorSuppressed, bool RunOnly = false);
 
 // Адаптер LLM-провайдера для одной сессии. Контракт — калька публичного API ClaudeSession:
 // SessionManager владеет жизненным циклом и статусами, адаптер — только общением с моделью.
@@ -68,6 +70,14 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // завершения она не присылает и может жить часами, поэтому свечение и «агенты работают»
     // ей не положены, но и молчать нельзя — иначе непонятно, почему чат держит живой процесс.
     bool HasTrackedCommandBg { get; }
+
+    // У прогона остались живые фоновые АГЕНТЫ (Agent/Task с run_in_background, Workflow) —
+    // или их ход-продолжение: они действуют от имени хода, который их запустил. По этому
+    // признаку SessionManager держит делегированность прогона после result делегированного
+    // хода (SessionEntry.RunDelegation) и снимает её, когда агентов не осталось. Fail-closed:
+    // нераспознанный фоновый запуск считается агентом; фоновая КОМАНДА (Bash) — нет.
+    // DIM с консервативным умолчанием (любая фоновая задача) — для адаптеров без своего учёта.
+    bool HasLiveBgAgents => HasPendingBg;
 
     // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт
     // (ContinuationActive) или вот-вот начнёт (окно ContinuationStartGrace, см. ClaudeSession.

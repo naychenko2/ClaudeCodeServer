@@ -524,16 +524,18 @@ public class LocalImageEditorTests : IDisposable
 
         job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
         var sent = media.Submitted.Should().ContainSingle().Subject;
-        // Путь с размеченной копией (ADR-028, п.7): вуаль не включается (VeilMask = null, как
-        // раньше AsReference), маска не образец — в запросе 3 картинки
-        sent.Images.Should().HaveCount(3);
+        // Путь с размеченной копией (ADR-028, п.7): вуаль не включается (VeilMask = null), маска
+        // идёт образцом №3, как до вуали, — иначе до модели она не доходит (живой прогон 13.10)
+        sent.Images.Should().HaveCount(4);
         sent.Images[0].Should().Equal(source, "холст — исходник, а не фото персонажа");
         sent.Images[1].Should().Equal(annotated);
-        sent.Images[2].Should().Equal(faces[0].Bytes);
+        sent.Images[2].Should().Equal(mask);
+        sent.Images[3].Should().Equal(faces[0].Bytes);
         sent.VeilMask.Should().BeNull("путь с размеченной копией: вуаль не проверена — не включаем");
         sent.KeepMask.Should().BeNull("размеченная копия может просить правку вне кисти — склейка выбросила бы её");
         sent.Prompt.Should().Contain("1) исходная картинка").And.Contain("2) та же картинка с пометками")
-            .And.Contain("3) фото лица — персонаж «Тимур»");
+            .And.Contain("3) маска").And.Contain("4) фото лица — персонаж «Тимур»")
+            .And.NotContain(EditRequestComposer.VeilNote);
     }
 
     // ── Режим B: LoRA персонажа плюс фото-образец ──

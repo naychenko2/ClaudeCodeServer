@@ -191,22 +191,29 @@ public class EditMarksTests
             "остаться не должно. Всё вне отмеченного места оставь без изменений.");
     }
 
-    // Путь «annotated» (размеченная копия) с вуалью Артём НЕ проверял: вуаль для него не включается
-    // (драйвер даст VeilMask = null, как раньше AsReference) — фиксируем: маска каналом, копия образцом
+    // С размеченной копией вуаль не включается (драйвер даёт VeilMask = null): маска идёт образцом,
+    // как до вуали, а промпт без VeilHead/VeilNote. Живой прогон Артёма 13.10: маска в канале до
+    // модели не доходила, а промпт про серую заливку рисовал серый прямоугольник
     [Fact]
-    public void Вуаль_СРазмеченнойКопией_МаскаКаналом_КопияОбразцом()
+    public void Вуаль_СРазмеченнойКопией_МаскаОбразцом_БезВуали()
     {
         var png = TestImages.Png(10, 10);
         var annotated = TestImages.Png(10, 10, tail: 2);
+        var marks = """[{"type":"brush","points":[[0.2,0.2],[0.4,0.4]]},{"type":"text","x":0.5,"y":0.5,"text":"сюда"}]""";
 
         var req = EditRequestComposer.Compose(
-            Input(png, mask: png, annotated: annotated), ImageEditOp.Edit, VeilModel, 1).Value!;
+            Input(png, mask: png, annotated: annotated, marks: marks), ImageEditOp.Edit, VeilModel, 1).Value!;
 
-        req.Mask.Should().NotBeNull("вуаль: маска каналом, даже с размеченной копией");
+        req.Mask.Should().BeNull("с размеченной копией канала маски нет — драйвер его не отдал бы модели");
         req.References.Should().Contain(r => r.Label == EditRequestComposer.AnnotatedLabel,
-            "размеченная копия — образцом, как раньше");
-        req.References.Should().NotContain(r => r.Label == EditRequestComposer.MaskLabel,
-            "маска не образцом — вуаль, а не AsReference");
+            "размеченная копия — образцом");
+        req.References.Should().ContainSingle(r => r.Label == EditRequestComposer.MaskLabel,
+            "маска — образцом, как до вуали")
+            .Which.Bytes.Should().Equal(png);
+        req.Prompt.Should().NotStartWith(EditRequestComposer.VeilHead, "вуали нет — текст человека не оборачивается");
+        req.Prompt.Should().NotContain(EditRequestComposer.VeilNote, "вуали нет — примечания о серой заливке нет");
+        req.Prompt.Should().Contain("белое — область, которую менять", "роль маски-образца названа");
+        req.Prompt.Should().Contain("выделено кистью", "строки кисти на месте, как до вуали");
     }
 
     [Fact]

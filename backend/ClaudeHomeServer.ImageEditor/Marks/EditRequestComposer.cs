@@ -90,7 +90,9 @@ public static class EditRequestComposer
             {
                 keepMask = mask;
             }
-            else if (model.Caps.Mask is MaskSupport.Native or MaskSupport.Veil)
+            // Вуаль с размеченной копией не включается (LocalImageEditor.VeilMaskOf): маска идёт
+            // образцом, как до вуали, — иначе до модели она не дошла бы вовсе
+            else if (model.Caps.Mask == MaskSupport.Native || (model.Caps.Mask == MaskSupport.Veil && annotated is null))
             {
                 maskChannel = mask;
             }
@@ -140,7 +142,7 @@ public static class EditRequestComposer
         // Вуаль (ADR-028, решение 12): модель видит серую заливку вместо белой маски, поэтому
         // строки «выделено кистью…» из пометок не нужны (место уже видно), а текст человека
         // оборачивается: модель должна понять, что серое — это то, что править
-        var veil = mask is not null && model.Caps.Mask == MaskSupport.Veil;
+        var veil = mask is not null && annotated is null && model.Caps.Mask == MaskSupport.Veil;
         var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split || veil ? MarksScope.WithoutBrush : MarksScope.All);
         var prompt = veil
             ? Join(VeilHead + input.Prompt?.Trim(), marks, notes.Prepend(VeilNote))

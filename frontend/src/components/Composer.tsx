@@ -505,7 +505,9 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
           overflow: 'hidden', pointerEvents: 'none',
         }}>
-          <div style={{ height: RATE_STRIPE_H, background: c.bg }}>
+          {/* Дорожка — тот же цвет заливки, приглушённый: c.bg (warningBg) в тёмной теме
+              сливается с карточкой, и полоска читалась обрубком, а не «осталось столько» */}
+          <div style={{ height: RATE_STRIPE_H, background: `color-mix(in srgb, ${c.fill} 22%, transparent)` }}>
             <div style={{ height: '100%', width: `${fillPct}%`, background: c.fill }} />
           </div>
         </div>

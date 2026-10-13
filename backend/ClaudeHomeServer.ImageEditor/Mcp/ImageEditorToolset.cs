@@ -476,9 +476,15 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             var assignments = new List<FaceAssignment>();
             foreach (var item in facesArray.OfType<JsonObject>())
             {
-                if (Int(item, "face") is not { } f) continue;
-                if (Str(item, "character") is not { } c) continue;
-                assignments.Add(new FaceAssignment(f, c));
+                // Явный отказ до общего прогона правил: отсутствующий face или пустой/пробельный
+                // character (Str → null) иначе тихо проглатывались, и агент видел «Не больше 2 лиц
+                // за раз» вместо причины — «укажи персонажа» (как на одиночном пути)
+                var faceNo = Int(item, "face");
+                if (faceNo is null || faceNo < 1)
+                    return Deny("Укажите номер лица (face) — целое число от 1");
+                if (Str(item, "character") is not { } c)
+                    return Deny($"Для лица {faceNo.Value} укажи персонажа (character)");
+                assignments.Add(new FaceAssignment(faceNo.Value, c));
             }
             // Правила — та же чистая функция, что котировка и сборщик; FacesKey для проверки не нужен
             var rules = Faces.FaceTargetRules.Validate(new FaceTarget(version.Id, "", assignments));

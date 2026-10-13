@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Faces;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
@@ -144,5 +146,44 @@ public class FacePassesQuoteTests : IDisposable
         var result = await _service.QuoteAsync(Owner, Project, QuoteRequest(1, faceTarget), CancellationToken.None);
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // ── (е) facePasses в JSON-ответе: null не пишется (шаг 7) ─────────────────────────
+
+    private static string QuoteDtoJson(ImageEditQuoteDto dto) =>
+        JsonSerializer.Serialize(dto, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+    private static ImageEditQuoteDto QuoteDto(int? facePasses) =>
+        new("q1", "local", "auto",
+            new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false, ImageEditEstimateSources.Provider),
+            DateTime.UtcNow.AddMinutes(10), 60, FacePasses: facePasses);
+
+    [Fact]
+    public void facePasses_null_обычной_правки_не_пишется_в_JSON()
+    {
+        var json = QuoteDtoJson(QuoteDto(null));
+        json.Should().NotContain("facePasses", "у обычной правки facePasses = null — ключ не пишется");
+    }
+
+    [Fact]
+    public void facePasses_подстановки_пишется_в_JSON()
+    {
+        var json = QuoteDtoJson(QuoteDto(1));
+        json.Should().Contain("\"facePasses\":1", "для подстановки facePasses = 1 — ключ пишется");
+    }
+
+    // ── (ж) Гонка: два параллельных запуска по одной котировке — ровно один проходит (шаг 7) ──
+
+    [Fact]
+    public async Task Два_параллельных_запуска_по_одной_котировке_ровно_один_проходит()
+    {
+        var quote = (await _service.QuoteAsync(Owner, Project, QuoteRequest(1, FaceTarget(1)), CancellationToken.None)).Value!;
+        var results = await Task.WhenAll(
+            _service.StartAsync(Owner, Project, JobInput(quote.QuoteId, 1), CancellationToken.None),
+            _service.StartAsync(Owner, Project, JobInput(quote.QuoteId, 1), CancellationToken.None));
+
+        results.Count(r => r.Value is not null).Should().Be(1, "ровно один запуск проходит");
+        results.First(r => r.Value is null).ErrorCode.Should().Be(ImageEditErrorCodes.QuoteNotFound,
+            "второй запуск: котировка уже расходуется");
     }
 }

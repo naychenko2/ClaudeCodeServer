@@ -1509,6 +1509,9 @@ public class ImageEditorToolsetTests : IDisposable
 
         public void SetToolset(ImageEditorToolset toolset) => _toolset = toolset;
 
+        // Текущее число запусков хода: после отказа слот освобождается → 0
+        public int CurrentLaunchCount => _toolset is null ? 0 : LaunchCount(_toolset);
+
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct)
         {
@@ -1527,8 +1530,11 @@ public class ImageEditorToolsetTests : IDisposable
             return Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto("j1")));
         }
 
+        // FacePasses — число лиц из последнего записанного quote request: сборщик сверяет его
+        // с faceTarget.Faces.Count (шаг 7), поэтому мок отвечает согласованным числом, а не null
         public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId)
-            => new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local");
+            => new ImageEditQuoteInfo(ImageEditOp.Edit, null, "local",
+                LastQuoteRequest?.FaceTarget?.Faces.Count);
 
         public ImageEditJobDto? Get(string ownerId, string projectId, string jobId) => null;
 
@@ -1611,7 +1617,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slugA = CreateCharacter("Аня");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1625,6 +1631,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("либо faces, либо face");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
     }
 
     // повтор персонажа → отказ
@@ -1636,7 +1643,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1649,6 +1656,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("свой персонаж");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
     }
 
     // три лица → отказ
@@ -1663,7 +1671,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(3, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1676,6 +1684,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("2 лиц");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
     }
 
     // повтор номера лица → отказ
@@ -1688,7 +1697,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1701,6 +1710,67 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("указано дважды");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
+    }
+
+    // Пустой/пробельный character в элементе faces → явный отказ про персонажа,
+    // а не вводящий в заблуждение «Не больше 2 лиц за раз» (мутация: вернуть continue → краснеет)
+    [Fact]
+    public async Task faces_пустой_character_отказ_про_персонажа()
+    {
+        var slugA = CreateCharacter("Аня");
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        var args = FacesArg((1, "  "));
+        args["threadId"] = thread;
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("укажи персонажа", "причина — отсутствие персонажа, а не лимит лиц");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
+    }
+
+    // Отказ не тратит слот запуска: повторный запуск в том же ходе после отказа проходит.
+    // Если бы отказ не освободил слот, второй успешный запуск уперся бы в лимит MaxLaunchesPerTurn
+    [Fact]
+    public async Task faces_отказ_не_тратит_слот_повторный_запуск_в_том_же_ходе_проходит()
+    {
+        var slugA = CreateCharacter("Аня");
+        var slugB = CreateCharacter("Боря");
+        // Один детектированный face 1: для успешных запусков; отказной вызов (повтор персонажа)
+        // отбивается в тулсете до детекции, поэтому второе лицо детекции не нужно
+        var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia(faces));
+        var thread = Thread();
+
+        // 1) успешный запуск (слот 1)
+        var ok = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slugA, ["provider"] = "local" });
+        ok.IsError.Should().BeFalse(ok.Text);
+
+        // 2) отказной запуск: повтор персонажа (резервирует слот, затем освобождает)
+        var denyArgs = FacesArg((1, slugA), (2, slugA));
+        denyArgs["threadId"] = thread;
+        denyArgs["prompt"] = "фон";
+        denyArgs["provider"] = "local";
+        var deny = await Call(toolset, ImageEditorToolset.ToolGenerate, denyArgs);
+        deny.IsError.Should().BeTrue();
+        deny.Text.Should().Contain("свой персонаж");
+        jobs.CurrentLaunchCount.Should().Be(1, "после отказа слот освобождён — остался только первый запуск");
+
+        // 3) повторный запуск в том же ходе: если бы отказ тратил слот, уперся бы в лимит
+        var again = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "фон", ["face"] = 1,
+                ["character"] = slugB, ["provider"] = "local" });
+        again.IsError.Should().BeFalse(again.Text);
     }
 
     // faces без provider local → отказ как у одиночной подстановки
@@ -1713,7 +1783,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, _) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1726,6 +1796,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("локальными");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
     }
 
     // Замечание Глеба (b8cca6705): в запросе запуска CharacterSlug == null,

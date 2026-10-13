@@ -275,20 +275,9 @@ public sealed class ImageEditLaunchAssembler(
     // образцы — только персонаж, маска строится сервером по bbox детектора.
     // Порядок: a. флаг → b. личная область/входы → c. версия → d. детекция/facesKey →
     // e. промпт → f. проходы (одна детекция, N масок/кропов, по возрастанию номера лица) →
-    // g. входы (N = 1 — старые поля, N > 1 — FacePasses)
-    // Публичный путь (AssembleAsync): временный отказ N > 1 (шаг 12). Тест N > 1 — через
-    // AssembleFaceTargetForTestAsync (allowMultipleFaces: true), который снимает только этот отказ
+    // g. входы (N = 1 — старые поля, N > 1 — FacePasses: цепочка проходов в задаче)
     private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetAsync(
         string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
-        => await AssembleFaceTargetCoreAsync(ownerId, scope, req, faceTarget, allowMultipleFaces: false, ct);
-
-    internal async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetForTestAsync(
-        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
-        => await AssembleFaceTargetCoreAsync(ownerId, scope, req, faceTarget, allowMultipleFaces: true, ct);
-
-    private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetCoreAsync(
-        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget,
-        bool allowMultipleFaces, CancellationToken ct)
     {
         // a. Флаг выключен — как в 7a
         if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
@@ -301,17 +290,14 @@ public sealed class ImageEditLaunchAssembler(
         var rules = Faces.FaceTargetRules.Validate(faceTarget);
         if (!rules.Ok)
             return Fail<ImageEditJobInput>(rules.ErrorCode!, rules.Error!);
-        // Котировка: сверка числа проходов (ADR-028, этап 3) — до временного отказа N > 1,
-        // чтобы несовпадение N не было замаскировано; при отказе котировка не расходуется
+        // Котировка: сверка числа проходов (ADR-028, этап 3) — цена и ETA посчитаны на N лиц;
+        // при отказе котировка не расходуется
         var quote = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
         if (quote is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound, "Котировка устарела");
         if (faceTarget.Faces.Count != (quote.FacePasses ?? 0))
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
-        // Временный отказ: цепочка N > 1 — шаг 12 снимет только эту строку
-        if (!allowMultipleFaces && faceTarget.Faces.Count > 1)
-            return Invalid("Несколько лиц за раз пока не поддерживается");
         if (req.Mask is not null || req.Annotated is not null)
             return Invalid("При подстановке на лицо маску и разметку не указывают");
         // Провайдер — только local

@@ -1600,7 +1600,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
 
-        // Запуск может упасть в сборщик (N>1 пока не поддерживается), но котировка ушла
+        // Исход запуска здесь не проверяется (его держат тесты сборщика и сквозной HTTP-тест) — только котировка
         jobs.LastQuoteRequest.Should().NotBeNull("quote request записан");
         jobs.LastQuoteRequest!.FaceTarget!.Faces.Should().HaveCount(2);
         jobs.LastQuoteRequest!.FaceTarget!.Faces[0].Face.Should().Be(1);

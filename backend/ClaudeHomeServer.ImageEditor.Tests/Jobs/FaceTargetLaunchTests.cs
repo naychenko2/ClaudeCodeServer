@@ -302,7 +302,7 @@ public class FaceTargetLaunchTests : IDisposable
         };
         var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
         var result = await Assembler(media: FakeMedia(faces), jobs: QuoteJobsN(2))
-            .AssembleFaceTargetForTestAsync(Owner, _scope, req, req.FaceTarget!, default);
+            .AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -653,12 +653,12 @@ public class FaceTargetLaunchTests : IDisposable
         return $"{{\"versionId\":\"origin\",\"facesKey\":\"{facesKey}\",\"faces\":[{faces}]}}";
     }
 
-    // N > 1: обход временного отказа (AssembleFaceTargetForTestAsync), котировка на N лиц
+    // N > 1: публичный путь сборщика, котировка на N лиц
     private async Task<ImageEditJobInput> AssembleNAsync(ILocalImageMedia media, string faceTargetJson, int n)
     {
         var req = Request(null, faceTargetJson);
         var result = await Assembler(media: media, jobs: QuoteJobsN(n))
-            .AssembleFaceTargetForTestAsync(Owner, _scope, req, req.FaceTarget!, default);
+            .AssembleAsync(Owner, _scope, req, default);
         result.Value.Should().NotBeNull(result.Error);
         return result.Value!;
     }
@@ -739,7 +739,7 @@ public class FaceTargetLaunchTests : IDisposable
 
         var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
         var result = await Assembler(media: media.Object, jobs: QuoteJobsN(2))
-            .AssembleFaceTargetForTestAsync(Owner, _scope, req, req.FaceTarget!, default);
+            .AssembleAsync(Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         Volatile.Read(ref detectCount).Should().Be(1, "детекция одна на запуск, не по числу лиц");

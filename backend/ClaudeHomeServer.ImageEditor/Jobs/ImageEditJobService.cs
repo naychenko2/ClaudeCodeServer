@@ -295,7 +295,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 Initiator = input.Initiator,
             };
             _jobs[job.Id] = job;
-            job.Completion = Task.Run(() => RunAsync(job, editor, request, input.CharacterPicker));
+            job.Completion = Task.Run(() => RunAsync(job, editor, request, input.CharacterPicker, input.FacePasses));
         }
 
         _workspace.Sweep(Now());
@@ -303,14 +303,25 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     }
 
     private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request,
-        Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker)
+        Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker,
+        IReadOnlyList<FacePass>? facePasses)
     {
         ImageEditResult result;
         var cancelled = false;
         try
         {
             if (picker is not null) request = await PickCharacterAsync(job, request, picker);
-            result = await editor.RunAsync(request, new JobProgress(this, job), job.Cts.Token);
+            if (facePasses is { Count: > 1 })
+            {
+                // Цепочка проходов (ADR-028, этап 3): исходник каждого прохода — выход предыдущего,
+                // N = 1 идёт прежним путём (поведение этапа 2 не меняется)
+                result = await FacePassChain.RunAsync(editor, facePasses, request.Source!, request.Model,
+                    new JobProgress(this, job), job.Cts.Token);
+            }
+            else
+            {
+                result = await editor.RunAsync(request, new JobProgress(this, job), job.Cts.Token);
+            }
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
         {

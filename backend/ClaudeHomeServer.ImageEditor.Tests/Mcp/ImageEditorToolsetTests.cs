@@ -1698,6 +1698,29 @@ public class ImageEditorToolsetTests : IDisposable
         jobs.LastQuoteRequest.Should().BeNull("до котировки не дошло");
     }
 
+    // Номер лица меньше 1 → понятный отказ до котировки, без исключения
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task faces_номер_лица_меньше_1_отказ(int faceNo)
+    {
+        var slugA = CreateCharacter("Аня");
+        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+            localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
+
+        var args = FacesArg((faceNo, slugA));
+        args["threadId"] = Thread();
+        args["prompt"] = "фон";
+        args["provider"] = "local";
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("целое число от 1");
+        jobs.LastQuoteRequest.Should().BeNull("до котировки не дошло");
+        jobs.CurrentLaunchCount.Should().Be(0, "отказ не тратит слот запуска");
+    }
+
     // Порядок назначений — как у агента, не по номеру лица: (2 → Боря), (1 → Аня)
     [Fact]
     public async Task faces_порядок_назначений_как_в_аргументе()

@@ -284,6 +284,12 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             ? new List<string> { "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose" }
             : new List<string> { "--print", "--output-format", "json" };
         args.AddRange(hooksOffArgs);
+        // Явный режим прав: CLI ≥ 2.1.2xx при -p на сторонних провайдерах (env-оверрайд)
+        // без явного режима стартует в auto mode (авто-одобрение). One-shot — чистая
+        // генерация, режиму «default» это соответствует: не авто-одобряет и не планирует.
+        // ClaudeSession передаёт --permission-mode по Info.Mode; у one-shot режима нет —
+        // всегда default, поэтому флаг постоянный и входит в сигнатуру детерминированно.
+        args.AddRange(["--permission-mode", ClaudeMode.Default.ToCliFlag()]);
         // Транскрипт one-shot мертв с рождения: --resume по нему никто не делает, а CLI
         // писал по файлу на вызов (замер: ~287 файлов за сутки на одном инстансе) и держал
         // их до своей плановой уборки (~30 дней). Флаг работает только вместе с --print —

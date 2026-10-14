@@ -66,6 +66,16 @@ public class OneShotClaudeRunnerArgsTests
     }
 
     [Fact]
+    public void РежимПрав_ВсегдаDefault()
+    {
+        // CLI ≥ 2.1.2xx при -p на сторонних провайдерах (env-оверрайд) без явного режима
+        // стартует в auto mode (авто-одобрение); one-shot — чистая генерация, режиму
+        // «default» это соответствует. Флаг постоянный (не зависит от хода/модели),
+        // входит в сигнатуру запуска детерминированно.
+        Build().Should().ContainInOrder("--permission-mode", "default");
+    }
+
+    [Fact]
     public void ФорматВывода_ВсегдаJson()
     {
         // Аналитике расхода нужен usage каждого вызова, а его отдает только json-ответ

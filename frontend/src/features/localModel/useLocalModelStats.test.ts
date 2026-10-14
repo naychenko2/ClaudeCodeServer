@@ -4,9 +4,15 @@ import {
   createStatsPoller,
   getLocalModelConfigured,
   isLocalModelPanelVisible,
+  makeStatsFetch,
   setLocalModelConfigured,
   subscribeLocalModelConfigured,
 } from './useLocalModelStats';
+
+// Блокёр: окно из UI доходит до fetch. makeStatsFetch читает windowRef.current на
+// каждый вызов; мутация «захватить окно при создании poller» краснеет.
+const { fetchLocalModelStats } = vi.hoisted(() => ({ fetchLocalModelStats: vi.fn() }));
+vi.mock('./api', () => ({ fetchLocalModelStats }));
 
 describe('isLocalModelPanelVisible: значок — только когда все три условия', () => {
   it('флаг + admin + configured — показывается', () => {
@@ -119,5 +125,27 @@ describe('стор configured: лёгкий опрос для значка', () 
     setLocalModelConfigured(null);
     expect(seen).toEqual([true, false]);
     expect(getLocalModelConfigured()).toBeNull();
+  });
+});
+
+describe('makeStatsFetch: окно доходит до запроса (блокер)', () => {
+  it('fetch читает ТЕКУЩЕЕ окно: 15m → 1h, смена ref меняет следующий запрос', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    const ref = { current: '15m' as const };
+    const fetch = makeStatsFetch(ref);
+
+    await fetch();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('15m');
+
+    ref.current = '1h'; // переключатель на «1 ч»
+    await fetch();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('1h');
+  });
+
+  it('5m → 5m (не 15m по умолчанию): мутация «окно не пробрасывается» краснеет', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    const ref = { current: '5m' as const };
+    await makeStatsFetch(ref)();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
   });
 });

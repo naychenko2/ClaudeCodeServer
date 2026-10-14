@@ -7,6 +7,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { fetchLocalModelStats, type LocalModelStats } from './api';
 import type { Window as StatsWindow } from './ThroughputChart';
 
+// Захват текущего окна для fetch: poller живёт дольше выбора окна, поэтому fetch
+// читает windowRef.current на каждый вызов, а не захваченное значение. Смена
+// окна (без пересоздания poller) меняет следующий запрос — тест ниже.
+export function makeStatsFetch(windowRef: { current: StatsWindow }): () => Promise<LocalModelStats> {
+  return () => fetchLocalModelStats(windowRef.current);
+}
+
 // === Условие показа значка и панели: все три сразу ===
 // Флаг фичи включён, пользователь — админ, локальный провайдер настроен на
 // сервере (configured из ответа /api/local-model/stats). configured === null —
@@ -181,7 +188,17 @@ export function useLocalModelStats(active: boolean, window: StatsWindow = '15m')
 } {
   const windowRef = useRef<StatsWindow>(window);
   windowRef.current = window;
-  const [poller] = useState(() => createStatsPoller(() => fetchLocalModelStats(windowRef.current), 2000));
+  const [poller] = useState(() => createStatsPoller(makeStatsFetch(windowRef), 2000));
+
+  // Смена окна — сразу новый снимок: сервер отдаёт средние за выбранное окно,
+  // поэтому данные за 15m не подходят под график 1h. Первый прогон пропускаем —
+  // setActive уже снял снимок, повторный fetch был бы дублем.
+  const prevWindow = useRef<StatsWindow | null>(null);
+  useEffect(() => {
+    if (prevWindow.current === window) return;
+    prevWindow.current = window;
+    poller.refetch();
+  }, [window, poller]);
 
   const snap = useSyncExternalStore(
     cb => poller.subscribe(cb),

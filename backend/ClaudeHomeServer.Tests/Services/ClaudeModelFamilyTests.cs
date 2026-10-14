@@ -54,12 +54,30 @@ public class ClaudeModelFamilyTests : IDisposable
         ClaudeModelFamily.Canonicalize(once).Should().Be(once, "повторное сведение ничего не меняет");
     }
 
+    // Supports1M = «запускать семейство с окном [1m], если подписка тянет»: opus/fable/sonnet —
+    // да, haiku — нет (claude-haiku-5-5 умеет 1M, но тариф ×5 за промпт >100K, порог
+    // автокомпакта держим 200K).
     [Fact]
-    public void Supports1M_УHaikuНет_УОстальныхЕсть()
+    public void Supports1M_TриСемействаС1M_HaikuБезОкна()
     {
         ClaudeModelFamily.All.Select(f => f.Alias).Should().Equal("opus", "fable", "sonnet", "haiku");
         ClaudeModelFamily.All.Where(f => f.Supports1M).Select(f => f.Alias)
             .Should().BeEquivalentTo("opus", "fable", "sonnet");
+        ClaudeModelFamily.FromAlias("haiku")!.Supports1M.Should().BeFalse(
+            "haiku по умолчанию не запускается с окном [1m]");
+    }
+
+    // haiku: Supports1M=false → LaunchModel НЕ дописывает [1m] — порог auto-compact
+    // (CLAUDE_CODE_MAX_CONTEXT_TOKENS) остаётся 200K, иначе тариф Haiku 5.5 ×5 за промпт >100K.
+    // Мутация: haiku Supports1M=true → здесь haiku[1m] и окно 1M → тест краснеет.
+    [Fact]
+    public void Haiku_Supports1MFalse_ОкноНеДописывается_ПорогАвтокомпакта200K()
+    {
+        var pool = Pool(("max", true));
+        var launched = pool.LaunchModel("haiku");
+        launched.Should().Be("haiku", "haiku не получает суффикс [1m] по умолчанию");
+        LlmProviderRegistry.ClaudeContextWindow(launched).Should().Be(200_000,
+            "порог auto-compact haiku не сдвинулся с 200K");
     }
 
     private static LlmProviderRegistry Registry() => new(TestConfig.Build(new Dictionary<string, string?>

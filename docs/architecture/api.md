@@ -335,13 +335,18 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 ```
 GET  /api/local-model/stats        ?window=15m|1h&since=<unix ms>   (только admin; иначе 403)
      → { configured, engine?, model?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
-         othersCount?, speed: { genPerStream?, prefillPerStream? },
+         othersCount?, speed: { genPerStream?, prefillPerStream?, avgGenTps?, avgPromptTps? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
          history: [{ t, genThroughput?, waiting?, running? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
      window по умолчанию 15m, «<n>m»/«<n>h», иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
+     speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
+     avgGenTps/avgPromptTps — СРЕДНЯЯ скорость на поток (ток/с) за окно графика (window, 15m/1h):
+     Δgeneration_tokens/Δdecode_time (генерация) и Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта).
+     Знаменатель — суммарное время движка, поэтому простой (движок молчит) в среднее не входит;
+     нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
      chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
      othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi
      (сейчас в массиве одна карта — первая строка nvidia-smi)

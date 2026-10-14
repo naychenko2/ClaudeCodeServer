@@ -89,6 +89,29 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         }
     }
 
+    // Средняя скорость на поток за окно (15m/1h, те же окна, что у графика «Нагрузка»):
+    // Δgeneration_tokens/Δdecode_time (генерация) и Δprefill_kv_computed_tokens/Δprefill_time
+    // (чтение промпта). Знаменатель — суммарное время движка (decode/prefill), поэтому простой
+    // (движок молчит) в среднее не входит: ночью среднее не падает к нулю. Окно режется по
+    // разрыву (рестарт счётчика → отрицательная дельта → null), ровно как график рисует разрыв.
+    // Текущие значения счётчиков — из последнего снимка; старейшая точка окна — из буфера.
+    public LocalModelStatsAverage GetAverageSpeed(TimeSpan window)
+    {
+        var now = _time.GetUtcNow();
+        var basePt = OldestInWindow(now, window);
+        if (basePt is null || _last is not { } cur)
+            return new LocalModelStatsAverage(); // null/null: нет данных за окно
+        return new LocalModelStatsAverage
+        {
+            GenTps = SpeedOverWindow(basePt, cur,
+                p => p.GenerationTokens, s => (double?)s.GenerationTokens,
+                p => p.DecodeTimeSum, s => s.DecodeTimeSum),
+            PromptTps = SpeedOverWindow(basePt, cur,
+                p => p.PrefillKvComputedTokens, s => s.PrefillKvComputedTokens,
+                p => p.PrefillTimeSum, s => s.PrefillTimeSum),
+        };
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
@@ -303,8 +326,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 _counters.Clear();
             _counters.Add(point);
 
-            // Обрыв: держим только точки за PreemptionsWindow (15 мин) — самое длинное окно.
-            var windowStart = now - _options.CurrentValue.PreemptionsWindow;
+            // Обрыв: держим только точки за HistoryWindow (1 ч) — самое длинное окно
+            // (средняя скорость и график «Нагрузка» используют окна 15m/1h; preemptions — 15m).
+            var windowStart = now - _options.CurrentValue.HistoryWindow;
             while (_counters.Count > 1 && _counters[0].Time < windowStart)
                 _counters.RemoveAt(0);
         }

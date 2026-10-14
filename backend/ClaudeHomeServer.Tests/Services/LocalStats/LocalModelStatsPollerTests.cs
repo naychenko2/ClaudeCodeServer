@@ -401,4 +401,97 @@ public class LocalModelStatsPollerTests
         h.Poller.Current.Speed.Should().NotBeNull("живое «сейчас» доступно при частом опросе");
         _ = t0;
     }
+
+    // ─── Средняя скорость на поток за окно (GetAverageSpeed) ─────────────────────────────
+    //
+    // Средняя = Δgeneration_tokens/Δdecode_time (генерация) и Δprefill_kv_computed_tokens/
+    // Δprefill_time (чтение промпта) за окно. Знаменатель — суммарное время движка, поэтому
+    // простой (движок молчит) в среднее не входит. Нет данных/рестарт счётчика → null, не 0.
+
+    // (14) Обычное окно: 600 токенов за 10 с decode-времени за 60 с wall-clock → 60 ток/с.
+    // Мутация: делить на wall-clock (60 с) вместо decode_time (10 с) → 10, тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_NormalWindow()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, DecodeTimeSum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, DecodeTimeSum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().Be(60.0, "600 токенов / 10 с decode-времени = 60 ток/с (средняя за окно)");
+    }
+
+    // (15) Простой не тянет среднее вниз: 10 с генерации внутри 300 с окна. Средняя считается
+    // по decode-времени (10 с), а не по wall-clock (300 с) → 60, а не 20. Мутация: знаменатель
+    // = wall-clock → 600/300 = 2, тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_IdleDoesNotDilute()
+    {
+        var h = new Harness();
+        // t=0: старт счётчиков.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, DecodeTimeSum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // t=10: 600 токенов за 10 с decode-времени (генерация реально шла).
+        h.Time.Advance(TimeSpan.FromSeconds(10));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, DecodeTimeSum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // t=300: 290 с простоя — счётчики не двигаются, но окно растянулось.
+        h.Time.Advance(TimeSpan.FromSeconds(290));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, DecodeTimeSum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().Be(60.0, "простой (290 с) не входит в знаменатель: средняя = 600/10, а не 600/300");
+    }
+
+    // (16) Рестарт счётчика: generation_tokens упал (600 → 100) → отрицательная дельта → null.
+    // Мутация: не резать по разрыву (усреднить по всему окну) → 500/10 = 50, тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_Restart_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, DecodeTimeSum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, DecodeTimeSum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // Рестарт: счётчики упали (600 → 100, 10 → 2) → отрицательная дельта.
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, DecodeTimeSum = 2, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().BeNull("рестарт счётчика (отрицательная дельта) = разрыв, средняя null, а не отрицательная");
+    }
+
+    // (17) Нет данных: ни одного опроса → null (не 0). Мутация: вернуть 0 вместо null → краснеет.
+    [Fact]
+    public async Task AvgGenTps_NoData_IsNull()
+    {
+        var h = new Harness();
+        // Ни одного PollOnceAsync: буфер счётчиков пуст, _last null.
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().BeNull("нет данных за окно → null, а не 0");
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).PromptTps
+            .Should().BeNull("нет данных за окно → null, а не 0");
+    }
+
+    // (18) Чтение промпта: средняя скорость prefill за окно = Δprefill_kv_computed_tokens/Δprefill_time.
+    // Мутация: перепутать числитель/знаменатель → тест краснеет.
+    [Fact]
+    public async Task AvgPromptTps_NormalWindow()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefillKvComputedTokens = 0, PrefillTimeSum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefillKvComputedTokens = 3000, PrefillTimeSum = 3, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).PromptTps
+            .Should().Be(1000.0, "3000 prefill-токенов / 3 с prefill-времени = 1000 ток/с (средняя)");
+    }
 }

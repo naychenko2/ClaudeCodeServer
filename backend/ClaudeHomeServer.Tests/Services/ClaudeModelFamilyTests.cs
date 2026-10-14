@@ -54,21 +54,24 @@ public class ClaudeModelFamilyTests : IDisposable
         ClaudeModelFamily.Canonicalize(once).Should().Be(once, "повторное сведение ничего не меняет");
     }
 
-    // С CLI 2.1.2xx алиас haiku ведёт на claude-haiku-5-5 (реестр: window 1e6, native_1m) —
-    // все четыре семейства теперь Supports1M.
+    // Supports1M = «запускать семейство с окном [1m], если подписка тянет»: opus/fable/sonnet —
+    // да, haiku — нет (claude-haiku-5-5 умеет 1M, но тариф ×5 за промпт >100K, порог
+    // автокомпакта держим 200K).
     [Fact]
-    public void Supports1M_ВсеСемействаС1M()
+    public void Supports1M_TриСемействаС1M_HaikuБезОкна()
     {
         ClaudeModelFamily.All.Select(f => f.Alias).Should().Equal("opus", "fable", "sonnet", "haiku");
         ClaudeModelFamily.All.Where(f => f.Supports1M).Select(f => f.Alias)
-            .Should().BeEquivalentTo("opus", "fable", "sonnet", "haiku");
+            .Should().BeEquivalentTo("opus", "fable", "sonnet");
+        ClaudeModelFamily.FromAlias("haiku")!.Supports1M.Should().BeFalse(
+            "haiku по умолчанию не запускается с окном [1m]");
     }
 
-    // haiku: Supports1M=true, но LaunchModel НЕ дописывает [1m] — порог auto-compact
+    // haiku: Supports1M=false → LaunchModel НЕ дописывает [1m] — порог auto-compact
     // (CLAUDE_CODE_MAX_CONTEXT_TOKENS) остаётся 200K, иначе тариф Haiku 5.5 ×5 за промпт >100K.
-    // Мутация: убрать guard «haiku» в LaunchModel → здесь haiku[1m] и окно 1M → тест краснеет.
+    // Мутация: haiku Supports1M=true → здесь haiku[1m] и окно 1M → тест краснеет.
     [Fact]
-    public void Haiku_Supports1MTrue_НоОкноНеДописывается_ПорогАвтокомпакта200K()
+    public void Haiku_Supports1MFalse_ОкноНеДописывается_ПорогАвтокомпакта200K()
     {
         var pool = Pool(("max", true));
         var launched = pool.LaunchModel("haiku");

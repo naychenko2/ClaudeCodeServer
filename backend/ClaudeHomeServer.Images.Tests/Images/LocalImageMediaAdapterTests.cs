@@ -490,12 +490,16 @@ public class LocalImageMediaAdapterTests
             Pad = new LocalImagePad(1, 0, 1, 0),
         }, default);
 
-        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без дорисовки.");
         _comfy.Prompts.Should().BeEmpty();
     }
 
+    // Дефект f0903cb5: стирание кистью теперь совместимо с «вне маски вернуть исходник» —
+    // склейка по той же маске. destination — залитый серым холст (img1), но серый только в области
+    // маски, поэтому «вне маски» возвращается исходник, а не перерисованный холст. Мутация
+    // «вернуть несовместимость» (EraseMask → отказ) → красный
     [Fact]
-    public async Task Маска_вне_маски_с_стиранием_отказ()
+    public async Task Стирание_СМаскойВнеМаски_СклейкаПоМаске_ДестинацияХолст()
     {
         var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
 
@@ -506,8 +510,13 @@ public class LocalImageMediaAdapterTests
             KeepMask = LocalMediaTestImages.Png(8, 8),
         }, default);
 
-        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
-        _comfy.Prompts.Should().BeEmpty();
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        // Склейка есть и destination — холст (img1): вне маски — исходник, внутри — сгенерированное
+        graph["overlay"]!["class_type"]!.GetValue<string>().Should().Be("ImageCompositeMasked");
+        var overlay = graph["overlay"]!["inputs"]!.AsObject();
+        overlay["destination"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1");
+        overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec");
     }
 
     [Fact]
@@ -519,7 +528,7 @@ public class LocalImageMediaAdapterTests
             LocalImageOp.Generate, "Тимур сидит в кафе", [LocalMediaTestImages.Png(8, 8)], "1:1", 1,
             KeepMask: LocalMediaTestImages.Png(8, 8)), default);
 
-        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без дорисовки.");
         _comfy.Prompts.Should().BeEmpty();
     }
 

@@ -156,8 +156,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint
                 when req.Source is not null && EraseMaskOf(req) is { } eraseMask:
+                // Стирание клеится по маске (KeepMask): вне мазка — исходник, а не перерисованный
+                // холст (дефект f0903cb5: без склейки модель меняла 99,8 % пикселей вне 30 px от мазка)
                 run = new LocalImageRequest(LocalImageOp.Edit, ErasePrompt(req.Instruction), [req.Source.Bytes], null, 1,
-                    EraseMask: eraseMask, Model: req.Model);
+                    EraseMask: eraseMask, KeepMask: req.KeepMask?.Bytes ?? KeepMaskOf(req), Model: req.Model);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Outpaint:

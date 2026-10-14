@@ -287,14 +287,70 @@ export function breakRuns(intervals: Interval[]): [number, number][] {
   return runs;
 }
 
-// aria-label области графика: «Выработка и кэш за {окно}, в среднем {avg} ток/с,
-// попадания в кэш {hit} %». На наведении строка-считывание обновляет label (aria-live).
+// === aria-label областей графика (динамический: обновляется при наведении) ===
+// Базовая часть: окно + сводка (avg/кэш). При hover — добавляется интервал с
+// деталью того поля, к которому относится SVG. Скринридер слышит смену при
+// pointermove / ArrowLeft / ArrowRight, потому что у SVG стоит aria-label и
+// строка-считывание над ним (aria-live).
+
+const WINDOW_LABEL: Record<Window, string> = { '5m': '5 минут', '15m': '15 минут', '1h': '1 час' };
+
+// Подпись общего контейнера (сводка без привязки к полю). Используется в
+// сводке над графиками; SVG получают свои, чтобы скринридеру было понятно,
+// какое поле сейчас считывается.
 export function chartAriaLabel(window: Window, avg: number | null, hit: number | null): string {
-  const label = window === '1h' ? '1 час' : window === '15m' ? '15 минут' : '5 минут';
-  const parts = [`Выработка и кэш за ${label}`];
+  const parts = [`Выработка и кэш за ${WINDOW_LABEL[window]}`];
   if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
   if (hit != null) parts.push(`попадания в кэш ${formatPerc(hit)}`);
   return parts.join(', ');
+}
+
+// aria-label SVG «Выработка, ток/с»: базовая сводка; при hover — время
+// интервала и значение выработки (или «движок не отвечал» на разрыве).
+export function tpChartAriaLabel(
+  window: Window, avg: number | null, hit: number | null,
+  hoverTime: string | null, hoverThroughput: number | null,
+): string {
+  const parts = [`Выработка, ток/с за ${WINDOW_LABEL[window]}`];
+  if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
+  if (hit != null) parts.push(`кэш ${formatPerc(hit)}`);
+  if (hoverTime != null) {
+    parts.push(hoverThroughput == null
+      ? `интервал ${hoverTime}: движок не отвечал`
+      : `интервал ${hoverTime}: ${formatTps(hoverThroughput)}`);
+  }
+  return parts.join(', ');
+}
+
+// aria-label SVG «Кэш, %»: базовая сводка; при hover — попадания и из RAM.
+// «—» если движок интервал не отдал (или серии нет).
+export function kvChartAriaLabel(
+  window: Window, hit: number | null, hasRam: boolean,
+  hoverTime: string | null, hoverPrefix: number | null, hoverRam: number | null,
+): string {
+  const parts = [`Кэш за ${WINDOW_LABEL[window]}`];
+  if (hit != null) parts.push(`попадания ${formatPerc(hit)}`);
+  if (hoverTime != null) {
+    parts.push(`интервал ${hoverTime}: попадания ${formatPerc(hoverPrefix)}${hasRam ? `, из RAM ${formatPerc(hoverRam)}` : ''}`);
+  }
+  return parts.join(', ');
+}
+
+// aria-label SVG «Вытеснения»: сумма за окно; при hover — значение интервала.
+export function evChartAriaLabel(
+  window: Window, preTotal: number,
+  hoverTime: string | null, hoverEv: number | null,
+): string {
+  const parts = [`Вытеснения за ${WINDOW_LABEL[window]}: ${preTotal > 0 ? `за окно ${preTotal}` : 'не было'}`];
+  if (hoverTime != null) parts.push(`интервал ${hoverTime}: ${hoverEv == null ? '—' : hoverEv}`);
+  return parts.join(', ');
+}
+
+// Показывать ли подпись «данных нет» в зоне отсутствия истории слева.
+// Текст рисуется только в поле выработки и только если зона достаточно широкая,
+// чтобы подпись влезла без наезда на данные. 40 px — порог по макету Майи.
+export function shouldShowNoDataLabel(zoneWidth: number): boolean {
+  return zoneWidth > 40;
 }
 
 // === Компонент ===
@@ -441,11 +497,13 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
 
   // Строка-итог / считывание
   let summary: string;
+  let hoverTime: string | null = null;
   if (hover) {
     const d = new Date(hover.tStart);
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     const time = window === '5m' ? `${hh}:${mm}:${String(d.getSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
+    hoverTime = time;
     summary = hover.throughput == null
       ? `${time} · движок не отвечал`
       : `${time} · ${formatTps(hover.throughput)}`;
@@ -473,9 +531,6 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
     x0: xForTime(intervals[a].tStart, tMin, tMax, geomTp),
     x1: xForTime(intervals[b].tEnd, tMin, tMax, geomTp),
   }));
-
-  // aria-label области: обновляется на наведении (aria-live) — строка-считывание.
-  const ariaLabel = chartAriaLabel(window, avg, hitAvg);
 
   // «Занято» — область без линии (C.textMuted 0.18), рисуется фоном под линиями.
   const kvArea = useMemo(() => {
@@ -568,7 +623,8 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
           : (
             <>
               <FieldLabel>Выработка, ток/с</FieldLabel>
-              <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }} aria-label={ariaLabel}>
+              <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}
+                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.throughput ?? null)}>
                 {[0, 0.5, 1].map(f => {
                   const y = yForThroughput(maxT * f, maxT, geomTp);
                   return (
@@ -580,10 +636,19 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
                   );
                 })}
                 {renderBreaks(geomTp, GEOM_TP.height)}
-                {noDataX != null && noDataX > geomTp.left + 1 && (
-                  <rect x={geomTp.left} y={geomTp.top} width={Math.max(0, noDataX - geomTp.left)} height={GEOM_TP.height - geomTp.top - geomTp.bottom}
-                    fill={C.bgInset} fillOpacity={0.5} />
-                )}
+                {noDataX != null && noDataX > geomTp.left + 1 && (() => {
+                  const w = Math.max(0, noDataX - geomTp.left);
+                  return (
+                    <g>
+                      <rect x={geomTp.left} y={geomTp.top} width={w} height={GEOM_TP.height - geomTp.top - geomTp.bottom}
+                        fill={C.bgInset} fillOpacity={0.5} />
+                      {shouldShowNoDataLabel(w) && (
+                        <text x={geomTp.left + w / 2} y={(geomTp.top + GEOM_TP.height - geomTp.bottom) / 2 + 3}
+                          textAnchor="middle" fontFamily={FONT.mono} fontSize={FS.xs} fill={C.textMuted}>данных нет</text>
+                      )}
+                    </g>
+                  );
+                })()}
                 {avg != null && (() => {
                   const first = samples.find(s => s.throughput != null && s.running != null && s.running > 0);
                   if (!first) return null;
@@ -621,7 +686,8 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
             : (
               <>
                 <FieldLabel>Кэш, %</FieldLabel>
-                <svg viewBox={`0 0 ${width} ${GEOM_KV.height}`} width={width} height={GEOM_KV.height} style={{ display: 'block' }} aria-label={ariaLabel}>
+                <svg viewBox={`0 0 ${width} ${GEOM_KV.height}`} width={width} height={GEOM_KV.height} style={{ display: 'block' }}
+                  aria-label={kvChartAriaLabel(window, hitAvg, hasRam, hoverTime, hover?.prefix ?? null, hover?.ram ?? null)}>
                   {[0, 0.5, 1].map(f => {
                     const y = yForPerc(f, geomKv);
                     return (
@@ -633,6 +699,10 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
                     );
                   })}
                   {renderBreaks(geomKv, GEOM_KV.height)}
+                  {noDataX != null && noDataX > geomKv.left + 1 && (
+                    <rect x={geomKv.left} y={geomKv.top} width={Math.max(0, noDataX - geomKv.left)} height={GEOM_KV.height - geomKv.top - geomKv.bottom}
+                      fill={C.bgInset} fillOpacity={0.5} />
+                  )}
                   {kvArea && <path d={kvArea} fill={C.textMuted} fillOpacity={0.18} />}
                   {prefixLines.map((pts, i) => (
                     <polyline key={`kpl${i}`} points={pts} fill="none" stroke={C.success} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
@@ -640,9 +710,24 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
                   {hasRam && ramLines.map((pts, i) => (
                     <polyline key={`krl${i}`} points={pts} fill="none" stroke={C.info} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />
                   ))}
-                  {hoverX != null && hover && (
-                    <line x1={hoverX} x2={hoverX} y1={geomKv.top} y2={GEOM_KV.height - geomKv.bottom} stroke={C.textMuted} strokeWidth={1} />
-                  )}
+                  {hoverX != null && hover && (() => {
+                    // Точки 6 px (r=3) на линиях попаданий и «из RAM» под курсором.
+                    const dots: React.ReactNode[] = [];
+                    if (hover.prefix != null) {
+                      const cy = yForPerc(hover.prefix, geomKv);
+                      dots.push(<circle key="kdp" cx={hoverX} cy={cy} r={3} fill={C.success} stroke={C.bgCard} strokeWidth={2} />);
+                    }
+                    if (hasRam && hover.ram != null) {
+                      const cy = yForPerc(hover.ram, geomKv);
+                      dots.push(<circle key="kdr" cx={hoverX} cy={cy} r={3} fill={C.info} stroke={C.bgCard} strokeWidth={2} />);
+                    }
+                    return (
+                      <g>
+                        <line x1={hoverX} x2={hoverX} y1={geomKv.top} y2={GEOM_KV.height - geomKv.bottom} stroke={C.textMuted} strokeWidth={1} />
+                        {dots}
+                      </g>
+                    );
+                  })()}
                 </svg>
                 <div aria-live="polite" style={{
                   marginTop: SP.xxs, height: FS.xs * 1.45, display: 'flex', alignItems: 'center', gap: SP.md,
@@ -671,17 +756,22 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
         {!evNotReported && (
           <div style={{ marginTop: SP.sm }}>
             <FieldLabel right={
-              <span style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading, fontSize: FS.xs }}>
+              <span aria-live="polite" style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading, fontSize: FS.xs }}>
                 {hover ? (hover.preemptions != null ? String(hover.preemptions) : '—') : (preTotal > 0 ? `за окно ${preTotal}` : 'не было')}
               </span>
             }>
               Вытеснения
             </FieldLabel>
             {preTotal > 0 ? (
-              <svg viewBox={`0 0 ${width} ${GEOM_EV.height}`} width={width} height={GEOM_EV.height} style={{ display: 'block' }} aria-label={ariaLabel}>
+              <svg viewBox={`0 0 ${width} ${GEOM_EV.height}`} width={width} height={GEOM_EV.height} style={{ display: 'block' }}
+                aria-label={evChartAriaLabel(window, preTotal, hoverTime, hover?.preemptions ?? null)}>
                 <line x1={geomEv.left} x2={width - geomEv.right} y1={GEOM_EV.height - geomEv.bottom} y2={GEOM_EV.height - geomEv.bottom} stroke={C.border} strokeWidth={1} />
                 <text x={width - geomEv.right + 4} y={geomEv.top + 3} textAnchor="start" fontFamily={FONT.mono} fontSize={FS.xs} fill={C.textMuted}>{evMax}</text>
                 {renderBreaks(geomEv, GEOM_EV.height)}
+                {noDataX != null && noDataX > geomEv.left + 1 && (
+                  <rect x={geomEv.left} y={geomEv.top} width={Math.max(0, noDataX - geomEv.left)} height={GEOM_EV.height - geomEv.top - geomEv.bottom}
+                    fill={C.bgInset} fillOpacity={0.5} />
+                )}
                 {evBars.map(b => (
                   <rect key={`evb${b.i}`} x={b.x} y={b.y} width={b.w} height={Math.max(1, b.h)} rx={1}
                     fill={C.danger} fillOpacity={hoverIdx === b.i ? 1 : 0.85} />

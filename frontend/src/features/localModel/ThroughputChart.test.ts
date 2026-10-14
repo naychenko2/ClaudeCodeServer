@@ -5,8 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   avgThroughputOf, breakRuns, buildIntervals, buildThroughputSegments, cacheHitAvg,
-  chartAriaLabel, formatAxisTps, intervalCountFor, maxThroughputOf, niceAxisMax,
-  peakThroughputOf, preemptionTotal, xForTime, yForThroughput,
+  chartAriaLabel, evChartAriaLabel, formatAxisTps, intervalCountFor, kvChartAriaLabel,
+  maxThroughputOf, niceAxisMax, peakThroughputOf, preemptionTotal, shouldShowNoDataLabel,
+  tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type ThroughputSample,
 } from './ThroughputChart';
 
@@ -367,5 +368,79 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
   it('1h → «1 час»; без avg/hit — только окно', () => {
     expect(chartAriaLabel('1h', null, null)).toBe('Выработка и кэш за 1 час');
+  });
+});
+
+describe('tpChartAriaLabel: SVG «Выработка, ток/с» обновляется на hover', () => {
+  it('базовый: окно + среднее + кэш', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
+    expect(label).toContain('Выработка, ток/с за 15 минут');
+    expect(label).toContain('412 ток/с');
+    expect(label).not.toContain('интервал');
+  });
+  it('hover: добавляется интервал с временем и значением', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
+    expect(label).toContain('интервал 14:32');
+    expect(label).toContain('250 ток/с');
+  });
+  it('hover на разрыве (throughput null) → «движок не отвечал»', () => {
+    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
+    expect(label).toContain('интервал 14:32');
+    expect(label).toContain('движок не отвечал');
+    // в части «интервал …:» единицы быть не должно — на разрыве значения нет
+    const after = label.split('интервал')[1] ?? '';
+    expect(after).not.toMatch(/\d+\s+ток\/с/);
+  });
+});
+
+describe('kvChartAriaLabel: SVG «Кэш, %» обновляется на hover', () => {
+  it('базовый: окно + попадания; без RAM — без части про RAM', () => {
+    const label = kvChartAriaLabel('15m', 0.87, false, null, null, null);
+    expect(label).toContain('Кэш за 15 минут');
+    expect(label).toContain('попадания 87 %');
+    expect(label).not.toContain('интервал');
+    expect(label).not.toContain('RAM');
+  });
+  it('hover c RAM: интервал + попадания + из RAM', () => {
+    const label = kvChartAriaLabel('15m', 0.87, true, '14:32', 0.91, 0.5);
+    expect(label).toContain('интервал 14:32');
+    expect(label).toContain('попадания 91 %');
+    expect(label).toContain('из RAM 50 %');
+  });
+  it('hover без RAM: пункт RAM в label не пишется', () => {
+    const label = kvChartAriaLabel('15m', 0.87, false, '14:32', 0.91, null);
+    expect(label).toContain('попадания 91 %');
+    expect(label).not.toContain('RAM');
+  });
+});
+
+describe('evChartAriaLabel: SVG «Вытеснения» обновляется на hover', () => {
+  it('базовый: «за окно N»', () => {
+    const label = evChartAriaLabel('15m', 7, null, null);
+    expect(label).toBe('Вытеснения за 15 минут: за окно 7');
+  });
+  it('базовый без вытеснений → «не было»', () => {
+    const label = evChartAriaLabel('1h', 0, null, null);
+    expect(label).toBe('Вытеснения за 1 час: не было');
+  });
+  it('hover: добавляется интервал со значением', () => {
+    const label = evChartAriaLabel('15m', 7, '14:32', 2);
+    expect(label).toContain('интервал 14:32');
+    expect(label).toContain('2');
+  });
+  it('hover на разрыве → «—»', () => {
+    const label = evChartAriaLabel('15m', 7, '14:32', null);
+    expect(label).toContain('—');
+  });
+});
+
+describe('shouldShowNoDataLabel: текст «данных нет» только при широкой зоне', () => {
+  it('≤ 40 → false (подпись не влезает)', () => {
+    expect(shouldShowNoDataLabel(0)).toBe(false);
+    expect(shouldShowNoDataLabel(40)).toBe(false);
+  });
+  it('> 40 → true', () => {
+    expect(shouldShowNoDataLabel(41)).toBe(true);
+    expect(shouldShowNoDataLabel(120)).toBe(true);
   });
 });

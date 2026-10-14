@@ -240,7 +240,7 @@ export function jobOwnerLabel(job: { own: boolean; title?: string | null }): str
   return 'Чат другого пользователя';
 }
 
-// === Подпись карты (общая с вкладкой «Текст») ===
+// === Подпись карты (общая с вкладкой «LLM») ===
 
 // Очередь: «N из M мест занято» (счётчик мест в заголовке).
 export function slotsLine(slots: { used: number; limit: number }): string {

@@ -28,9 +28,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
-    // GET /api/local-model/stats?window=15m|1h&since=<unix ms>
-    // window: по умолчанию 15m; неизвестное значение → 400. since: unix-мс, фильтр
-    // «только хвост новее этого момента» (без since — всё окно).
+    // GET /api/local-model/stats?window=5m|15m|1h&since=<unix ms>
+    // window: по умолчанию 15m; белый список 5m/15m/1h, иное → 400.
+    // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
         [FromQuery] string? window,
@@ -38,7 +38,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         CancellationToken ct)
     {
         if (!TryParseWindow(window, out var windowSpan))
-            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 15m, 1h)" });
+            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 5m, 15m, 1h)" });
 
         var current = _reader?.Current;
 
@@ -56,13 +56,14 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
                 Unsupported = [],
             });
 
-        // gpus — из IGpuSampler (null, если нет nvidia-smi); одна карта «текст» (индекс 0).
+        // gpus — из IGpuSampler: ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
+        // Пустой список/ошибка nvidia-smi → null (без блока).
         GpuDto[]? gpus = null;
         if (_gpus is { } sampler)
         {
-            var sample = await sampler.ReadAsync(ct);
-            if (sample is not null)
-                gpus = [MapGpu(sample)];
+            var samples = await sampler.ReadAsync(ct);
+            if (samples.Count > 0)
+                gpus = samples.Select(MapGpu).ToArray();
         }
 
         // history — из GetHistory(window, since); при since — только хвост новее момента.
@@ -73,6 +74,12 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             GenThroughput = p.GenThroughput,
             Waiting = p.Waiting,
             Running = p.Running,
+            KvUsage = p.KvUsage,
+            PrefixHits = p.PrefixHits,
+            PrefixQueries = p.PrefixQueries,
+            RamHits = p.RamHits,
+            RamQueries = p.RamQueries,
+            Preemptions = p.Preemptions,
         }).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
@@ -98,11 +105,17 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         // только ходы, прошедшие через шлюз): max(0, running + waiting − живых чатов).
         var othersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0) - active.Count);
 
+        // Средняя скорость на поток за окно графика (15m/1h): Δсчётчика/Δсуммы времени.
+        // Считается по окну запроса (не в Current, который считается один раз на опрос):
+        // простой (движок молчит) в среднее не входит, нет данных/рестарт → null.
+        var avg = _reader.GetAverageSpeed(windowSpan);
+
         return Ok(new LocalModelStatsResponse
         {
             Configured = current.Configured,
             Engine = current.Engine,
             Model = current.Model,
+            TensorParallel = current.TensorParallel,
             Status = current.Status,
             DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
             Running = current.Running,
@@ -112,6 +125,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             {
                 GenPerStream = current.Kv?.GenPerStream,
                 PrefillPerStream = current.Kv?.PrefillPerStream,
+                AvgGenTps = avg.GenTps,
+                AvgPromptTps = avg.PromptTps,
             },
             Kv = new KvDto
             {
@@ -260,7 +275,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         PowerLimitW = s.PowerLimit,
     };
 
-    // window: null/пусто → 15m (дефолт); "<n>m" → n минут; "<n>h" → n часов; иначе false (400).
+    // window: null/пусто → 15m (дефолт); белый список 5m/15m/1h (ровно как в сообщении 400);
+    // иное → false (400).
     private static bool TryParseWindow(string? raw, out TimeSpan window)
     {
         window = TimeSpan.Zero;
@@ -269,18 +285,20 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             window = TimeSpan.FromMinutes(15);
             return true;
         }
-        var s = raw.Trim();
-        if (s.Length < 2) return false;
-        var unit = s[^1];
-        var numPart = s[..^1];
-        if (!int.TryParse(numPart, out var n) || n <= 0) return false;
-        window = unit switch
+        switch (raw.Trim())
         {
-            'm' => TimeSpan.FromMinutes(n),
-            'h' => TimeSpan.FromHours(n),
-            _ => TimeSpan.Zero,
-        };
-        return window != TimeSpan.Zero;
+            case "5m":
+                window = TimeSpan.FromMinutes(5);
+                return true;
+            case "15m":
+                window = TimeSpan.FromMinutes(15);
+                return true;
+            case "1h":
+                window = TimeSpan.FromHours(1);
+                return true;
+            default:
+                return false;
+        }
     }
 
     // ─── DTO ответа (camelCase на wire через дефолт ASP.NET Core) ─────────────────────
@@ -296,6 +314,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
         // Идентификатор модели стенда; null — неизвестен.
         public string? Model { get; init; }
+
+        // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
+        public int? TensorParallel { get; init; }
 
         // working | busy | down | notConnected.
         public string Status { get; init; } = "notConnected";
@@ -326,11 +347,17 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public IReadOnlyList<string> Unsupported { get; init; } = [];
     }
 
-    // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени за окно ~60 с.
+    // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени.
+    // GenPerStream/PrefillPerStream — за окно ~60 с (как чувствует чат);
+    // AvgGenTps/AvgPromptTps — за окно графика (5m/15m/1h), только время активной генерации.
     public sealed record SpeedDto
     {
         public double? GenPerStream { get; init; }
         public double? PrefillPerStream { get; init; }
+        // Средняя скорость генерации на поток (ток/с) за окно графика: Δgeneration_tokens/Δdecode_time.
+        public double? AvgGenTps { get; init; }
+        // Средняя скорость чтения промпта (ток/с) за окно графика: Δprefill_kv_computed_tokens/Δprefill_time.
+        public double? AvgPromptTps { get; init; }
     }
 
     // Блок KV-кэша: доли 0..1 и вытеснения за 15 мин.
@@ -357,12 +384,21 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
     }
 
     // Точка кольца истории. T — unix-мс (long): фронт ждёт число (api.ts: t: number).
+    // Серии кэша (v2.1): kvUsage — доля 0..1 (максимум по опросам с прошлой точки);
+    // prefixHits/prefixQueries/ramHits/ramQueries/preemptions — приращения счётчиков
+    // с прошлой точки (фронт сводит в интервалы и считает долю из сумм). null — нет данных.
     public sealed record HistoryPointDto
     {
         public long T { get; init; }
         public double? GenThroughput { get; init; }
         public int? Waiting { get; init; }
         public int? Running { get; init; }
+        public double? KvUsage { get; init; }
+        public long? PrefixHits { get; init; }
+        public long? PrefixQueries { get; init; }
+        public long? RamHits { get; init; }
+        public long? RamQueries { get; init; }
+        public long? Preemptions { get; init; }
     }
 
     // Чат на стенде: живой ход на локальном движке. Own — чат текущего пользователя

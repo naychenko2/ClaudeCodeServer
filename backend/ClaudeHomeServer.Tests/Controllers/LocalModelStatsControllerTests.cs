@@ -65,8 +65,18 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    // window=15m и window=1h — валидные → 200.
+    // window=30m — не в белом списке (5m/15m/1h) → 400. Мутация: вернуть приём любого <n>m
+    // (старое поведение) — 30m снова 200, тест краснеет.
+    [Fact]
+    public async Task Window30m_400()
+    {
+        var resp = await _admin.GetAsync("/api/local-model/stats?window=30m");
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // window=5m/15m/1h — валидные → 200 (5m — третье окно графика, v2.1).
     [Theory]
+    [InlineData("5m")]
     [InlineData("15m")]
     [InlineData("1h")]
     public async Task WindowВалидный_200(string window)
@@ -144,6 +154,72 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         // t — число (long), не строка.
         t.ValueKind.Should().Be(JsonValueKind.Number, "t в wire — unix-мс (long), не ISO-строка");
         t.GetInt64().Should().Be(t0.ToUnixTimeMilliseconds());
+    }
+
+    // history: серии кэша (v2.1) — шесть полей сериализуются camelCase:
+    // kvUsage (доля 0..1), prefixHits/prefixQueries/ramHits/ramQueries/preemptions (приращения).
+    // Мутация: не маппить поле из LocalModelStatsPoint в HistoryPointDto → null в JSON, тест краснеет.
+    [Fact]
+    public async Task History_СерииКэша_Сериализуются()
+    {
+        var t0 = DateTimeOffset.UtcNow;
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+            Points =
+            [
+                new LocalModelStatsPoint
+                {
+                    Timestamp = t0,
+                    GenThroughput = 42.0,
+                    Running = 1,
+                    Waiting = 0,
+                    KvUsage = 0.87,
+                    PrefixHits = 1234,
+                    PrefixQueries = 5000,
+                    RamHits = 77,
+                    RamQueries = 900,
+                    Preemptions = 3,
+                },
+            ],
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var p = body.GetProperty("history")[0];
+
+        p.GetProperty("kvUsage").GetDouble().Should().Be(0.87);
+        p.GetProperty("prefixHits").GetInt64().Should().Be(1234);
+        p.GetProperty("prefixQueries").GetInt64().Should().Be(5000);
+        p.GetProperty("ramHits").GetInt64().Should().Be(77);
+        p.GetProperty("ramQueries").GetInt64().Should().Be(900);
+        p.GetProperty("preemptions").GetInt64().Should().Be(3);
+    }
+
+    // ─── speed: средняя скорость на поток за окно графика (avgGenTps/avgPromptTps) ─────
+
+    // speed.avgGenTps/avgPromptTps — средняя скорость на поток за окно графика (15m/1h):
+    // Δсчётчика/Δсуммы времени. Приходит из reader.GetAverageSpeed(window) и сериализуется
+    // camelCase. Мутация: не передавать avg из reader в SpeedDto → поля null, тест краснеет.
+    [Fact]
+    public async Task Speed_AvgTps_Из_Окна()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+            Average = new LocalModelStatsAverage { GenTps = 42.0, PromptTps = 1000.0 },
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.GetAsync("/api/local-model/stats?window=15m");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("speed").GetProperty("avgGenTps").GetDouble().Should().Be(42.0);
+        body.GetProperty("speed").GetProperty("avgPromptTps").GetDouble().Should().Be(1000.0);
     }
 
     // ─── chats: phase — required string ─────────────────────────────────────────────
@@ -286,6 +362,94 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("unsupported").EnumerateArray().Select(s => s.GetString()!)
             .Should().Equal(new[] { "vllm:kv_cache_usage_perc", "vllm:ram_tier_hits" });
+    }
+
+    // ─── gpus: ВСЕ карты хоста (ADR-029 п.7) ─────────────────────────────────────────
+
+    // Сэмплер отдаёт 2 карты → gpus в ответе содержит ОБЕ (index 0 и 1).
+    // Мутация «маппить только samples[0]» (одну карту) → gpus.length 1, тест краснеет.
+    [Fact]
+    public async Task Gpus_AllCards_FromSampler()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+        };
+        var gpus = new FakeGpuSampler
+        {
+            Samples =
+            [
+                new GpuSample { Index = 0, Uuid = "GPU-uuid-1", Name = "NVIDIA GeForce RTX 3090", Utilization = 99, MemoryUsed = 24000, MemoryTotal = 24576, Temperature = 71, PowerDraw = 338, PowerLimit = 350 },
+                new GpuSample { Index = 1, Uuid = "GPU-uuid-2", Name = "NVIDIA GeForce RTX 3090", Utilization = 100, MemoryUsed = 24100, MemoryTotal = 24576, Temperature = 72, PowerDraw = 340, PowerLimit = 350 },
+            ],
+        };
+        var factory = BuildFactoryWithFakes(reader, gpuSampler: gpus);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        var g = body.GetProperty("gpus");
+        g.GetArrayLength().Should().Be(2, "обе карты хоста, не только первая");
+        g[0].GetProperty("index").GetInt32().Should().Be(0);
+        g[0].GetProperty("utilPerc").GetInt32().Should().Be(99);
+        g[1].GetProperty("index").GetInt32().Should().Be(1);
+        g[1].GetProperty("utilPerc").GetInt32().Should().Be(100);
+    }
+
+    // Сэмплер отдаёт пустой список (нет nvidia-smi) → gpus null (без блока), а не пустой массив.
+    [Fact]
+    public async Task Gpus_EmptySampler_IsNull()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+        };
+        var factory = BuildFactoryWithFakes(reader, gpuSampler: new FakeGpuSampler { Samples = [] });
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("gpus").ValueKind.Should().Be(JsonValueKind.Null, "нет карт — gpus null (без блока)");
+    }
+
+    // ─── tensorParallel: из секции Stats провайдера ───────────────────────────────────
+
+    // Stats:TensorParallel задано (2) → tensorParallel в ответе = 2.
+    // Мутация: не передавать Current.TensorParallel в ответ → null, тест краснеет.
+    [Fact]
+    public async Task TensorParallel_FromConfig()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", TensorParallel = 2 },
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("tensorParallel").GetInt32().Should().Be(2);
+    }
+
+    // Stats:TensorParallel не задано (null) → tensorParallel null (фронт покажет число карт).
+    [Fact]
+    public async Task TensorParallel_NotSet_IsNull()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("tensorParallel").ValueKind.Should().Be(JsonValueKind.Null, "не задано → null, фронт покажет число карт");
     }
 
     // ─── Выключенная вертикаль Llm → configured:false, status:notConnected, 200 ───
@@ -582,11 +746,14 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
-    // Фейковый ILocalModelStatsReader: тест задаёт Current и Points; GetHistory фильтрует по since.
+    // Фейковый ILocalModelStatsReader: тест задаёт Current, Points и Average;
+    // GetHistory фильтрует по since, GetAverageSpeed отдаёт заданное среднее.
     private sealed class FakeReader : ILocalModelStatsReader
     {
         public LocalModelStatsCurrent Current { get; init; } = new() { Status = "notConnected", Configured = false };
         public List<LocalModelStatsPoint> Points { get; init; } = [];
+        public LocalModelStatsAverage Average { get; set; } = new();
+        public double? TokensPerStep { get; set; }
 
         public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null)
         {
@@ -596,12 +763,21 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 : (now - window).UtcDateTime;
             return Points.Where(p => p.Timestamp >= since).ToList();
         }
+
+        public LocalModelStatsAverage GetAverageSpeed(TimeSpan window) => Average;
     }
 
-    // Фейковый IGpuSampler: null — нет nvidia-smi (блок не показывать).
+    // Фейковый IGpuSampler: пустой список — нет nvidia-smi (блок не показывать).
     private sealed class NoGpuSampler : IGpuSampler
     {
-        public Task<GpuSample?> ReadAsync(CancellationToken ct = default) => Task.FromResult<GpuSample?>(null);
+        public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<GpuSample>>([]);
+    }
+
+    // Фейковый IGpuSampler с управляемым списком карт: тест задаёт, сколько карт «видит» nvidia-smi.
+    private sealed class FakeGpuSampler : IGpuSampler
+    {
+        public IReadOnlyList<GpuSample> Samples { get; set; } = [];
+        public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) => Task.FromResult(Samples);
     }
 
     // sub в JWT = user.Id (не username): декодируем payload токена.
@@ -624,13 +800,13 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // Фабрика с подменой ILocalModelStatsReader/IGpuSampler/ILocalModelTurnMeter на фейки
     // (ExtraServices — после встроенных регистраций, перетирает forwarder подсистемы Llm).
-    private static TestWebApplicationFactory BuildFactoryWithFakes(FakeReader reader, ILocalModelTurnMeter? meter = null)
+    private static TestWebApplicationFactory BuildFactoryWithFakes(FakeReader reader, ILocalModelTurnMeter? meter = null, IGpuSampler? gpuSampler = null)
     {
         var factory = new TestWebApplicationFactory();
         factory.ExtraServices = services =>
         {
             services.AddSingleton<ILocalModelStatsReader>(reader);
-            services.AddSingleton<IGpuSampler>(new NoGpuSampler());
+            services.AddSingleton<IGpuSampler>(gpuSampler ?? new NoGpuSampler());
             if (meter is not null)
                 services.AddSingleton(meter);
         };

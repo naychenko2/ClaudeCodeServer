@@ -67,6 +67,8 @@ public class VllmMetricsSourceTests
         snapshot.PrefillKvComputedTokens.Should().Be(31087402.0);
         snapshot.RamTierHits.Should().Be(953624);
         snapshot.RamTierQueries.Should().Be(5231151);
+        snapshot.InterTokenLatencySum.Should().Be(64492.1099384452);
+        snapshot.InterTokenLatencyCount.Should().Be(953047);
         snapshot.Unsupported.Should().BeEmpty();
     }
 
@@ -125,6 +127,8 @@ public class VllmMetricsSourceTests
         snapshot.PrefillKvComputedTokens.Should().BeNull();
         snapshot.RamTierHits.Should().BeNull();
         snapshot.RamTierQueries.Should().BeNull();
+        snapshot.InterTokenLatencySum.Should().BeNull();
+        snapshot.InterTokenLatencyCount.Should().BeNull();
         // Все блоки маппинга отсутствуют → Unsupported = все имена из AllMetrics.
         snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.AllMetrics.Length);
     }
@@ -137,6 +141,31 @@ public class VllmMetricsSourceTests
 
         var snapshot = await source.ReadAsync();
         snapshot.Should().BeNull();
+    }
+
+    // Мусор в /metrics (недоверенный источник): строки, которые не разбираются как
+    // Prometheus (нет значения, незакрытая скобка, дробное число) → Parse не бросает,
+    // ReadAsync возвращает снимок с null-полями, а не исключение (иначе BackgroundService
+    // умрёт — ADR-029 «Недоверенный внешний ответ»). Мутация: Parse бросает на мусоре
+    // (например, GetValue вместо TryGetValue) → тест краснеет.
+    [Fact]
+    public async Task ReadAsync_GarbageText_DoesNotThrow()
+    {
+        const string garbage = """
+            totally-not-prometheus
+            name_without_value
+            {unclosed_brace
+            metric_with_bad_value abc
+            # just a comment
+            """;
+        var http = new HttpClient(new FakeHandler(garbage));
+        var source = new VllmMetricsSource(http, "http://localhost:8000/metrics");
+
+        var snapshot = await source.ReadAsync();
+        snapshot.Should().NotBeNull("мусор не роняет источник");
+        snapshot!.KvUsagePerc.Should().BeNull("не разобралось → null");
+        snapshot.PrefixCacheHits.Should().BeNull();
+        snapshot.Preemptions.Should().BeNull();
     }
 
     [Fact]
@@ -160,6 +189,8 @@ public class VllmMetricsSourceTests
         snapshot.PrefillKvComputedTokens.Should().BeNull();
         snapshot.RamTierHits.Should().BeNull();
         snapshot.RamTierQueries.Should().BeNull();
+        snapshot.InterTokenLatencySum.Should().BeNull();
+        snapshot.InterTokenLatencyCount.Should().BeNull();
         snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.AllMetrics.Length);
     }
 }

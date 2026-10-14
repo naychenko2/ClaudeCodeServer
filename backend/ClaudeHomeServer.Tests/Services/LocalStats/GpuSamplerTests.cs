@@ -5,8 +5,9 @@ using Xunit;
 namespace ClaudeHomeServer.Tests.Services.LocalStats;
 
 /// <summary>
-/// Тесты сэмплера видеокарт: разбор CSV nvidia-smi (csv,noheader,nounits) с [N/A]
-/// и 2 картами, кэш на GpuCacheTtl (2 с) на фейковых часах, нет бинаря/ошибка → null.
+/// Тесты сэмплера видеокарт: ReadAsync возвращает ВСЕ карты хоста (IReadOnlyList&lt;GpuSample&gt;),
+/// разбор CSV nvidia-smi (csv,noheader,nounits) с [N/A], кэш на GpuCacheTtl (2 с) на фейковых
+/// часах, нет бинаря/ошибка/пусто/мусор → пустой список (без исключений наружу).
 /// Запуск процесса подменяется фейковым runner (internal-конструктор), без реального nvidia-smi.
 /// </summary>
 public class GpuSamplerTests
@@ -18,6 +19,102 @@ public class GpuSamplerTests
         public override DateTimeOffset GetUtcNow() => _now;
         public void Advance(TimeSpan by) => _now += by;
     }
+
+    // Две карты хоста (TP=2): ReadAsync возвращает ОБЕ, не только первую.
+    // Мутация «вернуть samples[0]» (только первую карту) → count 1, тест краснеет.
+    [Fact]
+    public async Task ReadAsync_TwoCards_ReturnsBoth()
+    {
+        var time = new ManualTime();
+        const string text = """
+            0, GPU-uuid-1, NVIDIA GeForce RTX 3090, 99, 24000, 24576, 71, 338, 350
+            1, GPU-uuid-2, NVIDIA GeForce RTX 3090, 100, 24100, 24576, 72, 340, 350
+            """;
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
+            () => Task.FromResult(text));
+
+        var samples = await sampler.ReadAsync();
+        samples.Should().HaveCount(2, "обе карты хоста, не только первая");
+        samples[0].Index.Should().Be(0);
+        samples[0].Uuid.Should().Be("GPU-uuid-1");
+        samples[0].Utilization.Should().Be(99);
+        samples[1].Index.Should().Be(1);
+        samples[1].Uuid.Should().Be("GPU-uuid-2");
+        samples[1].Utilization.Should().Be(100);
+    }
+
+    // Одна карта: ReadAsync возвращает одну.
+    [Fact]
+    public async Task ReadAsync_OneCard_ReturnsOne()
+    {
+        var time = new ManualTime();
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
+            () => Task.FromResult("0, GPU-1, NVIDIA GeForce RTX 4090, 50, 100, 200, 40, 1.0, 2.0"));
+
+        var samples = await sampler.ReadAsync();
+        samples.Should().HaveCount(1);
+        samples[0].Index.Should().Be(0);
+        samples[0].Name.Should().Be("NVIDIA GeForce RTX 4090");
+    }
+
+    // Пустой вывод (карт нет) → пустой список, без исключений наружу.
+    [Fact]
+    public async Task ReadAsync_EmptyOutput_ReturnsEmpty()
+    {
+        var time = new ManualTime();
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
+            () => Task.FromResult(""));
+
+        (await sampler.ReadAsync()).Should().BeEmpty();
+    }
+
+    // Мусорный вывод (не CSV: меньше 9 полей) → пустой список, без исключений наружу.
+    [Fact]
+    public async Task ReadAsync_GarbageOutput_ReturnsEmpty()
+    {
+        var time = new ManualTime();
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
+            () => Task.FromResult("NVIDIA GeForce RTX 3090\nfoo,bar"));
+
+        (await sampler.ReadAsync()).Should().BeEmpty();
+    }
+
+    // Нет бинаря/ошибка (runner бросает) → пустой список, без исключений наружу.
+    [Fact]
+    public async Task ReadAsync_NoBinary_ReturnsEmpty()
+    {
+        var time = new ManualTime();
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
+            () => throw new System.ComponentModel.Win32Exception(2, "not found"));
+
+        (await sampler.ReadAsync()).Should().BeEmpty("нет бинаря/ошибка → пустой список, без исключений наружу");
+    }
+
+    // Кэш 2 с на фейковых часах: в пределах TTL runner не дёргается повторно,
+    // после TTL — дёргается снова.
+    [Fact]
+    public async Task Cache_WithinTtl_DoesNotRerun_AfterTtl_Reruns()
+    {
+        var time = new ManualTime();
+        var runs = 0;
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
+            () => { runs++; return Task.FromResult("0, GPU-1, Card, 50, 100, 200, 40, 1.0, 2.0"); });
+
+        var first = await sampler.ReadAsync();
+        first.Should().HaveCount(1);
+        runs.Should().Be(1);
+
+        time.Advance(TimeSpan.FromSeconds(1)); // < 2 с
+        var second = await sampler.ReadAsync();
+        second.Should().HaveCount(1);
+        runs.Should().Be(1, "в пределах TTL runner не дёргается повторно");
+
+        time.Advance(TimeSpan.FromSeconds(2)); // > 2 с
+        await sampler.ReadAsync();
+        runs.Should().Be(2, "после TTL runner дёргается снова");
+    }
+
+    // ─── Разбор CSV (статический ParseCsv) ─────────────────────────────────────────
 
     // (1) Разбор CSV: 2 карты, [N/A] в числовых полях → null, имя с пробелами.
     [Fact]
@@ -79,53 +176,5 @@ public class GpuSamplerTests
         samples[0].Temperature.Should().Be(60);
         samples[0].PowerDraw.Should().Be(300.5);
         samples[0].PowerLimit.Should().Be(450.0);
-    }
-
-    // (2) Кэш 2 с на фейковых часах: в пределах TTL runner не дёргается повторно,
-    // после TTL — дёргается снова.
-    [Fact]
-    public async Task Cache_WithinTtl_DoesNotRerun_AfterTtl_Reruns()
-    {
-        var time = new ManualTime();
-        var runs = 0;
-        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
-            () => { runs++; return Task.FromResult("0, GPU-1, Card, 50, 100, 200, 40, 1.0, 2.0"); });
-
-        var first = await sampler.ReadAsync();
-        first.Should().NotBeNull();
-        runs.Should().Be(1);
-
-        time.Advance(TimeSpan.FromSeconds(1)); // < 2 с
-        var second = await sampler.ReadAsync();
-        second.Should().NotBeNull();
-        runs.Should().Be(1, "в пределах TTL runner не дёргается повторно");
-
-        time.Advance(TimeSpan.FromSeconds(2)); // > 2 с
-        await sampler.ReadAsync();
-        runs.Should().Be(2, "после TTL runner дёргается снова");
-    }
-
-    // (3) Нет бинаря/ошибка → null, без исключений наружу.
-    [Fact]
-    public async Task NoBinary_ReturnsNull()
-    {
-        var time = new ManualTime();
-        // Runner бросает (симуляция «бинарь не найден» / таймаут).
-        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
-            () => throw new System.ComponentModel.Win32Exception(2, "not found"));
-
-        var result = await sampler.ReadAsync();
-        result.Should().BeNull("нет бинаря/ошибка → null, без исключений наружу");
-    }
-
-    // (4) Пустой вывод nvidia-smi (карт нет) → null.
-    [Fact]
-    public async Task EmptyOutput_ReturnsNull()
-    {
-        var time = new ManualTime();
-        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
-            () => Task.FromResult(""));
-
-        (await sampler.ReadAsync()).Should().BeNull();
     }
 }

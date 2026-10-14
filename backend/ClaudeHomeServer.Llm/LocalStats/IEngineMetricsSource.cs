@@ -33,6 +33,16 @@ public sealed record EngineSnapshot
     public double? DecodeTimeSum { get; init; }
     public double? PrefillTimeSum { get; init; }
 
+    // Сумма inter-token latency (сек): пишется на каждом шаге декодирования (в отличие
+    // от DecodeTimeSum, который растёт только при завершении запроса). Знаменатель живой
+    // скорости «на поток» (ADR-029): Δgeneration_tokens/Δinter_token_latency.
+    public double? InterTokenLatencySum { get; init; }
+
+    // Число событий inter-token latency (= число шагов декодирования). Коэффициент живой
+    // скорости кольца Ctx (ADR-029): Δgeneration_tokens/Δinter_token_latency_count =
+    // токенов на шаг (DFlash отдаёт несколько токенов за SSE-дельту).
+    public long? InterTokenLatencyCount { get; init; }
+
     // Сумма гистограммы: новые KV-токены, вычисленные в prefill (без кэша).
     public double? PrefillKvComputedTokens { get; init; }
 

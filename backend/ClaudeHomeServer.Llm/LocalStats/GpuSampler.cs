@@ -26,10 +26,11 @@ public sealed record GpuSample
 
 // Сэмплер видеокарт: по запросу (не в фоне) запускает nvidia-smi на хосте бэкенда.
 // Таймаут 3 с, результат кэшируется на GpuCacheTtl (2 с); запросы сериализует lock.
-// Нет бинаря/ошибка → null («нет блока видеокарт»), без исключений наружу.
+// Все карты хоста (ADR-029 п.7: всё, что видит хостовый nvidia-smi, — «текст»).
+// Нет бинаря/ошибка/пусто → пустой список («нет блока видеокарт»), без исключений наружу.
 public interface IGpuSampler
 {
-    Task<GpuSample?> ReadAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default);
 }
 
 public sealed class GpuSampler : IGpuSampler
@@ -48,7 +49,8 @@ public sealed class GpuSampler : IGpuSampler
     private readonly object _gate = new();
 
     private DateTimeOffset _lastSample;
-    private GpuSample? _cached;      // null — нет бинаря/ошибка (кэшируем и её, чтобы не дёргать nvidia-smi чаще TTL)
+    // Пустой список — нет бинаря/ошибка/карты (кэшируем и его, чтобы не дёргать nvidia-smi чаще TTL).
+    private IReadOnlyList<GpuSample> _cached = [];
 
     public GpuSampler(TimeProvider time, TimeSpan cacheTtl, ILogger<GpuSampler> log)
     {
@@ -67,7 +69,7 @@ public sealed class GpuSampler : IGpuSampler
         _log = log ?? NullLogger<GpuSampler>.Instance;
     }
 
-    public Task<GpuSample?> ReadAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default)
     {
         lock (_gate)
         {
@@ -82,24 +84,21 @@ public sealed class GpuSampler : IGpuSampler
     }
 
     // Один запуск: runner вызывается синхронно (GetAwaiter().GetResult()), чтобы результат
-    // был готов до возврата из ReadAsync. null — нет бинаря/ошибка, без исключений наружу.
-    private GpuSample? RunOnce()
+    // был готов до возврата из ReadAsync. Все карты хоста; нет бинаря/ошибка/пусто → пустой
+    // список, без исключений наружу.
+    private IReadOnlyList<GpuSample> RunOnce()
     {
-        GpuSample? result = null;
+        IReadOnlyList<GpuSample> result = [];
         try
         {
             var text = _runner().GetAwaiter().GetResult();
             if (text is not null)
-            {
-                var samples = ParseCsv(text);
-                if (samples.Count > 0)
-                    result = samples[0]; // карта «текст» — индекс 0 (первая); остальные — медиа-узел
-            }
+                result = ParseCsv(text); // все карты хоста; ADR-029 п.7 — всё «текст»
         }
         catch
         {
-            // Нет бинаря/ошибка — null, без исключений наружу.
-            result = null;
+            // Нет бинаря/ошибка — пустой список, без исключений наружу.
+            result = [];
         }
         finally
         {

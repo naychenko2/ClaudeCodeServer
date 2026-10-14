@@ -1,4 +1,4 @@
-// Вкладка «Текст» панели «Локальные модели»: сверху вниз — жива ли модель →
+// Вкладка «LLM» панели «Локальные модели»: сверху вниз — жива ли модель →
 // кто на ней → как быстро → чем забита память → что с картами (макет
 // docs/mockups/local-model-stats-panel.html, раздел «Спецификация для Киры»).
 //
@@ -7,30 +7,31 @@
 // pointer-events: none); загрузка — скелетоны; поле в `unsupported` — строка
 // «Движок {имя} это не сообщает» вместо блока (нули не рисуем).
 
-import { useState, type CSSProperties } from 'react';
+import { useMemo, type CSSProperties } from 'react';
 import { AlertTriangle, Plug, FolderOpen } from 'lucide-react';
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { Button, EmptyState } from '../../components/ui';
 import { requestOpenModelsSpend } from '../../lib/modelProvidersNav';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelStats } from './api';
-import { formatPerc, formatSince, formatTps, whoRows, type WhoRow } from './format';
+import { formatPerc, formatSince, formatTps, gpuCountLabel, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
 import { GpuCard } from './GpuCard';
-import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
+import { ThroughputChart, WindowToggle, WINDOW_MS, peakThroughputOf, type Window } from './ThroughputChart';
 
 // === Оболочка секции ===
-// Карточка: C.bgCard, рамка C.borderLight, R.xl, паддинг SP.md. Заголовок —
-// как badgeSectionStyle: 11 / 700 / uppercase / C.textMuted.
+// Карточка: C.bgWhite (тот же фон, что у карточек соседних панелей и контентной
+// зоны), рамка C.borderLight, R.xl, паддинг SP.md. Заголовок —
+// 11 / 700 / uppercase / C.textMuted.
 function Card({ title, right, children }: { title: string; right?: React.ReactNode; children?: React.ReactNode }) {
   return (
     <section style={{
-      background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
+      background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
         <h3 style={{
           margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
-          letterSpacing: '0.04em', color: C.textMuted,
+          letterSpacing: '0.06em', color: C.textSecondary,
         }}>{title}</h3>
         {right}
       </div>
@@ -91,7 +92,11 @@ function StatusSubline({ data }: { data: LocalModelStats }) {
   const parts: string[] = [];
   if (data.engine) parts.push(data.engine);
   const n = data.gpus?.length ?? 0;
-  if (n > 0) parts.push(`${n} карт, TP=${n}`);
+  if (n > 0) {
+    // TP: из необязательного поля tensorParallel, иначе = число карт
+    const tp = data.tensorParallel ?? n;
+    parts.push(`${gpuCountLabel(n)}, TP=${tp}`);
+  }
   const since = formatSince(data.downSince);
   parts.push(data.status === 'down' && since ? `данные на ${since}` : 'обновлено 2 с назад');
   return (
@@ -156,15 +161,29 @@ function NowCard({ data }: { data: LocalModelStats }) {
 }
 
 // === «Скорость»: генерация и чтение промпта, ток/с на поток ===
-function SpeedCard({ data }: { data: LocalModelStats }) {
+// Под KPI — средняя за окно графика (window, то же, что у графика): «в среднем … · пик …».
+// avgGenTps/avgPromptTps — ток/с, null — нет данных за окно (рестарт счётчика) → «—»;
+// пик — максимум genThroughput по истории окна (вычисляется в ThroughputChart, передаётся сюда).
+function SpeedCard({ data, peakGenTps }: {
+  data: LocalModelStats; peakGenTps: number;
+}) {
   if (data.speed == null) {
     return <Card title="Скорость"><NotReported data={data} /></Card>;
   }
+  const avgGen = data.speed.avgGenTps;
+  const avgPrompt = data.speed.avgPromptTps;
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
-        <Kpi value={formatTps(data.speed.genPerStream)} label="генерация, на поток" />
-        <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта" />
+        <Kpi value={formatTps(data.speed.genPerStream)} label="генерация на поток, ср. за минуту" />
+        <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, на запрос" />
+      </div>
+      <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>
+        <div>
+          генерация: в среднем {formatTps(avgGen)}
+          {avgGen != null && peakGenTps > 0 && <> · пик {formatTps(peakGenTps)}</>}
+        </div>
+        <div>чтение промпта: в среднем {formatTps(avgPrompt)}</div>
       </div>
     </Card>
   );
@@ -248,14 +267,15 @@ function GpusCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Нагрузка»: график выработки (ток/с) и очереди за 15 мин или 1 ч ===
-// Окно держит TextTab, чтобы переключатель стоял в шапке карточки (как в макете).
+// === «Нагрузка и кэш»: выработка (ток/с) + график «Кэш, %» + полоса «Вытеснения»
+// на общей оси времени. Окно держит LocalModelPanel (его же читает серверный опрос),
+// переключатель стоит в шапке карточки (как в макете).
 function ChartCard({ data, window, onWindowChange, isMobile }: {
   data: LocalModelStats; window: Window; onWindowChange: (w: Window) => void; isMobile: boolean;
 }) {
   return (
-    <Card title="Нагрузка" right={<WindowToggle value={window} onChange={onWindowChange} isMobile={isMobile} />}>
-      <ThroughputChart history={data.history} window={window} />
+    <Card title="Нагрузка и кэш" right={<WindowToggle value={window} onChange={onWindowChange} isMobile={isMobile} />}>
+      <ThroughputChart history={data.history} window={window} engine={data.engine} />
     </Card>
   );
 }
@@ -398,20 +418,29 @@ function TextTabSkeleton() {
       <div style={block(76)} />
       <div style={block(120)} />
       <div style={block(110)} />
+      {/* «Нагрузка и кэш»: 280 px — карточка без поля вытеснений (самое частое состояние) */}
+      <div style={block(280)} />
+      <div style={block(110)} />
     </div>
   );
 }
 
 // === Вкладка ===
-export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
+export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window, onWindowChange }: {
   data: LocalModelStats | null;
   loading: boolean;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
+  window: Window;
+  onWindowChange: (w: Window) => void;
 }) {
-  // Окно графика (15 мин / 1 ч) — хук наверху, до ранних return (правило хуков)
-  const [window, setWindow] = useState<Window>('15m');
+  const now = useMemo(() => Date.now(), []);
+  // Пик выработки за окно — для «пик» в блоке «Скорость» (то же окно, что у графика)
+  const peakGenTps = useMemo(
+    () => (data ? peakThroughputOf(data.history, WINDOW_MS[window], now) : 0),
+    [data, window, now],
+  );
   // Первое открытие до первого ответа — скелетоны
   if (loading && !data) return <TextTabSkeleton />;
   if (!data) return null;
@@ -430,10 +459,10 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
       <StatusSubline data={data} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
-        <SpeedCard data={data} />
+        <SpeedCard data={data} peakGenTps={peakGenTps} />
         <MemoryCard data={data} />
         <GpusCard data={data} />
-        <ChartCard data={data} window={window} onWindowChange={setWindow} isMobile={isMobile} />
+        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>
     </>

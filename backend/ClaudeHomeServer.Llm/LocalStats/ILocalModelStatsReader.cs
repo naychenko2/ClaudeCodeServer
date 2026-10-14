@@ -24,6 +24,9 @@ public sealed record LocalModelStatsCurrent
     // Тип движка из секции Stats ("vllm" | "llama-server" | "ollama"); null — не задан.
     public string? Engine { get; init; }
 
+    // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
+    public int? TensorParallel { get; init; }
+
     // Идентификатор модели стенда (из каталога провайдера); null — неизвестен.
     public string? Model { get; init; }
 
@@ -58,7 +61,7 @@ public sealed record LocalModelStatsKv
     public double? PrefillPerStream { get; init; }
 }
 
-// Точка кольца истории: момент, скорость, running, waiting.
+// Точка кольца истории: момент, скорость, running, waiting + серии кэша (v2.1).
 public sealed record LocalModelStatsPoint
 {
     public DateTimeOffset Timestamp { get; init; }
@@ -68,6 +71,49 @@ public sealed record LocalModelStatsPoint
 
     public int? Running { get; init; }
     public int? Waiting { get; init; }
+
+    // ─── Серии кэша (спецификация v2.1, «Что нужно от бэкенда») ─────────────────────
+    //
+    // Отдаём приращения счётчиков (не проценты): фронт сводит точки в интервалы
+    // 15/60 с и считает долю из сумм (окна графика «Нагрузка» — 5m/15m/1h).
+    // Доля за интервал из точек 5 с сложить честно нельзя (короткий запрос даст 0 %
+    // или 100 %).
+
+    // Доля занятых блоков KV-кэша (0..1): МАКСИМУМ vllm:kv_cache_usage_perc по опросам
+    // с прошлой точки (при нагрузке опрос 1×/с — пик давления между точками не теряется).
+    // null — метрики не было ни на одном опросе с прошлой точки.
+    public double? KvUsage { get; init; }
+
+    // Приращение счётчика prefix-кэша (vllm:prefix_cache_hits_total) с прошлой точки, токены.
+    public long? PrefixHits { get; init; }
+
+    // Приращение счётчика prefix-кэша (vllm:prefix_cache_queries_total) с прошлой точки, токены.
+    public long? PrefixQueries { get; init; }
+
+    // Приращение счётчика RAM-тиера (vllm:kv_offload_tiering_chunk_hits_total) с прошлой точки, чанки.
+    public long? RamHits { get; init; }
+
+    // Приращение счётчика RAM-тиера (vllm:kv_offload_tiering_chunk_queries_total) с прошлой точки, чанки.
+    public long? RamQueries { get; init; }
+
+    // Приращение счётчика вытеснений (vllm:num_preemptions_total) с прошлой точки, штуки.
+    public long? Preemptions { get; init; }
+
+    // Правило приращений (все пять счётчиков): null — нет прошлой точки, метрика не
+    // отдана на прошлой или текущей точке, либо счётчик уменьшился (рестарт движка).
+    // Отрицательных значений в JSON быть не должно.
+}
+
+// Средняя скорость на поток за окно (5m/15m/1h, те же окна, что у графика «Нагрузка»):
+// ток/с, считаем только время, когда генерация реально шла (знаменатель — суммарное
+// время движка, простой не входит). null — нет данных за окно или рестарт счётчика.
+public sealed record LocalModelStatsAverage
+{
+    // Средняя скорость генерации на поток (ток/с) за окно: Δgeneration_tokens/Δdecode_time.
+    public double? GenTps { get; init; }
+
+    // Средняя скорость чтения промпта (ток/с) за окно: Δprefill_kv_computed_tokens/Δprefill_time.
+    public double? PromptTps { get; init; }
 }
 
 // Публичный API поллера (для контроллера шага 11). Чтение без блокировки фоновых циклов:
@@ -76,7 +122,19 @@ public interface ILocalModelStatsReader
 {
     LocalModelStatsCurrent Current { get; }
 
+    // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования
+    // (generation_tokens_total / inter_token_latency_seconds_count). DFlash отдаёт несколько
+    // токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует счётчик дельт этим
+    // коэффициентом. null — поллер выключен или движок не отдал обе метрики (поведение
+    // живого счётчика прежнее: 1 токен на дельту).
+    double? TokensPerStep { get; }
+
     // Точки кольца за окно `window` (от настоящего момента назад); sinceUnixMs — фильтр
     // «только новее этого момента» (unix-мс). Пусто — окно пустое или движок не ходил.
     IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null);
+
+    // Средняя скорость на поток за окно `window` (5m/15m/1h, те же окна, что у графика):
+    // Δсчётчика/Δсуммы времени движка. Простой (движок молчит) в среднее не входит;
+    // нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
+    LocalModelStatsAverage GetAverageSpeed(TimeSpan window);
 }

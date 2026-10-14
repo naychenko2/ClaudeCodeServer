@@ -333,18 +333,31 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 Серверный флаг пользователя ручки не проверяют: его проверяет фронт.
 
 ```
-GET  /api/local-model/stats        ?window=15m|1h&since=<unix ms>   (только admin; иначе 403)
-     → { configured, engine?, model?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
-         othersCount?, speed: { genPerStream?, prefillPerStream? },
+GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (только admin; иначе 403)
+     → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
+         othersCount?, speed: { genPerStream?, prefillPerStream?, avgGenTps?, avgPromptTps? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
-         history: [{ t, genThroughput?, waiting?, running? }],
+         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
-     window по умолчанию 15m, «<n>m»/«<n>h», иное — 400; since — только хвост истории новее момента.
+     window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
+     history серии кэша (v2.1): kvUsage — доля 0..1, МАКСИМУМ vllm:kv_cache_usage_perc по опросам с прошлой
+     точки; prefixHits/prefixQueries (токены), ramHits/ramQueries (чанки), preemptions (штуки) — ПРИРАЩЕНИЕ
+     счётчика с прошлой точки (не с предыдущего опроса). null — нет прошлой точки, метрика не отдана или
+     счётчик упал (рестарт); отрицательных значений нет. Долю за интервал фронт считает из сумм.
+     speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
+     genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
+     в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).
+     avgGenTps/avgPromptTps — СРЕДНЯЯ скорость на поток (ток/с) за окно графика (window, 5m/15m/1h):
+     Δgeneration_tokens/Δinter_token_latency (генерация) и Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта).
+     Простой (движок молчит) в среднее не входит;
+     нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
      chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
-     othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi
-     (сейчас в массиве одна карта — первая строка nvidia-smi)
+     othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi;
+     иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
+     tensorParallel? — из секции Stats провайдера (vLLM --tensor-parallel-size); null — фронт
+     показывает число карт (gpus.length)
 GET  /api/local-model/stats/media  ?since=<unix ms>   (только admin)
      → { configured, comfy: { status: working|busy|down|disabled, downSince?, version? },
          slots: { used, limit }, gpus: [{ uuid, index, name, roles: ["media"], utilPerc?, memUsedMb?,

@@ -117,7 +117,7 @@ public class LocalModelStatsPollerTests
                 Time,
                 NullLogger<LocalModelStatsPoller>.Instance);
             // Фейковый источник: подменяем фабрику, чтобы не ходить в реальную сеть.
-            Poller.SourceFactoryOverride = () => (Source, "vllm", "qwen3.8-27b", true);
+            Poller.SourceFactoryOverride = () => (Source, "vllm", "qwen3.8-27b", null, true);
         }
     }
 
@@ -286,34 +286,76 @@ public class LocalModelStatsPollerTests
         rateA.Should().Be(rateB, "частота опроса не меняет оконную долю");
     }
 
-    // (8) Скорость на поток: Δgeneration_tokens/Δsum(decode_time) за окно 60 с.
+    // (8) Скорость на поток: Δgeneration_tokens/Δinter_token_latency за окно 60 с.
+    //     ADR-029: знаменатель — inter_token_latency (пишется на каждом шаге), а не
+    //     decode_time (только при завершении запроса): окна совпадают, «—» не бывает.
     [Fact]
     public async Task GenPerStream_NormalCase()
     {
         var h = new Harness();
-        // t=0: 0 токенов, 0 decode-времени. t=60: 600 токенов за 10 с decode-времени.
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, DecodeTimeSum = 0, Running = 0 });
+        // t=0: 0 токенов, 0 inter-token-времени. t=60: 600 токенов за 10 с inter-token-времени.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, InterTokenLatencySum = 0, Running = 0 });
         await h.Poller.PollOnceAsync();
         h.Time.Advance(TimeSpan.FromSeconds(60));
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, DecodeTimeSum = 10, Running = 0 });
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, InterTokenLatencySum = 10, Running = 0 });
         await h.Poller.PollOnceAsync();
 
-        h.Poller.Current.Kv!.GenPerStream.Should().Be(60.0, "600 токенов / 10 с decode = 60 ток/с на поток");
+        h.Poller.Current.Kv!.GenPerStream.Should().Be(60.0, "600 токенов / 10 с inter-token = 60 ток/с на поток");
     }
 
-    // (9) Скорость на поток: деление на ноль (decode_time не меняется) → null.
+    // (8b) ADR-029: один длинный ход (300 токенов, ещё не завершён) плюс служебные
+    //      запросы на 1 токен. Старая формула (Δgen/Δdecode) давала «—»: decode_time
+    //      длинного хода не записан (запрос не завершён), 1-токеновый запрос даёт
+    //      decode_time +0. Новая формула (Δgen/Δinter_token_latency): inter_token_latency
+    //      растёт на каждом шаге длинного хода → знаменатель > 0 → «—» нет.
+    //      Мутация: вернуть знаменатель на DecodeTimeSum → «—» (null) → тест краснеет.
+    [Fact]
+    public async Task GenPerStream_LongRequestPlusOneTokenRequests_NotDash()
+    {
+        var h = new Harness();
+        // t=0: старт, всё 0.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            GenerationTokens = 0,
+            InterTokenLatencySum = 0,
+            DecodeTimeSum = 0,
+            Running = 1,
+        });
+        await h.Poller.PollOnceAsync();
+
+        // t=30: длинный ход сгенерировал 300 токенов (inter_token_latency = 5 с),
+        // плюс 3 служебных запроса по 1 токену (decode_time +0, inter_token_latency +0).
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            GenerationTokens = 303, // 300 (длинный) + 3 (1-токеновые)
+            InterTokenLatencySum = 5, // только длинный ход (1-токеновые дают 0)
+            DecodeTimeSum = 0, // 1-токеновые дают 0, длинный ещё не завершён
+            Running = 1,
+        });
+        await h.Poller.PollOnceAsync();
+
+        // Старая формула: Δgen/Δdecode = 303/0 = «—».
+        // Новая формула: Δgen/ΔITL = 303/5 = 60.6 ток/с.
+        h.Poller.Current.Kv!.GenPerStream.Should().NotBeNull(
+            "длинный ход + 1-токеновые: inter_token_latency растёт → «—» нет");
+        h.Poller.Current.Kv!.GenPerStream!.Should().BeApproximately(303.0 / 5.0, 0.01,
+            "303 токена / 5 с inter-token = 60.6 ток/с (не «—»)");
+    }
+
+    // (9) Скорость на поток: деление на ноль (inter_token_latency не меняется) → null.
     [Fact]
     public async Task GenPerStream_DivideByZero_IsNull()
     {
         var h = new Harness();
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, DecodeTimeSum = 5, Running = 0 });
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, InterTokenLatencySum = 5, Running = 0 });
         await h.Poller.PollOnceAsync();
         h.Time.Advance(TimeSpan.FromSeconds(60));
-        // decode_time не вырос (5 → 5), но токены выросли: дельта времени = 0 → деление на ноль.
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, DecodeTimeSum = 5, Running = 0 });
+        // inter_token_latency не вырос (5 → 5), но токены выросли: дельта = 0 → деление на ноль.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, InterTokenLatencySum = 5, Running = 0 });
         await h.Poller.PollOnceAsync();
 
-        h.Poller.Current.Kv!.GenPerStream.Should().BeNull("Δdecode_time = 0 → деление на ноль → null");
+        h.Poller.Current.Kv!.GenPerStream.Should().BeNull("Δinter_token_latency = 0 → деление на ноль → null");
     }
 
     // (10) Скорость на поток: отрицательная дельта (рестарт движка, счётчик упал) → null.
@@ -321,11 +363,11 @@ public class LocalModelStatsPollerTests
     public async Task GenPerStream_NegativeDelta_IsNull()
     {
         var h = new Harness();
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, DecodeTimeSum = 10, Running = 0 });
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, InterTokenLatencySum = 10, Running = 0 });
         await h.Poller.PollOnceAsync();
         h.Time.Advance(TimeSpan.FromSeconds(60));
-        // Рестарт: generation_tokens упал (1000 → 500), decode_time тоже — отрицательная дельта.
-        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 500, DecodeTimeSum = 5, Running = 0 });
+        // Рестарт: generation_tokens упал (1000 → 500), inter_token_latency тоже — отрицательная дельта.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 500, InterTokenLatencySum = 5, Running = 0 });
         await h.Poller.PollOnceAsync();
 
         h.Poller.Current.Kv!.GenPerStream.Should().BeNull("отрицательная дельта (рестарт) → null");
@@ -400,5 +442,319 @@ public class LocalModelStatsPollerTests
         // Живое «сейчас» (Speed) — свежее: дельта последнего опроса, а не точка 5 с назад
         h.Poller.Current.Speed.Should().NotBeNull("живое «сейчас» доступно при частом опросе");
         _ = t0;
+    }
+
+    // ─── Средняя скорость на поток за окно (GetAverageSpeed) ─────────────────────────────
+    //
+    // Средняя = Δgeneration_tokens/Δinter_token_latency (генерация) и
+    // Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта) за окно.
+    // ADR-029: знаменатель генерации — inter_token_latency (пишется на каждом шаге),
+    // поэтому простой (движок молчит) в среднее не входит. Нет данных/рестарт → null, не 0.
+
+    // (14) Обычное окно: 600 токенов за 10 с inter-token-времени за 60 с wall-clock → 60 ток/с.
+    // Мутация: делить на wall-clock (60 с) вместо inter_token_latency (10 с) → 10, тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_NormalWindow()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, InterTokenLatencySum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, InterTokenLatencySum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().Be(60.0, "600 токенов / 10 с inter-token = 60 ток/с (средняя за окно)");
+    }
+
+    // (15) Простой не тянет среднее вниз: 10 с генерации внутри 300 с окна. Средняя считается
+    // по inter-token-времени (10 с), а не по wall-clock (300 с) → 60, а не 20.
+    // Мутация: знаменатель = wall-clock → 600/300 = 2, тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_IdleDoesNotDilute()
+    {
+        var h = new Harness();
+        // t=0: старт счётчиков.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, InterTokenLatencySum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // t=10: 600 токенов за 10 с inter-token-времени (генерация реально шла).
+        h.Time.Advance(TimeSpan.FromSeconds(10));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, InterTokenLatencySum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // t=300: 290 с простоя — счётчики не двигаются, но окно растянулось.
+        h.Time.Advance(TimeSpan.FromSeconds(290));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, InterTokenLatencySum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().Be(60.0, "простой (290 с) не входит в знаменатель: средняя = 600/10, а не 600/300");
+    }
+
+    // (16) Рестарт счётчика: generation_tokens упал (600 → 100) → отрицательная дельта → null.
+    // Мутация: не резать по разрыву (усреднить по всему окну) → 500/10 = 50, тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_Restart_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, InterTokenLatencySum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 600, InterTokenLatencySum = 10, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // Рестарт: счётчики упали (600 → 100, 10 → 2) → отрицательная дельта.
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, InterTokenLatencySum = 2, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().BeNull("рестарт счётчика (отрицательная дельта) = разрыв, средняя null, а не отрицательная");
+    }
+
+    // (16b) ADR-029: ход, перешедший границу окна. Быстрая фаза (300 ток/5с=60) до окна
+    //      (t=0…60), медленная фаза (600 ток/20с=30) внутри окна (t=60…960).
+    //      Окно 15 мин, now=t=960: basePt = t=60 (старейшая в окне, since=t=60).
+    //      Δ за окно = (900−300)/(25−5) = 600/20 = 30 ток/с (только медленная фаза).
+    //      Мутация: basePt = t=0 (весь период) → 900/25 = 36 ≠ 30 → тест краснеет.
+    [Fact]
+    public async Task AvgGenTps_TurnCrossingWindowBoundary()
+    {
+        var h = new Harness();
+        // t=0: старт.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, InterTokenLatencySum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // t=60: 300 токенов за 5 с inter-token (быстрая фаза, до окна).
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 300, InterTokenLatencySum = 5, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        // t=960 (16 мин): ещё 600 токенов за 20 с inter-token (медленная фаза, внутри окна).
+        // Окно 15 мин: since = t=960−900 = t=60 → basePt = t=60.
+        h.Time.Advance(TimeSpan.FromMinutes(15));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 900, InterTokenLatencySum = 25, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        // Окно 15 мин: basePt = t=60 (300 токенов, 5 с ITL).
+        // Δ за окно = (900−300) / (25−5) = 600/20 = 30 ток/с (только медленная фаза).
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().BeApproximately(30.0, 0.01,
+                "средняя за окно: только токены внутри окна (600/20=30), не весь период (900/25=36)");
+    }
+
+    // (17) Нет данных: ни одного опроса → null (не 0). Мутация: вернуть 0 вместо null → краснеет.
+    [Fact]
+    public async Task AvgGenTps_NoData_IsNull()
+    {
+        var h = new Harness();
+        // Ни одного PollOnceAsync: буфер счётчиков пуст, _last null.
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).GenTps
+            .Should().BeNull("нет данных за окно → null, а не 0");
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).PromptTps
+            .Should().BeNull("нет данных за окно → null, а не 0");
+    }
+
+    // (18) Чтение промпта: средняя скорость prefill за окно = Δprefill_kv_computed_tokens/Δprefill_time.
+    // Мутация: перепутать числитель/знаменатель → тест краснеет.
+    [Fact]
+    public async Task AvgPromptTps_NormalWindow()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefillKvComputedTokens = 0, PrefillTimeSum = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(60));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefillKvComputedTokens = 3000, PrefillTimeSum = 3, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).PromptTps
+            .Should().Be(1000.0, "3000 prefill-токенов / 3 с prefill-времени = 1000 ток/с (средняя)");
+    }
+
+    // ─── Серии кэша в истории (v2.1) ─────────────────────────────────────────────────────
+    //
+    // Точка кольца несёт шесть полей: kvUsage (максимум по опросам с прошлой точки) и пять
+    // приращений счётчиков (prefixHits/prefixQueries/ramHits/ramQueries/preemptions) с прошлой
+    // ТОЧКИ. Приращения — null при отсутствии прошлой точки, отсутствии метрики или рестарте
+    // (счётчик упал). Отрицательных значений в JSON быть не должно.
+
+    // (19) Обычный интервал: пять счётчиков дают приращение с прошлой точки, kvUsage — максимум.
+    // Мутация: считать приращение с предыдущего ОПРОСА (а не точки) → значения совпадут,
+    // но при частом опросе тест (21) краснеет; здесь проверяем базовый случай.
+    [Fact]
+    public async Task CacheSeries_NormalInterval_IncrementsAndMax()
+    {
+        var h = new Harness();
+        // t=0: старт счётчиков (первая точка — приращения null, нет прошлой точки).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            PrefixCacheHits = 100, PrefixCacheQueries = 1000,
+            RamTierHits = 10, RamTierQueries = 100,
+            Preemptions = 1, KvUsagePerc = 0.2, Running = 0,
+        });
+        await h.Poller.PollOnceAsync();
+
+        // t=5: счётчики выросли, kvUsage подскочил до 0.5.
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            PrefixCacheHits = 150, PrefixCacheQueries = 1200,
+            RamTierHits = 15, RamTierQueries = 130,
+            Preemptions = 3, KvUsagePerc = 0.5, Running = 0,
+        });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+
+        // Первая точка: прошлой точки нет → все пять приращений null; kvUsage — максимум с старта.
+        history[0].PrefixHits.Should().BeNull("нет прошлой точки → null, не 0");
+        history[0].PrefixQueries.Should().BeNull();
+        history[0].RamHits.Should().BeNull();
+        history[0].RamQueries.Should().BeNull();
+        history[0].Preemptions.Should().BeNull();
+        history[0].KvUsage.Should().Be(0.2, "максимум по опросам до первой точки = 0.2");
+
+        // Вторая точка: приращения с прошлой точки, kvUsage — максимум (0.5).
+        history[1].PrefixHits.Should().Be(50, "150 − 100 = 50");
+        history[1].PrefixQueries.Should().Be(200, "1200 − 1000 = 200");
+        history[1].RamHits.Should().Be(5, "15 − 10 = 5");
+        history[1].RamQueries.Should().Be(30, "130 − 100 = 30");
+        history[1].Preemptions.Should().Be(2, "3 − 1 = 2");
+        history[1].KvUsage.Should().Be(0.5, "максимум по опросам с прошлой точки = 0.5");
+    }
+
+    // (20) kvUsage — максимум по НЕСКОЛЬКИМ опросам с прошлой точки: при опросе 1×/с
+    // пик давления (0.9) между двумя точками (5 с) не теряется.
+    // Мутация: брать kvUsage последнего опроса (0.3) вместо максимума → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_KvUsage_MaxAcrossMultiplePolls()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.1, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        // Между двумя точками (5 с) — три опроса: 0.1 → 0.9 (пик) → 0.3.
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.9, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.3, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.4, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+        history[1].KvUsage.Should().Be(0.9, "пик 0.9 между точками не теряется (максимум, не последний)");
+    }
+
+    // (21) Приращение — с прошлой ТОЧКИ, не с предыдущего опроса: при опросе 1×/с между
+    // точками (5 с) четыре промежуточных опроса не должны «съесть» приращение.
+    // Мутация: считать дельту от предыдущего опроса → приращение = 1 (последний шаг),
+    // а не 5 (с прошлой точки) → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_IncrementFromPreviousPoint_NotPreviousPoll()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        // Пять опросов по 1 с: preemptions 0 → 1 → 2 → 3 → 4 → 5.
+        for (var i = 1; i <= 5; i++)
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = i, Running = 0 });
+            await h.Poller.PollOnceAsync();
+        }
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        // Точки: t=0 (старт) и t=5 (после 5 с). Промежуточные опросы точку не создают.
+        history.Should().HaveCount(2);
+        history[1].Preemptions.Should().Be(5, "приращение с прошлой ТОЧКИ (0→5), не с предыдущего опроса (4→5=1)");
+    }
+
+    // (22) Рестарт счётчика: счётчик упал (50 → 10) → приращение null, не отрицательное.
+    // Мутация: не резать по разрыву (отрицательное приращение) → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_CounterRestart_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefixCacheHits = 100, PrefixCacheQueries = 1000, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // Рестарт: счётчики упали (100→10, 1000→100) → отрицательная дельта.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefixCacheHits = 10, PrefixCacheQueries = 100, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].PrefixHits.Should().BeNull("рестарт (счётчик упал) → null, не −90");
+        history[1].PrefixQueries.Should().BeNull("рестарт → null, не −900");
+    }
+
+    // (23) Метрики нет (движок не отдал счётчик) → приращение null, не 0.
+    // Мутация: вернуть 0 вместо null → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_MetricAbsent_IsNull()
+    {
+        var h = new Harness();
+        // t=0: preemptions задан, prefix-счётчики не заданы (null).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // t=5: preemptions вырос, prefix-счётчики по-прежнему null.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = 4, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].Preemptions.Should().Be(4, "счётчик есть → приращение 4");
+        history[1].PrefixHits.Should().BeNull("метрики нет (null на обеих точках) → null, не 0");
+        history[1].PrefixQueries.Should().BeNull();
+    }
+
+    // (24) Окно 5 мин: GetHistory(5m) отдаёт только точки за последние 5 мин (60 точек по 5 с).
+    // Мутация: резать окно по 15 мин → тест краснеет (больше точек).
+    [Fact]
+    public async Task CacheSeries_Window5m_ReturnsOnlyLastFiveMinutes()
+    {
+        var h = new Harness();
+        // 20 точек по 5 с = 100 с (~1.7 мин) — все в пределах 5 мин.
+        for (var i = 0; i < 20; i++)
+        {
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = i, Running = 0 });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+        // Ещё 10 точек по 5 с = 50 с → суммарно 150 с = 2.5 мин. Всё ещё < 5 мин.
+        for (var i = 20; i < 30; i++)
+        {
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = i, Running = 0 });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        // Все 30 точек (150 с) в пределах 5-минутного окна.
+        h.Poller.GetHistory(TimeSpan.FromMinutes(5)).Should().HaveCount(30, "150 с < 5 мин → все точки");
+
+        // Окно 1 мин: только последние 12 точек (60 с / 5 с).
+        h.Poller.GetHistory(TimeSpan.FromMinutes(1)).Should().HaveCount(12, "60 с / 5 с = 12 точек");
+    }
+
+    // (25) Мусор в /metrics: источник бросает (сбой парсера на недоверенном тексте) →
+    // исключение не выходит из поллера (PollOnceAsync ловит), статус → down.
+    // Мутация: убрать try/catch вокруг source.ReadAsync → исключение выходит, тест краснеет.
+    [Fact]
+    public async Task SourceThrows_GarbageMetrics_DoesNotEscapePoller()
+    {
+        var h = new Harness();
+        // Подменяем фабрику: источник бросает (симуляция мусора, на котором парсер упал).
+        h.Poller.SourceFactoryOverride = () => (new ThrowingSource(), "vllm", "qwen", null, true);
+
+        await h.Poller.PollOnceAsync(); // не бросает наружу
+        h.Poller.Current.Status.Should().Be("down", "сбой источника → down, а не исключение из BackgroundService");
+    }
+
+    // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).
+    private sealed class ThrowingSource : IEngineMetricsSource
+    {
+        public Task<EngineSnapshot?> ReadAsync(CancellationToken ct = default)
+            => throw new FormatException("мусор в /metrics");
     }
 }

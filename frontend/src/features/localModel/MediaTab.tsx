@@ -21,20 +21,22 @@ import {
   LAST_HOUR_VISIBLE,
 } from './mediaFormat';
 import { GpuCard } from './GpuCard';
+import { gpuCountLabel } from './format';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
 // === Оболочка секции ===
-// Карточка: C.bgCard, рамка C.borderLight, R.xl, паддинг SP.md. Заголовок —
+// Карточка: C.bgWhite (тот же фон, что у карточек соседних панелей и контентной
+// зоны), рамка C.borderLight, R.xl, паддинг SP.md. Заголовок —
 // 11 / 700 / uppercase / C.textMuted (как в TextTab).
 function Card({ title, right, children }: { title: string; right?: ReactNode; children?: ReactNode }) {
   return (
     <section style={{
-      background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
+      background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
         <h3 style={{
           margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
-          letterSpacing: '0.04em', color: C.textMuted,
+          letterSpacing: '0.06em', color: C.textSecondary,
         }}>{title}</h3>
         {right}
       </div>
@@ -78,7 +80,7 @@ function ComfyStatusRow({ media }: { media: LocalModelMedia }) {
 function ComfySubline({ media }: { media: LocalModelMedia }) {
   const parts: string[] = [];
   const n = media.gpus?.length ?? 0;
-  if (n > 0) parts.push(`${n} карта`);
+  if (n > 0) parts.push(gpuCountLabel(n));
   const since = formatClockTime(media.comfy.downSince);
   parts.push(media.comfy.status === 'down' && since ? `данные на ${since}` : 'обновлено 2 с назад');
   return (

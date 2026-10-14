@@ -1,6 +1,15 @@
-// Панель «Локальные модели» — остров правого рельса (только админ). Каркас:
-// шапка, переключатель «Текст · Медиа» (не прокручивается с телом) и тело
-// вкладки. Блоки вкладок — следующие шаги, сейчас заглушки с заголовком.
+// Панель «Локальные модели» — остров правого рельса (только админ).
+//
+// Каркас (остров, шапку с иконкой+названием и крестик) рисует контейнер панели
+// рельса (PanelShell зоны, как у «Персонажей»/«Голосов»/«Команды»): панель
+// отдаёт ему шапку и рисует только переключатель «LLM · Медиа» и тело
+// активной вкладки. Фон тела наследуется от контентной зоны контейнера.
+//
+// Переключатель: на десктопе (шапка есть) живёт в шапке через PanelHeaderSlot
+// side="left" — штатное место переключателей вида; там, где PanelShell-шапки
+// нет (узкий планшет/телефон), — фиксированной строкой в теле, над
+// прокручиваемым блоком. Двойной шапки нет: свою шапку и остров панель не
+// рисует.
 //
 // Видимость: флаг + admin + configured — все три; не выполнено — null, и
 // keyAvailable PanelZone прячет кнопку в рельсе.
@@ -15,12 +24,11 @@
 // из модульного стора.
 
 import { useCallback, useState } from 'react';
-import { Cpu, Clapperboard, MessageSquareText, X } from 'lucide-react';
-import { C, FONT, FS, R, SHADOW, SP, Z, ISLAND, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { Clapperboard, MessageSquareText } from 'lucide-react';
+import { FONT, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { InlineSegmented } from '../../components/ui/InlineSegmented';
-import { IconButton } from '../../components/ui';
+import { InlineSegmented, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { openChatById } from '../../lib/openChat';
 import {
   isLocalModelPanelVisible,
@@ -31,8 +39,9 @@ import {
 import { useLocalModelMedia } from './useLocalModelMedia';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
+import type { Window as StatsWindow } from './ThroughputChart';
 
-// Вкладка запоминается на устройство (localStorage): «Текст · Медиа» — выбор
+// Вкладка запоминается на устройство (localStorage): «LLM · Медиа» — выбор
 // человека, не состояние сессии
 const TAB_KEY = 'cc_local_model_tab';
 type Tab = 'text' | 'media';
@@ -40,21 +49,18 @@ function loadTab(): Tab {
   try { return localStorage.getItem(TAB_KEY) === 'media' ? 'media' : 'text'; } catch { return 'text'; }
 }
 
-// Переключатель «Текст · Медиа»: первый элемент тела, над статусом,
-// не прокручивается вместе с телом. Дорожка TB.pillTrack, активный C.accentLight/C.accent
+// Переключатель «LLM · Медиа»: InlineSegmented, активный C.accentLight/C.accent
 function TabSwitch({ value, onChange, isMobile }: { value: Tab; onChange: (t: Tab) => void; isMobile: boolean }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'center' }}>
-      <InlineSegmented<Tab>
-        value={value}
-        isMobile={isMobile}
-        options={[
-          { value: 'text', label: 'Текст', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-          { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-        ]}
-        onChange={onChange}
-      />
-    </div>
+    <InlineSegmented<Tab>
+      value={value}
+      isMobile={isMobile}
+      options={[
+        { value: 'text', label: 'LLM', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+        { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+      ]}
+      onChange={onChange}
+    />
   );
 }
 
@@ -74,9 +80,13 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     try { localStorage.setItem(TAB_KEY, t); } catch { /* приватный режим */ }
   }, []);
 
+  // Окно графика (5m/15m/1h): держим здесь, чтобы и тяжёлый опрос (сервер отдаёт
+  // средние за это окно), и вкладка «LLM» видели один и тот же выбор.
+  const [window, setWindow] = useState<StatsWindow>('15m');
+
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
-  // «Текст» — stats, «Медиа» — media; переключение — немедленный снимок.
-  const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text');
+  // «LLM» — stats, «Медиа» — media; переключение — немедленный снимок.
+  const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
 
   // Клик по строке «Кто на модели»: открыть чат; на мобиле после перехода лист
@@ -88,78 +98,40 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // Не видно — null: keyAvailable прячет кнопку в рельсе
   if (!visible) return null;
 
-  const close = (
-    <IconButton size={ctx.isMobile ? 'lg' : 'xs'} title="Закрыть панель" onClick={ctx.onClose}>
-      <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-    </IconButton>
-  );
+  // Есть ли над панелью шапка (PanelShell зоны). На десктопе и планшете — да:
+  // переключатель уезжает в шапку (PanelHeaderSlot side="left"). Там, где
+  // PanelShell-шапки нет (узкий планшет/телефон), — строкой в теле.
+  const inHeader = useHasPanelHeader();
 
-  // Шапка: остров — 40 px на C.bgInset; лист — 44 px прозрачная (фон листа C.bgPanel)
-  const header = (
-    <div style={{
-      height: ctx.isMobile ? 44 : ISLAND.headerH,
-      flex: `0 0 ${ctx.isMobile ? 44 : ISLAND.headerH}px`,
-      display: 'flex', alignItems: 'center', gap: SP.sm,
-      padding: `0 ${SP.md}px`, minWidth: 0,
-      background: ctx.isMobile ? 'transparent' : ISLAND.headerBg,
-      borderBottom: `1px solid ${C.borderLight}`,
-    }}>
-      <span style={{ display: 'inline-flex', color: C.accent, flexShrink: 0 }}>
-        <Cpu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-      </span>
-      <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}>
-        Локальные модели
-      </span>
-      <span style={{ flex: 1 }} />
-      {close}
-    </div>
-  );
-
-  const switcher = (
-    <div style={{ padding: `${SP.md}px ${SP.md}px 0`, flexShrink: 0 }}>
-      <div style={{ width: '100%' }}>
-        <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} />
-      </div>
-    </div>
-  );
-
+  // Тело активной вкладки: поток блоков, скролл держит контентная зона контейнера.
   const body = (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.md }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.md, padding: SP.md }}>
       {tab === 'text'
-        ? <TextTab data={textData} loading={textLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} />
+        ? <TextTab data={textData} loading={textLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} window={window} onWindowChange={setWindow} />
         : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} />}
     </div>
   );
 
-  // Мобила — нижний лист: как другие панели рельса (R.sheet, граббер, 88 % высоты)
-  if (ctx.isMobile) {
-    return (
-      <div role="dialog" aria-label="Локальные модели" style={{
-        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: Z.modal,
-        height: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        background: C.bgPanel, borderRadius: `${R.sheet}px ${R.sheet}px 0 0`,
-        boxShadow: SHADOW.sheet, fontFamily: FONT.sans,
-      }}>
-        <div style={{ flex: '0 0 auto', alignSelf: 'center', padding: `${SP.sm}px 0 ${SP.xxs}px` }}>
-          <span style={{ display: 'block', width: 40, height: 4, borderRadius: R.max, background: C.track }} />
-        </div>
-        {header}
-        {switcher}
+  // Без PanelShell-шапки (мобила) переключатель — фиксированной строкой в теле,
+  // над прокручиваемым блоком: не скроллится вместе с ним.
+  const mobileSwitcher = !inHeader && (
+    <div style={{ flexShrink: 0, padding: `${SP.md}px ${SP.md}px 0` }}>
+      <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} />
+    </div>
+  );
+
+  return (
+    <>
+      {inHeader && (
+        <PanelHeaderSlot side="left">
+          <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} />
+        </PanelHeaderSlot>
+      )}
+      <div role="complementary" aria-label="Локальные модели"
+        style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', fontFamily: FONT.sans }}>
+        {mobileSwitcher}
         {body}
       </div>
-    );
-  }
-
-  // Десктоп/планшет — остров: C.bgPanel, рамка C.borderLight, R.xxl, SHADOW.island
-  return (
-    <div role="complementary" aria-label="Локальные модели" style={{
-      position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      background: ISLAND.bg, border: `1px solid ${ISLAND.border}`,
-      borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow, fontFamily: FONT.sans,
-    }}>
-      {header}
-      {switcher}
-      {body}
-    </div>
+    </>
   );
 }

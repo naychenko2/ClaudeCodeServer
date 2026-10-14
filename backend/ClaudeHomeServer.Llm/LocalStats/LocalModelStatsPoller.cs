@@ -52,8 +52,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     private DateTimeOffset? _lastPointTime;
     private EngineSnapshot? _lastPointSnap;
 
+    // Bегущий максимум vllm:kv_cache_usage_perc по опросам с прошлой точки (v2.1, kvUsage):
+    // при нагрузке опрос 1×/с, пик давления между точками не теряется. Сбрасывается на точке.
+    // single-writer: читается и пишется только из UpdateRing фонового опроса.
+    private double? _kvUsageMaxSincePoint;
+
     // Живое «сейчас»: дельта generation_tokens от предыдущего опроса (каждый опрос, не только на точке)
     private double? _liveThroughput;
+
+    // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования
+    // (generation_tokens_total / inter_token_latency_seconds_count). DFlash отдаёт несколько
+    // токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует счётчик дельт этим
+    // коэффициентом. null — поллер выключен или движок не отдал обе метрики.
+    private double? _tokensPerStep;
 
     // Ожидаемый интервал: по умолчанию Task.Delay; тест подменяет, чтобы гонять цикл
     // на фейковых часах (без реального Task.Delay).
@@ -78,6 +89,11 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         get { lock (_gate) return _current; }
     }
 
+    // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования. null — нет данных
+    // (поллер выключен или движок не отдал обе метрики). Чтение под _gate: Nullable<double>
+    // не атомарна (в отличие от double), а читает её счётчик хода на другом потоке.
+    public double? TokensPerStep { get { lock (_gate) return _tokensPerStep; } }
+
     public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null)
     {
         lock (_gate)
@@ -87,6 +103,30 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             var list = _history.Where(p => p.Timestamp >= sinceUtc).ToList();
             return list;
         }
+    }
+
+    // Средняя скорость на поток за окно (15m/1h, те же окна, что у графика «Нагрузка»):
+    // Δgeneration_tokens/Δinter_token_latency (генерация) и Δprefill_kv_computed_tokens/Δprefill_time
+    // (чтение промпта). Знаменатель генерации — суммарное inter-token-время движка (пишется на
+    // каждом шаге, ADR-029), поэтому простой (движок молчит) в среднее не входит: ночью среднее
+    // не падает к нулю. Окно режется по разрыву (рестарт счётчика → отрицательная дельта → null),
+    // ровно как график рисует разрыв. Текущие значения счётчиков — из последнего снимка;
+    // старейшая точка окна — из буфера.
+    public LocalModelStatsAverage GetAverageSpeed(TimeSpan window)
+    {
+        var now = _time.GetUtcNow();
+        var basePt = OldestInWindow(now, window);
+        if (basePt is null || _last is not { } cur)
+            return new LocalModelStatsAverage(); // null/null: нет данных за окно
+        return new LocalModelStatsAverage
+        {
+            GenTps = SpeedOverWindow(basePt, cur,
+                p => p.GenerationTokens, s => (double?)s.GenerationTokens,
+                p => p.InterTokenLatencySum, s => s.InterTokenLatencySum),
+            PromptTps = SpeedOverWindow(basePt, cur,
+                p => p.PrefillKvComputedTokens, s => s.PrefillKvComputedTokens,
+                p => p.PrefillTimeSum, s => s.PrefillTimeSum),
+        };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -119,7 +159,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     internal async Task<TimeSpan> PollOnceAsync(CancellationToken ct = default)
     {
         var opts = _options.CurrentValue;
-        var (source, engine, model, configured) = ResolveSource();
+        var (source, engine, model, tensorParallel, configured) = ResolveSource();
         if (!configured)
         {
             // notConnected: сбрасываем _downSince (движок «не мёртв» — его просто нет).
@@ -129,6 +169,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 Status = "notConnected",
                 Engine = engine,
                 Model = model,
+                TensorParallel = tensorParallel,
                 Configured = false,
             });
             return opts.PollInterval;
@@ -162,6 +203,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 DownSince = _downSince,
                 Engine = engine,
                 Model = model,
+                TensorParallel = tensorParallel,
                 Configured = true,
             });
             return opts.DownPollInterval;
@@ -175,7 +217,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         }
         UpdateRing(now, snapshot);
         UpdateCounters(now, snapshot);
-        UpdateCurrent(now, snapshot, engine, model);
+        UpdateCurrent(now, snapshot, engine, model, tensorParallel);
 
         var busy = (snapshot.Running ?? 0) > 0 || (snapshot.Waiting ?? 0) > 0;
         return busy ? opts.ActivePollInterval : opts.PollInterval;
@@ -183,24 +225,25 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
     // Фабрика источника: по умолчанию ResolveSource (по провайдеру). Тест подменяет,
     // чтобы подставить фейковый IEngineMetricsSource.
-    internal Func<(IEngineMetricsSource, string?, string?, bool)>? SourceFactoryOverride { get; set; }
+    internal Func<(IEngineMetricsSource, string?, string?, int?, bool)>? SourceFactoryOverride { get; set; }
 
     // Источник метрик по локальному провайдеру с секцией Stats.
-    // (source, engine, model, configured): configured=false — notConnected.
-    private (IEngineMetricsSource, string?, string?, bool) ResolveSource()
+    // (source, engine, model, tensorParallel, configured): configured=false — notConnected.
+    private (IEngineMetricsSource, string?, string?, int?, bool) ResolveSource()
     {
         if (SourceFactoryOverride is { } f)
             return f();
         var local = _providers.All.FirstOrDefault(p => p.IsLocal);
         if (local is null || local.Stats is null)
-            return (new NullEngineMetricsSource(), null, FirstModel(local), false);
+            return (new NullEngineMetricsSource(), null, FirstModel(local), null, false);
 
         var engine = local.Stats.Engine.Trim().ToLowerInvariant();
         var model = FirstModel(local);
+        var tensorParallel = local.Stats.TensorParallel;
         if (engine == "vllm" && !string.IsNullOrWhiteSpace(local.Stats.MetricsUrl))
-            return (new VllmMetricsSource(_httpFactory.CreateClient(HttpClientName), local.Stats.MetricsUrl), engine, model, true);
+            return (new VllmMetricsSource(_httpFactory.CreateClient(HttpClientName), local.Stats.MetricsUrl), engine, model, tensorParallel, true);
         // llama-server / ollama / пусто — заглушка (метрики не отдают Prometheus).
-        return (new NullEngineMetricsSource(), string.IsNullOrEmpty(engine) ? null : engine, model, true);
+        return (new NullEngineMetricsSource(), string.IsNullOrEmpty(engine) ? null : engine, model, tensorParallel, true);
     }
 
     private static string? FirstModel(LlmProviderConfig? p) =>
@@ -219,6 +262,21 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 _liveThroughput = dTokens < 0 ? null : dTokens / dt;
         }
 
+        // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования.
+        // DFlash отдаёт несколько токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует
+        // счётчик дельт этим коэффициентом. Считаем по накопленным счётчикам (стабильно).
+        // Запись под _gate: Nullable<double> не атомарна, а свойство читает на другом потоке.
+        if (snap.GenerationTokens is { } g && snap.InterTokenLatencyCount is { } c && c > 0)
+        {
+            lock (_gate)
+                _tokensPerStep = (double)g / c;
+        }
+
+        // v2.1 (kvUsage): бегущий максимум доли KV-кэша по опросам с прошлой точки.
+        // При нагрузке опрос 1×/с: пик давления между точками не теряется. Сброс — на точке.
+        if (snap.KvUsagePerc is { } kv)
+            _kvUsageMaxSincePoint = _kvUsageMaxSincePoint is { } m ? Math.Max(m, kv) : kv;
+
         // M6: прореживание по времени — точка в кольцо не чаще PointStep (5 с). Частый опрос (1 с)
         // иначе сжимает окно «1 ч» до ~12 мин (720 точек × 1 с). Дельта скорости — за интервал от
         // предыдущей ТОЧКИ (не от предыдущего опроса), поэтому скорость в кольце — среднее за шаг.
@@ -236,12 +294,21 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                     throughput = dTokens < 0 ? null : dTokens / dt;
             }
 
+            // Серии кэша (v2.1): kvUsage — максимум по опросам с прошлой точки; пять счётчиков —
+            // приращение с прошлой ТОЧКИ (как GenThroughput через _lastPointSnap), не с прошлого
+            // опроса: иначе при опросе 1×/с между точками потерялись бы 4 опроса из 5.
             var point = new LocalModelStatsPoint
             {
                 Timestamp = now,
                 GenThroughput = throughput,
                 Running = snap.Running,
                 Waiting = snap.Waiting,
+                KvUsage = _kvUsageMaxSincePoint,
+                PrefixHits = CounterDelta(_lastPointSnap, snap, s => s.PrefixCacheHits),
+                PrefixQueries = CounterDelta(_lastPointSnap, snap, s => s.PrefixCacheQueries),
+                RamHits = CounterDelta(_lastPointSnap, snap, s => s.RamTierHits),
+                RamQueries = CounterDelta(_lastPointSnap, snap, s => s.RamTierQueries),
+                Preemptions = CounterDelta(_lastPointSnap, snap, s => s.Preemptions),
             };
 
             lock (_gate)
@@ -254,6 +321,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
             _lastPointTime = now;
             _lastPointSnap = snap;
+            _kvUsageMaxSincePoint = null; // максимум «с прошлой точки» собран: сбрасываем
         }
 
         // Живое «сейчас» — каждый опрос (не только на точке): ThroughputOf отдаёт свежую дельту
@@ -275,6 +343,8 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         public double? PrefillTimeSum;
         public long? GenerationTokens;
         public double? PrefillKvComputedTokens;
+        public double? InterTokenLatencySum;
+        public long? InterTokenLatencyCount;
     }
 
     // Добавляет текущий снимок в буфер счётчиков, обрывает старые точки (за PreemptionsWindow)
@@ -294,6 +364,8 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             PrefillTimeSum = snap.PrefillTimeSum,
             GenerationTokens = snap.GenerationTokens,
             PrefillKvComputedTokens = snap.PrefillKvComputedTokens,
+            InterTokenLatencySum = snap.InterTokenLatencySum,
+            InterTokenLatencyCount = snap.InterTokenLatencyCount,
         };
 
         lock (_gate)
@@ -303,8 +375,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 _counters.Clear();
             _counters.Add(point);
 
-            // Обрыв: держим только точки за PreemptionsWindow (15 мин) — самое длинное окно.
-            var windowStart = now - _options.CurrentValue.PreemptionsWindow;
+            // Обрыв: держим только точки за HistoryWindow (1 ч) — самое длинное окно
+            // (средняя скорость и график «Нагрузка» используют окна 15m/1h; preemptions — 15m).
+            var windowStart = now - _options.CurrentValue.HistoryWindow;
             while (_counters.Count > 1 && _counters[0].Time < windowStart)
                 _counters.RemoveAt(0);
         }
@@ -322,7 +395,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             || (prev.DecodeTimeSum is not null && cur.DecodeTimeSum is not null && cur.DecodeTimeSum < prev.DecodeTimeSum)
             || (prev.PrefillTimeSum is not null && cur.PrefillTimeSum is not null && cur.PrefillTimeSum < prev.PrefillTimeSum)
             || (prev.GenerationTokens is not null && cur.GenerationTokens is not null && cur.GenerationTokens < prev.GenerationTokens)
-            || (prev.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens < prev.PrefillKvComputedTokens);
+            || (prev.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens < prev.PrefillKvComputedTokens)
+            || (prev.InterTokenLatencySum is not null && cur.InterTokenLatencySum is not null && cur.InterTokenLatencySum < prev.InterTokenLatencySum)
+            || (prev.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount < prev.InterTokenLatencyCount);
     }
 
     // Самая старая точка буфера не раньше now-window; null — буфер короче окна (не хватает истории).
@@ -359,6 +434,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         return d < 0 ? null : d;
     }
 
+    // Приращение счётчика с прошлой ТОЧКИ кольца (v2.1, серии кэша): cur − prevPoint.
+    // null — прошлой точки нет, метрика не на прошлой или текущей точке, или счётчик упал (рестарт).
+    // Отрицательных значений наружу не идёт (тот же приём, что DeltaLong/DeltaDouble).
+    private static long? CounterDelta(EngineSnapshot? prevPoint, EngineSnapshot cur, Func<EngineSnapshot, long?> sel)
+    {
+        if (prevPoint is null) return null;
+        var a = sel(prevPoint);
+        var b = sel(cur);
+        if (a is null || b is null) return null;
+        var d = b - a;
+        return d < 0 ? null : d;
+    }
+
     // Hit-доля за окно: Δчислитель/Δзнаменатель; basePt — старейшая точка окна (null — окна нет).
     // Деление на ноль/отрицательная дельта → null.
     private static double? RatioOverWindow(
@@ -388,7 +476,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     }
 
     // Current: status по running/waiting, KV-блок (hit-доли и скорость за окно), preemptions за окно.
-    private void UpdateCurrent(DateTimeOffset now, EngineSnapshot snap, string? engine, string? model)
+    private void UpdateCurrent(DateTimeOffset now, EngineSnapshot snap, string? engine, string? model, int? tensorParallel)
     {
         var busy = (snap.Running ?? 0) > 0 || (snap.Waiting ?? 0) > 0;
         var status = busy ? "busy" : "working";
@@ -407,9 +495,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 p => p.RamTierHits, s => s.RamTierHits,
                 p => p.RamTierQueries, s => s.RamTierQueries),
             Preemptions = PreemptionsOverWindow(base15, snap),
+            // Знаменатель — inter_token_latency (пишется на каждом шаге), а не decode_time
+            // (только при завершении запроса): окна числителя/знаменателя совпадают, и при
+            // идущей генерации «—» не бывает (ADR-029).
             GenPerStream = SpeedOverWindow(base60, snap,
                 p => p.GenerationTokens, s => (double?)s.GenerationTokens,
-                p => p.DecodeTimeSum, s => s.DecodeTimeSum),
+                p => p.InterTokenLatencySum, s => s.InterTokenLatencySum),
             PrefillPerStream = SpeedOverWindow(base60, snap,
                 p => p.PrefillKvComputedTokens, s => s.PrefillKvComputedTokens,
                 p => p.PrefillTimeSum, s => s.PrefillTimeSum),
@@ -426,6 +517,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             Unsupported = snap.Unsupported,
             Engine = engine,
             Model = model,
+            TensorParallel = tensorParallel,
             Configured = true,
         });
     }

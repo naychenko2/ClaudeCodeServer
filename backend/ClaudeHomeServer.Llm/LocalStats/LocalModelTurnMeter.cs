@@ -157,15 +157,26 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
     }
 
     // M5: приращение токенов запроса во время стриминга. Наблюдатель шлёт накопленный
-    // счётчик ЭТОГО запроса; мы добавляем приращение в монотонный счётчик сессии
-    // (Minor 2: не сумма по активным — она падает при завершении запроса) и пишем в
-    // скользящее окно. Скорость (EmitLive) — из окна: Δтокены / Δвремя.
+    // счётчик ЭТОГО запроса (≈1 на content_block_delta); мы добавляем приращение в монотонный
+    // счётчик сессии (Minor 2: не сумма по активным — она падает при завершении запроса) и
+    // пишем в скользящее окно. Скорость (EmitLive) — из окна: Δтокены / Δвремя.
+    //
+    // ADR-029 (DFlash): vLLM со спекулятивным декодированием отдаёт несколько токенов за
+    // SSE-дельту (замер 2,64–3,69), а наблюдатель считает дельты, не токены. Массштабируем
+    // счётчик дельт коэффициентом TokensPerStep (токенов на шаг) из поллера; null (поллер
+    // выключен) — поведение прежнее (1 токен на дельту).
     public void OnTokenCount(string requestId, string turnId, int cumulativeTokens)
     {
         var (sessionId, ownerId) = ResolveSession(turnId);
         if (sessionId is null) return;
         var now = _time.GetUtcNow();
         bool hasWork;
+        // Коэффициент DFlash (токенов на SSE-дельту) клампуем в [0.5, 10]: аномальное
+        // значение (сбой метрик, 0/∞) не должно искажать счётчик. Диапазон покрывает замер
+        // DFlash (2.64–3.69) и обычный 1:1 (null → 1.0).
+        var coeff = Math.Clamp(_reader?.TokensPerStep ?? 1.0, 0.5, 10.0);
+        // Math.Round, а не (int): (int) усечает вниз (2.5 → 2), округление честнее.
+        var scaled = (int)Math.Round(cumulativeTokens * coeff);
         lock (_gate)
         {
             var s = GetOrAdd(sessionId, ownerId);
@@ -173,8 +184,8 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
             {
                 // Minor 2: приращение токенов ЭТОГО запроса → монотонный счётчик сессии.
                 // Завершённый запрос (вне InWork) не меняет счётчик: его вклад заморожен.
-                var delta = cumulativeTokens - r.TokenCount;
-                r.TokenCount = cumulativeTokens;
+                var delta = scaled - r.TokenCount;
+                r.TokenCount = scaled;
                 s.SessionTotalTokens += delta;
             }
             // Записываем точку в окно; prune старых (> SpeedWindow).

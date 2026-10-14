@@ -101,11 +101,12 @@ describe('чип котировки (шаг 16б): число проходов �
   it('N и M берутся из котировки: разные ETA — разные подписи', () => {
     expect(faceQuoteChip({ facePasses: 2, expectedSeconds: 100 })).toBe('2 прохода · бесплатно · ~2 мин');
     expect(faceQuoteChip({ facePasses: 2, expectedSeconds: 250 })).toBe('2 прохода · бесплатно · ~5 мин');
-    expect(faceQuoteChip({ facePasses: 1, expectedSeconds: 61 })).toBe('1 проход · бесплатно · ~2 мин');
+    // Одно назначение: «1 проход» не пишется (v2) — только «бесплатно · ~M мин»
+    expect(faceQuoteChip({ facePasses: 1, expectedSeconds: 61 })).toBe('бесплатно · ~2 мин');
   });
 
   it('ETA округляется вверх, не меньше минуты; без facePasses — один проход', () => {
-    expect(faceQuoteChip({ expectedSeconds: 5 })).toBe('1 проход · бесплатно · ~1 мин');
+    expect(faceQuoteChip({ expectedSeconds: 5 })).toBe('бесплатно · ~1 мин');
     expect(faceQuoteChip({ facePasses: 2, expectedSeconds: 0 })).toBe('2 прохода · бесплатно · ~1 мин');
   });
 

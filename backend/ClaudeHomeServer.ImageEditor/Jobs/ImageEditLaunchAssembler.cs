@@ -340,7 +340,7 @@ public sealed class ImageEditLaunchAssembler(
         // (по bbox детекции) и исходник были в одной системе координат (той, что видит пользователь),
         // независимо от того, как загрузчик узла/воркера трактует EXIF. facesKey — по сырым байтам (фронт
         // считает его на исходнике), поэтому сверка facesKey идёт до нормализации.
-        var normalizedSource = NormalizeExif(sourceBytes);
+        var (normalizedSource, sourceType) = NormalizeExif(sourceBytes);
 
         // d. Детекция: кэш по нормализованным байтам, промах — детектор
         var detector = faces ?? new Faces.FaceDetectionCache();
@@ -366,14 +366,15 @@ public sealed class ImageEditLaunchAssembler(
         var maskBuilder = raster is null ? null : new FaceMaskBuilder(raster);
         if (maskBuilder is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена");
-        var source = new ImageBytes(normalizedSource, "image/png");
+        var source = new ImageBytes(normalizedSource, sourceType);
         var extra = string.IsNullOrWhiteSpace(req.Prompt) ? "" : " " + req.Prompt!.Trim();
         var passes = new List<FacePass>();
         foreach (var assignment in faceTarget.Faces.OrderBy(fa => fa.Face))
         {
             var face = result.Faces.FirstOrDefault(f => f.N == assignment.Face);
             if (face is null)
-                return Invalid($"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц");
+                return FaceFail(ImageEditErrorCodes.InvalidRequest,
+                    $"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц", assignment.Face);
             if (face.Small)
                 return FaceFail(ImageEditErrorCodes.InvalidRequest, $"Лицо {assignment.Face} слишком мелкое для подстановки персонажа", assignment.Face);
             var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, assignment.Face, quote.InputCaps);
@@ -385,11 +386,12 @@ public sealed class ImageEditLaunchAssembler(
                     FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
                     _ => ImageEditErrorCodes.InvalidRequest,
                 };
-                return FaceFail(code, $"{assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}", assignment.Face);
+                return FaceFail(code, $"Лицо {assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}", assignment.Face);
             }
             var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, assignment.CharacterSlug);
             if (character is null)
-                return Invalid($"Персонаж {assignment.CharacterSlug} не найден");
+                return FaceFail(ImageEditErrorCodes.InvalidRequest,
+                    $"Персонаж «{assignment.CharacterSlug}» не найден", assignment.Face);
             var mask = new ImageBytes(maskResult.Png, "image/png");
             var prompt = $"Лицо человека в центре первой картинки заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.{extra}";
             passes.Add(new FacePass(
@@ -446,13 +448,26 @@ public sealed class ImageEditLaunchAssembler(
     // Нормализация EXIF: применяем EXIF-поворот и обнуляем тег, чтобы маска (по bbox детекции)
     // и исходник были в одной системе координат. Orientation 1 (или нет EXIF) — байты не трогаем.
     // raster = null (подсистема images выключена) — исходные байты; маска всё равно не построится.
-    private byte[] NormalizeExif(byte[] image)
+    // Возвращает байты и метку (mime) реального формата: JPEG без повороста остаётся JPEG-байтами,
+    // а не «image/png» (метка по сигнатуре финальных байт, не жёсткая)
+    private (byte[] Bytes, string ContentType) NormalizeExif(byte[] image)
     {
-        if (raster is null) return image;
+        if (raster is null) return (image, ContentTypeOfBytes(image));
         var probe = raster.Probe(image);
-        if (probe is null || probe.Orientation <= 1) return image;
+        if (probe is null || probe.Orientation <= 1) return (image, ContentTypeOfBytes(image));
         var outcome = raster.Apply(image, [], null);
-        return outcome.Image is { } img ? img.Bytes : image;
+        return outcome.Image is { } img ? (img.Bytes, ContentTypeOfBytes(img.Bytes)) : (image, ContentTypeOfBytes(image));
+    }
+
+    // Метка (mime) по сигнатуре байт: JPEG/PNG/WebP/GIF; нераспознанное — «image/png» (как раньше)
+    private static string ContentTypeOfBytes(byte[] b)
+    {
+        if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";
+        if (b.Length >= 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "image/png";
+        if (b.Length >= 12 && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
+            && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') return "image/webp";
+        if (b.Length >= 4 && b[0] == 'G' && b[1] == 'I' && b[2] == 'F' && b[3] == '8') return "image/gif";
+        return "image/png";
     }
 
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;

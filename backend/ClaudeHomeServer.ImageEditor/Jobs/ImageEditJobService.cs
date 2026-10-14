@@ -162,6 +162,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 return Fail<ImageEditQuoteDto>(rules.ErrorCode!, rules.Error!);
         }
 
+        // Подстановка на лицо (ADR-028, этап 3): признаки для оценки — на сервере из числа проходов
+        // (холст + одно фото персонажа на проход, маска картинкой не идёт); присланные клиентом
+        // References/HasMask/HasCharacter игнорируются, чтобы REST и MCP дали одно время
+        if (request.FaceTarget is not null)
+            request = request with { References = 0, HasMask = false, HasCharacter = true, HasAnnotations = false };
+
         var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
         var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)
@@ -861,7 +867,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
                 j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
-                j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null,
+                // При N > 1 общего сходства нет (ADR-028 §11): N — плановое число лиц из котировки
+                // (Quote.FacePasses), а не состояние выполнения (FaceResults.Count) — иначе в окне между
+                // DeliverReady и onResult последнего прохода клиент видел бы «общее» сходство при N = 2.
+                // Сходство каждого лица — в FaceResults, «сходство варианта» не отдаём; N = 1 и обычная правка — как раньше
+                j.Quote.FacePasses is { } n && n > 1 ? null : (j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null),
                 Op: ImageEditOpNames.OpName(j.Quote.Op),
                 FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
                 Gpu: j.Gpu);

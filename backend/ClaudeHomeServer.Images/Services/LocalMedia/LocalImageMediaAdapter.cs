@@ -211,11 +211,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
 
         // Вне маски вернуть исходник: маска — PNG того же размера, что холст; только у Edit,
-        // несовместима со стиранием кистью и дорисовкой; пустой массив — «маски нет»
+        // несовместима с дорисовкой; пустой массив — «маски нет». Стирание кистью склеивается
+        // по той же маске (дефект f0903cb5): destination — залитый серым холст, но серый только
+        // в области маски, поэтому «вне маски» возвращается исходник, а не перерисованный холст
         if (request.KeepMask is { Length: > 0 } keepMask)
         {
-            if (request.Op != LocalImageOp.Edit || request.EraseMask is not null || request.Pad is not null)
-                return LocalImageSubmitted.Fail("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+            if (request.Op != LocalImageOp.Edit || request.Pad is not null)
+                return LocalImageSubmitted.Fail("Возврат исходника вне маски — только для правки без дорисовки.");
             if (keepMask.Length > LocalMediaService.MaxInputBytes)
                 return LocalImageSubmitted.Fail($"Маска больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
             if (!ImageDimensions.IsPng(keepMask))
@@ -471,10 +473,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             var history = await comfy.GetHistoryAsync(ticket, ct);
             if (history is null)
             {
-                // Снимок монитора (шаг 26б): позиция и Gpu из общего /queue, не поштучный запрос
+                // Позиция для статистики — из снимка монитора (может быть старше отправки);
+                // статус задачи решает живой /queue: снимок не знает о промпте, отправленном позже него
                 var position = monitor?.Snapshot is { } snap && !snap.Down
                     ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
-                    : (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
+                    : null;
+                if (position is null)
+                    position = (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
                 if (position is not null)
                     return new LocalImagePoll(position == 0 ? LocalImageState.Running : LocalImageState.Queued, position, [], null,
                         Gpu: _gpuBuilder.Build(ticket, position));

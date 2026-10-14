@@ -517,7 +517,9 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         // высоту у выбора персонажа на 320×640 (M2). Десктоп — подвал как есть
         footer={mobile && faceSwapMode ? undefined : (
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', width: '100%', justifyContent: 'flex-end' }}>
-            {!mobile && (
+            {/* Режим подстановки: кисти/рамки/стрелки там нет (решение В1), а подсказка
+                «Нажмите на лицо…» уже в полосе — дублировать в подвале нечего (v2) */}
+            {!mobile && !faceSwapMode && (
               <span style={{ marginRight: 'auto', fontSize: FS.xs, color: C.textMuted }}>
                 {!marks.length ? 'Отметьте место кистью, рамкой или стрелкой — модель это увидит'
                   : personal ? 'Пометки уйдут со следующим запуском в режиме «Картинка»'

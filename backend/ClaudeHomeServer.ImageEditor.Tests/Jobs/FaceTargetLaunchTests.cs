@@ -312,16 +312,61 @@ public class FaceTargetLaunchTests : IDisposable
         body.Error.Should().Be(result.Error);
     }
 
-    // Отказ без привязки к лицу (лица нет в списке) — тела с номером нет: прежнее {error, code}
+    // «Лицо N не найдено» (лица нет в списке): отказ привязан к запрошенному лицу — тело несёт
+    // номер (FaceRefusalResponse.Face). Мутация «не передавать номер» (Invalid без Payload) → красный
     [Fact]
-    public async Task Отказ_без_привязки_к_лицу_без_Payload()
+    public async Task Лицо_не_найдено_несёт_номер_в_Payload()
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var req = Request(_charB, FaceTargetJson(_facesKey, 99, _charB));
         var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
 
+        result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
-        result.Payload.Should().BeNull();
+        result.Error.Should().Be("Лицо 99 не найдено: на картинке 1 лиц");
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(99);
+        body.Code.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.Error.Should().Be(result.Error);
+    }
+
+    // «Лица стоят слишком близко»: текст отказа называет лицо префиксом «Лицо N:», а не голым «N:»
+    // (ADR-028, этап 3). Мутация «вернуть N:» → красный
+    [Fact]
+    public async Task Лицо_слишком_близко_текст_с_префиксом_Лицо_N()
+    {
+        // Лицо 1 (10,10)-(50,50) и сосед (30,10)-(70,50) вплотную: остаток < 60 % → TooClose
+        var faces = new[] {
+            new LocalDetectedFace(1, 10, 10, 50, 50, 0.9, false),
+            new LocalDetectedFace(2, 30, 10, 70, 50, 0.85, false)
+        };
+        var req = Request(_charB, FaceTargetJson(_facesKey, 1, _charB));
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.FacesTooClose);
+        result.Error.Should().Be("Лицо 1: Лица стоят слишком близко — закрасьте лицо кистью.");
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(1);
+        body.Code.Should().Be(ImageEditErrorCodes.FacesTooClose);
+    }
+
+    // «Персонаж «{slug}» не найден»: текст называет слаг (имени нет — персонаж не найден),
+    // а тело несёт номер запрошенного лица. Мутация «не передавать номер» → красный
+    [Fact]
+    public async Task Персонаж_не_найден_несёт_face_И_слаг()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var req = Request(null, FaceTargetJson(_facesKey, 1, "no-such-char"));
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        result.Error.Should().Be("Персонаж «no-such-char» не найден");
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(1);
+        body.Code.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.Error.Should().Be(result.Error);
     }
 
     // ── ТЕСТ ШВА (ключевой) ───────────────────────────────────────────────────────
@@ -594,6 +639,76 @@ public class FaceTargetLaunchTests : IDisposable
         sourceSize.Should().Be((640, 1312));
         // Маска построена в той же системе
         input.Mask.Should().NotBeNull();
+        // Метка типа — по реальным байтам: JPEG с поворотом перекодирован в JPEG (не «image/png»)
+        input.Source.ContentType.Should().Be("image/jpeg", "нормализованный исходник — JPEG, метка соответствует байтам");
+    }
+
+    // ── Метка типа нормализованного исходника (копилка этапа 2, шаг 14) ─────────────
+    // После нормализации EXIF метка (mime) исходника соответствует реальным байтам, а не
+    // жёсткому «image/png»: JPEG без поворота остаётся JPEG, PNG — PNG
+
+    // Настоящий JPEG без EXIF-поворота (orientation 1) и настоящий PNG
+    private static byte[] PlainJpeg()
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(64, 48, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Coral);
+        canvas.Flush();
+        using var pixmap = bitmap.PeekPixels();
+        using var data = pixmap.Encode(new SKJpegEncoderOptions(90, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore));
+        return data!.ToArray();
+    }
+
+    private static byte[] PlainPng()
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(64, 48, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.MediumSeaGreen);
+        canvas.Flush();
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    // Запуск face-target на файле с заданными байтами: возвращает метку типа исходника
+    private async Task<string> SourceContentTypeAsync(string fileName, byte[] bytes)
+    {
+        var path = Path.Combine(_root, fileName);
+        File.WriteAllBytes(path, bytes);
+        var revision = _store.Get(Owner, Chat).Revision;
+        _threads.OpenAsync(Owner, "p1", Chat, fileName, null, revision, default).GetAwaiter().GetResult();
+        var threadId = _store.Get(Owner, Chat).Threads.Last().Id;
+        var facesKey = FaceDetectionCache.FacesKey(bytes);
+
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var media = new Mock<ILocalImageMedia>();
+        media.Setup(m => m.DetectFacesAsync(It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(new LocalFaceDetectResult(200, 200, faces)));
+
+        var req = new ImageEditLaunchRequest(
+            "q1", null, null, null, null, null, null, [], [], _charB,
+            ThreadSessionId: Chat, ThreadId: threadId,
+            FaceTarget: new FaceTarget("origin", facesKey, [new FaceAssignment(1, _charB)]));
+
+        var result = await Assembler(media: media.Object).AssembleAsync(Owner, _scope, req, default);
+        result.Value.Should().NotBeNull(result.Error);
+        return result.Value!.Source!.ContentType;
+    }
+
+    // JPEG без поворота: исходник остаётся JPEG-байтами, метка image/jpeg (не image/png)
+    [Fact]
+    public async Task JPEG_без_поворота_метка_image_jpeg()
+    {
+        var contentType = await SourceContentTypeAsync("plain.jpg", PlainJpeg());
+        contentType.Should().Be("image/jpeg", "JPEG без поворота — те же JPEG-байты, метка соответствует");
+    }
+
+    // PNG: метка image/png
+    [Fact]
+    public async Task PNG_метка_image_png()
+    {
+        var contentType = await SourceContentTypeAsync("plain.png", PlainPng());
+        contentType.Should().Be("image/png", "PNG — метка image/png");
     }
 
     // JPEG 1312×640 с EXIF Orientation 6 (тот же формат, что в LocalImageMediaAdapterTests)

@@ -219,10 +219,13 @@ public sealed class LocalVideoMediaAdapter(
             var history = await comfy.GetHistoryAsync(ticket, ct);
             if (history is null)
             {
-                // Снимок монитора (шаг 26б): позиция и Gpu из общего /queue, не поштучный запрос
+                // Позиция для статистики — из снимка монитора (может быть старше отправки);
+                // статус задачи решает живой /queue: снимок не знает о промпте, отправленном позже него
                 var position = monitor?.Snapshot is { } snap && !snap.Down
                     ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
-                    : (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
+                    : null;
+                if (position is null)
+                    position = (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
                 if (position is not null)
                     return new LocalVideoPoll(position == 0 ? LocalVideoState.Running : LocalVideoState.Queued, position, null, null,
                         Percent: position == 0 ? PercentOf(ticket) : null,

@@ -91,17 +91,31 @@ export function passesWord(n: number): string {
 
 // Чип котировки подвала (ADR-028, шаг 16б): число проходов и время — из котировки
 // (facePasses, expectedSeconds), а не из макета. ETA округляется вверх до минуты, не меньше 1.
-// Котировки нет (ещё едет или отказ) — чипа нет; без facePasses — один проход (этап 2)
+// Котировки нет (ещё едет или отказ) — чипа нет; без facePasses — один проход (этап 2).
+// Слово «проход» осмысленно только при двух и больше: при одном назначении — «бесплатно · ~M мин» (v2)
 export function faceQuoteChip(q: { facePasses?: number | null; expectedSeconds?: number | null } | null): string | null {
   if (!q) return null;
   const n = q.facePasses ?? 1;
-  const parts = [`${n} ${passesWord(n)}`, 'бесплатно'];
+  const parts = n > 1 ? [`${n} ${passesWord(n)}`, 'бесплатно'] : ['бесплатно'];
   if (q.expectedSeconds != null) parts.push(`~${Math.max(1, Math.ceil(q.expectedSeconds / 60))} мин`);
   return parts.join(' · ');
 }
 
 // Подпись карточки запуска/версии: «{Имя} → лицо {n}»
 export const faceCaption = (name: string, n: number) => `${name} → лицо ${n}`;
+
+// Подпись модели в строке запуска: как её называют в выборе модели (label из каталога).
+// Локальные модели — «локальные модели» (словарь v2), не id qwen-image-2.1.
+// Каталог не пришёл или модель не найдена — id как есть (fallback).
+export function modelLabel(catalog: { providers: { key: string; models: { id: string; label: string }[] }[] } | null, modelId: string | null): string | null {
+  if (!modelId) return null;
+  if (!catalog) return modelId;
+  for (const p of catalog.providers) {
+    const m = p.models.find(x => x.id === modelId);
+    if (m) return p.key === 'local' ? 'локальные модели' : m.label;
+  }
+  return modelId;
+}
 
 // Выбор подписи на карточке запуска (этап 2 · шаг 10c): faceTarget null — подписи нет
 // (карточка прежняя). Имя — имя персонажа по slug из списка проекта; персонаж не найден

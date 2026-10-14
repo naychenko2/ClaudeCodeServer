@@ -490,12 +490,16 @@ public class LocalImageMediaAdapterTests
             Pad = new LocalImagePad(1, 0, 1, 0),
         }, default);
 
-        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без дорисовки.");
         _comfy.Prompts.Should().BeEmpty();
     }
 
+    // Дефект f0903cb5: стирание кистью теперь совместимо с «вне маски вернуть исходник» —
+    // склейка по той же маске. destination — залитый серым холст (img1), но серый только в области
+    // маски, поэтому «вне маски» возвращается исходник, а не перерисованный холст. Мутация
+    // «вернуть несовместимость» (EraseMask → отказ) → красный
     [Fact]
-    public async Task Маска_вне_маски_с_стиранием_отказ()
+    public async Task Стирание_СМаскойВнеМаски_СклейкаПоМаске_ДестинацияХолст()
     {
         var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
 
@@ -506,8 +510,13 @@ public class LocalImageMediaAdapterTests
             KeepMask = LocalMediaTestImages.Png(8, 8),
         }, default);
 
-        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
-        _comfy.Prompts.Should().BeEmpty();
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        // Склейка есть и destination — холст (img1): вне маски — исходник, внутри — сгенерированное
+        graph["overlay"]!["class_type"]!.GetValue<string>().Should().Be("ImageCompositeMasked");
+        var overlay = graph["overlay"]!["inputs"]!.AsObject();
+        overlay["destination"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1");
+        overlay["source"]!.AsArray()[0]!.GetValue<string>().Should().Be("dec");
     }
 
     [Fact]
@@ -519,7 +528,7 @@ public class LocalImageMediaAdapterTests
             LocalImageOp.Generate, "Тимур сидит в кафе", [LocalMediaTestImages.Png(8, 8)], "1:1", 1,
             KeepMask: LocalMediaTestImages.Png(8, 8)), default);
 
-        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без стирания и дорисовки.");
+        submitted.Error.Should().Be("Возврат исходника вне маски — только для правки без дорисовки.");
         _comfy.Prompts.Should().BeEmpty();
     }
 
@@ -1372,5 +1381,60 @@ public class LocalImageMediaAdapterTests
         var jsonStr = System.Text.Json.JsonSerializer.SerializeToElement(poll.Gpu.Busy).GetRawText();
         jsonStr.Should().NotContain("otherOwner");
         jsonStr.Should().NotContain("otherSess");
+    }
+
+    // Дефект: монитор в простое, снимок старше отправки — промпт в живой очереди, но не в снимке.
+    // Статус решает живой /queue, не stale-снимок: задача Running, не «пропала».
+    // Мутация: вернуть прежнюю логику (позиция только из снимка, без живого /queue) → Failed → красный.
+    [Fact]
+    public async Task СнимокСтаршеОтправки_ПромптВЖивойОчереди_ЗадачаНеПропала()
+    {
+        // Снимок монитора: только чужой прогон (наш промпт ещё не отправлен)
+        _comfy.Running.Add("чужой");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default); // снимок: чужой в Running, нашего нет
+        // Промпт отправлен ПОСЛЕ снимка: в живой очереди, но не в stale-снимке
+        _comfy.Running.Add("наш");
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance,
+            null, null, ledger, null, monitor);
+
+        var poll = await adapter.PollAsync("наш", default);
+
+        poll.State.Should().Be(LocalImageState.Running, "живой /queue видит промпт — не «пропала»");
+        poll.Gpu.Should().NotBeNull("позиция из живого /queue — Gpu заполнен");
+    }
+
+    // Промпт реально пропал (перезапуск узла): нет ни в живой очереди, ни в истории → Failed после живого /queue.
+    [Fact]
+    public async Task ПромптНеВЖивойОчереди_ИНеВИстории_Failed()
+    {
+        // Снимок монитора: чужой прогон; нашего промпта нет ни в снимке, ни в живой очереди, ни в истории
+        _comfy.Running.Add("чужой");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default);
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance,
+            null, null, ledger, null, monitor);
+
+        // «наш» не добавлен ни в Running, ни в Pending, ни в History — реально пропал
+        var poll = await adapter.PollAsync("наш", default);
+
+        poll.State.Should().Be(LocalImageState.Failed, "ни в живой очереди, ни в истории — «пропала»");
+        poll.Error.Should().Contain("пропала");
     }
 }

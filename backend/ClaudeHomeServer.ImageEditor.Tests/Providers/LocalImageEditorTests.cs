@@ -203,9 +203,11 @@ public class LocalImageEditorTests : IDisposable
     }
 
     // Живой прогон 2026-09-26: маску-образец Qwen-Image прочла как «убери фон». Стирание уходит
-    // маской стирания (серая заливка на холсте), одним холстом — без маски среди образцов
+    // маской стирания (серая заливка на холсте), одним холстом — без маски среди образцов.
+    // Дефект f0903cb5: стирание теперь клеится по маске (KeepMask = та же маска), иначе вне мазка
+    // модель перерисовывала 99,8 % пикселей. Мутация «убрать KeepMask у стирания» → красный
     [Fact]
-    public async Task УдалиКистью_МаскаСтирания_ОдинХолст()
+    public async Task УдалиКистью_МаскаСтирания_ОдинХолст_ИKeepMask()
     {
         var media = new FakeMedia();
         var service = Service(Editor(media));
@@ -216,7 +218,7 @@ public class LocalImageEditorTests : IDisposable
         job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
         var sent = media.Submitted.Should().ContainSingle().Subject;
         sent.EraseMask.Should().Equal(mask);
-        sent.KeepMask.Should().BeNull("стирание и склейка «вне маски» несовместимы — адаптер бы отказал");
+        sent.KeepMask.Should().Equal(mask, "стирание клеится по маске: вне мазка — исходник (дефект f0903cb5)");
         sent.Images.Should().ContainSingle("размеченная копия и маска-образец стираемое только показали бы");
         sent.Prompt.Should().StartWith("удали").And.Contain(LocalImageEditor.EraseNote);
     }

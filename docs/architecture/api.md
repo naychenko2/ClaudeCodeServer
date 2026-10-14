@@ -340,7 +340,7 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
          history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
-     window по умолчанию 15m, «<n>m»/«<n>h» (в т.ч. 5m), иное — 400; since — только хвост истории новее момента.
+     window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
      history серии кэша (v2.1): kvUsage — доля 0..1, МАКСИМУМ vllm:kv_cache_usage_perc по опросам с прошлой
      точки; prefixHits/prefixQueries (токены), ramHits/ramQueries (чанки), preemptions (штуки) — ПРИРАЩЕНИЕ

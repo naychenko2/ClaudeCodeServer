@@ -54,6 +54,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
     // Bегущий максимум vllm:kv_cache_usage_perc по опросам с прошлой точки (v2.1, kvUsage):
     // при нагрузке опрос 1×/с, пик давления между точками не теряется. Сбрасывается на точке.
+    // single-writer: читается и пишется только из UpdateRing фонового опроса.
     private double? _kvUsageMaxSincePoint;
 
     // Живое «сейчас»: дельта generation_tokens от предыдущего опроса (каждый опрос, не только на точке)

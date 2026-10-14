@@ -715,7 +715,6 @@ public class LocalModelStatsPollerTests
     public async Task CacheSeries_Window5m_ReturnsOnlyLastFiveMinutes()
     {
         var h = new Harness();
-        var t0 = h.Time.GetUtcNow();
         // 20 точек по 5 с = 100 с (~1.7 мин) — все в пределах 5 мин.
         for (var i = 0; i < 20; i++)
         {
@@ -736,7 +735,6 @@ public class LocalModelStatsPollerTests
 
         // Окно 1 мин: только последние 12 точек (60 с / 5 с).
         h.Poller.GetHistory(TimeSpan.FromMinutes(1)).Should().HaveCount(12, "60 с / 5 с = 12 точек");
-        _ = t0;
     }
 
     // (25) Мусор в /metrics: источник бросает (сбой парсера на недоверенном тексте) →

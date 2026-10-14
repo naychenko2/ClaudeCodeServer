@@ -65,6 +65,15 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // window=30m — не в белом списке (5m/15m/1h) → 400. Мутация: вернуть приём любого <n>m
+    // (старое поведение) — 30m снова 200, тест краснеет.
+    [Fact]
+    public async Task Window30m_400()
+    {
+        var resp = await _admin.GetAsync("/api/local-model/stats?window=30m");
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     // window=5m/15m/1h — валидные → 200 (5m — третье окно графика, v2.1).
     [Theory]
     [InlineData("5m")]

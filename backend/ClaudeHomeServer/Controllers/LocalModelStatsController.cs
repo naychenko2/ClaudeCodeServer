@@ -29,7 +29,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
     // GET /api/local-model/stats?window=5m|15m|1h&since=<unix ms>
-    // window: по умолчанию 15m; «<n>m»/«<n>h» (в т.ч. 5m) — валидные, иное → 400.
+    // window: по умолчанию 15m; белый список 5m/15m/1h, иное → 400.
     // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
@@ -275,7 +275,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         PowerLimitW = s.PowerLimit,
     };
 
-    // window: null/пусто → 15m (дефолт); "<n>m" → n минут; "<n>h" → n часов; иначе false (400).
+    // window: null/пусто → 15m (дефолт); белый список 5m/15m/1h (ровно как в сообщении 400);
+    // иное → false (400).
     private static bool TryParseWindow(string? raw, out TimeSpan window)
     {
         window = TimeSpan.Zero;
@@ -284,18 +285,20 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             window = TimeSpan.FromMinutes(15);
             return true;
         }
-        var s = raw.Trim();
-        if (s.Length < 2) return false;
-        var unit = s[^1];
-        var numPart = s[..^1];
-        if (!int.TryParse(numPart, out var n) || n <= 0) return false;
-        window = unit switch
+        switch (raw.Trim())
         {
-            'm' => TimeSpan.FromMinutes(n),
-            'h' => TimeSpan.FromHours(n),
-            _ => TimeSpan.Zero,
-        };
-        return window != TimeSpan.Zero;
+            case "5m":
+                window = TimeSpan.FromMinutes(5);
+                return true;
+            case "15m":
+                window = TimeSpan.FromMinutes(15);
+                return true;
+            case "1h":
+                window = TimeSpan.FromHours(1);
+                return true;
+            default:
+                return false;
+        }
     }
 
     // ─── DTO ответа (camelCase на wire через дефолт ASP.NET Core) ─────────────────────

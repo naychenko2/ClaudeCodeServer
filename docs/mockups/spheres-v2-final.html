@@ -1,0 +1,1259 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Сферы v2 · Итоговый вариант</title>
+<style>
+/* Значения — копия frontend/src/lib/theme.css (светлая :root и тёмная data-theme="dark") */
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2; --c-bg-hover:#EFE9DE;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-canvas-doodle:rgba(117,107,94,.06);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 3px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.05);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+}
+html[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815; --c-bg-hover:#332E28;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-canvas-doodle:rgba(237,230,219,.035);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 3px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25);
+  --shadow-dropdown:0 8px 28px rgba(0,0,0,.5);
+  --shadow-modal:0 24px 60px rgba(0,0,0,.6);
+}
+/* Палитра сфер = GROUP_COLORS из design.ts (не зависит от темы) */
+.s-blue{--sph:#3E7CA6}.s-violet{--sph:#8E4A82}.s-green{--sph:#3F7A4F}.s-orange{--sph:#C2693B}
+.s-red{--sph:#B4452F}.s-indigo{--sph:#4B6BB0}.s-khaki{--sph:#7A7250}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-inset);color:var(--c-text-primary);
+  font-family:"Hanken Grotesk",-apple-system,"Segoe UI",sans-serif;font-size:13px;line-height:1.4}
+button{font:inherit;color:inherit}
+.ic{width:16px;height:16px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle}
+.ic.s12{width:12px;height:12px}.ic.s14{width:14px;height:14px}.ic.s18{width:18px;height:18px}.ic.s20{width:20px;height:20px}.ic.s24{width:24px;height:24px}
+.serif{font-family:"PT Serif",Georgia,serif}
+.mono{font-family:"JetBrains Mono",monospace;font-size:11.5px}
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 18px;
+  background:var(--c-bg-panel);border-bottom:1px solid var(--c-border)}
+.mk h1{margin:0;font:600 17px "PT Serif",Georgia,serif;color:var(--c-text-heading);margin-right:8px}
+.mk .grp{display:inline-flex;background:var(--c-bg-inset);border-radius:10px;padding:3px;gap:2px}
+.mk .grp button{border:none;background:none;border-radius:8px;padding:5px 11px;font-size:12px;font-weight:600;color:var(--c-text-secondary);cursor:pointer}
+.mk .grp button[aria-pressed="true"]{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:var(--shadow-card)}
+.mk .grp a{border-radius:8px;padding:5px 11px;font-size:12px;font-weight:600;color:var(--c-text-secondary);text-decoration:none}
+.mk .grp a.on{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:var(--shadow-card)}
+.mk .sp{flex:1}
+.mk .lbl{font-size:11px;color:var(--c-text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.mk-idea{max-width:1240px;margin:14px auto 0;padding:0 18px;color:var(--c-text-secondary);font-size:12.5px;line-height:1.55}
+.mk-idea b{color:var(--c-text-heading)}
+.stage{display:flex;justify-content:center;padding:14px 18px 40px}
+.dev{position:relative;width:1240px;max-width:100%;height:800px;border:1px solid var(--c-border);border-radius:16px;overflow:hidden;
+  background:var(--c-bg-main);box-shadow:var(--shadow-modal);display:flex;flex-direction:column;container-type:inline-size;container-name:app;
+  transition:width .25s}
+.dev.m{width:360px;height:760px;border-radius:26px}
+.addr{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--c-bg-panel);border-bottom:1px solid var(--c-border-light);flex-shrink:0}
+.addr .dots{display:flex;gap:5px}.addr .dots i{width:9px;height:9px;border-radius:50%;background:var(--c-divider)}
+.addr .url{flex:1;min-width:0;display:flex;align-items:center;gap:6px;background:var(--c-bg-white);border:1px solid var(--c-border-light);border-radius:8px;
+  padding:4px 10px;font:12px "JetBrains Mono",monospace;color:var(--c-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.addr .url b{color:var(--c-text-heading);font-weight:500}
+@container app (max-width:640px){ .addr .dots{display:none} }
+
+/* ===== Шапка приложения (HubHeader) ===== */
+.hub{display:flex;align-items:center;gap:6px;padding:8px 14px;flex-shrink:0;background:var(--c-bg-main)}
+.logo{display:flex;align-items:center;gap:8px;font:600 15px "PT Serif",Georgia,serif;color:var(--c-text-heading);margin-right:14px;white-space:nowrap}
+.logo i{width:24px;height:24px;border-radius:8px;background:var(--c-accent);color:var(--c-on-accent);display:inline-flex;align-items:center;justify-content:center;font-style:normal;font:700 12px "Hanken Grotesk",sans-serif}
+.htabs{display:flex;gap:2px}
+.htab{border:none;background:none;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:600;color:var(--c-text-secondary);cursor:pointer}
+.htab:hover{background:var(--c-bg-hover)}
+.htab.on{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:var(--shadow-card)}
+.hub .sp{flex:1}
+.me{width:28px;height:28px;border-radius:50%;background:var(--c-bg-selected);color:var(--c-text-secondary);display:flex;align-items:center;justify-content:center;font:700 11px inherit}
+@container app (max-width:640px){
+  .htabs{display:none} .logo span{display:none} .logo{margin-right:4px}
+  .hub{padding:8px 10px}
+}
+.body{flex:1;min-height:0;position:relative;overflow:hidden;display:flex}
+.scroll{flex:1;min-height:0;overflow:auto}
+/* Холст с дудлом — как CanvasBackdrop */
+.canvas{background-color:var(--c-bg-main);
+  background-image:radial-gradient(var(--c-canvas-doodle) 1.2px,transparent 1.3px);background-size:18px 18px}
+
+/* ===== Контролы — визуальные копии components/ui ===== */
+.btn{font-family:"Hanken Grotesk",-apple-system,"Segoe UI",sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;border-radius:10px;
+  font-weight:600;font-size:13px;cursor:pointer;border:1px solid transparent;white-space:nowrap;transition:background .12s,border-color .12s}
+.btn.primary{background:var(--c-accent);color:var(--c-on-accent)}
+.btn.primary:hover{filter:brightness(1.05)}
+.btn.secondary{background:var(--c-bg-white);border-color:var(--c-border);color:var(--c-text-primary)}
+.btn.secondary:hover{background:var(--c-bg-hover)}
+.btn.ghost{background:none;color:var(--c-text-secondary)}
+.btn.ghost:hover{background:var(--c-bg-hover);color:var(--c-text-primary)}
+.btn.ghostAccent{background:none;color:var(--c-accent)}
+.btn.ghostAccent:hover{background:var(--c-accent-light)}
+.btn.dashed{background:none;border:1px dashed var(--c-dashed);color:var(--c-text-secondary)}
+.btn.dashed:hover{border-color:var(--c-accent);color:var(--c-accent)}
+.btn.danger{background:var(--c-danger);color:var(--c-on-accent)}
+.btn.sm{height:28px;padding:0 10px;font-size:12px;border-radius:8px}
+.btn.xs{height:24px;padding:0 8px;font-size:11.5px;border-radius:6px;gap:4px}
+.btn.block{width:100%}
+.ib{width:32px;height:32px;border-radius:8px;border:none;background:none;color:var(--c-text-secondary);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.ib:hover,.ib.on{background:var(--c-bg-hover);color:var(--c-text-primary)}
+.ib.sm{width:26px;height:26px}
+@container app (max-width:640px){ .ib{width:40px;height:40px} .ib.sm{width:36px;height:36px} }
+.back{display:inline-flex;align-items:center;gap:4px;border:none;background:none;color:var(--c-text-secondary);font-size:12.5px;font-weight:600;cursor:pointer;padding:4px 6px 4px 2px;border-radius:8px}
+.back:hover{color:var(--c-text-primary);background:var(--c-bg-hover)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap;
+  background:var(--c-bg-selected);color:var(--c-text-secondary)}
+.badge.warn{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.badge.info{background:var(--c-info-bg);color:var(--c-info)}
+.badge.ok{background:var(--c-success-bg);color:var(--c-success-text)}
+.badge.acc{background:var(--c-accent-light);color:var(--c-accent)}
+.badge.sph{background:color-mix(in srgb,var(--sph) 14%,transparent);color:var(--sph)}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--c-border);background:var(--c-bg-white);font-size:12px;color:var(--c-text-primary);white-space:nowrap}
+.notice{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:12.5px;line-height:1.5;border:1px solid}
+.notice>.ic{margin-top:1px}
+.notice.warn{background:var(--c-warning-bg);border-color:color-mix(in srgb,var(--c-warning) 35%,transparent)}
+.notice.warn>.ic{color:var(--c-warning)}
+.notice.info{background:var(--c-info-bg);border-color:color-mix(in srgb,var(--c-info) 30%,transparent)}
+.notice.info>.ic{color:var(--c-info)}
+.notice b{color:var(--c-text-heading)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--c-border-light);overflow-x:auto;scrollbar-width:none}
+.tab{border:none;background:none;padding:9px 12px 8px;font-size:13px;font-weight:600;color:var(--c-text-secondary);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
+.tab:hover{color:var(--c-text-primary)}
+.tab.on{color:var(--c-text-heading);border-bottom-color:var(--c-accent)}
+.tab .n{font-size:11px;color:var(--c-text-muted);font-weight:600}
+.seg{display:inline-flex;background:var(--c-bg-inset);border-radius:10px;padding:3px;gap:2px}
+.seg button{border:none;background:none;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;color:var(--c-text-secondary);cursor:pointer}
+.seg button.on{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:var(--shadow-card)}
+.input{width:100%;height:38px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);padding:0 12px;font:inherit;font-size:13.5px;color:var(--c-text-primary);outline:none}
+.input:focus{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+textarea.input{height:auto;min-height:84px;padding:10px 12px;line-height:1.5;resize:vertical}
+.flabel{font-size:12px;font-weight:700;color:var(--c-text-heading);margin:0 0 6px;display:block}
+.fhint{font-size:11.5px;color:var(--c-text-muted);line-height:1.45;margin-top:5px}
+.field{margin-bottom:14px}
+
+/* Меню (Menu/MenuItem) */
+.menu{position:absolute;background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:12px;box-shadow:var(--shadow-dropdown);padding:5px;min-width:230px;z-index:40}
+.mi{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;font-size:13px;color:var(--c-text-primary);white-space:nowrap;cursor:pointer;border:none;background:none;width:100%;text-align:left}
+.mi:hover{background:var(--c-bg-selected)}
+.mi .ic{color:var(--c-text-muted)}
+.mi.danger{color:var(--c-danger-text)}.mi.danger .ic{color:inherit}
+.msep{height:1px;background:var(--c-border-light);margin:4px 6px}
+
+/* Значок сферы: плитка цвета сферы, глиф цветом on-dark */
+.tile{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:6px;background:var(--sph);color:var(--c-on-dark);width:22px;height:22px;font-weight:700;font-size:12px}
+.tile .ic{width:13px;height:13px}
+.tile.md{width:32px;height:32px;border-radius:9px;font-size:14px}.tile.md .ic{width:17px;height:17px}
+.tile.lg{width:44px;height:44px;border-radius:12px;font-size:18px}.tile.lg .ic{width:23px;height:23px}
+.tile.xl{width:56px;height:56px;border-radius:16px;font-size:22px}.tile.xl .ic{width:28px;height:28px}
+.tile.none{background:none;border:1.5px dashed var(--c-dashed);color:var(--c-text-muted)}
+
+/* Аватары персон и проектов */
+.ava{width:30px;height:30px;border-radius:50%;flex-shrink:0;color:var(--c-on-dark);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;background:var(--pc)}
+.ava.sm{width:22px;height:22px;font-size:9.5px}
+.ava.lg{width:40px;height:40px;font-size:14px}
+.avas{display:inline-flex}.avas .ava{border:2px solid var(--c-bg-card);margin-left:-7px}.avas .ava:first-child{margin-left:0}
+.pava{width:28px;height:28px;border-radius:8px;background:var(--c-bg-selected);color:var(--c-text-secondary);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;flex-shrink:0}
+
+/* Пометка изменений агента ✦ */
+.ag{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--c-accent);white-space:nowrap;cursor:help}
+.ag b{font-weight:700}
+.flash{animation:flash 1.6s ease-out}
+@keyframes flash{0%,30%{box-shadow:0 0 0 3px var(--c-accent)}100%{box-shadow:0 0 0 0 transparent}}
+
+/* Карточки и строки */
+.card{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-card);padding:14px 16px;min-width:0}
+.card>h4,.h4{margin:0;display:flex;align-items:center;gap:8px;font:600 16px "PT Serif",Georgia,serif;color:var(--c-text-heading)}
+.h4 .c{font:600 12px "Hanken Grotesk",sans-serif;color:var(--c-text-muted)}
+.h4 .sp{flex:1}
+.sub{font-size:12px;color:var(--c-text-muted);margin:3px 0 8px;line-height:1.45}
+.row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--c-border-light);position:relative}
+.row:first-child{border-top:none}
+.row .tx{flex:1;min-width:0}
+.row .tx b{display:block;font-size:13px;color:var(--c-text-heading);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .tx u{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;text-decoration:none;font-size:11.5px;color:var(--c-text-muted);margin-top:2px}
+.row.click{cursor:pointer;border-radius:8px;margin:0 -6px;padding-left:6px;padding-right:6px}
+.row.click:hover{background:var(--c-bg-hover)}
+.task{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-top:1px solid var(--c-border-light)}
+.task:first-child{border-top:none}
+.task .pr{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
+.pr.urgent{background:var(--c-danger)}.pr.high{background:var(--c-warning)}.pr.medium{background:var(--c-info)}.pr.low{background:var(--c-text-muted)}
+.task .tx{flex:1;min-width:0;font-size:13px;color:var(--c-text-primary)}
+.task .tx u{display:block;text-decoration:none;font-size:11.5px;color:var(--c-text-muted);margin-top:1px}
+.task .due{font-size:11.5px;color:var(--c-text-muted);white-space:nowrap;margin-top:1px}
+.task .due.late{color:var(--c-danger-text);font-weight:600}
+.shelf{border:1px solid var(--c-border-light);border-radius:12px;padding:10px 12px;background:var(--c-bg-white)}
+.shelf+.shelf{margin-top:10px}
+.shelf .sh{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--c-text-heading)}
+.shelf .sh .c{color:var(--c-text-muted);font-weight:600}
+.shelf .sh .sp{flex:1}
+.shelf .shs{font-size:11.5px;color:var(--c-text-muted);margin:2px 0 4px;line-height:1.4}
+.mem{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--c-border-light)}
+.mem:first-of-type{border-top:none}
+.mem .tx{flex:1;min-width:0;font-size:12.5px;line-height:1.45;color:var(--c-text-primary)}
+.mem .tx u{display:flex;gap:6px;align-items:center;text-decoration:none;font-size:11px;color:var(--c-text-muted);margin-top:3px;flex-wrap:wrap}
+.mem.moving{animation:fly .5s ease-in forwards}
+@keyframes fly{to{opacity:0;transform:translateY(-14px)}}
+.empty{padding:12px 2px 4px;font-size:12.5px;color:var(--c-text-muted);line-height:1.5}
+.estate{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 22px;border:1px dashed var(--c-dashed);border-radius:16px;background:var(--c-bg-card)}
+.estate .eic{width:56px;height:56px;border-radius:16px;background:var(--c-bg-panel);color:var(--c-accent);display:flex;align-items:center;justify-content:center}
+.estate .et{font:600 18px "PT Serif",Georgia,serif;color:var(--c-text-heading)}
+.estate .es{font-size:13px;color:var(--c-text-secondary);max-width:48ch;line-height:1.55}
+.estate .ask{font-size:12px;color:var(--c-text-muted);margin-top:4px}
+.estate .ask q{color:var(--c-text-secondary);font-style:italic}
+.dev-badge{display:inline-flex;align-items:center;gap:4px}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.dot.on{background:var(--c-success)}.dot.off{background:var(--c-text-muted)}
+
+/* Модалка: по центру на десктопе, шторкой на мобиле */
+.scrim{position:absolute;inset:0;background:var(--c-overlay);display:flex;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:60;animation:fade .15s}
+@keyframes fade{from{opacity:0}}
+.modal{background:var(--c-bg-card);border-radius:20px;box-shadow:var(--shadow-modal);width:100%;max-width:480px;max-height:100%;display:flex;flex-direction:column;overflow:hidden;animation:pop .18s}
+@keyframes pop{from{transform:translateY(10px);opacity:.6}}
+.mh{display:flex;align-items:center;gap:10px;padding:16px 18px 6px}
+.mh h3{flex:1;margin:0;font:600 18px "PT Serif",Georgia,serif;color:var(--c-text-heading)}
+.mb{padding:8px 18px 4px;overflow:auto}
+.mf{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px 16px;border-top:1px solid var(--c-border-light);margin-top:8px}
+@container app (max-width:640px){
+  .scrim{align-items:flex-end;padding:0}
+  .modal{max-width:none;border-radius:22px 22px 0 0;max-height:88%}
+  .mf{flex-direction:column-reverse}.mf .btn{width:100%;height:40px}
+}
+.opt{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--c-border-light);border-radius:12px;cursor:pointer;margin-bottom:6px;background:var(--c-bg-white)}
+.opt:hover{border-color:var(--c-border)}
+.opt.on{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.opt .tx{flex:1;min-width:0}
+.opt .tx b{display:block;font-size:13px;color:var(--c-text-heading)}
+.opt .tx u{display:block;text-decoration:none;font-size:11.5px;color:var(--c-text-muted)}
+.radio{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--c-border);flex-shrink:0}
+.opt.on .radio{border:5px solid var(--c-accent)}
+.ghead{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin:10px 2px 6px}
+.swatches{display:flex;gap:8px;flex-wrap:wrap}
+.sw{width:26px;height:26px;border-radius:50%;background:var(--sph);border:2px solid var(--c-bg-card);box-shadow:0 0 0 1px var(--c-border);cursor:pointer}
+.sw.on{box-shadow:0 0 0 2px var(--sph)}
+
+/* Тост */
+.toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);background:var(--c-text-heading);color:var(--c-bg-main);border-radius:12px;padding:10px 12px 10px 14px;
+  font-size:12.5px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow-dropdown);z-index:70;max-width:calc(100% - 24px);animation:pop .2s}
+.toast button{border:none;background:none;color:var(--c-accent-muted);font-weight:700;cursor:pointer;font-size:12.5px;white-space:nowrap}
+
+/* Чат сферы (общий) */
+.chat{display:flex;flex-direction:column;flex:1;min-height:0}
+.cmsgs{flex:1;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+.cmsgs>*{flex-shrink:0}
+.bub{width:fit-content;max-width:min(620px,86%);padding:10px 13px;border-radius:16px;font-size:13px;line-height:1.55}
+.bub.me{align-self:flex-end;background:var(--c-accent-light);border-radius:16px 16px 4px 16px}
+.bub.as{align-self:flex-start;background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:4px 16px 16px 16px}
+.bub .who{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--c-text-secondary);margin-bottom:5px}
+.bub .grp{margin-top:8px}
+.bub .grp b{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-heading);margin-bottom:2px}
+.bub ul{margin:2px 0 0;padding-left:18px}.bub li{margin:2px 0}
+.composer{margin:0 14px 14px;border:1px solid var(--c-border);border-radius:16px;background:var(--c-bg-white);padding:8px 10px 8px 12px;box-shadow:var(--shadow-card)}
+.ctxrow{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--c-text-muted);margin-bottom:6px;flex-wrap:wrap}
+.ctxrow .chip{height:22px;font-size:11.5px;padding:0 8px}
+.cin{display:flex;align-items:center;gap:8px}
+.cin input{flex:1;border:none;background:none;outline:none;font:inherit;font-size:13.5px;color:var(--c-text-primary);min-width:0}
+.cin input::placeholder{color:var(--c-text-muted)}
+.send{width:32px;height:32px;border-radius:10px;border:none;background:var(--c-accent);color:var(--c-on-accent);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.typing{color:var(--c-text-muted);font-size:12px;font-style:italic}
+
+/* ===== Страницы (основа — вариант А) ===== */
+.wrap{max-width:1100px;margin:0 auto;padding:18px 22px 40px}
+.ph{display:flex;align-items:flex-end;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.ph .tt{flex:1;min-width:180px}
+.ph h2{margin:0;font:600 24px "PT Serif",Georgia,serif;color:var(--c-text-heading)}
+.ph .meta{font-size:12.5px;color:var(--c-text-muted);margin-top:2px}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.scard{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:16px;box-shadow:var(--shadow-island);
+  display:flex;flex-direction:column;overflow:hidden;cursor:pointer;transition:transform .12s,box-shadow .12s,border-color .12s;position:relative}
+.scard:hover{transform:translateY(-2px);border-color:var(--c-border);box-shadow:var(--shadow-dropdown)}
+.scard .band{height:4px;background:var(--sph)}
+.scard .top{display:flex;gap:12px;padding:14px 16px 8px;align-items:flex-start}
+.scard .top .tx{flex:1;min-width:0}
+.scard .nm{font:600 18px "PT Serif",Georgia,serif;color:var(--c-text-heading);display:flex;align-items:center;gap:8px}
+.scard .ch{font-size:12.5px;color:var(--c-text-secondary);line-height:1.5;margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.scard .ch.none{color:var(--c-text-muted);font-style:italic}
+.scard .stats{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 16px 10px;font-size:12px;color:var(--c-text-muted)}
+.scard .plist{padding:0 16px;border-top:1px solid var(--c-border-light);flex:1}
+.scard .plist .row{padding:7px 0}
+.scard .plist .row .pava{width:24px;height:24px;font-size:10px;border-radius:7px}
+.scard .more{font-size:12px;color:var(--c-text-muted);padding:6px 0 4px}
+.scard .foot{display:flex;gap:6px;padding:10px 12px 12px;border-top:1px solid var(--c-border-light);align-items:center}
+.scard .foot .sp{flex:1}
+.scard.new{border-style:dashed;border-color:var(--c-dashed);background:none;box-shadow:none;align-items:center;justify-content:center;min-height:180px;color:var(--c-text-secondary);gap:8px;font-weight:600}
+.scard.new:hover{border-color:var(--c-accent);color:var(--c-accent)}
+.sect{display:flex;align-items:center;gap:9px;margin:26px 2px 10px}
+.sect b{font-size:14px;color:var(--c-text-heading)}
+.sect .c{font-size:12px;color:var(--c-text-muted)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.pcard{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:10px;cursor:pointer}
+.pcard:hover{border-color:var(--c-accent-muted)}
+.pcard .tx{flex:1;min-width:0}
+.pcard b{display:block;font-size:13.5px;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcard u{text-decoration:none;font-size:11.5px;color:var(--c-text-muted)}
+
+/* Страница сферы */
+.shead{background:var(--c-bg-card);border-bottom:1px solid var(--c-border-light);position:relative}
+.shead::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:var(--sph)}
+.shead .in{max-width:1100px;margin:0 auto;padding:14px 22px 0}
+.shead .r1{display:flex;gap:16px;align-items:flex-start;margin-top:6px}
+.shead .r1 .tx{flex:1;min-width:0}
+.shead h2{margin:0;font:600 26px "PT Serif",Georgia,serif;color:var(--c-text-heading);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.shead .meta{font-size:12.5px;color:var(--c-text-muted);margin-top:3px}
+.shead .acts{display:flex;gap:6px;align-items:center}
+.shead .chart{max-width:82ch;margin-top:8px}
+.shead .tabs{margin-top:10px;border-bottom:none}
+.cols{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;align-items:start}
+.colstack{display:flex;flex-direction:column;gap:16px;min-width:0}
+.single{max-width:780px}
+.ev{display:flex;gap:10px;padding:8px 0;border-top:1px solid var(--c-border-light);font-size:12.5px;line-height:1.45}
+.ev:first-child{border-top:none}
+.ev .ei{width:24px;height:24px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--c-bg-selected);color:var(--c-text-secondary);font-size:11px;font-weight:700}
+.ev .ei.star{background:var(--c-accent-light);color:var(--c-accent)}
+.ev u{display:block;text-decoration:none;font-size:11px;color:var(--c-text-muted)}
+.chatbox{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:16px;box-shadow:var(--shadow-island);height:540px;display:flex;flex-direction:column;overflow:hidden}
+.chatbox .chh{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--c-border-light);font-size:12px;color:var(--c-text-muted)}
+
+@container app (max-width:640px){
+  .wrap{padding:12px 12px 30px}
+  .ph h2{font-size:21px}
+  .ph .hide-m{display:none}
+  .sgrid{grid-template-columns:1fr}
+  .pgrid{grid-template-columns:1fr}
+  .shead .in{padding:10px 12px 0}
+  .shead h2{font-size:21px}
+  .shead .r1{gap:10px}
+  .shead .r1 .tile.xl{width:44px;height:44px;border-radius:12px}
+  .shead .acts .lbl-d{display:none}
+  .cols{grid-template-columns:1fr}
+  .chatbox{height:470px;border-radius:14px}
+}
+
+
+/* ===== Итоговый вариант: добавки к А ===== */
+.ag{border:none;background:none;padding:0 3px;border-radius:5px;font-family:"Hanken Grotesk",-apple-system,"Segoe UI",sans-serif;line-height:1.4}
+.ag:hover{background:var(--c-accent-light)}
+.agline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0 2px}
+.agchip{display:inline-flex;align-items:center;gap:5px;min-height:24px;padding:2px 10px;border-radius:999px;background:var(--c-accent-light);color:var(--c-accent);font-size:11.5px;font-weight:600}
+.tab .n.acc{color:var(--c-accent)}
+.lnk{border:none;background:none;padding:0;color:var(--c-accent);font:inherit;cursor:pointer;display:inline;text-align:left}
+.lnk:hover{text-decoration:underline}
+
+/* Журнал сферы */
+.jr{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--c-border-light);font-size:12.5px;line-height:1.45}
+.jr:first-child{border-top:none}
+.jr .ei{width:24px;height:24px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--c-bg-selected);color:var(--c-text-secondary);font-size:11px;font-weight:700}
+.jr .ei.star{background:var(--c-accent-light);color:var(--c-accent)}
+.jr .tx{flex:1;min-width:0;color:var(--c-text-primary)}
+.jr .who{display:inline-flex;align-items:center;gap:5px;font-weight:700;color:var(--c-text-heading);margin-right:3px;vertical-align:middle}
+.jr .meta{display:flex;flex-wrap:wrap;gap:3px 8px;align-items:center;font-size:11.5px;color:var(--c-text-muted);margin-top:3px}
+.jr .acts{flex-shrink:0;display:flex;align-items:center;gap:6px}
+.jr.new{background:linear-gradient(90deg,var(--c-accent-light),transparent 75%);margin:0 -10px;padding-left:10px;padding-right:10px;border-radius:10px;border-top-color:transparent}
+.jr.new+.jr{border-top-color:transparent}
+.jhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+
+/* Список чатов */
+.crow{display:flex;align-items:center;gap:10px;padding:10px 10px 10px 14px;border-radius:12px;cursor:pointer;position:relative}
+.crow:hover{background:var(--c-bg-hover)}
+.crow.sph::before{content:"";position:absolute;left:3px;top:12px;bottom:12px;width:3px;border-radius:2px;background:var(--sph)}
+.crow .tx{flex:1;min-width:0}
+.crow .tx b{display:block;font-size:13.5px;color:var(--c-text-heading);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crow .tx u{display:block;text-decoration:none;font-size:12px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.crow .place{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;font-size:11.5px;color:var(--c-text-muted)}
+.crow .when{font-size:11.5px;color:var(--c-text-muted);white-space:nowrap;align-self:flex-start;margin-top:2px}
+.cic{width:32px;height:32px;border-radius:9px;background:var(--c-bg-selected);color:var(--c-text-secondary);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.clist{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:16px;box-shadow:var(--shadow-card);padding:6px}
+.clist .crow+.crow{margin-top:2px}
+
+/* Экран чата сферы */
+.cpage{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--c-bg-main)}
+.chead{display:flex;align-items:center;gap:10px;padding:12px 16px 10px;border-bottom:1px solid var(--c-border-light);background:var(--c-bg-card);position:relative;flex-shrink:0}
+.chead::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--sph)}
+.chead .tx{flex:1;min-width:0}
+.chead .tx b{display:block;font:600 16px "PT Serif",Georgia,serif;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chead .tx u{display:block;text-decoration:none;font-size:12px;color:var(--c-text-muted)}
+.cpage .chat{width:100%;max-width:880px;margin:0 auto}
+.ctxrow .lbl2{font-weight:700;color:var(--c-text-secondary)}
+
+/* Диалог переноса персоны */
+.modal.wide{max-width:580px}
+.pvsum{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px}
+.pvbox{border:1px solid var(--c-border-light);border-radius:12px;padding:2px 12px;background:var(--c-bg-white);margin-top:8px}
+.pv{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--c-border-light)}
+.pv:first-child{border-top:none}
+.pv .pi{width:28px;height:28px;border-radius:8px;background:var(--c-bg-selected);color:var(--c-text-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.pv.warn .pi{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.pv.ok .pi{background:var(--c-success-bg);color:var(--c-success-text)}
+.pv .tx{flex:1;min-width:0;font-size:12.5px;line-height:1.5;color:var(--c-text-secondary)}
+.pv .tx>b{display:block;color:var(--c-text-heading);font-size:13px}
+.pv ul{margin:4px 0 0;padding-left:16px}.pv li{margin:2px 0}
+.pv li em{font-style:normal;color:var(--c-text-muted)}
+.pv .h{font-size:11.5px;color:var(--c-text-muted);margin-top:4px}
+.cb{display:flex;gap:9px;align-items:flex-start;cursor:pointer;margin-top:8px;font-size:12.5px;color:var(--c-text-primary);border:none;background:none;padding:0;text-align:left}
+.cb .box{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--c-border);background:var(--c-bg-white);flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;color:var(--c-on-accent)}
+.cb.on .box{background:var(--c-accent);border-color:var(--c-accent)}
+.cb .box .ic{width:11px;height:11px;stroke-width:3}
+.cb u{display:block;text-decoration:none;font-size:11.5px;color:var(--c-text-muted);margin-top:1px}
+.hin{display:flex;align-items:center;gap:6px;margin-top:6px}
+.hin .at{color:var(--c-text-muted);font-weight:700}
+.hin .input{height:32px;font-size:13px;border-radius:10px;max-width:240px}
+.target{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;background:var(--c-bg-inset);font-size:12.5px;color:var(--c-text-secondary);flex-wrap:wrap}
+.target b{color:var(--c-text-heading)}
+
+/* Раздел «Персоны» (в объёме макета) */
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.percard{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-card);padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.percard .r{display:flex;gap:10px;align-items:center}
+.percard .r .tx{flex:1;min-width:0}
+.percard .r .tx b{display:block;font:600 16px "PT Serif",Georgia,serif;color:var(--c-text-heading)}
+.percard .r .tx u{display:block;text-decoration:none;font-size:12px;color:var(--c-text-muted)}
+.percard .bar{display:flex;gap:6px;align-items:center}
+.percard .bar .sp{flex:1}
+
+/* Удалённая агентом сфера */
+.tile.dim{opacity:.5;filter:grayscale(.5)}
+.gonebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:22px;padding:10px 12px;border:1px dashed var(--c-dashed);border-radius:12px;font-size:12.5px;color:var(--c-text-secondary);background:var(--c-bg-card)}
+.gonebar .t{flex:1 1 220px;min-width:0}
+.estate .src{font-size:12px;color:var(--c-text-muted)}
+
+@container app (max-width:640px){
+  .jr{flex-wrap:wrap}
+  .jr .acts{width:100%;padding-left:34px}
+  .jr.new{margin:0 -8px;padding-left:8px;padding-right:8px}
+  .chead{padding:10px 10px 8px}
+  .pcards{grid-template-columns:1fr}
+  .hin .input{max-width:none}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="i-landmark"><path d="M10 18v-7"/><path d="M11.119 2.205a2 2 0 0 1 1.762 0l7.84 3.846A.5.5 0 0 1 20.5 7h-17a.5.5 0 0 1-.22-.949z"/><path d="M14 18v-7"/><path d="M18 18v-7"/><path d="M3 22h18"/><path d="M6 18v-7"/></g>
+<g id="i-heart-pulse"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/><path d="M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></g>
+<g id="i-house"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g>
+<g id="i-briefcase"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></g>
+<g id="i-chevron-right"><path d="m9 18 6-6-6-6"/></g>
+<g id="i-chevron-down"><path d="m6 9 6 6 6-6"/></g>
+<g id="i-chevron-left"><path d="m15 18-6-6 6-6"/></g>
+<g id="i-ellipsis-vertical"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></g>
+<g id="i-plus"><path d="M5 12h14"/><path d="M12 5v14"/></g>
+<g id="i-users"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></g>
+<g id="i-brain"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></g>
+<g id="i-square-check-big"><path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"/><path d="m9 11 3 3L22 4"/></g>
+<g id="i-folder"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></g>
+<g id="i-folder-input"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></g>
+<g id="i-laptop"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></g>
+<g id="i-message-square"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></g>
+<g id="i-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g>
+<g id="i-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></g>
+<g id="i-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></g>
+<g id="i-triangle-alert"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></g>
+<g id="i-link"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></g>
+<g id="i-send"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></g>
+<g id="i-arrow-up-right"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+<g id="i-undo"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></g>
+<g id="i-check"><path d="M20 6 9 17l-5-5"/></g>
+<g id="i-scroll"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></g>
+<g id="i-user-plus"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></g>
+<g id="i-arrow-right-left"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></g>
+<g id="i-layout-grid"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></g>
+<g id="i-list"><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/></g>
+<g id="i-clock"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></g>
+<g id="i-history"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></g>
+<g id="i-wifi-off"><path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/></g>
+<g id="i-pencil"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></g>
+<g id="i-panel-left"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></g>
+<g id="i-globe"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></g>
+<g id="i-rotate-ccw"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></g>
+<g id="i-trash-2"><path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></g>
+<g id="i-at-sign"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></g>
+<g id="i-crown"><path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/></g>
+<g id="i-plug"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></g>
+<g id="i-message-square-plus"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M12 8v6"/><path d="M9 11h6"/></g>
+</defs></svg>
+
+<header class="mk">
+  <h1>Сферы v2 · Итоговый вариант</h1>
+  <span class="grp" title="Варианты"><a href="spheres-v2-a.html">А</a><a href="spheres-v2-b.html">Б</a><a href="spheres-v2-c.html">В</a><a href="spheres-v2-final.html" class="on">Итог</a></span>
+  <span class="sp"></span>
+  <span class="lbl">Экран</span><span class="grp" id="mk-scr"><button data-mk="scr:projects">Проекты</button><button data-mk="scr:sphere">Сфера</button><button data-mk="scr:chats">Чаты</button><button data-mk="scr:chat">Чат</button><button data-mk="scr:journal">Журнал</button><button data-mk="scr:transfer">Перенос</button><button data-mk="scr:gone">Удалённая</button></span>
+  <span class="lbl">Тема</span><span class="grp"><button data-mk="theme:light">Светлая</button><button data-mk="theme:dark">Тёмная</button></span>
+  <span class="lbl">Ширина</span><span class="grp"><button data-mk="w:d">Десктоп</button><button data-mk="w:m">360 px</button></span>
+  <span class="lbl">Данные</span><span class="grp"><button data-mk="empty:0">Сферы есть</button><button data-mk="empty:1">Сфер нет</button></span>
+</header>
+<p class="mk-idea"><b>Итог:</b> основа — вариант А, доработанный по решениям Андрея и разрезу Александра. Колокольчика и «Вернуть как было» нет: изменения Claude видны только на странице сферы (✦ на месте и журнал), снимаются кнопкой «Оставить». Страница сферы живёт по адресу <span class="mono">#/sphere/{id}</span>, вкладки «Обзор · Проекты · Чаты · Команда · Память · Задачи · Журнал». Чатов у сферы список, у каждого свой адрес; в разделе «Чаты» они видны с цветом и значком сферы. Перенос персоны — через диалог с превью последствий. Описание и тексты — <a href="spheres-v2-proposal.md" style="color:var(--c-accent)">spheres-v2-proposal.md</a>, раздел «Итоговый вариант».</p>
+<div class="stage"><div class="dev" id="dev"></div></div>
+<script>
+/* ===== Итоговый макет сфер v2: данные, состояние, роутер, диалоги ===== */
+const GC = { blue:'#3E7CA6', violet:'#8E4A82', green:'#3F7A4F', orange:'#C2693B', red:'#B4452F', indigo:'#4B6BB0', khaki:'#7A7250' };
+
+const SPH = {
+  bank:   { id:'bank', name:'Банк', color:'blue', glyph:'landmark', charterBy:'j1',
+            charter:'Всё про работу в банке: архитектура платформы, миграции, отчётность ВФЛА. Решения фиксируем в памяти сферы, сроки — по релизному календарю банка. Персональные данные клиентов за контур не выносим. Тон — деловой, без жаргона; на вопрос «можно ли» отвечаем со ссылкой на регламент.' },
+  health: { id:'health', name:'Здоровье', color:'green', glyph:'heart-pulse',
+            charter:'Тренировки, анализы, сон. Рекомендации — консервативные, к врачу при любых сомнениях.' },
+  home:   { id:'home', name:'Дом', color:'orange', glyph:null, charter:'', agent:'j7' },
+};
+const SPH_ORDER = ['bank','health','home'];
+/* Сферы, которые удалил агент: восстановить можно до срока */
+const GONE = {
+  dacha: { id:'dacha', name:'Дача', color:'khaki', glyph:'house', charter:'Огород, баня, сезонные работы.', by:'alisa', chat:'k3', when:'сегодня в 11:02', until:'5 ноября', projects:['garden'], mem:4, restored:false },
+};
+
+const PRJ = {
+  vfla:   { id:'vfla',   name:'ВФЛА-ПСБ',          ini:'ВП', sphere:'bank',   chats:12,  when:'сегодня' },
+  arch:   { id:'arch',   name:'Архитектура банка', ini:'АБ', sphere:'bank',   chats:31,  when:'вчера' },
+  pay:    { id:'pay',    name:'Миграция платежей', ini:'МП', sphere:'bank',   chats:7,   when:'3 дня назад', device:{ name:'Ноутбук', online:false } },
+  mort:   { id:'mort',   name:'Ипотека',           ini:'ИП', sphere:'bank',   chats:6,   when:'2 ч назад', agent:'j2' },
+  train:  { id:'train',  name:'План тренировок',   ini:'ПТ', sphere:'health', chats:4,   when:'2 дня назад' },
+  labs:   { id:'labs',   name:'Анализы 2026',      ini:'АН', sphere:'health', chats:2,   when:'неделю назад', device:{ name:'Ноутбук', online:false } },
+  aihome: { id:'aihome', name:'AI Home',           ini:'AI', sphere:null,     chats:214, when:'сейчас' },
+  garden: { id:'garden', name:'Огород',            ini:'ОГ', sphere:null,     chats:3,   when:'неделю назад' },
+  drafts: { id:'drafts', name:'Черновики',         ini:'Ч',  sphere:null,     chats:5,   when:'месяц назад' },
+};
+const PRJ_ORDER = ['vfla','arch','pay','mort','train','labs','aihome','garden','drafts'];
+
+/* links — то, что попадает в превью переноса: чаты, задачи-исполнитель, руководство, автопривязки */
+const PER = {
+  arkady: { id:'arkady', name:'Аркадий', acc:'Аркадия', ins:'Аркадием', handle:'arkady',  role:'Архитектор',        pc:GC.indigo, zone:{ k:'sphere', id:'bank' },
+            chats:[{ t:'Правила релизов', p:null, sph:'bank' }, { t:'Схема шины', p:'arch' }], tasks:[{ t:'Согласовать схему шины с безопасностью', p:'arch', st:'inProgress' }], leads:['arch'] },
+  yulia:  { id:'yulia',  name:'Юлия',    acc:'Юлию',    ins:'Юлией',    handle:'yulia',   role:'Юрист',             pc:GC.violet, zone:{ k:'sphere', id:'bank' }, agent:'j3', prev:{ k:'project', id:'vfla' },
+            chats:[{ t:'Юридические риски миграции', p:null, sph:'bank' }, { t:'Акт за сентябрь', p:'vfla' }, { t:'Залог по ипотеке', p:'mort' }, { t:'Оферта процессинга', p:'pay' }, { t:'Договор с подрядчиком', p:'arch' }],
+            tasks:[{ t:'Проверить договор залога', p:'mort', st:'todo' }, { t:'Юридическое заключение по шине', p:'arch', st:'inProgress' }, { t:'Подписать акт по ВФЛА за сентябрь', p:'vfla', st:'todo' }], leads:['mort'] },
+  boris:  { id:'boris',  name:'Борис',   acc:'Бориса',  ins:'Борисом',  handle:'analyst', role:'Аналитик',          pc:GC.khaki,  zone:{ k:'sphere', id:'bank' }, chats:[], tasks:[], leads:[] },
+  irina:  { id:'irina',  name:'Ирина',   acc:'Ирину',   ins:'Ириной',   handle:'irina',   role:'Тренер',            pc:GC.green,  zone:{ k:'sphere', id:'health' }, chats:[], tasks:[], leads:['train'] },
+  oleg:   { id:'oleg',   name:'Олег',    acc:'Олега',   ins:'Олегом',   handle:'oleg',    role:'Тестировщик',       pc:GC.orange, zone:{ k:'project', id:'vfla' },
+            chats:[{ t:'Регресс отчёта', p:'vfla' }, { t:'Шаблон v3', p:'vfla' }], tasks:[{ t:'Прогнать шаблон v3', p:'vfla', st:'todo' }], leads:['vfla'] },
+  mira:   { id:'mira',   name:'Мира',    acc:'Миру',    ins:'Мирой',    handle:'mira', role:'Аналитик платежей', pc:GC.red,    zone:{ k:'project', id:'pay' },
+            chats:[{ t:'План переключения', p:'pay' }], tasks:[{ t:'Перевести 30 % трафика на новый шлюз', p:'pay', st:'inProgress' }], leads:[] },
+  marat:  { id:'marat',  name:'Марат',   acc:'Марата',  ins:'Маратом',  handle:'analyst', role:'Аналитик данных',   pc:GC.violet, zone:{ k:'project', id:'aihome' },
+            chats:[{ t:'Метрики удержания', p:'aihome' }, { t:'Дашборд расходов', p:'aihome' }, { t:'Выгрузка для банка', p:'aihome' }],
+            tasks:[{ t:'Собрать отчёт по токенам за сентябрь', p:'aihome', st:'todo' }, { t:'Почистить события телеметрии', p:'aihome', st:'inProgress' }], leads:['aihome'] },
+  alisa:  { id:'alisa',  name:'Алиса',   acc:'Алису',   ins:'Алисой',   handle:'alisa',   role:'Личный помощник',   pc:GC.blue,   zone:{ k:'global' },
+            chats:[{ t:'Разбор сфер', p:null }, { t:'Ремонт кухни', p:null }, { t:'Ревью PR #412', p:'aihome' }, { t:'Ставки по ипотеке', p:'mort' }, { t:'Отпуск в ноябре', p:null }, { t:'Список покупок', p:'drafts' }],
+            tasks:[{ t:'Разобрать входящие', p:'aihome', st:'todo' }, { t:'Собрать «Что нового»', p:'aihome', st:'inProgress' }, { t:'Записать ребёнка к врачу', p:null, st:'todo' }], leads:['drafts'] },
+};
+const PER_ORDER = ['alisa','arkady','yulia','boris','irina','oleg','mira','marat'];
+
+let MEM = [
+  { id:'m1', shelf:'sphere', sphere:'bank', by:'arkady', from:'arch', when:'2 нед. назад', text:'Релизы банка — только по вторникам, заморозка изменений с 20 декабря.' },
+  { id:'m2', shelf:'sphere', sphere:'bank', by:'arkady', from:'arch', when:'2 дня назад', text:'Все интеграции с АБС идут через шину, прямые вызовы запрещены.' },
+  { id:'m3', shelf:'sphere', sphere:'bank', by:'yulia',  from:null,   when:'вчера',       text:'Персональные данные клиентов не выносим за контур банка, даже в тестовых выгрузках.' },
+  { id:'m4', shelf:'project', project:'vfla', by:'oleg', when:'5 дней назад', text:'Отчёт ВФЛА сдаём до 5-го числа, шаблон v3 — старый банк больше не принимает.' },
+  { id:'m5', shelf:'project', project:'pay',  by:'mira', when:'неделю назад', text:'Старый шлюз выключаем, когда на новый уйдёт 80 % трафика.' },
+  { id:'m6', shelf:'project', project:'mort', by:'boris', when:'сегодня', text:'Для зарплатных клиентов ставка ниже на 0,5 п. п.' },
+  { id:'m7', shelf:'sphere', sphere:'health', by:'irina', from:'train', when:'3 дня назад', text:'Зона 2 — пульс 120–135, держать 40 минут.' },
+  { id:'m8', shelf:'project', project:'labs', by:'irina', when:'месяц назад', text:'Ферритин проверять раз в квартал.' },
+];
+
+const TASKS = [
+  { pr:'urgent', title:'Подписать акт по ВФЛА за сентябрь', project:'vfla', due:'вчера', late:true },
+  { pr:'high',   title:'Согласовать схему шины с безопасностью', project:'arch', due:'8 окт' },
+  { pr:'high',   title:'Перевести 30 % трафика на новый шлюз', project:'pay', due:'10 окт' },
+  { pr:'medium', title:'Сверить тарифы ипотеки с новым приказом', project:'mort', due:'15 окт' },
+  { pr:'low',    title:'Обновить глоссарий терминов банка', project:'arch', due:'' },
+  { pr:'medium', title:'Сдать анализы в ноябре', project:'labs', due:'3 нояб' },
+  { pr:'low',    title:'Купить пульсометр', project:'train', due:'' },
+];
+
+/* Чаты: sphere — чат сферы (свой адрес), project — чат проекта, ни того ни другого — чат вне проекта */
+const CHATS = {
+  c1: { id:'c1', sphere:'bank',   title:'Что открыто по банку',        with:'arkady', when:'сегодня',     last:'7 открытых задач в 4 проектах. Самое срочное — акт по ВФЛА.' },
+  c2: { id:'c2', sphere:'bank',   title:'Правила релизов',             with:'arkady', when:'сегодня',     last:'Добавил в устав: сроки — по релизному календарю банка.' },
+  c3: { id:'c3', sphere:'bank',   title:'Юридические риски миграции',  with:'yulia',  when:'вчера',       last:'С процессингом нужно допсоглашение до переключения трафика.' },
+  c4: { id:'c4', sphere:'health', title:'Сводка за неделю',            with:'irina',  when:'3 дня назад', last:'Четыре тренировки, две из них в зоне 2.' },
+  k1: { id:'k1', project:'mort',  title:'Ставки по ипотеке',           with:'boris',  when:'2 ч назад',   last:'Перенёс «Ипотеку» в сферу «Банк» — так команда банка её увидит.' },
+  k2: { id:'k2', project:'aihome',title:'Ревью PR #412',               with:null,     when:'сегодня',     last:'Два замечания по тестам, остальное можно мержить.' },
+  k3: { id:'k3', project:null,    title:'Разбор сфер',                 with:'alisa',  when:'вчера',       last:'Готово: Юлия теперь в команде «Банка».' },
+  k4: { id:'k4', project:null,    title:'Ремонт кухни',                with:'alisa',  when:'вчера',       last:'Завела сферу «Дом» — туда же лягут смета и подрядчики.' },
+};
+let CHAT_ORDER = ['k1','c1','c2','k2','c3','k3','k4','c4'];
+
+/* Журнал сферы. ag — изменение сделал агент: ✦ горит, пока человек не нажал «Оставить» */
+let JR = [
+  { id:'j1', sphere:'bank',   ag:true,  st:'new',  who:'arkady', chat:'c2', when:'сегодня, 14:20', text:'изменил устав: добавил «сроки — по релизному календарю банка»', kind:'charter', go:'' },
+  { id:'j2', sphere:'bank',   ag:true,  st:'new',  who:'boris',  chat:'k1', when:'сегодня, 12:05', text:'перенёс проект «Ипотека» в сферу', go:'projects', focus:'p-mort' },
+  { id:'j3', sphere:'bank',   ag:true,  st:'new',  who:'alisa',  chat:'k3', when:'вчера, 19:40',   text:'перевела Юлию из проекта «ВФЛА-ПСБ» в команду сферы', go:'team', focus:'pe-yulia' },
+  { id:'j4', sphere:'bank',   ag:false,            who:'me',                when:'3 дня назад',    text:'Вы перенесли проект «Миграция платежей» в сферу' },
+  { id:'j5', sphere:'bank',   ag:true,  st:'kept', who:'alisa',  chat:'k3', when:'неделю назад',   text:'создала сферу «Банк»' },
+  { id:'j6', sphere:'health', ag:false,            who:'me',                when:'2 нед. назад',   text:'Вы создали сферу «Здоровье»' },
+  { id:'j7', sphere:'home',   ag:true,  st:'new',  who:'alisa',  chat:'k4', when:'вчера, 18:12',   text:'создала сферу «Дом»', go:'' },
+];
+
+const S = { theme:'light', mobile:false, empty:false, modal:null, menu:null, toast:null, charterOpen:{}, chat:{}, flash:null, jf:'all' };
+
+/* ---------- Выборки ---------- */
+const spheres = () => SPH_ORDER.map(id => SPH[id]).filter(x => x && (!S.empty || x.fresh));
+const sphereOf = p => p && p.sphere && SPH_ORDER.includes(p.sphere) && (!S.empty || SPH[p.sphere].fresh) ? p.sphere : null;
+const projectsIn = sid => PRJ_ORDER.map(id => PRJ[id]).filter(p => sphereOf(p) === sid);
+const loose = () => PRJ_ORDER.map(id => PRJ[id]).filter(p => !sphereOf(p));
+const team = sid => PER_ORDER.map(id => PER[id]).filter(p => p.zone.k === 'sphere' && p.zone.id === sid);
+const projectPersonas = sid => PER_ORDER.map(id => PER[id]).filter(p => p.zone.k === 'project' && PRJ[p.zone.id] && sphereOf(PRJ[p.zone.id]) === sid);
+const tasksIn = sid => { const order = { urgent:0, high:1, medium:2, low:3 }; return TASKS.filter(t => sphereOf(PRJ[t.project]) === sid).sort((a,b) => order[a.pr]-order[b.pr]); };
+const memSphere = sid => MEM.filter(m => m.shelf === 'sphere' && m.sphere === sid);
+const memProjects = sid => MEM.filter(m => m.shelf === 'project' && PRJ[m.project] && sphereOf(PRJ[m.project]) === sid);
+const chatsIn = sid => CHAT_ORDER.map(id => CHATS[id]).filter(c => c.sphere === sid);
+const jrIn = sid => JR.filter(j => j.sphere === sid);
+const jrById = id => JR.find(j => j.id === id);
+const agNew = id => { const j = !S.empty && id && jrById(id); return !!(j && j.ag && j.st === 'new'); };
+const agCountIn = sid => S.empty && !SPH[sid].fresh ? 0 : jrIn(sid).filter(j => j.ag && j.st === 'new').length;
+
+/* ---------- Склонения ---------- */
+function plural(n, a, b, c){ const m10 = n % 10, m100 = n % 100; if (m10 === 1 && m100 !== 11) return a; if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return b; return c; }
+const nProj = n => `${n} ${plural(n,'проект','проекта','проектов')}`;
+const nPers = n => `${n} ${plural(n,'персона','персоны','персон')}`;
+const nMem  = n => `${n} ${plural(n,'запись','записи','записей')}`;
+const nTask = n => `${n} ${plural(n,'открытая задача','открытые задачи','открытых задач')}`;
+const nTaskS = n => `${n} ${plural(n,'задача','задачи','задач')}`;
+const nProjLoc = n => `${n} ${plural(n,'проекте','проектах','проектах')}`;
+const nProjDat = n => `${n} ${plural(n,'проекту','проектам','проектам')}`;
+const nChat = n => `${n} ${plural(n,'чат','чата','чатов')}`;
+
+/* ---------- Кусочки разметки ---------- */
+const ic = (n, s='') => `<svg viewBox="0 0 24 24" class="ic ${s}"><use href="#i-${n}"/></svg>`;
+const tile = (s, size='') => s ? `<span class="tile ${size} s-${s.color}">${s.glyph ? ic(s.glyph) : s.name[0]}</span>` : `<span class="tile ${size} none"></span>`;
+const ava = (p, size='') => `<span class="ava ${size}" style="--pc:${p.pc}" title="${p.name} — ${p.role}">${p.name[0]}</span>`;
+const pava = p => `<span class="pava">${p.ini}</span>`;
+const stripTags = s => s.replace(/<[^>]+>/g,'');
+/* ✦ на месте: ведёт к записи журнала, там же «Оставить» */
+function agMark(id, label='Claude'){
+  if (!agNew(id)) return '';
+  const j = jrById(id);
+  return `<button class="ag" title="Claude (${PER[j.who].name}) ${j.text} · ${j.when}. Открыть в журнале сферы" data-act="agGo" data-arg="${id}">✦ ${label}</button>`;
+}
+function deviceBadge(p){
+  if (!p.device) return '';
+  return p.device.online
+    ? `<span class="badge ok" title="Проект живёт на устройстве">${ic('laptop','s12')}${p.device.name}</span>`
+    : `<span class="badge warn" title="Файлы проекта на устройстве, оно не в сети">${ic('wifi-off','s12')}${p.device.name} · не в сети</span>`;
+}
+function projectRow(p, opts={}){
+  return `<div class="row click" id="p-${p.id}" data-act="openProject" data-arg="${p.id}">
+    ${pava(p)}<div class="tx"><b>${p.name}</b><u><span>${nChat(p.chats)} · ${p.when}</span>${deviceBadge(p)}${agMark(p.agent)}</u></div>
+    ${opts.menu !== false ? `<button class="ib sm" title="Действия с проектом" data-act="menu" data-arg="project:${p.id}">${ic('ellipsis-vertical','s14')}</button>` : ''}
+  </div>`;
+}
+function personaRow(p){
+  return `<div class="row" id="pe-${p.id}">${ava(p)}<div class="tx"><b>${p.name}</b><u><span>${p.role}</span><span class="mono">@${p.handle}</span>${agMark(p.agent)}</u></div>
+    <button class="ib sm" title="Ещё" data-act="menu" data-arg="persona:${p.id}">${ic('ellipsis-vertical','s14')}</button></div>`;
+}
+function teamBlock(sid){
+  const t = team(sid), pp = projectPersonas(sid);
+  let h = t.length ? t.map(personaRow).join('')
+    : `<div class="empty">Персон пока нет. Персона сферы работает во всех её проектах и помнит решения соседних.</div>`;
+  if (pp.length) {
+    h += `<div class="ghead" style="margin-top:14px">Работают в одном проекте</div>` + pp.map(p =>
+      `<div class="row" id="pe-${p.id}">${ava(p,'sm')}<div class="tx"><b>${p.name}</b><u>${p.role} · «${PRJ[p.zone.id].name}»</u></div>
+       <button class="btn xs secondary" data-act="modal" data-arg="toSphere:${p.id}:${sid}:fixed">${ic('folder-input','s12')}В сферу</button></div>`).join('');
+  }
+  h += `<div style="margin-top:10px"><button class="btn sm dashed block" data-act="modal" data-arg="addPersona:${sid}">${ic('user-plus','s14')}Добавить существующую персону</button></div>`;
+  return h;
+}
+function taskList(sid, limit){
+  const all = tasksIn(sid), list = limit ? all.slice(0, limit) : all;
+  if (!all.length) return `<div class="empty">Открытых задач нет.</div>`;
+  return list.map(t => `<div class="task"><span class="pr ${t.pr}" title="Приоритет"></span><div class="tx">${t.title}<u>${PRJ[t.project].name}</u></div>
+    ${t.due ? `<span class="due ${t.late ? 'late' : ''}">${t.late ? 'просрочено · ' : ''}${t.due}</span>` : ''}</div>`).join('')
+    + (limit && all.length > limit ? `<button class="btn xs ghostAccent" style="margin-top:6px" data-act="go" data-arg="#/sphere/${sid}/tasks">Все ${all.length}</button>` : '');
+}
+function memShelves(sid){
+  const sm = memSphere(sid), pm = memProjects(sid), s = SPH[sid];
+  const rec = (m, proj) => `<div class="mem" id="m-${m.id}">${ava(PER[m.by],'sm')}<div class="tx">${m.text}
+     <u><span>${PER[m.by].name}</span><span>· ${proj ? '«' + PRJ[m.project].name + '»' : (m.from ? 'из «' + PRJ[m.from].name + '»' : 'в чате сферы')}</span><span>· ${m.when}</span></u></div>
+     ${proj ? `<button class="btn xs secondary" title="Запись увидят все проекты сферы" data-act="memMove" data-arg="${m.id}">${ic('folder-input','s12')}В сферу</button>` : ''}</div>`;
+  return `<div class="shelf"><div class="sh">${tile(s)}Память сферы <span class="c">${sm.length}</span><span class="sp"></span></div>
+      <div class="shs">Её помнят во всех проектах и чатах сферы.</div>
+      ${sm.length ? sm.map(m => rec(m,false)).join('') : '<div class="empty">Пока пусто. Перенесите сюда то, что пригодится в соседних проектах.</div>'}</div>
+    <div class="shelf"><div class="sh">${ic('folder','s14')}Память проектов <span class="c">${pm.length}</span></div>
+      <div class="shs">Знает только свой проект. «В сферу» — и запись станет общей.</div>
+      ${pm.length ? pm.map(m => rec(m,true)).join('') : '<div class="empty">Всё общее уже в сфере.</div>'}</div>`;
+}
+function charterBlock(sid, clampLines=2){
+  const s = SPH[sid], open = S.charterOpen[sid];
+  if (!s.charter) return `<div class="empty" style="padding-top:6px">Устава пока нет. Опишите, чем занимается сфера, — правила подхватит каждый её проект и чат. <button class="btn xs ghostAccent" data-act="toast" data-arg="Откроется «Изменить сферу»">Написать устав</button></div>`;
+  let ag = '';
+  if (agNew(s.charterBy)) {
+    const j = jrById(s.charterBy);
+    ag = `<div class="agline"><span class="agchip" title="Пока вы не приняли правку, Claude знает, что последний текст устава написал агент">✦ изменил Claude · ${PER[j.who].name} · ${j.when}</span>
+      <button class="btn xs secondary" data-act="agKeep" data-arg="${j.id}">${ic('check','s12')}Принять</button>
+      <button class="btn xs ghost" data-act="agGo" data-arg="${j.id}">Что изменилось</button></div>`;
+  }
+  return `${ag}<div style="font-size:13px;line-height:1.55;color:var(--c-text-secondary);${open ? '' : `display:-webkit-box;-webkit-line-clamp:${clampLines};-webkit-box-orient:vertical;overflow:hidden`}">${s.charter}</div>
+    <button class="btn xs ghostAccent" style="margin:2px 0 0 -8px" data-act="charter" data-arg="${sid}">${open ? 'Свернуть' : 'Показать полностью'}</button>`;
+}
+function sphereMeta(sid){
+  return [nProj(projectsIn(sid).length), nPers(team(sid).length), nChat(chatsIn(sid).length), nTask(tasksIn(sid).length)].join(' · ');
+}
+function emptySpheres(){
+  return `<div class="estate"><div class="eic">${ic('folder-input','s24')}</div><div class="et">Сфер пока нет</div>
+    <div class="es">Сфера объединяет проекты одной темы: у неё своя команда, общая память и чаты сразу по всем её проектам.</div>
+    <button class="btn primary" style="margin-top:6px" data-act="modal" data-arg="newSphere">${ic('plus','s14')}Создать сферу</button>
+    <div class="ask">Или попросите Claude в любом чате: <q>разложи мои проекты по сферам</q></div></div>`;
+}
+function copyLinkBtn(sid){ return `<button class="ib" title="Скопировать ссылку на сферу" data-act="copyLink" data-arg="${sid}">${ic('link')}</button>`; }
+function chatLink(cid){
+  const c = CHATS[cid]; if (!c) return '';
+  return `<button class="lnk" data-act="openChat" data-arg="${cid}">«${c.title}»</button>`;
+}
+
+/* ---------- Журнал ---------- */
+function jrRow(j){
+  const p = PER[j.who];
+  const who = j.ag ? `<span class="who">${ava(p,'sm')}${p.name}</span>${j.text}` : j.text;
+  const meta = j.ag
+    ? `<span class="ag" style="cursor:default">✦ Claude</span><span>из чата ${chatLink(j.chat)}</span><span>· ${j.when}</span>`
+    : `<span>${j.when}</span>`;
+  const acts = j.ag ? (j.st === 'new'
+      ? `<button class="btn xs secondary" data-act="agKeep" data-arg="${j.id}">${ic('check','s12')}Оставить</button>${j.go != null ? `<button class="btn xs ghost" data-act="agShow" data-arg="${j.id}">Показать</button>` : ''}`
+      : `<span class="badge">оставлено</span>`) : '';
+  return `<div class="jr ${j.ag && j.st === 'new' ? 'new' : ''}" id="j-${j.id}"><span class="ei ${j.ag ? 'star' : ''}">${j.ag ? '✦' : 'Я'}</span>
+    <div class="tx">${who}<div class="meta">${meta}</div></div>${acts ? `<div class="acts">${acts}</div>` : ''}</div>`;
+}
+function journal(sid, limit){
+  let list = jrIn(sid);
+  if (!limit && S.jf === 'ag') list = list.filter(j => j.ag && j.st === 'new');
+  if (limit) list = list.slice(0, limit);
+  if (!list.length) return `<div class="empty">${S.jf === 'ag' && !limit ? 'Всё оставлено — пометок ✦ нет.' : 'Пока ничего не менялось.'}</div>`;
+  return list.map(jrRow).join('')
+    + (limit && jrIn(sid).length > limit ? `<button class="btn xs ghostAccent" style="margin-top:6px" data-act="go" data-arg="#/sphere/${sid}/journal">Весь журнал</button>` : '');
+}
+
+/* ---------- Чаты ---------- */
+function chatRow(c, opts={}){
+  const s = c.sphere ? SPH[c.sphere] : null, p = c.with ? PER[c.with] : null;
+  const icon = s ? tile(s,'md') : c.project ? pava(PRJ[c.project]) : `<span class="cic">${ic('message-square','s14')}</span>`;
+  const place = opts.place === false ? '' : `<div class="place">${s ? `<span class="badge sph s-${s.color}">сфера «${s.name}»</span>` : c.project ? `<span>«${PRJ[c.project].name}»</span>` : '<span>Без проекта</span>'}${p ? `<span>· с ${p.ins}</span>` : ''}</div>`;
+  return `<div class="crow ${s ? 'sph s-' + s.color : ''}" data-act="openChat" data-arg="${c.id}">${icon}
+    <div class="tx"><b>${c.title}</b><u>${c.last}</u>${place}</div><span class="when">${c.when}</span></div>`;
+}
+function chatSeed(cid){
+  if (S.chat[cid]) return S.chat[cid];
+  const c = CHATS[cid], sid = c.sphere, msgs = [];
+  if (cid === 'c1') {
+    msgs.push({ me:true, text:'Что открыто по банку? Коротко, по проектам.' });
+    const by = {};
+    tasksIn(sid).forEach(t => (by[t.project] = by[t.project] || []).push(t));
+    const groups = Object.keys(by).map(pid => `<div class="grp"><b>${pava(PRJ[pid]).replace('pava','pava" style="width:18px;height:18px;font-size:8px;border-radius:5px')}${PRJ[pid].name}</b><ul>${by[pid].map(t => `<li>${t.title}${t.due ? ' — ' + (t.late ? '<b style="color:var(--c-danger-text)">просрочено</b>' : t.due) : ''}</li>`).join('')}</ul></div>`).join('');
+    msgs.push({ who:'arkady', text:`${nTask(tasksIn(sid).length)} в ${nProjLoc(projectsIn(sid).length)}. Самое срочное — акт по ВФЛА, он просрочен.${groups}
+      <div class="notice warn" style="margin-top:10px">${ic('wifi-off','s14')}<span>«Миграция платежей» живёт на ноутбуке, он не в сети: задачи и память вижу, файлы — нет.</span></div>` });
+  } else if (cid === 'c2') {
+    msgs.push({ me:true, text:'Запиши в устав банка, что сроки у нас идут по релизному календарю банка.' });
+    msgs.push({ who:'arkady', text:'Добавил в устав сферы «Банк»: «сроки — по релизному календарю банка». На странице сферы у устава пометка ✦ — она погаснет, когда вы примете правку.' });
+  } else if (cid === 'c3') {
+    msgs.push({ me:true, text:'Какие юридические риски у миграции платежей?' });
+    msgs.push({ who:'yulia', text:'Главный — договор с процессингом: переключение трафика без допсоглашения нарушает п. 4.2. Второй — персональные данные в тестовых выгрузках, это запрещено памятью сферы.' });
+  } else if (c.with) {
+    msgs.push({ who:c.with, text:`Я на связи по всем проектам сферы «${SPH[sid].name}». Спросите, что открыто, или попросите сводку за неделю.` });
+  }
+  return (S.chat[cid] = msgs);
+}
+function chatView(cid){
+  const c = CHATS[cid], s = SPH[c.sphere], p = c.with ? PER[c.with] : null, msgs = chatSeed(cid);
+  const body = msgs.length ? msgs.map(m => m.me ? `<div class="bub me">${m.text}</div>`
+    : m.typing ? `<div class="bub as"><span class="typing">${PER[m.who] ? PER[m.who].name : 'Claude'} печатает…</span></div>`
+    : `<div class="bub as"><div class="who">${m.who ? ava(PER[m.who],'sm') + PER[m.who].name + ' · ' + PER[m.who].role : 'Claude'}</div>${m.text}</div>`).join('')
+    : `<div class="empty" style="text-align:center;margin:auto;max-width:42ch">В команде сферы пока никого — отвечать будет Claude, видя все проекты сферы.</div>`;
+  return `<div class="chat">
+    <div class="cmsgs" data-keep="chat-${cid}">${body}</div>
+    <div class="composer">
+      <div class="ctxrow"><span class="lbl2">Где</span> <span class="chip s-${s.color}">${tile(s)}сфера «${s.name}» · ${nProj(projectsIn(s.id).length)}</span>
+        <span class="lbl2">С кем</span> ${p ? `<span class="chip">${ava(p,'sm')}${p.name} · ${p.role}</span>` : `<span class="chip">Claude</span>`}</div>
+      <div class="cin"><input id="cin-${cid}" placeholder="Спросите сразу по всем проектам сферы" data-enter="send" data-arg="${cid}">
+        <button class="send" title="Отправить" data-act="send" data-arg="${cid}">${ic('send','s14')}</button></div>
+    </div></div>`;
+}
+
+/* ---------- Превью переноса персоны ---------- */
+const zoneName = z => z.k === 'global' ? 'во всех ваших данных' : z.k === 'sphere' ? `в сфере «${SPH[z.id].name}»` : `в проекте «${PRJ[z.id].name}»`;
+const zoneText = p => zoneName(p.zone);
+function inZone(target, c){
+  if (target.k === 'global') return true;
+  if (target.k === 'sphere') return c.sph === target.id || (!!c.p && sphereOf(PRJ[c.p]) === target.id);
+  return c.p === target.id;
+}
+const sameZone = (a, b) => a.k === b.k && (a.k === 'global' || a.id === b.id);
+function preview(p, target){
+  const chatsOut = p.chats.filter(c => !inZone(target, c));
+  const tasksOut = p.tasks.filter(t => !inZone(target, t));
+  const leadsOut = p.leads.filter(id => !inZone(target, { p:id }));
+  const bindDrop = p.zone.k === 'project' ? p.zone.id : null;
+  const bindAdd = target.k === 'project' ? target.id : null;
+  const clash = PER_ORDER.map(id => PER[id]).find(o => o.id !== p.id && o.handle === p.handle && sameZone(o.zone, target));
+  return { chatsOut, tasksOut, leadsOut, bindDrop, bindAdd, clash };
+}
+function previewHtml(p, target){
+  const v = preview(p, target), M = S.modal;
+  const sec = (cls, icon, title, inner) => `<div class="pv ${cls}"><span class="pi">${ic(icon,'s14')}</span><div class="tx"><b>${title}</b>${inner || ''}</div></div>`;
+  const place = c => c.sph ? `чат сферы «${SPH[c.sph].name}»` : c.p ? `«${PRJ[c.p].name}»` : 'вне проектов';
+  const out = [];
+  out.push(v.chatsOut.length
+    ? sec('warn','message-square', `${nChat(v.chatsOut.length)} окажутся вне новой зоны`,
+        `<ul>${v.chatsOut.slice(0,4).map(c => `<li>${c.t} <em>· ${place(c)}</em></li>`).join('')}${v.chatsOut.length > 4 ? `<li><em>и ещё ${v.chatsOut.length - 4}</em></li>` : ''}</ul>
+         <div class="h">История останется. На следующее сообщение в таком чате персона ответит, что проект вне её зоны, и предложит сменить собеседника.</div>`)
+    : sec('ok','message-square','Все её чаты останутся в зоне'));
+  const todo = v.tasksOut.filter(t => t.st === 'todo'), run = v.tasksOut.filter(t => t.st !== 'todo');
+  out.push(v.tasksOut.length
+    ? sec('warn','square-check-big', `${nTaskS(v.tasksOut.length)} вне новой зоны`,
+        `<ul>${todo.map(t => `<li>${t.t} <em>· ${t.p ? PRJ[t.p].name : 'личная'} — потеряет исполнителя</em></li>`).join('')}${run.map(t => `<li>${t.t} <em>· ${t.p ? PRJ[t.p].name : 'личная'} — уже в работе, останется за ней; следующий запуск откажет</em></li>`).join('')}</ul>`)
+    : sec('ok','square-check-big','Задачи, где она исполнитель, остаются в зоне'));
+  if (v.leadsOut.length) out.push(sec('warn','crown', `Перестанет быть руководителем ${v.leadsOut.length > 1 ? 'проектов' : 'проекта'} ${v.leadsOut.map(id => '«' + PRJ[id].name + '»').join(', ')}`,
+    `<div class="h">Новые чаты там начнутся с обычным ассистентом. Руководителя можно назначить заново в настройках проекта.</div>`));
+  if (v.bindDrop) {
+    const pr = PRJ[v.bindDrop], covered = target.k === 'sphere' && sphereOf(pr) === target.id;
+    out.push(sec('', 'plug', `Снимутся автопривязки к проекту «${pr.name}»: файлы, заметки, знания`,
+      `<div class="h">${covered ? `Проект в сфере «${SPH[target.id].name}», зона его и так покрывает.` : `Проект не входит в новую зону.`} Привязки, которые вы добавляли руками, не трогаем.</div>
+       <button class="cb ${M.keep ? 'on' : ''}" data-act="keepAccess"><span class="box">${M.keep ? ic('check') : ''}</span><span>Оставить доступ к проекту «${pr.name}»<u>Прямой доступ к файлам проекта сверх зоны. Claude сам эту галку не ставит.</u></span></button>`));
+  }
+  if (v.bindAdd) out.push(sec('', 'plug', `Добавятся автопривязки к проекту «${PRJ[v.bindAdd].name}»: файлы, заметки, знания`));
+  out.push(sec('', 'brain', 'Личная память переезжает вместе с ней',
+    `<div class="h">Записи на полках проектов и сферы остаются на своих местах — нужные перенесите кнопкой «В сферу».</div>`));
+  if (v.clash) {
+    const where = zoneName(target);
+    out.push(sec('warn','at-sign', `Имя @${p.handle} ${where} уже занято`,
+      `<div class="h">Так зовут ${v.clash.acc} (${v.clash.role}). Двум персонам с одним именем в одной зоне быть нельзя — выберите другое.</div>
+       <div class="hin"><span class="at">@</span><input class="input mono" id="tr-handle" value="${M.handle != null ? M.handle : p.handle + '-' + (p.zone.k === 'project' ? p.zone.id : 'new')}" data-input="handle"></div>
+       <div class="h">Старые упоминания @${p.handle} в истории чатов останутся как есть.</div>`));
+  }
+  const sum = [];
+  if (v.chatsOut.length) sum.push(`<span class="badge warn">${nChat(v.chatsOut.length)} вне зоны</span>`);
+  if (todo.length) sum.push(`<span class="badge warn">${nTaskS(todo.length)} без исполнителя</span>`);
+  if (v.leadsOut.length) sum.push(`<span class="badge warn">${ic('crown','s12')}${nProj(v.leadsOut.length)} без руководителя</span>`);
+  if (v.clash) sum.push(`<span class="badge warn">${ic('at-sign','s12')}имя занято</span>`);
+  if (!sum.length) sum.push(`<span class="badge ok">${ic('check','s12')}ничего не потеряется</span>`);
+  return `<div class="ghead" style="margin-top:14px">Что изменится</div><div class="pvsum">${sum.join('')}</div><div class="pvbox">${out.join('')}</div>`;
+}
+
+/* ---------- Диалоги ---------- */
+const MODALS = {
+  addPersona(sid){
+    const s = SPH[sid], sel = S.modal.pick;
+    const cands = PER_ORDER.map(id => PER[id]).filter(p => !(p.zone.k === 'sphere' && p.zone.id === sid));
+    const group = (title, list) => list.length ? `<div class="ghead">${title}</div>` + list.map(p => `<div class="opt ${sel === p.id ? 'on' : ''}" data-act="pick" data-arg="${p.id}"><span class="radio"></span>${ava(p,'sm')}<div class="tx"><b>${p.name} · ${p.role}</b><u>Сейчас ${zoneText(p)}</u></div></div>`).join('') : '';
+    return { title:`Добавить в команду «${s.name}»`, body:`<div class="sub" style="margin-top:0">Персона одна — она не копируется, а переходит в сферу. На следующем шаге покажем, что при этом изменится.</div>
+      ${group('Из проектов сферы', cands.filter(c => c.zone.k === 'project' && sphereOf(PRJ[c.zone.id]) === sid))}
+      ${group('Во всех данных', cands.filter(c => c.zone.k === 'global'))}
+      ${group('Из других мест', cands.filter(c => c.zone.k === 'sphere' || (c.zone.k === 'project' && sphereOf(PRJ[c.zone.id]) !== sid)))}`,
+      ok: sel ? { label:'Дальше', act:'addNext', arg:`${sel}:${sid}` } : { label:'Дальше', disabled:true } };
+  },
+  /* Перенести в сферу: fixed — сфера уже выбрана (из блока «Команда») */
+  toSphere(pid, sid, fixed){
+    const p = PER[pid];
+    const list = spheres().filter(s => !(p.zone.k === 'sphere' && p.zone.id === s.id));
+    const target = S.modal.pick || (fixed ? sid : (sid && list.some(s => s.id === sid) ? sid : list[0].id));
+    const head = fixed
+      ? `<div class="target">${ava(p,'sm')}<b>${p.name}</b> <span>${zoneText(p)}</span> ${ic('chevron-right','s14')} ${tile(SPH[target])}<b>в сфере «${SPH[target].name}»</b></div>`
+      : `<div class="sub" style="margin-top:0">Сейчас ${p.name} работает ${zoneText(p)}.</div>` + list.map(s => `<div class="opt ${target === s.id ? 'on' : ''}" data-act="pick" data-arg="${s.id}"><span class="radio"></span>${tile(s)}<div class="tx"><b>${s.name}</b><u>${nProj(projectsIn(s.id).length)} · ${nPers(team(s.id).length)}</u></div></div>`).join('');
+    const glob = p.zone.k === 'global' ? `<div class="notice warn" style="margin-top:10px">${ic('triangle-alert','s14')}<span><b>${p.name}</b> сейчас видит все ваши данные. В сфере — только ${nProj(projectsIn(target).length)} «${SPH[target].name}».</span></div>` : '';
+    const t = { k:'sphere', id:target }, v = preview(p, t);
+    return { wide:true, title:`Перенести ${p.acc} в сферу`, body: head + glob + previewHtml(p, t),
+      back: S.modal.from === 'add' ? { act:'modal', arg:`addPersona:${sid}` } : null,
+      ok: { label:'Перенести в сферу', act:'applyTransfer', arg:`${pid}:sphere:${target}`, disabled: v.clash && (S.modal.handle == null ? false : (!S.modal.handle.trim() || S.modal.handle.trim() === p.handle)) } };
+  },
+  toProject(pid){
+    const p = PER[pid], sid = p.zone.id, list = projectsIn(sid);
+    const target = S.modal.pick || (p.prev && p.prev.id) || list[0].id;
+    const opts = list.map(pr => `<div class="opt ${target === pr.id ? 'on' : ''}" data-act="pick" data-arg="${pr.id}"><span class="radio"></span>${pava(pr)}<div class="tx"><b>${pr.name}</b><u>${nChat(pr.chats)}${p.prev && p.prev.id === pr.id ? ' · была здесь до переноса' : ''}</u></div></div>`).join('');
+    const t = { k:'project', id:target };
+    return { wide:true, title:`Вернуть ${p.acc} в проект`, body:`<div class="sub" style="margin-top:0">Сейчас ${p.name} работает во всех проектах сферы «${SPH[sid].name}». В проекте — только в одном.</div>${opts}` + previewHtml(p, t),
+      ok:{ label:'Вернуть в проект', act:'applyTransfer', arg:`${pid}:project:${target}` } };
+  },
+  moveProject(prid){
+    const pr = PRJ[prid], cur = S.modal.pick === undefined ? sphereOf(pr) : S.modal.pick;
+    const opts = spheres().map(s => `<div class="opt ${cur === s.id ? 'on' : ''}" data-act="pick" data-arg="${s.id}"><span class="radio"></span>${tile(s)}<div class="tx"><b>${s.name}</b><u>${nPers(team(s.id).length)} в команде</u></div></div>`).join('')
+      + `<div class="opt ${cur === null ? 'on' : ''}" data-act="pick" data-arg=""><span class="radio"></span>${tile(null)}<div class="tx"><b>Без сферы</b><u>Команда и память сферы перестанут работать в проекте</u></div></div>`;
+    return { title:`Сфера проекта «${pr.name}»`, body:opts, ok:{ label:'Сохранить', act:'applyMoveProject', arg:prid } };
+  },
+  newSphere(){
+    const col = S.modal.pick || 'violet';
+    return { title:'Новая сфера', body:`<div class="field"><label class="flabel">Название</label><input class="input" id="ns-name" placeholder="Например, «Учёба»" value="${S.modal.name || ''}"></div>
+      <div class="field"><label class="flabel">Чем занимается сфера</label><textarea class="input" id="ns-ch" placeholder="Тема, правила и тон — их подхватит каждый проект и чат сферы"></textarea></div>
+      <div class="field"><label class="flabel">Цвет</label><div class="swatches">${Object.keys(GC).map(c => `<span class="sw s-${c} ${col === c ? 'on' : ''}" data-act="pick" data-arg="${c}" title="${c}"></span>`).join('')}</div>
+      <div class="fhint">Значок подберётся по названию, поменять можно потом.</div></div>`,
+      ok:{ label:'Создать сферу', act:'createSphere', arg:col } };
+  },
+  deleteSphere(sid){
+    const s = SPH[sid], t = team(sid);
+    if (t.length) return { title:`Удалить сферу «${s.name}»?`, body:`<div class="notice warn">${ic('triangle-alert','s14')}<span>В команде сферы ${nPers(t.length)}: ${t.map(p => p.name).join(', ')}. Сначала верните их в проекты или перенесите в другую сферу — меню «Ещё» у персоны.</span></div>`,
+      ok:{ label:'Удалить сферу', danger:true, disabled:true } };
+    return { title:`Удалить сферу «${s.name}»?`, body:`<div class="sub" style="margin-top:0">Проекты сферы (${projectsIn(sid).length}) останутся и станут «Без сферы». Память сферы и её чаты удалятся сразу и безвозвратно.</div>`,
+      ok:{ label:'Удалить сферу', danger:true, act:'applyDelete', arg:sid } };
+  },
+};
+function modalHtml(){
+  if (!S.modal) return '';
+  const [name, ...args] = S.modal.key.split(':');
+  const m = MODALS[name](...args);
+  return `<div class="scrim" data-act="closeModal" data-self="1"><div class="modal ${m.wide ? 'wide' : ''}" role="dialog">
+    <div class="mh"><h3>${m.title}</h3><button class="ib" title="Закрыть" data-act="closeModal">${ic('x')}</button></div>
+    <div class="mb">${m.body}</div>
+    <div class="mf">${m.back ? `<button class="btn ghost" style="margin-right:auto" data-act="${m.back.act}" data-arg="${m.back.arg}">${ic('chevron-left','s14')}Назад</button>` : ''}<button class="btn secondary" data-act="closeModal">Отмена</button>
+      <button class="btn ${m.ok.danger ? 'danger' : 'primary'}" ${m.ok.disabled ? 'disabled style="opacity:.5;cursor:default"' : `data-act="${m.ok.act}" data-arg="${m.ok.arg}"`}>${m.ok.label}</button></div></div></div>`;
+}
+
+/* ---------- Меню ---------- */
+function personaMenu(p){
+  const zoneItems = p.zone.k === 'sphere'
+    ? `<button class="mi" data-act="modal" data-arg="toProject:${p.id}">${ic('undo')}Вернуть в проект…</button>
+       <button class="mi" data-act="modal" data-arg="toSphere:${p.id}:">${ic('arrow-right-left')}Перенести в другую сферу…</button>`
+    : `<button class="mi" data-act="modal" data-arg="toSphere:${p.id}:${p.zone.k === 'project' ? sphereOf(PRJ[p.zone.id]) || '' : ''}">${ic('folder-input')}Перенести в сферу…</button>`;
+  return `<button class="mi" data-act="toast" data-arg="Откроется чат с персоной ${p.name}">${ic('message-square')}Открыть чат с персоной</button>
+    <button class="mi" data-act="toast" data-arg="Откроется редактор персоны">${ic('pencil')}Изменить</button>
+    <div class="msep"></div>${zoneItems}`;
+}
+function menuHtml(){
+  if (!S.menu) return '';
+  const [kind, id] = S.menu.key.split(':');
+  let items = '';
+  if (kind === 'project') {
+    const p = PRJ[id];
+    items = `<button class="mi" data-act="openProject" data-arg="${id}">${ic('arrow-up-right')}Открыть проект</button>
+      <button class="mi" data-act="modal" data-arg="moveProject:${id}">${ic('folder-input')}${sphereOf(p) ? 'Перенести в другую сферу…' : 'Перенести в сферу…'}</button>
+      ${sphereOf(p) ? `<div class="msep"></div><button class="mi danger" data-act="removeFromSphere" data-arg="${id}">${ic('x')}Убрать из сферы</button>` : ''}`;
+  } else if (kind === 'persona') {
+    items = personaMenu(PER[id]);
+  } else if (kind === 'sphere') {
+    items = `<button class="mi" data-act="toast" data-arg="Откроется «Изменить сферу»">${ic('pencil')}Изменить сферу</button>
+      <button class="mi" data-act="copyLink" data-arg="${id}">${ic('link')}Скопировать ссылку</button>
+      <div class="msep"></div><button class="mi danger" data-act="modal" data-arg="deleteSphere:${id}">${ic('trash-2')}Удалить сферу</button>`;
+  }
+  return `<div class="menu" style="left:${S.menu.x}px;top:${S.menu.y}px">${items}</div>`;
+}
+
+/* ---------- Экраны ---------- */
+function sphereCard(s){
+  const ps = projectsIn(s.id), t = team(s.id), tk = tasksIn(s.id), late = tk.filter(x => x.late).length, ch = chatsIn(s.id).length;
+  return `<div class="scard s-${s.color}" id="sc-${s.id}" data-act="go" data-arg="#/sphere/${s.id}">
+    <div class="band"></div>
+    <div class="top">${tile(s,'lg')}<div class="tx"><div class="nm">${s.name}${agMark(s.agent,'создал Claude')}</div>
+      <div class="ch ${s.charter ? '' : 'none'}">${s.charter || 'Устава пока нет'}</div></div>
+      <button class="ib sm" title="Действия со сферой" data-act="menu" data-arg="sphere:${s.id}">${ic('ellipsis-vertical','s14')}</button></div>
+    <div class="stats">${t.length ? `<span class="avas">${t.map(p => ava(p,'sm')).join('')}</span><span>${nPers(t.length)}</span>` : `<span>Команды пока нет</span>`}
+      <span>·</span><span>${nMem(memSphere(s.id).length)} памяти</span>
+      ${tk.length ? `<span class="badge ${late ? 'warn' : ''}">${nTask(tk.length)}${late ? ' · ' + late + ' просроч.' : ''}</span>` : ''}</div>
+    <div class="plist">${ps.length ? ps.slice(0,3).map(p => projectRow(p,{ menu:false })).join('') + (ps.length > 3 ? `<div class="more">и ещё ${nProj(ps.length - 3)}</div>` : '')
+      : '<div class="empty">В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.</div>'}</div>
+    <div class="foot"><button class="btn sm secondary" data-act="go" data-arg="#/sphere/${s.id}/chat">${ic('message-square','s14')}Чаты${ch ? ` · ${ch}` : ''}</button>
+      <span class="sp"></span><button class="btn sm ghost" data-act="go" data-arg="#/sphere/${s.id}">Открыть${ic('chevron-right','s14')}</button></div>
+  </div>`;
+}
+function projectsPage(){
+  const ss = spheres(), lp = loose();
+  const pc = p => `<div class="pcard" id="p-${p.id}" data-act="openProject" data-arg="${p.id}">${pava(p)}<div class="tx"><b>${p.name}</b><u>${nChat(p.chats)} · ${p.when}</u> ${deviceBadge(p)}</div>
+    <button class="ib sm" title="Действия с проектом" data-act="menu" data-arg="project:${p.id}">${ic('ellipsis-vertical','s14')}</button></div>`;
+  const gone = S.empty ? [] : Object.values(GONE).filter(g => !g.restored);
+  return `<div class="scroll canvas" data-keep="list"><div class="wrap">
+    <div class="ph"><div class="tt"><h2>Проекты</h2><div class="meta">${ss.length ? `${ss.length} ${plural(ss.length,'сфера','сферы','сфер')} · ` : ''}${nProj(PRJ_ORDER.length)}</div></div>
+      ${ss.length ? `<button class="btn secondary sm hide-m" data-act="modal" data-arg="newSphere">${ic('plus','s14')}Сфера</button>` : ''}
+      <button class="btn primary sm" data-act="toast" data-arg="Откроется «Новый проект» — с выбором сферы">${ic('plus','s14')}Проект</button></div>
+    ${ss.length ? `<div class="sgrid">${ss.map(sphereCard).join('')}<div class="scard new" data-act="modal" data-arg="newSphere">${ic('plus','s20')}Новая сфера</div></div>` : emptySpheres()}
+    ${lp.length ? `<div class="sect">${tile(null)}<b>Без сферы</b><span class="c">${lp.length}</span></div><div class="pgrid">${lp.map(pc).join('')}</div>` : ''}
+    ${gone.map(g => `<div class="gonebar">${tile(g,'dim')}<span class="t">Сферу «${g.name}» удалил Claude (${PER[g.by].name}). Восстановить можно до ${g.until}.</span>
+      <button class="btn xs secondary" data-act="go" data-arg="#/sphere/${g.id}">Открыть</button></div>`).join('')}
+  </div></div>`;
+}
+const TABS = [['', 'Обзор'], ['projects', 'Проекты'], ['chat', 'Чаты'], ['team', 'Команда'], ['memory', 'Память'], ['tasks', 'Задачи'], ['journal', 'Журнал']];
+function tabCount(sid, k){
+  if (k === 'journal') { const n = agCountIn(sid); return n ? `<span class="n acc">✦ ${n}</span>` : ''; }
+  const n = { projects: projectsIn(sid).length, chat: chatsIn(sid).length, team: team(sid).length, memory: memSphere(sid).length, tasks: tasksIn(sid).length }[k];
+  return n != null ? `<span class="n">${n}</span>` : '';
+}
+function card(title, count, sub, inner, extra=''){
+  return `<div class="card"><div class="h4">${title}${count != null ? `<span class="c">${count}</span>` : ''}<span class="sp"></span>${extra}</div>${sub ? `<div class="sub">${sub}</div>` : '<div style="height:6px"></div>'}${inner}</div>`;
+}
+function sphereSection(r){
+  const sid = r.id, s = SPH[sid], ps = projectsIn(sid), cs = chatsIn(sid);
+  const newChat = cls => `<button class="btn ${cls}" data-act="newChat" data-arg="${sid}">${ic('message-square-plus','s14')}Новый чат сферы</button>`;
+  const projects = card('Проекты', ps.length, null,
+    ps.length ? ps.map(p => projectRow(p)).join('') : '<div class="empty">В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.</div>',
+    `<button class="btn xs ghost" data-act="toast" data-arg="Откроется «Новый проект» в сфере «${s.name}»">${ic('plus','s12')}Проект</button>`);
+  const chatsFull = card('Чаты сферы', cs.length, `Вопросы сразу по всем ${nProjDat(ps.length)} сферы. По умолчанию отвечает ${team(sid)[0] ? team(sid)[0].name + ' — первая персона команды' : 'Claude: команды пока нет'}.`,
+    `<div style="margin:2px 0 8px">${newChat('sm primary')}</div>` + (cs.length ? cs.map(c => chatRow(c,{ place:false })).join('') : '<div class="empty">Чатов пока нет. Спросите, например: «что открыто по всем проектам?»</div>'));
+  const chatsShort = card('Чаты сферы', cs.length, null,
+    (cs.length ? cs.slice(0,3).map(c => chatRow(c,{ place:false })).join('') : '<div class="empty">Чатов пока нет.</div>'),
+    `<button class="btn xs ghost" data-act="newChat" data-arg="${sid}">${ic('plus','s12')}Чат</button>`);
+  const teamC = card('Команда', team(sid).length, 'Работают во всех проектах и чатах сферы и пишут в её память.', teamBlock(sid));
+  const tasks = lim => card('Открытые задачи', tasksIn(sid).length, 'Из всех проектов сферы: сначала срочные, потом по сроку.', taskList(sid, lim));
+  const mem = card('Память', null, 'В проекте и в чате сферы персоны помнят обе полки.', memShelves(sid));
+  const jn = agCountIn(sid);
+  const jrShort = card('Журнал', null, null, journal(sid, 3), jn ? `<span class="badge acc">✦ ${jn} ждут ответа</span>` : '');
+  const jrFull = card('Журнал сферы', null, 'Что менялось в сфере: устав, проекты, команда. ✦ — сделал Claude; «Оставить» снимает пометку. Отменить — обратным переносом вручную.',
+    `<div class="jhead"><span class="seg"><button class="${S.jf === 'all' ? 'on' : ''}" data-act="jf" data-arg="all">Все</button><button class="${S.jf === 'ag' ? 'on' : ''}" data-act="jf" data-arg="ag">✦ Ждут ответа${jn ? ' · ' + jn : ''}</button></span></div>` + journal(sid));
+  switch (r.sub) {
+    case 'projects': return `<div class="single">${projects}</div>`;
+    case 'chat': return `<div class="single">${chatsFull}</div>`;
+    case 'team': return `<div class="single">${teamC}</div>`;
+    case 'memory': return `<div class="single">${mem}</div>`;
+    case 'tasks': return `<div class="single">${tasks()}</div>`;
+    case 'journal': return `<div class="single">${jrFull}</div>`;
+    default: return `<div class="cols"><div class="colstack">${projects}${tasks(4)}</div><div class="colstack">${chatsShort}${teamC}${jrShort}</div></div>`;
+  }
+}
+function spherePage(r){
+  const s = SPH[r.id];
+  return `<div class="scroll canvas" data-keep="sph-${r.id}-${r.sub || ''}">
+    <div class="shead s-${s.color}"><div class="in">
+      <button class="back" data-act="go" data-arg="#/projects">${ic('chevron-left','s14')}Проекты</button>
+      <div class="r1">${tile(s,'xl')}<div class="tx"><h2>${s.name}${agMark(s.agent,'создал Claude')}</h2><div class="meta">${sphereMeta(r.id)}</div></div>
+        <div class="acts">${copyLinkBtn(r.id)}<button class="ib" title="Действия со сферой" data-act="menu" data-arg="sphere:${r.id}">${ic('ellipsis-vertical')}</button></div></div>
+      <div class="chart">${charterBlock(r.id)}</div>
+      <nav class="tabs">${TABS.map(([k, l]) => `<button class="tab ${(r.sub || '') === k ? 'on' : ''}" data-act="go" data-arg="#/sphere/${r.id}${k ? '/' + k : ''}">${l}${tabCount(r.id, k)}</button>`).join('')}</nav>
+    </div></div>
+    <div class="wrap">${sphereSection(r)}</div></div>`;
+}
+function chatPage(r){
+  const c = CHATS[r.cid], s = SPH[r.id];
+  return `<div class="cpage">
+    <div class="chead s-${s.color}"><button class="ib" title="К чатам сферы" data-act="go" data-arg="#/sphere/${s.id}/chat">${ic('chevron-left')}</button>
+      ${tile(s,'md')}<div class="tx"><b>${c.title}</b><u>Чат сферы «${s.name}» · ${nProj(projectsIn(s.id).length)}</u></div>
+      <button class="ib" title="Скопировать ссылку на чат" data-act="toast" data-arg="Ссылка скопирована: ai-home.local/#/sphere/${s.id}/chat/${c.id}">${ic('link')}</button></div>
+    ${chatView(r.cid)}</div>`;
+}
+function chatsPage(){
+  const list = CHAT_ORDER.map(id => CHATS[id]).filter(c => !c.sphere || spheres().some(s => s.id === c.sphere));
+  return `<div class="scroll canvas" data-keep="chats"><div class="wrap" style="max-width:760px">
+    <div class="ph"><div class="tt"><h2>Чаты</h2><div class="meta">Чаты сфер — с цветной полосой и значком сферы</div></div>
+      <button class="btn primary sm" data-act="toast" data-arg="Откроется новый чат">${ic('plus','s14')}Чат</button></div>
+    <div class="field"><input class="input" placeholder="Поиск по чатам — находит и чаты сфер"></div>
+    <div class="ghead">Недавние</div><div class="clist">${list.map(c => chatRow(c)).join('')}</div>
+  </div></div>`;
+}
+function personasPage(){
+  const zb = p => p.zone.k === 'sphere' ? `<span class="badge sph s-${SPH[p.zone.id].color}">${SPH[p.zone.id].glyph ? ic(SPH[p.zone.id].glyph,'s12') : ''}сфера «${SPH[p.zone.id].name}»</span>`
+    : p.zone.k === 'project' ? `<span class="badge">${ic('folder','s12')}«${PRJ[p.zone.id].name}»</span>` : `<span class="badge info">${ic('globe','s12')}во всех данных</span>`;
+  return `<div class="scroll canvas" data-keep="pers"><div class="wrap">
+    <div class="ph"><div class="tt"><h2>Персоны</h2><div class="meta">Перенос между проектом и сферой — в меню «Ещё»</div></div></div>
+    <div class="pcards">${PER_ORDER.map(id => PER[id]).map(p => `<div class="percard" id="pe-${p.id}"><div class="r">${ava(p,'lg')}<div class="tx"><b>${p.name}</b><u>${p.role} · <span class="mono">@${p.handle}</span></u></div></div>
+      <div>${zb(p)}</div>
+      <div class="bar"><button class="btn sm secondary" data-act="toast" data-arg="Откроется чат с персоной ${p.name}">${ic('message-square','s14')}Чат</button><span class="sp"></span>
+        <button class="btn sm ghost" data-act="menu" data-arg="persona:${p.id}">Ещё${ic('chevron-down','s14')}</button></div></div>`).join('')}</div>
+  </div></div>`;
+}
+function gonePage(r){
+  const g = GONE[r.id], who = PER[g.by];
+  return `<div class="scroll canvas"><div class="wrap" style="max-width:640px">
+    <button class="back" data-act="go" data-arg="#/projects">${ic('chevron-left','s14')}Проекты</button>
+    <div class="estate" style="margin-top:12px">${tile(g,'xl dim')}
+      <div class="et">Сферу удалил Claude (${who.name})</div>
+      <div class="es">Сфера «${g.name}». Восстановить можно до ${g.until} — вернутся устав, проекты (${g.projects.length}) и память сферы (${nMem(g.mem)}).</div>
+      <div class="src">${ic('message-square','s12')} Из чата ${chatLink(g.chat)} · ${g.when}</div>
+      <button class="btn primary" style="margin-top:8px" data-act="restore" data-arg="${g.id}">${ic('rotate-ccw','s14')}Восстановить</button>
+      <div class="ask">Если сфера не нужна, ничего делать не надо: ${g.until} она удалится окончательно. Проекты останутся «Без сферы».</div></div>
+  </div></div>`;
+}
+
+/* ---------- Роутер и рендер ---------- */
+function route(){
+  const h = (location.hash || '#/projects').replace(/^#\/?/,'').split('/');
+  if (h[0] === 'sphere') {
+    if (GONE[h[1]] && !GONE[h[1]].restored && !S.empty) return { page:'gone', id:h[1] };
+    if (spheres().some(x => x.id === h[1])) {
+      if (h[2] === 'chat' && h[3] && CHATS[h[3]] && CHATS[h[3]].sphere === h[1]) return { page:'chat', id:h[1], cid:h[3] };
+      return { page:'sphere', id:h[1], sub: TABS.some(t => t[0] === h[2]) ? h[2] || null : null };
+    }
+  }
+  if (h[0] === 'chats') return { page:'chats' };
+  if (h[0] === 'personas') return { page:'personas' };
+  return { page:'projects' };
+}
+function addrText(r){
+  const base = 'ai-home.local/';
+  if (r.page === 'projects') return base + '<b>#/projects</b>';
+  if (r.page === 'chats') return base + '<b>#/chats</b>';
+  if (r.page === 'personas') return base + '<b>#/personas</b>';
+  if (r.page === 'chat') return base + `<b>#/sphere/${r.id}/chat/${r.cid}</b>`;
+  return base + '<b>#/sphere/' + r.id + (r.sub ? '/' + r.sub : '') + '</b>';
+}
+const HUB = r => r.page === 'chats' ? 'chats' : r.page === 'personas' ? 'personas' : 'projects';
+function render(){
+  const keep = {};
+  document.querySelectorAll('[data-keep]').forEach(el => keep[el.dataset.keep] = el.scrollTop);
+  const r = route();
+  document.documentElement.dataset.theme = S.theme;
+  const dev = document.getElementById('dev');
+  dev.classList.toggle('m', S.mobile);
+  const hub = HUB(r), tab = (k, l) => `<button class="htab ${hub === k ? 'on' : ''}" data-act="go" data-arg="#/${k}">${l}</button>`;
+  const body = r.page === 'projects' ? projectsPage() : r.page === 'chats' ? chatsPage() : r.page === 'personas' ? personasPage()
+    : r.page === 'gone' ? gonePage(r) : r.page === 'chat' ? chatPage(r) : spherePage(r);
+  dev.innerHTML = `<div class="addr"><span class="dots"><i></i><i></i><i></i></span><span class="url">${ic('globe','s12')}${addrText(r)}</span></div>
+    <div class="hub"><div class="logo"><i>AI</i><span>AI Home</span></div>
+      <nav class="htabs">${tab('chats','Чаты')}${tab('projects','Проекты')}${tab('personas','Персоны')}<button class="htab" data-act="toast" data-arg="Это раздел «Заметки»">Заметки</button><button class="htab" data-act="toast" data-arg="Это раздел «Задачи»">Задачи</button></nav>
+      <span class="sp"></span>
+      <span class="me">АН</span></div>
+    <div class="body">${body}</div>
+    ${menuHtml()}${modalHtml()}
+    ${S.toast ? `<div class="toast"><span>${S.toast.text}</span>${S.toast.undo ? `<button data-act="toastUndo">Отменить</button>` : ''}</div>` : ''}`;
+  document.querySelectorAll('[data-keep]').forEach(el => { if (keep[el.dataset.keep] != null) el.scrollTop = keep[el.dataset.keep]; });
+  document.querySelectorAll('.cmsgs').forEach(el => { el.scrollTop = el.scrollHeight; });
+  document.querySelectorAll('.tabs').forEach(n => { const t = n.querySelector('.tab.on'); if (t) n.scrollLeft = t.offsetLeft - (n.clientWidth - t.offsetWidth) / 2; });
+  if (S.flash) { const el = document.getElementById(S.flash); if (el) { el.scrollIntoView({ block:'center' }); el.classList.add('flash'); } S.flash = null; }
+  document.querySelectorAll('.mk [data-mk]').forEach(b => {
+    const [k, v] = b.dataset.mk.split(':');
+    if (k === 'scr') return;
+    b.setAttribute('aria-pressed', String(k === 'theme' ? S.theme === v : k === 'w' ? S.mobile === (v === 'm') : S.empty === (v === '1')));
+  });
+}
+
+/* ---------- Действия ---------- */
+let toastTimer;
+function toast(text, undo){ S.toast = { text, undo }; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; render(); }, 4200); }
+function go(h){ S.menu = null; S.modal = null; if (location.hash === h) render(); else location.hash = h; }
+function journalAdd(sid, text){ JR.unshift({ id:'j' + Date.now(), sphere:sid, ag:false, who:'me', when:'только что', text }); }
+const ACT = {
+  go: a => go(a),
+  toast: a => { S.menu = null; toast(a); },
+  menu: (a, el) => {
+    if (S.menu && S.menu.key === a) { S.menu = null; return; }
+    const d = document.getElementById('dev').getBoundingClientRect(), b = el.getBoundingClientRect();
+    const w = 250, x = Math.max(8, Math.min(b.right - d.left - w, d.width - w - 8));
+    const y = b.bottom - d.top + 190 > d.height ? b.top - d.top - 190 : b.bottom - d.top + 4;
+    S.menu = { key:a, x, y };
+  },
+  modal: a => { S.menu = null; S.modal = { key:a }; },
+  closeModal: () => { S.modal = null; },
+  pick: a => { S.modal.pick = a === '' ? null : a; S.modal.handle = null; const n = document.getElementById('ns-name'); if (n) S.modal.name = n.value; },
+  addNext: a => { const [pid, sid] = a.split(':'); S.modal = { key:`toSphere:${pid}:${sid}:fixed`, from:'add' }; },
+  keepAccess: () => { S.modal.keep = !S.modal.keep; },
+  openProject: a => { S.menu = null; toast(`Здесь откроется проект «${PRJ[a].name}»`); },
+  openChat: a => { const c = CHATS[a]; if (c.sphere && spheres().some(s => s.id === c.sphere)) go(`#/sphere/${c.sphere}/chat/${a}`); else toast(`Откроется чат «${c.title}»`); return c.sphere ? 'skip' : undefined; },
+  newChat: a => {
+    const id = 'c' + Date.now(), lead = team(a)[0];
+    CHATS[id] = { id, sphere:a, title:'Новый чат', with: lead ? lead.id : null, when:'сейчас', last:'Пока без сообщений' };
+    CHAT_ORDER.unshift(id); go(`#/sphere/${a}/chat/${id}`); return 'skip';
+  },
+  charter: a => { S.charterOpen[a] = !S.charterOpen[a]; },
+  copyLink: a => { S.menu = null; toast(`Ссылка скопирована: ai-home.local/#/sphere/${a}`); },
+  jf: a => { S.jf = a; },
+  memMove: a => {
+    const el = document.getElementById('m-' + a); if (el) el.classList.add('moving');
+    const m = MEM.find(x => x.id === a), pr = PRJ[m.project];
+    setTimeout(() => { const snap = { ...m }; Object.assign(m, { shelf:'sphere', sphere:sphereOf(pr), from:m.project, when:'только что' });
+      toast(`Запись перенесена в память сферы «${SPH[sphereOf(pr)].name}» — её увидят все проекты`, () => Object.assign(m, snap)); render(); }, 380);
+    return 'skip';
+  },
+  applyTransfer: a => {
+    const [pid, k, id] = a.split(':'), p = PER[pid], target = { k, id }, v = preview(p, target), from = { ...p.zone };
+    const keep = S.modal.keep, hInp = document.getElementById('tr-handle');
+    if (v.clash) { const nh = (hInp ? hInp.value : '').trim(); if (!nh || nh === p.handle) { toast('Выберите другое имя: это уже занято'); return; } p.handle = nh; }
+    const lost = v.tasksOut.filter(t => t.st === 'todo');
+    p.tasks = p.tasks.filter(t => !lost.includes(t)); p.leads = p.leads.filter(x => !v.leadsOut.includes(x));
+    p.zone = target; if (p.agent && agNew(p.agent)) jrById(p.agent).st = 'kept'; S.modal = null;
+    const sid = k === 'sphere' ? id : from.id;
+    journalAdd(sid, k === 'sphere' ? `Вы перевели ${p.acc} ${from.k === 'global' ? 'из «во всех данных»' : from.k === 'project' ? `из проекта «${PRJ[from.id].name}»` : `из сферы «${SPH[from.id].name}»`} в команду сферы${keep ? ` (доступ к «${PRJ[from.id].name}» оставлен)` : ''}`
+      : `Вы вернули ${p.acc} в проект «${PRJ[id].name}»`);
+    if (from.k === 'sphere' && k === 'sphere') journalAdd(from.id, `Вы перевели ${p.acc} в сферу «${SPH[id].name}»`);
+    toast(`${p.name} теперь работает ${zoneName(target)}${lost.length ? ` · ${nTaskS(lost.length)} без исполнителя` : ''}`);
+    S.flash = 'pe-' + pid;
+  },
+  applyMoveProject: a => {
+    const pr = PRJ[a], prev = pr.sphere, to = S.modal.pick === undefined ? prev : S.modal.pick;
+    pr.sphere = to; if (pr.agent && agNew(pr.agent)) jrById(pr.agent).st = 'kept'; S.modal = null;
+    if (to && to !== prev) journalAdd(to, `Вы перенесли проект «${pr.name}» в сферу`);
+    if (prev && SPH[prev] && to !== prev) journalAdd(prev, `Вы убрали проект «${pr.name}» из сферы`);
+    toast(to ? `«${pr.name}» теперь в сфере «${SPH[to].name}»` : `«${pr.name}» больше не в сфере`, () => { pr.sphere = prev; });
+  },
+  removeFromSphere: a => { S.menu = null; const pr = PRJ[a], prev = pr.sphere; pr.sphere = null; journalAdd(prev, `Вы убрали проект «${pr.name}» из сферы`); toast(`«${pr.name}» убран из сферы «${SPH[prev].name}»`, () => { pr.sphere = prev; }); },
+  createSphere: a => {
+    const name = (document.getElementById('ns-name').value || 'Учёба').trim(), ch = document.getElementById('ns-ch').value.trim();
+    const id = 's' + Date.now();
+    SPH[id] = { id, name, color:a, glyph: /уч/i.test(name) ? 'briefcase' : null, charter:ch, fresh:true };
+    SPH_ORDER.push(id); journalAdd(id, `Вы создали сферу «${name}»`); S.modal = null; go('#/sphere/' + id); toast(`Сфера «${name}» создана. Перенесите в неё проекты через их меню.`);
+    return 'skip';
+  },
+  applyDelete: a => {
+    const s = SPH[a]; SPH_ORDER.splice(SPH_ORDER.indexOf(a), 1);
+    PRJ_ORDER.forEach(id => { if (PRJ[id].sphere === a) PRJ[id].sphere = null; });
+    S.modal = null; go('#/projects'); toast(`Сфера «${s.name}» удалена. Проекты остались — они в «Без сферы».`); return 'skip';
+  },
+  restore: a => {
+    const g = GONE[a]; g.restored = true;
+    SPH[a] = { id:a, name:g.name, color:g.color, glyph:g.glyph, charter:g.charter };
+    SPH_ORDER.push(a); g.projects.forEach(id => { PRJ[id].sphere = a; });
+    for (let i = 0; i < g.mem; i++) MEM.push({ id:'g' + i, shelf:'sphere', sphere:a, by:'alisa', from:'garden', when:'месяц назад', text:['Полив — утром, до 9.','Рассаду томатов высаживать после 10 мая.','Баню топить берёзой.','Ключи от сарая — у соседа.'][i] });
+    JR.unshift({ id:'jg1', sphere:a, ag:true, st:'kept', who:g.by, chat:g.chat, when:g.when, text:`удалила сферу «${g.name}»` });
+    JR.unshift({ id:'jg2', sphere:a, ag:false, who:'me', when:'только что', text:'Вы восстановили сферу' });
+    go('#/sphere/' + a); toast(`Сфера «${g.name}» восстановлена вместе с проектами и памятью`); return 'skip';
+  },
+  agKeep: a => {
+    const j = jrById(a); j.st = 'kept';
+    toast(j.kind === 'charter' ? 'Правка устава принята — теперь это ваш текст' : 'Оставлено, пометка ✦ снята. Передумаете — перенесите обратно вручную.');
+  },
+  agGo: a => { const j = jrById(a); S.flash = 'j-' + a; S.jf = 'all'; go(`#/sphere/${j.sphere}/journal`); return 'skip'; },
+  agShow: a => { const j = jrById(a); S.flash = j.focus || null; go(`#/sphere/${j.sphere}${j.go ? '/' + j.go : ''}`); return 'skip'; },
+  send: a => {
+    const inp = document.getElementById('cin-' + a); const text = (inp && inp.value.trim()) || 'Что изменилось за неделю?';
+    const c = CHATS[a], sid = c.sphere, msgs = chatSeed(a);
+    msgs.push({ me:true, text }); msgs.push({ typing:true, who:c.with });
+    if (c.title === 'Новый чат') { c.title = text.length > 40 ? text.slice(0, 40) + '…' : text; }
+    c.last = text; c.when = 'сейчас';
+    setTimeout(() => { msgs.pop(); msgs.push({ who:c.with, text:`Смотрю по всем ${nProjDat(projectsIn(sid).length)} сферы «${SPH[sid].name}». За неделю: в память сферы добавлено ${nMem(memSphere(sid).length)}, закрыта 1 задача. Изменения в составе сферы — в журнале на её странице.` }); render(); }, 900);
+  },
+  toastUndo: () => { if (S.toast && S.toast.undo) S.toast.undo(); S.toast = null; },
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el) { if (S.menu && !e.target.closest('.menu')) { S.menu = null; render(); } return; }
+  if (el.dataset.self && e.target !== el) return;
+  if (el.hasAttribute('disabled')) return;
+  const fn = ACT[el.dataset.act];
+  if (!fn) return;
+  if (el.dataset.act !== 'menu' && !el.closest('.menu')) S.menu = null;
+  if (S.modal) { const h = document.getElementById('tr-handle'); if (h) S.modal.handle = h.value; }
+  if (fn(el.dataset.arg, el, e) !== 'skip') render();
+});
+document.addEventListener('input', e => {
+  if (e.target.dataset.input === 'handle' && S.modal) { S.modal.handle = e.target.value; const pos = e.target.selectionStart; render(); const h = document.getElementById('tr-handle'); if (h) { h.focus(); h.setSelectionRange(pos, pos); } }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.dataset.enter) { ACT[e.target.dataset.enter](e.target.dataset.arg); render(); }
+  if (e.key === 'Escape') { S.modal = null; S.menu = null; render(); }
+});
+window.addEventListener('hashchange', () => { S.menu = null; S.modal = S.pending || null; S.pending = null; render(); });
+const SCR = {
+  projects: () => go('#/projects'),
+  sphere: () => go('#/sphere/bank'),
+  chats: () => go('#/sphere/bank/chat'),
+  chat: () => go('#/sphere/bank/chat/c1'),
+  journal: () => go('#/sphere/bank/journal'),
+  transfer: () => {
+    const h = '#/sphere/bank/team', m = { key: PER.marat.zone.k === 'project' ? 'toSphere:marat:bank:fixed' : 'toProject:yulia' };
+    if (location.hash === h) { S.modal = m; render(); } else { S.pending = m; location.hash = h; }
+  },
+  gone: () => go('#/sphere/dacha'),
+};
+function mk(k, v){
+  S.menu = null; if (k !== 'scr') S.modal = null;
+  if (k === 'theme') S.theme = v; if (k === 'w') S.mobile = v === 'm';
+  if (k === 'empty') { S.empty = v === '1'; if (S.empty) location.hash = '#/projects'; }
+  if (k === 'scr') { if (S.empty) S.empty = false; SCR[v](); return; }
+  render();
+}
+document.querySelectorAll('.mk [data-mk]').forEach(b => b.addEventListener('click', () => { const [k, v] = b.dataset.mk.split(':'); mk(k, v); }));
+window.mkApi = { go, set: mk, act: (n, a) => { ACT[n](a); render(); }, S };
+
+render();
+</script>
+</body>
+</html>

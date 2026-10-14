@@ -58,7 +58,9 @@
 
 4. **Запустить `switch-release.sh`** — сам уходит в `systemd-run`,
    сохраняет снимок текущего бинарника, стопит `ccs.service`, копирует
-   staging поверх `/opt/ccs/app/`, поднимает сервис, гоняет health-гейт.
+   staging поверх `/opt/ccs/app/` (без `appsettings.Local.json*`, `.mcp.json`,
+   `backups-secrets`, `logs/`, `data/` — машинные файлы app из staging не
+   берутся; проверка — `scripts/ops/test-switch-copy.sh`), поднимает сервис, гоняет health-гейт.
    При провале гейта — автооткат на снимок и рестарт.
 
 5. **После будильника сторожа** — прод на новой сборке, health зелёный

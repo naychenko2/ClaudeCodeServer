@@ -12,6 +12,9 @@
 # Внутри неё живёт то, чего нет в staging и что потерять нельзя:
 # appsettings.Local.json (там DataPath и ключи), backups-secrets, .mcp.json,
 # mcp-dify, pty-bridge. Полная подмена каталога унесла бы их вместе со сборкой.
+# Машинные файлы (appsettings.Local.json*, .mcp.json, backups-secrets, logs/, data/)
+# из staging НЕ копируются даже если лежат там: устаревшая копия в staging уже
+# затёрла боевой конфиг (прод 2026-10-14). Список исключений — как в publish-linux.sh.
 #
 # Расширения для выкатки из чата (ADR-010, карточка хода):
 #   - CCS_DEPLOY_JOURNAL=<путь к deploy-journal.py>
@@ -84,6 +87,20 @@ rotate_releases() {
   return 0
 }
 
+# Копирование сборки поверх приложения БЕЗ --delete и без машинных файлов app.
+# Исключения те же, что в publish-linux.sh (switch_server), плюс backups-secrets:
+# файлы, которые принадлежат машине, а не сборке, из staging не берём никогда.
+# Якорь «/» — только верхний уровень каталога; appsettings.Local.json* и .mcp.json
+# без якоря, как в publish-linux.sh. --ignore-times: прежний cp -a перезаписывал всегда,
+# а быстрая проверка rsync (размер + mtime) пропустила бы файл одинакового размера и секунды.
+copy_build_over() {
+  local src=$1 dst=$2
+  rsync -a --ignore-times \
+    --exclude 'appsettings.Local.json' --exclude 'appsettings.Local.json.*' --exclude '.mcp.json' \
+    --exclude '/backups-secrets' --exclude '/logs/' --exclude '/data/' \
+    "$src"/ "$dst"/
+}
+
 # Разовый запуск ротации без выкатки: switch-release.sh --rotate [--dry-run].
 # Каталог — CCS_RELEASES_DIR (для проверок на временном каталоге), по умолчанию боевой.
 if [ "${1:-}" = "--rotate" ]; then
@@ -137,6 +154,9 @@ APP="${APP:-/opt/ccs/app}"
 STAGING="${STAGING:-/opt/ccs/staging}"
 RELEASES="${RELEASES:-/opt/ccs/releases}"
 SYSTEMCTL_CMD="${CCS_SYSTEMCTL:-systemctl --user}"
+# Прод слушает 80/443 (Kestrel:Endpoints), а НЕ 5000, и требует разрешённый Host
+# (AllowedHosts). Пути /api/auth/ping не существует вовсе — старая проба давала 000
+# на живом сервере и откатила УДАВШУЮСЯ выкатку (прод 2026-09-22, лог 162323).
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
 HEALTH_HOST="${HEALTH_HOST:-localhost}"
 HEALTH_TRIES="${HEALTH_TRIES:-18}"          # 18 × 5 c = 90 секунд, как в ADR-010
@@ -203,7 +223,7 @@ rm -rf "$APP/wwwroot"
 cp -a "$STAGING/wwwroot" "$APP/wwwroot"
 
 log "копирую файлы сборки поверх (конфиги и данные не трогаю)"
-cp -a "$STAGING"/. "$APP"/
+copy_build_over "$STAGING" "$APP"
 step swap ok
 
 log "поднимаю ccs.service"

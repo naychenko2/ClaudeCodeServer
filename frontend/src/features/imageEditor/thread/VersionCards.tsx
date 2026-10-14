@@ -19,6 +19,7 @@ import {
   faceResultRows, facePairsCaption, launchFaces, partialNotice, passStage, versionSimilarityShown,
   type FaceResultRow, type PassSegment,
 } from './faceSwap';
+import { modelLabel } from '../faceSwapView';
 import type { ImageThreadFaceTarget } from './threadsApi';
 import { useCharacters } from '../characters/useCharacters';
 import { useCatalog } from './catalog';
@@ -331,6 +332,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const mobile = useIsMobile();
   const { primary } = useChatContext(ctx.sessionId ?? '');
   const { list: faceChars } = useCharacters(projectId);
+  const catalog = useCatalog(projectId);
   const data = (rec?.data ?? {}) as LaunchData;
   const jobId = str(data.jobId);
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
@@ -340,16 +342,18 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const launch = launchOf(thread, jobId);
   const versions = launchVersions(thread, jobId);
   const focused = focusId === thread.id;
-  const model = str(data.model);
+  // Подпись модели: человекочитаемая из каталога (локальные — «локальные модели»), не id (v2)
+  const model = modelLabel(catalog, str(data.model));
   const count = typeof data.count === 'number' && data.count > 0 ? data.count : 1;
   const prompt = str(data.prompt) ?? launch?.prompt ?? null;
   const base = findVersion(thread, str(data.baseVersionId) ?? launch?.baseVersionId);
   const agent = (str(data.initiator) ?? launch?.initiator) === 'agent';
   const head = base && versionHasImage(thread, base) ? `Правка ${fromVersion(base)}` : 'Генерация';
-  const info = [model, variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
+  // «Подставить персонажа»: число вариантов всегда 1 — «1 вариант» в строке не пишем (v2)
+  const faces = launchFaces(launch);
+  const info = [model, faces.length ? null : variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
   // «Подставить персонажа» (этап 2 · шаг 10c, этап 3 · шаг 17): подпись пар «Мария → лицо 1, Иван → лицо 2»
   // в строке запуска; имя — по slug персонажа из списка проекта, персонажа больше нет — сам slug
-  const faces = launchFaces(launch);
   const faceCap = facePairsCaption(faces, slug => faceChars?.find(c => c.slug === slug)?.name);
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
   const endNote = launchEndNote(status, versions.length, count, faces.length);

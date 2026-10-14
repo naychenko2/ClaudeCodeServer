@@ -4,7 +4,7 @@ import {
   FS_TEXT, faceCaption, faceRect, faceSwapEntryVisible, faceSwapView, faceTargetCaption, faceVisual, launchFailure,
   clearFailures, clearFaceChange,
   assignCharacter, emptyAssignments, faceTargetFromAssignments, hasAssignments, isCharacterTaken,
-  MAX_FACE_PASSES, parseFacesChangedBody, removeAssignment, searchFailureText, tapFace,
+  MAX_FACE_PASSES, parseFacesChangedBody, removeAssignment, searchFailureText, tapFace, modelLabel,
   type FaceSwapViewInput, type FaceUi,
 } from './faceSwapView';
 
@@ -456,5 +456,28 @@ describe('тексты режима: номер лица не отрываетс
       expect(s).toMatch(/лиц[ае]\u00A01/);
       expect(s).not.toMatch(/лиц[ае] 1/);
     }
+  });
+});
+
+// ── Подпись модели в строке запуска (v2): локальные — «локальные модели», облачные — label ──
+describe('modelLabel: подпись модели', () => {
+  const catalog = { providers: [
+    { key: 'local', models: [{ id: 'qwen-image-2.1', label: 'Qwen-Image 2.1 — качественно' }] },
+    { key: 'fal', models: [{ id: 'fal-ai/flux-pro/kontext', label: 'FLUX Kontext' }] },
+  ] };
+  it('локальная модель — «локальные модели», не id (мутация: вернуть id → краснеет)', () => {
+    expect(modelLabel(catalog, 'qwen-image-2.1')).toBe('локальные модели');
+  });
+  it('облачная модель — label из каталога', () => {
+    expect(modelLabel(catalog, 'fal-ai/flux-pro/kontext')).toBe('FLUX Kontext');
+  });
+  it('каталог не пришёл — id как есть', () => {
+    expect(modelLabel(null, 'qwen-image-2.1')).toBe('qwen-image-2.1');
+  });
+  it('модель не найдена в каталоге — id как есть', () => {
+    expect(modelLabel(catalog, 'unknown-model')).toBe('unknown-model');
+  });
+  it('id null — null', () => {
+    expect(modelLabel(catalog, null)).toBeNull();
   });
 });

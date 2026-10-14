@@ -42,7 +42,7 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 // (commit-on-plumbing): запись полного дерева, резолв рефа, чтение списка файлов и
 // содержимого, tip с автором, push. Имя ветки и идентичность коммита — на стороне
 // вызывающей вертикали (см. DossierBranch), GitService про конкретные ветки не знает.
-public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker, IGitWorkingTree
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker, IGitWorkingTree, IGitFileHistory
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -361,6 +361,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
              "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
+
+    public async Task<GitLogEntry?> LastCommitAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
+        (await FileLogAsync(ownerId, root, relPath, 1, ct)).FirstOrDefault();
 
     // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
     // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история

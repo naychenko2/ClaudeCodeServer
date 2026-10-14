@@ -7,7 +7,9 @@ using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -46,20 +48,29 @@ public sealed class McpGatewayIntegrationTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
-    [Fact]
-    public async Task ToolsListЧерезШлюз_ТотЖеЧтоУСерверногоХода()
+    // httpPorts — как ASPNETCORE_HTTP_PORTS образа aspnet: хост кладёт в адреса сервера
+    // http://*:порт, и шлюз обязан звонить в бэкенд по loopback, а не падать на Uri
+    [Theory]
+    [InlineData(null)]
+    [InlineData("8080")]
+    public async Task ToolsListЧерезШлюз_ТотЖеЧтоУСерверногоХода(string? httpPorts)
     {
-        var ownerId = _factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        using var dev = Device(ownerId);
-        var turn = _factory.Services.GetRequiredService<TurnTokenService>().Issue(ownerId, "chat-1", dev.Id);
+        using var factory = httpPorts is null
+            ? null
+            : _factory.WithWebHostBuilder(b => b.UseSetting(WebHostDefaults.HttpPortsKey, httpPorts));
+        var host = (WebApplicationFactory<Program>?)factory ?? _factory;
 
-        var direct = _factory.CreateClient();
+        var ownerId = host.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        using var dev = new GatewayTestDevice(ownerId, host.Services.GetRequiredService<DeviceRegistry>());
+        var turn = host.Services.GetRequiredService<TurnTokenService>().Issue(ownerId, "chat-1", dev.Id);
+
+        var direct = host.CreateClient();
         direct.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
-            _factory.Services.GetRequiredService<JwtService>().IssueServiceToken(ownerId));
+            host.Services.GetRequiredService<JwtService>().IssueServiceToken(ownerId));
         var viaServer = await direct.PostAsync($"/mcp/{McpEndpoints.WidgetsName}", Json(ToolsList));
 
-        var device = _factory.CreateClient();
+        var device = host.CreateClient();
         var req = new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{turn.Grant.TurnId}/mcp/{McpEndpoints.WidgetsName}")
         {
             Content = Json(ToolsList),
@@ -74,6 +85,23 @@ public sealed class McpGatewayIntegrationTests : IDisposable
         var actual = JsonNode.Parse(await viaGateway.Content.ReadAsStringAsync())!;
         expected["result"]!["tools"]!.AsArray().Should().NotBeEmpty();
         JsonNode.DeepEquals(actual, expected).Should().BeTrue("шлюз не меняет состав tools/list");
+    }
+
+    // Wildcard-хост адреса прослушивания уходит в loopback, конкретный хост не трогается
+    [Theory]
+    [InlineData("http://*:8080", "http://localhost:8080")]
+    [InlineData("http://+:8080/", "http://localhost:8080")]
+    [InlineData("http://0.0.0.0:5000", "http://localhost:5000")]
+    [InlineData("http://[::]:5000", "http://localhost:5000")]
+    [InlineData("https://*:443/base", "https://localhost:443/base")]
+    [InlineData("http://127.0.0.1:5000", "http://127.0.0.1:5000")]
+    [InlineData("http://host.docker.internal:5000", "http://host.docker.internal:5000")]
+    public void АдресПрослушивания_WildcardВLoopback(string address, string expected)
+    {
+        var url = SessionManager.LoopbackApiUrl(address);
+
+        url.Should().Be(expected);
+        Uri.TryCreate(url, UriKind.Absolute, out _).Should().BeTrue();
     }
 
     [Fact]

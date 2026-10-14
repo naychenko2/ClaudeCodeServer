@@ -48,6 +48,15 @@ public sealed record TurnRunPassport(
     /// <summary>Ход не состоялся — человек увидел ошибку вместо ответа.</summary>
     [JsonIgnore]
     public bool Failed => Outcome is "failed" or "egress_down" or "crashed";
+
+    /// <summary>
+    /// Потолок ожидания retry-watchdog, на который CLI был отпущен на этом запуске (мс).
+    /// С 2.1.246 headless-сессия сама дотягивает оборванный ответ и может переждать 429/529
+    /// МИНУТАМИ внутри процесса, прежде чем отдать ход нам: <see cref="Attempts"/>/
+    /// <see cref="EgressRetries"/> это наши повторы, а это поле — насколько долго CLI мог
+    /// молча ждать сам. null — потолок не объявляли (CLI держит собственный дефолт).
+    /// </summary>
+    public int? CliRetryWatchdogMs { get; init; }
 }
 
 /// <summary>

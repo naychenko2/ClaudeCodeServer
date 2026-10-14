@@ -1201,7 +1201,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LastErrorClass: errorClass,
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
-                        RecordedAt: endedAt);
+                        RecordedAt: endedAt)
+                    {
+                        // На сколько долго CLI мог молча переждать 429/529 внутри процесса,
+                        // прежде чем отдать ход нам (см. LlmProviderRegistry.RetryCeilings).
+                        // null — реестр не подставил потолок (тесты/без DI), CLI держит свой дефолт.
+                        CliRetryWatchdogMs = _providers?.RetryWatchdogMaxWaitMs,
+                    };
                 }
                 catch (Exception ex)
                 {

@@ -4015,6 +4015,16 @@ public class ClaudeSession : ILlmSessionAdapter
         // исполнителю задачи план-тулы всё равно закрыты через --disallowedTools.
         envOverrides["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1";
 
+        // Потолки внутренних повторов CLI (429/529): владелец фолбэка — наша цепочка (ADR-007 §4),
+        // CLI получает только короткий внутренний backoff, чтобы отказ доходил до TurnErrorClassifier
+        // за десятки секунд, а не минуты (с 2.1.246 headless-сессии сами дотягивают оборванный
+        // ответ и могут переждать 529 минутами). Ставим на КАЖДОМ запуске — и родному Claude,
+        // и стороннему (ветка cliEnv выше уже склеена, здесь общий путь). Значения — из конфига
+        // LlmProviders:Retry (LlmProviderRegistry.RetryCeilings), 0/нет → встроенные дефолты.
+        if (_providers is not null)
+            foreach (var (k, v) in _providers.RetryCeilings)
+                envOverrides[k] = v;
+
         foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
             envOverrides[k] = v;
 

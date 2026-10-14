@@ -434,12 +434,21 @@ public static class TurnErrorClassifier
         "gateway timeout",
     ];
 
+    // 5xx-код отдельным числом в тексте («API Error: 529 …», «(503)», «Error 500:») — но не
+    // кусок «1529»/«5000». Паритет с TurnFailureText.HttpServerErrorCode: 529 у Anthropic — та
+    // же перегрузка, и CLI отдаёт её в api_error_status=null, когда код есть только в тексте.
+    // Спрашивается только при ПУСТОМ статусе (ветка статусов решает по коду раньше), поэтому
+    // цитата 5xx в разборе инцидента при живом статусе сюда не доходит — тот же гейт, что у
+    // RateLimit (429 с квалификатором) и ContextOverflow (маркеры только при 400/413).
+    private static readonly System.Text.RegularExpressions.Regex ProviderErrorHttpCode =
+        new(@"(?<!\d)5\d{2}(?!\d)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static bool LooksProviderError(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return false;
         foreach (var phrase in ProviderErrorPhrases)
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
+        return ProviderErrorHttpCode.IsMatch(value);
     }
 
     // Исчерпание локальных ресурсов ОС. Формулировки .NET для inotify («…user limit (N) on the

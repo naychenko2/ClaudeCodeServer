@@ -50,6 +50,26 @@ public class TurnRunLogTests
         log.Recent(1)[0].LastError!.Length.Should().BeLessThan(400);
     }
 
+    // Паспорт обязан отражать, насколько долго CLI мог молча переждать 429/529 внутри процесса
+    // (CliRetryWatchdogMs): поле не теряется при усечении LastError через `with` в Record, и
+    // passport без значения держит null (CLI держит собственный дефолт).
+    [Fact]
+    public void Паспорт_ПолеCliRetryWatchdog_ПереживаетУсечениеИДержитNull()
+    {
+        var log = new TurnRunLog();
+        var withCeiling = new TurnRunPassport(
+            "s1", DateTime.UtcNow.AddSeconds(-30), DateTime.UtcNow, 30, "failed",
+            "opus", "claude", "opus", "claude", 1, 0, 0, ["opus"], "unreachable",
+            new string('x', 5000), 120_000, DateTime.UtcNow) { CliRetryWatchdogMs = 30000 };
+        log.Record(withCeiling);
+        log.Recent(1)[0].CliRetryWatchdogMs.Should().Be(30000,
+            "потолок повторов CLI не теряется при усечении LastError через `with`");
+
+        log.Record(Passport("s2", "failed", "unreachable"));
+        log.Recent(1)[0].CliRetryWatchdogMs.Should().BeNull(
+            "без значения — null: CLI держит собственный дефолт, потолок не объявляли");
+    }
+
     [Fact]
     public void ПишетДневнойФайлРядомССервернымЛогом()
     {

@@ -312,16 +312,61 @@ public class FaceTargetLaunchTests : IDisposable
         body.Error.Should().Be(result.Error);
     }
 
-    // Отказ без привязки к лицу (лица нет в списке) — тела с номером нет: прежнее {error, code}
+    // «Лицо N не найдено» (лица нет в списке): отказ привязан к запрошенному лицу — тело несёт
+    // номер (FaceRefusalResponse.Face). Мутация «не передавать номер» (Invalid без Payload) → красный
     [Fact]
-    public async Task Отказ_без_привязки_к_лицу_без_Payload()
+    public async Task Лицо_не_найдено_несёт_номер_в_Payload()
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var req = Request(_charB, FaceTargetJson(_facesKey, 99, _charB));
         var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
 
+        result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
-        result.Payload.Should().BeNull();
+        result.Error.Should().Be("Лицо 99 не найдено: на картинке 1 лиц");
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(99);
+        body.Code.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.Error.Should().Be(result.Error);
+    }
+
+    // «Лица стоят слишком близко»: текст отказа называет лицо префиксом «Лицо N:», а не голым «N:»
+    // (ADR-028, этап 3). Мутация «вернуть N:» → красный
+    [Fact]
+    public async Task Лицо_слишком_близко_текст_с_префиксом_Лицо_N()
+    {
+        // Лицо 1 (10,10)-(50,50) и сосед (30,10)-(70,50) вплотную: остаток < 60 % → TooClose
+        var faces = new[] {
+            new LocalDetectedFace(1, 10, 10, 50, 50, 0.9, false),
+            new LocalDetectedFace(2, 30, 10, 70, 50, 0.85, false)
+        };
+        var req = Request(_charB, FaceTargetJson(_facesKey, 1, _charB));
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.FacesTooClose);
+        result.Error.Should().Be("Лицо 1: Лица стоят слишком близко — закрасьте лицо кистью.");
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(1);
+        body.Code.Should().Be(ImageEditErrorCodes.FacesTooClose);
+    }
+
+    // «Персонаж «{slug}» не найден»: текст называет слаг (имени нет — персонаж не найден),
+    // а тело несёт номер запрошенного лица. Мутация «не передавать номер» → красный
+    [Fact]
+    public async Task Персонаж_не_найден_несёт_face_И_слаг()
+    {
+        var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
+        var req = Request(null, FaceTargetJson(_facesKey, 1, "no-such-char"));
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+
+        result.Value.Should().BeNull();
+        result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        result.Error.Should().Be("Персонаж «no-such-char» не найден");
+        var body = result.Payload.Should().BeOfType<FaceRefusalResponse>().Subject;
+        body.Face.Should().Be(1);
+        body.Code.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.Error.Should().Be(result.Error);
     }
 
     // ── ТЕСТ ШВА (ключевой) ───────────────────────────────────────────────────────

@@ -394,9 +394,10 @@ public class FaceTargetLaunchHttpTests : IDisposable
         factory.Dispose();
     }
 
-    // Отказ без привязки к лицу (лица 3 нет в списке): тело прежнее {error, code}, без face
+    // «Лицо 3 не найдено» (лицо 3 нет в списке): отказ привязан к запрошенному лицу — тело
+    // несёт face = 3. Мутация «не передавать номер» (отказ без Payload) → поля face нет, тест красный
     [Fact]
-    public async Task Отказ_без_привязки_к_лицу_без_face()
+    public async Task Лицо_не_найдено_несёт_face_3()
     {
         SetFlag(true);
         var resp = await Start(FaceTargetJson(_facesKey, 3, _charSlug));
@@ -404,8 +405,56 @@ public class FaceTargetLaunchHttpTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
         var body = await Json(resp);
         body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
-        body.TryGetProperty("face", out _).Should().BeFalse();
-        body.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(["error", "code"]);
+        body.GetProperty("face").GetInt32().Should().Be(3);
+        body.GetProperty("error").GetString().Should().Contain("3");
+        body.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(["error", "code", "face"]);
+    }
+
+    // «Персонаж «{slug}» не найден»: HTTP-тело несёт face запрошенного лица (ADR-028, этап 3)
+    [Fact]
+    public async Task Персонаж_не_найден_несёт_face()
+    {
+        var factory = new TestWebApplicationFactory { UseFrontend = false };
+        factory.ExtraServices = services =>
+        {
+            services.AddSingleton<IImageEditor>(new FakeImageEditor("local", models: FakeImageEditor.Model("m")));
+            services.RemoveAll<ILocalImageMedia>();
+            services.AddSingleton<ILocalImageMedia>(new OkMedia());
+            services.AddSingleton<IImageEditJobs>(new FakeQuoteJobs());
+        };
+        var client = factory.CreateAuthenticatedClient();
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
+        var ownerId = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var chat = factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+        var store = factory.Services.GetRequiredService<ImageThreadStore>();
+        var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
+        var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(System.IO.Path.Combine(root, "test.png")));
+        factory.Services.GetRequiredService<UserStore>()
+            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
+
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent("q1"), "quoteId" },
+            { new StringContent("тест"), "prompt" },
+            { new StringContent(FaceTargetJson(facesKey, 1, "no-such-char")), "faceTarget" },
+            { new StringContent(chat.Id), "sessionId" },
+            { new StringContent(thread.Thread!.Id), "threadId" },
+        };
+        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
+        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        form.Add(png, "source", "test.png");
+        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("face").GetInt32().Should().Be(1);
+        body.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        body.GetProperty("error").GetString().Should().Be("Персонаж «no-such-char» не найден");
+        factory.Dispose();
     }
 
     // ── busy → 503 ───────────────────────────────────────────────────────────────

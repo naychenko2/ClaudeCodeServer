@@ -373,7 +373,8 @@ public sealed class ImageEditLaunchAssembler(
         {
             var face = result.Faces.FirstOrDefault(f => f.N == assignment.Face);
             if (face is null)
-                return Invalid($"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц");
+                return FaceFail(ImageEditErrorCodes.InvalidRequest,
+                    $"Лицо {assignment.Face} не найдено: на картинке {result.Faces.Count} лиц", assignment.Face);
             if (face.Small)
                 return FaceFail(ImageEditErrorCodes.InvalidRequest, $"Лицо {assignment.Face} слишком мелкое для подстановки персонажа", assignment.Face);
             var maskResult = maskBuilder.Build(result.Width, result.Height, result.Faces, assignment.Face, quote.InputCaps);
@@ -385,11 +386,12 @@ public sealed class ImageEditLaunchAssembler(
                     FaceMaskReason.OutOfFrame => ImageEditErrorCodes.FaceOutOfFrame,
                     _ => ImageEditErrorCodes.InvalidRequest,
                 };
-                return FaceFail(code, $"{assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}", assignment.Face);
+                return FaceFail(code, $"Лицо {assignment.Face}: {maskResult.Error ?? "Не удалось построить маску лица"}", assignment.Face);
             }
             var character = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, assignment.CharacterSlug);
             if (character is null)
-                return Invalid($"Персонаж {assignment.CharacterSlug} не найден");
+                return FaceFail(ImageEditErrorCodes.InvalidRequest,
+                    $"Персонаж «{assignment.CharacterSlug}» не найден", assignment.Face);
             var mask = new ImageBytes(maskResult.Png, "image/png");
             var prompt = $"Лицо человека в центре первой картинки заменить на лицо персонажа «{character.Ref.Name}», всё остальное оставить как есть.{extra}";
             passes.Add(new FacePass(

@@ -2,7 +2,7 @@
 //
 // Каркас (остров, шапку с иконкой+названием и крестик) рисует контейнер панели
 // рельса (PanelShell зоны, как у «Персонажей»/«Голосов»/«Команды»): панель
-// отдаёт ему шапку и рисует только переключатель «Текст · Медиа» и тело
+// отдаёт ему шапку и рисует только переключатель «LLM · Медиа» и тело
 // активной вкладки. Фон тела наследуется от контентной зоны контейнера.
 //
 // Переключатель: на десктопе (шапка есть) живёт в шапке через PanelHeaderSlot
@@ -40,7 +40,7 @@ import { useLocalModelMedia } from './useLocalModelMedia';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
 
-// Вкладка запоминается на устройство (localStorage): «Текст · Медиа» — выбор
+// Вкладка запоминается на устройство (localStorage): «LLM · Медиа» — выбор
 // человека, не состояние сессии
 const TAB_KEY = 'cc_local_model_tab';
 type Tab = 'text' | 'media';
@@ -48,14 +48,14 @@ function loadTab(): Tab {
   try { return localStorage.getItem(TAB_KEY) === 'media' ? 'media' : 'text'; } catch { return 'text'; }
 }
 
-// Переключатель «Текст · Медиа»: InlineSegmented, активный C.accentLight/C.accent
+// Переключатель «LLM · Медиа»: InlineSegmented, активный C.accentLight/C.accent
 function TabSwitch({ value, onChange, isMobile }: { value: Tab; onChange: (t: Tab) => void; isMobile: boolean }) {
   return (
     <InlineSegmented<Tab>
       value={value}
       isMobile={isMobile}
       options={[
-        { value: 'text', label: 'Текст', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+        { value: 'text', label: 'LLM', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
         { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
       ]}
       onChange={onChange}
@@ -80,7 +80,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   }, []);
 
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
-  // «Текст» — stats, «Медиа» — media; переключение — немедленный снимок.
+  // «LLM» — stats, «Медиа» — media; переключение — немедленный снимок.
   const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text');
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
 

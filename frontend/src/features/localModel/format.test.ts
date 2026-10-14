@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clamp01, formatGpuMem, formatPerc, formatPower, formatSince, formatTps,
-  gpuLabel, gpuOrdinal, whoRows,
+  gpuCountLabel, gpuLabel, gpuOrdinal, whoRows,
 } from './format';
 
 describe('formatTps: ток/с', () => {
@@ -72,6 +72,20 @@ describe('gpuLabel / gpuOrdinal: подписи карт', () => {
   it('«карта N из M»', () => {
     expect(gpuOrdinal(0, 2)).toBe('карта 0 из 2');
     expect(gpuOrdinal(1, 2)).toBe('карта 1 из 2');
+  });
+});
+
+describe('gpuCountLabel: склонение числа видеокарт', () => {
+  it('1 → «1 карта», 2 → «2 карты», 5 → «5 карт»', () => {
+    expect(gpuCountLabel(1)).toBe('1 карта');
+    expect(gpuCountLabel(2)).toBe('2 карты');
+    expect(gpuCountLabel(5)).toBe('5 карт');
+  });
+  it('русские формы: 21 → «21 карта», 22 → «22 карты», 25 → «25 карт», 11 → «11 карт»', () => {
+    expect(gpuCountLabel(21)).toBe('21 карта');
+    expect(gpuCountLabel(22)).toBe('22 карты');
+    expect(gpuCountLabel(25)).toBe('25 карт');
+    expect(gpuCountLabel(11)).toBe('11 карт');
   });
 });
 

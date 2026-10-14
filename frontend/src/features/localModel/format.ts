@@ -1,4 +1,4 @@
-// Чистые функции форматирования вкладки «Текст»: юнит-тесты без React и DOM.
+// Чистые функции форматирования вкладки «LLM»: юнит-тесты без React и DOM.
 // Все подписи — по спецификации макета (docs/mockups/local-model-stats-panel.html,
 // раздел «Спецификация для Киры»): единицы, запятая как десятичный разделитель,
 // «—» когда движок значение не отдал.
@@ -64,6 +64,16 @@ export function gpuLabel(name: string, kind: 'text' | 'media'): string {
 // «карта 0 из 2»
 export function gpuOrdinal(index: number, total: number): string {
   return `карта ${index} из ${total}`;
+}
+
+// «1 карта / 2 карты / 5 карт» — русское склонение числа видеокарт
+export function gpuCountLabel(n: number): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return `${n} карт`;
+  if (last === 1) return `${n} карта`;
+  if (last >= 2 && last <= 4) return `${n} карты`;
+  return `${n} карт`;
 }
 
 // === Строки «Кто сейчас на модели» ===

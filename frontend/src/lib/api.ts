@@ -37,7 +37,10 @@ export interface LocalModelStats {
   running?: number;
   waiting?: number;
   othersCount?: number;
-  speed?: { genPerStream?: number; prefillPerStream?: number };
+  // genPerStream/prefillPerStream — сейчас, на поток (~60 с); avgGenTps/avgPromptTps —
+  // средняя на поток за окно графика (window): Δсчётчика/Δсуммы времени, простой не входит;
+  // null — нет данных за окно или рестарт счётчика
+  speed?: { genPerStream?: number; prefillPerStream?: number; avgGenTps?: number | null; avgPromptTps?: number | null };
   // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
   // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
   // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;
@@ -45,6 +48,9 @@ export interface LocalModelStats {
   kv?: { usagePerc?: number; ramTierPerc?: number; prefixHitPerc?: number; ramTierHitPerc?: number; preemptions15m?: number };
   gpus?: { index: number; name: string; utilPerc?: number; memUsedMb?: number; memTotalMb?: number; tempC?: number; powerW?: number; powerLimitW?: number }[] | null;
   history?: { t: number; genThroughput?: number; waiting?: number; running?: number }[];
+  // tensorParallel — необязательное: число GPU в tensor-parallel (Денис добавляет
+  // следующим); нет поля — TP = число карт (gpus.length)
+  tensorParallel?: number;
   // chats: «кто сейчас на модели». own — чат текущего пользователя (клик открывает его);
   // чужие — строка «Чат другого пользователя» без названия и перехода. Бэк отдаёт
   // только projectId (и только для своих чатов) — имя проекта резолвит фронт из

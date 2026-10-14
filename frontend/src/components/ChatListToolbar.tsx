@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, List, ListTree, Check,
+  Plus, CalendarDays, Tags, Layers, List, Check,
   ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
   SlidersHorizontal, Archive,
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
-import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader } from './ui';
+import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader, usePanelElement, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FilterBar } from './FilterBar';
 import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder } from '../lib/chatFilters';
 
 // === Однострочный тулбар списка чатов (макет chat-unified-view, вариант А) ===
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
-// иерархия → архив. Поиска здесь нет — он первой секцией поповера фильтров.
+// архив. Список всегда деревом — переключателя иерархии нет. Поиска здесь нет — он первой секцией поповера фильтров.
 // «Архивные» — не фильтр, а РЕЖИМ списка (ось filters.archivedOnly): включён — видно
 // только архивные чаты, поэтому переключатель стоит рядом с осями вида, а не в поповере.
 // Ступени по ширине панели (ResizeObserver):
@@ -27,6 +27,8 @@ import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder
 const GROUP_BY_META: Record<ChatGroupBy, { label: string; title: string; Icon: typeof CalendarDays }> = {
   days: { label: 'Дни', title: 'Группировка по дням', Icon: CalendarDays },
   tags: { label: 'Теги', title: 'Группировка по тегам', Icon: Tags },
+  // Темы чатов: опцию в groupByOptions передаёт только список проекта
+  subjects: { label: 'Темы', title: 'Группировка по темам', Icon: Layers },
   none: { label: 'Без', title: 'Без группировки', Icon: List },
 };
 
@@ -80,6 +82,69 @@ function SheetSec({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Кнопка-меню группировки: иконка = текущий режим, клик — меню режимов с галкой.
+// Одна реализация на compact-ступень сайдбара и на шапку карточки.
+function GroupByMenuButton({ size, value, options, onChange }: {
+  size: 'xs' | 'sm';
+  value: ChatGroupBy;
+  options: ChatGroupBy[];
+  onChange: (v: ChatGroupBy) => void;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Рамка карточки на момент открытия: меню кнопки справа в узкой панели иначе
+  // свисало за её левую кромку
+  const [boundary, setBoundary] = useState<DOMRect | null>(null);
+  const panel = usePanelElement();
+  // Меню живёт порталом в body: курсор уходит с карточки, и шапка гасила бы кнопку
+  // вместе с остальными значками — меню повисало без якоря
+  usePanelHeaderHold(!!anchor);
+  const meta = GROUP_BY_META[value] ?? GROUP_BY_META.days;
+  return (
+    <>
+      <IconButton size={size}
+        active={!!anchor} expanded={!!anchor}
+        title={`Группировка: ${value === 'none' ? 'без группировки' : meta.label} (сменить)`}
+        onClick={e => {
+          setBoundary(panel?.getBoundingClientRect() ?? null);
+          setAnchor(e.currentTarget.getBoundingClientRect());
+        }}>
+        <meta.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      {anchor && (
+        // Высота — от числа режимов: строка 38 + заголовок; четыре в 180 не влезали
+        <Menu anchor={anchor} boundary={boundary} minWidth={230} maxHeight={options.length * 38 + 40}
+          onClose={() => setAnchor(null)}>
+          <div style={{
+            padding: '7px 10px 3px', fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+          }}>
+            Группировка
+          </div>
+          {options.map(v => {
+            const m = GROUP_BY_META[v];
+            return (
+              <MenuItem
+                key={v}
+                icon={<m.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                onClick={() => { onChange(v); setAnchor(null); }}
+                label={
+                  <span style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    flex: 1, gap: SP.sm,
+                  }}>
+                    {v === 'none' ? 'Без группировки' : m.label}
+                    {v === value && <Check size={ICON_SIZE.xs} strokeWidth={2.4} style={{ color: C.accent, flexShrink: 0 }} />}
+                  </span>
+                }
+              />
+            );
+          })}
+        </Menu>
+      )}
+    </>
+  );
+}
+
 export function ChatListToolbar({
   onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
   isMobile = false, groupByOptions = ['days', 'tags', 'none'],
@@ -102,7 +167,7 @@ export function ChatListToolbar({
   const tier: Tier = width >= 400 ? 'comfort' : width >= 260 ? 'cozy' : 'compact';
   const iconBtnSize = tier === 'comfort' ? 'md' : 'sm';
 
-  const { groupBy, sortOrder, hierarchy, archivedOnly } = filters;
+  const { groupBy, sortOrder, archivedOnly } = filters;
   // groupBy из хранилища может отсутствовать в groupByOptions (напр. 'tags' у
   // глобального списка после переезда чата) — PillSwitch без активного сегмента
   // не рисует пилюлю, это валидное состояние; первый же выбор всё чинит.
@@ -117,8 +182,6 @@ export function ChatListToolbar({
     };
   });
 
-  // Меню группировки на compact-ступени (иконка кнопки = текущий режим)
-  const [groupMenu, setGroupMenu] = useState<DOMRect | null>(null);
   // Мобильная шторка «Вид»
   const [viewSheet, setViewSheet] = useState(false);
 
@@ -144,7 +207,7 @@ export function ChatListToolbar({
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} isMobile triggerSize="lg"
         />
-        <IconButton size="lg" title="Вид: группировка, сортировка, иерархия, архивные"
+        <IconButton size="lg" title="Вид: группировка, сортировка, архивные"
           onClick={() => setViewSheet(true)}>
           <SlidersHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </IconButton>
@@ -160,11 +223,13 @@ export function ChatListToolbar({
             }
           >
             <SheetSec>Группировка</SheetSec>
+            {/* Четыре режима (с «Темами» в списке проекта) на 320 CSS подписями не влезают —
+                autoCompact, как у сортировки */}
             <PillSwitch
               value={groupBy}
               options={pillOptions}
               onChange={v => patch({ groupBy: v })}
-              fill isMobile
+              fill isMobile autoCompact={pillOptions.length > 3}
             />
             <SheetSec>Сортировка</SheetSec>
             {/* Четыре пункта в строку: autoCompact оставляет подпись активному,
@@ -184,17 +249,6 @@ export function ChatListToolbar({
               onChange={v => patch({ sortOrder: v })}
               fill isMobile autoCompact
             />
-            <SheetSec>Структура</SheetSec>
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              minHeight: 48, gap: SP.sm,
-            }}>
-              <span style={{ fontSize: FS.md, color: C.textPrimary, fontFamily: FONT.sans }}>
-                Иерархия (вложенные чаты)
-              </span>
-              <Toggle checked={hierarchy} onChange={v => patch({ hierarchy: v })}
-                ariaLabel="Иерархия (вложенные чаты)" />
-            </div>
             <SheetSec>Архив</SheetSec>
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -212,11 +266,12 @@ export function ChatListToolbar({
     );
   }
 
-  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [архив] [+ Чат] ===
+  // === Контролы в шапке карточки: [фильтр] [сортировка] [группировка] [архив] [+ Чат] ===
   // Ряд нейтральных иконок 24px, главное действие последним и залитым — общий
-  // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает и
-  // уехала секцией в поповер фильтров: из трёх осей вида она самая редкая, а
-  // фильтр, сортировка и иерархия остаются на виду одним кликом.
+  // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает —
+  // вместо неё та же кнопка-меню, что на compact-ступени (иконка = текущий режим),
+  // и это единственное место группировки в шапке — в поповере фильтров её нет.
+  // Кнопка стоит и в списке вне проекта: там два режима (Дни / Без).
   // «+ Чат» — в закреплённом слоте (pinned): нейтральные иконки проявляются по
   // наведению, а главное действие видно всегда.
   if (inHeader) {
@@ -226,18 +281,6 @@ export function ChatListToolbar({
         <FilterBar
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} triggerSize="xs"
-          grouping={{
-            value: groupBy,
-            options: groupByOptions.map(v => {
-              const m = GROUP_BY_META[v];
-              return {
-                value: v,
-                label: v === 'none' ? 'Без группировки' : m.label,
-                icon: <m.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-              };
-            }),
-            onChange: v => patch({ groupBy: v }),
-          }}
         />
         <IconButton
           size="xs"
@@ -247,14 +290,8 @@ export function ChatListToolbar({
         >
           <sort.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-        <IconButton
-          size="xs"
-          active={hierarchy}
-          title={`Иерархия: ${hierarchy ? 'вкл' : 'выкл'}`}
-          onClick={() => patch({ hierarchy: !hierarchy })}
-        >
-          <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        <GroupByMenuButton size="xs" value={groupBy} options={groupByOptions}
+          onChange={v => patch({ groupBy: v })} />
         <IconButton
           size="xs"
           active={archivedOnly}
@@ -280,7 +317,6 @@ export function ChatListToolbar({
   }
 
   // === Десктопные ступени (без шапки: сайдбар раздела «Чаты», dev-витрина) ===
-  const groupByMeta = GROUP_BY_META[groupBy] ?? GROUP_BY_META.days;
   return (
     <div ref={rootRef} style={{
       display: 'flex', alignItems: 'center', gap: tier === 'compact' ? 4 : 6,
@@ -301,42 +337,8 @@ export function ChatListToolbar({
 
       {/* Группировка: PillSwitch только иконками (comfort/cozy) или кнопка-меню на compact */}
       {tier === 'compact' ? (
-        <>
-          <IconButton size="sm" title={`Группировка: ${groupByMeta.label} (сменить)`}
-            onClick={e => setGroupMenu(e.currentTarget.getBoundingClientRect())}>
-            <groupByMeta.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          {groupMenu && (
-            <Menu anchor={groupMenu} minWidth={230} maxHeight={180} onClose={() => setGroupMenu(null)}>
-              <div style={{
-                padding: '7px 10px 3px', fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
-                textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
-              }}>
-                Группировка
-              </div>
-              {groupByOptions.map(v => {
-                const m = GROUP_BY_META[v];
-                const active = v === groupBy;
-                return (
-                  <MenuItem
-                    key={v}
-                    icon={<m.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-                    onClick={() => { patch({ groupBy: v }); setGroupMenu(null); }}
-                    label={
-                      <span style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        flex: 1, gap: SP.sm,
-                      }}>
-                        {v === 'none' ? 'Без группировки' : m.label}
-                        {active && <Check size={ICON_SIZE.xs} strokeWidth={2.4} style={{ color: C.accent, flexShrink: 0 }} />}
-                      </span>
-                    }
-                  />
-                );
-              })}
-            </Menu>
-          )}
-        </>
+        <GroupByMenuButton size="sm" value={groupBy} options={groupByOptions}
+          onChange={v => patch({ groupBy: v })} />
       ) : (
         <PillSwitch
           value={groupBy}
@@ -359,14 +361,6 @@ export function ChatListToolbar({
         onClick={() => patch({ sortOrder: nextSortOrder(sortOrder) })}
       >
         <sort.Icon size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      </IconButton>
-      <IconButton
-        size={iconBtnSize}
-        active={hierarchy}
-        title={`Иерархия: ${hierarchy ? 'вкл' : 'выкл'}`}
-        onClick={() => patch({ hierarchy: !hierarchy })}
-      >
-        <ListTree size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
       <IconButton
         size={iconBtnSize}

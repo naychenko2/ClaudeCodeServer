@@ -84,6 +84,33 @@ public class ChatHistoryService
         return null;
     }
 
+    // Реплики ЧЕЛОВЕКА для разбора чатов по темам: первые first и
+    // последние last сообщения, которые владелец написал сам — без ответов ассистента, вывода
+    // инструментов, вложений, директив цикла, авто-промптов задач и сообщений от агентов.
+    // Без бэкфилла стоимостей и прочих побочек GetHistoryAsync: только чтение файла.
+    // maxChars — грубая обрезка каждой реплики (окончательную делает сборщик промпта).
+    public async Task<IReadOnlyList<string>> ReadHumanSnippetsAsync(string claudeSessionId,
+        int first = 1, int last = 2, int maxChars = 400)
+    {
+        if (string.IsNullOrWhiteSpace(claudeSessionId)) return [];
+        var human = (await LoadAsync(claudeSessionId))
+            .OfType<StoredUserMessage>()
+            .Where(IsHumanMessage)
+            .Select(m => m.Text.Trim())
+            .Where(t => t.Length > 0)
+            .ToList();
+        if (human.Count <= first + last)
+            return human.Select(t => Cut(t, maxChars)).ToList();
+        return human.Take(first).Concat(human.TakeLast(last)).Select(t => Cut(t, maxChars)).ToList();
+    }
+
+    // Сообщение написал сам человек, а не автоматика
+    internal static bool IsHumanMessage(StoredUserMessage m) =>
+        m.ViaAgent != true && m.SystemDirective != true && m.Auto != true
+        && m.SenderPersonaId is null && m.StaffNote is null && m.DelegationTaskId is null;
+
+    private static string Cut(string text, int max) => text.Length <= max ? text : text[..max];
+
     // tool_result фонового запуска — квитанция CLI, а не ответ (зеркало isAsyncLaunchAck
     // на фронте + маркеры workflow/resume)
     private static bool IsBgLaunchAck(string result) =>

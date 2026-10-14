@@ -19,16 +19,23 @@ globalThis.localStorage = {
 
 beforeEach(() => store.clear());
 
+describe('loadChatFilters: groupBy=subjects (темы чатов)', () => {
+  it('значение переживает запись и чтение — оно в белом списке normalize', () => {
+    persistChatFilters('p-subj', { ...loadChatFilters('p-subj'), groupBy: 'subjects' });
+    expect(loadChatFilters('p-subj').groupBy).toBe('subjects');
+  });
+});
+
 describe('loadChatFilters: оси вида и миграция cc_chat_view', () => {
-  it('дефолт: groupBy=days, sortOrder=newest, hierarchy=false', () => {
+  it('дефолт: groupBy=days, sortOrder=newest, hierarchy=true (список всегда деревом)', () => {
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('days');
     expect(f.sortOrder).toBe('newest');
-    expect(f.hierarchy).toBe(false);
+    expect(f.hierarchy).toBe(true);
   });
 
-  it('сохранённые оси читаются как есть', () => {
-    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'tags', sortOrder: 'oldest', hierarchy: true }));
+  it('сохранённые оси читаются как есть, выключенная иерархия игнорируется', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'tags', sortOrder: 'oldest', hierarchy: false }));
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('tags');
     expect(f.sortOrder).toBe('oldest');
@@ -58,10 +65,11 @@ describe('loadChatFilters: оси вида и миграция cc_chat_view', ()
   it('после persist выбор читается из нового формата, legacy-ключ удалён', () => {
     store.set('cc_chat_view:p1', 'tree');
     const f = loadChatFilters('p1');
-    // Пользователь выключил дерево — patch персистит и снимает legacy-ключ
+    // Запись с выключенным деревом (сохранённая до снятия переключателя) — legacy-ключ
+    // снимается, а сама ось при чтении всё равно дерево
     persistChatFilters('p1', { ...f, hierarchy: false });
     expect(store.has('cc_chat_view:p1')).toBe(false);
-    expect(loadChatFilters('p1').hierarchy).toBe(false);
+    expect(loadChatFilters('p1').hierarchy).toBe(true);
   });
 
   it('запись старого формата (без осей): повторный load не теряет мигрированные оси', () => {
@@ -77,14 +85,14 @@ describe('loadChatFilters: оси вида и миграция cc_chat_view', ()
     store.set('cc_chat_view:p1', 'tags');
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('tags');
-    expect(f.hierarchy).toBe(false);
+    expect(f.hierarchy).toBe(true);
   });
 
   it('legacy "flat" ⇒ дефолтные оси', () => {
     store.set('cc_chat_view:p1', 'flat');
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('days');
-    expect(f.hierarchy).toBe(false);
+    expect(f.hierarchy).toBe(true);
   });
 
   it('legacy-ключ применяется и к записи фильтров старого формата (без осей)', () => {
@@ -101,7 +109,8 @@ describe('loadChatFilters: оси вида и миграция cc_chat_view', ()
     store.set('cc_chat_view:p1', 'tree');
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('none');
-    expect(f.hierarchy).toBe(false);
+    // Ось иерархии больше не переключается — из записи не читается
+    expect(f.hierarchy).toBe(true);
   });
 
   it('значения оси по созданию читаются как есть', () => {
@@ -124,7 +133,7 @@ describe('loadChatFilters: оси вида и миграция cc_chat_view', ()
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('days');
     expect(f.sortOrder).toBe('newest');
-    expect(f.hierarchy).toBe(false);
+    expect(f.hierarchy).toBe(true);
   });
 });
 

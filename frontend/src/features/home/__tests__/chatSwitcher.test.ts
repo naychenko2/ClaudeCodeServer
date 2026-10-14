@@ -40,4 +40,14 @@ describe('switcherSections', () => {
     expect(new Set(r.recent.map(x => x.id)).size).toBe(10);
     expect(r.recent.some(x => x.id === 'arch')).toBe(false);
   });
+
+  it('дочерние чаты не показываются, закреплённый дочерний остаётся', () => {
+    const r = switcherSections({
+      active: [s('child-live', 9, { status: 'working', parentSessionId: 'root' })],
+      recent: [s('root', 5), s('child', 4, { parentSessionId: 'root' }),
+        s('child-pin', 3, { parentSessionId: 'root', isPinned: true })],
+    });
+    expect(r.recent.map(x => x.id)).toEqual(['root']);
+    expect(r.pinned.map(x => x.id)).toEqual(['child-pin']);
+  });
 });

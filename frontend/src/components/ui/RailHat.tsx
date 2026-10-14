@@ -33,11 +33,15 @@ import { RAIL_W } from './RailCapsule';
 // схлопнутую капсулу).
 export const RAIL_HAT_H = 13;
 
-export function RailHat({ side, label, title, collapse, railHover }: {
+export function RailHat({ side, label, labelSize = 7, title, collapse, railHover }: {
   // Сторона окна: в неё же выезжает плашка с полным названием
   side: 'left' | 'right';
   // Подпись в самой шляпке — капс до семи символов (см. замер выше)
   label: string;
+  // Кегль подписи. Семь букв («Проекты») на 7px входят впритык и на деле
+  // упираются в края капсулы — такой подписи кегль снижают на пункт. Высота
+  // строки остаётся 7px, так что RAIL_HAT_H от кегля не зависит.
+  labelSize?: number;
   // Полное название рельсы для плашки по наведению. Шести-семи букв капса на
   // объяснение не хватает, а плашка — та же, что подписывает кнопки рельсы, и
   // места в ней сколько угодно. Не задано — плашки нет вовсе.
@@ -113,7 +117,7 @@ export function RailHat({ side, label, title, collapse, railHover }: {
       <div style={{
         height: 7, display: 'flex', alignItems: 'center', justifyContent: 'center',
         transform: 'translateY(2px)',
-        fontFamily: FONT.sans, fontSize: 7, fontWeight: 700, lineHeight: '7px',
+        fontFamily: FONT.sans, fontSize: labelSize, fontWeight: 700, lineHeight: '7px',
         letterSpacing: '0.03em', textTransform: 'uppercase',
         // Под курсором ярлык оживает: в покое он почти растворён (smoke), и без
         // отклика непонятно, что на него вообще можно навести

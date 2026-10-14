@@ -72,7 +72,9 @@ public class HomeController(SessionManager sessions, ProjectManager projects, IT
         s.LastReadAt,
         // Готовый признак архива — считает СЕРВЕР: сравнение updatedAt <= archivedAt на
         // фронте было бы второй копией правила плюс миганием на равных таймстемпах
-        s.IsArchived);
+        s.IsArchived,
+        // Родитель по той же связи, что у дерева чатов: переключатель показывает только корни
+        SessionTaskLinks.ParentSessionId(s, tasks));
 }
 
 // Строка сводки: сессия + имя проекта (чтобы фронт не тянул список проектов отдельно).
@@ -101,4 +103,6 @@ public record HomeSessionDto(
     DateTime? LastReadAt = null,
     // В архиве ли чат — готовый bool с сервера (ветку active сервер не режет, фронт
     // применяет matchChatFilter к HomeSessionInfo). Дефолт — по той же причине
-    bool Archived = false);
+    bool Archived = false,
+    // Родительский чат (SessionTaskLinks.ParentSessionId); null — корневой чат
+    string? ParentSessionId = null);

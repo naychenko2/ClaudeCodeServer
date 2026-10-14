@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
@@ -37,7 +37,7 @@ import { C, FONT, FS, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } fro
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { Badge, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
+import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -110,34 +110,47 @@ const badgeSectionStyle: React.CSSProperties = {
   textTransform: 'uppercase', letterSpacing: 0.4, margin: '10px 0 4px',
 };
 
-// Строка одного окна лимита в выпадашке (пип кольца + метка + бар + % + сброс).
-// pip — мини-иконка кольца этой строки; у окон без кольца — пустое место той же ширины
+// Строка-«метр» поповера кольцевой пилюли: пип кольца + метка + значение справа, под ними
+// полоса и приглушённые подписи. Одна грамматика у контекста и у окон лимитов — строки
+// поповера идут в порядке колец пилюли. pct undefined — полосы нет (нет оценки/утилизации)
+const meterSubStyle: React.CSSProperties = { fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 };
+function MeterRow({ pip, label, value, valueColor, pct, fill, sub }: {
+  pip?: ReactNode; label: ReactNode; value: ReactNode; valueColor: string;
+  pct?: number; fill: string; sub?: ReactNode;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.xs + 2, padding: `${SP.xs}px 0` }}>
+      <span style={{ display: 'flex', width: 12, height: 12, flexShrink: 0, marginTop: SP.xxs }}>{pip}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: SP.sm }}>
+          <span style={{ fontFamily: FONT.sans, fontSize: FS.base, color: C.textSecondary }}>{label}</span>
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 700, color: valueColor, whiteSpace: 'nowrap' }}>{value}</span>
+        </div>
+        {pct !== undefined && (
+          <div style={{ height: 4, borderRadius: R.max, background: C.track, overflow: 'hidden', margin: `${SP.xs}px 0 ${SP.xxs}px` }}>
+            <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: fill }} />
+          </div>
+        )}
+        {sub}
+      </div>
+    </div>
+  );
+}
+
+// Строка одного окна лимита в выпадашке. pip — мини-иконка кольца этой строки;
+// у окон без кольца — пустое место той же ширины
 function RateRow({ w, pip }: { w: RateWindow; pip?: ReactNode }) {
   const c = RATE_COLORS[w.level];
   const reset = fmtReset(w.resetsAt);
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.xs + 2, padding: '3px 0' }}>
-      <span style={{ display: 'flex', width: 12, height: 12, flexShrink: 0, marginTop: SP.xxs }}>{pip}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary }}>
-            {windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}
-          </span>
-          {/* Процента нет (событие хода без utilization) — не «0%», а «в пределах нормы», как на экране «Использование» */}
-          <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>
-            {w.stale ? '—' : w.hasUtil ? `${w.pct}%${w.isUsingOverage ? '+' : ''}` : 'в пределах нормы'}
-          </span>
-        </div>
-        {!w.stale && w.hasUtil && (
-          <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
-            <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
-          </div>
-        )}
-        {w.stale
-          ? <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>данные устарели</div>
-          : reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
-      </div>
-    </div>
+    <MeterRow pip={pip} fill={c.fill} valueColor={c.text}
+      label={<>{windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}</>}
+      // Процента нет (событие хода без utilization) — не «0%», а «в пределах нормы», как на экране «Использование»
+      value={w.stale ? '—' : w.hasUtil ? `${w.pct}%${w.isUsingOverage ? '+' : ''}` : 'в пределах нормы'}
+      pct={!w.stale && w.hasUtil ? w.pct : undefined}
+      sub={w.stale
+        ? <div style={meterSubStyle}>данные устарели</div>
+        : reset && <div style={meterSubStyle}>сброс {reset}</div>} />
   );
 }
 
@@ -237,16 +250,17 @@ function hasClaudeCostInfo(stats: CostStats, windows: RateWindow[]): boolean {
   return stats.cost > 0 || !!worstWindow(windows);
 }
 
-// Тело поповера стоимости Claude (разбивка токенов/ходов + лимиты подписки + переключатель оплаты).
-// Вынесено отдельно: секция поповера кольцевой пилюли.
-function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
-  stats: CostStats; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void; windows: RateWindow[];
+// Тело поповера стоимости Claude (лимиты подписки + свёрнутая разбивка токенов/ходов).
+// Вынесено отдельно: секция поповера кольцевой пилюли. Режим оплаты здесь только читается —
+// переключатель живёт в «Модели и расход» (настройка серверная, общая на всех).
+function ClaudeCostPopoverBody({ stats, billing, windows }: {
+  stats: CostStats; billing: ClaudeBilling; windows: RateWindow[];
 }) {
   const sub = billing === 'subscription';
   const [costOpen, setCostOpen] = useState(false);
   const costBody = <>
     {sub && (
-      <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 6, lineHeight: 1.45 }}>
+      <div style={{ ...meterSubStyle, margin: `${SP.xxs}px 0 ${SP.xs}px` }}>
         Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
       </div>
     )}
@@ -259,18 +273,15 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
       <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
     </>}
   </>;
-  // Есть лимиты — они главное, идут первыми; расход по API-тарифу свёрнут внизу над
-  // чертой «Оплата». Лимитов нет (оплата по ключу) — расход и есть содержимое, без сворачивания
+  // Лимитов нет (оплата по ключу) — расход и есть содержимое, без сворачивания
   if (windows.length === 0) {
     return <>
       <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
       {costBody}
-      <BillingLine sub={sub} billing={billing} onBillingChange={onBillingChange} />
     </>;
   }
   return (
     <>
-      <div style={badgeTitleStyle}>Лимиты Claude</div>
       {/* Порядок — как у колец на пилюле (5 часов → неделя → по моделям), а не по
           проценту: иначе строки попапа не совпадали бы с кольцами и прыгали местами.
           Первые RING_WINDOWS окон — с пипом своего кольца (mid, inner), остальные без */}
@@ -279,47 +290,17 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
           <RateRow key={w.limitType} w={w}
             pip={i < RING_WINDOWS ? <RingPip slot={(i + 1) as 1 | 2} level={w.level} /> : undefined} />
         ))}
-      <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
+      {/* Расход по API-тарифу — справка, свёрнута одной строкой под лимитами; расхода нет — нет и строки */}
+      {stats.cost > 0 && <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
         style={{
-          ...badgeSectionStyle, display: 'flex', alignItems: 'center', gap: 4, width: '100%',
-          border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+          ...meterSubStyle, display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%',
+          marginTop: SP.xs, border: 'none', background: 'none', padding: 0, cursor: 'pointer',
         }}>
-        <ChevronRight size={12} strokeWidth={ICON_STROKE} style={{ transform: costOpen ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />
+        <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ transform: costOpen ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />
         {sub ? '≈ по API-тарифу' : 'Стоимость'}
-        {stats.cost > 0 && <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, textTransform: 'none' }}>{fmtUsd(stats.cost)}</span>}
-      </button>
-      {costOpen && costBody}
-      <BillingLine sub={sub} billing={billing} onBillingChange={onBillingChange} />
-    </>
-  );
-}
-
-// Строка «Оплата: Подписка | API-ключ» под чертой в конце поповера Claude
-function BillingLine({ sub, billing, onBillingChange }: {
-  sub: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
-}) {
-  return (
-    <>
-      <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.bgInset}`, display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: 11 }}>
-        <span style={{ color: C.textMuted }}>Оплата:</span>
-        {/* Настройка серверная, общая для всех — не-админу показываем режим без переключателя */}
-        {!onBillingChange ? (
-          <span style={{ color: C.textSecondary, fontWeight: 600 }}>
-            {sub ? 'Подписка' : 'API-ключ'}
-          </span>
-        ) : (['subscription', 'api'] as ClaudeBilling[]).map(b => (
-          <button key={b} type="button" onClick={() => onBillingChange(b)}
-            style={{
-              padding: '2px 9px', borderRadius: 6, cursor: 'pointer', fontSize: 11,
-              fontFamily: FONT.sans, fontWeight: billing === b ? 700 : 500,
-              border: `1px solid ${billing === b ? C.accent : C.border}`,
-              background: billing === b ? C.accentLight : C.bgWhite,
-              color: billing === b ? C.accent : C.textMuted,
-            }}>
-            {b === 'subscription' ? 'Подписка' : 'API-ключ'}
-          </button>
-        ))}
-      </div>
+        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono }}>{fmtUsd(stats.cost)}</span>
+      </button>}
+      {costOpen && stats.cost > 0 && costBody}
     </>
   );
 }
@@ -337,28 +318,45 @@ const RING_C = RING_BOX / 2;
 const RING_GEOMETRY = [9, 6, 3].map(r => ({ r, L: 2 * Math.PI * r }));
 const RING_STROKE = 2;
 
-// Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся
-function RingCircle({ r, stroke, dash }: { r: number; stroke: string; dash?: string }) {
+// Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся.
+// round — скруглённые концы дуги; animate — дуга плавно дорастает до нового значения
+function RingCircle({ r, stroke, dash, round, animate }: { r: number; stroke: string; dash?: string; round?: boolean; animate?: boolean }) {
   return (
-    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap="butt"
-      strokeDasharray={dash} style={{ stroke }} />
+    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap={round ? 'round' : 'butt'}
+      strokeDasharray={dash} style={{ stroke, transition: animate ? 'stroke-dasharray 600ms cubic-bezier(.2,.8,.2,1)' : undefined }} />
   );
 }
+
+// Дуга со скруглёнными концами: каждый конец выступает на полтолщины, поэтому штрих
+// короче на толщину — видимая длина остаётся ровно arc (и минимум 3px из ringArcLength)
+const roundArcDash = (arc: number, L: number) => `${Math.max(arc - RING_STROKE, 0.01)} ${L}`;
+
+const levelRank = (l: RateWindow['level']) => (l === 'danger' ? 2 : l === 'warn' ? 1 : 0);
 
 // Иконка пилюли 20×20. slots — [outer, mid, inner]; undefined — слота нет (не рисуется),
 // pct null — только дорожка. spinOuter — идёт сжатие: внешнее кольцо становится спиннером.
 // forceReducedMotion — только для витрины (5.2r), в продукте решает настройка ОС.
 // Обёртка нулевой высоты: иконка центрируется по строке текста, но высоту пилюли не
 // задаёт — её задаёт текст, ровно как у соседних пилюль, и ряд стоит на одной высоте
-function RingIcon({ slots, spinOuter, forceReducedMotion }: {
+function RingIcon({ slots, spinOuter, forceReducedMotion, resetKey }: {
   slots: [RingSlot, RingSlot | undefined, RingSlot | undefined]; spinOuter?: boolean; forceReducedMotion?: boolean;
+  resetKey?: string;
 }) {
   const reducedMotion = usePrefersReducedMotion() || !!forceReducedMotion;
   const outer = RING_GEOMETRY[0];
+  // Толчок — только когда уровень вырос в ЭТОМ чате; смена чата лишь запоминает новый уровень
+  const rank = Math.max(...slots.map(s => (s && s.pct !== null ? levelRank(s.level) : 0)));
+  const prev = useRef({ rank, resetKey });
+  const [bump, setBump] = useState(false);
+  useEffect(() => {
+    if (rank > prev.current.rank && resetKey === prev.current.resetKey && !reducedMotion) setBump(true);
+    prev.current = { rank, resetKey };
+  }, [rank, resetKey, reducedMotion]);
   return (
     <span style={{ display: 'flex', alignItems: 'center', width: RING_BOX, height: 0, flexShrink: 0 }}>
     <svg width={RING_BOX} height={RING_BOX} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
-      style={{ flexShrink: 0, display: 'block' }}>
+      onAnimationEnd={() => setBump(false)}
+      style={{ flexShrink: 0, display: 'block', transformOrigin: 'center', animation: bump ? 'cc-ring-bump 500ms ease-out' : undefined }}>
       {/* Старт дуг сверху, по часовой */}
       <g transform={`rotate(-90 ${RING_C} ${RING_C})`}>
         {slots.map((s, i) => {
@@ -368,7 +366,7 @@ function RingIcon({ slots, spinOuter, forceReducedMotion }: {
           return (
             <g key={i}>
               <RingCircle r={r} stroke={C.progressTrack} />
-              {arc > 0 && <RingCircle r={r} stroke={RATE_COLORS[s.level].fill} dash={`${arc} ${L}`} />}
+              {arc > 0 && <RingCircle r={r} stroke={RATE_COLORS[s.level].fill} dash={roundArcDash(arc, L)} round animate={!reducedMotion} />}
             </g>
           );
         })}
@@ -378,7 +376,7 @@ function RingIcon({ slots, spinOuter, forceReducedMotion }: {
         // поверх пунктирной дорожки, чтобы «идёт работа» читалось и без анимации
         <g style={{ transformOrigin: `${RING_C}px ${RING_C}px`, animation: reducedMotion ? undefined : 'cc-spin 0.9s linear infinite' }}>
           <RingCircle r={outer.r} stroke={C.progressTrack} dash={reducedMotion ? '2 2' : undefined} />
-          <RingCircle r={outer.r} stroke={C.accent} dash={`${outer.L * 0.25} ${outer.L}`} />
+          <RingCircle r={outer.r} stroke={C.accent} dash={roundArcDash(outer.L * 0.25, outer.L)} round />
         </g>
       )}
     </svg>
@@ -490,15 +488,50 @@ function hasContextInfo(estimate: ContextEstimate): boolean {
   return estimate.pct !== undefined || estimate.fresh;
 }
 
-// Тело поповера контекста (детали заполнения + «Сжать контекст» + «Настроить пороги»).
-// Вынесено отдельно: секция поповера кольцевой пилюли; pip — метка внешнего кольца у заголовка.
-function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент', pip }: {
+// Строка контекста в поповере кольцевой пилюли — такая же, как строки окон лимитов
+// (внешнее кольцо → первая строка). Токены, модель и итоги сжатия — приглушёнными подписями.
+function ContextRow({ estimate, assistantName = 'Ассистент' }: { estimate: ContextEstimate; assistantName?: string }) {
+  const c = RATE_COLORS[estimate.level];
+  const hasPct = estimate.pct !== undefined;
+  return (
+    <MeterRow pip={<RingPip slot={0} level={estimate.level} />} label="Контекст"
+      fill={c.fill} valueColor={hasPct ? c.text : C.textMuted}
+      value={hasPct ? `${estimate.pct}%` : estimate.fresh ? 'сжат' : '—'}
+      pct={estimate.pct}
+      sub={<>
+        <div style={meterSubStyle}>
+          {hasPct
+            ? `${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}${estimate.model ? ` · ${modelLabel(estimate.model)}` : ''}`
+            : estimate.fresh
+              ? 'Точная оценка появится после следующего хода'
+              : `${assistantName}: оценка появится после первого ответа`}
+        </div>
+        {estimate.lastCompact?.post !== undefined && (
+          // Итог последнего сжатия — про объём ИСТОРИИ, а не про окно (системный промпт и
+          // инструменты в это число не входят)
+          <div style={meterSubStyle}>
+            сжатие истории {estimate.lastCompact.pre !== undefined
+              ? `${fmtTokens(estimate.lastCompact.pre)} → ${fmtTokens(estimate.lastCompact.post)}`
+              : fmtTokens(estimate.lastCompact.post)}
+          </div>
+        )}
+        {estimate.pruned && (
+          // Итог обрезок прокси локальной модели за чат: каждый сдвиг отмечен карточкой в
+          // ленте, здесь — сумма
+          <div style={meterSubStyle}>обрезка контекста {prunedSummaryText(estimate.pruned)}</div>
+        )}
+      </>} />
+  );
+}
+
+// Действия с контекстом — один ряд под чертой в конце поповера: «Сжать контекст» и «Пороги».
+// Пояснение к сжатию — подсказкой кнопки, а не абзацем над ней.
+function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент' }: {
   estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
-  assistantName?: string; pip?: ReactNode;
+  assistantName?: string;
 }) {
   const [showThresholds, setShowThresholds] = useState(false);
-  const c = RATE_COLORS[estimate.level];
   const hasPct = estimate.pct !== undefined;
 
   // Кнопка сжатия недоступна: ход идёт, компакт идёт, оценки нет, контекст только что сжат,
@@ -506,77 +539,27 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
   const compactDisabled = isWaiting || isCompacting || !hasPct || estimate.fresh || !canCompact || !online;
   const compactTitle = !canCompact && !isWaiting && !isCompacting
     ? 'Пока нечего сжимать — слишком мало сообщений'
-    : isWaiting && !isCompacting ? 'Дождитесь завершения текущего хода' : undefined;
+    : isWaiting && !isCompacting ? 'Дождитесь завершения текущего хода'
+    : `Заменит историю кратким пересказом. При заполнении ${assistantName} сожмёт сам`;
 
   return (
-    <>
-      <div style={{ ...badgeTitleStyle, display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>{pip}Контекст сессии</div>
-      {hasPct ? (
-        <>
-          <div style={{ height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', margin: '2px 0 6px' }}>
-            <div style={{ width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
-          </div>
-          <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
-          <BadgeRow k="≈ Токенов" v={`${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}`} />
-          {estimate.model && <BadgeRow k="Модель" v={modelLabel(estimate.model)} />}
-        </>
-      ) : (
-        <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
-          {estimate.fresh
-            ? 'Контекст сжат — точная оценка появится после следующего хода.'
-            : `${assistantName}: оценка появится после первого ответа.`}
-        </div>
-      )}
-      {estimate.lastCompact?.post !== undefined && (
-        // Итог последнего сжатия — про объём ИСТОРИИ, а не про окно (системный промпт и
-        // инструменты в это число не входят), поэтому отдельной строкой рядом с пояснением ниже
-        <BadgeRow k="Сжатие истории" v={estimate.lastCompact.pre !== undefined
-          ? `${fmtTokens(estimate.lastCompact.pre)} → ${fmtTokens(estimate.lastCompact.post)}`
-          : fmtTokens(estimate.lastCompact.post)} />
-      )}
-      {estimate.pruned && (
-        // Итог обрезок прокси локальной модели за чат: сколько раз двигали контекст и
-        // сколько суммарно срезали. Каждый сдвиг отмечен карточкой в ленте, здесь — сумма
-        <BadgeRow k="Обрезка контекста" v={prunedSummaryText(estimate.pruned)} />
-      )}
-      <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-        Заменит историю кратким пересказом. При заполнении {assistantName} сожмёт сам.
-      </div>
+    <div style={{ marginTop: SP.sm, paddingTop: SP.sm, borderTop: `1px solid ${C.bgInset}` }}>
       {compactNote && (
-        <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>
+        <div style={{ ...meterSubStyle, marginBottom: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
           {compactNote}
         </div>
       )}
-      <button
-        type="button"
-        disabled={compactDisabled}
-        onClick={onCompact}
-        title={compactTitle}
-        style={{
-          marginTop: 10, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          padding: '6px 10px', borderRadius: 7, border: `1px solid ${compactDisabled ? C.border : C.borderLight}`,
-          background: C.bgWhite, cursor: compactDisabled ? 'default' : 'pointer',
-          fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-          color: compactDisabled ? C.textMuted : C.textHeading, opacity: compactDisabled ? 0.65 : 1,
-        }}
-      >
-        {isCompacting && <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
-        {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
-      </button>
-      <div style={{ marginTop: 8, textAlign: 'center' }}>
-        <button
-          type="button"
-          onClick={() => setShowThresholds(true)}
-          style={{
-            border: 'none', background: 'none', padding: 0, cursor: 'pointer',
-            fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, textDecoration: 'underline',
-          }}
-        >
-          Настроить пороги…
-        </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+        <Button variant="ghost" size="xs" disabled={compactDisabled} loading={isCompacting} onClick={onCompact} title={compactTitle}>
+          {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
+        </Button>
+        <Button variant="ghost" size="xs" onClick={() => setShowThresholds(true)} style={{ marginLeft: 'auto' }}
+          leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+          Пороги
+        </Button>
       </div>
       {showThresholds && <ContextThresholdsDialog onClose={() => setShowThresholds(false)} />}
-    </>
+    </div>
   );
 }
 
@@ -779,7 +762,7 @@ export function RingPillBadge(props: {
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean; assistantName: string;
   // стоимость
   isCliProvider: boolean; providerName: string; cost: CostStats; falCost: FalCostStats; glifCost: GlifGenStats;
-  balance: ProviderBalance | null; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
+  balance: ProviderBalance | null; billing: ClaudeBilling;
   windows: RateWindow[];
   // workflow (только мобила/планшет): прогресс фаз втягивается в эту же пилюлю
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
@@ -941,7 +924,7 @@ export function RingPillBadge(props: {
     <BadgeShell
       ring
       amount={<>
-        <RingIcon slots={slots} spinOuter={isCompacting} forceReducedMotion={props.forceReducedMotion} />
+        <RingIcon slots={slots} spinOuter={isCompacting} forceReducedMotion={props.forceReducedMotion} resetKey={props.resetKey} />
         <span>
           {apiCost && <>
             <span style={{ color: C.textSecondary }}>{fmtUsd(cost.cost)}</span>
@@ -985,19 +968,25 @@ export function RingPillBadge(props: {
           <BadgeRow k="Фаза" v={activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'} />
         </div>
       )}
-      {showCtx && (
-        <div style={(lmActive || wfActive) ? sectionDivider : undefined}>
-          <ContextPopoverBody {...props} pip={<RingPip slot={0} level={estimate.level} />} />
+      {/* Строки идут в порядке колец пилюли: контекст (внешнее) → окна лимитов. У Claude с
+          лимитами это один список без заголовков секций; у CLI-провайдера и оплаты по ключу
+          ниже идёт своя секция расхода. Контекст — ContextRow (кольцо Ctx со slot 0),
+          индикатор локальной модели (LocalModelPopoverBody) — отдельной секцией выше */}
+      {(showCtx || (showCost && !isCliProvider && windows.length > 0)) && (
+        <div style={wfActive ? sectionDivider : undefined}>
+          {showCtx && <ContextRow estimate={estimate} assistantName={props.assistantName} />}
+          {showCost && !isCliProvider && windows.length > 0 && <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} />}
         </div>
       )}
-      {showCost && (
-        <div style={(lmActive || wfActive || showCtx) ? sectionDivider : undefined}>
+      {showCost && (isCliProvider || windows.length === 0) && (
+        <div style={(wfActive || showCtx) ? sectionDivider : undefined}>
           {isCliProvider
             ? <ProviderCostPopoverBody providerName={providerName} stats={cost} balance={balance}
                 quotaPip={isQuota ? <RingPip slot={1} level={provLevel} /> : undefined} />
-            : <ClaudeCostPopoverBody stats={cost} billing={billing} onBillingChange={props.onBillingChange} windows={windows} />}
+            : <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} />}
         </div>
       )}
+      {showCtx && <ContextActions {...props} />}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />
@@ -1022,8 +1011,6 @@ interface ChatHeaderBarProps {
   falCost: FalCostStats;
   glifCost: GlifGenStats;
   billing: ClaudeBilling;
-  // Не задан — переключать нельзя (не админ): показывается только текущий режим
-  onBillingChange?: (b: ClaudeBilling) => void;
   rateWindows: RateWindow[];
   isMobile?: boolean;
   onBack?: () => void;
@@ -1171,7 +1158,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1602,7 +1589,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       canCompact={canCompact} compactNote={compactNote} onCompact={preview ? () => {} : onCompact}
       online={online} assistantName={asstName}
       isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
-      balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={limitWindows}
+      balance={provBalance} billing={billing} windows={limitWindows}
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
       sessionId={session.id}
@@ -1660,6 +1647,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     rename: online,
     pin: online && !session.projectId,
     tags: canTag,
+    // Тема чата в v1 меняется только из списка проекта (спека «Темы», §4)
+    subject: false,
     wall: !!onAddToWall,
     notify: online && isNotifySupported(),
     dossier: !!project && online,
@@ -1747,6 +1736,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         label: session.isPinned ? 'Открепить' : 'Закрепить',
       };
       case 'tags': return { icon: <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Теги чата', active: !!tagMenu };
+      // В шапке действие недоступно (headerActionAvailable.subject = false) — ветка для полноты switch
+      case 'subject': return { icon: <Layers size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Тема' };
       case 'wall': return { icon: <Columns3 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'На стену' };
       case 'notify': return {
         icon: notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,

@@ -47,6 +47,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // они уже сжаты до иконок → замер осциллирует. Эталон всегда полнотекстовый и вне потока.
   const measureRef = useRef<HTMLDivElement>(null);
   const [overflowCompact, setOverflowCompact] = useState(false);
+  const [hovered, setHovered] = useState<number | null>(null);
   // compact форсирует (мобила), autoCompact ДОБАВЛЯЕТ детект переполнения
   // (планшет — пока влезает полнотекст, при переполнении → иконки). Семантика
   // «||»: явное false от compact не блокирует autoCompact (старая версия через
@@ -236,8 +237,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
           style={{
             position: 'absolute', top: 3, bottom: 3,
             left: geom.left, width: geom.width,
-            background: hub ? C.navInk : TB.pillThumbBg,
-            boxShadow: hub ? SHADOW.card : TB.pillThumbShadow,
+            background: hub ? C.navActive : TB.pillThumbBg,
+            boxShadow: hub ? `${SHADOW.card}, inset 0 0 0 1px ${C.navActiveEdge}` : TB.pillThumbShadow,
             borderRadius: TB.pillRadius - 2,
             transition: drag ? 'none' : `left 0.32s ${PILL_EASE}, width 0.32s ${PILL_EASE}`,
             cursor: draggable ? (drag ? 'grabbing' : 'grab') : undefined,
@@ -267,6 +268,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         return (
           <button key={opt.value} ref={el => { btnRefs.current[i] = el; }}
             onClick={() => { if (suppressClick.current) return; onChange(opt.value); }}
+            onMouseEnter={hub ? () => setHovered(i) : undefined}
+            onMouseLeave={hub ? () => setHovered(h => (h === i ? null : h)) : undefined}
             aria-label={opt.label}
             title={iconsOnly ? (opt.title ?? opt.label) : undefined}
             style={{
@@ -280,9 +283,10 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
                 : isMobile ? TB.iconHitMobile : TB.iconHitDesktop,
               borderRadius: TB.pillRadius - 2, border: 'none', cursor: 'pointer',
               fontSize: effectiveCompact ? FS.sm : FS.base, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
-              transition: 'color 0.15s',
-              background: 'transparent',
-              color: active ? (hub ? C.onNavInk : C.textHeading) : C.textSecondary,
+              transition: 'color 0.15s, background 0.15s',
+              // hub: неактивная вкладка отзывается на наведение подложкой bgSelected
+              background: hub && !active && hovered === i ? C.bgSelected : 'transparent',
+              color: active ? (hub ? C.onNavActive : C.textHeading) : C.textSecondary,
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               touchAction: draggable ? 'none' : undefined,
             }}

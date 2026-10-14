@@ -166,9 +166,9 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
   // Панели сессии фокусного чата — их зоны подмешивают сами (как в воркспейсе)
   const sessionPanels = useSessionPanels(focused, focusedProject?.id, focusedProject?.rootPath);
 
-  // Панель «Чаты» — список чатов ФОКУСНОГО проекта, как в воркспейсе: оттуда
-  // карточки перетаскиваются на док стены, а пункт меню «На стену» добавляет их
-  // без перетаскивания. Своих кнопок-чатов у рельсы стены больше нет.
+  // Панель «Чаты» — список чатов ФОКУСНОГО проекта, как в воркспейсе: оттуда чат
+  // ставится на стену пунктом меню «На стену» (или пикером дока стены). Своих
+  // кнопок-чатов у рельсы стены больше нет.
   const zonePanels: Partial<Record<PanelKey, ReactNode>> = useMemo(() => ({
     ...projectPanels,
     chats: focusedProject ? (

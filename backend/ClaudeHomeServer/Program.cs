@@ -874,6 +874,10 @@ builder.Services.AddGatedHostedService<ChatExpiryService>(builder.Configuration)
 // «Применить сейчас» (POST /api/chats/archive-run) дёргает RunNowAsync того же инстанса
 builder.Services.AddSingleton<ChatArchiveService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ChatArchiveService>());
+// Темы чатов проекта — singleton + hosted: кнопки «Разложить сейчас/
+// заново» (POST /api/projects/{id}/subjects/run|reset-ai) работают с тем же инстансом и его замком
+builder.Services.AddSingleton<ChatSubjectSweeper>();
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ChatSubjectSweeper>());
 builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configuration);
 // NoteExpiryService — DI в подсистеме `NotesSubsystem` (волна 4C, шаг 2).
 // Фоновый прогрев сводок «Что нового» — в `Services.Changelog.ChangelogSubsystem`.

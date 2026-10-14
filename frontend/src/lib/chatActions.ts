@@ -8,17 +8,19 @@
 // диалогом), и склеивать эти реализации в один рантайм смысла нет.
 
 export type ChatActionKey =
-  | 'rename' | 'pin' | 'tags' | 'wall' | 'notify' | 'dossier' | 'expiry' | 'archive' | 'delete';
+  | 'rename' | 'pin' | 'tags' | 'subject' | 'wall' | 'notify' | 'dossier' | 'expiry' | 'archive' | 'delete';
 
 // Порядок — канонический: в каком бы месте действие ни рисовалось, соседи те же
 export const CHAT_ACTION_ORDER: ChatActionKey[] = [
-  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'expiry', 'archive', 'delete',
+  'rename', 'pin', 'tags', 'subject', 'wall', 'notify', 'dossier', 'expiry', 'archive', 'delete',
 ];
 
 export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
   rename: 'Переименовать',
   pin: 'Закрепить',
   tags: 'Теги',
+  // Тема чата: только в списке проекта и только у корневого чата
+  subject: 'Тема',
   wall: 'На стену',
   notify: 'Уведомления',
   dossier: 'Досье решений',
@@ -40,7 +42,7 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
 // (см. ChatCard.quickButtons) — поэтому спрятавший действие человек всё равно
 // сможет вытащить чат обратно из карточки
 export const CARD_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'wall', 'notify', 'dossier', 'expiry', 'archive',
+  'rename', 'subject', 'wall', 'notify', 'dossier', 'expiry', 'archive',
 ];
 
 // Шапка открытого чата: Теги · Срок хранения (у срока ещё и роль индикатора —

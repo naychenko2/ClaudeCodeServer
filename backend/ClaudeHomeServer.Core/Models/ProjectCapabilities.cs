@@ -155,6 +155,16 @@ public sealed record ProjectCapabilities(
     public static bool TranscriptOnServer(Project project) => !IsDeviceBound(project);
 
     /// <summary>
+    /// Можно ли отдавать ленту чата (<c>history.json</c> на сервере) серверной фоновой модели —
+    /// например, разбору чатов по темам. Лента живёт на сервере у ВСЕХ проектов, включая
+    /// локальные, а фоновый разбор ходит только в локальную модель (решение по плану
+    /// «AI-группировка чатов», вариант Б), поэтому сейчас — всегда да. Метод остаётся точкой
+    /// правды на случай смены политики; не путать с <see cref="TranscriptOnServer"/> — тот про
+    /// <c>.jsonl</c> CLI.
+    /// </summary>
+    public static bool ChatFeedForServerAi(Project project) => true;
+
+    /// <summary>
     /// Ключ папки проекта — пара «устройство + путь» (ADR-016 §1): одна и та же строка пути на
     /// сервере и на устройстве даёт разные ключи. У серверного проекта ключ совпадает с
     /// прежним <see cref="PathNormalizer.NormalizePath"/> — сторы на диске не мигрируют.

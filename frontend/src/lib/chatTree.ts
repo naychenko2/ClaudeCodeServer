@@ -3,34 +3,91 @@
 // 'global' и каждый projectId. Спецификация — docs/design/mockups/chat-list-tree-spec.md.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
-import { sortKeyOf, type ChatSortOrder } from './chatFilters';
+import { chatStatusOf, sortKeyOf, type ChatSortOrder } from './chatFilters';
+import { hasUnread } from './chatReadState';
 
 const COLLAPSE_KEY_PREFIX = 'cc_chat_tree_collapsed:';
+// Ветки, которые пользователь ЯВНО раскрыл: нужны только длинным веткам, свёрнутым
+// по умолчанию (AUTO_COLLAPSE_CHILDREN), — иначе раскрытие не пережило бы перезагрузку
+const EXPAND_KEY_PREFIX = 'cc_chat_tree_expanded:';
 
-// === Память свёрнутых веток (Set id чатов) ===
-export function useTreeCollapse(scopeKey: string) {
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => loadCollapsed(scopeKey));
-  const scopeRef = useRef(scopeKey);
+// Ветка, у которой видимых прямых детей больше этого числа, свёрнута по умолчанию —
+// пока пользователь не раскрыл её сам и пока через неё не идёт путь к открытому чату
+export const AUTO_COLLAPSE_CHILDREN = 5;
 
-  useEffect(() => {
-    if (scopeRef.current === scopeKey) return;
-    scopeRef.current = scopeKey;
-    setCollapsedIds(loadCollapsed(scopeKey));
-  }, [scopeKey]);
-
-  const toggleCollapse = (id: string) => {
-    const next = new Set(collapsedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    try { localStorage.setItem(COLLAPSE_KEY_PREFIX + scopeKey, JSON.stringify([...next])); } catch { /* квота */ }
-    setCollapsedIds(next);
-  };
-
-  return { collapsedIds, toggleCollapse };
+// Полный список id чатов области — с меткой, ДЛЯ КАКОЙ области он загружен. Без метки
+// при смене проекта хук получал бы в первом же рендере список старого проекта под
+// ключом нового и стирал бы из памяти новой области все её ветки
+export interface KnownChatIds {
+  scope: string;
+  ids: readonly string[];
 }
 
-function loadCollapsed(scopeKey: string): Set<string> {
+// === Память свёрнутых веток: явно свёрнутые и явно раскрытые id чатов ===
+// known — полный список id чатов области: когда он приехал, из обоих наборов
+// вычищаются удалённые чаты, иначе localStorage копил бы их бесконечно
+export function useTreeCollapse(scopeKey: string, known?: KnownChatIds) {
+  const [state, setState] = useState(() => ({ scope: scopeKey, ...loadState(scopeKey) }));
+  // Смена области — перечитываем её память прямо в рендере (состояние от пропа), а не
+  // эффектом: иначе один кадр показывал бы свёрнутость чужой области
+  let cur = state;
+  if (state.scope !== scopeKey) {
+    cur = { scope: scopeKey, ...loadState(scopeKey) };
+    setState(cur);
+  }
+
+  // Список чужой области (ещё не перезагрузился после смены) — как будто его нет.
+  // Пустой список — ещё не загрузился (или чатов нет вовсе): чистить по нему тоже нельзя
+  const knownKey = known && known.scope === scopeKey ? known.ids.join(',') : '';
+  // Последний известный состав области — им же чистится и запись при переключении ветки
+  const knownRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    knownRef.current = knownKey ? new Set(knownKey.split(',')) : null;
+    if (!knownRef.current) return;
+    // Чистится только хранилище: удалённые чаты в дереве не рисуются, и держать их
+    // в состоянии рендера безвредно — следующая запись уйдёт уже без них
+    const stored = loadState(scopeKey);
+    const collapsed = keepKnown(stored.collapsed, knownRef.current);
+    const expanded = keepKnown(stored.expanded, knownRef.current);
+    if (collapsed.size === stored.collapsed.size && expanded.size === stored.expanded.size) return;
+    saveState(scopeKey, collapsed, expanded);
+  }, [scopeKey, knownKey]);
+
+  // collapsedNow — что ветка показывает СЕЙЧАС (с учётом свёрнутости по умолчанию):
+  // по одному id не понять, явное это состояние или автоматическое
+  const toggleCollapse = (id: string, collapsedNow: boolean) => {
+    const collapsed = keepKnown(cur.collapsed, knownRef.current);
+    const expanded = keepKnown(cur.expanded, knownRef.current);
+    if (collapsedNow) { collapsed.delete(id); expanded.add(id); }
+    else { expanded.delete(id); collapsed.add(id); }
+    saveState(scopeKey, collapsed, expanded);
+    setState({ scope: scopeKey, collapsed, expanded });
+  };
+
+  return { collapsedIds: cur.collapsed, expandedIds: cur.expanded, toggleCollapse };
+}
+
+// Копия набора без удалённых чатов; состав области неизвестен — копия как есть
+const keepKnown = (s: Set<string>, known: Set<string> | null) =>
+  new Set(known ? [...s].filter(id => known.has(id)) : s);
+
+function loadState(scopeKey: string) {
+  return {
+    collapsed: loadIdSet(COLLAPSE_KEY_PREFIX + scopeKey),
+    expanded: loadIdSet(EXPAND_KEY_PREFIX + scopeKey),
+  };
+}
+
+function saveState(scopeKey: string, collapsed: Set<string>, expanded: Set<string>) {
   try {
-    const raw = localStorage.getItem(COLLAPSE_KEY_PREFIX + scopeKey);
+    localStorage.setItem(COLLAPSE_KEY_PREFIX + scopeKey, JSON.stringify([...collapsed]));
+    localStorage.setItem(EXPAND_KEY_PREFIX + scopeKey, JSON.stringify([...expanded]));
+  } catch { /* квота */ }
+}
+
+function loadIdSet(key: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(key);
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? new Set(arr.filter((x): x is string => typeof x === 'string')) : new Set();
@@ -51,6 +108,11 @@ interface TreeNode {
   // спрятаны и внуки, счётчик обязан их учитывать.
   groupCount: number;
   groupRunningCount: number;
+  // Сигналы свёрнутой ветки по тому же поддереву: ждут ответа (waiting — входят и в
+  // groupRunningCount), с ошибкой (error/orphaned) и непрочитанные (стор chatReadState)
+  groupWaitingCount: number;
+  groupErrorCount: number;
+  groupUnreadCount: number;
 }
 
 // Готовая строка для рендера ChatTreeRow: глубина, геометрия связей, accent-путь
@@ -69,6 +131,10 @@ export interface ChatTreeRowData {
   // детям — свёрнутый узел прячет и внуков.
   groupCount: number;
   groupRunningCount: number;
+  // Сигналы поддерева для пилюли свёрнутой ветки — см. TreeNode
+  groupWaitingCount: number;
+  groupErrorCount: number;
+  groupUnreadCount: number;
   // Строка лежит на пути корень→активный чат (сам активный или его предок)
   onActivePath: boolean;
   // Вертикаль-связь к родителю подсвечена accent (путь к активному чату проходит здесь)
@@ -106,6 +172,33 @@ export const isChatRunning = (c: Session, bgWorkIds?: ReadonlySet<string>) =>
 // карточки, и «128/12» накрыл бы точку статуса вместе с началом названия чата
 export const formatGroupCount = (n: number) => (n > 99 ? '99+' : String(n));
 
+// Главный сигнал свёрнутой ветки — им красится пилюля со счётчиком. Приоритет:
+// ошибка → ждёт ответа → работает → непрочитано. «Работает» — живые чаты БЕЗ ждущих:
+// waiting входит в groupRunningCount, но у него свой, более срочный сигнал
+export type CollapsedSignal = 'error' | 'waiting' | 'running' | 'unread' | 'none';
+
+type SignalCounts = Pick<ChatTreeRowData,
+  'groupCount' | 'groupRunningCount' | 'groupWaitingCount' | 'groupErrorCount' | 'groupUnreadCount'>;
+
+export function collapsedSignal(r: SignalCounts): CollapsedSignal {
+  if (r.groupErrorCount > 0) return 'error';
+  if (r.groupWaitingCount > 0) return 'waiting';
+  if (r.groupRunningCount - r.groupWaitingCount > 0) return 'running';
+  if (r.groupUnreadCount > 0) return 'unread';
+  return 'none';
+}
+
+// Подсказка свёрнутой ветки: цвет пилюли несёт один сигнал, а здесь — все сразу
+export function collapsedBranchHint(r: SignalCounts): string {
+  const parts = [`вложенных чатов ${r.groupCount}`];
+  if (r.groupErrorCount > 0) parts.push(`с ошибкой ${r.groupErrorCount}`);
+  if (r.groupWaitingCount > 0) parts.push(`ждут ответа ${r.groupWaitingCount}`);
+  const working = r.groupRunningCount - r.groupWaitingCount;
+  if (working > 0) parts.push(`в работе ${working}`);
+  if (r.groupUnreadCount > 0) parts.push(`непрочитанных ${r.groupUnreadCount}`);
+  return `Развернуть: ${parts.join(', ')}`;
+}
+
 /**
  * Исходное множество ПЛЮС все предки его участников — наследование признака вверх по
  * ветке (значок «правки не зафиксированы»: родитель отвечает за работу потомков).
@@ -133,6 +226,29 @@ export function withAncestors(chats: Session[], ids: ReadonlySet<string>): Set<s
     }
   }
   return out;
+}
+
+/**
+ * Корень ветки чата — по той же связи parentSessionId, что у дерева: подъём к предку,
+ * которого нет в списке или у которого нет родителя. Нужен секционерам плоского списка,
+ * которым секцию задаёт корень (режим «Темы»: тема — у корня, вложенные чаты её не
+ * несут). Список — ПОЛНЫЙ: предок, скрытый фильтром, остаётся звеном к корню. Цикл в
+ * данных обрывается на месте — чат считается корнем сам себе.
+ */
+export function rootResolver(chats: Session[]): (s: Session) => Session {
+  const byId = new Map(chats.map(c => [c.id, c]));
+  return s => {
+    const seen = new Set<string>([s.id]);
+    let cur = s;
+    for (;;) {
+      const pid = cur.parentSessionId;
+      const parent = pid && pid !== cur.id ? byId.get(pid) : undefined;
+      if (!parent) return cur;
+      if (seen.has(parent.id)) return s;
+      seen.add(parent.id);
+      cur = parent;
+    }
+  };
 }
 
 /**
@@ -172,7 +288,10 @@ export function buildChatTreeRows(
   chats: Session[],
   opts: {
     isVisible: (c: Session) => boolean;
+    // Явно свёрнутые пользователем ветки
     collapsedIds: Set<string>;
+    // Явно раскрытые: снимают свёрнутость длинной ветки по умолчанию
+    expandedIds?: Set<string>;
     activeId: string | null;
     // Направление сортировки детей и корней (дефолт — свежие сверху)
     sortOrder?: ChatSortOrder;
@@ -202,6 +321,23 @@ export function buildChatTreeRows(
     }
   }
 
+  // Узел с метриками поддерева — одна формула и для сырого леса, и для отфильтрованного.
+  // Счётчики суммируются по детям: сам узел в свои счётчики не входит
+  const sum = (kids: TreeNode[], own: (c: Session) => boolean, sub: (k: TreeNode) => number) =>
+    kids.reduce((n, k) => n + (own(k.chat) ? 1 : 0) + sub(k), 0);
+  const makeNode = (chat: Session, kids: TreeNode[]): TreeNode => ({
+    chat,
+    children: kids,
+    maxActivity: Math.max(activity(chat), ...kids.map(k => k.maxActivity)),
+    groupCount: sum(kids, () => true, k => k.groupCount),
+    groupRunningCount: sum(kids, c => isChatRunning(c, opts.bgWorkIds), k => k.groupRunningCount),
+    // Ждущие и ошибки — тем же chatStatusOf, что у чипов фильтра: иначе пилюля
+    // считала бы «ждёт ответа» чат, который фильтр относит к выполненным
+    groupWaitingCount: sum(kids, c => chatStatusOf(c) === 'waiting', k => k.groupWaitingCount),
+    groupErrorCount: sum(kids, c => chatStatusOf(c) === 'error', k => k.groupErrorCount),
+    groupUnreadCount: sum(kids, c => hasUnread(c.updatedAt, c.id, c.lastReadAt), k => k.groupUnreadCount),
+  });
+
   // Сборка узлов DFS от кандидатов в корни; visited защищает от циклов parentSessionId
   const visited = new Set<string>();
   const buildNode = (chat: Session): TreeNode => {
@@ -210,14 +346,7 @@ export function buildChatTreeRows(
       .filter(k => !visited.has(k.id))
       .sort((a, b) => dir * (chatTs(a) - chatTs(b)))
       .map(buildNode);
-    return {
-      chat,
-      children: kids,
-      maxActivity: Math.max(activity(chat), ...kids.map(k => k.maxActivity)),
-      groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
-      groupRunningCount: kids.reduce(
-        (n, k) => n + (isChatRunning(k.chat, opts.bgWorkIds) ? 1 : 0) + k.groupRunningCount, 0),
-    };
+    return makeNode(chat, kids);
   };
   const topNodes = topCandidates.map(buildNode);
   // Чаты, не достижимые из кандидатов (цикл ссылок) — разрываем, поднимая в корни
@@ -235,14 +364,7 @@ export function buildChatTreeRows(
       const kids: TreeNode[] = [];
       for (const k of node.children) visit(k, kids);
       if (opts.isVisible(node.chat)) {
-        sink.push({
-          chat: node.chat,
-          children: kids,
-          maxActivity: Math.max(activity(node.chat), ...kids.map(k => k.maxActivity)),
-          groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
-          groupRunningCount: kids.reduce(
-            (n, k) => n + (isChatRunning(k.chat, opts.bgWorkIds) ? 1 : 0) + k.groupRunningCount, 0),
-        });
+        sink.push(makeNode(node.chat, kids));
       } else {
         // узел скрыт фильтром — прокол: его видимые дети уходят уровнем выше
         for (const k of kids) sink.push(k);
@@ -295,7 +417,15 @@ export function buildChatTreeRows(
     passBelow: { show: boolean; accent: boolean },
     ancestors: { show: boolean; accent: boolean }[],
   ) => {
-    const collapsed = opts.collapsedIds.has(node.chat.id) && node.children.length > 0;
+    const id = node.chat.id;
+    // Явное сворачивание пользователя — всегда; длинная ветка — по умолчанию, пока её
+    // явно не раскрыли и пока через неё не идёт путь к открытому чату (иначе открытый
+    // чат спрятался бы под свёрнутым предком)
+    const collapsed = node.children.length > 0 && (
+      opts.collapsedIds.has(id)
+      || (node.children.length > AUTO_COLLAPSE_CHILDREN
+        && !opts.expandedIds?.has(id)
+        && !activeAncestors.has(id)));
     rows.push({
       chat: node.chat,
       depth,
@@ -305,6 +435,9 @@ export function buildChatTreeRows(
       collapsed,
       groupCount: node.groupCount,
       groupRunningCount: node.groupRunningCount,
+      groupWaitingCount: node.groupWaitingCount,
+      groupErrorCount: node.groupErrorCount,
+      groupUnreadCount: node.groupUnreadCount,
       onActivePath: onPath(node.chat.id),
       segAccent,
       elbowAccent: onPath(node.chat.id),

@@ -46,6 +46,9 @@ interface Props {
   ariaLabel?: string;
   disabled?: boolean;
   active?: boolean;
+  // Кнопка открывает попап (меню, поповер): true/false — aria-expanded, не задан —
+  // атрибута нет (у обычной кнопки-действия его быть не должно)
+  expanded?: boolean;
   size?: IconButtonSize;
   tone?: IconButtonTone;
   variant?: IconButtonVariant;   // см. IconButtonVariant
@@ -59,7 +62,7 @@ interface Props {
 }
 
 export function IconButton({
-  onClick, title, ariaLabel, disabled, active, size = 'md', tone = 'muted', variant = 'ghost', color, style, className, children,
+  onClick, title, ariaLabel, disabled, active, expanded, size = 'md', tone = 'muted', variant = 'ghost', color, style, className, children,
 }: Props) {
   const [hover, setHover] = useState(false);
   const s = SIZE[size];
@@ -85,6 +88,7 @@ export function IconButton({
       onClick={onClick}
       title={ariaLabel ? undefined : title}
       aria-label={ariaLabel ?? title}
+      aria-expanded={expanded}
       disabled={disabled}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}

@@ -99,7 +99,8 @@ export function HubTabs({ value, onChange, mobile, tablet, tabs }: {
   const appendActive = isMod
     ? false
     : isSub
-      ? (!baseTabs.includes(displayValue) && activeSubValues.has(displayValue))
+      // noPill-подсистема («Расход») вкладки не получает и активной — как TABLESS
+      ? (!baseTabs.includes(displayValue) && activeSubs.some(m => !m.noPill && subsystemTabValue(m.key) === displayValue))
       : !(baseTabs.includes(displayValue) || TABLESS.includes(displayValue as HubTab));
   const shown = appendActive ? [...baseTabs, displayValue] : baseTabs;
 

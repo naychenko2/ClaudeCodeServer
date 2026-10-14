@@ -1455,6 +1455,12 @@ Main их типов не видит на этапе компиляции вов
 не во что. Мера успеха этапа — Main из композиции, контроллеров и ядра,
 **без единой папки вертикали в `Services/`**.
 
+Остаточный долг «Тем чатов» (флаг `chat-subjects`, 2026-10-10): чистая часть лежит в Core
+(`Services/ChatSubjects`, спина в `CoreAllowedNamespaces`), а склейка — `ChatSubjectSweeper`
+и `SessionManager.ApplySubjects` — файлами ядра сессий в корне `Services/` Main, рядом с
+`ChatArchiveService`. Шва к ядру сессий для неё нет; заводить его стоит вместе с общим швом
+для фоновых проходов по чатам (архив, сводки, темы), а не под одну фичу.
+
 ### Побочная находка: фиктивные зависимости на `Services.Llm`
 
 `ICheapTextRunner`, `LocalActionCatalog` и `ModelTier` физически лежат

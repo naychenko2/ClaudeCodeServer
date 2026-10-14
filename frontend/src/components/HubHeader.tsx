@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Activity, Bell, ChevronRight, ExternalLink, House, Puzzle, Settings, Users } from 'lucide-react';
 import type { AuthState, Project } from '../types';
 import { C, FONT, R, TB } from '../lib/design';
@@ -52,6 +52,15 @@ export const PRODUCT_HISTORY_EVENT = 'open-product-history';
 // Ключ привязан к пользователю (userId), чтобы на одном устройстве у разных аккаунтов
 // была своя отметка. Без userId (не залогинен) — общий базовый ключ.
 const PRODUCT_HISTORY_SEEN_BASE = 'cc_product_history_seen';
+// Зазоры шапки: между тремя секциями и между кнопками правой секции
+const HEADER_GAP = 12;
+const HEADER_RIGHT_GAP = 8;
+// Планшет: минимум левой колонки — favicon-кнопка, шеврон, иконка проекта,
+// шестерёнка и пара букв имени. Меньше места — таббар уходит в «3 + ⋯».
+const TABLET_LEFT_MIN = 140;
+// Последнее решение «полный ряд не влез» — переживает пересоздание шапки при смене
+// страницы. Первый запуск — true (откат), чтобы до замера ничего не выпирало за края.
+let lastCompactOverflow = true;
 export const productHistorySeenKey = (userId?: string | null) =>
   userId ? `${PRODUCT_HISTORY_SEEN_BASE}_${userId}` : PRODUCT_HISTORY_SEEN_BASE;
 
@@ -79,13 +88,19 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // переключаем набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
   // Замер делаем сами, по ПОСТОЯННОМУ скрытому эталону полного набора 5 табов —
   // эталон не зависит от того, какая ветка сейчас отрисована, поэтому цикла
-  // «3 влезают → 5 не влезают → 3 влезают…» нет. Стартуем с true (откат),
-  // чтобы первый кадр до замера ничего не выпирал за края.
-  const [compactOverflow, setCompactOverflow] = useState<boolean>(true);
-  // Ссылка на контейнер центра таббара — он определяет ширину «куда должен влезть»
-  // (центр — единственная flex:1 среди секций на планшете) и его наблюдает
-  // ResizeObserver: открытие/закрытие боковых панелей и длинная крошка проекта
-  // пересчитывают решение.
+  // «3 влезают → 5 не влезают → 3 влезают…» нет. Старт — с решения прошлого
+  // экземпляра (lastCompactOverflow), замер — до отрисовки (useLayoutEffect).
+  // Шапка своя у каждой страницы и пересоздаётся при переходе — стартуем с
+  // последнего решения прошлого экземпляра, иначе ряд мигал «3 + ⋯» → 5 на каждом шаге.
+  const [compactOverflow, setCompactOverflowState] = useState<boolean>(lastCompactOverflow);
+  const setCompactOverflow = (v: boolean) => { lastCompactOverflow = v; setCompactOverflowState(v); };
+  // Шапка целиком и её правая секция — по ним считаем ширину, доступную таббару.
+  // На планшете, как и на десктопе, раскладка трёхколоночная «1fr auto 1fr»:
+  // боковые секции равны, поэтому таббар стоит строго по центру окна, а не в
+  // промежутке между широкой крошкой проекта и узкими иконками справа (иначе ряд
+  // уезжал вправо и скакал при переходе между страницами с проектом и без).
+  const headerRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
   const centerRef = useRef<HTMLDivElement>(null);
   // Скрытый компактный эталон полного набора — существует всегда на планшете,
   // живёт ВНУТРИ центрального контейнера (не внутри трека со скроллом, иначе
@@ -100,24 +115,30 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // (probeFull). Решение принимаем сами, не через колбэк PillSwitch: его компактный
   // эталон строится из ТЕКУЩИХ options, и в откатной ветке (3 таба) он заведомо
   // влезает → цикл. Здесь же эталон один и тот же в обеих ветках.
-  // Меряем по ширине ЦЕНТРА, а не по ширине внутреннего трека (внутренний трек
-  // — flex-элемент без `flex: 1`, его ширина = ширина содержимого; мерить по нему
-  // — условие истинно всегда, обратный переход к 5 табам невозможен, планшет
-  // залипает в откате). Центр с `flex: 1 1 0%` + `minWidth: 0` от содержимого не
-  // зависит (трек скроллится, кнопка «⋯» — flexShrink:0 внутри центра) → ответ
-  // — чистая функция ширины окна, обе ветки дают одинаковый результат, осцилляции
-  // нет. −24 — буфер на дребезг при протяжке ресайза.
-  useEffect(() => {
+  // Меряем НЕ по ширине центра: он теперь по содержимому и в двух ветках разный
+  // (5 табов / 3 + «⋯») — замер по нему осциллировал бы. Доступное центру место
+  // считаем от шапки: ширина минус поля, зазоры и ДВЕ боковые колонки по ширине
+  // большей из них (колонки равны). Правая — по её реальному содержимому, левая —
+  // по минимуму TABLET_LEFT_MIN (favicon, шеврон, иконка и шестерёнка проекта;
+  // имя проекта ужимается многоточием). От ветки ответ не зависит → цикла нет.
+  // −24 — буфер на дребезг при протяжке ресайза.
+  useLayoutEffect(() => {
     if (!isTablet) return;
-    const center = centerRef.current;
+    const header = headerRef.current;
+    const right = rightRef.current;
     const probe = probeFullRef.current;
-    if (!center || !probe) return;
+    if (!header || !right || !probe) return;
     const measure = () => {
-      setCompactOverflow(probe.offsetWidth > center.clientWidth - 24);
+      const kids = Array.from(right.children) as HTMLElement[];
+      const rightContent = kids.reduce((s, el) => s + el.offsetWidth, 0) + Math.max(0, kids.length - 1) * HEADER_RIGHT_GAP;
+      const side = Math.max(rightContent, TABLET_LEFT_MIN);
+      const avail = header.clientWidth - 2 * TB.padXTablet - 2 * HEADER_GAP - 2 * side;
+      setCompactOverflow(probe.offsetWidth > avail - 24);
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(center);
+    ro.observe(header);
+    ro.observe(right);
     return () => ro.disconnect();
   }, [isTablet]);
 
@@ -330,8 +351,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   );
 
   return (
-    <div style={{
-      flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12,
+    <div ref={headerRef} style={{
+      flexShrink: 0, display: 'flex', alignItems: 'center', gap: HEADER_GAP,
       height: isMobile ? TB.heightMobile : TB.heightDesktop,
       padding: `0 ${isMobile ? TB.padXMobile : isTablet ? TB.padXTablet : TB.padX}px`,
       // Десктоп: шапка сливается с холстом (Islands) — граница не нужна, острова
@@ -341,11 +362,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     }}>
       {/* Левая секция — логотип, он же вход на дашборд. На мобиле скрыт: место нужно
           вкладкам, а на дашборд там ведёт пункт «Домой» в «⋯ Разделы».
-          Планшет: секция по содержимому — растёт только центр таббара, а крошка
-          проекта сжимается через свой `maxWidth + ellipsis + minWidth: 0` ниже.
-          Десктоп: место делится поровну между всеми тремя секциями. */}
+          Планшет и десктоп: боковые секции равны (`flex: 1` с нулевой базой), таббар
+          по центру окна; крошка проекта ужимается через `maxWidth + ellipsis + minWidth: 0`. */}
       {!isMobile && (
-        <div style={{ flex: isTablet ? '0 1 auto' : 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           {logo}
           {projectCrumb}
         </div>
@@ -364,7 +384,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {(isMobile || isTablet) ? (
         <div
           ref={centerRef}
-          style={{ flex: 1, minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+          // Мобила — центр забирает всё место; планшет — по содержимому между
+          // равными боковыми колонками (может сжаться: трек внутри скроллится)
+          style={{ flex: isMobile ? 1 : '0 1 auto', minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
         >
           <div
             className="cc-no-scrollbar"
@@ -434,10 +456,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       )}
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin).
-          Планшет: секция по содержимому — её контент прижат `flex-end`, и при
-          `flex: 1` она держала бы пустоту перед колокольчиком, отнимая место у
-          центра таббара. Десктоп — равное деление между секциями, как раньше. */}
-      <div style={{ flex: (isMobile || isTablet) ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+          Планшет и десктоп — равное деление с левой секцией, чтобы таббар стоял по
+          центру окна; пустота перед колокольчиком — цена этой симметрии. */}
+      <div ref={rightRef} style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: HEADER_RIGHT_GAP }}>
         {/* «Открыть в новом окне» — только в разделе «Телеметрия» и только когда SigNoz
             доступен (иначе открылась бы вкладка с ошибкой прокси). Иконкой, как колокольчик. */}
         {onOpenExternal && (

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
-import type { Project, ProjectTag, Session } from '../types';
+import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
@@ -9,8 +9,19 @@ import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
-import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
-import { Modal, ModalActions, Button } from './ui';
+import { C, FONT, FS, GROUP_COLORS, MODAL_W, SP } from '../lib/design';
+import { Modal, ModalActions, Button, IconButton } from './ui';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { ChatGroupHeader } from './ChatGroupHeader';
+import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
+import {
+  SubjectDeleteDialog, SubjectPickMenu, SubjectRenameDialog, SubjectRunBar, SubjectSectionHeader,
+  subjectHint, subjectOf,
+} from './ChatSubjects';
+import {
+  addEdits, moveEdits, needsRegistryReload, onSubjectRunFinished, overlayPendingMoves, prunePendingMoves, removeEdits, renameEdits,
+  startSubjectRun, takeFreshPoll, useSubjectRun, type PendingSubjectMove,
+} from '../lib/chatSubjects';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { showToast } from '../lib/toast';
@@ -18,20 +29,20 @@ import { useSubsystem } from '../lib/subsystems';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
-import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, useTreeCollapse, withAncestors } from '../lib/chatTree';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
+import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolver, useTreeCollapse, withAncestors } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { startVisiblePoll } from '../lib/visiblePoll';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
-import { ChatCard } from './ChatCard';
+import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, sortChatsFlat, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, sortChatsFlat, chatTagsSorted, NO_SUBJECT_KEY, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
-import { WALL_DRAG_TYPE } from '../features/wall/WallDock';
+import { useReadStateVersion } from '../lib/chatReadState';
 
 interface Props {
   project: Project;
@@ -62,13 +73,13 @@ interface Props {
   onAddToWall?: (s: Session) => void;
 }
 
-// Кнопка порядка ▲▼ у заголовка секции тегов
-const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  width: 20, height: 20, padding: 0,
-  border: 'none', borderRadius: R.sm, cursor: disabled ? 'default' : 'pointer',
-  background: 'transparent', color: disabled ? C.border : C.textMuted,
-});
+// Режимы группировки списка проекта: «Темы» есть только здесь, у глобального списка их нет
+const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'tags', 'subjects', 'none'];
+// Зазор под секцией группы (дни, теги, темы). Нижний padding списка его вычитает
+// (не больше SP.sm − ROW_GAP, иначе padding уйдёт в минус)
+const GROUP_GAP = SP.xs + SP.xxs;
+// Дебаунс перечитывания реестра тем по неизвестному subjectId из опроса
+const SUBJECT_RELOAD_DEBOUNCE_MS = 1000;
 
 // Порция архива: столько карточек рисуется при входе в «Архивные» и добавляется кнопкой
 const ARCHIVE_PAGE = 40;
@@ -114,6 +125,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // стартовый массив — не «чатов нет», а «ещё не знаем», и владелец, который по
   // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
   const [loaded, setLoaded] = useState(false);
+  // Для какого проекта приехал последний свежий список: при смене проекта sessions ещё
+  // держат чаты старого, и память свёрнутых веток нового проекта чистилась бы по ним
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -214,6 +228,153 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }
   };
 
+  // === Темы чатов проекта ===
+  // Реестр — оптимистичный state поверх project.subjectRegistry: ответ PUT заменяет его
+  // целиком. DTO проекта у владельца обновляется редко, поэтому
+  // реестр перечитывается сам: при монтировании, на конце прохода разбора и когда опрос
+  // принёс тему, которой в реестре нет (модель завела её фоном)
+  const [subjects, setSubjects] = useState<ProjectSubject[]>(() => project.subjectRegistry ?? []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация оптимистичного реестра тем с project.subjectRegistry
+  useEffect(() => { setSubjects(project.subjectRegistry ?? []); }, [project.id, project.subjectRegistry]);
+  // Поколение записей реестра: применяется только ответ последнего запроса (PUT или
+  // перечитывания) — ответы, пришедшие не по порядку, не откатывают экран назад
+  const subjectsGenRef = useRef(0);
+  // PUT реестра в полёте: его ответ и есть свежий реестр, перечитывание ему не нужно
+  const subjectsPutsRef = useRef(0);
+  const reloadSubjects = () => {
+    if (subjectsPutsRef.current > 0) return;
+    const gen = ++subjectsGenRef.current;
+    api.projects.subjects.list(project.id)
+      .then(r => { if (gen === subjectsGenRef.current) setSubjects(r); })
+      .catch(() => {});
+  };
+  // Эффекты ниже живут на весь project.id — зовут свежую версию через ref
+  const reloadSubjectsRef = useRef(reloadSubjects);
+  useEffect(() => { reloadSubjectsRef.current = reloadSubjects; });
+  // Неизвестные subjectId, по которым уже перечитывали (висячий id не гоняет петлю), и
+  // таймер дебаунса: несколько поводов подряд — одно перечитывание
+  const triedSubjectIdsRef = useRef(new Set<string>());
+  const subjectReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const genRef = subjectsGenRef;
+    const timerRef = subjectReloadTimerRef;
+    triedSubjectIdsRef.current = new Set();
+    reloadSubjectsRef.current();
+    const off = onSubjectRunFinished(pid => { if (pid === project.id) reloadSubjectsRef.current(); });
+    return () => {
+      off();
+      // Ответ ушедшего проекта в реестр нового не ляжет
+      genRef.current++;
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    };
+  }, [project.id]);
+  useEffect(() => {
+    if (subjectReloadTimerRef.current) return;
+    if (!needsRegistryReload(sessions, subjects, triedSubjectIdsRef.current)) return;
+    subjectReloadTimerRef.current = setTimeout(() => {
+      subjectReloadTimerRef.current = null;
+      reloadSubjectsRef.current();
+    }, SUBJECT_RELOAD_DEBOUNCE_MS);
+  }, [sessions, subjects]);
+  // Переносы чатов, чей PUT ещё в полёте (или ответил, но опросы, ушедшие до ответа, ещё
+  // не вернулись): опрос накладывает их поверх своего ответа. pollNoRef — номер последнего
+  // ушедшего опроса
+  const pendingMovesRef = useRef(new Map<string, PendingSubjectMove>());
+  const pollNoRef = useRef(0);
+  // Номер последнего ПРИМЕНЁННОГО опроса: ответ опроса, ушедшего раньше, но вернувшегося
+  // позже, отбрасывается (takeFreshPoll)
+  const appliedPollNoRef = useRef(0);
+  const applyPoll = useCallback((pollNo: number, list: Session[]) => {
+    if (!takeFreshPoll(appliedPollNoRef, pollNo)) return;
+    prunePendingMoves(pendingMovesRef.current, pollNo);
+    setSessions(prev => keepIfSame(prev, overlayPendingMoves(list, pendingMovesRef.current)));
+  }, []);
+  // Открытый выбор темы: чат + якорь (fixed-позиция, как у меню тегов)
+  const [subjectMenu, setSubjectMenu] = useState<{ sessionId: string; anchor: DOMRect } | null>(null);
+  const subjectTarget = subjectMenu ? sessions.find(x => x.id === subjectMenu.sessionId) : undefined;
+  const [renameSubject, setRenameSubject] = useState<ProjectSubject | null>(null);
+  const [deleteSubject, setDeleteSubject] = useState<ProjectSubject | null>(null);
+  // Секция, принявшая чат, коротко мигает — иначе на длинном списке чат «пропадает» из-под пальца
+  const [flashSubject, setFlashSubject] = useState<string | null>(null);
+  const flashSection = (key: string) => {
+    setFlashSubject(key);
+    window.setTimeout(() => setFlashSubject(k => (k === key ? null : k)), LIST_FLASH_MS);
+  };
+
+  // Запись реестра: оптимистично, ответ PUT — правда, сбой — откат и тост. Любая ручная
+  // правка темы модели переводит её в human — ✦ снимаем сразу
+  // Отказ (400 «Тема не найдена», дубль) значит, что локальный реестр разошёлся с
+  // сервером — после отката перечитываем его
+  const persistSubjects = (optimistic: ProjectSubject[], edits: Parameters<typeof api.projects.subjects.replace>[1]) => {
+    const prev = subjects;
+    const gen = ++subjectsGenRef.current;
+    subjectsPutsRef.current++;
+    setSubjects(optimistic);
+    return api.projects.subjects.replace(project.id, edits)
+      .then(fresh => {
+        subjectsPutsRef.current--;
+        if (gen === subjectsGenRef.current) setSubjects(fresh);
+        return fresh;
+      })
+      .catch((e: unknown) => {
+        subjectsPutsRef.current--;
+        if (gen === subjectsGenRef.current) setSubjects(prev);
+        showToast('Темы', e instanceof Error ? e.message : 'Не удалось сохранить темы', 'info');
+        reloadSubjects();
+        throw e;
+      });
+  };
+  const doRenameSubject = (t: ProjectSubject, name: string) =>
+    persistSubjects(subjects.map(s => (s.id === t.id ? { ...s, name, createdBy: 'human' as const } : s)), renameEdits(subjects, t.id, name))
+      .then(() => undefined);
+  const doMoveSubject = (t: ProjectSubject, dir: -1 | 1) => {
+    const edits = moveEdits(subjects, t.id, dir);
+    if (!edits) return;
+    const orderOf = new Map(edits.map(e => [e.id, e.order ?? 0]));
+    persistSubjects(subjects.map(s => {
+      const order = orderOf.get(s.id) ?? s.order;
+      return order === s.order ? s : { ...s, order, createdBy: 'human' as const };
+    }), edits).catch(() => {});
+  };
+  const doDeleteSubject = (t: ProjectSubject) =>
+    persistSubjects(subjects.filter(s => s.id !== t.id), removeEdits(subjects, t.id)).then(() => undefined).catch(() => {});
+
+  // Перенос чата: оптимистично в список (и владельцу), ответ — сессия с сервера. Пока PUT
+  // в полёте, опрос не возвращает старую тему (pendingMovesRef); отказ (тему снесла
+  // уборка прохода) — откат, тост и перечитывание реестра, чтобы тема-призрак ушла из выбора
+  const moveChatSubject = (s: Session, body: { subjectId: string | null } | { release: true }) => {
+    const patch: PendingSubjectMove['patch'] = 'release' in body
+      ? { subjectId: null, subjectSource: null }
+      : { subjectId: body.subjectId, subjectSource: 'human' };
+    const optimistic: Session = { ...s, ...patch };
+    const move: PendingSubjectMove = { patch };
+    pendingMovesRef.current.set(s.id, move);
+    // Завершение трогает только СВОЙ перенос: более поздний перенос того же чата остаётся
+    const own = () => pendingMovesRef.current.get(s.id) === move;
+    setSessions(prev => prev.map(x => (x.id === s.id ? optimistic : x)));
+    flashSection(('subjectId' in body && body.subjectId) || NO_SUBJECT_KEY);
+    api.projects.subjects.moveSession(project.id, s.id, body)
+      // Успех: перенос держится, пока не вернётся опрос, ушедший ПОСЛЕ ответа PUT, —
+      // ответ опроса, ушедшего раньше, принёс бы старую тему
+      .then(updated => { if (own()) move.settledAt = pollNoRef.current; handleSessionUpdated(updated); })
+      .catch((e: unknown) => {
+        // Отказ: откат к исходной теме — старые опросы несут её же, держать нечего
+        if (own()) pendingMovesRef.current.delete(s.id);
+        setSessions(prev => prev.map(x => (x.id === s.id ? s : x)));
+        showToast('Тема чата', e instanceof Error ? e.message : 'Не удалось перенести чат', 'info');
+        reloadSubjects();
+      });
+  };
+  // Новая тема из выбора: заводится и сразу принимает чат
+  const createSubjectFor = (s: Session, name: string) => {
+    persistSubjects(subjects, addEdits(subjects, name))
+      .then(fresh => {
+        const created = fresh.find(t => t.name.trim().toLowerCase() === name.trim().toLowerCase());
+        if (created) moveChatSubject(s, { subjectId: created.id });
+      })
+      .catch(() => {});
+  };
+
   useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
   // Полный список сессий прокидывается владельцу для плашки «Ветка от …»: при любом
   // изменении списка (загрузка, удаление, realtime-обновление) ChatPanel выше должен
@@ -256,6 +417,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       freshArrived = true;
       setSessions(list);
       setLoaded(true);
+      setLoadedProjectId(project.id);
       if (!initializedRef.current) {
         initializedRef.current = true;
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
@@ -275,12 +437,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
     init();
     // Пауза на скрытой вкладке + догон при возврате: час фоновых агентов не должен
-    // жечь CPU/сеть опросом списка (см. lib/visiblePoll)
+    // жечь CPU/сеть опросом списка (см. lib/visiblePoll). Применяем через applyPoll:
+    // дерево/свёрнутые ветки и pending-переносы origin учитываются, keepIfSame — внутри
     const stop = startVisiblePoll(() => {
-      api.sessions.list(project.id).then(list => setSessions(prev => keepIfSame(prev, list))).catch(() => {});
+      const pollNo = ++pollNoRef.current;
+      api.sessions.list(project.id)
+        .then(list => { if (!cancelled) applyPoll(pollNo, list); })
+        .catch(() => {});
     }, 5000);
     return () => { cancelled = true; stop(); };
-  }, [project.id]);
+  }, [project.id, applyPoll]);
 
   // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.
   useEffect(() => {
@@ -290,8 +456,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // Отписку храним и зовём в cleanup: иначе колбэк живёт после unmount (утечка)
     const offReconnected = onReconnected(() => {
       if (!mounted) return;
+      const pollNo = ++pollNoRef.current;
       api.sessions.list(project.id).then(list => {
-        if (mounted) setSessions(prev => keepIfSame(prev, list));
+        if (mounted) applyPoll(pollNo, list);
       }).catch(() => {});
     });
 
@@ -377,7 +544,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       unsub();
       offReconnected();
     };
-  }, [project.id]);
+  }, [project.id, applyPoll]);
 
   // Если активную сессию отредактировали из шапки чата — подхватываем название/модель,
   // не затирая статус, который приходит по realtime. Режим — тоже: changeMode обновляет
@@ -458,11 +625,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   // === Фильтры и оси списка чатов ===
-  // Фильтры + оси вида (groupBy/sortOrder/hierarchy) — единый state, персистится
-  // в localStorage отдельно для каждого проекта (scope = project.id)
+  // Фильтры + оси вида (groupBy/sortOrder) — единый state, персистится в localStorage
+  // отдельно для каждого проекта (scope = project.id). Список всегда деревом: ось
+  // hierarchy в сторе осталась ради совместимости записей и здесь не читается
   const { filters, patch } = useChatFilters(project.id);
-  const { groupBy, sortOrder, hierarchy } = filters;
-  
+  const { sortOrder } = filters;
+  const groupBy: ChatGroupBy = filters.groupBy;
+  const subjectsMode = groupBy === 'subjects';
+  const subjectRun = useSubjectRun(project.id, subjectsMode);
+
   // Возврат чата из архива: выходим из архивного вида и открываем этот чат — достают
   // из архива, чтобы продолжить работу, а не чтобы остаться в архивном списке
   const leaveArchiveAndOpen = (s: Session) => {
@@ -470,8 +641,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     setOpenSwipeId(null);
     onSelect(s);
   };
-  // Память свёрнутых веток дерева
-  const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
+  // Память свёрнутых веток дерева; удалённые чаты из неё вычищаются по полному списку.
+  // До загрузки списка не передаём ничего — пустой стартовый массив не «чатов нет»; после
+  // смены проекта список помечен старым проектом, и хук его не примет до свежего ответа
+  const { collapsedIds, expandedIds, toggleCollapse } = useTreeCollapse(
+    project.id,
+    loadedProjectId ? { scope: loadedProjectId, ids: sessions.map(s => s.id) } : undefined,
+  );
   // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
   // в счётчике свёрнутой ветки, как и в переливе самой карточки
   const bgWorkIds = useBgWorkPresence();
@@ -491,6 +667,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { setArchiveLimit(ARCHIVE_PAGE); }, [filters.archivedOnly, project.id]);
   const archiveRest = filters.archivedOnly ? Math.max(0, filteredSessions.length - archiveLimit) : 0;
   const archiveCut = archiveRest > 0;
+  // Хвост под последней карточкой (её ROW_GAP и GROUP_GAP секции), который нижний
+  // padding списка вычитает. Под кнопкой «Показать ещё» хвоста нет — там полный SP.sm
+  const listTail = archiveCut ? 0 : ROW_GAP + (groupBy === 'none' ? 0 : GROUP_GAP);
   const archiveShownIds = useMemo(
     () => archiveCut
       ? new Set(sortChatsFlat(filteredSessions, sortOrder).slice(0, archiveLimit).map(s => s.id))
@@ -501,7 +680,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const isVisible = archiveShownIds
     ? (s: Session) => matchesFilters(s) && archiveShownIds.has(s.id)
     : matchesFilters;
-  const shownSessions = archiveShownIds ? filteredSessions.filter(s => archiveShownIds.has(s.id)) : filteredSessions;
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
   // подмножеству: в режиме архива бейдж иначе врал бы на весь список проекта,
@@ -513,12 +691,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
   // исходные данные покрывает зависимость filters
   const activeSessionId = activeSession?.id ?? null;
+  // readVersion — пересчёт счётчика непрочитанных свёрнутых веток при отметке прочтения
+  const readVersion = useReadStateVersion();
   const tree = useMemo(
-    () => hierarchy
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
-      : null,
+    () => buildChatTreeRows(sessions, { isVisible, collapsedIds, expandedIds, activeId: activeSessionId, sortOrder, bgWorkIds }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, bgWorkIds],
+    [sessions, sortOrder, collapsedIds, expandedIds, activeSessionId, filters, bgWorkIds, readVersion, archiveShownIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = scoped.length - filteredSessions.length;
@@ -527,36 +705,68 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
   const numberById = new Map(sessions.map((s, i) => [s.id, i + 1]));
 
-  // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
+  // === Композиция списка по осям (groupBy × sortOrder) ===
   // Сегменты дерева по корням (корень + его видимые строки-потомки). Ключ секции
   // корня — maxActivity поддерева: корень с живым ребёнком не тонет в старых днях.
-  const treeSegments = useMemo(() => {
-    if (!tree) return null;
-    // Чем представлен корень для секционеров — одна точка на оба списка (rootChatForSection)
-    return splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) }));
-  }, [tree, sortOrder]);
+  // Чем представлен корень для секционеров — одна точка на оба списка (rootChatForSection)
+  const treeSegments = useMemo(
+    () => splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) })),
+    [tree, sortOrder],
+  );
   const segByRootId = useMemo(
-    () => treeSegments ? new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])) : null,
+    () => new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])),
     [treeSegments],
   );
+  const treeRoots = treeSegments.map(x => x.rootChat);
 
-  // Секции: плоский список — из отфильтрованных чатов; дерево — из корней
-  const dayGroups = treeSegments
-    ? (groupBy === 'days' ? groupChats(treeSegments.map(x => x.rootChat), sortOrder) : [])
-    : (groupBy === 'days' ? groupChats(shownSessions, sortOrder) : []);
+  // Секции строятся из корней дерева
+  const dayGroups = groupBy === 'days' ? groupChats(treeRoots, sortOrder) : [];
   // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»); корень дерева
   // с несколькими тегами дублируется в каждой своей секции
-  const tagGroups = groupBy === 'tags'
-    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : shownSessions, registry, sortOrder)
+  const tagGroups = groupBy === 'tags' ? groupByTags(treeRoots, registry, sortOrder) : null;
+  // Режим «Темы»: чат ровно в одной секции, секцию задаёт корень ветки — на вход идут корни.
+  // rootOf (по полному списку) нужен карточке: пункт выбора темы есть только у корня
+  const rootOf = useMemo(() => rootResolver(sessions), [sessions]);
+  const subjectGroups: SubjectChatGroup[] | null = subjectsMode
+    ? groupBySubjects(treeRoots, subjects, sortOrder)
     : null;
-  // Без группировки: единый список (порядок дерева — pin+maxActivity, плоского — pin+дата)
-  const flatList = groupBy === 'none' && !treeSegments
-    ? sortChatsFlat(shownSessions, sortOrder)
-    : null;
-
-  // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
-  const renderCard = (s: Session, leadingInset = 0) => {
-    const card = (
+  // Подсказка про залежи: чаты «без темы» старше нижней границы фона модель сама не тронет
+  const sweepSince = project.subjectsSweepSince ? new Date(project.subjectsSweepSince).getTime() : null;
+  const startRun = () => { void startSubjectRun(project.id); };
+  const renderSubjectSection = (g: SubjectChatGroup, body: React.ReactNode) => {
+    const key = g.subject?.id ?? NO_SUBJECT_KEY;
+    const registryEmpty = subjects.length === 0;
+    const hasOld = !g.subject && !registryEmpty && sweepSince !== null
+      && g.items.some(c => new Date(c.updatedAt).getTime() < sweepSince);
+    return (
+      <div key={key} className={flashSubject === key ? LIST_FLASH_CLASS : undefined} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
+        <SubjectSectionHeader
+          subject={g.subject}
+          // Счётчик — видимые строки секции: в дереве это корни, в плоском списке —
+          // все чаты секции, включая дочерние, которых секция корня тоже показывает
+          count={g.items.length}
+          registry={subjects}
+          isMobile={isMobile}
+          online={online}
+          run={subjectRun}
+          onRename={setRenameSubject}
+          onMove={doMoveSubject}
+          onDelete={setDeleteSubject}
+          onRun={startRun}
+        />
+        {hasOld && (
+          <div style={{ padding: '0 4px 6px', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>
+            Чаты до включения тем AI сам не трогает — нажмите «Разложить»
+          </div>
+        )}
+        {body}
+      </div>
+    );
+  };
+  // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
+  // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
+  // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
+  const renderCard = (s: Session, leadingInset = 0) => (
       <ChatCard
         key={s.id}
         session={s}
@@ -573,6 +783,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onDelete={() => setDeleteTarget(s)}
         tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
         onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
+        // Тема — у корня ветки: у вложенного чата пункта нет; офлайн — тоже нет
+        onPickSubject={online && rootOf(s).id === s.id
+          ? anchor => setSubjectMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor })
+          : undefined}
+        subjectHint={subjectHint(s, subjects)}
+        subjectTitle={subjectOf(s, subjects) ? `Тема: ${subjectOf(s, subjects)!.name}` : 'Выбрать тему'}
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
         onEdited={handleSessionUpdated}
@@ -588,23 +804,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
       />
-    );
-    // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
-    // держит dnd-kit (ChatTreeRow.useDraggable), и нативный drag глушил бы вложение
-    if (!onAddToWall || hierarchy) return card;
-    return (
-      <div
-        key={s.id}
-        draggable
-        onDragStart={e => {
-          e.dataTransfer.setData(WALL_DRAG_TYPE, JSON.stringify(s));
-          e.dataTransfer.effectAllowed = 'copy';
-        }}
-      >
-        {card}
-      </div>
-    );
-  };
+  );
 
   // Заголовок секции режима «Теги»: цветовая точка, имя, счётчик чатов, кнопки
   // порядка ▲▼ (только у реестровых тегов; сироты и «Без тегов» неупорядочены)
@@ -613,47 +813,26 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const idx = rt ? registry.findIndex(t => t.name.toLowerCase() === rt.name.toLowerCase()) : -1;
     const dot = tagColor(registry, g.title);
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 4px 7px' }}>
-        <span style={{
-          width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-          background: g.tag ? (dot ?? C.accent) : C.textMuted,
-        }} />
-        <span style={{
-          fontSize: 11, fontWeight: 700, color: C.textSecondary,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {g.title}
-        </span>
-        <span style={{
-          fontSize: 10, fontFamily: 'inherit', color: C.textMuted,
-          background: C.bgSelected, padding: '1px 6px', borderRadius: R.sm, flexShrink: 0,
-        }}>
-          {g.items.length}
-        </span>
-        <span style={{ flex: 1 }} />
-        {rt && online && (
+      <ChatGroupHeader
+        title={g.title}
+        count={g.items.length}
+        marker={
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+            background: g.tag ? (dot ?? C.accent) : C.textMuted,
+          }} />
+        }
+        actions={rt && online ? (
           <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-            <button
-              onClick={() => moveTag(rt, -1)}
-              disabled={idx <= 0}
-              title="Переместить тег выше"
-              aria-label={`Тег «${rt.name}» выше`}
-              style={orderBtnStyle(idx <= 0)}
-            >
-              <ChevronUp size={13} strokeWidth={2.2} />
-            </button>
-            <button
-              onClick={() => moveTag(rt, 1)}
-              disabled={idx < 0 || idx >= registry.length - 1}
-              title="Переместить тег ниже"
-              aria-label={`Тег «${rt.name}» ниже`}
-              style={orderBtnStyle(idx < 0 || idx >= registry.length - 1)}
-            >
-              <ChevronDown size={13} strokeWidth={2.2} />
-            </button>
+            <IconButton size="xs" onClick={() => moveTag(rt, -1)} disabled={idx <= 0} title={`Тег «${rt.name}» выше`}>
+              <ChevronUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            <IconButton size="xs" onClick={() => moveTag(rt, 1)} disabled={idx < 0 || idx >= registry.length - 1} title={`Тег «${rt.name}» ниже`}>
+              <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
           </span>
-        )}
-      </div>
+        ) : undefined}
+      />
     );
   };
 
@@ -667,12 +846,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onNew={() => { void createNew(); }}
         hideNew={!online}
         sessions={sessions}
-        filters={filters}
+        filters={groupBy === filters.groupBy ? filters : { ...filters, groupBy }}
         patch={patch}
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
+        groupByOptions={GROUP_BY_OPTIONS}
       />
+      {subjectsMode && <SubjectRunBar run={subjectRun} />}
 
       {/* Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
           верхний padding у него есть, и вместе с общим набегало 18px пустоты под
@@ -683,7 +864,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
         // Фон явный — по той же причине, что в ChatList: прозрачные строки и липкая
         // подпись группы держатся на том, что под ними именно bgWhite
-        style={{ flex: 1, overflowY: 'auto', background: C.bgWhite, padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+        // Снизу — то же поле, что сбоку (SP.sm), считая от края последней карточки:
+        // её marginBottom и хвостовой отступ последней группы уже лежат под ней, и
+        // поверх полного padding'а они давали низ вдвое шире боковых полей
+        style={{
+          flex: 1, overflowY: 'auto', background: C.bgWhite,
+          padding: `${groupBy === 'none' ? SP.sm : SP.xxs}px ${SP.sm}px ${SP.sm - listTail}px`,
+        }}>
         {/* Все чаты проекта в архиве — то же состояние, что у глобального списка:
             иное пустое состояние молчит (чаты есть), и панель без этого блока
             оставалась бы белой дырой. Кнопки создания нет — «Новый» в тулбаре панели */}
@@ -726,7 +913,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             subtitle="Начните первый чат по этому проекту."
           />
         )}
-        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && scoped.length > 0 && (
+        {tree.rows.length === 0 && scoped.length > 0 && (
           <EmptyState
             compact
             icon={<FilterX size={20} strokeWidth={2} />}
@@ -742,13 +929,18 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             }
           />
         )}
-        {treeSegments ? (
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
-            {tagGroups ? (
+            {subjectGroups ? (
+              subjectGroups.map(g => renderSubjectSection(g,
+                g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
+                  <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
+                ))),
+              ))
+            ) : tagGroups ? (
               tagGroups.map(g => (
-                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
+                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
                   {renderTagSectionHeader(g)}
-                  {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                  {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                     // Корень с несколькими тегами дублируется в каждой своей секции —
                     // key несёт тег, иначе React сочтёт ветки одним узлом между секциями
                     <ChatTreeBranch key={`${g.tag ?? '__untagged__'}:${node.row.chat.id}`} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
@@ -761,37 +953,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               )))
             ) : (
               dayGroups.map(g => (
-                <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
+                <div key={g.title} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
                   <ListDateDivider title={g.title} plain />
-                  {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                  {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                     <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                   )))}
                 </div>
               ))
             )}
           </ChatGroupingDnd>
-        ) : tagGroups ? (
-          // display:flow-root у секций — иначе marginBottom последней карточки
-          // схлопывался бы с отступом секции, и высота плоского списка отличалась
-          // бы от «Иерархии» на 5px за каждую секцию (там последняя строка —
-          // flex-контейнер ChatTreeRow, её margin наружу не выходит). Панель
-          // растёт по контенту, и переключение иерархии дёргало её на эту разницу
-          tagGroups.map(g => (
-            <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
-              {renderTagSectionHeader(g)}
-              {g.items.map(c => renderCard(c))}
-            </div>
-          ))
-        ) : flatList ? (
-          flatList.map(c => renderCard(c))
-        ) : dayGroups.map(g => (
-          <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-            <ListDateDivider title={g.title} plain />
-            {g.items.map(c => renderCard(c))}
-          </div>
-        ))}
         {archiveRest > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 2px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: `${SP.xs + SP.xxs}px 0 0` }}>
             <Button variant="ghost" size="sm" onClick={() => setArchiveLimit(n => n + ARCHIVE_PAGE)}>
               Показать ещё {Math.min(archiveRest, ARCHIVE_PAGE)} из {archiveRest}
             </Button>
@@ -815,6 +987,35 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         );
       })()}
 
+      {/* Выбор темы чата: десктоп — меню по якорю, мобила — шторка */}
+      {subjectMenu && subjectTarget && (
+        <SubjectPickMenu
+          anchor={subjectMenu.anchor}
+          isMobile={isMobile}
+          chat={subjectTarget}
+          registry={subjects}
+          onClose={() => setSubjectMenu(null)}
+          onPick={id => { setSubjectMenu(null); moveChatSubject(subjectTarget, { subjectId: id }); }}
+          onCreate={name => { setSubjectMenu(null); createSubjectFor(subjectTarget, name); }}
+          onRelease={() => { setSubjectMenu(null); moveChatSubject(subjectTarget, { release: true }); }}
+        />
+      )}
+      {renameSubject && (
+        <SubjectRenameDialog
+          subject={renameSubject}
+          registry={subjects}
+          onSave={name => doRenameSubject(renameSubject, name)}
+          onClose={() => setRenameSubject(null)}
+        />
+      )}
+      {deleteSubject && (
+        <SubjectDeleteDialog
+          subject={deleteSubject}
+          chats={sessions.filter(c => c.subjectId === deleteSubject.id && rootOf(c).id === c.id).length}
+          onConfirm={() => doDeleteSubject(deleteSubject)}
+          onClose={() => setDeleteSubject(null)}
+        />
+      )}
 
       {deleteTarget && (
         <Modal

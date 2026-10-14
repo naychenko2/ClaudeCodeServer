@@ -505,7 +505,9 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
           overflow: 'hidden', pointerEvents: 'none',
         }}>
-          <div style={{ height: RATE_STRIPE_H, background: c.bg }}>
+          {/* Дорожка — тот же цвет заливки, приглушённый: c.bg (warningBg) в тёмной теме
+              сливается с карточкой, и полоска читалась обрубком, а не «осталось столько» */}
+          <div style={{ height: RATE_STRIPE_H, background: `color-mix(in srgb, ${c.fill} 22%, transparent)` }}>
             <div style={{ height: '100%', width: `${fillPct}%`, background: c.fill }} />
           </div>
         </div>
@@ -2196,7 +2198,7 @@ export function Composer({
       style={{
         ...iconBtnGuard,
         width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
-        background: C.textHeading, color: C.bgMain, cursor: 'pointer',
+        background: C.navActive, color: C.onNavActive, boxShadow: `inset 0 0 0 1px ${C.navActiveEdge}`, cursor: 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}
     >
@@ -2242,8 +2244,10 @@ export function Composer({
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,
         border: 'none',
-        background: C.textHeading,
-        color: C.bgMain,
+        // Пара активной вкладки хаба: в светлой — чернильный круг, в тёмной — приподнятый, а не белое пятно
+        background: C.navActive,
+        color: C.onNavActive,
+        boxShadow: `inset 0 0 0 1px ${C.navActiveEdge}`,
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',

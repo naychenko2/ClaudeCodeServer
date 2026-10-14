@@ -6,7 +6,8 @@ import { saveArchiveSessionAsNote } from '../api/chats';
 import { useOnline } from '../hooks/useOnline';
 import { C, ISLAND, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
-import { groupChats, sortChatsFlat } from '../lib/chatGroups';
+import { groupChats } from '../lib/chatGroups';
+import { useReadStateVersion } from '../lib/chatReadState';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
@@ -65,17 +66,18 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
 
   // === Фильтры и оси списка чатов ===
-  // Фильтры + оси вида (groupBy/sortOrder/hierarchy) — единый state, персистится
-  // в localStorage отдельно от проектных списков (scope 'global')
+  // Фильтры + оси вида (groupBy/sortOrder) — единый state, персистится в localStorage
+  // отдельно от проектных списков (scope 'global'). Список всегда деревом: ось
+  // hierarchy в сторе осталась ради совместимости записей и здесь не читается
   const { filters, patch } = useChatFilters('global');
-  const { sortOrder, hierarchy } = filters;
+  const { sortOrder } = filters;
   // groupBy из хранилища может быть недоступен глобальному списку ('tags',
   // напр., мигрирован из legacy cc_chat_view:global) — клампим к опциям, иначе
   // ни одна ветка рендера не сработает: пустой лист без empty-state. Хранилище
   // не перезаписываем — первый же явный выбор пользователя всё починит сам.
   const groupBy: ChatGroupBy = GROUP_BY_OPTIONS.includes(filters.groupBy) ? filters.groupBy : 'days';
-  // Память свёрнутых веток дерева
-  const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
+  // Память свёрнутых веток дерева; удалённые чаты из неё вычищаются по полному списку
+  const { collapsedIds, expandedIds, toggleCollapse } = useTreeCollapse('global', { scope: 'global', ids: chats.map(c => c.id) });
   // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
   // в счётчике свёрнутой ветки, как и в переливе самой карточки
   const bgWorkIds = useBgWorkPresence();
@@ -97,12 +99,12 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // чатов совпадает с плоским списком. Сборка леса мемоизирована — hover по карточке
   // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
   // исходные данные покрывает зависимость filters
+  // readVersion — пересчёт счётчика непрочитанных свёрнутых веток при отметке прочтения
+  const readVersion = useReadStateVersion();
   const tree = useMemo(
-    () => hierarchy
-      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, bgWorkIds })
-      : null,
+    () => buildChatTreeRows(chats, { isVisible, collapsedIds, expandedIds, activeId, sortOrder, bgWorkIds }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, bgWorkIds],
+    [chats, sortOrder, collapsedIds, expandedIds, activeId, filters, bgWorkIds, readVersion],
   );
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
@@ -161,28 +163,23 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   };
 
 
-  // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
+  // === Композиция списка по осям (groupBy × sortOrder) ===
   // groupBy уже клампнут к GROUP_BY_OPTIONS выше — ветка 'tags' сюда не доходит.
   // Сегменты дерева — как в SessionList: при сортировке по активности корень
   // секционируется по maxActivity поддерева, при сортировке по созданию подмена даты
   // сломала бы секции — там едет настоящая сессия корня с её createdAt.
-  const treeSegments = useMemo(() => {
-    if (!tree) return null;
-    return splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) }));
-  }, [tree, sortOrder]);
+  const treeSegments = useMemo(
+    () => splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) })),
+    [tree, sortOrder],
+  );
   const segByRootId = useMemo(
-    () => treeSegments ? new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])) : null,
+    () => new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])),
     [treeSegments],
   );
 
-  const dayGroups = groupBy === 'days'
-    ? groupChats(treeSegments ? treeSegments.map(x => x.rootChat) : filteredChats, sortOrder)
-    : [];
-  const flatList = groupBy === 'none' && !treeSegments
-    ? sortChatsFlat(filteredChats, sortOrder)
-    : null;
+  const dayGroups = groupBy === 'days' ? groupChats(treeSegments.map(x => x.rootChat), sortOrder) : [];
 
-  // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
+  // leadingInset — место под контрол ветки дерева
   const renderCard = (chat: Session, leadingInset = 0) => (
     <ChatCard
       key={chat.id}
@@ -291,7 +288,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           }
         />
       )}
-      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && scoped.length > 0 && (
+      {tree.rows.length === 0 && scoped.length > 0 && (
         <EmptyState
           compact
           icon={<FilterX size={20} strokeWidth={2} />}
@@ -307,36 +304,22 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           }
         />
       )}
-      {treeSegments ? (
-        <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>
-          {groupBy === 'none' ? (
-            treeSegments.map(({ seg }) => nestTreeRows(seg).map(node => (
-              <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
-            )))
-          ) : (
-            dayGroups.map(g => (
-              <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-                <ListDateDivider title={g.title} plain />
-                {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
-                  <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
-                )))}
-              </div>
-            ))
-          )}
-        </ChatGroupingDnd>
-      ) : flatList ? (
-        flatList.map(c => renderCard(c))
-      ) : dayGroups.map(g => (
-        // display:flow-root — иначе marginBottom последней карточки схлопывался бы
-        // с отступом группы, и высота списка отличалась бы от режима «Иерархия» на
-        // 5px за каждую группу: там последняя строка — flex-контейнер (ChatTreeRow),
-        // её margin наружу не выходит. Панель растёт по контенту, и переключение
-        // иерархии дёргало её на эту разницу
-        <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-          <ListDateDivider title={g.title} plain />
-          {g.items.map(c => renderCard(c))}
-        </div>
-      ))}
+      <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>
+        {groupBy === 'none' ? (
+          treeSegments.map(({ seg }) => nestTreeRows(seg).map(node => (
+            <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
+          )))
+        ) : (
+          dayGroups.map(g => (
+            <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
+              <ListDateDivider title={g.title} plain />
+              {g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
+                <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
+              )))}
+            </div>
+          ))
+        )}
+      </ChatGroupingDnd>
     </>
   );
 

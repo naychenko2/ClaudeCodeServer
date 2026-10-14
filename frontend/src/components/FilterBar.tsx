@@ -4,7 +4,8 @@ import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal, IconButton, Chip } from './ui';
+import { Modal, IconButton, Chip, usePanelElement, usePanelHeaderHold } from './ui';
+import { clampPopupLeft } from './ui/Menu';
 import { personaLabel } from '../lib/personas';
 import { useCanHover } from '../lib/pointer';
 import { useListAutoFocus } from '../lib/listAutoFocus';
@@ -12,7 +13,7 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS,
   chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
-  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter, type ChatGroupBy,
+  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
 } from '../lib/chatFilters';
 
 // === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
@@ -63,14 +64,6 @@ interface FilterBarProps {
   // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле,
   // xs в шапке панели: там весь ряд контролов высотой 24)
   triggerSize?: 'xs' | 'sm' | 'md' | 'lg';
-  // Секция «Группировка» внутри поповера. Нужна, когда тулбар уехал в шапку
-  // панели: там на пилюлю группировки места нет, а из трёх осей вида она самая
-  // редкая. В мобильной шторке не показывается — группировка там своя, в «Виде».
-  grouping?: {
-    value: ChatGroupBy;
-    options: { value: ChatGroupBy; label: string; icon: ReactNode }[];
-    onChange: (v: ChatGroupBy) => void;
-  };
 }
 
 // Маркер-точка статуса: на активном чипе — onAccent, иначе — цвет статуса
@@ -335,7 +328,7 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 }
 
 export function FilterBar({
-  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm', grouping,
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm',
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -344,9 +337,17 @@ export function FilterBar({
   // Рамка триггера на момент открытия: поповер живёт в портале и позиционируется
   // по ней — с клампом к окну, чтобы не вылезал за край на узких ширинах
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Рамка карточки панели (если фильтр в её шапке): поповер держится в ней, а не
+  // только в окне
+  const panel = usePanelElement();
+  const [boundary, setBoundary] = useState<DOMRect | null>(null);
+  // Поповер в портале: курсор уходит с карточки, и без удержания шапка гасила бы
+  // кнопку фильтра под открытым поповером
+  usePanelHeaderHold(open);
 
   const toggleOpen = () => {
     setAnchor(rootRef.current?.getBoundingClientRect() ?? null);
+    if (!open) setBoundary(panel?.getBoundingClientRect() ?? null);
     setOpen(o => !o);
   };
 
@@ -410,7 +411,8 @@ export function FilterBar({
     <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
       <IconButton
         size={triggerSize}
-        active={hasFilters}
+        active={hasFilters || open}
+        expanded={open}
         title={hasFilters ? `Фильтры: ${summary}` : 'Фильтры и поиск'}
         onClick={toggleOpen}
       >
@@ -467,7 +469,7 @@ export function FilterBar({
         <div ref={popRef} style={{
           position: 'fixed',
           top: anchor.bottom + 4,
-          left: Math.max(8, Math.min(anchor.left, window.innerWidth - POPOVER_W - 8)),
+          left: clampPopupLeft(anchor.left, POPOVER_W, window.innerWidth, boundary),
           width: POPOVER_W, boxSizing: 'border-box',
           maxHeight: `calc(100vh - ${anchor.bottom + 16}px)`, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`,
@@ -475,19 +477,6 @@ export function FilterBar({
           padding: SP.md, zIndex: Z.dropdown,
         }}>
           <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} />
-          {grouping && (
-            <div style={{ marginTop: SP.md }}>
-              <SectionTitle>Группировка</SectionTitle>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-                {grouping.options.map(o => (
-                  <Chip variant="toggle" key={o.value} selected={o.value === grouping.value} onClick={() => grouping.onChange(o.value)}>
-                    {o.icon}
-                    {o.label}
-                  </Chip>
-                ))}
-              </div>
-            </div>
-          )}
           <div style={{
             marginTop: SP.xs, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
           }}>

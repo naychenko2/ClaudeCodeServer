@@ -18,6 +18,31 @@ public sealed class ProjectTag
     public string? Color { get; set; }
 }
 
+// Кто завёл тему чатов / назначил её чату
+public static class SubjectSources
+{
+    public const string Ai = "ai";
+    public const string Human = "human";
+}
+
+// Тема чатов проекта — элемент Project.SubjectRegistry. Не путать с Session.Topic (значок
+// чата). CreatedBy = ai — тему завела модель, и уборка пустых тем вправе её удалить; любое
+// ручное действие с темой (переименование, порядок, цвет, перенос чата в неё) переводит её
+// в human, и такую тему уборка не трогает никогда.
+public sealed class ProjectSubject
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+    public int Order { get; set; }
+    public string? Color { get; set; }
+    public string CreatedBy { get; set; } = SubjectSources.Human;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// Строка ручной правки реестра тем (PUT /api/projects/{id}/subjects): Id известной темы —
+// правка, без Id — новая тема человека. Order null — порядок по позиции в запросе.
+public sealed record ProjectSubjectEdit(string? Id, string Name, int? Order = null, string? Color = null);
+
 // Иконка проекта: инициалы+цвет по умолчанию, подобранный значок или загруженная
 // владельцем картинка опционально. Значок — данные записи (ADR-009 §6), картинка —
 // файл в data/project-icon-images/{id}/ (ревизия ADR-009 от 01.10.2026).
@@ -150,4 +175,11 @@ public class Project
     // (User.ArchiveAfterDays); явное значение перекрывает его для этого проекта.
     // Nullable с дефолтом: старые записи projects.json читаются штатно, стор уже в бэкапе.
     public int? ArchiveAfterDays { get; set; }
+    // Темы чатов проекта. Правка — только через ProjectManager.
+    // Аддитивные поля: старые записи projects.json читаются штатно, BackupSchema.Version
+    // не двигается.
+    public List<ProjectSubject> SubjectRegistry { get; set; } = [];
+    // Нижняя граница фонового разбора: ставится на первом тике, где флаг владельца включён.
+    // Фон берёт только чаты с активностью не раньше неё, залежи — только кнопкой.
+    public DateTime? SubjectsSweepSince { get; set; }
 }

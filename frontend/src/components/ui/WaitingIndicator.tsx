@@ -40,7 +40,7 @@ const WAIT_CLOCK_MIN_W = '9ch';
 // «Синхронизирую транскрипты · 52 с». Пропы примитивами: объект пересоздавался бы на каждом
 // рендере ленты. Подпись встаёт только с порога TOOL_TIMER_MIN_MS, чтобы быстрые Read/Grep
 // не мигали поверх глаголов; дальше машинка по кругу печатает подпись и счётчик этапа.
-export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt, activeToolDetail, activeToolOnScreen = false, activeToolOperation = null }: {
+export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt, activeToolDetail, activeToolOnScreen = false, activeToolOperation = null, personaId }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
   awaitingResponse?: boolean;
@@ -64,6 +64,10 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   activeToolOnScreen?: boolean;
   // Типовая операция (тесты, сборка…) — иконка перед временем, та же, что в шапке карточки
   activeToolOperation?: Operation | null;
+  // Персона своего чата: undefined — взять из глобального стора открытого чата. Чат
+  // передаёт её явно — в «Стене» (embedded) стор не публикуется, и без пропа лицом
+  // вставала дефолт-персона проекта вместо персоны колонки
+  personaId?: string | null;
 } = {}) {
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -73,7 +77,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   const ringColor = planning ? C.plan : C.smoke;
   // Лицо индикатора = релевантная персона контекста.
   // Аватар 28px с расходящимися кольцами «Эхо» поверх.
-  const facePersona = useContextPersona();
+  const facePersona = useContextPersona({ personaId });
 
   const [text, setText] = useState(awaitingResponse ? 'Ожидаю ответа…' : '');
 

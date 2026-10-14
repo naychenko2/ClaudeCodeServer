@@ -1,26 +1,22 @@
 // Док «Стены» — капсула ПОД доком проектов, в обоих режимах на одном месте:
-// номера чатов стены, лупа (пикер чатов) и приёмник перетаскивания — перетащи
-// карточку чата из панели «Чаты», и чат встанет колонкой. Кнопок входа и выхода
+// номера чатов стены и лупа (пикер чатов). Чат на стену ставят пикер и пункт меню
+// «На стену» у карточки чата: перетаскивания карточки на док больше нет — список
+// чатов всегда дерево, и его DnD занят ручной группировкой. Кнопок входа и выхода
 // тут НЕТ: на стену уводит клик по номерку чата, обратно — пилюля «Проекты» в
 // шапке (на стене она подсвечена как активный раздел и гасит режим).
 //
 // При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
-// состава, и без загруженного снимка дроп затирал бы чужие монеты.
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { AlarmClock, Plus, Search } from 'lucide-react';
+// состава, и без загруженного снимка добавление затирало бы чужие монеты.
+import { useEffect, useState, type CSSProperties } from 'react';
+import { AlarmClock, Search } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
-import { showToast } from '../../lib/toast';
-import type { Session } from '../../types';
 import { useChatActivity, STATUS_COLOR, STATUS_PULSE, type ActivityStatus } from '../../lib/projectActivity';
 import { projectMainColor } from '../projects/projectUtil';
-import { useWallState, initWall, addChatSafe, focusChat, swapChats, startOrderDrag, MAX_CHATS } from './wallStore';
+import { useWallState, initWall, focusChat, swapChats, startOrderDrag } from './wallStore';
 import { WallPicker } from './WallPicker';
-
-// Тип данных перетаскивания карточки чата (кладёт SessionList в плоском режиме)
-export const WALL_DRAG_TYPE = 'cc-wall-chat';
 
 // Подписи статуса — про ЧАТ (у дока проектов те же статусы говорят про проект)
 const CHAT_STATUS_TITLE: Record<ActivityStatus, string> = {
@@ -41,29 +37,18 @@ export function WallDock({ onOpenWall, slots = 0 }: {
   // Сторожа чатов: у номерка чата с живым сторожем — будильник в нижнем углу
   // (верхний занят точкой статуса)
   const watchdogs = useWatchdogPresence();
-  // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
-  // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
-  // курсор не дойдёт до неё, а знать «сюда можно» надо заранее.
-  const [dragging, setDragging] = useState(false);
-  const [over, setOver] = useState(false);
   // Курсор над капсулой — номерки просыпаются цветом (как иконки в доке проектов):
   // в покое ряд спит, нейтральный контур кроме фокусного; навели — все встали цветом
   // своего проекта. Фокусный ВСЕГДА цветной, как активный проект в спящей рельсе
   const [railHover, setRailHover] = useState(false);
-  // Счётчик enter/leave: переход курсора между ДОЧЕРНИМИ элементами капсулы шлёт
-  // dragleave, и без счётчика мишень мигала и гасла на полпути
-  const overDepth = useRef(0);
 
+  // Номерок утащили на колонку стены: пока идёт перетаскивание, мышиных событий нет,
+  // и mouseleave капсулы не придёт — без сброса ряд так и остался бы проснувшимся
   useEffect(() => {
-    const onStart = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes(WALL_DRAG_TYPE)) setDragging(true);
-    };
-    const onEnd = () => { setDragging(false); setOver(false); overDepth.current = 0; setRailHover(false); };
-    document.addEventListener('dragstart', onStart);
+    const onEnd = () => setRailHover(false);
     document.addEventListener('dragend', onEnd);
     document.addEventListener('drop', onEnd);
     return () => {
-      document.removeEventListener('dragstart', onStart);
       document.removeEventListener('dragend', onEnd);
       document.removeEventListener('drop', onEnd);
     };
@@ -74,24 +59,6 @@ export function WallDock({ onOpenWall, slots = 0 }: {
 
   useEffect(() => { initWall(undefined); }, []);
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setOver(false);
-    setDragging(false);
-    overDepth.current = 0;
-    const raw = e.dataTransfer.getData(WALL_DRAG_TYPE);
-    if (!raw) return;
-    try {
-      const s = JSON.parse(raw) as Session;
-      const name = s.name?.trim() || 'Чат';
-      const res = await addChatSafe(s);
-      showToast('Стена',
-        res === 'added' ? `«${name}» на стене`
-        : res === 'duplicate' ? `«${name}» уже на стене`
-        : `На стене уже ${MAX_CHATS} чатов — уберите лишний`);
-    } catch { /* битые данные перетаскивания — игнорируем */ }
-  };
-
   const onWall = !onOpenWall;
 
   return (
@@ -100,35 +67,7 @@ export function WallDock({ onOpenWall, slots = 0 }: {
       style={{ marginTop: 8 }}
       onMouseEnter={() => setRailHover(true)}
       onMouseLeave={() => setRailHover(false)}
-      // Мишень как у рельсы панелей: пока чат тащат — пунктирная обводка, под
-      // курсором сплошная акцентная с подложкой (PanelRail.railBorder)
-      border={dragging ? (over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`) : undefined}
-      background={dragging && over ? C.accentMuted : undefined}
-      onDragEnter={e => {
-        if (!e.dataTransfer.types.includes(WALL_DRAG_TYPE)) return;
-        overDepth.current++;
-        setOver(true);
-      }}
-      onDragOver={e => { if (e.dataTransfer.types.includes(WALL_DRAG_TYPE)) e.preventDefault(); }}
-      onDragLeave={() => { overDepth.current = Math.max(0, overDepth.current - 1); if (overDepth.current === 0) setOver(false); }}
-      onDrop={handleDrop}
     >
-      {/* Пока чат тащат, капсула ЦЕЛИКОМ становится мишенью: кнопки уступают место
-          одной иконке — рельса не должна расти на лишний слот и дёргать раскладку */}
-      {dragging ? (
-        <span style={{
-          width: 32, height: 32, borderRadius: R.md, flexShrink: 0, boxSizing: 'border-box',
-          border: over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`,
-          background: over ? C.accentLight : 'transparent',
-          color: over ? C.accent : C.textSecondary,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Plus size={16} strokeWidth={ICON_STROKE} />
-        </span>
-      ) : (
-      <>
-      {/* Шляпка — только в покое: пока чат тащат, капсула ужимается до одной
-          мишени, и ярлык рос бы ровно там, куда человек целится */}
       <RailHat side="left" label="Стена" title="Стена чатов" />
 
       {/* ВЕСЬ набор стены номерками — карта состава в ОБОИХ режимах: цвет номерка =
@@ -224,14 +163,10 @@ export function WallDock({ onOpenWall, slots = 0 }: {
       {chats.length > 0 && <RailSep />}
 
       {/* Поиск чата для стены — в ОБОИХ режимах: собрать стену можно, не покидая
-          проект. Лупа, а не «плюс»: за кнопкой пикер с поиском по всем чатам, а
-          «плюс» в этой капсуле занят мишенью перетаскивания выше */}
+          проект. Лупа, а не «плюс»: за кнопкой пикер с поиском по всем чатам */}
       <RailIconButton side="left" label="Найти чат для стены" onClick={() => setPicker(true)}>
         <Search size={16} strokeWidth={ICON_STROKE} />
       </RailIconButton>
-
-      </>
-      )}
 
       {picker && <WallPicker onClose={() => setPicker(false)} />}
     </RailCapsule>

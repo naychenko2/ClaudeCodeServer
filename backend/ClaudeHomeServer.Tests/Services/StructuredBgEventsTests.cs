@@ -480,9 +480,12 @@ public class StructuredBgEventsTests : IDisposable
     // БыстрыеСменыСостояния_ДоставляютсяВПорядкеСмены в master как раз был таким).
     // [CallerArgumentExpression] подставляет выражение condition строкой, чтобы при
     // таймауте сразу было видно, какое именно условие не дождались.
+    // Потолок 10 с, а не 2: на CI параллельно идут тысячи тестов, и цепочка публикаций
+    // через пул потоков не успевала за 2 с (флак ЗавершениеКоманды_СнимаетТихийЗначок).
+    // Выход — по условию, поэтому зелёный прогон дольше не становится.
     private static async Task WaitForAsync(
         Func<bool> condition,
-        int timeoutMs = 2000,
+        int timeoutMs = 10_000,
         string? description = null,
         [CallerArgumentExpression(nameof(condition))] string? conditionExpression = null)
     {

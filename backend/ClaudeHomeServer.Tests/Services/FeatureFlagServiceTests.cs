@@ -127,19 +127,22 @@ public class FeatureFlagServiceTests : IDisposable
         effective.Keys.Should().BeEquivalentTo(FeatureFlagCatalog.All.Select(f => f.Key));
     }
 
-    [Fact]
-    public void ОверрайдСнятогоФлага_ВUsersJson_ПереживаетПерезагрузкуИНеЛомаетЧтение()
+    // Снятые из каталога флаги, чей ключ остался в data/users.json у людей:
+    // composer-context-row — 2026-10-03, chat-subjects — 2026-10-10
+    [Theory]
+    [InlineData("composer-context-row")]
+    [InlineData("chat-subjects")]
+    public void ОверрайдСнятогоФлага_ВUsersJson_ПереживаетПерезагрузкуИНеЛомаетЧтение(string key)
     {
-        // composer-context-row снят из каталога 2026-10-03, но ключ остался в data/users.json у людей
-        _users.SetFeatureFlag(_userId, "composer-context-row", true);
-        FeatureFlagCatalog.Exists("composer-context-row").Should().BeFalse();
+        _users.SetFeatureFlag(_userId, key, true);
+        FeatureFlagCatalog.Exists(key).Should().BeFalse();
 
         var reloaded = new FeatureFlagService(CreateUserStore());
         var effective = reloaded.GetEffective(_userId);
 
-        effective.Should().NotContainKey("composer-context-row");
+        effective.Should().NotContainKey(key);
         effective.Keys.Should().BeEquivalentTo(FeatureFlagCatalog.All.Select(f => f.Key));
-        reloaded.IsEnabled(_userId, "composer-context-row").Should().BeFalse("снятый ключ никого не включает");
+        reloaded.IsEnabled(_userId, key).Should().BeFalse("снятый ключ никого не включает");
     }
 
     [Fact]

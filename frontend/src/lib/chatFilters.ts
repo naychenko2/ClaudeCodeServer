@@ -18,7 +18,9 @@ export type ChatOnlyFilter = 'pinned' | 'temp' | 'group';
 // Оси вида списка (группировка, порядок, иерархия) — живут в filters, персистятся
 // вместе с ним. От фильтрующих полей отличаются тем, что не скрывают чаты, а лишь
 // перестраивают список: isDefaultFilters их не учитывает.
-export type ChatGroupBy = 'days' | 'tags' | 'none';
+// 'subjects' — темы чатов проекта: есть только у списка проекта; у
+// глобального списка значение из хранилища клампится в 'days' на месте рендера
+export type ChatGroupBy = 'days' | 'tags' | 'subjects' | 'none';
 // Белый список значений оси: он же порядок цикла кнопки-переключателя и фильтр
 // мусора из localStorage (незнакомое значение вырождается в 'newest'). Список
 // неизменяем (as const), а тип оси выводится ИЗ НЕГО — иначе список и тип разошлись бы.
@@ -51,7 +53,10 @@ export interface ChatFilters {
   groupBy: ChatGroupBy;
   // Порядок внутри секций и (для days/none) порядок самих секций
   sortOrder: ChatSortOrder;
-  // Дерево по parentSessionId: группировка применяется к корням, дети — под корнём
+  // Дерево по parentSessionId: группировка применяется к корням, дети — под корнём.
+  // Список теперь ВСЕГДА деревом, переключателя нет: поле оставлено ради совместимости
+  // сохранённых записей и legacy-миграции, нормализация держит его равным true,
+  // а списки его не читают
   hierarchy: boolean;
   // Режим архива: список показывает ТОЛЬКО архивные чаты (обычные скрыты).
   // Это ОСЬ РЕЖИМА, а не значение в only[]: там OR-семантика «показать только»
@@ -81,7 +86,7 @@ function defaults(): ChatFilters {
     search: '',
     groupBy: 'days',
     sortOrder: 'newest',
-    hierarchy: false,
+    hierarchy: true,
     archivedOnly: false,
   };
 }
@@ -129,7 +134,7 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     ? readLegacyView(scopeKey)
     : {};
   const groupBy: ChatGroupBy =
-    p.groupBy === 'tags' || p.groupBy === 'none' || p.groupBy === 'days'
+    p.groupBy === 'tags' || p.groupBy === 'subjects' || p.groupBy === 'none' || p.groupBy === 'days'
       ? p.groupBy
       : legacyAxes.groupBy ?? 'days';
   return {
@@ -144,7 +149,8 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     // Белым списком: запись старого формата ('newest'/'oldest') читается как есть,
     // а незнакомое значение (мусор, ось из будущей версии) — дефолтом, не роняя фильтры
     sortOrder: ALL_SORT_ORDERS.find(v => v === p.sortOrder) ?? 'newest',
-    hierarchy: typeof p.hierarchy === 'boolean' ? p.hierarchy : legacyAxes.hierarchy ?? false,
+    // Ось больше не переключается: что бы ни лежало в записи — дерево
+    hierarchy: true,
     // Запись старого формата (до режима архива) — начинаем с обычного списка
     archivedOnly: typeof p.archivedOnly === 'boolean' ? p.archivedOnly : false,
   };

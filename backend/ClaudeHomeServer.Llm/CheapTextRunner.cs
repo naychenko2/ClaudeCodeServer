@@ -306,13 +306,15 @@ public sealed class CheapTextRunner(
     // Действие без облачного шага: занятый ходом движок означает «не сейчас» — вызывающий
     // получает null и деградирует ровно как при недоступной локали (иначе единственная
     // альтернатива — платить за бесплатное по замыслу место).
-    public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+    public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
+        RunLocalOnlyAsync(actionKey, prompt, jsonFormat: null, ct);
+
+    // Маршрут сверяется на КАЖДОМ вызове: админ мог перевести место на облако посреди прохода
+    public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, object? jsonFormat,
+        CancellationToken ct)
     {
         if (!router.UsesLocal(actionKey) || router.LocalBlockedByTurn) return null;
-        var spec = router.ProfileFor(actionKey);
-        var local = await ollama.GenerateTextAsync(
-            prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
-            numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId: null, label: actionKey, ct);
+        var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId: null, ct);
         return string.IsNullOrWhiteSpace(local) ? null : local;
     }
 

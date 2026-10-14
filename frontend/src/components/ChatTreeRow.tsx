@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { C, R, FONT, FS } from '../lib/design';
-import { formatGroupCount, type ChatTreeRowData } from '../lib/chatTree';
+import { collapsedBranchHint, collapsedSignal, formatGroupCount, type ChatTreeRowData, type CollapsedSignal } from '../lib/chatTree';
 import type { Session } from '../types';
 import { useChatDrag } from './useChatDrag';
 import { ROW_GAP, ROW_R } from './ChatCard';
@@ -15,7 +15,7 @@ import { ROW_GAP, ROW_R } from './ChatCard';
 //
 // Строка одновременно источник и цель перетаскивания (ручная группировка —
 // ChatGroupingDnd). Вне DnD-провайдера useChatDrag отдаёт нейтральное состояние,
-// поэтому строка рендерится и без него (flat-режим).
+// поэтому строка рендерится и без него.
 
 const STEP = 14;
 const MAX_DEPTH = 6;
@@ -37,6 +37,19 @@ const CONTROL_MOBILE = 20;
 const CONTROL_INSET = 8;
 const CONTROL_INSET_COLLAPSED = 14;
 
+// Цвет пилюли свёрнутой ветки по её главному сигналу. «Ждёт ответа» — медовый, как
+// визуал waiting у карточки, и потому не путается с accent «работает». Ошибка — сплошная
+// заливка: бледный dangerBg с текстом dangerText на маленькой пилюле не отличался от
+// оранжевого «работает». Текст поверх сплошного danger — onAccent, как у кнопки danger
+// (bgWhite в тёмной теме сам тёмный)
+const SIGNAL_STYLE: Record<CollapsedSignal, { bg: string; fg: string }> = {
+  error:   { bg: C.danger,      fg: C.onAccent },
+  waiting: { bg: C.warningBg,   fg: C.warningText },
+  running: { bg: C.accentLight, fg: C.accent },
+  unread:  { bg: C.infoBg,      fg: C.info },
+  none:    { bg: C.bgSelected,  fg: C.textMuted },
+};
+
 /**
  * Насколько сдвинуть содержимое карточки вправо, чтобы контрол ветки не лёг на
  * название (проп leadingInset у ChatCard). Строка без детей контрола не несёт.
@@ -49,7 +62,8 @@ export function treeLeadingInset(row: ChatTreeRowData): number {
 interface Props {
   row: ChatTreeRowData;
   isMobile: boolean;
-  onToggleCollapse: (id: string) => void;
+  // collapsedNow — что ветка показывает сейчас (свёрнутость бывает и по умолчанию)
+  onToggleCollapse: (id: string, collapsedNow: boolean) => void;
   children: React.ReactNode;
 }
 
@@ -77,10 +91,9 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
   const offset = (d: number) => Math.min(d, MAX_DEPTH) * STEP;
   const spineX = (d: number) => offset(d) + inset;
 
-  const { depth, isLast, hasChildren, collapsed, groupCount, groupRunningCount } = row;
-  const collapsedHint = groupRunningCount > 0
-    ? `Развернуть: вложенных чатов ${groupCount}, из них в работе ${groupRunningCount}`
-    : `Развернуть: вложенных чатов ${groupCount}`;
+  const { depth, isLast, hasChildren, collapsed, groupCount } = row;
+  const signal = collapsedSignal(row);
+  const collapsedHint = collapsedBranchHint(row);
   const lineColor = (accent: boolean) => (accent ? C.accent : C.divider);
 
   return (
@@ -159,12 +172,12 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
           названии. Кромка состояния под ним видна выше и ниже — она во всю высоту.
           Развёрнутая ветка — треугольник, свёрнутая — счётчик спрятанных чатов:
           два состояния одного места, поэтому отдельного бейджа-числа больше нет.
-          Сколько из них в работе, несёт цвет (accent — как у кромки «работает»),
+          Что творится внутри, несёт цвет (самый важный сигнал — collapsedSignal),
           а не второе число: пилюля растёт вправо, и «99+/99+» накрыла бы заголовок.
-          Обе цифры остаются в подсказке. */}
+          Все цифры остаются в подсказке. */}
       {hasChildren && (
         <button
-          onClick={e => { e.stopPropagation(); onToggleCollapse(row.chat.id); }}
+          onClick={e => { e.stopPropagation(); onToggleCollapse(row.chat.id, collapsed); }}
           // Сворачивание — не перетаскивание: гасим нажатие до сенсоров dnd-kit,
           // иначе тяга за контрол уносила бы всю ветку
           onMouseDown={e => e.stopPropagation()}
@@ -192,13 +205,13 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
             border: 'none', borderRadius: R.max, cursor: 'pointer',
             // Подложка только у свёрнутой: у неё внутри число, и без неё оно
             // читалось бы как часть карточки. Развёрнутая — голый треугольник
-            background: collapsed
-              ? (groupRunningCount > 0 ? C.accentLight : C.bgSelected)
-              : 'none',
-            color: collapsed && groupRunningCount > 0
-              ? C.accent
+            background: collapsed ? SIGNAL_STYLE[signal].bg : 'none',
+            color: collapsed && signal !== 'none'
+              ? SIGNAL_STYLE[signal].fg
               : row.onActivePath ? C.accent : chevronHover ? C.textSecondary : C.textMuted,
-            fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600, lineHeight: 1,
+            // Цифры — sans с табличными цифрами: в mono на этом кегле «10» читалось как «18»
+            fontFamily: FONT.sans, fontVariantNumeric: 'tabular-nums',
+            fontSize: FS.xs, fontWeight: 600, lineHeight: 1,
             whiteSpace: 'nowrap',
           }}
         >
@@ -250,7 +263,7 @@ const EXPAND_MS = 200;
 interface BranchProps {
   node: ChatTreeNode;
   isMobile: boolean;
-  onToggleCollapse: (id: string) => void;
+  onToggleCollapse: (id: string, collapsedNow: boolean) => void;
   renderCard: (chat: Session, leadingInset: number) => React.ReactNode;
 }
 

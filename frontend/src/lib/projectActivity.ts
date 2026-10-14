@@ -72,6 +72,9 @@ let _fingerprint = '';
 // рангу), и пересоздавать Map друг из-за друга — лишние ререндеры подписчиков
 let _chatAgg = new Map<string, ActivityStatus>();
 let _chatFingerprint = '';
+// Третий срез — для точки шеврона мобильного переключателя (aggregateRootChats)
+let _rootChatAgg = new Map<string, ActivityStatus>();
+let _rootChatFingerprint = '';
 const _listeners = new Set<() => void>();
 
 let _timer: ReturnType<typeof setInterval> | null = null;
@@ -183,6 +186,23 @@ function aggregateChats(active: HomeSessionInfo[], recent: HomeSessionInfo[]): M
   return next;
 }
 
+// Срез для точки на шевроне мобильного переключателя: те же статусы, но по правилам
+// точки проекта в рельсе. Дочерние чаты (исполнители задач) не считаются — их нет и
+// в шторке (switcherSections), закреплённый дочерний остаётся по той же причине.
+// Непрочитанность — только по чатам, видимым в фильтре списка своего проекта
+// (visibleInProjectFilter: кэш предикатов к этому моменту свежий, aggregate идёт раньше)
+function aggregateRootChats(active: HomeSessionInfo[], recent: HomeSessionInfo[], chats: Map<string, ActivityStatus>): Map<string, ActivityStatus> {
+  const next = new Map<string, ActivityStatus>();
+  for (const s of [...active, ...recent]) {
+    const st = chats.get(s.id);
+    if (!st || next.has(s.id)) continue;
+    if (s.parentSessionId && !s.isPinned) continue;
+    if (st === 'unread' && !visibleInProjectFilter(s)) continue;
+    next.set(s.id, st);
+  }
+  return next;
+}
+
 // Последний ответ сервера. Нужен, чтобы пересобрать агрегат без запроса, когда
 // изменилась только прочитанность (гибрид: локальная отметка в localStorage
 // меняется мгновенно, серверная lastReadAt приедет со следующим поллингом)
@@ -208,6 +228,14 @@ function recompute() {
   if (chatFp !== _chatFingerprint) {
     _chatFingerprint = chatFp;
     _chatAgg = chatNext;
+    changed = true;
+  }
+
+  const rootNext = aggregateRootChats(_lastSummary.active, _lastSummary.recent, chatNext);
+  const rootFp = [...rootNext.entries()].map(([id, st]) => `${id}:${st}`).sort().join('|');
+  if (rootFp !== _rootChatFingerprint) {
+    _rootChatFingerprint = rootFp;
+    _rootChatAgg = rootNext;
     changed = true;
   }
 
@@ -262,11 +290,14 @@ function subscribe(fn: () => void): () => void {
 export const __subscribeActivity = subscribe;
 export const __projectAggSnapshot = () => _agg;
 export const __chatAggSnapshot = () => _chatAgg;
+export const __rootChatAggSnapshot = () => _rootChatAgg;
 export function __resetProjectActivity() {
   _agg = new Map();
   _chatAgg = new Map();
+  _rootChatAgg = new Map();
   _fingerprint = '';
   _chatFingerprint = '';
+  _rootChatFingerprint = '';
   _lastSummary = null;
   _listeners.clear();
   stop();
@@ -282,6 +313,11 @@ export function useProjectActivity(): Map<string, ProjectActivity> {
 // живой сессии в карту не попадёт — точки у него просто не будет (как и в доке проектов).
 export function useChatActivity(): Map<string, ActivityStatus> {
   return useSyncExternalStore(subscribe, () => _chatAgg, () => _chatAgg);
+}
+
+// Активность корневых чатов по правилам точки проекта — для шеврона переключателя
+export function useRootChatActivity(): Map<string, ActivityStatus> {
+  return useSyncExternalStore(subscribe, () => _rootChatAgg, () => _rootChatAgg);
 }
 
 // Публичный refresh для тех, кто видит проектные события, не доходящие до агрегата:

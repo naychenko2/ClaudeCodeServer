@@ -212,6 +212,75 @@ public class LlmProviderRegistryTests
         env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
     }
 
+    // Форс модели сабагента: сторонний провайдер — ВСЕ сабагенты на small, игнорируя
+    // model: во frontmatter (пин чужой модели дал бы 401 на эндпоинте провайдера).
+    [Fact]
+    public void BuildCliEnv_СтороннийПровайдер_ФорсМоделиСабагента()
+    {
+        var env = Create().BuildCliEnv("deepseek-v4-pro")!;
+        env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
+        env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].Should().Be("deepseek-v4-flash");
+    }
+
+    // Локальный провайдер (vLLM) — форс тоже: сабагент с чужим пином уедет на локальный
+    // эндпоинт с несуществующей там моделью.
+    [Fact]
+    public void BuildCliEnv_Локальный_ФорсМоделиСабагента()
+    {
+        var env = CreateLocal().BuildCliEnv("qwen38-27b")!;
+        env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("qwen38-27b");
+        env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].Should().Be("qwen38-27b");
+    }
+
+    // Третий случай тройки «локаль/сторонний/Claude»: родной Claude (подписка) — BuildCliEnv
+    // = null, форс не строится (пин haiku/sonnet агентом легален, реальные модели Anthropic).
+    [Fact]
+    public void BuildCliEnv_РоднойClaude_ФорсНеСтавится()
+    {
+        Create().BuildCliEnv("sonnet").Should().BeNull(
+            "родной Claude — env провайдера не строится, форс модели сабагента в нём нет");
+    }
+
+    // Родной Claude (BuildCliEnv = null) форс не получает: пин haiku/sonnet агентом легален.
+    // Ключи обязаны быть в ProviderEnvKeys, чтобы унаследованное значение с машины вычищалось.
+    [Fact]
+    public void ProviderEnvKeys_СодержитФорсИПотолокWorkflow()
+    {
+        LlmProviderRegistry.ProviderEnvKeys.Should()
+            .Contain("CLAUDE_CODE_SUBAGENT_MODEL_FORCE")
+            .And.Contain("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS")
+            .And.Contain("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL");
+    }
+
+    // Потолок параллельных агентов Workflow: только локальным провайдерам, значение из
+    // конфига (не хардкод). Облачные не трогаем — CLI решает сам.
+    [Fact]
+    public void BuildCliEnv_Локальный_ПотолокWorkflowИзКонфига()
+    {
+        var reg = CreateLocal(new() { ["LlmProviders:local-qwen:WorkflowMaxConcurrentAgents"] = "3" });
+        var env = reg.BuildCliEnv("qwen38-27b")!;
+        env["CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"].Should().Be("3");
+    }
+
+    // Облачный провайдер без WorkflowMaxConcurrentAgents/WorkflowSubagentModel — ключи не
+    // ставятся (CLI решает сам).
+    [Fact]
+    public void BuildCliEnv_Облачный_БезПотолкаWorkflow_КлючиНеСтавятся()
+    {
+        var env = Create().BuildCliEnv("deepseek-v4-pro")!;
+        env.Should().NotContainKey("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS");
+        env.Should().NotContainKey("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL");
+    }
+
+    // Явная модель субагентов Workflow — прокидывается, если задана в конфиге.
+    [Fact]
+    public void BuildCliEnv_Локальный_МодельWorkflow_Прокладывается()
+    {
+        var reg = CreateLocal(new() { ["LlmProviders:local-qwen:WorkflowSubagentModel"] = "qwen3.6-flash" });
+        var env = reg.BuildCliEnv("qwen38-27b")!;
+        env["CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL"].Should().Be("qwen3.6-flash");
+    }
+
     // Окно контекста уходит в CLI явно: id сторонних моделей он не знает и без этого
     // держит сессию в 200k (ранний auto-compact при реальном окне до 1M)
     [Fact]

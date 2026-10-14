@@ -8,8 +8,14 @@ namespace ClaudeHomeServer.Services.Llm;
 // (ClaudeSubscriptionPool.LaunchModel). Номер версии или суффикс [1m] в сохранённом значении
 // прибивает чат к устаревшей модели — каталог CLI отдаёт часть пунктов версионными id.
 //
-// Supports1M — у семейства есть окно 1M (актуальные opus-5-5, fable-5-1, sonnet-5 объявлены
-// в реестре моделей CLI 2.1.283 с window 1e6; haiku-4-5 — 200k).
+// Supports1M — у семейства есть окно 1M (актуальные opus-5-5, fable-5-1, sonnet-5 и haiku-5-5
+// объявлены в реестре моделей CLI 2.1.299 с window 1e6; haiku-4-5 — 200k).
+//
+// Для haiku флаг = «модель УМЕЕТ 1M», но НЕ «дописывать [1m] по умолчанию»: алиас haiku с
+// CLI 2.1.2xx ведёт на claude-haiku-5-5 (окно 1M), однако тариф Haiku 5.5 — ×5 за промпт
+// свыше 100K. Чтобы порог автокомпакта haiku-сессий и фоновых one-shot (CLAUDE_CODE_MAX_
+// CONTEXT_TOKENS, он же порог auto-compact) не сдвинулся молча с 200K на 1M, LaunchModel
+// для haiku по-прежнему возвращает голый алиас без суффикса — см. ClaudeSubscriptionPool.
 public sealed record ClaudeModelFamily(string Alias, string DisplayName, bool Supports1M)
 {
     public const string WindowSuffix = "[1m]";
@@ -19,7 +25,7 @@ public sealed record ClaudeModelFamily(string Alias, string DisplayName, bool Su
         new("opus", "Opus", Supports1M: true),
         new("fable", "Fable", Supports1M: true),
         new("sonnet", "Sonnet", Supports1M: true),
-        new("haiku", "Haiku", Supports1M: false),
+        new("haiku", "Haiku", Supports1M: true),
     ];
 
     // Алиас с окном: «opus[1m]».

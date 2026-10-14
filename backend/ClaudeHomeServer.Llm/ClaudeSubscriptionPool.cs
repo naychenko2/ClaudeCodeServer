@@ -328,7 +328,9 @@ public class ClaudeSubscriptionPool
 
     /// <summary>Модель, которая уйдёт в --model: семейство + окно 1M, если его можно получить.</summary>
     /// Храним только семейство, окно решает сервер при запуске: суффикс [1m] дописывается, если
-    /// семейство его поддерживает (ClaudeModelFamily.Supports1M) И подписка хода тянет окно. Ключ
+    /// семейство его поддерживает (ClaudeModelFamily.Supports1M) И подписка хода тянет окно.
+    /// Исключение — haiku: Supports1M=true, но суффикс не дописывается (порог auto-compact 200K,
+    /// тариф ×5 за промпт >100K; см. ClaudeModelFamily). Ключ
     /// подписки известен (ход чата на аккаунте пула) — решает её план; не известен или вне пула
     /// (основной аккаунт, фон до Pick) — CanServeWindow1M по всему пулу, тогда Pick по модели с
     /// окном сам выберет аккаунт, который его тянет. Алиас с суффиксом из старых данных приводится
@@ -337,6 +339,11 @@ public class ClaudeSubscriptionPool
     {
         if (ClaudeModelFamily.FromAliasOrWindowAlias(model) is not { } family) return model;
         if (!family.Supports1M) return family.Alias;
+        // haiku: Supports1M=true (claude-haiku-5-5 умеет 1M), но суффикс [1m] НЕ дописываем —
+        // иначе CLAUDE_CODE_MAX_CONTEXT_TOKENS (он же порог auto-compact) сдвинулся бы с 200K
+        // на 1M, а тариф Haiku 5.5 — ×5 за промпт свыше 100K. Держим нынешнее поведение: голый
+        // алиас, окно 200K. Флаг = «модель умеет 1M», не «дописывать окно по умолчанию».
+        if (family.Alias == "haiku") return family.Alias;
         var sub = subKey is null ? null : _subscriptions.FirstOrDefault(s => s.Key == subKey);
         var can1M = sub is not null ? sub.Supports1M : CanServeWindow1M(family.WindowAlias);
         return can1M ? family.WindowAlias : family.Alias;

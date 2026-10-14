@@ -575,15 +575,18 @@ CLI). Ни номера версии, ни суффикса `[1m]` в сохра
   `resolvedVersion` («Opus 5.5», из описания CLI) только для показа. Контракт `/api/models`:
   у Claude `value ∈ {default, opus, fable, sonnet, haiku}`.
 - **Окно 1M дописывает сервер при запуске.** `ClaudeSubscriptionPool.LaunchModel` добавляет
-  `[1m]`, если семейство его поддерживает (`ClaudeModelFamily.Supports1M`: opus, fable,
-  sonnet — да, haiku — нет) И подписка хода тянет окно: ход чата — по плану его аккаунта
+  `[1m]`, если семейство его поддерживает (`ClaudeModelFamily.Supports1M`: все четыре — opus,
+  fable, sonnet, haiku) И подписка хода тянет окно: ход чата — по плану его аккаунта
   (`Session.Provider`), фон — по пулу (`CanServeWindow1M`, затем `Pick` по модели с окном).
-  Pro без 1M получает голое семейство и объявленное окно 200K
+  Исключение — haiku: Supports1M=true (алиас с CLI 2.1.2xx ведёт на claude-haiku-5-5, окно 1M),
+  но суффикс `[1m]` не дописывается — порог auto-compact (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`)
+  остаётся 200K, иначе тариф Haiku 5.5 ×5 за промпт свыше 100K. Pro без 1M получает голое
+  семейство и объявленное окно 200K
   (`CLAUDE_CODE_MAX_CONTEXT_TOKENS` считается от того, что реально ушло в `--model`), CLI
   сожмёт контекст вовремя. Без пула (тесты, сборка без подписок) окно не дописывается.
-  Проверено по реестру моделей CLI 2.1.283: fable-5-1, opus-5-5, sonnet-5 объявлены с окном
-  1e6 (`native_1m`), haiku-4-5 — 200K; суффикс к fable CLI принимает (`fable[1m]` есть в его
-  списке алиасов).
+  Проверено по реестру моделей CLI 2.1.299: fable-5-1, opus-5-5, sonnet-5 и haiku-5-5
+  объявлены с окном 1e6 (`native_1m`), haiku-4-5 — 200K; суффикс к fable CLI принимает
+  (`fable[1m]` есть в его списке алиасов).
 - **Семейство не уходит в `ANTHROPIC_MODEL` никогда** — ни голое, ни с окном: из env алиас
   уезжает в API сырым id и валит ход «There's an issue with the selected model». Сторонним
   провайдерам `BuildCliEnv` маппит алиасы пина сабагента env-переменными, включая

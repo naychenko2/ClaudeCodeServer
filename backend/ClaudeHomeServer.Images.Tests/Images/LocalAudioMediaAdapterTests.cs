@@ -504,4 +504,31 @@ public class LocalAudioMediaAdapterTests
         jsonStr.Should().NotContain("otherOwner");
         jsonStr.Should().NotContain("otherSess");
     }
+
+    // Регрессия (дефект): монитор в простое, снимок старше отправки — промпт в живой очереди, не в снимке.
+    // Статус решает живой /queue: задача Running, не «пропала». Мутация: прежняя логика → Failed → красный.
+    [Fact]
+    public async Task СнимокСтаршеОтправки_ПромптВЖивойОчереди_ЗадачаНеПропала()
+    {
+        _comfy.Running.Add("чужой");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:AudioEnabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+            ["LocalMedia:MaxAudioInputSeconds"] = "600",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default); // снимок: чужой в Running, нашего нет
+        _comfy.Running.Add("наш"); // промпт отправлен ПОСЛЕ снимка
+        var images = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance);
+        var adapter = new LocalAudioMediaAdapter(client, config, images, NullLogger<LocalAudioMediaAdapter>.Instance, ledger, null, monitor);
+
+        var poll = await adapter.PollAsync("наш", default);
+
+        poll.State.Should().Be(LocalAudioState.Running, "живой /queue видит промпт — не «пропала»");
+    }
 }

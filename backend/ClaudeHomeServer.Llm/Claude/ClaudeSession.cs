@@ -3104,6 +3104,23 @@ public class ClaudeSession : ILlmSessionAdapter
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
 
+        // --restricted (CLI ≥ 2.1.248): для персон «Только чтение» (консультанты) — убирает
+        // встроенные инструменты запуска команд и WebFetch, держит файловые инструменты внутри
+        // рабочего каталога, отказывает bypassPermissions. Fail-closed на стороне CLI в
+        // дополнение к disallowed-инструментам (PersonaAccessPolicy); гейты на бэкенде
+        // остаются. Встроенный WebSearch и ридер ссылок (MCP web_read) не затронуты:
+        // --restricted режет только встроенные инструменты, а не MCP-тулсеты.
+        var persona = _personaProvider?.Invoke();
+        if (persona is { Access: PersonaAccess.ReadOnly } && CliAtLeast(CurrentCliVersion(), 2, 1, 248))
+            args.Add("--restricted");
+
+        // --permission-prompts none (CLI ≥ 2.1.259): ход, где человека нет (исполнитель задачи
+        // трекера, периодическая автоматика) — всё, что просило бы подтверждения, отказывается
+        // автоматически, активный режим прав продолжает решать. Без флага такой ход виснет на
+        // stdio-запросе прав до истечения TTL чата исполнения.
+        if (Info.Origin != ChatOrigin.Manual && CliAtLeast(CurrentCliVersion(), 2, 1, 259))
+            args.AddRange(["--permission-prompts", "none"]);
+
         // Пустая модель сессии = «по умолчанию»: подставляем глобальную настройку, а не
         // отдаём выбор CLI (иначе «по умолчанию» значило бы в разных местах разные модели)
         if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))
@@ -5357,6 +5374,31 @@ public class ClaudeSession : ILlmSessionAdapter
             return projectLocal;
         }
         return ResolveHostPath(configured, serverContentRoot, projectRoot);
+    }
+
+    // Версия CLI хоста: ClaudeCliVersion — одна точка на процесс (кэш с перечитыванием).
+    // Шов для тестов: по умолчанию реальный ClaudeCliVersion.TryGetKnown, тесты подменяют
+    // на фиксированную версию, чтобы гейт по версии (CliAtLeast) был детерминирован.
+    internal static Func<string?>? CliVersionProbeForTests;
+
+    private static string? CurrentCliVersion()
+    {
+        if (CliVersionProbeForTests is { } probe) return probe();
+        return ClaudeCliVersion.TryGetKnown(out var v) ? v : null;
+    }
+
+    // Версия CLI хоста поддерживает порог? ClaudeCliVersion.Parse чистит вывод до "X.Y.Z",
+    // поэтому Version.TryParse надёжен. Неизвестная/битая версия — false (fail-safe: не
+    // ставим флаг, который старый CLI не поймёт и который роняет запуск кодом 1).
+    // Третья часть версии в System.Version — это Build (Revision — четвёртая, -1 у трёхчастной):
+    // сравниваем по Build, а не по Revision.
+    internal static bool CliAtLeast(string? version, int major, int minor, int patch)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return false;
+        if (!Version.TryParse(version, out var v)) return false;
+        return v.Major > major
+            || (v.Major == major && v.Minor > minor)
+            || (v.Major == major && v.Minor == minor && v.Build >= patch);
     }
 
     private static string BuildLaunchSignature(

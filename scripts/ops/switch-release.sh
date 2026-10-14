@@ -202,6 +202,9 @@ for must in ClaudeHomeServer.dll wwwroot modules modules/notes modules/spend; do
 done
 log "staging проверен: dll, wwwroot, modules/notes, modules/spend на месте"
 
+# Без rsync копирование сборки невозможно, а выяснять это после остановки сервиса поздно.
+command -v rsync >/dev/null || { log "ОТКАЗ: rsync не установлен — прод не трогаем"; exit 1; }
+
 journal_phase switching
 
 mkdir -p "$RELEASES"
@@ -223,25 +226,29 @@ rm -rf "$APP/wwwroot"
 cp -a "$STAGING/wwwroot" "$APP/wwwroot"
 
 log "копирую файлы сборки поверх (конфиги и данные не трогаю)"
-copy_build_over "$STAGING" "$APP"
-step swap ok
-
-log "поднимаю ccs.service"
-$SYSTEMCTL_CMD start ccs.service
-step start ok
-
-# Health-гейт: юнит может подняться, а приложение упасть на старте —
-# поэтому спрашиваем именно HTTP, а не systemctl is-active.
-journal_phase verifying
-
 ok=0
-for i in $(seq 1 $HEALTH_TRIES); do
-  sleep $HEALTH_SLEEP
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 -H "Host: $HEALTH_HOST" "$HEALTH_URL" || echo 000)
-  log "health $i/$HEALTH_TRIES: $code"
-  # 204 отдаёт /api/health, 401 — любая ручка под [Authorize]: живость доказывают оба
-  if [ "$code" = "200" ] || [ "$code" = "204" ] || [ "$code" = "401" ]; then ok=1; break; fi
-done
+if copy_build_over "$STAGING" "$APP"; then
+  step swap ok
+
+  log "поднимаю ccs.service"
+  $SYSTEMCTL_CMD start ccs.service
+  step start ok
+
+  # Health-гейт: юнит может подняться, а приложение упасть на старте —
+  # поэтому спрашиваем именно HTTP, а не systemctl is-active.
+  journal_phase verifying
+
+  for i in $(seq 1 $HEALTH_TRIES); do
+    sleep $HEALTH_SLEEP
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 -H "Host: $HEALTH_HOST" "$HEALTH_URL" || echo 000)
+    log "health $i/$HEALTH_TRIES: $code"
+    # 204 отдаёт /api/health, 401 — любая ручка под [Authorize]: живость доказывают оба
+    if [ "$code" = "200" ] || [ "$code" = "204" ] || [ "$code" = "401" ]; then ok=1; break; fi
+  done
+else
+  # Недокопированный app со старым бинарником поднимать нельзя — идём сразу в откат.
+  log "!!! rsync завершился с ошибкой — app недокопирован"
+fi
 
 if [ "$ok" = "1" ]; then
   step health ok
@@ -258,10 +265,10 @@ step health fail
 # Сигнализируем оркестратору, на какой снимок вернулись: deploy-linux.sh при exit 1
 # прочитает state.rollbackTarget и передаст его в finalize как result.releaseId.
 journal set-rollback-target "$STAMP"
-log "!!! health не прошёл за ${HEALTH_TRIES}×${HEALTH_SLEEP} с — возвращаю предыдущую сборку"
+log "!!! выкатка не удалась (health за ${HEALTH_TRIES}×${HEALTH_SLEEP} с или копирование) — возвращаю предыдущую сборку"
 $SYSTEMCTL_CMD stop ccs.service
 sleep 2
-rm -rf "$APP"
+rm -rf -- "${APP:?}"
 cp -a "$PREV" "$APP"
 $SYSTEMCTL_CMD start ccs.service
 sleep $HEALTH_SLEEP

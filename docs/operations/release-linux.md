@@ -109,6 +109,8 @@ CCS_RELEASES_DIR=/tmp/x CCS_RELEASES_KEEP=3 /opt/ccs/switch-release.sh --rotate 
 момент человек ещё не знает, дошёл ли `publish-linux.sh` до swap. Monitor
 и `run_in_background` харнесса CLI тоже мертвы.
 
+На хосте для выкатки нужны `rsync`, `flock` и `python3`; без `rsync` `switch-release.sh` отказывает (exit 1) до остановки сервиса.
+
 Серверный сторож (ADR-013) исполняет `poll_command` **в бэкенде**, а не в
 процессе CLI — переживает stop, рестарт и смену хода. Условие — `exit 0`
 «дождались», `exit != 0` — «ещё нет». Тик каждые 5 с, poll каждый

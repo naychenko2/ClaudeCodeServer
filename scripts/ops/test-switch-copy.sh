@@ -31,6 +31,31 @@ chk appsettings.Local.json "CONFIG-A (боевой)"; chk appsettings.Local.json
 chk .mcp.json MCP-A; chk backups-secrets SECRETS-A; chk logs/a.log LOG-A; chk data/d.json DATA-A; none logs/b.log; none data/e.json
 chk ClaudeHomeServer.dll NEW; chk build-id.txt new-build; chk ClaudeHomeServer.New.dll NEWFILE; chk wwwroot/new.js NEWWWW; none wwwroot/old.js; chk mcp-dify/keep.txt keep
 chk $T/releases/20261014-999999/appsettings.Local.json "CONFIG-A (боевой)"
+
+# --- Кейс 2: rsync недоступен — отказ ДО остановки сервиса, app не тронут ---
+mkdir -p $T/app2 $T/nopath $T/releases2; echo OLD > $T/app2/ClaudeHomeServer.dll
+for b in bash sh date mkdir cp du cut curl seq sleep head tr cat dirname readlink sed grep flock python3 rm env mktemp; do
+  p=$(command -v $b) && ln -sf "$p" $T/nopath/$b
+done
+printf '#!/bin/sh\ntouch %s/stopped\n' "$T" > $T/shim/systemctl-spy; chmod +x $T/shim/systemctl-spy
+CCS_SWITCH_DETACHED=1 PATH=$T/nopath APP=$T/app2 STAGING=$T/staging RELEASES=$T/releases2 LOG=$T/deploy2.log STAMP=20261014-999998 \
+ CCS_SYSTEMCTL="$T/shim/systemctl-spy" HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 $T/nopath/bash "$S" >/dev/null; rc=$?
+if [ $rc = 1 ]; then echo "OK   rsync нет: rc=1"; else echo "FAIL rsync нет: rc=$rc (ждали 1)"; bad=1; fi
+chk $T/app2/ClaudeHomeServer.dll OLD; none $T/stopped
+if grep -q "rsync не установлен" $T/deploy2.log; then echo "OK   отказ записан в лог"; else echo "FAIL нет записи об отказе"; bad=1; fi
+
+# --- Кейс 3: rsync упал после остановки — откат на прежний билд, ccs.service не стартует с недокопированным app ---
+mkdir -p $T/app3 $T/shimfail $T/releases3; echo OLD3 > $T/app3/ClaudeHomeServer.dll
+printf '#!/bin/sh\nexit 23\n' > $T/shimfail/rsync; chmod +x $T/shimfail/rsync
+printf '#!/bin/sh\necho "$@" >> %s/calls3\n' "$T" > $T/shim/systemctl-rec; chmod +x $T/shim/systemctl-rec
+CCS_SWITCH_DETACHED=1 PATH=$T/shimfail:$PATH APP=$T/app3 STAGING=$T/staging RELEASES=$T/releases3 LOG=$T/deploy3.log STAMP=20261014-999997 \
+ CCS_SYSTEMCTL="$T/shim/systemctl-rec" HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; rc=$?
+if [ $rc = 1 ]; then echo "OK   rsync упал: rc=1"; else echo "FAIL rsync упал: rc=$rc (ждали 1)"; bad=1; fi
+chk $T/app3/ClaudeHomeServer.dll OLD3
+if grep -q "ОТКАЧЕНО" $T/deploy3.log; then echo "OK   откат записан в лог"; else echo "FAIL нет записи об откате"; bad=1; fi
+# stop (выкатка), stop (откат), start (после отката): стартов до отката быть не должно
+if [ "$(grep -c '^start' $T/calls3)" = 1 ]; then echo "OK   start только после отката"; else echo "FAIL start вызван $(grep -c '^start' $T/calls3) раз(а)"; bad=1; fi
+
 [ $bad = 0 ] && echo "ИТОГ: ЗЕЛЁНО" || echo "ИТОГ: КРАСНО"
 rm -rf "$T"
 exit $bad

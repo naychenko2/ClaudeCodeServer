@@ -92,6 +92,17 @@ public class LlmProviderConfig
     // управляет effort (см. EffortMap), а эта переменная только страхует от лишнего параметра.
     public int? MaxThinkingTokens { get; set; }
 
+    // Потолок параллельных агентов Workflow (env CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS,
+    // 1–256). null/0 — CLI решает сам (облачные провайдеры не трогаем). Для локального vLLM
+    // ставим 3: три потока prefill по 63k душат decode соседей до 12 ток/с (замер 23.09),
+    // выше трёх отдача почти не растёт (max_num_seqs=4, пятый запрос в очередь).
+    public int? WorkflowMaxConcurrentAgents { get; set; }
+
+    // Модель для субагентов Workflow (env CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL). Пусто —
+    // CLI применяет CLAUDE_CODE_SUBAGENT_MODEL (см. BuildCliEnv). Задан — явная модель,
+    // которой Workflow ведёт всех своих агентов.
+    public string WorkflowSubagentModel { get; set; } = "";
+
     // Урезать состав MCP-серверов до минимума (false — обычный состав). Для провайдеров с
     // маленькимом окном (vLLM/llama.cpp, qwen3.8-27b на 65k) описания MCP-инструментов
     // едят десятки тысяч токенов служебного контекста — на local-qwen замерено 46 480

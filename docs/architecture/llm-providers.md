@@ -62,6 +62,21 @@ Unexpected empty grammar stack after accepting piece: `<think>`»: грамма�
 субагенты, workflow, план, compact, MCP, permissions, resume) работает одинаково
 у всех провайдеров.
 
+**Форс модели сабагента и потолок Workflow (CLI 2.1.300).** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`
+— булев флаг (значение `"1"`; CLI 2.1.299 разбирает переменную как bool — истина только
+`1`/`true`/`yes`/`on`, id модели молча выключает форс): включённый форс гонит ВСЕ сабагенты
+на `CLAUDE_CODE_SUBAGENT_MODEL` (= `SmallModel`), игнорируя `model:` во frontmatter агента
+и per-spawn override, а CLI при форсе убирает параметр `model` из схемы инструмента Agent:
+у стороннего/локального провайдера чужой пин (opus/конкретный id) уехал бы на его эндпоинт
+и дал 401. У родного Claude форс не ставится (`BuildCliEnv = null`) — пин haiku/sonnet
+агентом легален. `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`
+(1–256) — потолок параллельных агентов Workflow; ставится только локальным провайдерам
+(vLLM: три prefill по 63k душат decode соседей, выше трёх отдача почти не растёт —
+`LlmProviders:local-qwen:WorkflowMaxConcurrentAgents=3`), облачные не трогаем.
+`CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL` — явная модель субагентов Workflow (пусто — CLI
+применяет `CLAUDE_CODE_SUBAGENT_MODEL`). Все три ключа в `ProviderEnvKeys`: унаследованное
+значение с машины вычищается на каждом запуске.
+
 - **Конфиг** — секция `LlmProviders` (словарь key → провайдер): `DisplayName`,
   `AnthropicBaseUrl` (для CLI), `ApiBaseUrl` (нативный API — баланс, GET /models),
   `ApiKey` (в appsettings.Local.json; пустой = провайдер выключен и модели скрыты),

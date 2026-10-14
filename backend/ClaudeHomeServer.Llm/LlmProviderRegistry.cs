@@ -412,6 +412,9 @@ public class LlmProviderRegistry
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "ANTHROPIC_DEFAULT_FABLE_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", // форс модели сабагента на ВСЕХ (см. BuildCliEnv)
+        "CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", // потолок параллельных агентов Workflow
+        "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL", // модель субагентов Workflow
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
         "MAX_THINKING_TOKENS", // лимит токенов на блок thinking (см. BuildCliEnv)
@@ -463,7 +466,22 @@ public class LlmProviderRegistry
             // ушёл бы на эндпоинт провайдера id модели Anthropic
             ["ANTHROPIC_DEFAULT_FABLE_MODEL"] = main,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
+            // Форс: булев флаг, значение "1" (CLI 2.1.299 разбирает переменную как bool:
+            // истина только 1/true/yes/on — id модели молча выключает форс). Включённый форс
+            // гонит ВСЕ сабагентов на CLAUDE_CODE_SUBAGENT_MODEL (= small), игнорируя model:
+            // во frontmatter агента и per-spawn override; CLI при этом убирает параметр model
+            // из схемы инструмента Agent. Без него пин чужой модели (opus/конкретный id)
+            // уедет на эндпоинт провайдера и даст 401. У родного Claude (BuildCliEnv = null)
+            // форс не нужен: пин haiku/sonnet агентом легален (реальные модели Anthropic).
+            ["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = "1",
         };
+        // Потолок параллельных агентов Workflow: только локальным провайдерам (vLLM), где
+        // N>3 prefill душит decode соседей (замер 23.09: три потока по 63k → 12 ток/с).
+        // Облачные не трогаем — CLI решает сам. Значение из конфига провайдера, не хардкод.
+        if (p.WorkflowMaxConcurrentAgents is int wmc && wmc is > 0 and <= 256)
+            env["CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"] = wmc.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(p.WorkflowSubagentModel))
+            env["CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL"] = p.WorkflowSubagentModel;
         // Реальное окно контекста модели. Id сторонних моделей CLI не знает и тогда считает
         // окно равным 200k, запуская auto-compact на ~167k при реальном окне до 1M; сам он об
         // этом и предупреждает: «"kimi-k3" is not a model this version of Claude Code

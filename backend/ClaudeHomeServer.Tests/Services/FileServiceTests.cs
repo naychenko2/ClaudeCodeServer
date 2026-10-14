@@ -67,10 +67,12 @@ public class FileServiceTests : IDisposable
         result.TrimEnd(Path.DirectorySeparatorChar).Should().Be(_root.TrimEnd(Path.DirectorySeparatorChar));
     }
 
-    [Fact]
+    [SkippableFact]
     public void SafeJoin_CaseInsensitive_ReEnterRootInDifferentCase_Allowed()
     {
-        // Сравнение в SafeJoin регистронезависимое (OrdinalIgnoreCase):
+        Skip.IfNot(OperatingSystem.IsWindows(),
+            "Только Windows: там ФС регистронезависима; на Linux другой регистр — другой каталог");
+        // На Windows сравнение регистронезависимое (OrdinalIgnoreCase):
         // выход из root и возврат в него же другим регистром — не traversal
         var upperName = Path.GetFileName(_root).ToUpperInvariant();
         var result = FileService.SafeJoin(_root,
@@ -78,6 +80,31 @@ public class FileServiceTests : IDisposable
 
         result.Should().EndWith("file.txt");
         result.Should().StartWithEquivalentOf(_root); // регистронезависимое сравнение префикса
+    }
+
+    [SkippableFact]
+    public void SafePath_Linux_SiblingInDifferentCase_Throws()
+    {
+        // S8 ревью F2-15: на Linux «/tmp/x/proj» — соседний каталог, а не корень «/tmp/x/Proj»
+        Skip.If(OperatingSystem.IsWindows(),
+            "Только Linux: на Windows ФС регистронезависима, и «../proj» — тот же корень");
+        var act = () => SafePath.Join("/tmp/x/Proj", "../proj/a");
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Fact]
+    public void SafePath_DotDotOutsideRoot_ThrowsOnAnyOs()
+    {
+        var act = () => SafePath.Join(_root, "../outside/a");
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Theory]
+    [InlineData(true, StringComparison.OrdinalIgnoreCase)]
+    [InlineData(false, StringComparison.Ordinal)]
+    public void SafePath_ComparisonFor_DependsOnOs(bool isWindows, StringComparison expected)
+    {
+        SafePath.ComparisonFor(isWindows).Should().Be(expected);
     }
 
     [Fact]

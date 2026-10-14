@@ -17,19 +17,27 @@ namespace ClaudeHomeServer.Services;
 // тонкими форвардерами — у `SafeJoin` десятки вызывающих по всему Main, и смена
 // имени там сломала бы половину тестов.
 //
-// Поведение побайтовое — никаких «улучшений». Покрытие граничных случаев
-// (`..`, абсолютный путь, символы диска) живёт в `FileServiceTests` и
-// запускается на обоих форвардерах.
+// Покрытие граничных случаев (`..`, абсолютный путь, символы диска, регистр)
+// живёт в `FileServiceTests` и запускается на обоих форвардерах.
+//
+// Регистр сравнивается по правилам ФС хоста (S8 ревью F2-15): на Linux «/tmp/x/proj» —
+// другой каталог, чем «/tmp/x/Proj», и `OrdinalIgnoreCase` пропускал бы «../proj/a»
+// как путь внутри корня. На Windows ФС регистронезависима — там игнор регистра верен.
 public static class SafePath
 {
     public static string Join(string root, string relativePath)
     {
         var full = Path.GetFullPath(Path.Combine(root, relativePath.TrimStart('/', '\\')));
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = ComparisonFor(OperatingSystem.IsWindows());
         // Сравнение с разделителем на конце: иначе root "C:\Data\Proj" пропускает "C:\Data\Proj2\..."
-        if (!full.Equals(rootFull, StringComparison.OrdinalIgnoreCase) &&
-            !full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (!full.Equals(rootFull, comparison) &&
+            !full.StartsWith(rootFull + Path.DirectorySeparatorChar, comparison))
             throw new UnauthorizedAccessException("Доступ за пределы проекта запрещён");
         return full;
     }
+
+    // Выбор компаратора вынесен ради теста: ветку чужой ОС иначе на CI не проверить.
+    public static StringComparison ComparisonFor(bool isWindows) =>
+        isWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 }

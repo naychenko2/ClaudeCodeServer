@@ -1048,8 +1048,19 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var addr = addresses?.FirstOrDefault(a => a.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
                    ?? addresses?.FirstOrDefault();
         if (string.IsNullOrEmpty(addr)) return "http://localhost:5000";
-        return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
+        return LoopbackApiUrl(addr);
     }
+
+    // Wildcard-хост адреса прослушивания → localhost. Kestrel и хост отдают в
+    // IServerAddressesFeature и сырые формы конфига: ASPNETCORE_HTTP_PORTS/URLS дают
+    // http://*:порт или http://+:порт, а такой адрес не разбирается в Uri (UriFormatException
+    // у шлюза MCP и у всех MCP-конфигов хода).
+    private static readonly Regex WildcardHost =
+        new(@"^(?<scheme>[a-z][a-z0-9+.-]*://)(?:\*|\+|0\.0\.0\.0|\[::\])(?=[:/]|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static string LoopbackApiUrl(string address) =>
+        WildcardHost.Replace(address, "${scheme}localhost").TrimEnd('/');
 
     // tasks-MCP доступен, когда разрешён персоной (Persona.Tools/привязки), ЛИБО сессия
     // является исполнителем задачи — тогда tasks-MCP форсируется: исполнитель обязан

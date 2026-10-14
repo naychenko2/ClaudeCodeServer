@@ -4,10 +4,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  avgThroughputOf, buildIntervals, buildThroughputSegments, cacheHitAvg,
-  formatAxisTps, intervalCountFor, maxThroughputOf, niceAxisMax, peakThroughputOf,
-  preemptionTotal, xForTime, yForThroughput,
-  type ChartGeom, type ThroughputSample,
+  avgThroughputOf, breakRuns, buildIntervals, buildThroughputSegments, cacheHitAvg,
+  chartAriaLabel, formatAxisTps, intervalCountFor, maxThroughputOf, niceAxisMax,
+  peakThroughputOf, preemptionTotal, xForTime, yForThroughput,
+  type ChartGeom, type Interval, type ThroughputSample,
 } from './ThroughputChart';
 
 // Геометрия как в компоненте (height 96, left 0, right 28)
@@ -337,5 +337,35 @@ describe('intervalCountFor: число интервалов окна', () => {
     expect(intervalCountFor('5m')).toBe(20);
     expect(intervalCountFor('15m')).toBe(60);
     expect(intervalCountFor('1h')).toBe(60);
+  });
+});
+
+describe('breakRuns: непрерывные прогоны разрыва (throughput == null)', () => {
+  const mk = (tStart: number, tEnd: number, tp: number | null): Interval =>
+    ({ tStart, tEnd, throughput: tp, kvUsage: null, prefix: null, ram: null, preemptions: null });
+
+  it('один прогон: серия null → пара [start, end]', () => {
+    const intervals = [mk(0, 1, 10), mk(1, 2, null), mk(2, 3, null), mk(3, 4, 20)];
+    expect(breakRuns(intervals)).toEqual([[1, 2]]);
+  });
+
+  it('два раздельных разрыва → две пары', () => {
+    const intervals = [mk(0, 1, null), mk(1, 2, 10), mk(2, 3, null), mk(3, 4, null), mk(4, 5, 10)];
+    expect(breakRuns(intervals)).toEqual([[0, 0], [2, 3]]);
+  });
+
+  it('без разрывов → пусто; ноль (не null) — не разрыв', () => {
+    expect(breakRuns([mk(0, 1, 0), mk(1, 2, 0)])).toEqual([]);
+  });
+});
+
+describe('chartAriaLabel: подпись области графика', () => {
+  it('окно + среднее + кэш', () => {
+    const label = chartAriaLabel('15m', 412, 0.87);
+    expect(label).toContain('15 минут');
+    expect(label).toContain('412');
+  });
+  it('1h → «1 час»; без avg/hit — только окно', () => {
+    expect(chartAriaLabel('1h', null, null)).toBe('Выработка и кэш за 1 час');
   });
 });

@@ -14,7 +14,7 @@
 // • Считывание — одна вертикаль через все три поля + строка-итог над ними.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FIELD, FONT, FS, R, SP } from '../../lib/design';
 import { InlineSegmented } from '../../components/ui/InlineSegmented';
 import { formatPerc, formatTps } from './format';
 import type { LocalModelStats } from './api';
@@ -272,6 +272,31 @@ export function preemptionTotal(samples: ThroughputSample[]): number {
   return sum;
 }
 
+// Прогоны разрыва: максимальные непрерывные серии интервалов, где throughput == null
+// (рестарт движка / стенд лежал). Один прямоугольник на прогон, а не на интервал —
+// иначе на стыках интервалов видны швы. Возвращает пары индексов [start, end] включ.
+export function breakRuns(intervals: Interval[]): [number, number][] {
+  const runs: [number, number][] = [];
+  let start = -1;
+  for (let i = 0; i < intervals.length; i++) {
+    const isBreak = intervals[i].throughput == null;
+    if (isBreak && start === -1) start = i;
+    if (!isBreak && start !== -1) { runs.push([start, i - 1]); start = -1; }
+  }
+  if (start !== -1) runs.push([start, intervals.length - 1]);
+  return runs;
+}
+
+// aria-label области графика: «Выработка и кэш за {окно}, в среднем {avg} ток/с,
+// попадания в кэш {hit} %». На наведении строка-считывание обновляет label (aria-live).
+export function chartAriaLabel(window: Window, avg: number | null, hit: number | null): string {
+  const label = window === '1h' ? '1 час' : window === '15m' ? '15 минут' : '5 минут';
+  const parts = [`Выработка и кэш за ${label}`];
+  if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
+  if (hit != null) parts.push(`попадания в кэш ${formatPerc(hit)}`);
+  return parts.join(', ');
+}
+
 // === Компонент ===
 
 // Окно графика: 5 минут, 15 минут или 1 час.
@@ -380,6 +405,19 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
   const clearHold = () => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } };
   useEffect(() => () => clearHold(), []);
 
+  // Клавиатура: ←/→ двигают интервал, Esc сбрасывает. Focus ring (FIELD.borderFocus,
+  // 2 px, R.md) — только при фокусе с клавиатуры (matches(':focus-visible')), не от клика.
+  const [focusVisible, setFocusVisible] = useState(false);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const d = e.key === 'ArrowLeft' ? -1 : 1;
+      setHoverIdx(prev => prev == null ? (d > 0 ? 0 : intervals.length - 1) : Math.max(0, Math.min(intervals.length - 1, prev + d)));
+    } else if (e.key === 'Escape') {
+      setHoverIdx(null);
+    }
+  };
+
   const pickInterval = (e: React.PointerEvent): number => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -428,6 +466,16 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
   // Зона «данных нет» слева (история короче окна): от левого края до первой точки.
   const firstT = samples.length ? samples[0].t : null;
   const noDataX = firstT != null ? xForTime(firstT, tMin, tMax, geomTp) : null;
+
+  // Разрывы (throughput == null): один прямоугольник на непрерывный прогон +
+  // пунктирная вертикаль на левой границе. X общий для всех полей (left/right равны).
+  const breaks = breakRuns(intervals).map(([a, b]) => ({
+    x0: xForTime(intervals[a].tStart, tMin, tMax, geomTp),
+    x1: xForTime(intervals[b].tEnd, tMin, tMax, geomTp),
+  }));
+
+  // aria-label области: обновляется на наведении (aria-live) — строка-считывание.
+  const ariaLabel = chartAriaLabel(window, avg, hitAvg);
 
   // «Занято» — область без линии (C.textMuted 0.18), рисуется фоном под линиями.
   const kvArea = useMemo(() => {
@@ -478,14 +526,37 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
   const legendRam = hover ? formatPerc(hover.ram) : (hasRam ? '—' : null);
   const legendKv = hover ? formatPerc(hover.kvUsage) : '—';
 
-  // Ось времени (общая, под последним полем)
+  // Ось времени (общая, под последным полем)
   const ticks = timeTicks(window);
+
+  // Зона разрыва: фон C.bgInset 0.5 + пунктирная вертикаль 2 2 на левой границе.
+  // Один прямоугольник на непрерывный прогон; рисуется фоном под линиями/заливками.
+  const renderBreaks = (geom: ChartGeom, height: number) => (
+    <>
+      {breaks.map((b, i) => (
+        <g key={`brk${i}`}>
+          <rect x={b.x0} y={geom.top} width={Math.max(0, b.x1 - b.x0)} height={height - geom.top - geom.bottom}
+            fill={C.bgInset} fillOpacity={0.5} />
+          <line x1={b.x0} x2={b.x0} y1={geom.top} y2={height - geom.bottom}
+            stroke={C.textMuted} strokeWidth={1} strokeDasharray="2 2" />
+        </g>
+      ))}
+    </>
+  );
 
   return (
     <div>
       <SummaryLine text={summary} />
       <div
-        style={{ position: 'relative', marginTop: SP.sm, touchAction: 'pan-y', cursor: 'crosshair', minWidth: 0 }}
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onFocus={e => setFocusVisible(e.currentTarget.matches(':focus-visible'))}
+        onBlur={() => setFocusVisible(false)}
+        style={{
+          position: 'relative', marginTop: SP.sm, touchAction: 'pan-y', cursor: 'crosshair', minWidth: 0,
+          borderRadius: R.md, outline: 'none',
+          boxShadow: focusVisible ? `0 0 0 2px ${FIELD.borderFocus}` : 'none',
+        }}
         onPointerMove={onPointerMove}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
@@ -497,7 +568,7 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
           : (
             <>
               <FieldLabel>Выработка, ток/с</FieldLabel>
-              <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}>
+              <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }} aria-label={ariaLabel}>
                 {[0, 0.5, 1].map(f => {
                   const y = yForThroughput(maxT * f, maxT, geomTp);
                   return (
@@ -508,6 +579,7 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
                     </g>
                   );
                 })}
+                {renderBreaks(geomTp, GEOM_TP.height)}
                 {noDataX != null && noDataX > geomTp.left + 1 && (
                   <rect x={geomTp.left} y={geomTp.top} width={Math.max(0, noDataX - geomTp.left)} height={GEOM_TP.height - geomTp.top - geomTp.bottom}
                     fill={C.bgInset} fillOpacity={0.5} />
@@ -549,7 +621,7 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
             : (
               <>
                 <FieldLabel>Кэш, %</FieldLabel>
-                <svg viewBox={`0 0 ${width} ${GEOM_KV.height}`} width={width} height={GEOM_KV.height} style={{ display: 'block' }}>
+                <svg viewBox={`0 0 ${width} ${GEOM_KV.height}`} width={width} height={GEOM_KV.height} style={{ display: 'block' }} aria-label={ariaLabel}>
                   {[0, 0.5, 1].map(f => {
                     const y = yForPerc(f, geomKv);
                     return (
@@ -560,6 +632,7 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
                       </g>
                     );
                   })}
+                  {renderBreaks(geomKv, GEOM_KV.height)}
                   {kvArea && <path d={kvArea} fill={C.textMuted} fillOpacity={0.18} />}
                   {prefixLines.map((pts, i) => (
                     <polyline key={`kpl${i}`} points={pts} fill="none" stroke={C.success} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
@@ -605,9 +678,10 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
               Вытеснения
             </FieldLabel>
             {preTotal > 0 ? (
-              <svg viewBox={`0 0 ${width} ${GEOM_EV.height}`} width={width} height={GEOM_EV.height} style={{ display: 'block' }}>
+              <svg viewBox={`0 0 ${width} ${GEOM_EV.height}`} width={width} height={GEOM_EV.height} style={{ display: 'block' }} aria-label={ariaLabel}>
                 <line x1={geomEv.left} x2={width - geomEv.right} y1={GEOM_EV.height - geomEv.bottom} y2={GEOM_EV.height - geomEv.bottom} stroke={C.border} strokeWidth={1} />
                 <text x={width - geomEv.right + 4} y={geomEv.top + 3} textAnchor="start" fontFamily={FONT.mono} fontSize={FS.xs} fill={C.textMuted}>{evMax}</text>
+                {renderBreaks(geomEv, GEOM_EV.height)}
                 {evBars.map(b => (
                   <rect key={`evb${b.i}`} x={b.x} y={b.y} width={b.w} height={Math.max(1, b.h)} rx={1}
                     fill={C.danger} fillOpacity={hoverIdx === b.i ? 1 : 0.85} />

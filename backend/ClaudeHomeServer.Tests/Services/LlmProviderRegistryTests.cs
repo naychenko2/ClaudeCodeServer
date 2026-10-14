@@ -518,6 +518,43 @@ public class LlmProviderRegistryTests
         }
     }
 
+    // Синк скиллов/плагинов claude.ai (CLI ≥ 2.1.2xx) выключается в settings.json профиля:
+    // для container-владельцев --settings не передаётся, и профильный файл — единственный
+    // канал. Мерж хостового settings.json (SyncUserProfile) может принести syncClaudeAi* = true,
+    // поэтому EnsureClaudeAiSyncOff идёт ПОСЛЕ него и вынуждает оба ключа в false.
+    [Fact]
+    public void СинкClaudeAi_ХостовоеTrue_ВынуждаетсяВFalse()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        var profileDir = Path.Combine(tmp, "data", "claude-profiles", "deepseek");
+        Directory.CreateDirectory(userDir);
+        Directory.CreateDirectory(profileDir);
+
+        // Хостовый профиль «включил» синк — мерж перенесёт это в профиль провайдера
+        File.WriteAllText(Path.Combine(userDir, "settings.json"),
+            """{ "syncClaudeAiSkills": true, "syncClaudeAiPlugins": true }""");
+
+        try
+        {
+            var reg = Create(new()
+            {
+                ["ClaudeUserProfileDir"] = userDir,
+                ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            });
+            reg.BuildCliEnv("deepseek-v4-pro");
+
+            var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(profileDir, "settings.json")))!;
+            settings["syncClaudeAiSkills"]!.GetValue<bool>().Should().BeFalse(
+                "хостовое true мержится, но EnsureClaudeAiSyncOff вынуждает false");
+            settings["syncClaudeAiPlugins"]!.GetValue<bool>().Should().BeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void ComputeCost_ПоЦенамКонфига()
     {

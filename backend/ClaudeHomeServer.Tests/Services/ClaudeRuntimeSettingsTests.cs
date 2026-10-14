@@ -78,4 +78,19 @@ public class ClaudeRuntimeSettingsTests
         foreach (var browser in new[] { true, false })
             Settings(browser).Json.GetProperty("cleanupPeriodDays").GetInt32().Should().BeGreaterThan(30);
     }
+
+    [Fact]
+    public void СинкСкилловИПлагиновClaudeAiВыключен()
+    {
+        // CLI ≥ 2.1.2xx тянет скиллы/плагины аккаунта claude.ai (docx/pptx/canvas-design)
+        // в каждую сессию с подписочным логином — они входят в системный блок каждого хода
+        // и съедают контекст. Для хостовых владельцев --settings — единственный канал
+        // настройки, поэтому ключи стоят false всегда (container-путь — LlmProviderRegistry).
+        foreach (var browser in new[] { true, false })
+        {
+            var json = Settings(browser).Json;
+            json.GetProperty("syncClaudeAiSkills").GetBoolean().Should().BeFalse();
+            json.GetProperty("syncClaudeAiPlugins").GetBoolean().Should().BeFalse();
+        }
+    }
 }

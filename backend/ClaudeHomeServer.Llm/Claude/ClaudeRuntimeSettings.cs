@@ -36,6 +36,13 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // ретенция CLI срезала бы контент из-под архива. На чужие интерактивные сессии не
 // влияет: файл подкладывается только нашим запускам.
 //
+// Четвёртая обязанность файла — выключить синк скиллов и плагинов аккаунта claude.ai
+// (CLI ≥ 2.1.2xx тянет их в каждую сессию с подписочным логином: docx/pptx/canvas-design
+// и др. входят в системный блок каждого хода и съедают контекст). Ключи syncClaudeAiSkills
+// и syncClaudeAiPlugins стоят false всегда. Для container-владельцев, где --settings не
+// передаётся (HooksOffArgs), те же ключи выключает LlmProviderRegistry.EnsureClaudeAiSyncOff
+// в settings.json профиля CLI.
+//
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
 // внутри контейнера недоступен — там --settings не добавляем (и гейт браузера
 // в песочнице не работает; браузера в образе всё равно нет).
@@ -85,7 +92,7 @@ public static class ClaudeRuntimeSettings
             var path = Path.Combine(dir,
                 $"hooks-{(disableHooks ? "off" : "on")}{(browserEnabled ? "" : "-no-browser")}.settings.json");
             File.WriteAllText(path,
-                $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays}}}");
+                $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false}}");
             _cachedPaths[cacheKey] = path;
             return path;
         }

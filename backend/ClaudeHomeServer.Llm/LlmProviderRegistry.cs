@@ -466,11 +466,14 @@ public class LlmProviderRegistry
             // ушёл бы на эндпоинт провайдера id модели Anthropic
             ["ANTHROPIC_DEFAULT_FABLE_MODEL"] = main,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
-            // Форс: ВСЕ сабагенты идут на small, игнорируя model: во frontmatter агента и
-            // per-spawn override. Без него пин чужой модели (opus/конкретный id) уедет на
-            // эндпоинт провайдера и даст 401. У родного Claude (BuildCliEnv = null) форс не
-            // нужен: пин haiku/sonnet агентом легален (реальные модели Anthropic).
-            ["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = small,
+            // Форс: булев флаг, значение "1" (CLI 2.1.299 разбирает переменную как bool:
+            // истина только 1/true/yes/on — id модели молча выключает форс). Включённый форс
+            // гонит ВСЕ сабагентов на CLAUDE_CODE_SUBAGENT_MODEL (= small), игнорируя model:
+            // во frontmatter агента и per-spawn override; CLI при этом убирает параметр model
+            // из схемы инструмента Agent. Без него пин чужой модели (opus/конкретный id)
+            // уедет на эндпоинт провайдера и даст 401. У родного Claude (BuildCliEnv = null)
+            // форс не нужен: пин haiku/sonnet агентом легален (реальные модели Anthropic).
+            ["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = "1",
         };
         // Потолок параллельных агентов Workflow: только локальным провайдерам (vLLM), где
         // N>3 prefill душит decode соседей (замер 23.09: три потока по 63k → 12 ток/с).

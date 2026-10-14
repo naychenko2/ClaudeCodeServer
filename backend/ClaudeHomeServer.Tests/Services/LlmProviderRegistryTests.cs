@@ -212,24 +212,24 @@ public class LlmProviderRegistryTests
         env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
     }
 
-    // Форс модели сабагента: сторонний провайдер — ВСЕ сабагенты на small, игнорируя
-    // model: во frontmatter (пин чужой модели дал бы 401 на эндпоинте провайдера).
+    // Форс модели сабагента: сторонний провайдер — булев флаг "1" (CLI разбирает переменную
+    // как bool; id модели дал бы false и форс молча выключился), модель форса — CLAUDE_CODE_SUBAGENT_MODEL.
     [Fact]
     public void BuildCliEnv_СтороннийПровайдер_ФорсМоделиСабагента()
     {
         var env = Create().BuildCliEnv("deepseek-v4-pro")!;
         env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
-        env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].Should().Be("deepseek-v4-flash");
+        env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].Should().Be("1");
     }
 
-    // Локальный провайдер (vLLM) — форс тоже: сабагент с чужим пином уедет на локальный
-    // эндпоинт с несуществующей там моделью.
+    // Локальный провайдер (vLLM) — форс тоже (булев флаг "1"): сабагент с чужим пином
+    // уедет на локальный эндпоинт с несуществующей там моделью.
     [Fact]
     public void BuildCliEnv_Локальный_ФорсМоделиСабагента()
     {
         var env = CreateLocal().BuildCliEnv("qwen38-27b")!;
         env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("qwen38-27b");
-        env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].Should().Be("qwen38-27b");
+        env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].Should().Be("1");
     }
 
     // Третий случай тройки «локаль/сторонний/Claude»: родной Claude (подписка) — BuildCliEnv

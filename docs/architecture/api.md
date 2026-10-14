@@ -343,9 +343,11 @@ GET  /api/local-model/stats        ?window=15m|1h&since=<unix ms>   (тольк�
      window по умолчанию 15m, «<n>m»/«<n>h», иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
      speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
+     genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
+     в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).
      avgGenTps/avgPromptTps — СРЕДНЯЯ скорость на поток (ток/с) за окно графика (window, 15m/1h):
-     Δgeneration_tokens/Δdecode_time (генерация) и Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта).
-     Знаменатель — суммарное время движка, поэтому простой (движок молчит) в среднее не входит;
+     Δgeneration_tokens/Δinter_token_latency (генерация) и Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта).
+     Простой (движок молчит) в среднее не входит;
      нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
      chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
      othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi

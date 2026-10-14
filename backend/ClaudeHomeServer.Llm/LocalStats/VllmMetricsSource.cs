@@ -66,6 +66,8 @@ public sealed class VllmMetricsSource : IEngineMetricsSource
         "vllm:request_prefill_kv_computed_tokens_sum",
         "vllm:kv_offload_tiering_chunk_hits_total",
         "vllm:kv_offload_tiering_chunk_queries_total",
+        "vllm:inter_token_latency_seconds_sum",
+        "vllm:inter_token_latency_seconds_count",
     ];
 
     private static EngineSnapshot BuildSnapshot(PrometheusSeries series)
@@ -116,6 +118,8 @@ public sealed class VllmMetricsSource : IEngineMetricsSource
             PrefillKvComputedTokens = Single(AllMetrics[11]),
             RamTierHits = ToLong(Multi(AllMetrics[12])),
             RamTierQueries = ToLong(Multi(AllMetrics[13])),
+            InterTokenLatencySum = Single(AllMetrics[14]),
+            InterTokenLatencyCount = ToLong(Single(AllMetrics[15])),
             Unsupported = unsupported,
         };
     }

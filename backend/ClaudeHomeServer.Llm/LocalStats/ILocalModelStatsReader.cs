@@ -88,6 +88,13 @@ public interface ILocalModelStatsReader
 {
     LocalModelStatsCurrent Current { get; }
 
+    // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования
+    // (generation_tokens_total / inter_token_latency_seconds_count). DFlash отдаёт несколько
+    // токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует счётчик дельт этим
+    // коэффициентом. null — поллер выключен или движок не отдал обе метрики (поведение
+    // живого счётчика прежнее: 1 токен на дельту).
+    double? TokensPerStep { get; }
+
     // Точки кольца за окно `window` (от настоящего момента назад); sinceUnixMs — фильтр
     // «только новее этого момента» (unix-мс). Пусто — окно пустое или движок не ходил.
     IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null);

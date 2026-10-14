@@ -612,6 +612,7 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         public LocalModelStatsCurrent Current { get; init; } = new() { Status = "notConnected", Configured = false };
         public List<LocalModelStatsPoint> Points { get; init; } = [];
         public LocalModelStatsAverage Average { get; set; } = new();
+        public double? TokensPerStep { get; set; }
 
         public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null)
         {

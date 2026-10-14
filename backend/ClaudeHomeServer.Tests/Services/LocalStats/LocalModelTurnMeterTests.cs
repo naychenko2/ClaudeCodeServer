@@ -22,10 +22,12 @@ public sealed class LocalModelTurnMeterTests
         public void Advance(TimeSpan by) => Now += by;
     }
 
-    // Фейковый reader: управляем Waiting (сколько прогонов ждут GPU).
+    // Фейковый reader: управляем Waiting (сколько прогонов ждут GPU) и TokensPerStep
+    // (коэффициент DFlash: токенов на SSE-дельту; null — поллер выключен, поведение прежнее).
     private sealed class FakeReader : ILocalModelStatsReader
     {
         public int Waiting;
+        public double? TokensPerStep { get; set; }
         public LocalModelStatsCurrent Current => new() { Waiting = Waiting };
         public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null) => [];
         public LocalModelStatsAverage GetAverageSpeed(TimeSpan window) => new();
@@ -588,6 +590,58 @@ public sealed class LocalModelTurnMeterTests
         var last = _sink.Live.Last(l => l.Session == "chat-A");
         last.Tps.Should().NotBeNull("завершение параллельного запроса не роняет скорость в null");
         last.Tps!.Should().BeGreaterThan(0, "скорость > 0: монотонный счётчик, приращение по r2");
+    }
+
+    // (M5-6) ADR-029 (DFlash): 3 токена на SSE-дельту → живая скорость ×3.
+    //      Наблюдатель считает дельты (1 на content_block_delta), а не токены.
+    //      Коэффициент TokensPerStep=3 масштабирует счётчик: 10 дельт → 30 «токенов».
+    //      Мутация: убрать масштабирование (coeff=1) → скорость 10/2=5, не 15 → тест краснеет.
+    [Fact]
+    public void M5_DFlash_3ТокенаНаДельту_СкоростьВ3Р()
+    {
+        var t = Issue("chat-A");
+        var r = ReqId();
+        _reader.TokensPerStep = 3.0; // DFlash: 3 токена на SSE-дельту
+        _meter.OnRequestStarted(r, t);
+        _meter.OnFirstToken(r, t);
+
+        // 10 дельт за 2 секунды → 30 «токенов» (10 × 3) → 15 ток/с.
+        for (var i = 1; i <= 10; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(200));
+            _meter.OnTokenCount(r, t, i);
+        }
+
+        var last = _sink.Live.Last(l => l.Session == "chat-A");
+        last.Tps.Should().NotBeNull("есть приращение → скорость не null");
+        last.Tps!.Should().BeApproximately(15.0, 1.0,
+            "10 дельт × 3 (коэффициент) = 30 токенов / 2 с = 15 ток/с");
+    }
+
+    // (M5-7) ADR-029: без коэффициента (поллер выключен, TokensPerStep=null) —
+    //      поведение прежнее: 1 токен на дельту. Мутация: coeff=1.0 → 10/2=5,
+    //      но с null → 10/2=5 (то же); для мутации используем 5 дельт → 2.5 ток/с.
+    [Fact]
+    public void M5_БезКоэффициента_ПрежнееПоведение()
+    {
+        var t = Issue("chat-A");
+        var r = ReqId();
+        // TokensPerStep = null (по умолчанию): 1 токен на дельту, как раньше.
+        _reader.TokensPerStep = null;
+        _meter.OnRequestStarted(r, t);
+        _meter.OnFirstToken(r, t);
+
+        // 5 дельт за 2 секунды → 5 «токенов» (1:1) → 2.5 ток/с.
+        for (var i = 1; i <= 5; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(400));
+            _meter.OnTokenCount(r, t, i);
+        }
+
+        var last = _sink.Live.Last(l => l.Session == "chat-A");
+        last.Tps.Should().NotBeNull("есть приращение → скорость не null");
+        last.Tps!.Should().BeApproximately(2.5, 0.5,
+            "5 дельт (1:1, без коэффициента) / 2 с = 2.5 ток/с (прежнее поведение)");
     }
 
     // (M5-5) Итог хода — по точному usage, не по живой скорости.

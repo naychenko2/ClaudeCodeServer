@@ -67,6 +67,8 @@ public class VllmMetricsSourceTests
         snapshot.PrefillKvComputedTokens.Should().Be(31087402.0);
         snapshot.RamTierHits.Should().Be(953624);
         snapshot.RamTierQueries.Should().Be(5231151);
+        snapshot.InterTokenLatencySum.Should().Be(64492.1099384452);
+        snapshot.InterTokenLatencyCount.Should().Be(953047);
         snapshot.Unsupported.Should().BeEmpty();
     }
 
@@ -125,6 +127,8 @@ public class VllmMetricsSourceTests
         snapshot.PrefillKvComputedTokens.Should().BeNull();
         snapshot.RamTierHits.Should().BeNull();
         snapshot.RamTierQueries.Should().BeNull();
+        snapshot.InterTokenLatencySum.Should().BeNull();
+        snapshot.InterTokenLatencyCount.Should().BeNull();
         // Все блоки маппинга отсутствуют → Unsupported = все имена из AllMetrics.
         snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.AllMetrics.Length);
     }
@@ -160,6 +164,8 @@ public class VllmMetricsSourceTests
         snapshot.PrefillKvComputedTokens.Should().BeNull();
         snapshot.RamTierHits.Should().BeNull();
         snapshot.RamTierQueries.Should().BeNull();
+        snapshot.InterTokenLatencySum.Should().BeNull();
+        snapshot.InterTokenLatencyCount.Should().BeNull();
         snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.AllMetrics.Length);
     }
 }

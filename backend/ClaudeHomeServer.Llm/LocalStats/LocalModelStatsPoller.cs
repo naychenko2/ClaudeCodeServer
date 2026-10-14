@@ -55,6 +55,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // Живое «сейчас»: дельта generation_tokens от предыдущего опроса (каждый опрос, не только на точке)
     private double? _liveThroughput;
 
+    // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования
+    // (generation_tokens_total / inter_token_latency_seconds_count). DFlash отдаёт несколько
+    // токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует счётчик дельт этим
+    // коэффициентом. null — поллер выключен или движок не отдал обе метрики.
+    private double? _tokensPerStep;
+
     // Ожидаемый интервал: по умолчанию Task.Delay; тест подменяет, чтобы гонять цикл
     // на фейковых часах (без реального Task.Delay).
     internal Func<TimeSpan, CancellationToken, Task>? WaitFunc { get; set; }
@@ -78,6 +84,11 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         get { lock (_gate) return _current; }
     }
 
+    // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования. null — нет данных
+    // (поллер выключен или движок не отдал обе метрики). Чтение без блокировки: double? на x64
+    // атомарно (тот же паттерн, что _liveThroughput).
+    public double? TokensPerStep => _tokensPerStep;
+
     public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null)
     {
         lock (_gate)
@@ -90,11 +101,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     }
 
     // Средняя скорость на поток за окно (15m/1h, те же окна, что у графика «Нагрузка»):
-    // Δgeneration_tokens/Δdecode_time (генерация) и Δprefill_kv_computed_tokens/Δprefill_time
-    // (чтение промпта). Знаменатель — суммарное время движка (decode/prefill), поэтому простой
-    // (движок молчит) в среднее не входит: ночью среднее не падает к нулю. Окно режется по
-    // разрыву (рестарт счётчика → отрицательная дельта → null), ровно как график рисует разрыв.
-    // Текущие значения счётчиков — из последнего снимка; старейшая точка окна — из буфера.
+    // Δgeneration_tokens/Δinter_token_latency (генерация) и Δprefill_kv_computed_tokens/Δprefill_time
+    // (чтение промпта). Знаменатель генерации — суммарное inter-token-время движка (пишется на
+    // каждом шаге, ADR-029), поэтому простой (движок молчит) в среднее не входит: ночью среднее
+    // не падает к нулю. Окно режется по разрыву (рестарт счётчика → отрицательная дельта → null),
+    // ровно как график рисует разрыв. Текущие значения счётчиков — из последнего снимка;
+    // старейшая точка окна — из буфера.
     public LocalModelStatsAverage GetAverageSpeed(TimeSpan window)
     {
         var now = _time.GetUtcNow();
@@ -105,7 +117,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         {
             GenTps = SpeedOverWindow(basePt, cur,
                 p => p.GenerationTokens, s => (double?)s.GenerationTokens,
-                p => p.DecodeTimeSum, s => s.DecodeTimeSum),
+                p => p.InterTokenLatencySum, s => s.InterTokenLatencySum),
             PromptTps = SpeedOverWindow(basePt, cur,
                 p => p.PrefillKvComputedTokens, s => s.PrefillKvComputedTokens,
                 p => p.PrefillTimeSum, s => s.PrefillTimeSum),
@@ -242,6 +254,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 _liveThroughput = dTokens < 0 ? null : dTokens / dt;
         }
 
+        // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования.
+        // DFlash отдаёт несколько токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует
+        // счётчик дельт этим коэффициентом. Считаем по накопленным счётчикам (стабильно).
+        if (snap.GenerationTokens is { } g && snap.InterTokenLatencyCount is { } c && c > 0)
+            _tokensPerStep = (double)g / c;
+
         // M6: прореживание по времени — точка в кольцо не чаще PointStep (5 с). Частый опрос (1 с)
         // иначе сжимает окно «1 ч» до ~12 мин (720 точек × 1 с). Дельта скорости — за интервал от
         // предыдущей ТОЧКИ (не от предыдущего опроса), поэтому скорость в кольце — среднее за шаг.
@@ -298,6 +316,8 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         public double? PrefillTimeSum;
         public long? GenerationTokens;
         public double? PrefillKvComputedTokens;
+        public double? InterTokenLatencySum;
+        public long? InterTokenLatencyCount;
     }
 
     // Добавляет текущий снимок в буфер счётчиков, обрывает старые точки (за PreemptionsWindow)
@@ -317,6 +337,8 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             PrefillTimeSum = snap.PrefillTimeSum,
             GenerationTokens = snap.GenerationTokens,
             PrefillKvComputedTokens = snap.PrefillKvComputedTokens,
+            InterTokenLatencySum = snap.InterTokenLatencySum,
+            InterTokenLatencyCount = snap.InterTokenLatencyCount,
         };
 
         lock (_gate)
@@ -346,7 +368,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             || (prev.DecodeTimeSum is not null && cur.DecodeTimeSum is not null && cur.DecodeTimeSum < prev.DecodeTimeSum)
             || (prev.PrefillTimeSum is not null && cur.PrefillTimeSum is not null && cur.PrefillTimeSum < prev.PrefillTimeSum)
             || (prev.GenerationTokens is not null && cur.GenerationTokens is not null && cur.GenerationTokens < prev.GenerationTokens)
-            || (prev.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens < prev.PrefillKvComputedTokens);
+            || (prev.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens < prev.PrefillKvComputedTokens)
+            || (prev.InterTokenLatencySum is not null && cur.InterTokenLatencySum is not null && cur.InterTokenLatencySum < prev.InterTokenLatencySum)
+            || (prev.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount < prev.InterTokenLatencyCount);
     }
 
     // Самая старая точка буфера не раньше now-window; null — буфер короче окна (не хватает истории).
@@ -431,9 +455,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 p => p.RamTierHits, s => s.RamTierHits,
                 p => p.RamTierQueries, s => s.RamTierQueries),
             Preemptions = PreemptionsOverWindow(base15, snap),
+            // Знаменатель — inter_token_latency (пишется на каждом шаге), а не decode_time
+            // (только при завершении запроса): окна числителя/знаменателя совпадают, и при
+            // идущей генерации «—» не бывает (ADR-029).
             GenPerStream = SpeedOverWindow(base60, snap,
                 p => p.GenerationTokens, s => (double?)s.GenerationTokens,
-                p => p.DecodeTimeSum, s => s.DecodeTimeSum),
+                p => p.InterTokenLatencySum, s => s.InterTokenLatencySum),
             PrefillPerStream = SpeedOverWindow(base60, snap,
                 p => p.PrefillKvComputedTokens, s => s.PrefillKvComputedTokens,
                 p => p.PrefillTimeSum, s => s.PrefillTimeSum),

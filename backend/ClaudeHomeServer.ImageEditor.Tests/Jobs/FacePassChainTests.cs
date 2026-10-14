@@ -891,4 +891,85 @@ public class FacePassChainTests
         }
         finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
     }
+
+    // ── Поле сходства задачи (ADR-028 §11, Minor 7) ──────────────────────────────
+    // При N > 1 общего сходства нет: сходство каждого лица — в FaceResults, «сходство варианта»
+    // (Similarities) не отдаём. N = 1 — как раньше: Similarities заполнен
+
+    // Драйвер: каждый проход отдаёт картинку с Similarity = 0.9
+    private sealed class SimilarityEditor : IImageEditor
+    {
+        public const string ProviderKey = "sim";
+        private static readonly ImageEditModelInfo Model = new("m", "M",
+            new ImageEditCaps([ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false));
+        public string Key => ProviderKey;
+        public string Label => "Sim";
+        public string PriceUnit => ImageEditPriceUnits.Free;
+        public bool Enabled => true;
+        public IReadOnlyList<ImageEditModelInfo> Models => [Model];
+        public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Model;
+
+        public Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
+        {
+            var img = new EditedImage(Png(8, 8, 1), "image/png", Similarity: 0.9);
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 1, Ready: [img]));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null));
+        }
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
+    }
+
+    private (ImageEditJobService Jobs, string JobId) StartSimilarityJob(int faces, string dir)
+    {
+        var editor = new SimilarityEditor();
+        var jobs = new ImageEditJobService([editor], new ImageEditWorkspace(dir),
+            NullLogger<ImageEditJobService>.Instance);
+        var quote = new ImageEditQuoteRequest(
+            SimilarityEditor.ProviderKey, "m", EditMode.Auto, ImageEditOp.Inpaint, 1,
+            true, 0, false, null, null,
+            FaceTarget: new FaceTarget("origin", "key",
+                Enumerable.Range(1, faces).Select(i => new FaceAssignment(i, "char" + i)).ToList()));
+        var quoteResult = jobs.QuoteAsync("owner", "p1", quote, default).GetAwaiter().GetResult();
+        quoteResult.Value.Should().NotBeNull(quoteResult.Error);
+        var passes = TwoPasses().Take(faces).ToList();
+        var input = new ImageEditJobInput(
+            quoteResult.Value!.QuoteId, "подстановка", null,
+            new ImageBytes(Png(8, 8, 0), "image/png"), passes[0].Mask, null, passes[0].References,
+            "images/hero.png", passes[0].Character,
+            FaceTarget: passes[0].ThreadFaceTarget,
+            FaceCrop: passes[0].Crop, KeepMask: passes[0].KeepMask,
+            FacePasses: passes);
+        var started = jobs.StartAsync("owner", "p1", input, default).GetAwaiter().GetResult();
+        started.Value.Should().NotBeNull(started.Error);
+        return (jobs, started.Value!.JobId);
+    }
+
+    // N = 2: общего сходства нет — Similarities null (сходство каждого лица — в FaceResults)
+    [Fact]
+    public async Task Задача_на_два_лица_без_общего_сходства()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_sim_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId) = StartSimilarityJob(2, dir);
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.FaceResults!.Should().HaveCount(2, "два лица — два прохода");
+            job.Similarities.Should().BeNull("при N > 1 общего сходства нет (ADR-028 §11)");
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // N = 1: как раньше — Similarities заполнен сходством единственного прохода
+    [Fact]
+    public async Task Задача_на_одно_лицо_с_сходством()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_sim_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId) = StartSimilarityJob(1, dir);
+        try
+        {
+            var job = await WaitDone(jobs, jobId);
+            job.Similarities.Should().NotBeNull("N = 1 — сходство варианта как раньше");
+            job.Similarities!.Values.Should().Contain(0.9);
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
 }

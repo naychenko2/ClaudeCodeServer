@@ -867,9 +867,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
                 j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
-                // При N > 1 общего сходства нет (ADR-028 §11): сходство каждого лица — в FaceResults,
-                // «сходство варианта» не отдаём; N = 1 и обычная правка — как раньше
-                j.FaceResults.Count > 1 ? null : (j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null),
+                // При N > 1 общего сходства нет (ADR-028 §11): N — плановое число лиц из котировки
+                // (Quote.FacePasses), а не состояние выполнения (FaceResults.Count) — иначе в окне между
+                // DeliverReady и onResult последнего прохода клиент видел бы «общее» сходство при N = 2.
+                // Сходство каждого лица — в FaceResults, «сходство варианта» не отдаём; N = 1 и обычная правка — как раньше
+                j.Quote.FacePasses is { } n && n > 1 ? null : (j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null),
                 Op: ImageEditOpNames.OpName(j.Quote.Op),
                 FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
                 Gpu: j.Gpu);

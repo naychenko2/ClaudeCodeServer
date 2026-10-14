@@ -599,6 +599,16 @@ public class FacePassChainTests
         throw new TimeoutException("задача не завершилась");
     }
 
+    private static async Task WaitUntil(Func<bool> condition, string what)
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            if (condition()) return;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException(what);
+    }
+
     // (6) Падение прохода 2: задача Completed (Outcome=Ok), одна версия, текст ошибки в Error
     [Fact]
     public async Task Падение_прохода_2_задача_Completed_с_версией()
@@ -969,6 +979,94 @@ public class FacePassChainTests
             var job = await WaitDone(jobs, jobId);
             job.Similarities.Should().NotBeNull("N = 1 — сходство варианта как раньше");
             job.Similarities!.Values.Should().Contain(0.9);
+        }
+        finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    // ── А2 (338ef4a0c): «общее» сходство при N = 2 скрывается по ПЛАНУ, а не по ходу выполнения ──
+    // Окно: DeliverReadyAsync последнего прохода уже заполнил job.Similarities, но onResult(pass2)
+    // ещё не шёл (FaceResults.Count == 1). Старый код (FaceResults.Count > 1) в этом окне отдавал
+    // «общее» сходство; новый — по Quote.FacePasses = 2 → null.
+
+    // Управляемый fake: проход 2 отчитался Ready (DeliverReadyAsync в очереди), но RunAsync ещё не
+    // вернулся (onResult(pass2) не шёл). Pass2Ready — «Ready ушёл», Pass2Release — тест отпускает
+    private sealed class WindowEditor : IImageEditor
+    {
+        public const string ProviderKey = "window";
+        private static readonly ImageEditModelInfo Model = new("m", "M",
+            new ImageEditCaps([ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false));
+        public TaskCompletionSource Pass2Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Pass2Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Key => ProviderKey;
+        public string Label => "Window";
+        public string PriceUnit => ImageEditPriceUnits.Free;
+        public bool Enabled => true;
+        public IReadOnlyList<ImageEditModelInfo> Models => [Model];
+        public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Model;
+
+        public async Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
+        {
+            var pass = req.Character!.Slug; // anya = проход 1, borya = проход 2
+            var img = new EditedImage(Png(8, 8, (byte)(pass == "anya" ? 1 : 2)), "image/png", Similarity: 0.9);
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 2, Ready: [img]));
+            if (pass == "borya")
+            {
+                Pass2Ready.TrySetResult();
+                await Pass2Release.Task.WaitAsync(ct);
+            }
+            return new ImageEditResult(EditOutcome.Ok, [img], null, true, null, null);
+        }
+
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
+    }
+
+    private (ImageEditJobService Jobs, string JobId, WindowEditor Editor) StartWindowJob(string dir)
+    {
+        var editor = new WindowEditor();
+        var jobs = new ImageEditJobService([editor], new ImageEditWorkspace(dir),
+            NullLogger<ImageEditJobService>.Instance);
+        var quote = new ImageEditQuoteRequest(
+            WindowEditor.ProviderKey, "m", EditMode.Auto, ImageEditOp.Inpaint, 1,
+            true, 0, false, null, null,
+            FaceTarget: new FaceTarget("origin", "key",
+                [new FaceAssignment(1, "anya"), new FaceAssignment(2, "borya")]));
+        var quoteResult = jobs.QuoteAsync("owner", "p1", quote, default).GetAwaiter().GetResult();
+        quoteResult.Value.Should().NotBeNull(quoteResult.Error);
+        var passes = TwoPasses();
+        var input = new ImageEditJobInput(
+            quoteResult.Value!.QuoteId, "подстановка", null,
+            new ImageBytes(Png(8, 8, 0), "image/png"), passes[0].Mask, null, passes[0].References,
+            "images/hero.png", passes[0].Character,
+            FaceTarget: passes[0].ThreadFaceTarget,
+            FaceCrop: passes[0].Crop, KeepMask: passes[0].KeepMask,
+            FacePasses: passes);
+        var started = jobs.StartAsync("owner", "p1", input, default).GetAwaiter().GetResult();
+        started.Value.Should().NotBeNull(started.Error);
+        return (jobs, started.Value!.JobId, editor);
+    }
+
+    // N = 2: в окне (DeliverReady заполнил Similarities, onResult(pass2) не шёл → FaceResults.Count == 1)
+    // «общее» сходство скрывается по ПЛАНУ (Quote.FacePasses = 2), а не по FaceResults.Count.
+    // Мутация «вернуть FaceResults.Count > 1» красит: в окне FaceResults.Count == 1 → условие ложно →
+    // Similarities (заполнен) отдаётся, а не null
+    [Fact]
+    public async Task Два_лица_общее_сходство_скрывается_по_плану_в_окне_выполнения()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs_win_" + Guid.NewGuid().ToString("N"));
+        var (jobs, jobId, editor) = StartWindowJob(dir);
+        try
+        {
+            // Ждём, пока DeliverReadyAsync последнего прохода дописал вариант: тогда job.Similarities
+            // заполнен, а RunAsync(pass2) ещё не вернулся (onResult(pass2) не шёл, FaceResults.Count == 1)
+            await editor.Pass2Ready.Task;
+            await WaitUntil(() => jobs.Get("owner", "p1", jobId)!.Variants.Count == 1, "DeliverReady не дописал вариант");
+
+            var dto = jobs.Get("owner", "p1", jobId)!;
+            dto.FaceResults.Should().HaveCount(1, "onResult(pass2) ещё не шёл");
+            dto.Similarities.Should().BeNull("N = 2 — общего сходства нет, даже в окне выполнения");
+
+            editor.Pass2Release.TrySetResult();
+            (await WaitDone(jobs, jobId)).Similarities.Should().BeNull("N = 2 — итогового общего сходства нет");
         }
         finally { jobs.Dispose(); try { Directory.Delete(dir, true); } catch (IOException) { } }
     }

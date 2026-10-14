@@ -25,7 +25,7 @@ vi.mock('./useHomeSummary', () => ({ useHomeSummary: () => ({ data: { active: []
 const openSession = vi.fn();
 vi.mock('./SessionRow', () => ({ openSession: (s: HomeSessionInfo) => openSession(s), rowTitle: (s: HomeSessionInfo) => s.name ?? '' }));
 vi.mock('../../lib/projectActivity', () => ({
-  STATUS_COLOR: {}, STATUS_PULSE: {}, foldChatActivity: () => undefined, useChatActivity: () => new Map(),
+  STATUS_COLOR: {}, STATUS_PULSE: {}, foldChatActivity: () => undefined, useChatActivity: () => new Map(), useRootChatActivity: () => new Map(),
 }));
 vi.mock('../projects/useAllProjects', () => ({ useAllProjects: () => [] }));
 vi.mock('../projects/ProjectIcon', () => ({ ProjectIcon: () => null }));

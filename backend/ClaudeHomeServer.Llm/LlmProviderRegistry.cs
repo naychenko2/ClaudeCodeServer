@@ -617,6 +617,7 @@ public class LlmProviderRegistry
 
         var seededCount = SeedDefaultWorkflows(profileDir, manifest);
         EnsureInstalledPluginsEnabled(profileDir);
+        EnsureClaudeAiSyncOff(profileDir);
 
         if (delivered > 0 || seededCount > 0)
             ProfileSyncManifestStore.Save(profileDir, manifest);
@@ -1035,6 +1036,40 @@ public class LlmProviderRegistry
     }
 
     private static readonly JsonSerializerOptions SettingsJsonOptions = new() { WriteIndented = true };
+
+    // Выключить синк скиллов/плагинов аккаунта claude.ai (CLI ≥ 2.1.2xx тянет их в каждую
+    // сессию с подписочным логином: docx/pptx/canvas-design и др. входят в системный блок
+    // каждого хода и съедают контекст). Для container-владельцев --settings не передаётся
+    // (HooksOffArgs), поэтому единственный канал — settings.json профиля CLI, который CLI
+    // читает как CLAUDE_CONFIG_DIR. Ключи ставим false всегда; MergeSettingsInto выше мог
+    // принести хостовое значение, поэтому эта запись идёт ПОСЛЕ него и побеждает.
+    private static void EnsureClaudeAiSyncOff(string profileDir)
+    {
+        try
+        {
+            var settingsPath = Path.Combine(profileDir, "settings.json");
+            JsonObject? settings = null;
+            if (File.Exists(settingsPath))
+                try { settings = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject; }
+                catch (JsonException) { }
+            settings ??= [];
+
+            var changed = false;
+            foreach (var key in new[] { "syncClaudeAiSkills", "syncClaudeAiPlugins" })
+            {
+                if (settings[key] is JsonValue v && v.GetValueKind() == JsonValueKind.False) continue;
+                settings[key] = false;
+                changed = true;
+            }
+            if (!changed) return;
+
+            File.WriteAllText(settingsPath, settings.ToJsonString(SettingsJsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Выключение синка claude.ai в профиле {profileDir} не удалось: {ex.Message}");
+        }
+    }
 
     // Синк settings.json — НЕ копия файла, а мерж по ключам. Профильный settings.json
     // не копия хостового: в нём живут собственные значения профиля — env маршрута

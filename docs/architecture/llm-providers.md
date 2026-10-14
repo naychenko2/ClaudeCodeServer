@@ -459,8 +459,12 @@ SHA-256 и сравнивается с `ClaudeSession._lastTurnRecallHash`; со
 ([ClaudeRuntimeSettings](../../backend/ClaudeHomeServer.Llm/Claude/ClaudeRuntimeSettings.cs),
 `HooksOffArgs`). **В песочнице его нет вовсе** (`launcher.IsSandboxed` → пустой список
 аргументов): путь к хостовому файлу внутри контейнера недоступен, а окон консоли там не бывает.
-У файла три обязанности — `disableAllHooks`, гейт плагина браузера (`enabledPlugins`) и
-`cleanupPeriodDays` (ретенция транскриптов CLI, 3650 дней).
+У файла четыре обязанности — `disableAllHooks`, гейт плагина браузера (`enabledPlugins`),
+`cleanupPeriodDays` (ретенция транскриптов CLI, 3650 дней) и выключенный синк скиллов/
+плагинов аккаунта claude.ai (`syncClaudeAiSkills`/`syncClaudeAiPlugins: false`): CLI ≥ 2.1.2xx
+тянет их в каждую сессию с подписочным логином, и они съедают контекст. Для container-
+владельцев, где `--settings` не передаётся, те же ключи выключает
+`LlmProviderRegistry.EnsureClaudeAiSyncOff` в `settings.json` профиля CLI.
 
 **Хуки гасятся только на Windows-хосте.** Гейт — `OperatingSystem.IsWindows()`, и он управляет
 **значением** `disableAllHooks`, а не наличием файла: на Linux файл всё равно подкладывается,

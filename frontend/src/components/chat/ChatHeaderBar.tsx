@@ -727,6 +727,18 @@ function LocalModelPopoverBody({ live, isAdmin, sessionId }: {
   const queueText = localModelQueueText(queueMs);
   const queueLabel = live.phase === 'queued' ? 'Ожидание' : 'Ждал в очереди';
 
+  // Атрибуция (ADR-029): разрез «основной ход / субагенты / компакция» по подсказочным
+  // заголовкам. Строки видны, когда в ходе были сабагенты или компакция; обычный ход
+  // (только main) их не показывает, чтобы не засорять поповер.
+  const lt = live.lastTurn;
+  const subN = lt?.subagentRequests ?? 0;
+  const compN = lt?.compactionRequests ?? 0;
+  const hasBreakdown = lt != null && (subN > 0 || compN > 0 || lt.compactionKind != null);
+  const breakdownText = lt
+    ? `${lt.mainRequests ?? 0} ход · ${subN} сабаг. · ${compN} компакт.`
+    : '';
+  const agentTypesText = lt?.agentTypes && lt.agentTypes.length > 0 ? lt.agentTypes.join(', ') : '';
+
   return (
     <>
       <div style={badgeTitleStyle}>Локальная модель</div>
@@ -734,6 +746,8 @@ function LocalModelPopoverBody({ live, isAdmin, sessionId }: {
       <BadgeRow k="Чтение промпта" v={prefillText} />
       <BadgeRow k="Попадание в кэш" v={cacheText} />
       <BadgeRow k={queueLabel} v={queueText} />
+      {hasBreakdown && <BadgeRow k="Состав хода" v={breakdownText} />}
+      {hasBreakdown && agentTypesText !== '' && <BadgeRow k="Сабагенты" v={agentTypesText} />}
       {isAdmin && (
         <button
           type="button"

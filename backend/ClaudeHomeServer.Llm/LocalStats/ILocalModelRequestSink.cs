@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Llm.Gateway;
+
 namespace ClaudeHomeServer.Services.Llm;
 
 // Приёмник метрик локальной модели: шлюз LLM (LlmGatewayEndpoints) отводит ему копию
@@ -24,4 +26,10 @@ public interface ILocalModelRequestSink
     // cumulativeTokens — накопленный счётчик токенов ЭТОГО запроса (не сессии).
     // Счётчик хода суммирует по всем запросам сессии и считает скользящую скорость.
     void OnTokenCount(string requestId, string turnId, int cumulativeTokens);
+
+    // Подсказочные заголовки CLI (GatewayHintHeaders, ADR-029): класс запроса, тип агента,
+    // компакция — бесплатная атрибуция для разреза «основной ход / субагенты / компакция».
+    // Default-реализация пуста: приёмник, которому подсказки не нужны, не переопределяет.
+    // Вызывается шлюзом сразу после OnRequestStarted, только когда наблюдатель создан.
+    void OnRequestHints(string requestId, string turnId, GatewayHintHeaders hints) { }
 }

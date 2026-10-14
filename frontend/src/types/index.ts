@@ -1373,7 +1373,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'local_model_live'; phase: string; genTps?: number | null; waitingTotal?: number | null }
   // Итоговые метрики завершённого хода на локальной модели: скорость генерации/префилла,
   // time-to-first-token, оценка времени в очереди, доля prefix-кэша, число выданных токенов.
-  | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null }
+  | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null; mainRequests?: number; subagentRequests?: number; compactionRequests?: number; auxiliaryRequests?: number; agentTypes?: string[] | null; compactionKind?: 'auto' | 'manual' | 'reactive' | null }
 );
 
 // Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})

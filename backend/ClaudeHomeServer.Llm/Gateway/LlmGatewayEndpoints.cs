@@ -34,12 +34,18 @@ public static class LlmGatewayEndpoints
 
     // Заголовки, которые не пересылаются upstream: авторизация клиента (её заменяет шлюз),
     // токен хода и hop-by-hop. anthropic-beta собирается отдельно.
+    // Gateway hint headers (CLAUDE_CODE_GATEWAY_HINT_HEADERS=1) — consumed шлюзом для
+    // статистики локальных моделей (ADR-029): upstream (vLLM/прокси) их не ждёт, строгий
+    // прокси мог бы отклонить неизвестные x-claude-code-*.
     private static readonly HashSet<string> DropRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Host", "Authorization", "x-api-key", TurnTokenEndpointFilter.HeaderName,
         TurnTokenEndpointFilter.DeviceFingerprintHeader, "anthropic-beta",
         "Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer",
         "Transfer-Encoding", "Upgrade", "Content-Length", "Cookie",
+        GatewayHintHeaders.RequestClassHeader, GatewayHintHeaders.AgentTypeHeader,
+        GatewayHintHeaders.CompactionHeader, GatewayHintHeaders.ContextCompactedHeader,
+        "x-claude-code-prompt-id", "x-claude-code-prev-tool-durations",
     };
 
     // Общий для обоих шлюзов (LLM и MCP): hop-by-hop и всё, чем upstream мог бы выставить
@@ -184,6 +190,12 @@ public static class LlmGatewayEndpoints
             if (observer is not null)
             {
                 sink!.OnRequestStarted(requestId, grant.TurnId);
+                // Подсказочные заголовки CLI (ADR-029): класс запроса, тип агента, компакция —
+                // бесплатная атрибуция для разреза «основной ход / субагенты / компакция».
+                // Недоверенный ввод: GatewayHintHeaders.From валидирует/обрезает; null — нет.
+                var hints = GatewayHintHeaders.From(ctx.Request.Headers);
+                if (hints is not null)
+                    sink!.OnRequestHints(requestId, grant.TurnId, hints);
                 // M5: живая скорость — наблюдатель шлёт счётчик токенов на каждую дельту.
                 observer.OnTokenCount = count => sink!.OnTokenCount(requestId, grant.TurnId, count);
             }

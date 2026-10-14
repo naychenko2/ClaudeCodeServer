@@ -707,4 +707,109 @@ public sealed class LocalModelTurnMeterTests
         var s = _sink.Turns.Single(x => x.Session == "chat-A").Summary;
         s.GenTps.Should().Be(5.0, "итог = 10 токенов / 2 с = 5.0 (точный usage)");
     }
+
+    // ── Атрибуция по подсказочным заголовкам (ADR-029, OnRequestHints) ─────────────────────
+
+    // Запрос с подсказками: start + hints + complete (тот же requestId — иначе OnRequestCompleted
+    // не найдёт запрос в InWork и итог хода не соберётся).
+    private void HintReq(string turnId, GatewayHintHeaders? hints)
+    {
+        var id = ReqId();
+        _meter.OnRequestStarted(id, turnId);
+        if (hints is not null) _meter.OnRequestHints(id, turnId, hints);
+        _meter.OnRequestCompleted(id, turnId, Usage(10));
+    }
+
+    // (H1) Разрез «основной ход / субагенты / компакция»: классы запросов хода суммируются
+    //      в итог. Мутация: OnRequestHints не пишет в накопитель → нули → тест краснеет.
+    [Fact]
+    public async Task Hints_РазрезПоКлассамЗапросов()
+    {
+        var t = Issue("chat-A");
+        // Основной ход: 2 запроса main.
+        HintReq(t, new GatewayHintHeaders { RequestClass = "main" });
+        HintReq(t, new GatewayHintHeaders { RequestClass = "main" });
+        // Субагент (Explore) + workflow-агент.
+        HintReq(t, new GatewayHintHeaders { RequestClass = "subagent", AgentType = "Explore" });
+        HintReq(t, new GatewayHintHeaders { RequestClass = "workflow", AgentType = "Plan" });
+        // Компакция (auto) + боковой запрос.
+        HintReq(t, new GatewayHintHeaders { RequestClass = "compaction", Compaction = "auto" });
+        HintReq(t, new GatewayHintHeaders { RequestClass = "auxiliary" });
+
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-A", "owner", 1, 0), "success"));
+
+        var s = _sink.Turns.Single(x => x.Session == "chat-A").Summary;
+        s.MainRequests.Should().Be(2, "два запроса main");
+        s.SubagentRequests.Should().Be(2, "subagent + workflow");
+        s.CompactionRequests.Should().Be(1, "один запрос-суммаризация");
+        s.AuxiliaryRequests.Should().Be(1, "один боковой запрос");
+        s.CompactionKind.Should().Be("auto", "вид компакции из запроса-суммаризации");
+        s.AgentTypes.Should().BeEquivalentTo(["Explore", "Plan"], "типы сабагентов, distinct");
+    }
+
+    // (H2) AgentTypes — distinct и в порядке первого вхождения (не HashSet).
+    [Fact]
+    public async Task Hints_AgentTypes_Distinct_ПорядокПервогоВхождения()
+    {
+        var t = Issue("chat-A");
+        // Тот же тип дважды + другой: distinct, порядок первый-встреченный.
+        HintReq(t, new GatewayHintHeaders { RequestClass = "subagent", AgentType = "Explore" });
+        HintReq(t, new GatewayHintHeaders { RequestClass = "subagent", AgentType = "Explore" });
+        HintReq(t, new GatewayHintHeaders { RequestClass = "subagent", AgentType = "Plan" });
+
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-A", "owner", 1, 0), "success"));
+
+        var s = _sink.Turns.Single(x => x.Session == "chat-A").Summary;
+        s.AgentTypes.Should().Equal(new[] { "Explore", "Plan" }, "distinct, порядок первый-встреченный");
+    }
+
+    // (H3) Компакция только по context-compacted (первый основной запрос после неё):
+    //      compaction-запроса нет, но context-compacted=manual → вид компакции manual.
+    [Fact]
+    public async Task Hints_ТолькоContextCompacted_ВидКомпакцииЗаписан()
+    {
+        var t = Issue("chat-A");
+        HintReq(t, new GatewayHintHeaders { RequestClass = "main", ContextCompacted = "manual" });
+
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-A", "owner", 1, 0), "success"));
+
+        var s = _sink.Turns.Single(x => x.Session == "chat-A").Summary;
+        s.CompactionRequests.Should().Be(0, "запроса-суммаризации не было");
+        s.CompactionKind.Should().Be("manual", "вид компакции из context-compacted");
+    }
+
+    // (H4) Ход без подсказок (OnRequestHints не вызывался): нули, AgentTypes null, Kind null.
+    [Fact]
+    public async Task Hints_БезПодсказок_НулиИNull()
+    {
+        var t = Issue("chat-A");
+        // Запрос без подсказок: start + complete (OnRequestHints не зовётся).
+        var id = ReqId();
+        _meter.OnRequestStarted(id, t);
+        _meter.OnRequestCompleted(id, t, Usage(10));
+
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-A", "owner", 1, 0), "success"));
+
+        var s = _sink.Turns.Single(x => x.Session == "chat-A").Summary;
+        s.MainRequests.Should().Be(0);
+        s.SubagentRequests.Should().Be(0);
+        s.CompactionRequests.Should().Be(0);
+        s.AuxiliaryRequests.Should().Be(0);
+        s.AgentTypes.Should().BeNull("сабагентов не было → null, не пустой массив");
+        s.CompactionKind.Should().BeNull();
+    }
+
+    // (H5) Бесхозный ход (токен не найден): подсказки в чат не идут, итога нет.
+    [Fact]
+    public async Task Hints_БесхозныйХод_ИтогаНет()
+    {
+        var id = ReqId();
+        _meter.OnRequestStarted(id, "нет-такого-хода");
+        _meter.OnRequestHints(id, "нет-такого-хода", new GatewayHintHeaders { RequestClass = "main" });
+        _meter.OnRequestCompleted(id, "нет-такого-хода", Usage(10));
+
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-ghost", "owner", 1, 0), "success"));
+
+        _sink.Turns.Should().BeEmpty("бесхозный запрос не привязан к сессии, итога нет");
+    }
 }

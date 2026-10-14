@@ -187,6 +187,14 @@ export interface LocalModelTurnStats {
   queueMsApprox?: number | null;
   cacheHitPerc?: number | null;
   outTokens?: number | null;
+  // Атрибуция по подсказочным заголовкам CLI (ADR-029): разрез по классам запросов хода.
+  // 0 — класс не встречался (не null). agentTypes — null, если сабагентов не было.
+  mainRequests?: number;
+  subagentRequests?: number;
+  compactionRequests?: number;
+  auxiliaryRequests?: number;
+  agentTypes?: string[] | null;
+  compactionKind?: 'auto' | 'manual' | 'reactive' | null;
 }
 
 // Ответ GET /api/sessions/{id}/local-model: lastTurn — null, если ходов на

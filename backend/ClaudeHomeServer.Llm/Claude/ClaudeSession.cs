@@ -3980,6 +3980,11 @@ public class ClaudeSession : ILlmSessionAdapter
             envOverrides["ANTHROPIC_AUTH_TOKEN"] = GatewayAuthPlaceholder;
             envOverrides["ANTHROPIC_API_KEY"] = GatewayAuthPlaceholder;
             customHeaders.Add($"{Gateway.TurnTokenEndpointFilter.HeaderName}: {GatewayTokenPlaceholder}");
+            // Подсказочные заголовки CLI (CLAUDE_CODE_GATEWAY_HINT_HEADERS=1, ADR-029): шлюз
+            // читает их для атрибуции статистики локальных моделей (класс запроса, тип
+            // агента, компакция) без разбора тел. Только на запусках через шлюз: значение
+            // входит в сигнатуру запуска и стабильно по сессии (viaGateway не мерцает).
+            envOverrides["CLAUDE_CODE_GATEWAY_HINT_HEADERS"] = "1";
         }
         if (localProvider is not null)
             customHeaders.Add($"X-CCS-Session: {Info.Id}");

@@ -48,7 +48,30 @@ public sealed record TurnRunPassport(
     /// <summary>Ход не состоялся — человек увидел ошибку вместо ответа.</summary>
     [JsonIgnore]
     public bool Failed => Outcome is "failed" or "egress_down" or "crashed";
+
+    /// <summary>
+    /// Факт внутренних повторов CLI (событие system/api_retry) за ход: сколько раз
+    /// headless-сессия сама переждала 429/529 внутри процесса, прежде чем отдать ход нам.
+    /// С 2.1.246 CLI дотягивает оборванный ответ и может переждать 429/529 минутами:
+    /// <see cref="Attempts"/>/<see cref="EgressRetries"/> — это НАШИ повторы (цепочка),
+    /// а эти поля — сколько CLI молчал сам. 0/null — повторов не было (CLI не дотягивал).
+    /// </summary>
+    public int CliRetries { get; init; }
+
+    /// <summary>Суммарное время ожидания внутренних повторов CLI (мс, сумма retry_delay_ms).</summary>
+    public long CliRetryWaitMs { get; init; }
+
+    /// <summary>Последний HTTP-статус внутренних повторов CLI (529/429); null — не было.</summary>
+    public string? CliRetryLastStatus { get; init; }
 }
+
+/// <summary>
+/// Факт внутренних повторов CLI (system/api_retry) за ход: сколько раз headless-сессия
+/// сама переждала 429/529 внутри процесса, суммарное время ожидания (мс) и последний
+/// HTTP-статус. Читается адаптером для паспорта хода (TurnRunPassport.CliRetries/
+/// CliRetryWaitMs/CliRetryLastStatus). 0/null — повторов не было.
+/// </summary>
+public record CliRetryStats(int Count, long WaitMs, string? LastStatus);
 
 /// <summary>
 /// Сводка по паспортам ходов: сколько ходов и с какой причиной встали.

@@ -252,6 +252,61 @@ public class LlmProviderRegistryTests
             .And.Contain("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL");
     }
 
+    // Потолки внутренних повторов CLI (429/529): глобальная политика, не свойство провайдера.
+    // Секция LlmProviders:Retry не задана → встроенные дефолты «короткого backoff» (ADR-007 §4):
+    // базовый повтор 2 с, потолок между повторами 10 с, watchdog 30 с, non-streaming 2 повтора.
+    [Fact]
+    public void RetryCeilings_СекцияНеЗадана_ВстроенныеДефолты()
+    {
+        var env = Create().RetryCeilings;
+        env["CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS"].Should().Be("2000");
+        env["CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS"].Should().Be("10000");
+        env["CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS"].Should().Be("30000");
+        env["CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES"].Should().Be("2");
+    }
+
+    // Значения из конфига LlmProviders:Retry перебивают встроенные дефолты (0/отсутствует —
+    // дефолт, заданное число — как есть).
+    [Fact]
+    public void RetryCeilings_ИзКонфига_ПерезаписываетДефолты()
+    {
+        var reg = Create(new()
+        {
+            ["LlmProviders:Retry:OverloadedRetryBaseDelayMs"] = "1500",
+            ["LlmProviders:Retry:OverloadedRetryMaxDelayMs"] = "8000",
+            ["LlmProviders:Retry:RetryWatchdogMaxWaitMs"] = "45000",
+            ["LlmProviders:Retry:NonStreamingTimeoutRetries"] = "3",
+        });
+        var env = reg.RetryCeilings;
+        env["CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS"].Should().Be("1500");
+        env["CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS"].Should().Be("8000");
+        env["CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS"].Should().Be("45000");
+        env["CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES"].Should().Be("3");
+    }
+
+    // Паспорт хода обязан отражать, насколько долго CLI мог молча переждать 429/529:
+    // RetryWatchdogMaxWaitMs — то же значение, что уходит в env, и по умолчанию (без секции)
+    // держит встроенный дефолт, а не null.
+    [Fact]
+    public void RetryWatchdogMaxWaitMs_ПоУмолчаниюИИзКонфига()
+    {
+        Create().RetryWatchdogMaxWaitMs.Should().Be(30000);
+        Create(new() { ["LlmProviders:Retry:RetryWatchdogMaxWaitMs"] = "45000" })
+            .RetryWatchdogMaxWaitMs.Should().Be(45000);
+    }
+
+    // Ручки повторов обязаны быть в ProviderEnvKeys: глобально заданное на машине значение
+    // вычищается, чтобы маршрут/повторы определяли мы, а не чужой setx.
+    [Fact]
+    public void ProviderEnvKeys_СодержитПотолкиПовторовCli()
+    {
+        LlmProviderRegistry.ProviderEnvKeys.Should()
+            .Contain("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS")
+            .And.Contain("CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS")
+            .And.Contain("CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS")
+            .And.Contain("CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES");
+    }
+
     // Потолок параллельных агентов Workflow: только локальным провайдерам, значение из
     // конфига (не хардкод). Облачные не трогаем — CLI решает сам.
     [Fact]

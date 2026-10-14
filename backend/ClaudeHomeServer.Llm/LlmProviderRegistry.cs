@@ -16,6 +16,27 @@ public class LlmProviderRegistry
     // Служебный ключ секции: общий профиль облегчённого контекста, а не провайдер
     public const string LightProfileKey = "LightProfile";
 
+    // Служебный ключ секции: потолки внутренних повторов CLI (429/529), а не провайдер.
+    // Читается отдельно от провайдеров (см. конструктор) и применяется на КАЖДОМ запуске,
+    // включая родной Claude — это глобальная политика, а не свойство провайдера.
+    public const string RetryKey = "Retry";
+
+    // Имена env-ручек внутренних повторов CLI (2.1.246+). Ставятся на каждом запуске, чтобы
+    // 429/529 доходил до TurnErrorClassifier за десятки секунд, а не минуты (ADR-007 §4).
+    public const string EnvOverloadedRetryBaseDelayMs = "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS";
+    public const string EnvOverloadedRetryMaxDelayMs = "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS";
+    public const string EnvRetryWatchdogMaxWaitMs = "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS";
+    public const string EnvNonStreamingTimeoutRetries = "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES";
+
+    // Встроенные дефолты «короткого backoff»: применяются, когда значение в конфиге 0/отсутствует.
+    // Десятки секунд, не минуты: базовый повтор 2 с, потолок между повторами 10 с, watchdog 30 с,
+    // non-streaming не больше 2 повторных отправок. Значения — в конфиге LlmProviders:Retry,
+    // здесь только fail-open запас, чтобы политика держалась, даже если секцию не заполнили.
+    internal const int DefaultOverloadedRetryBaseDelayMs = 2000;
+    internal const int DefaultOverloadedRetryMaxDelayMs = 10000;
+    internal const int DefaultRetryWatchdogMaxWaitMs = 30000;
+    internal const int DefaultNonStreamingTimeoutRetries = 2;
+
     // Заглушка токена для локального провайдера (vLLM/llama.cpp). Локальный сервер
     // авторизацию игнорирует, но claude CLI требует непустой ANTHROPIC_AUTH_TOKEN —
     // иначе отбивает «Not logged in» ещё до запроса. Говорящее значение: при разборе
@@ -35,6 +56,9 @@ public class LlmProviderRegistry
     // Проба локального эндпоинта для подстановки живого max_model_len (см. BuildCliEnv).
     // null — старый конструктор без DI (тесты без проб); fail-open, поведение прежнее.
     private readonly ILocalEndpointProbe? _localProbe;
+    // Потолки внутренних повторов CLI (LlmProviders:Retry). null — секция не задана,
+    // RetryCeilings/RetryWatchdogMaxWaitMs подставят встроенные дефолты.
+    private readonly LlmRetryPolicy? _retry;
 
     public LlmProviderRegistry(IConfiguration config, ILocalEndpointProbe? localProbe = null)
     {
@@ -43,11 +67,16 @@ public class LlmProviderRegistry
         foreach (var child in config.GetSection(Section).GetChildren())
         {
             if (string.Equals(child.Key, LightProfileKey, StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(child.Key, RetryKey, StringComparison.OrdinalIgnoreCase)) continue;
             var cfg = child.Get<LlmProviderConfig>();
             if (cfg is null) continue;
             cfg.Key = child.Key.ToLowerInvariant();
             _providers[cfg.Key] = cfg;
         }
+
+        // Потолки внутренних повторов CLI: секция LlmProviders:Retry. null — секция не задана,
+        // RetryCeilings/RetryWatchdogMaxWaitMs подставят встроенные дефолты (см. константы выше).
+        _retry = config.GetSection($"{Section}:{RetryKey}").Get<LlmRetryPolicy>();
 
         _lightProfile = config.GetSection($"{Section}:{LightProfileKey}").Get<LightProfile>()
             ?? new LightProfile { KeepMcpServers = ["tasks", "memory", "codegraph", "websearch", "watch"] };
@@ -75,6 +104,41 @@ public class LlmProviderRegistry
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
+
+    // Env-ручки внутренних повторов CLI, выставленные на каждом запуске. Глобальная
+    // политика (не свойство провайдера): ClaudeSession склеивает её в envOverrides для
+    // любого хода — и родного Claude, и стороннего. Значения из LlmProviders:Retry, 0/нет
+    // → встроенные дефолты (см. DefaultRetry*). Словарь всегда с четырьмя ключами: «выключить
+    // потолок» — не наш случай, у нас он всегда «короткий».
+    public IReadOnlyDictionary<string, string> RetryCeilings
+    {
+        get
+        {
+            return new Dictionary<string, string>
+            {
+                [EnvOverloadedRetryBaseDelayMs] =
+                    RetryValue(_retry?.OverloadedRetryBaseDelayMs, DefaultOverloadedRetryBaseDelayMs).ToString(CultureInfo.InvariantCulture),
+                [EnvOverloadedRetryMaxDelayMs] =
+                    RetryValue(_retry?.OverloadedRetryMaxDelayMs, DefaultOverloadedRetryMaxDelayMs).ToString(CultureInfo.InvariantCulture),
+                [EnvRetryWatchdogMaxWaitMs] =
+                    RetryValue(_retry?.RetryWatchdogMaxWaitMs, DefaultRetryWatchdogMaxWaitMs).ToString(CultureInfo.InvariantCulture),
+                [EnvNonStreamingTimeoutRetries] =
+                    RetryValue(_retry?.NonStreamingTimeoutRetries, DefaultNonStreamingTimeoutRetries).ToString(CultureInfo.InvariantCulture),
+            };
+        }
+    }
+
+    // Потолок ожидания retry-watchdog, применённый к запуску (для паспорта хода: «насколько
+    // долго CLI мог переждать 429/529 внутри процесса, прежде чем отдать ход нам»). Всегда
+    // число (встроенный дефолт, если секция конфига не задана) — паспорт не зависит от наличия
+    // секции: политика «короткий backoff» держится по умолчанию.
+    public int RetryWatchdogMaxWaitMs =>
+        RetryValue(_retry?.RetryWatchdogMaxWaitMs, DefaultRetryWatchdogMaxWaitMs);
+
+    // Значение из конфига (0/отсутствует → встроенный дефолт). int? потому что _retry?.X —
+    // null, когда секция LlmProviders:Retry не задана.
+    private static int RetryValue(int? configured, int fallback) =>
+        configured is > 0 ? configured.Value : fallback;
 
     // Пользовательский .claude.json (сосед папки ~/.claude) — источник user-scope
     // MCP-серверов (claude mcp add), которые изолированный профиль провайдера не видит
@@ -419,6 +483,12 @@ public class LlmProviderRegistry
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
         "MAX_THINKING_TOKENS", // лимит токенов на блок thinking (см. BuildCliEnv)
         "ANTHROPIC_CUSTOM_HEADERS", // заголовки к запросам API, ставим сами (id сессии для прокси)
+        // Потолки внутренних повторов CLI (429/529): ставим сами на каждом запуске (RetryCeilings),
+        // глобально заданное значение на машине вычищаем, чтобы маршрут/повторы определяли мы.
+        EnvOverloadedRetryBaseDelayMs,
+        EnvOverloadedRetryMaxDelayMs,
+        EnvRetryWatchdogMaxWaitMs,
+        EnvNonStreamingTimeoutRetries,
     ];
 
     // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true

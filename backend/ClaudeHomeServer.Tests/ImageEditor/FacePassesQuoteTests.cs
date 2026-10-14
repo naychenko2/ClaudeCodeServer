@@ -36,7 +36,32 @@ public class FacePassesQuoteTests : IDisposable
         public int? ExpectedSeconds(ImageEditModelInfo model) => 100;
     }
 
+    // ETA зависит от признаков запроса, как у LocalImageEditor.Eta (холст + картинки):
+    // References + HasMask + HasCharacter. MCP и фронт шлют разные признаки — без правки
+    // сервера (этап 3) они дают разное время
+    private sealed class TraitEtaEditor : IImageEditor, IImageEditQuoter
+    {
+        public string Key => "local";
+        public string Label => "LOCAL";
+        public string PriceUnit => ImageEditPriceUnits.Free;
+        public bool Enabled => true;
+        public IReadOnlyList<ImageEditModelInfo> Models { get; } = [FakeImageEditor.Model("m")];
+        public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Models[0];
+        public Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct) =>
+            Task.FromResult(new ImageEditResult(EditOutcome.Ok, [], null, null, null, null));
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
+
+        public Task<ImageEditEstimateDto> EstimateAsync(ImageEditModelInfo model, ImageEditQuoteRequest request, CancellationToken ct)
+        {
+            var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0) + (request.HasCharacter ? 1 : 0);
+            return Task.FromResult(new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false, ImageEditEstimateSources.Provider,
+                EtaSeconds: 100 + 10 * images));
+        }
+        public int? ExpectedSeconds(ImageEditModelInfo model) => 100;
+    }
+
     private readonly ImageEditJobService _service;
+    private readonly ImageEditJobService _traitService;
     private const string Owner = "owner1";
     private const string Project = "project1";
 
@@ -44,11 +69,13 @@ public class FacePassesQuoteTests : IDisposable
     {
         var workspace = new ImageEditWorkspace(Path.Combine(Path.GetTempPath(), "fp_" + Guid.NewGuid().ToString("N")));
         _service = new ImageEditJobService([new EtaEditor()], workspace, NullLogger<ImageEditJobService>.Instance);
+        _traitService = new ImageEditJobService([new TraitEtaEditor()], workspace, NullLogger<ImageEditJobService>.Instance);
     }
 
     public void Dispose()
     {
         _service.Dispose();
+        _traitService.Dispose();
         GC.SuppressFinalize(this);
     }
 
@@ -209,5 +236,42 @@ public class FacePassesQuoteTests : IDisposable
         results.Count(r => r.Value is not null).Should().Be(1, "ровно один запуск проходит");
         results.First(r => r.Value is null).ErrorCode.Should().Be(ImageEditErrorCodes.QuoteNotFound,
             "второй запуск: котировка уже расходуется");
+    }
+
+    // ── (з) Время подстановки на лицо — одна точка для REST и MCP (ADR-028, этап 3, Minor 1) ──
+    // MCP котирует с References=1, HasMask=true, HasCharacter=true; фронт — со своими признаками.
+    // Признаки для оценки — на сервере из числа проходов (холст + одно фото персонажа, маска не
+    // картинкой), поэтому оба тела дают одно время. Мутация «вернуть клиентские признаки» красит.
+
+    private static ImageEditQuoteRequest McpBody(FaceTarget faceTarget) =>
+        new("local", "auto", EditMode.Auto, ImageEditOp.Edit, 1,
+            HasMask: true, References: 1, HasCharacter: true, FaceTarget: faceTarget);
+
+    private static ImageEditQuoteRequest RestBody(FaceTarget faceTarget) =>
+        new("local", "auto", EditMode.Auto, ImageEditOp.Edit, 1,
+            HasMask: false, References: 0, HasCharacter: true, FaceTarget: faceTarget);
+
+    [Fact]
+    public async Task Котировка_face_target_1_лицо_одно_время_REST_и_MCP()
+    {
+        var faceTarget = FaceTarget(1);
+        var mcp = (await _traitService.QuoteAsync(Owner, Project, McpBody(faceTarget), CancellationToken.None)).Value!;
+        var rest = (await _traitService.QuoteAsync(Owner, Project, RestBody(faceTarget), CancellationToken.None)).Value!;
+
+        mcp.Estimate.EtaSeconds.Should().Be(rest.Estimate.EtaSeconds,
+            "REST и MCP дают одно время: признаки для оценки — на сервере, не от клиента");
+    }
+
+    [Fact]
+    public async Task Котировка_face_target_2_лица_одно_время_REST_и_MCP()
+    {
+        var faceTarget = FaceTarget(2);
+        var mcp = (await _traitService.QuoteAsync(Owner, Project, McpBody(faceTarget), CancellationToken.None)).Value!;
+        var rest = (await _traitService.QuoteAsync(Owner, Project, RestBody(faceTarget), CancellationToken.None)).Value!;
+
+        mcp.Estimate.EtaSeconds.Should().Be(rest.Estimate.EtaSeconds,
+            "N = 2: REST и MCP дают одно время (N × время одной правки)");
+        // Одна правка = холст + фото персонажа (1 картинка в признаках) = 110; N = 2 → 220
+        rest.Estimate.EtaSeconds.Should().Be(220, "ETA = 2 × (100 + 10×1) = 220");
     }
 }

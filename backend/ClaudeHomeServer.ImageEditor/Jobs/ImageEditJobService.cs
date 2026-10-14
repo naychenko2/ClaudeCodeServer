@@ -162,6 +162,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 return Fail<ImageEditQuoteDto>(rules.ErrorCode!, rules.Error!);
         }
 
+        // Подстановка на лицо (ADR-028, этап 3): признаки для оценки — на сервере из числа проходов
+        // (холст + одно фото персонажа на проход, маска картинкой не идёт); присланные клиентом
+        // References/HasMask/HasCharacter игнорируются, чтобы REST и MCP дали одно время
+        if (request.FaceTarget is not null)
+            request = request with { References = 0, HasMask = false, HasCharacter = true, HasAnnotations = false };
+
         var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
         var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)

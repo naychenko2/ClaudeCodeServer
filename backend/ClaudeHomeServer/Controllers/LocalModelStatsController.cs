@@ -28,9 +28,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
-    // GET /api/local-model/stats?window=15m|1h&since=<unix ms>
-    // window: по умолчанию 15m; неизвестное значение → 400. since: unix-мс, фильтр
-    // «только хвост новее этого момента» (без since — всё окно).
+    // GET /api/local-model/stats?window=5m|15m|1h&since=<unix ms>
+    // window: по умолчанию 15m; «<n>m»/«<n>h» (в т.ч. 5m) — валидные, иное → 400.
+    // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
         [FromQuery] string? window,
@@ -38,7 +38,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         CancellationToken ct)
     {
         if (!TryParseWindow(window, out var windowSpan))
-            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 15m, 1h)" });
+            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 5m, 15m, 1h)" });
 
         var current = _reader?.Current;
 
@@ -74,6 +74,12 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             GenThroughput = p.GenThroughput,
             Waiting = p.Waiting,
             Running = p.Running,
+            KvUsage = p.KvUsage,
+            PrefixHits = p.PrefixHits,
+            PrefixQueries = p.PrefixQueries,
+            RamHits = p.RamHits,
+            RamQueries = p.RamQueries,
+            Preemptions = p.Preemptions,
         }).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
@@ -340,7 +346,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
     // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени.
     // GenPerStream/PrefillPerStream — за окно ~60 с (как чувствует чат);
-    // AvgGenTps/AvgPromptTps — за окно графика (15m/1h), только время активной генерации.
+    // AvgGenTps/AvgPromptTps — за окно графика (5m/15m/1h), только время активной генерации.
     public sealed record SpeedDto
     {
         public double? GenPerStream { get; init; }
@@ -375,12 +381,21 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
     }
 
     // Точка кольца истории. T — unix-мс (long): фронт ждёт число (api.ts: t: number).
+    // Серии кэша (v2.1): kvUsage — доля 0..1 (максимум по опросам с прошлой точки);
+    // prefixHits/prefixQueries/ramHits/ramQueries/preemptions — приращения счётчиков
+    // с прошлой точки (фронт сводит в интервалы и считает долю из сумм). null — нет данных.
     public sealed record HistoryPointDto
     {
         public long T { get; init; }
         public double? GenThroughput { get; init; }
         public int? Waiting { get; init; }
         public int? Running { get; init; }
+        public double? KvUsage { get; init; }
+        public long? PrefixHits { get; init; }
+        public long? PrefixQueries { get; init; }
+        public long? RamHits { get; init; }
+        public long? RamQueries { get; init; }
+        public long? Preemptions { get; init; }
     }
 
     // Чат на стенде: живой ход на локальном движке. Own — чат текущего пользователя

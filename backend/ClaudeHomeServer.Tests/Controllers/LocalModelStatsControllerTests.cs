@@ -65,8 +65,9 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    // window=15m и window=1h — валидные → 200.
+    // window=5m/15m/1h — валидные → 200 (5m — третье окно графика, v2.1).
     [Theory]
+    [InlineData("5m")]
     [InlineData("15m")]
     [InlineData("1h")]
     public async Task WindowВалидный_200(string window)
@@ -144,6 +145,49 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         // t — число (long), не строка.
         t.ValueKind.Should().Be(JsonValueKind.Number, "t в wire — unix-мс (long), не ISO-строка");
         t.GetInt64().Should().Be(t0.ToUnixTimeMilliseconds());
+    }
+
+    // history: серии кэша (v2.1) — шесть полей сериализуются camelCase:
+    // kvUsage (доля 0..1), prefixHits/prefixQueries/ramHits/ramQueries/preemptions (приращения).
+    // Мутация: не маппить поле из LocalModelStatsPoint в HistoryPointDto → null в JSON, тест краснеет.
+    [Fact]
+    public async Task History_СерииКэша_Сериализуются()
+    {
+        var t0 = DateTimeOffset.UtcNow;
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+            Points =
+            [
+                new LocalModelStatsPoint
+                {
+                    Timestamp = t0,
+                    GenThroughput = 42.0,
+                    Running = 1,
+                    Waiting = 0,
+                    KvUsage = 0.87,
+                    PrefixHits = 1234,
+                    PrefixQueries = 5000,
+                    RamHits = 77,
+                    RamQueries = 900,
+                    Preemptions = 3,
+                },
+            ],
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var p = body.GetProperty("history")[0];
+
+        p.GetProperty("kvUsage").GetDouble().Should().Be(0.87);
+        p.GetProperty("prefixHits").GetInt64().Should().Be(1234);
+        p.GetProperty("prefixQueries").GetInt64().Should().Be(5000);
+        p.GetProperty("ramHits").GetInt64().Should().Be(77);
+        p.GetProperty("ramQueries").GetInt64().Should().Be(900);
+        p.GetProperty("preemptions").GetInt64().Should().Be(3);
     }
 
     // ─── speed: средняя скорость на поток за окно графика (avgGenTps/avgPromptTps) ─────

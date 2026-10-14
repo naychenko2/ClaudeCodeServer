@@ -52,6 +52,10 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     private DateTimeOffset? _lastPointTime;
     private EngineSnapshot? _lastPointSnap;
 
+    // Bегущий максимум vllm:kv_cache_usage_perc по опросам с прошлой точки (v2.1, kvUsage):
+    // при нагрузке опрос 1×/с, пик давления между точками не теряется. Сбрасывается на точке.
+    private double? _kvUsageMaxSincePoint;
+
     // Живое «сейчас»: дельта generation_tokens от предыдущего опроса (каждый опрос, не только на точке)
     private double? _liveThroughput;
 
@@ -85,9 +89,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     }
 
     // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования. null — нет данных
-    // (поллер выключен или движок не отдал обе метрики). Чтение без блокировки: double? на x64
-    // атомарно (тот же паттерн, что _liveThroughput).
-    public double? TokensPerStep => _tokensPerStep;
+    // (поллер выключен или движок не отдал обе метрики). Чтение под _gate: Nullable<double>
+    // не атомарна (в отличие от double), а читает её счётчик хода на другом потоке.
+    public double? TokensPerStep { get { lock (_gate) return _tokensPerStep; } }
 
     public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null)
     {
@@ -260,8 +264,17 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования.
         // DFlash отдаёт несколько токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует
         // счётчик дельт этим коэффициентом. Считаем по накопленным счётчикам (стабильно).
+        // Запись под _gate: Nullable<double> не атомарна, а свойство читает на другом потоке.
         if (snap.GenerationTokens is { } g && snap.InterTokenLatencyCount is { } c && c > 0)
-            _tokensPerStep = (double)g / c;
+        {
+            lock (_gate)
+                _tokensPerStep = (double)g / c;
+        }
+
+        // v2.1 (kvUsage): бегущий максимум доли KV-кэша по опросам с прошлой точки.
+        // При нагрузке опрос 1×/с: пик давления между точками не теряется. Сброс — на точке.
+        if (snap.KvUsagePerc is { } kv)
+            _kvUsageMaxSincePoint = _kvUsageMaxSincePoint is { } m ? Math.Max(m, kv) : kv;
 
         // M6: прореживание по времени — точка в кольцо не чаще PointStep (5 с). Частый опрос (1 с)
         // иначе сжимает окно «1 ч» до ~12 мин (720 точек × 1 с). Дельта скорости — за интервал от
@@ -280,12 +293,21 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                     throughput = dTokens < 0 ? null : dTokens / dt;
             }
 
+            // Серии кэша (v2.1): kvUsage — максимум по опросам с прошлой точки; пять счётчиков —
+            // приращение с прошлой ТОЧКИ (как GenThroughput через _lastPointSnap), не с прошлого
+            // опроса: иначе при опросе 1×/с между точками потерялись бы 4 опроса из 5.
             var point = new LocalModelStatsPoint
             {
                 Timestamp = now,
                 GenThroughput = throughput,
                 Running = snap.Running,
                 Waiting = snap.Waiting,
+                KvUsage = _kvUsageMaxSincePoint,
+                PrefixHits = CounterDelta(_lastPointSnap, snap, s => s.PrefixCacheHits),
+                PrefixQueries = CounterDelta(_lastPointSnap, snap, s => s.PrefixCacheQueries),
+                RamHits = CounterDelta(_lastPointSnap, snap, s => s.RamTierHits),
+                RamQueries = CounterDelta(_lastPointSnap, snap, s => s.RamTierQueries),
+                Preemptions = CounterDelta(_lastPointSnap, snap, s => s.Preemptions),
             };
 
             lock (_gate)
@@ -298,6 +320,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
             _lastPointTime = now;
             _lastPointSnap = snap;
+            _kvUsageMaxSincePoint = null; // максимум «с прошлой точки» собран: сбрасываем
         }
 
         // Живое «сейчас» — каждый опрос (не только на точке): ThroughputOf отдаёт свежую дельту
@@ -406,6 +429,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     private static double? DeltaDouble(double? basePt, double? cur)
     {
         if (basePt is not { } a || cur is not { } b) return null;
+        var d = b - a;
+        return d < 0 ? null : d;
+    }
+
+    // Приращение счётчика с прошлой ТОЧКИ кольца (v2.1, серии кэша): cur − prevPoint.
+    // null — прошлой точки нет, метрика не на прошлой или текущей точке, или счётчик упал (рестарт).
+    // Отрицательных значений наружу не идёт (тот же приём, что DeltaLong/DeltaDouble).
+    private static long? CounterDelta(EngineSnapshot? prevPoint, EngineSnapshot cur, Func<EngineSnapshot, long?> sel)
+    {
+        if (prevPoint is null) return null;
+        var a = sel(prevPoint);
+        var b = sel(cur);
+        if (a is null || b is null) return null;
         var d = b - a;
         return d < 0 ? null : d;
     }

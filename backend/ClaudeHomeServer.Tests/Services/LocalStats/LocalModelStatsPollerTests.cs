@@ -566,4 +566,197 @@ public class LocalModelStatsPollerTests
         h.Poller.GetAverageSpeed(TimeSpan.FromMinutes(15)).PromptTps
             .Should().Be(1000.0, "3000 prefill-токенов / 3 с prefill-времени = 1000 ток/с (средняя)");
     }
+
+    // ─── Серии кэша в истории (v2.1) ─────────────────────────────────────────────────────
+    //
+    // Точка кольца несёт шесть полей: kvUsage (максимум по опросам с прошлой точки) и пять
+    // приращений счётчиков (prefixHits/prefixQueries/ramHits/ramQueries/preemptions) с прошлой
+    // ТОЧКИ. Приращения — null при отсутствии прошлой точки, отсутствии метрики или рестарте
+    // (счётчик упал). Отрицательных значений в JSON быть не должно.
+
+    // (19) Обычный интервал: пять счётчиков дают приращение с прошлой точки, kvUsage — максимум.
+    // Мутация: считать приращение с предыдущего ОПРОСА (а не точки) → значения совпадут,
+    // но при частом опросе тест (21) краснеет; здесь проверяем базовый случай.
+    [Fact]
+    public async Task CacheSeries_NormalInterval_IncrementsAndMax()
+    {
+        var h = new Harness();
+        // t=0: старт счётчиков (первая точка — приращения null, нет прошлой точки).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            PrefixCacheHits = 100, PrefixCacheQueries = 1000,
+            RamTierHits = 10, RamTierQueries = 100,
+            Preemptions = 1, KvUsagePerc = 0.2, Running = 0,
+        });
+        await h.Poller.PollOnceAsync();
+
+        // t=5: счётчики выросли, kvUsage подскочил до 0.5.
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            PrefixCacheHits = 150, PrefixCacheQueries = 1200,
+            RamTierHits = 15, RamTierQueries = 130,
+            Preemptions = 3, KvUsagePerc = 0.5, Running = 0,
+        });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+
+        // Первая точка: прошлой точки нет → все пять приращений null; kvUsage — максимум с старта.
+        history[0].PrefixHits.Should().BeNull("нет прошлой точки → null, не 0");
+        history[0].PrefixQueries.Should().BeNull();
+        history[0].RamHits.Should().BeNull();
+        history[0].RamQueries.Should().BeNull();
+        history[0].Preemptions.Should().BeNull();
+        history[0].KvUsage.Should().Be(0.2, "максимум по опросам до первой точки = 0.2");
+
+        // Вторая точка: приращения с прошлой точки, kvUsage — максимум (0.5).
+        history[1].PrefixHits.Should().Be(50, "150 − 100 = 50");
+        history[1].PrefixQueries.Should().Be(200, "1200 − 1000 = 200");
+        history[1].RamHits.Should().Be(5, "15 − 10 = 5");
+        history[1].RamQueries.Should().Be(30, "130 − 100 = 30");
+        history[1].Preemptions.Should().Be(2, "3 − 1 = 2");
+        history[1].KvUsage.Should().Be(0.5, "максимум по опросам с прошлой точки = 0.5");
+    }
+
+    // (20) kvUsage — максимум по НЕСКОЛЬКИМ опросам с прошлой точки: при опросе 1×/с
+    // пик давления (0.9) между двумя точками (5 с) не теряется.
+    // Мутация: брать kvUsage последнего опроса (0.3) вместо максимума → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_KvUsage_MaxAcrossMultiplePolls()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.1, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        // Между двумя точками (5 с) — три опроса: 0.1 → 0.9 (пик) → 0.3.
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.9, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.3, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { KvUsagePerc = 0.4, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+        history[1].KvUsage.Should().Be(0.9, "пик 0.9 между точками не теряется (максимум, не последний)");
+    }
+
+    // (21) Приращение — с прошлой ТОЧКИ, не с предыдущего опроса: при опросе 1×/с между
+    // точками (5 с) четыре промежуточных опроса не должны «съесть» приращение.
+    // Мутация: считать дельту от предыдущего опроса → приращение = 1 (последний шаг),
+    // а не 5 (с прошлой точки) → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_IncrementFromPreviousPoint_NotPreviousPoll()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        // Пять опросов по 1 с: preemptions 0 → 1 → 2 → 3 → 4 → 5.
+        for (var i = 1; i <= 5; i++)
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = i, Running = 0 });
+            await h.Poller.PollOnceAsync();
+        }
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        // Точки: t=0 (старт) и t=5 (после 5 с). Промежуточные опросы точку не создают.
+        history.Should().HaveCount(2);
+        history[1].Preemptions.Should().Be(5, "приращение с прошлой ТОЧКИ (0→5), не с предыдущего опроса (4→5=1)");
+    }
+
+    // (22) Рестарт счётчика: счётчик упал (50 → 10) → приращение null, не отрицательное.
+    // Мутация: не резать по разрыву (отрицательное приращение) → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_CounterRestart_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefixCacheHits = 100, PrefixCacheQueries = 1000, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // Рестарт: счётчики упали (100→10, 1000→100) → отрицательная дельта.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { PrefixCacheHits = 10, PrefixCacheQueries = 100, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].PrefixHits.Should().BeNull("рестарт (счётчик упал) → null, не −90");
+        history[1].PrefixQueries.Should().BeNull("рестарт → null, не −900");
+    }
+
+    // (23) Метрики нет (движок не отдал счётчик) → приращение null, не 0.
+    // Мутация: вернуть 0 вместо null → тест краснеет.
+    [Fact]
+    public async Task CacheSeries_MetricAbsent_IsNull()
+    {
+        var h = new Harness();
+        // t=0: preemptions задан, prefix-счётчики не заданы (null).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = 0, Running = 0 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // t=5: preemptions вырос, prefix-счётчики по-прежнему null.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = 4, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].Preemptions.Should().Be(4, "счётчик есть → приращение 4");
+        history[1].PrefixHits.Should().BeNull("метрики нет (null на обеих точках) → null, не 0");
+        history[1].PrefixQueries.Should().BeNull();
+    }
+
+    // (24) Окно 5 мин: GetHistory(5m) отдаёт только точки за последние 5 мин (60 точек по 5 с).
+    // Мутация: резать окно по 15 мин → тест краснеет (больше точек).
+    [Fact]
+    public async Task CacheSeries_Window5m_ReturnsOnlyLastFiveMinutes()
+    {
+        var h = new Harness();
+        var t0 = h.Time.GetUtcNow();
+        // 20 точек по 5 с = 100 с (~1.7 мин) — все в пределах 5 мин.
+        for (var i = 0; i < 20; i++)
+        {
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = i, Running = 0 });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+        // Ещё 10 точек по 5 с = 50 с → суммарно 150 с = 2.5 мин. Всё ещё < 5 мин.
+        for (var i = 20; i < 30; i++)
+        {
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { Preemptions = i, Running = 0 });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        // Все 30 точек (150 с) в пределах 5-минутного окна.
+        h.Poller.GetHistory(TimeSpan.FromMinutes(5)).Should().HaveCount(30, "150 с < 5 мин → все точки");
+
+        // Окно 1 мин: только последние 12 точек (60 с / 5 с).
+        h.Poller.GetHistory(TimeSpan.FromMinutes(1)).Should().HaveCount(12, "60 с / 5 с = 12 точек");
+        _ = t0;
+    }
+
+    // (25) Мусор в /metrics: источник бросает (сбой парсера на недоверенном тексте) →
+    // исключение не выходит из поллера (PollOnceAsync ловит), статус → down.
+    // Мутация: убрать try/catch вокруг source.ReadAsync → исключение выходит, тест краснеет.
+    [Fact]
+    public async Task SourceThrows_GarbageMetrics_DoesNotEscapePoller()
+    {
+        var h = new Harness();
+        // Подменяем фабрику: источник бросает (симуляция мусора, на котором парсер упал).
+        h.Poller.SourceFactoryOverride = () => (new ThrowingSource(), "vllm", "qwen", null, true);
+
+        await h.Poller.PollOnceAsync(); // не бросает наружу
+        h.Poller.Current.Status.Should().Be("down", "сбой источника → down, а не исключение из BackgroundService");
+    }
+
+    // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).
+    private sealed class ThrowingSource : IEngineMetricsSource
+    {
+        public Task<EngineSnapshot?> ReadAsync(CancellationToken ct = default)
+            => throw new FormatException("мусор в /metrics");
+    }
 }

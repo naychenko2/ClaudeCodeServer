@@ -61,7 +61,7 @@ public sealed record LocalModelStatsKv
     public double? PrefillPerStream { get; init; }
 }
 
-// Точка кольца истории: момент, скорость, running, waiting.
+// Точка кольца истории: момент, скорость, running, waiting + серии кэша (v2.1).
 public sealed record LocalModelStatsPoint
 {
     public DateTimeOffset Timestamp { get; init; }
@@ -71,6 +71,36 @@ public sealed record LocalModelStatsPoint
 
     public int? Running { get; init; }
     public int? Waiting { get; init; }
+
+    // ─── Серии кэша (спецификация v2.1, «Что нужно от бэкенда») ─────────────────────
+    //
+    // Отдаём приращения счётчиков (не проценты): фронт сводит точки в интервалы
+    // 15/60 с и считает долю из сумм. Доля за интервал из точек 5 с сложить честно
+    // нельзя (короткий запрос даст 0 % или 100 %).
+
+    // Доля занятых блоков KV-кэша (0..1): МАКСИМУМ vllm:kv_cache_usage_perc по опросам
+    // с прошлой точки (при нагрузке опрос 1×/с — пик давления между точками не теряется).
+    // null — метрики не было ни на одном опросе с прошлой точки.
+    public double? KvUsage { get; init; }
+
+    // Приращение счётчика prefix-кэша (vllm:prefix_cache_hits_total) с прошлой точки, токены.
+    public long? PrefixHits { get; init; }
+
+    // Приращение счётчика prefix-кэша (vllm:prefix_cache_queries_total) с прошлой точки, токены.
+    public long? PrefixQueries { get; init; }
+
+    // Приращение счётчика RAM-тиера (vllm:kv_offload_tiering_chunk_hits_total) с прошлой точки, чанки.
+    public long? RamHits { get; init; }
+
+    // Приращение счётчика RAM-тиера (vllm:kv_offload_tiering_chunk_queries_total) с прошлой точки, чанки.
+    public long? RamQueries { get; init; }
+
+    // Приращение счётчика вытеснений (vllm:num_preemptions_total) с прошлой точки, штуки.
+    public long? Preemptions { get; init; }
+
+    // Правило приращений (все пять счётчиков): null — нет прошлой точки, метрика не
+    // отдана на прошлой или текущей точке, либо счётчик уменьшился (рестарт движка).
+    // Отрицательных значений в JSON быть не должно.
 }
 
 // Средняя скорость на поток за окно (15m/1h, те же окна, что у графика «Нагрузка»):

@@ -143,6 +143,31 @@ public class VllmMetricsSourceTests
         snapshot.Should().BeNull();
     }
 
+    // Мусор в /metrics (недоверенный источник): строки, которые не разбираются как
+    // Prometheus (нет значения, незакрытая скобка, дробное число) → Parse не бросает,
+    // ReadAsync возвращает снимок с null-полями, а не исключение (иначе BackgroundService
+    // умрёт — ADR-029 «Недоверенный внешний ответ»). Мутация: Parse бросает на мусоре
+    // (например, GetValue вместо TryGetValue) → тест краснеет.
+    [Fact]
+    public async Task ReadAsync_GarbageText_DoesNotThrow()
+    {
+        const string garbage = """
+            totally-not-prometheus
+            name_without_value
+            {unclosed_brace
+            metric_with_bad_value abc
+            # just a comment
+            """;
+        var http = new HttpClient(new FakeHandler(garbage));
+        var source = new VllmMetricsSource(http, "http://localhost:8000/metrics");
+
+        var snapshot = await source.ReadAsync();
+        snapshot.Should().NotBeNull("мусор не роняет источник");
+        snapshot!.KvUsagePerc.Should().BeNull("не разобралось → null");
+        snapshot.PrefixCacheHits.Should().BeNull();
+        snapshot.Preemptions.Should().BeNull();
+    }
+
     [Fact]
     public void NullEngineMetricsSource_ReturnsEmptySnapshotWithAllBlocksUnsupported()
     {

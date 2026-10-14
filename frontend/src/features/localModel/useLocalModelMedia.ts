@@ -34,17 +34,31 @@ export function createMediaPoller(
   const subs = new Set<() => void>();
   const emit = () => subs.forEach(fn => fn());
 
+  // Снимок кэшируем: useSyncExternalStore сравнивает по Object.is, а новый
+  // объект на каждый вызов getSnapshot — бесконечный ререндер (React #185).
+  // Пересобираем только при реальном изменении data/loading/inflight.
+  let snapshot: { data: LocalModelMedia | null; loading: boolean } = { data: null, loading: false };
+  const refresh = () => {
+    const nextLoading = loading || inflight > 0;
+    if (snapshot.data !== data || snapshot.loading !== nextLoading) {
+      snapshot = { data, loading: nextLoading };
+    }
+  };
+
   const doFetch = () => {
     inflight++;
+    refresh();
     fetch().then(d => {
       data = d;
       loading = false;
       inflight--;
+      refresh();
       emit();
     }).catch(() => {
       // Сбой опроса не критичен: показываем последние данные
       inflight--;
       loading = false;
+      refresh();
       emit();
     });
   };
@@ -57,11 +71,12 @@ export function createMediaPoller(
       if (timer !== null) { clearTimer(timer); timer = null; }
       if (want) {
         if (data === null) loading = true;
+        refresh();
         doFetch();
         timer = setTimer(() => doFetch(), intervalMs);
       }
     },
-    getSnapshot() { return { data, loading: loading || inflight > 0 }; },
+    getSnapshot() { return snapshot; },
     subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
     refetch() { if (active) doFetch(); },
     dispose() { if (timer !== null) clearTimer(timer); timer = null; active = false; },

@@ -94,6 +94,17 @@ describe('createStatsPoller: 2-с опрос', () => {
     expect(p.getSnapshot().data).toEqual(mock); // прежние данные
     expect(p.getSnapshot().loading).toBe(false);
   });
+
+  it('getSnapshot: два подряд вызова без событий — один объект; после fetch — новый', async () => {
+    const { p } = make();
+    const s1 = p.getSnapshot();
+    const s2 = p.getSnapshot();
+    expect(s1).toBe(s2); // === : кэш, а не новый объект на каждый вызов
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    const s3 = p.getSnapshot();
+    expect(s3).not.toBe(s1); // после завершения fetch — пересобранный снимок
+  });
 });
 
 describe('стор configured: лёгкий опрос для значка', () => {

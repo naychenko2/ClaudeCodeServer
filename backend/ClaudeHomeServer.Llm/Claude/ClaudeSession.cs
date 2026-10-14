@@ -643,10 +643,19 @@ public class ClaudeSession : ILlmSessionAdapter
         get { var run = _run; return run is not null && run.HasPendingBg; }
     }
 
-    // Живые фоновые агенты прогона — держат делегированность прогона (см. ILlmSessionAdapter.HasLiveBgAgents)
+    // Живые фоновые агенты прогона — держат делегированность прогона (см. ILlmSessionAdapter.HasLiveBgAgents).
+    // Workflow-агенты — независимые процессы и переживают смерть CLI (NoteOwnerProcessGone): после
+    // финализации прогона _run пуст, а они продолжают ходить в MCP с заголовком этого чата. Поэтому
+    // живой ватчер Workflow держит признак и без прогона — иначе делегированность прогона снялась бы
+    // смертью процесса, и агенты делегированного хода пошли бы в admin-ручки с глубиной 0 (ревью F1-10, B1)
     public bool HasLiveBgAgents
     {
-        get { var run = _run; return run is not null && run.HasLiveBgAgents; }
+        get
+        {
+            var run = _run;
+            if (run is not null && run.HasLiveBgAgents) return true;
+            lock (_workflowWatchers) return _workflowWatchers.Any(w => w.IsAlive);
+        }
     }
 
     // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт

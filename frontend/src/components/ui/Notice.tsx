@@ -28,7 +28,8 @@ interface Props extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
   // Жирная первая строка; без неё плашка — одна строка текста
   title?: ReactNode;
   children?: ReactNode;
-  // Действие справа от текста (кнопка «Вернуть»); текст тогда занимает остаток строки
+  // Действие справа от текста (кнопка «Вернуть»); текст тогда занимает остаток строки,
+  // а когда ему остаётся меньше 220px — действие переносится под текст, к правому краю
   action?: ReactNode;
 }
 
@@ -39,7 +40,9 @@ export function Notice({ tone = 'warning', icon: Icon, title, children, action, 
       role="status"
       {...rest}
       style={{
-        display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+        // С действием — перенос: на узком экране (360px) кнопка уходит под текст, а не
+        // сжимает его в колонку в пару слов (ревью F2-13); на широком всё в одну строку
+        display: 'flex', alignItems: 'flex-start', gap: SP.sm, flexWrap: action ? 'wrap' : undefined,
         padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
         border: `1px solid ${t.border}`, background: t.bg, color: t.fg,
         fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.45,
@@ -47,11 +50,11 @@ export function Notice({ tone = 'warning', icon: Icon, title, children, action, 
       }}
     >
       <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs, color: t.icon }} />
-      <div style={action ? { minWidth: 0, flex: 1 } : { minWidth: 0 }}>
+      <div style={action ? { minWidth: 0, flex: '1 1 220px' } : { minWidth: 0 }}>
         {title && <div style={{ fontWeight: 600 }}>{title}</div>}
         {children}
       </div>
-      {action}
+      {action && <div style={{ marginLeft: 'auto', flexShrink: 0 }}>{action}</div>}
     </div>
   );
 }

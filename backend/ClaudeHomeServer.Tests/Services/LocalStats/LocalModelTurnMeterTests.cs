@@ -644,6 +644,45 @@ public sealed class LocalModelTurnMeterTests
             "5 дельт (1:1, без коэффициента) / 2 с = 2.5 ток/с (прежнее поведение)");
     }
 
+    // (M5-8) Клампуем коэффициент DFlash в [0.5, 10] (minor из ревью Глеба): аномальное
+    //      значение (сбой метрик, 0/∞) не искажает счётчик. 0.1 → 0.5, 100 → 10.
+    //      Мутация: убрать клампу (использовать сырой коэффициент) → скорость отличается → тест краснеет.
+    [Fact]
+    public void M5_Коэффициент_Кламп_ВРазумныеПределы()
+    {
+        // Нижний кламп: 0.1 → 0.5. 10 дельт × 0.5 = 5 «токенов» / 2 с = 2.5 ток/с.
+        var t = Issue("chat-A");
+        var r = ReqId();
+        _reader.TokensPerStep = 0.1; // ниже 0.5 → кламп 0.5
+        _meter.OnRequestStarted(r, t);
+        _meter.OnFirstToken(r, t);
+        for (var i = 1; i <= 10; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(200));
+            _meter.OnTokenCount(r, t, i);
+        }
+        var last = _sink.Live.Last(l => l.Session == "chat-A");
+        last.Tps.Should().NotBeNull();
+        last.Tps!.Should().BeApproximately(2.5, 0.5,
+            "0.1 клампуется в 0.5: 10 дельт × 0.5 = 5 токенов / 2 с = 2.5 ток/с");
+
+        // Верхний кламп: 100 → 10. 10 дельт × 10 = 100 «токенов» / 2 с = 50 ток/с.
+        var t2 = Issue("chat-B");
+        var r2 = ReqId();
+        _reader.TokensPerStep = 100.0; // выше 10 → кламп 10
+        _meter.OnRequestStarted(r2, t2);
+        _meter.OnFirstToken(r2, t2);
+        for (var i = 1; i <= 10; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(200));
+            _meter.OnTokenCount(r2, t2, i);
+        }
+        var last2 = _sink.Live.Last(l => l.Session == "chat-B");
+        last2.Tps.Should().NotBeNull();
+        last2.Tps!.Should().BeApproximately(50.0, 2.0,
+            "100 клампуется в 10: 10 дельт × 10 = 100 токенов / 2 с = 50 ток/с");
+    }
+
     // (M5-5) Итог хода — по точному usage, не по живой скорости.
     //      Мутация: BuildSummary берёт genTps из TokenWindow → значение отличается → тест краснеет.
     [Fact]

@@ -171,8 +171,12 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         if (sessionId is null) return;
         var now = _time.GetUtcNow();
         bool hasWork;
-        var coeff = _reader?.TokensPerStep ?? 1.0;
-        var scaled = (int)(cumulativeTokens * coeff);
+        // Коэффициент DFlash (токенов на SSE-дельту) клампуем в [0.5, 10]: аномальное
+        // значение (сбой метрик, 0/∞) не должно искажать счётчик. Диапазон покрывает замер
+        // DFlash (2.64–3.69) и обычный 1:1 (null → 1.0).
+        var coeff = Math.Clamp(_reader?.TokensPerStep ?? 1.0, 0.5, 10.0);
+        // Math.Round, а не (int): (int) усечает вниз (2.5 → 2), округление честнее.
+        var scaled = (int)Math.Round(cumulativeTokens * coeff);
         lock (_gate)
         {
             var s = GetOrAdd(sessionId, ownerId);

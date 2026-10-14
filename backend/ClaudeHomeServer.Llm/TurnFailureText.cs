@@ -180,9 +180,12 @@ public static class TurnFailureText
         "gateway timeout",
     ];
 
-    // Код 5xx отдельным числом: «529», «(503)», «Error 500:» — но не кусок «1529»/«5000»
+    // Код 5xx отдельным числом, но только с контекстом кода: «API Error: 529», «status 503»,
+    // «HTTP 500», «(503)», «Error 500:». Без контекста ловило «line 512», «took 503 ms»,
+    // «port 500» — и человек видел «модель перегружена» на содержательной ошибке. Паритет с
+    // TurnErrorClassifier.ProviderErrorHttpCode (та же регулярка, тот же гейт).
     private static readonly Regex HttpServerErrorCode =
-        new(@"(?<!\d)5\d{2}(?!\d)", RegexOptions.Compiled);
+        new(@"(?i)(?:API Error:|status|HTTP|\(|Error )\s*(?<!\d)5\d{2}(?!\d)", RegexOptions.Compiled);
 
     private static bool LooksLikePipeClosing(IOException io)
     {

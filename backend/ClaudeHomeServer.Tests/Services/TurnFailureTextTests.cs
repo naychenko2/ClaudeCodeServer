@@ -86,6 +86,26 @@ public class TurnFailureTextTests
     public void Нераспознанное_Null(string? raw)
         => TurnFailureText.ForCliError(raw).Should().BeNull();
 
+    // 5xx-код в тексте — «перегрузка» только с контекстом кода (API Error:/status/HTTP/(/Error ).
+    // Без контекста («line 512», «took 503 ms», «port 500») человек не должен видеть
+    // «модель перегружена» на содержательной ошибке — остаётся сырой текст (null).
+    [Theory]
+    [InlineData("API Error: 529 Overloaded")]
+    [InlineData("status 503")]
+    [InlineData("HTTP 500")]
+    [InlineData("(503)")]
+    [InlineData("Error 500: internal")]
+    public void Перегрузка5xx_СКонтекстомКода_ФормулировкаПерегрузки(string raw)
+        => TurnFailureText.ForCliError(raw).Should().Be(TurnFailureText.Overloaded);
+
+    [Theory]
+    [InlineData("line 512")]
+    [InlineData("took 503 ms")]
+    [InlineData("port 500")]
+    public void Цитата5xxБезКонтекста_СыройТекст(string raw)
+        => TurnFailureText.ForCliError(raw).Should().BeNull(
+            "голое 5xx-число без контекста кода — не перегрузка, человек видит настоящий текст");
+
     // ===== PromptOverflow: текст для ленты при перерасходе cmdline (задача dc641949) =====
 
     [Fact]

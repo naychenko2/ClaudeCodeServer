@@ -50,6 +50,36 @@ public class TurnRunLogTests
         log.Recent(1)[0].LastError!.Length.Should().BeLessThan(400);
     }
 
+    // Паспорт обязан отражать ФАКТ внутренних повторов CLI (system/api_retry) за ход:
+    // поля не теряются при усечении LastError через `with` в Record, а паспорт без повторов
+    // держит 0/null (CLI не дотягивал).
+    [Fact]
+    public void Паспорт_ПоляCliRetry_ПереживаютУсечениеИДержатНули()
+    {
+        var log = new TurnRunLog();
+        var withRetries = new TurnRunPassport(
+            "s1", DateTime.UtcNow.AddSeconds(-30), DateTime.UtcNow, 30, "failed",
+            "opus", "claude", "opus", "claude", 1, 0, 0, ["opus"], "unreachable",
+            new string('x', 5000), 120_000, DateTime.UtcNow)
+        {
+            CliRetries = 3,
+            CliRetryWaitMs = 45_000,
+            CliRetryLastStatus = "529",
+        };
+        log.Record(withRetries);
+        var fresh = log.Recent(1)[0];
+        fresh.CliRetries.Should().Be(3,
+            "число повторов CLI не теряется при усечении LastError через `with`");
+        fresh.CliRetryWaitMs.Should().Be(45_000, "суммарное ожидание повторов CLI не теряется");
+        fresh.CliRetryLastStatus.Should().Be("529", "последний статус повторов CLI не теряется");
+
+        log.Record(Passport("s2", "failed", "unreachable"));
+        var none = log.Recent(1)[0];
+        none.CliRetries.Should().Be(0, "без повторов — 0 (CLI не дотягивал)");
+        none.CliRetryWaitMs.Should().Be(0);
+        none.CliRetryLastStatus.Should().BeNull("без повторов — null");
+    }
+
     [Fact]
     public void ПишетДневнойФайлРядомССервернымЛогом()
     {

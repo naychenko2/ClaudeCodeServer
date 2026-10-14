@@ -367,6 +367,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ход завершён (result без parent_tool_use_id получен); между ходами true.
         // Сбрасывает поток нового хода в TrySubmitTurn (под _stdinLock)
         public volatile bool TurnDone;
+        // Факт внутренних повторов CLI (system/api_retry) текущего хода: сколько раз
+        // headless-сессия сама переждала 429/529 внутри процесса, суммарное время ожидания
+        // (мс) и последний HTTP-статус. Сбрасывается в TrySubmitTurn (per-turn), читается
+        // адаптером для паспорта хода (TurnRunPassport.CliRetries/CliRetryWaitMs/CliRetryLastStatus).
+        public CliRetryStats CliRetry = new(0, 0, null);
         // Резолвится reader'ом на result текущего хода (или финализацией — процесс умер)
         public TaskCompletionSource TurnTcs { get; set; } = NewTcs();
         // Живые фоновые задачи прогона: agentId/runId из tool_result запуска → toolUseId
@@ -2939,6 +2944,9 @@ public class ClaudeSession : ILlmSessionAdapter
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
+            // Факт внутренних повторов CLI — per-turn: паспорт хода отражает только ЭТОТ ход,
+            // а не накопленное с момента старта процесса (new-process стартует с нулями сам)
+            run.CliRetry = new CliRetryStats(0, 0, null);
             run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
             ArmEchoWait(run, turnUuid); // result'ы до эха этого сообщения — чужие
             run.Process.StandardInput.WriteLine(userMessageJson);
@@ -4019,6 +4027,16 @@ public class ClaudeSession : ILlmSessionAdapter
         // 2.1.292; замер: без неё у Fable 5.1 и Sonnet 5.5 их нет). Ставим всегда:
         // исполнителю задачи план-тулы всё равно закрыты через --disallowedTools.
         envOverrides["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1";
+
+        // Потолки внутренних повторов CLI (429/529): владелец фолбэка — наша цепочка (ADR-007 §4),
+        // CLI получает только короткий внутренний backoff, чтобы отказ доходил до TurnErrorClassifier
+        // за десятки секунд, а не минуты (с 2.1.246 headless-сессии сами дотягивают оборванный
+        // ответ и могут переждать 529 минутами). Ставим на КАЖДОМ запуске — и родному Claude,
+        // и стороннему (ветка cliEnv выше уже склеена, здесь общий путь). Значения — из конфига
+        // LlmProviders:Retry (LlmProviderRegistry.RetryCeilings), 0/нет → встроенные дефолты.
+        if (_providers is not null)
+            foreach (var (k, v) in _providers.RetryCeilings)
+                envOverrides[k] = v;
 
         foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
             envOverrides[k] = v;
@@ -5653,6 +5671,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 else if (sysSubtype == "task_notification") HandleStructuredTaskNotification(run, root);
                 else if (sysSubtype == "background_tasks_changed") HandleBackgroundTasksChanged(run, root);
+                else if (sysSubtype == "api_retry") run.CliRetry = Accumulate(run.CliRetry, root);
                 break;
 
             case "stream_event":
@@ -6969,6 +6988,31 @@ public class ClaudeSession : ILlmSessionAdapter
             JsonValueKind.Number => e.TryGetInt32(out var code) ? code.ToString(CultureInfo.InvariantCulture) : null,
             _ => null,
         };
+    }
+
+    // Внутренний повтор CLI (system/api_retry, CLI 2.1.246+): headless-сессия сама
+    // дотягивает оборванный ответ и пережидает 429/529 внутри процесса. Не показываем в
+    // ленте (не сообщение) — только копит факт за ход для паспорта (CliRetryStats).
+    // Чистая функция (текущее состояние, событие) → новое состояние: тестируется реальной
+    // строкой и накоплением за ход. retry_delay_ms — сколько CLI проспал перед повтором;
+    // error_status — HTTP-код (529/429), приходит числом или null. no_response-ветка без
+    // retry_delay_ms — повтор всё же был, просто без зафиксированной задержки (счётчик
+    // растёт, сумма — нет).
+    internal static CliRetryStats Accumulate(CliRetryStats current, JsonElement root)
+    {
+        var delay = LongProp(root, "retry_delay_ms");
+        var status = StatusProp(root, "error_status");
+        return new CliRetryStats(current.Count + 1, current.WaitMs + delay,
+            status is not null ? status : current.LastStatus);
+    }
+
+    // Факт внутренних повторов CLI текущего хода (system/api_retry): для паспорта хода
+    // (TurnRunPassport.CliRetries/CliRetryWaitMs/CliRetryLastStatus). Мёртвого/отсутствующего
+    // прогона нет — нули (повторов не было).
+    internal CliRetryStats CliRetryStats()
+    {
+        var run = _run;
+        return run is null ? new CliRetryStats(0, 0, null) : run.CliRetry;
     }
 
     public async ValueTask DisposeAsync()

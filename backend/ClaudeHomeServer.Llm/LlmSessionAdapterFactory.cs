@@ -198,6 +198,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             _capacity, BuildContextEstimate(claudeSession),
             context.EnqueueBypass, context.OrchestrationDone,
             contextSource: BuildContextSource(claudeSession),
+            cliRetryStats: () => claudeSession.CliRetryStats(),
             egress: _egress, events: context.Events,
             localProbe: _localProbe,
             transcriptOnServer: context.TranscriptOnServer,

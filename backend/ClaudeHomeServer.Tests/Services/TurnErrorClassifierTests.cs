@@ -149,6 +149,37 @@ public class TurnErrorClassifierTests
     public void ОшибкаПровайдера_ПустойСтатус_ПоМаркерамВТексте(string text)
         => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError);
 
+    // 5xx-код отдельным числом в тексте при ПУСТОМ статусе (CLI 2.1.246+ отдаёт 529/503 в
+    // api_error_status=null, когда код есть только в тексте). Паритет с TurnFailureText: 529 —
+    // та же перегрузка. Гейт: не кусок «1529»/«5000», и спрашивается только при пустом статусе.
+    [Theory]
+    [InlineData("API Error: 529 Overloaded, please retry.")]
+    [InlineData("API Error: (503) service unavailable")]
+    [InlineData("Error 500: internal error")]
+    public void ОшибкаПровайдера_ПустойСтатус_5xxКодВТексте_КлассProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError,
+            "5xx-код в тексте при пустом статусе — перегрузка провайдера, не цитата");
+
+    // 5xx-код БЕЗ контекста кода — цитата числа, не ошибка провайдера: «line 512», «took 503 ms»,
+    // «port 500». Без гейта по контексту такая ошибка кончалась бы ProviderError и запускала
+    // цепочку фолбэка, хотя должна была остаться None (инвариант «None фолбэк не запускает»).
+    [Theory]
+    [InlineData("line 512")]
+    [InlineData("took 503 ms")]
+    [InlineData("port 500")]
+    [InlineData("512 tokens in the prompt")]
+    public void Цитата5xxБезКонтекста_ПустойСтатус_НеКлассифицируетсяКакProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голое 5xx-число без контекста кода (line/took/port) — цитата, не перегрузка");
+
+    // Цитата 5xx-кода в разборе инцидента при ЖИВОМ статусе не доходит до LooksProviderError
+    // (ветка статусов решает по коду раньше) — регрессия на ложный ProviderError.
+    [Fact]
+    public void Цитата529_ПриСтатусе429_ОстаётсяRateLimit()
+        => TurnErrorClassifier.Classify(Result("429", "Разбираем: клиент получил 529 на соседнем сервисе"))
+            .Should().Be(FallbackErrorClass.RateLimit,
+                "статус 429 решает по коду, 529 в тексте — цитата, не перегрузка");
+
     // Гейт от ложных срабатываний: общие слова «server error»/«overloaded» НЕ входят в маркеры.
     // Ход, ЦИТИРУЮЩИЙ их в разборе инцидента, не должен уезжать на другого провайдера — тот же
     // приём, что у ContextOverflow (узкие формулировки) и RateLimit (429 с квалификатором).

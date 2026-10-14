@@ -1,0 +1,39 @@
+namespace ClaudeHomeServer.Services.Llm;
+
+// Итог завершённого хода на локальной модели: сумма по запросам хода. Числа nullable —
+// движок не отдал поле (на экране «—»). QueueMsApprox — оценка времени в очереди в
+// МИЛЛИСЕКУНДАХ, округлённая вверх до целой секунды (контракт ServerMessage/фронт).
+public sealed record LocalModelTurnSummary
+{
+    // Сумма output_tokens по запросам хода.
+    public int? OutTokens { get; init; }
+
+    // Суммарное время генерации (последняя дельта − первая дельта, по всем запросам).
+    public TimeSpan? GenDuration { get; init; }
+
+    // GenTps = output_tokens / суммарная генерация; null при нулевой/отсутствующей длительности.
+    public double? GenTps { get; init; }
+
+    // TtftMs — time-to-first-token ПЕРВОГО запроса хода (в мс).
+    public int? TtftMs { get; init; }
+
+    // QueueMsApprox ≈ суммарное время фаз queued: МИЛЛИСЕКУНДЫ, округлённые вверх до целой секунды.
+    public int? QueueMsApprox { get; init; }
+
+    // CacheHitPerc по сумме токенов хода (cache_read / (input + cache_read + cache_creation)).
+    public double? CacheHitPerc { get; init; }
+}
+
+// Шов живых событий локальной модели: счётчик хода (LocalModelTurnMeter) отдаёт сюда
+// тиковые снимки (OnLive) и итог завершённого хода (OnTurn). Реализацию (рассылка
+// ServerMessage в чат) делает Main в шаге 19; без зарегистрированной реализации события
+// уходят в никуда.
+public interface ILocalModelLiveSink
+{
+    // Тиковый снимок: фаза (queued | prefill | generating), скорость, сколько прогонов
+    // ждут GPU. НЕ чаще 1 раза в секунду на сессию (счётчик дросселирует через TimeProvider).
+    void OnLive(string sessionId, string phase, double? genTps, int? waitingTotal);
+
+    // Итог завершённого хода (TurnCompleted).
+    void OnTurn(string sessionId, LocalModelTurnSummary summary);
+}

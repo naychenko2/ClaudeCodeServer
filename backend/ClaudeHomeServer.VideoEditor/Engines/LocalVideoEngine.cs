@@ -259,6 +259,8 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         var stage = VideoStage.Queued;
         int? position = null;
         double? percent = null;
+        // Снимок очереди GPU (шаг 30): живой, меняется каждым опросом — обновляем и вешаем на отчёт
+        LocalGpuQueueInfo? gpu = null;
         while (true)
         {
             var poll = await media!.PollAsync(ticket, ct);
@@ -266,6 +268,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             var next = poll.State == LocalVideoState.Running ? runningStage : VideoStage.Queued;
             // Процент шлём, пока идёт прогон, и только при заметном сдвиге (1 %): опрос чаще, чем меняется шаг
             var nextPercent = poll.State == LocalVideoState.Running ? Percent(poll.Percent) : null;
+            gpu = poll.Gpu;
             if (poll.Warning is null && (next != stage || poll.QueuePosition != position || nextPercent != percent))
             {
                 stage = next;
@@ -274,7 +277,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
                 // У апскейла в очереди стадия остаётся upscaling: «следом» человек уже прочёл, дальше — вторая задача
                 var reported = runningStage == VideoStage.Upscaling && next == VideoStage.Queued ? VideoStage.Upscaling : next;
                 progress.Report(new VideoProgress(reported, next == VideoStage.Queued ? position : null, eta, RemoteId: ticket,
-                    Percent: percent, UpscaleEtaSeconds: next == VideoStage.Running ? null : upscaleEta));
+                    Percent: percent, UpscaleEtaSeconds: next == VideoStage.Running ? null : upscaleEta, Gpu: gpu));
             }
             await Task.Delay(PollInterval, ct);
         }
@@ -312,8 +315,17 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
                 fast = f.GetValue<bool>();
             }
         }
-        return (new LocalVideoRequest(req.Text, first.Bytes, req.FrameB?.Bytes, req.DurationSec, size, fast, req.Seed), null);
+        var run = new LocalVideoRequest(req.Text, first.Bytes, req.FrameB?.Bytes, req.DurationSec, size, fast, req.Seed);
+        // Метка происхождения прогона (шаг 30): владелец, чат/сцена, вид=видео, операция, тяжёлый ли.
+        // «видео 1440p» — из операции и ступени задачи (PostStep=upscale), размер не пересчитываем;
+        // данные у движка есть из задачи (VideoEditJobService кладёт их в запрос); без задачи (тесты) — null
+        if (req.OwnerId is { } owner)
+            run = run with { Origin = new LocalJobOrigin(owner, req.SessionId, "video", OpName(req), req.Heavy) };
+        return (run, null);
     }
+
+    // Операция для метки происхождения (шаг 30): «видео» для съёмки, «видео 1440p» для «Макс» (PostStep=upscale)
+    private static string OpName(VideoRequest req) => WantsUpscale(req) ? "видео 1440p" : "видео";
 
     private static readonly VideoCost Free = new(0, VideoPriceUnits.Free);
 }

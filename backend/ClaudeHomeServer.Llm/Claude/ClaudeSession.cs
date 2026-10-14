@@ -7,6 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Turn;
+using Microsoft.Extensions.Options;
 
 // Швы из Core, оставшиеся в namespace ClaudeHomeServer.Services.Skills после выноса
 // SkillsService в отдельную вертикаль: используются полным именем, чтобы Llm не тащил
@@ -897,6 +898,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // не попадает. null (тесты без DI, чат проекта на устройстве) — ход напрямую, как раньше.
     private readonly Gateway.ServerTurnGateway? _serverGateway;
     private readonly string? _llmGatewayApiUrl;
+    // Тумблер статистики локальной модели (LocalModelStats:Enabled) — читается живьём
+    // (IOptionsMonitor) в момент решения о шлюзе: смена тумблера меняет сигнатуру запуска
+    // один раз, и живой локальный процесс CLI перезапускается (предусмотрено фичей).
+    // null (тесты без DI) — локальная модель на шлюз не уходит.
+    private readonly IOptionsMonitor<LocalModelStatsOptions>? _localModelStats;
 
     // Заглушки адреса и токена шлюза в env: env входит в сигнатуру запуска, а настоящий токен
     // выдаётся только НОВОМУ процессу (BindGatewayTurn) — иначе сигнатура менялась бы каждый
@@ -907,18 +913,38 @@ public class ClaudeSession : ILlmSessionAdapter
     // Авторизация CLI шлюзу не нужна (её заменяет токен хода), но CLI без неё не стартует
     private const string GatewayAuthPlaceholder = "ccs-gateway";
 
-    // Ход провайдера с дефектом tool_use.input — через шлюз. Флаг есть, а шлюз выключен — ход
-    // идёт напрямую (чат не должен падать из-за костыля), дефект при этом не компенсируется.
-    private bool UseServerGateway()
+    // Предупреждение о выключенном шлюзе — одно за жизнь процесса: UseServerGateway() зовётся
+    // на каждый новый процесс CLI локальной модели, и повторные записи засоряли бы лог.
+    // true, как только предупреждение выдано (Interlocked.CompareExchange — потокобезопасно).
+    private static int _gatewayDisabledWarned;
+
+    // Сброс флага для тестов (InternalsVisibleTo): статика живёт на процесс, тестам нужен
+    // детерминированный старт.
+    internal static void ResetGatewayDisabledWarning() => Interlocked.Exchange(ref _gatewayDisabledWarned, 0);
+
+    // Ход провайдера с дефектом tool_use.input — через шлюз. Ход локальной модели — через
+    // шлюз, когда включена статистика (LocalModelStats:Enabled): счётчику хода
+    // (LocalModelTurnMeter) нужна копия потока запросов, а та доступна только на пути шлюза.
+    // Флаг есть, а шлюз выключен — ход идёт напрямую (чат не должен падать из-за костыля),
+    // дефект/метрики при этом не компенсируются.
+    internal bool UseServerGateway()
     {
-        if (_providers?.ResolveByModel(EffectiveModel) is not { NormalizeToolInputArrays: true } provider)
-            return false;
+        var provider = _providers?.ResolveByModel(EffectiveModel);
+        if (provider is null) return false;
+        var needsNormalization = provider.NormalizeToolInputArrays;
+        var viaLocalStats = provider.IsLocal && _localModelStats?.CurrentValue.Enabled == true;
+        if (!needsNormalization && !viaLocalStats) return false;
         if (_serverGateway is null || string.IsNullOrWhiteSpace(_llmGatewayApiUrl) || string.IsNullOrEmpty(Info.OwnerId))
             return false;
         if (_serverGateway.Enabled) return true;
-        (_sessionLog ?? (ILogger?)_log)?.LogWarning(
-            "Провайдер {Provider} требует нормализатора tool_use.input, но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, дефект провайдера не компенсируется",
-            provider.Key);
+        // Одно предупреждение за жизнь процесса (см. _gatewayDisabledWarned): повторные
+        // вызовы (каждый новый процесс CLI) не пишут в лог.
+        if (Interlocked.CompareExchange(ref _gatewayDisabledWarned, 1, 0) == 0)
+            (_sessionLog ?? (ILogger?)_log)?.LogWarning(
+                needsNormalization
+                    ? "Провайдер {Provider} требует нормализатора tool_use.input, но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, дефект провайдера не компенсируется"
+                    : "Локальная модель {Provider} со включённой статистикой (LocalModelStats:Enabled=true), но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, LocalModelStats:Enabled=true не сработает без LlmGateway",
+                provider.Key);
         return false;
     }
 
@@ -964,9 +990,11 @@ public class ClaudeSession : ILlmSessionAdapter
         FileChangeAttributor? fileChangeAttributor = null,
         ILogger? logger = null,
         ILogger<ClaudeSession>? sessionLogger = null,
-        Gateway.ServerTurnGateway? serverGateway = null)
+        Gateway.ServerTurnGateway? serverGateway = null,
+        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null)
     {
         _serverGateway = serverGateway;
+        _localModelStats = localModelStats;
         _llmGatewayApiUrl = context.LlmGatewayApiUrl;
         _log = logger;
         _sessionLog = sessionLogger;

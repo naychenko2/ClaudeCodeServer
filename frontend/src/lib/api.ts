@@ -17,6 +17,161 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
+// === «Локальные модели» (фича local-model-stats) ===
+//
+// DTO двух REST-ручек: LocalModelStatsController (снимок панели, только админ —
+// настройка глобальная) и SessionLocalModelController (итог последнего хода чата,
+// его владелец). Время — unix-мс; kv — доли 0..1 (не проценты и не ГиБ);
+// phase — строка; чужие чаты анонимны (own=false, без sessionId/projectId).
+
+// Снимок панели: GET /api/local-model/stats?window=15m|1h&since=<unix ms>.
+// configured=false — локальный провайдер не настроен (панель и значок скрыты);
+// status: working | busy | down | notConnected.
+export interface LocalModelStats {
+  configured: boolean;
+  engine?: string;
+  model?: string;
+  status: 'working' | 'busy' | 'down' | 'notConnected';
+  // unix-мс
+  downSince?: number | null;
+  running?: number;
+  waiting?: number;
+  othersCount?: number;
+  speed?: { genPerStream?: number; prefillPerStream?: number };
+  // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
+  // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
+  // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;
+  // preemptions15m — вытеснения за 15 мин
+  kv?: { usagePerc?: number; ramTierPerc?: number; prefixHitPerc?: number; ramTierHitPerc?: number; preemptions15m?: number };
+  gpus?: { index: number; name: string; utilPerc?: number; memUsedMb?: number; memTotalMb?: number; tempC?: number; powerW?: number; powerLimitW?: number }[] | null;
+  history?: { t: number; genThroughput?: number; waiting?: number; running?: number }[];
+  // chats: «кто сейчас на модели». own — чат текущего пользователя (клик открывает его);
+  // чужие — строка «Чат другого пользователя» без названия и перехода. Бэк отдаёт
+  // только projectId (и только для своих чатов) — имя проекта резолвит фронт из
+  // стора проектов; для чужого чата подстроки нет вовсе.
+  chats?: { own: boolean; sessionId?: string; projectId?: string; title?: string; phase: string; genTps?: number }[];
+  unsupported?: string[];
+}
+
+// === Вкладка «Медиа» (ComfyUI): GET /api/local-model/stats/media?since=<unix ms> ===
+//
+// Снимок второй видеокарты и ComfyUI: статус стенда, слоты очереди, идущие/ждущие
+// прогоны и завершённые за последний час. Время — unix-мс; чужие прогоны анонимны
+// (own=false, без sessionId/projectId, title «Чат другого пользователя»).
+//
+// configured=false — подсистема images/ComfyUI выключена (status:disabled, 200, не 500).
+// gpus=null — данные карты медиа ещё не приходят с узла ComfyUI (шаг 31).
+export interface LocalModelMedia {
+  configured: boolean;
+  comfy: {
+    // working | busy | down | disabled
+    status: 'working' | 'busy' | 'down' | 'disabled';
+    // unix-мс; null — стенд не мёртв
+    downSince?: number | null;
+    version?: string | null;
+  };
+  // Слоты очереди ComfyUI: «N из M мест»
+  slots: { used: number; limit: number };
+  // Видеокарта медиа; null до шага 31 (данные карты — с узла ComfyUI, не с хоста)
+  gpus?: MediaGpu[] | null;
+  // «Загружено сейчас»: имена моделей в памяти узла (basename, ≤ 96 символов);
+  // null/отсутствует — узел не сообщает (маршрут /ccs/stats не установлен)
+  loadedModels?: string[] | null;
+  running: MediaRunning[];
+  queue: MediaQueue[];
+  lastHour: MediaDone[];
+  unsupported?: string[];
+}
+
+// Видеокарта медиа (ComfyUI): числовые поля nullable — [N/A] → null.
+export interface MediaGpu {
+  uuid: string;
+  index: number;
+  name: string;
+  // Роли карты: в DTO бэкенда поле всегда присутствует (default []), не optional
+  roles: string[];
+  utilPerc?: number | null;
+  memUsedMb?: number | null;
+  memTotalMb?: number | null;
+  tempC?: number | null;
+  powerW?: number | null;
+  powerLimitW?: number | null;
+  mediaMemMb?: number | null;
+}
+
+// Прогресс семплера: текущий шаг, всего шагов, текущая стадия (если известна).
+export interface MediaSteps {
+  step: number;
+  total: number;
+  stage?: number | null;
+}
+
+// Идущий прогон ComfyUI. Own — прогон текущего пользователя (sessionId/projectId
+// отдаются, title null — фронт резолвит по sessionId); чужой — «Чат другого
+// пользователя», id/проект null. OwnerId наружу не уходит. Foreign — чужой источник.
+export interface MediaRunning {
+  kind: string;
+  op: string;
+  heavy: boolean;
+  own: boolean;
+  sessionId?: string | null;
+  projectId?: string | null;
+  title?: string | null;
+  foreign?: string | null;
+  steps?: MediaSteps | null;
+  percent?: number | null;
+  percentExact?: boolean | null;
+  etaSeconds?: number | null;
+  remainingSeconds?: number | null;
+  // unix-мс момента начала; null — ещё не стартовал
+  startedAt?: number | null;
+}
+
+// Прогон в очереди ComfyUI. Position — 1-based позиция. Анонимизация как в MediaRunning.
+export interface MediaQueue {
+  position: number;
+  kind: string;
+  op: string;
+  heavy: boolean;
+  own: boolean;
+  sessionId?: string | null;
+  projectId?: string | null;
+  title?: string | null;
+  foreign?: string | null;
+  etaSeconds?: number | null;
+  startInSeconds?: number | null;
+}
+
+// Завершённый за последний час прогон. Outcome — completed|failed|cancelled.
+export interface MediaDone {
+  kind: string;
+  op: string;
+  own: boolean;
+  outcome: string;
+  runSeconds?: number | null;
+  etaSeconds?: number | null;
+  // unix-мс момента завершения
+  finishedAt: number;
+}
+
+// Итог завершённого хода на локальной модели: суммы по запросам хода. Числа
+// nullable — движок не отдал поле (на экране «—»). Тот же состав — у hub-события
+// local_model_turn_stats (types/index.ts).
+export interface LocalModelTurnStats {
+  genTps?: number | null;
+  prefillTps?: number | null;
+  ttftMs?: number | null;
+  queueMsApprox?: number | null;
+  cacheHitPerc?: number | null;
+  outTokens?: number | null;
+}
+
+// Ответ GET /api/sessions/{id}/local-model: lastTurn — null, если ходов на
+// локальной модели не было (или после рестарта бэкенда: счётчик ходов в памяти).
+export interface LocalModelTurnResponse {
+  lastTurn: LocalModelTurnStats | null;
+}
+
 // Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
 // graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
 // новые и сохранённые элементы: повторная сборка ручные описания не трогает.
@@ -392,6 +547,29 @@ export const api = {
     applyPreset: (preset: 'tiers' | 'tiers-local') =>
       request<{ preset: string; count: number }>(`/admin/local-actions/preset`,
         { method: 'POST', body: JSON.stringify({ preset }) }),
+  },
+
+  // «Локальные модели» (фича local-model-stats): снимок панели — только админ
+  // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
+  // LocalModelStatsController / SessionLocalModelController (типы выше).
+  localModel: {
+    // GET /api/local-model/stats?window=15m|1h&since=<unix ms>
+    stats: (window: '15m' | '1h' = '15m', since?: number) => {
+      const qs = new URLSearchParams({ window });
+      if (since != null) qs.set('since', String(since));
+      return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);
+    },
+    // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
+    lastTurn: (sessionId: string) =>
+      request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`),
+    // GET /api/local-model/stats/media?since=<unix ms>: вкладка «Медиа» (ComfyUI).
+    // since — unix-мс, фильтрует lastHour (только завершённые новее момента).
+    media: (since?: number) => {
+      const qs = new URLSearchParams();
+      if (since != null) qs.set('since', String(since));
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return request<LocalModelMedia>(`/local-model/stats/media${suffix}`);
+    },
   },
 
   // Бэкапы — только админ (инстансная штука). Настройки правятся руками в секции Backup

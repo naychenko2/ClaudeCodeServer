@@ -62,7 +62,9 @@ public sealed partial class LocalMediaService(
     ComfyProgressTracker? steps = null,
     // Усыновители результата (карточка в ленте у модулей «Звук» и «Картинки»); без них — как раньше
     IEnumerable<ClaudeHomeServer.Services.Media.ILocalMediaAdopter>? adopters = null,
-    TimeProvider? time = null)
+    TimeProvider? time = null,
+    // Реестр prompt_id → происхождение/ETA/исход (шаг 7); нет — записи не копим
+    ComfyPromptLedger? ledger = null)
 {
     // Папка результатов в проекте: скрыта из дерева, из синка знаний и из git
     public const string ResultsFolder = ".cc-attachments/local-media";
@@ -79,6 +81,8 @@ public sealed partial class LocalMediaService(
     private readonly SemaphoreSlim _submitGate = new(1, 1);
     // Сбор результата: опрос агента и коллектор не пишут один файл дважды
     private readonly SemaphoreSlim _collectGate = new(1, 1);
+    // Реестр восстановлен из активных задач стора (рестарт: ComfyUI ещё держит их prompt_id)
+    private readonly bool _ledgerSeeded = SeedLedgerFromStore(store, ledger);
 
     public LocalMediaOptions Options => LocalMediaOptions.Read(config);
 
@@ -87,6 +91,32 @@ public sealed partial class LocalMediaService(
     public static bool LooksLikeJobId(string value) =>
         value.StartsWith(JobIdPrefix, StringComparison.Ordinal) && value.Length == JobIdPrefix.Length + 32
         && value[JobIdPrefix.Length..].All(char.IsAsciiHexDigitLower);
+
+    // Сид реестра (шаг 7): активные задачи стора — ComfyUI после рестарта ещё держит их prompt_id.
+    // Origin/ETA — из полей задачи; EnqueuedAt — «сейчас» (момент восстановления)
+    private static bool SeedLedgerFromStore(LocalMediaJobStore store, ComfyPromptLedger? ledger)
+    {
+        if (ledger is null) return false;
+        foreach (var job in store.Active())
+            if (!string.IsNullOrEmpty(job.PromptId))
+                ledger.Register(job.PromptId, OriginOf(job), job.EtaSeconds);
+        return true;
+    }
+
+    // Метка происхождения (шаг 6) из задачи: кто, из какой сессии, вид, операция, тяжёлая ли
+    private static LocalJobOrigin OriginOf(LocalMediaJob job) =>
+        new(job.OwnerId, job.SessionId, JobKind(job.Op), job.Op, job.Heavy);
+
+    // Вид прогона по операции: image | video | audio | train | other
+    private static string JobKind(string op) => op switch
+    {
+        LocalMediaOps.GenerateImage or LocalMediaOps.EditImage or LocalMediaOps.FaceDetail => "image",
+        LocalMediaOps.ImageToVideo or LocalMediaOps.TextToVideo or LocalMediaOps.VideoUpscale
+            or LocalMediaOps.VideoInpaint or LocalMediaOps.ReferenceToVideo => "video",
+        var audio when LocalMediaOps.IsAudio(audio) => "audio",
+        LocalMediaOps.LoraTrain => "train",
+        _ => "other",
+    };
 
     public async Task<LocalMediaCallResult> SubmitAsync(LocalMediaRequest request, CancellationToken ct)
     {
@@ -178,6 +208,8 @@ public sealed partial class LocalMediaService(
                 return LocalMediaCallResult.Fail(ex.Message);
             }
 
+            // Реестр (шаг 7): «чей этот prompt_id» — происхождение и оценка из задачи
+            ledger?.Register(job.PromptId, OriginOf(job), job.EtaSeconds);
             store.Add(job);
             return new LocalMediaCallResult(new LocalMediaJobView(job, queue.Length, eta), null);
         }
@@ -763,6 +795,8 @@ public sealed partial class LocalMediaService(
                 j.FinishedAt = DateTime.UtcNow;
                 ApplyRunStats(j, history);
             }) ?? current;
+            // Реестр (шаг 7): прогон завершён
+            ledger?.Complete(completed.PromptId, "completed", RunSecondsOf(completed));
             return (completed, true);
         }
         catch (UnauthorizedAccessException)
@@ -842,8 +876,9 @@ public sealed partial class LocalMediaService(
         files.Select(f => f.Subfolder.Length == 0 ? f.FileName : $"{f.Subfolder}/{f.FileName}").ToList();
 
     // history.Files — что ComfyUI успел положить в output: их убирает чистка
-    private LocalMediaJob Fail(LocalMediaJob job, string error, ComfyHistoryEntry? history = null, string? code = null) =>
-        store.Update(job.Id, job.OwnerId, j =>
+    private LocalMediaJob Fail(LocalMediaJob job, string error, ComfyHistoryEntry? history = null, string? code = null)
+    {
+        var failed = store.Update(job.Id, job.OwnerId, j =>
         {
             j.Status = LocalMediaStatuses.Failed;
             j.Error = error;
@@ -855,6 +890,10 @@ public sealed partial class LocalMediaService(
                 ApplyRunStats(j, history);
             }
         }) ?? job;
+        // Реестр (шаг 7): прогон упал или отменён (отмена — Cancelled)
+        ledger?.Complete(failed.PromptId, failed.Cancelled ? "cancelled" : "failed", RunSecondsOf(failed));
+        return failed;
+    }
 
     // Статистика прогона из истории ComfyUI. Часы ComfyUI с часами бэкенда не сравниваются:
     // из истории берётся только длительность. Начало — раньшее из «первого наблюдения running»
@@ -867,6 +906,10 @@ public sealed partial class LocalMediaService(
         var fromHistory = finished - TimeSpan.FromSeconds(run);
         job.StartedAt = job.StartedAt is { } observed && observed < fromHistory ? observed : fromHistory;
     }
+
+    // Длительность прогона (с) для реестра: из RunSeconds задачи (метки ComfyUI)
+    private static int? RunSecondsOf(LocalMediaJob job) =>
+        job.RunSeconds is { } run ? (int)Math.Round(run) : null;
 
     // Сбор висящих задач фоном: результат попадает в проект, даже если агент не спрашивает.
     // Возвращает число задач, дошедших до конца. Забывание старых задач и чистка ComfyUI —

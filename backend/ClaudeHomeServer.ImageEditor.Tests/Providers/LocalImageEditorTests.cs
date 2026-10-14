@@ -40,6 +40,8 @@ public class LocalImageEditorTests : IDisposable
         public int? QueuedFrom { get; set; }
         // Сходство лица, которое адаптер возвращает в каждом файле результата
         public double? Similarity { get; set; }
+        // Снимок очереди GPU, который адаптер возвращает в каждом опросе (шаг 28)
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         private readonly ConcurrentDictionary<string, bool> _seen = new();
 
         public IReadOnlyList<string>? Loras { get; set; } = [];
@@ -65,14 +67,14 @@ public class LocalImageEditorTests : IDisposable
         public Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct)
         {
             if (RunningFirst && _seen.TryAdd(ticket, true))
-                return Task.FromResult(new LocalImagePoll(LocalImageState.Running, null, [], null));
+                return Task.FromResult(new LocalImagePoll(LocalImageState.Running, null, [], null, Gpu: Gpu));
             if (QueuedFrom is { } from && int.Parse(ticket[1..]) >= from)
-                return Task.FromResult(new LocalImagePoll(LocalImageState.Queued, 5, [], null));
+                return Task.FromResult(new LocalImagePoll(LocalImageState.Queued, 5, [], null, Gpu: Gpu));
             var request = Submitted.ElementAt(int.Parse(ticket[1..]) - 1);
             var files = Enumerable.Range(0, request.Count)
                 .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png", Similarity))
                 .ToList();
-            return Task.FromResult(new LocalImagePoll(LocalImageState.Completed, null, files, null));
+            return Task.FromResult(new LocalImagePoll(LocalImageState.Completed, null, files, null, Gpu: Gpu));
         }
 
         public Task<bool> CancelAsync(string ticket, CancellationToken ct)
@@ -383,6 +385,46 @@ public class LocalImageEditorTests : IDisposable
             (EditStage.Queued, 1), (EditStage.Running, 1), (EditStage.Downloading, 1),
             (EditStage.Queued, 2), (EditStage.Running, 2), (EditStage.Downloading, 2));
         reports.Should().OnlyContain(r => r.Runs == 2 && r.EtaSeconds == 52);
+    }
+
+    // Шаг 28: метка происхождения прогона (владелец, чат, вид=картинка, операция, тяжёлый ли)
+    // заполняется при постановке; снимок очереди GPU из опроса прокидывается в отчёт прогресса
+    [Fact]
+    public async Task Прогон_НесётМеткуПроисхожденияИСнимокОчередиGpu()
+    {
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 1, StartInSeconds: 30, Steps: null, Percent: 40, PercentExact: false,
+            RemainingSeconds: 20, Busy: null, DownSince: null);
+        var media = new FakeMedia { RunningFirst = true, Gpu = gpu };
+        var reports = new List<EditProgress>();
+        var request = new ImageEditRequest(ImageEditOp.Generate, "кот в шляпе", null, null, [], 1, "1:1", null,
+            LocalImageEditor.QwenImage, null, OwnerId: "user-a", SessionId: "chat-1");
+
+        var result = await Editor(media).RunAsync(request, new SyncProgress(reports.Add), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        // Метка происхождения: владелец, чат, вид=картинка, операция (camelCase), тяжёлый ли
+        var origin = media.Submitted.Should().ContainSingle().Subject.Origin;
+        origin.Should().NotBeNull("запрос из задачи несёт владельца — метка заполняется");
+        origin!.Should().Be(new ClaudeHomeServer.Services.Media.LocalJobOrigin(
+            "user-a", "chat-1", "image", "generate", false));
+        // Снимок очереди GPU из опроса прокинут в отчёт прогресса (не в статус/трату)
+        reports.Should().Contain(p => p.Gpu != null && p.Gpu == gpu, "отчёт несёт живой снимок очереди GPU");
+    }
+
+    // Метка происхождения без задачи (OwnerId = null, как в тестах драйвера напрямую) — null,
+    // как до шага 28: поведение прежних прогонов не меняется
+    [Fact]
+    public async Task ПрогонБезЗадачи_МеткаПроисхожденияNull()
+    {
+        var media = new FakeMedia();
+        var request = new ImageEditRequest(ImageEditOp.Generate, "кот", null, null, [], 1, "1:1", null,
+            LocalImageEditor.QwenImage, null);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        media.Submitted.Should().ContainSingle().Which.Origin.Should().BeNull("без владельца — метка не заполняется");
     }
 
     // Варианты по готовности: генерация по тексту тоже идёт прогоном на вариант (граф ComfyWorkflows

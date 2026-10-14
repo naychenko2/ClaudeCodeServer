@@ -256,6 +256,18 @@ export function onGitStatusChanged(handler: (data: { projectId: string }) => voi
   return () => conn.off('message', h);
 }
 
+// Живые метрики локальной модели (флаг local-model-stats): тиковый снимок состояния
+// генерации (local_model_live) и итог завершённого хода (local_model_turn_stats). Оба
+// эфемерные (в историю не пишутся) и приходят в группу сессии — подписчик фильтрует по
+// sessionId, как и остальные события хода. Чат не на локальной модели — событий просто нет.
+export type LocalModelMessage = Extract<ServerMessage, { type: 'local_model_live' | 'local_model_turn_stats' }>;
+export function onLocalModelMessage(sessionId: string, handler: (msg: LocalModelMessage) => void): () => void {
+  return onMessage(msg => {
+    if (msg.sessionId !== sessionId) return;
+    if (msg.type === 'local_model_live' || msg.type === 'local_model_turn_stats') handler(msg);
+  });
+}
+
 export async function joinProject(projectId: string): Promise<void> {
   const conn = await ensureConnected();
   await conn.invoke('JoinProject', projectId);

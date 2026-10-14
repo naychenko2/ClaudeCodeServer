@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
@@ -68,7 +69,9 @@ public sealed record LoraTrainStart(
     string RunId,
     string Preset,
     string Trigger,
-    IReadOnlyList<LoraTrainPhoto> Photos);
+    IReadOnlyList<LoraTrainPhoto> Photos,
+    // Метка происхождения прогона (шаг 23): null — вызывающая сторона ещё не передаёт (шаги 28–30).
+    LocalJobOrigin? Origin = null);
 
 public enum LoraTrainErrorCode
 {

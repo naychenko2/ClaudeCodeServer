@@ -16,7 +16,10 @@ public sealed class LocalVideoMediaAdapter(
     ILocalImageMedia images,
     ILogger<LocalVideoMediaAdapter> log,
     LocalMediaCleanup? cleanup = null,
-    TimeProvider? time = null) : ILocalVideoMedia
+    TimeProvider? time = null,
+    ComfyProgressTracker? steps = null,
+    ComfyPromptLedger? ledger = null,
+    ComfyQueueMonitor? monitor = null) : ILocalVideoMedia
 {
     private DateTime Now => (time ?? TimeProvider.System).GetUtcNow().UtcDateTime;
 
@@ -33,6 +36,14 @@ public sealed class LocalVideoMediaAdapter(
     // Входы идущих и ещё не убранных апскейлов: тикет апскейла → id, по которому строятся имена копий латентов в input.
     // Копии нужны только пока идёт задача: после конца (удача, сбой, отмена) их удаляют сразу, остаток выметает Sweep
     private readonly ConcurrentDictionary<string, UpscaleInputs> _upscales = new();
+
+    // Максимальный процент, показанный для каждого prompt_id: у видео несколько семплеров, и процент
+    // ТЕКУЩЕЙ ноды (ComfyStepProgress.Fraction) откатывается к нулю на втором — шкала не должна убывать.
+    // Сбрасывается на Complete (конец прогона)
+    private readonly ConcurrentDictionary<string, double> _maxPercent = new(StringComparer.Ordinal);
+
+    // Снимок очереди GPU (шаг 26б): общий билдер — логика изоляции/процента/ETA не дублируется по адаптерам
+    private readonly ComfyGpuSnapshotBuilder _gpuBuilder = new(monitor, ledger, steps, log);
 
     private sealed record UpscaleInputs(string Id, string ShotTicket, DateTime At)
     {
@@ -127,45 +138,6 @@ public sealed class LocalVideoMediaAdapter(
     public bool CanUpscale(string ticket) =>
         _shots.TryGetValue(ticket, out var shot) && !Expired(shot) && shot.LatentVideo is not null && shot.LatentAudio is not null;
 
-    // Прогресс сэмплеров идущих задач: ticket → слушатель сокета ComfyUI. Живёт, пока опрашивают задачу
-    private readonly ConcurrentDictionary<string, ProgressWatch> _watches = new();
-
-    // Доля берётся как максимум от пройденного: у графа с несколькими сэмплерами шаги второго не должны
-    // откатывать шкалу назад; до конца задачи шкала не доходит до 1
-    private sealed class ProgressWatch : IDisposable
-    {
-        private readonly CancellationTokenSource _cts = new();
-        private double _fraction = -1;
-
-        public double? Fraction => _fraction < 0 ? null : _fraction;
-        public CancellationToken Token => _cts.Token;
-
-        public void Set(double value)
-        {
-            var capped = Math.Min(value, 0.99);
-            if (capped > _fraction) _fraction = capped;
-        }
-
-        public void Dispose() => _cts.Cancel();
-    }
-
-    private void StartWatch(string ticket)
-    {
-        var watch = new ProgressWatch();
-        if (!_watches.TryAdd(ticket, watch)) return;
-        _ = Task.Run(async () =>
-        {
-            await comfy.ListenProgressAsync(ticket, watch.Set, watch.Token);
-            // Слушатель закончил сам (задача завершилась или сокет не открылся): запись не держим
-            _watches.TryRemove(new KeyValuePair<string, ProgressWatch>(ticket, watch));
-        });
-    }
-
-    private void StopWatch(string ticket)
-    {
-        if (_watches.TryRemove(ticket, out var watch)) watch.Dispose();
-    }
-
     public bool Configured => LocalMediaOptions.IsEnabled(config);
 
     public bool Available => Configured && images.Available;
@@ -224,7 +196,8 @@ public sealed class LocalVideoMediaAdapter(
                 ComfyWorkflows.FramesFor(plan.Seconds), seed, plan.Fast, $"{ComfyWorkflows.OutputFolder}/{id}",
                 $"{ComfyWorkflows.OutputFolder}/latents/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
-            StartWatch(queued.PromptId);
+            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
+            ledger?.Register(queued.PromptId, request.Origin, LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast));
             Sweep();
             _shots[queued.PromptId] = new Shot(id, plan.Prompt, firstName, lastName, plan.Size, plan.Seconds, seed, Now);
             return new LocalVideoSubmitted(queued.PromptId, queue,
@@ -239,23 +212,31 @@ public sealed class LocalVideoMediaAdapter(
 
     public async Task<LocalVideoPoll> PollAsync(string ticket, CancellationToken ct)
     {
+        // Опрос задачи — панель активна: быстрый опрос очереди (2 с) на время TouchWindow
+        monitor?.Touch();
         try
         {
             var history = await comfy.GetHistoryAsync(ticket, ct);
             if (history is null)
             {
-                var position = (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
+                // Снимок монитора (шаг 26б): позиция и Gpu из общего /queue, не поштучный запрос
+                var position = monitor?.Snapshot is { } snap && !snap.Down
+                    ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
+                    : (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
                 if (position is not null)
                     return new LocalVideoPoll(position == 0 ? LocalVideoState.Running : LocalVideoState.Queued, position, null, null,
-                        Percent: position == 0 ? PercentOf(ticket) : null);
+                        Percent: position == 0 ? PercentOf(ticket) : null,
+                        Gpu: _gpuBuilder.Build(ticket, position));
                 // Могла закончиться между двумя запросами — история решает
                 history = await comfy.GetHistoryAsync(ticket, ct);
                 if (history is null)
                     return Failed("Задача пропала из очереди ComfyUI (перезапуск или отмена на стенде).");
             }
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
-            if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Percent: PercentOf(ticket));
-            StopWatch(ticket);
+            if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null,
+                Percent: PercentOf(ticket), Gpu: _gpuBuilder.Build(ticket, 0));
+            ledger?.Complete(ticket, "completed", null);
+            ForgetPercent(ticket);
             var upscale = _upscales.TryGetValue(ticket, out var upInputs) ? upInputs : null;
             ReleaseUpscale(ticket);
             if (_shots.TryGetValue(ticket, out var shot))
@@ -278,7 +259,14 @@ public sealed class LocalVideoMediaAdapter(
         }
         catch (ComfyException ex)
         {
-            return new LocalVideoPoll(LocalVideoState.Running, null, null, null, ex.Message);
+            // M1: стенд недоступен — снимок несёт downSince (фронт isStandDown видит «стенд недоступен»)
+            // Minor 3: позиция из снимка (не хардкод 0): если задачи нет в queue_running снимка,
+            // билдер не ставит ложный Running=true (монитор ещё не заметил падение, снимок stale).
+            var position = monitor?.Snapshot is { } snap
+                ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
+                : null;
+            return new LocalVideoPoll(LocalVideoState.Running, null, null, null, ex.Message,
+                Gpu: _gpuBuilder.Build(ticket, position));
         }
         catch (Exception ex) when (ex is InvalidOperationException or FormatException)
         {
@@ -288,7 +276,8 @@ public sealed class LocalVideoMediaAdapter(
 
         LocalVideoPoll Failed(string error)
         {
-            StopWatch(ticket);
+            ledger?.Complete(ticket, "failed", null);
+            ForgetPercent(ticket);
             ReleaseUpscale(ticket);
             // Съёмка не удалась — латента нет и увеличивать нечего: контекст и входы убираем сразу
             if (_shots.TryRemove(ticket, out var failedShot)) PurgeShot(failedShot, LocalMediaOptions.Read(config));
@@ -305,7 +294,20 @@ public sealed class LocalVideoMediaAdapter(
         owner.Outputs.Add((upscale?.Id ?? owner.Id, path));
     }
 
-    private double? PercentOf(string ticket) => _watches.TryGetValue(ticket, out var watch) ? watch.Fraction : null;
+    // Доля шагов текущего сэмплера из общего трекера (ComfyProgressTracker слушает сокет под ClientId):
+    // потолок 0.99, «100%» говорит только история. У видео несколько семплеров, и процент ТЕКУЩЕЙ ноды
+    // откатывается к нулю на втором — шкала не должна убывать: запоминаем максимум на prompt_id.
+    // Сбрасывается на Complete (конец прогона). Нет записи — шагов не знаем, шкала не показывается
+    private double? PercentOf(string ticket)
+    {
+        if (steps?.Get(ticket) is not { } progress) return null;
+        var current = Math.Min(0.99, progress.Fraction);
+        _maxPercent.AddOrUpdate(ticket, current, (_, prev) => Math.Max(prev, current));
+        return _maxPercent[ticket];
+    }
+
+    // Конец прогона: запомненный максимум не нужен
+    private void ForgetPercent(string ticket) => _maxPercent.TryRemove(ticket, out _);
 
     private static string? LatentPath(IReadOnlyList<ComfyOutputFile> latents, string marker) =>
         latents.FirstOrDefault(l => l.FileName.Contains(marker, StringComparison.Ordinal)) is { } file
@@ -354,8 +356,9 @@ public sealed class LocalVideoMediaAdapter(
             var graph = ComfyWorkflows.UpscaleVideo(latentVideo, latentAudio, shot.FirstName, shot.Prompt, size.Width, size.Height,
                 frames, shot.Seed, options.Upscale1440Tiled, $"{ComfyWorkflows.OutputFolder}/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
+            // Реестр прогонов (шаг 7): метка происхождения придёт в шаге 23, сейчас origin = null
+            ledger?.Register(queued.PromptId, null, LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled));
             _upscales[queued.PromptId] = inputs;
-            StartWatch(queued.PromptId);
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled), null);
         }
@@ -377,7 +380,6 @@ public sealed class LocalVideoMediaAdapter(
 
     public async Task<bool> CancelAsync(string ticket, CancellationToken ct)
     {
-        StopWatch(ticket);
         // Съёмку не трогаем: после её конца отмену могут звать по её тикету, а латент ещё нужен увеличению
         try
         {
@@ -389,9 +391,13 @@ public sealed class LocalVideoMediaAdapter(
                 // Идёт — прерываем адресно: иначе граф доигрывает и держит GPU
                 case 0:
                     await comfy.InterruptAsync(ticket, ct);
+                    ledger?.Complete(ticket, "cancelled", null);
+                    ForgetPercent(ticket);
                     return true;
                 default:
                     await comfy.DeletePendingAsync(ticket, ct);
+                    ledger?.Complete(ticket, "cancelled", null);
+                    ForgetPercent(ticket);
                     return true;
             }
         }

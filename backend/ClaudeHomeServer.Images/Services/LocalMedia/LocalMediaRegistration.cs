@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -20,8 +21,12 @@ public static class LocalMediaRegistration
 
         services.AddSingleton<ComfyClient>();
         services.AddSingleton<LocalMediaJobStore>();
-        // Настоящие шаги семплера по WebSocket ComfyUI; без связи — оценка по ETA
-        services.AddSingleton(sp => new ComfyProgressTracker(sp.GetRequiredService<LocalMediaJobStore>()));
+        // Реестр prompt_id ComfyUI → происхождение/ETA/исход (шаг 7): «чей этот прогон»
+        services.AddSingleton<ComfyPromptLedger>();
+        // Настоящие шаги семплера по WebSocket ComfyUI; без связи — оценка по ETA.
+        // isOurs = активные задачи local_*/LoRA (стор) + прогоны из реестра (редакторы)
+        services.AddSingleton(sp => new ComfyProgressTracker(
+            sp.GetRequiredService<LocalMediaJobStore>(), sp.GetRequiredService<ComfyPromptLedger>()));
         services.AddSingleton<LocalMediaService>();
         // Шов для поставщика «Локальные модели» редактора картинок (модуль ImageEditor)
         services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.ILocalImageMedia, LocalImageMediaAdapter>();
@@ -40,6 +45,15 @@ public static class LocalMediaRegistration
         services.AddSingleton<LocalMediaCleanup>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         services.AddGatedHostedService<ComfyProgressListener>(config, "images");
+        // Монитор очереди ComfyUI (шаг 24): снимок running/queue/lastHour/slots/status для IComfyStats (шаг 26).
+        // Shared singleton + hosted: адаптеры и ComfyStats резолвят монитор ПО ТИПУ (GetService<ComfyQueueMonitor>),
+        // а не только как IHostedService — иначе GetService<ComfyQueueMonitor>() = null и ComfyStats (обязательный
+        // конструктор ComfyQueueMonitor) в DI не строится (ревью шага 26б, critical).
+        services.AddSingleton<ComfyQueueMonitor>();
+        services.AddGatedHostedFrom<ComfyQueueMonitor>(config, sp => sp.GetRequiredService<ComfyQueueMonitor>(), "images");
+        // Снимок медиа-стенда (шаг 26): IComfyStats — опциональная зависимость для Main (подсистема
+        // images отключаема: без неё контроллер Main получает null и отвечает {configured:false})
+        services.AddSingleton<IComfyStats, ComfyStats>();
         return services;
     }
 }

@@ -21,6 +21,11 @@ import { personaTitleLines } from '../../lib/personas';
 import { isProjectPersona, isSpherePersona, zoneLabel } from '../../lib/personaZone';
 import { useSpheres } from '../../lib/useSpheres';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useLocalModelLive, type LocalModelLiveState } from '../../features/localModel/useLocalModelLive';
+import { useLocalModelAdmin } from '../../features/localModel/useLocalModelStats';
+import { localModelTail, localModelQueueText, formatTps } from '../../features/localModel/localModelTail';
+import { revealWorkspacePanel } from '../../lib/subsystems/registryCore';
+import { LOCAL_MODEL_PANEL } from '../../features/localModel/manifest';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, type RatePillSegment, type RingPillCandidate, RATE_COLORS, RING_WINDOWS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillVisible, windowCandidates, ringPillHead, ringArcLength } from '../../lib/rateLimit';
 import { useAccountUsage, accountSnapshotsFor } from '../../lib/accountUsage';
@@ -48,8 +53,20 @@ import { projectDeviceBadge } from '../../lib/projectCapabilities';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
 import { chatFilterScope, leaveChatArchiveView } from '../../lib/chatFilters';
+
+// Узкая шапка: < 340 CSS px «срок» уходит из ряда в меню «⋯», освобождая ~40 px
+// контейнеру бейджей — пилюля Ctx на 320 встаёт целиком, а не срезается. Порог —
+// matchMedia по ширине ОКНА, а не useIsMobile: мобильная раскладка начинается на 600,
+// а срез пилюли — уже на 340.
+const NARROW_QUERY = '(max-width: 339px)';
+// Меньше часа до конца срока — тревога: «срок» в «⋯» получает warning-цвет и точку
+const ONE_HOUR_MS = 3600_000;
+function useNarrowHeader(): boolean {
+  return useMediaQuery(NARROW_QUERY);
+}
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -702,6 +719,54 @@ function worseTone(a?: 'warn' | 'danger', b?: 'warn' | 'danger'): 'warn' | 'dang
   return undefined;
 }
 
+// Тело поповера «Локальная модель»: живой статус (генерация/очередь) + итог последнего
+// хода. Показывается ПЕРВЫМ в поповере кольцевой пилюли (перед workflow/контекстом).
+// live=null — чат не на локальной модели (раздел не рисуется).
+function LocalModelPopoverBody({ live, isAdmin, sessionId }: {
+  live: LocalModelLiveState; isAdmin: boolean; sessionId?: string;
+}) {
+  // Генерация: живая скорость (если идёт), иначе скорость последнего хода, иначе «—»
+  const gen = (live.phase === 'generating' && live.genTps != null && live.genTps > 0)
+    ? live.genTps
+    : (live.lastTurn?.genTps != null && live.lastTurn.genTps > 0 ? live.lastTurn.genTps : null);
+  const genText = gen != null ? formatTps(gen) : '—';
+
+  // Чтение промпта: скорость prefill последнего хода
+  const prefill = live.lastTurn?.prefillTps != null && live.lastTurn.prefillTps > 0 ? live.lastTurn.prefillTps : null;
+  const prefillText = prefill != null ? formatTps(prefill) : '—';
+
+  // Попадание в кэш: доля 0..1 → процент (без пробела: «37%», как в RateRow)
+  const cache = live.lastTurn?.cacheHitPerc != null ? live.lastTurn.cacheHitPerc : null;
+  const cacheText = cache != null ? `${Math.round(cache * 100)}%` : '—';
+
+  // Ожидание: время в очереди (мс → сек); < 500 мс округляется к «≈ 1 с», не «≈ 0 с»
+  const queueMs = live.lastTurn?.queueMsApprox ?? null;
+  const queueText = localModelQueueText(queueMs);
+  const queueLabel = live.phase === 'queued' ? 'Ожидание' : 'Ждал в очереди';
+
+  return (
+    <>
+      <div style={badgeTitleStyle}>Локальная модель</div>
+      <BadgeRow k="Генерация" v={genText} />
+      <BadgeRow k="Чтение промпта" v={prefillText} />
+      <BadgeRow k="Попадание в кэш" v={cacheText} />
+      <BadgeRow k={queueLabel} v={queueText} />
+      {isAdmin && (
+        <button
+          type="button"
+          onClick={() => revealWorkspacePanel(LOCAL_MODEL_PANEL, undefined, { sessionId })}
+          style={{
+            fontFamily: FONT.sans, fontSize: 12, color: C.accent, background: 'none',
+            border: 'none', padding: '4px 0', cursor: 'pointer', fontWeight: 600,
+          }}
+        >
+          Открыть панель модели →
+        </button>
+      )}
+    </>
+  );
+}
+
 // Кольцевая пилюля шапки — одна на все раскладки (вариант C2): иконка из трёх колец
 // (контекст, 1-е и 2-е окно) и текст ОДНОГО худшего показателя («5ч 81%», «Ctx 92%»),
 // без счётчика «+N». Все окна, контекст и стоимость — в одном поповере.
@@ -725,12 +790,37 @@ export function RingPillBadge(props: {
   resetKey?: string;
   // Только витрина: показать состояние 5.2r без смены настройки ОС
   forceReducedMotion?: boolean;
+  // id чата: для живых данных локальной модели (хвост + поповер «Локальная модель»)
+  sessionId?: string;
+  // Только витрина: форсировать состояние локальной модели (обходит хук)
+  forceLocalModel?: LocalModelLiveState;
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, isMobile, isCompact,
   } = props;
   const activeWorkflow = isCompact ? props.activeWorkflow : undefined;
   const wfActive = !!activeWorkflow;
+
+  // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
+  // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
+  // только на десктопе (мобильный вариант А — шаг 22) и при включённом флаге.
+  const hookLive = useLocalModelLive(props.sessionId ?? null);
+  // Витрина: форсированное состояние обходит хук (в витрине нет живых событий)
+  const live = props.forceLocalModel ?? hookLive;
+  const isAdmin = useLocalModelAdmin();
+  const lmFlag = useFeature(FLAGS.localModelStats);
+  // Десктоп: хвост добавляется к лицу через « · »; мобила (вариант А): лицо
+  // ЗАМЕНЯЕТСЯ компактным словом состояния (≤ 7 знаков), тревога контекста побеждает.
+  const lmTail = !isMobile && lmFlag ? localModelTail(live) : null;
+  const lmTailCompact = isMobile && lmFlag ? localModelTail(live, true) : null;
+  // Мобила: лицо заменяется словом состояния, только пока контекст в норме (не тревога)
+  const lmMobileFace = lmTailCompact != null && estimate.level === 'normal' ? lmTailCompact : null;
+  // Раздел «Локальная модель» в поповере: живые данные есть и флаг включён
+  const lmActive = live != null && lmFlag;
+  // Что «озвучивается» в aria-label: на десктопе — хвост, на мобиле — слово-лицо
+  // (только когда оно реально заменит лицо, т.е. контекст в норме). Нет активного
+  // состояния — null (строку в aria-label не добавляем).
+  const lmSpoken = isMobile ? lmMobileFace?.text : lmTail?.text;
 
   // Что доступно к показу в каждой секции
   const showCtx = hasContextInfo(estimate);
@@ -739,8 +829,9 @@ export function RingPillBadge(props: {
     : hasClaudeCostInfo(cost, windows);
   const hasFal = !!isCompact && !isCliProvider && falCost.total > 0;
   const hasGlif = !!isCompact && !isCliProvider && glifCost.count > 0;
-  // Совсем нечего показывать — прячем пилюлю (но активный workflow держит её на экране)
-  if (!showCtx && !showCost && !hasFal && !hasGlif && !wfActive) return null;
+  // Совсем нечего показывать — прячем пилюлю (но активный workflow или локальная модель
+  // держат её на экране)
+  if (!showCtx && !showCost && !hasFal && !hasGlif && !wfActive && !lmActive) return null;
 
   // Квота подписки (GLM) — процентом в mid-кольце; денежный баланс (DeepSeek) процента
   // не имеет и кольца не получает, но в тревожном тоне выходит текстом на пилюлю
@@ -813,6 +904,10 @@ export function RingPillBadge(props: {
   const ctxPip = { slot: 0 as const, level: estimate.level };
   if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
   else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
+  // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,
+  // чтобы на мобиле скринридер не читал только «Ctx 61k», а и состояние модели.
+  // Нет активного состояния (idle без скорости / не локальный чат) — строки нет.
+  if (lmActive && lmSpoken) parts.push({ text: `Локальная модель: ${lmSpoken}` });
   if (isCliProvider) {
     if (balance) parts.push({
       text: `${providerName}: ${isQuota ? 'израсходовано' : 'остаток'} ${providerPillLabel(balance)}`,
@@ -852,7 +947,21 @@ export function RingPillBadge(props: {
             <span style={{ color: C.textSecondary }}>{fmtUsd(cost.cost)}</span>
             {face && <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>}
           </>}
-          {face}
+          {lmMobileFace ? (
+            // Мобила, вариант А: лицо заменено компактным словом состояния (≤ 7 знаков)
+            <span style={{ color: lmMobileFace.tone === 'warn' ? C.warningText : C.textSecondary, fontWeight: 700 }}>
+              {lmMobileFace.text}
+            </span>
+          ) : (
+            <>
+              {face}
+              {lmTail && (
+                <span style={{ color: lmTail.tone === 'warn' ? C.warningText : lmTail.tone === 'dim' ? C.textMuted : C.textSecondary, fontWeight: 400 }}>
+                  {' '}· {lmTail.text}
+                </span>
+              )}
+            </>
+          )}
         </span>
       </>}
       isMobile={isMobile}
@@ -865,19 +974,24 @@ export function RingPillBadge(props: {
       tip={tip}
       ariaLabel={title}
     >
-      {wfActive && (
+      {lmActive && (
         <div>
+          <LocalModelPopoverBody live={live!} isAdmin={isAdmin} sessionId={props.sessionId} />
+        </div>
+      )}
+      {wfActive && (
+        <div style={lmActive ? sectionDivider : undefined}>
           <div style={badgeTitleStyle}>Workflow</div>
           <BadgeRow k="Фаза" v={activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'} />
         </div>
       )}
       {showCtx && (
-        <div style={wfActive ? sectionDivider : undefined}>
+        <div style={(lmActive || wfActive) ? sectionDivider : undefined}>
           <ContextPopoverBody {...props} pip={<RingPip slot={0} level={estimate.level} />} />
         </div>
       )}
       {showCost && (
-        <div style={(wfActive || showCtx) ? sectionDivider : undefined}>
+        <div style={(lmActive || wfActive || showCtx) ? sectionDivider : undefined}>
           {isCliProvider
             ? <ProviderCostPopoverBody providerName={providerName} stats={cost} balance={balance}
                 quotaPip={isQuota ? <RingPip slot={1} level={provLevel} /> : undefined} />
@@ -1078,6 +1192,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const ww = useWindowWidth();
   const isTablet = !isMobile && ww > MOBILE_MAX && ww < TABLET_WIDE_MIN;
   const isCompact = isMobile || isTablet;
+  // Узкая шапка (< 340): «срок» уходит в «⋯», освобождая место пилюле Ctx
+  const isNarrow = useNarrowHeader();
 
   // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).
   // Локальная копия, чтобы создание тега сразу отражалось в меню без перезагрузки
@@ -1449,6 +1565,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
   // приглушённая иконка. Клик открывает выбор срока прямо здесь (в офлайне менять
   // нечего — сохранение всё равно не пройдёт)
+  // «Срок чата · осталось 2 ч»: значение и тревога для пункта «⋯» на узкой шапке.
+  // formatTimeLeft отдаёт «через 2 ч» / «через 40 мин» / «скоро» — переводим в «осталось …»
+  const expiryLeft = formatTimeLeft(session);
+  const expiryValue = expiryLeft ? expiryLeft.replace(/^через /, 'осталось ') : null;
+  const expAt = expiresAt(session);
+  const expiryUrgent = !!expAt && expAt.getTime() - Date.now() < ONE_HOUR_MS;
   const expiryBadge = online ? (
     <ExpiryButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
@@ -1483,6 +1605,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={limitWindows}
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
+      sessionId={session.id}
     />
   );
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
@@ -1551,6 +1674,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Порядок ряда — канонический: набор скрытых фильтрует ряд, сохраняя привычную
   // расстановку оставшихся действий относительно друг друга
   const visibleActions = headerActions.filter(k => headerVis.isVisible(k));
+  // Узкая шапка: «срок» не в ряду, а первым пунктом «⋯» — освобождает ~40 px пилюле Ctx
+  const rowActions = isNarrow ? visibleActions.filter(k => k !== 'expiry') : visibleActions;
 
   // Исполнение действий шапки. Часть уже живёт готовыми кнопками (у них свои
   // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
@@ -1744,26 +1869,39 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       },
     };
   });
+  // Пункты «⋯»: все действия чата. Узкая шапка: «срок» — первым, со значением
+  // «осталось 2 ч» (меньше часа — C.warningText); порядок остальных — канонический
+  const overflowActionItems: OverflowItem[] = headerActions.map(k => {
+    const m = actionMeta(k);
+    const visible = headerVis.isVisible(k);
+    const it: OverflowItem = {
+      key: k,
+      icon: m.icon,
+      label: m.label,
+      danger: m.danger,
+      // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
+      // вместе с меню, и её rect брать было бы неоткуда
+      onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
+      action: {
+        icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
+        onClick: () => headerVis.toggle(k),
+      },
+    };
+    if (isNarrow && k === 'expiry' && expiryValue) {
+      it.label = 'Срок чата';
+      it.value = <span style={{ color: expiryUrgent ? C.warningText : C.textSecondary }}>{expiryValue}</span>;
+    }
+    return it;
+  });
+  if (isNarrow) {
+    const i = overflowActionItems.findIndex(x => x.key === 'expiry');
+    if (i > 0) { const [e] = overflowActionItems.splice(i, 1); overflowActionItems.unshift(e); }
+  }
   const headerOverflow = headerActions.length > 0 ? (
-    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact} items={[
-      ...headerActions.map(k => {
-        const m = actionMeta(k);
-        const visible = headerVis.isVisible(k);
-        return {
-          key: k,
-          icon: m.icon,
-          label: m.label,
-          danger: m.danger,
-          // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
-          // вместе с меню, и её rect брать было бы неоткуда
-          onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
-          action: {
-            icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-            title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
-            onClick: () => headerVis.toggle(k),
-          },
-        };
-      }),
+    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact}
+      items={[
+      ...overflowActionItems,
       // Запасной вход в AI-палитру на телефоне: ⌘K там нет, а круглешок прячется, когда
       // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
       ...(isMobile ? [{
@@ -1778,17 +1916,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <span ref={el => {
           ref(el);
           if (el) overflowAnchorRef.current = el.getBoundingClientRect();
-        }}>
-          <ToolbarIconButton onClick={toggle} title="Ещё действия">
+        }} style={{ position: 'relative', display: 'inline-flex' }}>
+          {/* Имя для скринридера явное: svg у lucide aria-hidden, а title — лишь тултип */}
+          <ToolbarIconButton onClick={toggle} ariaLabel={isNarrow && expiryUrgent ? 'Ещё действия, срок чата истекает' : 'Ещё действия'}>
             <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </ToolbarIconButton>
+          {/* Узкая шапка + срок < часа: точка 6 px C.warning — сигнал, что срок ушёл в «⋯» */}
+          {isNarrow && expiryUrgent && (
+            <span aria-hidden style={{ position: 'absolute', top: 0, right: 0, width: 6, height: 6, borderRadius: R.full, background: C.warning, border: `1.5px solid ${C.bgPanel}`, pointerEvents: 'none' }} />
+          )}
         </span>
       )} />
   ) : null;
   // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
   // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
     // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
@@ -1797,7 +1940,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
         <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
           {retitleBtn}{extractBtn}{summaryBtn}
-          {visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
+          {rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
         </div>
         {headerOverflow}
       </div>

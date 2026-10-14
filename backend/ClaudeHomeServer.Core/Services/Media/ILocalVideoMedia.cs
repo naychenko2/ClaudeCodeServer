@@ -53,7 +53,10 @@ public sealed record LocalVideoRequest(
     int Seconds = 5,
     string Size = "full",
     bool? Fast = null,
-    long? Seed = null);
+    long? Seed = null,
+    // Метка происхождения прогона (шаг 23): кто, из какой сессии, вид, операция, тяжёлая ли.
+    // null — вызывающая сторона ещё не передаёт (шаги 28–30); реестр пишет неопределённое происхождение.
+    LocalJobOrigin? Origin = null);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: «попробуй позже», а не ошибка запроса
 public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)
@@ -64,14 +67,15 @@ public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int
 public enum LocalVideoState { Queued, Running, Completed, Failed }
 
 // Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива; Percent — доля шагов сэмплера 0..1
-// по прогрессу ComfyUI (null — данных нет)
+// по прогрессу ComfyUI (null — данных нет). Gpu — снимок очереди GPU (шаг 26; пока null).
 public sealed record LocalVideoPoll(
     LocalVideoState State,
     int? QueuePosition,
     LocalVideoFile? File,
     string? Error,
     string? Warning = null,
-    double? Percent = null);
+    double? Percent = null,
+    LocalGpuQueueInfo? Gpu = null);
 
 // Extension — с точкой («.mp4»); HasSound — в ролике есть звуковая дорожка
 public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound);

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
@@ -17,9 +18,13 @@ public static class AudioEditEventNames
     public const string PrefsChanged = "audio_prefs_changed";
 }
 
-// Variant — номер варианта, который сейчас идёт (варианты — отдельные прогоны драйвера)
+// Variant — номер варианта, который сейчас идёт (варианты — отдельные прогоны драйвера);
+// Gpu — живой снимок очереди GPU ComfyUI (шаг 29): только отображение, null — поставщик не знает;
+// null не пишется (camelCase как соседние поля)
 public record AudioEditProgressMessage(string JobId, string ScopeKey, AudioStage Stage, int? QueuePosition, int? EtaSeconds,
-    int Variant, int Count, string? ChatSessionId, string? ThreadId, AudioEditInitiator Initiator)
+    int Variant, int Count, string? ChatSessionId, string? ThreadId, AudioEditInitiator Initiator,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null)
     : ServerMessage(AudioEditEventNames.Progress);
 
 // Error — у частичного успеха: часть вариантов готова, следующий не получился

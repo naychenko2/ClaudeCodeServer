@@ -8,18 +8,39 @@ rvc_convert: вход 1 — что переозвучить, вход 2 — .pth
 """
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 
-from ccs_common import fail, load_job
+from ccs_common import emit_progress, fail, load_job
 
 CORE = [sys.executable, "core.py"]
 
 
-def run(args):
-    subprocess.run(CORE + args, check=True)
+def run(args, on_line=None):
+    if on_line is None:
+        subprocess.run(CORE + args, check=True)
+        return
+    # вывод Applio пропускаем дальше в лог узла как есть, попутно читая его построчно
+    with subprocess.Popen(CORE + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            on_line(line)
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, CORE + args)
+
+
+def epoch_done(name, line):
+    """Номер завершённой эпохи из строки Applio «<имя> | epoch=N | step=M | <время>».
+
+    Строки «... | batch=K/B» печатаются внутри эпохи и не считаются. Сменит Applio формат —
+    шагов не будет, обучение от этого не ломается.
+    """
+    m = re.match(rf"{re.escape(name)} \| epoch=(\d+) \| step=\d+ \| (?!batch=)", line)
+    return int(m.group(1)) if m else None
 
 
 def train(job):
@@ -39,9 +60,16 @@ def train(job):
         run(["extract", "--model-name", name, "--f0-method", "rmvpe", "--gpu", "0",
              "--sample-rate", sr, "--embedder-model", "contentvec", "--cpu-cores", "8"])
         job.lap("extract")
+        emit_progress(0, epochs)
+
+        def on_line(line):
+            epoch = epoch_done(name, line)
+            if epoch is not None:
+                emit_progress(epoch, epochs)
+
         run(["train", "--model-name", name, "--total-epoch", str(epochs), "--sample-rate", sr,
              "--batch-size", str(batch), "--gpu", "0", "--save-every-epoch", str(epochs),
-             "--save-only-latest", "--pretrained", "--cleanup"])
+             "--save-only-latest", "--pretrained", "--cleanup"], on_line)
         job.lap("train")
         run(["index", "--model-name", name, "--index-algorithm", "Auto"])
         job.lap("index")

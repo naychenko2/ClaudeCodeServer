@@ -45,6 +45,7 @@
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
 **features/** — [spheres.md](features/spheres.md) (сферы: зоны персоны, две полки памяти, граница MVP),
+[local-model-stats.md](features/local-model-stats.md) (статистика локальных моделей: панель «Локальные модели», кольцо Ctx, строка ожидания GPU в карточках, включение на деве),
 [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
 Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
 [video-editor.md](features/video-editor.md) (редактор видео: сцены, фильм, сборка, агент `video_*`),
@@ -148,7 +149,8 @@ MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.
 [ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md)),
 [ADR-024](adr/ADR-024-spheres.md) (сферы: зона персоны `PersonaZone` и две полки памяти над проектами, fail-closed, членство меняет только человек; описание — [features/spheres.md](features/spheres.md)),
 [ADR-027](adr/ADR-027-character-smart-photos.md) (умный подбор фото персонажа под сюжет: метки ракурса и эмоции в манифесте, места разметки с картинками на вход, маршрут `face-pose`, шов `IImageLabeler`, фолбэк к прежнему порядку байт в байт; за флагом `character-smart-photos`),
-[ADR-028](adr/ADR-028-multi-character-faces.md) (подстановка персонажей на лица картинки, этапы 1–3: одна детекция и цепочка проходов в задаче, одна версия на запрос, частичный результат, MCP `faces`; за флагом `character-face-swap`);
+[ADR-028](adr/ADR-028-multi-character-faces.md) (подстановка персонажей на лица картинки, этапы 1–3: одна детекция и цепочка проходов в задаче, одна версия на запрос, частичный результат, MCP `faces`; за флагом `character-face-swap`),
+[ADR-029](adr/ADR-029-local-model-stats.md) (статистика локальных моделей: учёт за ход в шлюзе `/gw`, очередь текста без номера, реестр prompt_id ComfyUI как единственная точка атрибуции, чужим — только агрегаты; описание — [features/local-model-stats.md](features/local-model-stats.md));
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

@@ -661,6 +661,25 @@ public record HandsNoticeMessage(string Text)
 public record PromptSuggestionMessage(string Text)
     : ServerMessage("prompt_suggestion");
 
+// Живые метрики локальной модели (флаг local-model-stats). Оба события ЭФЕМЕРНЫЕ:
+// в history.json не пишутся (нет case в OnMessageAsync и StoredMessage) — после F5 их
+// подхватит следующий снимок. SessionId — унаследованное свойство ServerMessage,
+// рассылка проставляет его сама (msg with { SessionId = … }); здесь только состав.
+//
+// LocalModelLiveMessage — тиковый снимок состояния генерации: Phase — текущая фаза
+// (queued | prefill | generating), GenTps — токены/сек генерации, WaitingTotal — сколько
+// прогонов ждут GPU в общей очереди.
+public record LocalModelLiveMessage(string Phase, double? GenTps, int? WaitingTotal)
+    : ServerMessage("local_model_live");
+
+// LocalModelTurnStatsMessage — итоговые метрики завершённого хода на локальной модели:
+// GenTps/PrefillTps — скорость генерации и префилла, TtftMs — time-to-first-token,
+// QueueMsApprox — оценка времени в очереди, CacheHitPerc — доля prefix cache, OutTokens —
+// число выданных токенов.
+public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
+    int? TtftMs, int? QueueMsApprox, double? CacheHitPerc, int? OutTokens)
+    : ServerMessage("local_model_turn_stats");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

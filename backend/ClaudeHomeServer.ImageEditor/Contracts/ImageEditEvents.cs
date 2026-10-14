@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -19,10 +20,14 @@ public static class ImageEditEventNames
 // ChatSessionId и Initiator в событиях задачи — те же, что в ImageEditJobDto: карточка запуска
 // агентом в ленте находит свою задачу. Хвостовые поля, старый фронт их не видит.
 
-// Run/Runs/EtaSeconds/RunElapsedSeconds — как в ImageEditJobDto: полоса прогресса
+// Run/Runs/EtaSeconds/RunElapsedSeconds — как в ImageEditJobDto: полоса прогресса;
+// Gpu — живой снимок очереди GPU ComfyUI (шаг 28): только отображение, null — поставщик не знает
+// или задача вне локальных моделей; null не пишется (camelCase как соседние поля)
 public record ImageEditProgressMessage(string JobId, string ProjectId, EditStage Stage, int? QueuePosition,
     string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? ThreadId = null,
-    int? Run = null, int? Runs = null, int? EtaSeconds = null, int? RunElapsedSeconds = null)
+    int? Run = null, int? Runs = null, int? EtaSeconds = null, int? RunElapsedSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null)
     : ServerMessage(ImageEditEventNames.Progress);
 
 // SizeNote — как в ImageEditJobDto: варианты не приведены к размеру исходника

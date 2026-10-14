@@ -189,6 +189,11 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             default:
                 return Fail(EditOutcome.Failed, "Локальные модели так не умеют");
         }
+        // Метка происхождения прогона (шаг 28): владелец, чат, вид=картинка, операция, тяжёлый ли.
+        // Данные у движка есть из задачи (ImageEditJobService кладёт их в запрос); без задачи (тесты) — null
+        if (req.OwnerId is { } owner)
+            run = run with { Origin = new LocalJobOrigin(owner, req.SessionId, "image",
+                ImageEditOpNames.OpName(req.Op), req.Heavy) };
         // Обрезать нельзя: молча пропал бы персонаж или образец — честный отказ до очереди
         if (run.Images.Count > MaxImages)
             return Fail(EditOutcome.Failed,
@@ -262,16 +267,19 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     {
         var stage = EditStage.Queued;
         int? position = null;
+        // Снимок очереди GPU (шаг 28): живой, меняется каждый опрос — обновляем и вешаем на отчёт
+        LocalGpuQueueInfo? gpu = null;
         while (true)
         {
             var poll = await media!.PollAsync(ticket, ct);
             if (poll.State is LocalImageState.Completed or LocalImageState.Failed) return poll;
             var next = poll.State == LocalImageState.Running ? EditStage.Running : EditStage.Queued;
+            gpu = poll.Gpu;
             if (poll.Warning is null && (next != stage || poll.QueuePosition != position))
             {
                 stage = next;
                 position = poll.QueuePosition;
-                progress.Report(at with { Stage = stage, QueuePosition = stage == EditStage.Queued ? position : null });
+                progress.Report(at with { Stage = stage, QueuePosition = stage == EditStage.Queued ? position : null, Gpu = gpu });
             }
             await Task.Delay(PollInterval, ct);
         }

@@ -22,6 +22,8 @@ public class ComfyProgressTests : IDisposable
 {
     private const string Ours = "prompt-ours";
     private const string Foreign = "prompt-foreign";
+    // Прогон, которого нет в сторе, но есть в реестре (редактор): шаги копятся по реестру
+    private const string LedgerPrompt = "prompt-ledger";
 
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "comfy_progress_" + Guid.NewGuid().ToString("N"));
 
@@ -114,6 +116,29 @@ public class ComfyProgressTests : IDisposable
 
         act.Should().NotThrow("экзотика чужого формата пропускается, а не рвёт сокет со всеми шагами");
         tracker.Get(Ours).Should().Be(new ComfyStepProgress(4, 20, 1));
+    }
+
+    // ─── Трекер на реестре (шаг 7): prompt_id не в сторе, но в реестре ─────
+
+    [Fact]
+    public void Трекер_PromptIdИзРеестра_НеИзСтора_ШагиКопятся()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json"),
+        }).Build();
+        var store = new LocalMediaJobStore(config); // пустой: prompt_id не в сторе
+        var ledger = new ComfyPromptLedger();
+        ledger.Register(LedgerPrompt, null, null); // прогон редактора: только в реестре
+
+        var tracker = new ComfyProgressTracker(store, ledger);
+
+        tracker.Handle(Progress(LedgerPrompt, 6, 30));
+        tracker.Get(LedgerPrompt).Should().Be(new ComfyStepProgress(6, 30, 1),
+            "prompt_id не в сторе, но в реестре — шаги копятся");
+
+        tracker.Handle(Progress(LedgerPrompt, 12, 30));
+        tracker.Get(LedgerPrompt).Should().Be(new ComfyStepProgress(12, 30, 1));
     }
 
     // Сокет жив, но молчит (ComfyUI забыл его без Close): замёрзшие шаги не выдаются за точные
@@ -212,7 +237,7 @@ public class ComfyProgressTests : IDisposable
 
     private (ComfyProgressListener Listener, ComfyProgressTracker Tracker, LocalMediaJobStore Store, ListLogger Log)
         BuildListener(string comfyUrl, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null, bool withJob = true,
-            TimeProvider? time = null)
+            TimeProvider? time = null, ComfyPromptLedger? ledger = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -225,7 +250,7 @@ public class ComfyProgressTests : IDisposable
             store.Add(new LocalMediaJob { Id = "lm_" + new string('a', 32), OwnerId = "o", PromptId = Ours, Status = LocalMediaStatuses.Running });
         var tracker = new ComfyProgressTracker(store, time);
         var log = new ListLogger();
-        var listener = new ComfyProgressListener(tracker, store, config, log)
+        var listener = new ComfyProgressListener(tracker, store, config, log, ledger)
         {
             IdleDelay = TimeSpan.FromMilliseconds(50),
             MinRetryDelay = TimeSpan.FromMilliseconds(20),
@@ -416,6 +441,28 @@ public class ComfyProgressTests : IDisposable
         await listener.StopAsync(default);
 
         Volatile.Read(ref attempts).Should().BeGreaterThan(0, "задача появилась — слушатель подключается");
+    }
+
+    // Стор пуст, но реестр держит прогон редактора: сокет открывается по реестру, а не только по стору
+    [Fact]
+    public async Task Слушатель_СторПуст_РеестрНеПуст_ОткрываетСокет()
+    {
+        var attempts = 0;
+        var ledger = new ComfyPromptLedger();
+        ledger.Register(LedgerPrompt, null, null); // прогон редактора: только в реестре, не в сторе
+        var (listener, _, store, _) = BuildListener("http://127.0.0.1:1", (_, _) =>
+        {
+            Interlocked.Increment(ref attempts);
+            throw new WebSocketException("connection refused");
+        }, withJob: false, ledger: ledger);
+
+        await listener.StartAsync(default);
+        // Несколько холостых проходов цикла (IdleDelay 50 мс); ложного падения сон не даёт
+        await Task.Delay(300);
+        await listener.StopAsync(default);
+
+        store.HasActive().Should().BeFalse("стор пуст — сокет держит только реестр");
+        Volatile.Read(ref attempts).Should().BeGreaterThan(0, "реестр непуст — слушатель подключается");
     }
 
     // ─── Фейковый WebSocket ComfyUI ──────────────────────────────────────────

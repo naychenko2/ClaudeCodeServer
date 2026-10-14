@@ -1,8 +1,10 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -35,18 +37,42 @@ public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Erro
         : null;
 }
 
-// Снимок очереди: id задач по порядку — идущая первой
-public sealed record ComfyQueueState(IReadOnlyList<string> Running, IReadOnlyList<string> Pending)
+// Элемент очереди ComfyUI: prompt_id, client_id (из extra_data) и множество class_type узлов
+// графа. Только типы — текст промптов, имена файлов и входы узлов не читаются и не сохраняются
+public sealed record ComfyQueueItem(string PromptId, string? ClientId, IReadOnlyList<string> ClassTypes);
+
+// Снимок очереди: элементы по порядку — идущая первой
+public sealed record ComfyQueueState(IReadOnlyList<ComfyQueueItem> Running, IReadOnlyList<ComfyQueueItem> Pending)
 {
     public int Length => Running.Count + Pending.Count;
+
+    // Ids для старых потребителей (PositionOf, Contains)
+    public IReadOnlyList<string> RunningIds => Running.Select(i => i.PromptId).ToList();
+    public IReadOnlyList<string> PendingIds => Pending.Select(i => i.PromptId).ToList();
 
     // Сколько задач впереди (0 — идёт сейчас); null — задачи в очереди нет
     public int? PositionOf(string promptId)
     {
-        if (Running.Contains(promptId)) return 0;
-        var i = Pending.ToList().IndexOf(promptId);
+        if (Running.Any(i => i.PromptId == promptId)) return 0;
+        var i = PendingIds.ToList().IndexOf(promptId);
         return i < 0 ? null : Running.Count + i;
     }
+}
+
+// Снимок /system_stats ComfyUI: версия и живость. null — ComfyUI недоступен
+public sealed record ComfySystemStats(string? Version, bool Alive);
+
+// Снимок маршрута /ccs/stats узла ComfyUI (шаг 31): что загружено в память сейчас (имена
+// моделей) и карты узла. null — данных нет (маршрут 404 / сеть / таймаут / не-JSON).
+// Ненулевой с Reason="unsupported" — маршрут ответил, но версия != 1 (различимая причина,
+// чтобы панель честно сказала «не поддерживает», а не «не сообщает»).
+public sealed record ComfyCcsStats(
+    IReadOnlyList<string> LoadedModels,
+    IReadOnlyList<ComfyGpuInfo> Gpus,
+    string? Reason)
+{
+    // Данные есть: маршрут ответил, версия 1, разобрали (Gpus может быть пусто при pynvml-сбое)
+    public bool HasData => Reason is null;
 }
 
 // Тонкий HTTP-клиент ComfyUI. Граф приходит только из ComfyWorkflows — здесь его не строят
@@ -61,7 +87,10 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     // client_id постановки: события прогресса ComfyUI шлёт только сокету с этим clientId
     // (ComfyProgressListener). Свой на каждый процесс: ComfyUI держит на sid один сокет, и
     // общий id дева и боя на одном стенде вытеснял бы сокет соседа — тот молча глох без Close
-    public static readonly string ClientId = "ccs-local-media-" + Guid.NewGuid().ToString("N");
+    // Префикс client_id наших инстансов: чужой прогон с таким префиксом — другой инстанс AI Home
+    public const string ClientPrefix = "ccs-local-media-";
+
+    public static readonly string ClientId = ClientPrefix + Guid.NewGuid().ToString("N");
 
     private HttpClient Client()
     {
@@ -88,9 +117,9 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         form.Add(new StringContent("true"), "overwrite");
 
         var json = await SendJsonAsync(c => c.PostAsync("upload/image", form, ct), "загрузка входа", ct);
-        var name = json?["name"]?.GetValue<string>();
+        var name = StrOrNull(json?["name"]);
         if (string.IsNullOrEmpty(name)) throw new ComfyException("ComfyUI не вернул имя загруженного файла");
-        var saved = json?["subfolder"]?.GetValue<string>() ?? "";
+        var saved = StrOrNull(json?["subfolder"]) ?? "";
         return saved.Length == 0 ? name : $"{saved}/{name}";
     }
 
@@ -108,7 +137,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         if (front) body["front"] = true;
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         var json = await SendJsonAsync(c => c.PostAsync("prompt", content, ct), "постановка задачи", ct);
-        var id = json?["prompt_id"]?.GetValue<string>();
+        // prompt_id — чужой ответ: не-строка (C1) — считаем «не вернул», не бросаем
+        var id = json?["prompt_id"] is JsonValue pid && pid.TryGetValue<string>(out var s) ? s : null;
         if (string.IsNullOrEmpty(id)) throw new ComfyException("ComfyUI не вернул prompt_id");
         return new ComfyQueued(id);
     }
@@ -124,8 +154,9 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     internal static ComfyHistoryEntry ParseHistory(JsonObject entry)
     {
         var status = entry["status"] as JsonObject;
-        var statusStr = status?["status_str"]?.GetValue<string>();
-        var completed = status?["completed"]?.GetValue<bool>() == true;
+        // status/completed — чужой ответ: тип может не совпасть (C1) — GetValue<T>() заменяем на TryGetValue
+        var statusStr = status?["status_str"] is JsonValue sv && sv.TryGetValue<string>(out var sstr) ? sstr : null;
+        var completed = status?["completed"] is JsonValue cv && cv.TryGetValue<bool>(out var comp) && comp;
         var failed = statusStr == "error";
 
         string? error = null;
@@ -152,8 +183,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                         finishedAt = Timestamp(data);
                         if (failed)
                         {
-                            var text = data?["exception_message"]?.GetValue<string>();
-                            var node = data?["node_type"]?.GetValue<string>();
+                            var text = data?["exception_message"] is JsonValue ev && ev.TryGetValue<string>(out var t) ? t : null;
+                            var node = data?["node_type"] is JsonValue nv && nv.TryGetValue<string>(out var n) ? n : null;
                             var full = $"{node}: {text}".Trim(' ', ':');
                             error = Trim(full, 400);
                             // Маркер воркера (ccs_error=код) не должен потеряться в обрезанном хвосте
@@ -173,12 +204,13 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                     if (output?[key] is JsonArray list)
                         foreach (var item in list)
                         {
-                            var name = item?["filename"]?.GetValue<string>();
+                            var name = item?["filename"] is JsonValue fn && fn.TryGetValue<string>(out var n) ? n : null;
                             if (string.IsNullOrEmpty(name)) continue;
                             // temp-выходы — превью, в результат не идут
-                            var type = item?["type"]?.GetValue<string>() ?? "output";
+                            var type = item?["type"] is JsonValue tv && tv.TryGetValue<string>(out var t) ? t : "output";
                             if (type != "output") continue;
-                            var file = new ComfyOutputFile(name, item?["subfolder"]?.GetValue<string>() ?? "", type);
+                            var subfolder = item?["subfolder"] is JsonValue sf && sf.TryGetValue<string>(out var s) ? s : "";
+                            var file = new ComfyOutputFile(name, subfolder, type);
                             (key == "latents" ? latents : files).Add(file);
                         }
 
@@ -214,45 +246,6 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             : v.TryGetValue<long>(out var l) ? l
             : v.TryGetValue<double>(out var d) ? (long)d
             : null;
-    }
-
-    // Прогресс шагов сэмплера: ComfyUI шлёт его только по WebSocket /ws (событие "progress"), в HTTP его нет.
-    // Слушаем до execution_success/error/interrupted по задаче или до отмены; onProgress получает долю шага
-    // 0..1 в пределах текущей ноды. Любой сбой сокета — тихий выход: прогресс необязателен, ход задачи не страдает
-    public async Task ListenProgressAsync(string promptId, Action<double> onProgress, CancellationToken ct)
-    {
-        try
-        {
-            var baseUri = new Uri(LocalMediaOptions.Read(config).ComfyUrl.TrimEnd('/') + "/");
-            var ws = new UriBuilder(new Uri(baseUri, "ws"))
-            {
-                Scheme = baseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
-                Query = "clientId=ccs-local-media",
-            }.Uri;
-            using var socket = new ClientWebSocket();
-            await socket.ConnectAsync(ws, ct);
-            var buffer = new byte[16 * 1024];
-            while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
-            {
-                using var message = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await socket.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close) return;
-                    if (message.Length + result.Count <= 1024 * 1024) message.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-                // Бинарные кадры (превью) — не наши
-                if (result.MessageType != WebSocketMessageType.Text) continue;
-                var parsed = ParseProgressMessage(Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length), promptId);
-                if (parsed.Done) return;
-                if (parsed.Fraction is { } fraction) onProgress(fraction);
-            }
-        }
-        catch (Exception ex) when (ex is WebSocketException or IOException or InvalidOperationException
-            or UriFormatException or OperationCanceledException)
-        {
-        }
     }
 
     // Сообщение сокета: {"type":"progress","data":{"value":5,"max":8,"prompt_id":…}}; чужие задачи и прочие типы
@@ -303,26 +296,195 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     {
         var json = await SendJsonAsync(c => c.GetAsync("models/loras", ct), "чтение списка LoRA", ct);
         return json is JsonArray items
-            ? items.Select(i => i?.GetValue<string>() ?? "").Where(n => n.Length > 0).ToList()
+            ? items.Select(i => StrOrNull(i) ?? "").Where(n => n.Length > 0).ToList()
             : [];
     }
 
     public async Task<ComfyQueueState> GetQueueAsync(CancellationToken ct)
     {
         var json = await SendJsonAsync(c => c.GetAsync("queue", ct), "чтение очереди", ct);
-        return new ComfyQueueState(Ids(json?["queue_running"]), Ids(json?["queue_pending"]));
+        return new ComfyQueueState(Items(json?["queue_running"]), Items(json?["queue_pending"]));
 
-        // Элемент очереди — [номер, prompt_id, граф, …]; ждущие упорядочены по номеру
-        static IReadOnlyList<string> Ids(JsonNode? node) =>
+        // Элемент очереди — [номер, prompt_id, граф, extra_data, …]; ждущие упорядочены по номеру.
+        // Из графа берём ТОЛЬКО class_type узлов (текст промптов/входов не читаем), из extra_data — client_id.
+        // Разбор устойчив к мусору (C1): чужие клиенты стенда кладут в extra_data/позиции любой
+        // JSON-тип, поэтому GetValue<T>() (бросает на несовпадении типа) заменяем на TryGetValue.
+        static IReadOnlyList<ComfyQueueItem> Items(JsonNode? node) =>
             node is JsonArray items
                 ? items.OfType<JsonArray>()
                     .Where(i => i.Count >= 2)
-                    .OrderBy(i => i[0]?.GetValue<double>() ?? 0)
-                    .Select(i => i[1]?.GetValue<string>() ?? "")
-                    .Where(id => id.Length > 0)
+                    .OrderBy(i => i[0] is JsonValue n0 && n0.TryGetValue<double>(out var num) ? num : 0)
+                    .Select(i => new ComfyQueueItem(
+                        i[1] is JsonValue n1 && n1.TryGetValue<string>(out var s) ? s : "",
+                        i.Count >= 4 && i[3] is JsonObject extra && extra["client_id"] is JsonValue cid && cid.TryGetValue<string>(out var cs) ? cs : null,
+                        ClassTypes(i.Count >= 3 ? i[2] : null)))
+                    .Where(item => item.PromptId.Length > 0)
                     .ToList()
                 : [];
+
+        // Множество class_type узлов графа; null/не-объект — пусто
+        static IReadOnlyList<string> ClassTypes(JsonNode? graph)
+        {
+            if (graph is not JsonObject nodes) return [];
+            var types = new List<string>();
+            foreach (var (_, node) in nodes)
+                if (node is JsonObject n && n["class_type"] is JsonValue v && v.TryGetValue<string>(out var t) && t.Length > 0)
+                    types.Add(t);
+            return types;
+        }
     }
+
+    // GET /system_stats: версия ComfyUI и живость. null — ComfyUI недоступен (ComfyException)
+    public async Task<ComfySystemStats?> GetSystemStatsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var json = await SendJsonAsync(c => c.GetAsync("system_stats", ct), "чтение system_stats", ct);
+            // system_stats — чужой ответ: system может быть не-объектом, comfyui_version — не-строкой (C1)
+            var version = json?["system"] is JsonObject sys && sys["comfyui_version"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+            return new ComfySystemStats(version, Alive: true);
+        }
+        catch (ComfyException)
+        {
+            return null;
+        }
+    }
+
+    // GET /ccs/stats узла ComfyUI (шаг 31): «загружено сейчас» (имена моделей) и карты узла.
+    // Короткий таймаут (≈2 с): маршрут опрашивает фоновый монитор, а не запрос панели. null —
+    // данных нет (маршрут 404 / сеть / таймаут / не-JSON / версия != 1); Reason — различимая
+    // причина (unsupported) для пометки в unsupported. Ответ узла НЕДОВЕРЕННЫЙ: тело ≤ 64 КБ,
+    // ≤ 16 моделей, ≤ 8 карт, имена ≤ 96 (basename, без управляющих символов) — иначе «мусорный»
+    // узел раздувает снимок. Таймаут — CancellationTokenSource, не трогая внешний ct (он может
+    // быть бесконечным).
+    public async Task<ComfyCcsStats?> GetCcsStatsAsync(CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(2));
+        string text;
+        try
+        {
+            using var response = await Client().GetAsync("ccs/stats", cts.Token);
+            if (response.StatusCode == HttpStatusCode.NotFound) return null;   // маршрут не установлен
+            if (!response.IsSuccessStatusCode) return null;                  // прочие коды — «не сообщает»
+            text = await response.Content.ReadAsStringAsync(cts.Token);
+        }
+        catch (HttpRequestException)
+        {
+            return null;   // сеть: узел недоступен
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;   // таймаут 2 с
+        }
+
+        // Разбор недоверенного тела — страховочный catch: ни одно исключение парсинга (GetValue
+        // на мусоре, битый JSON) не доходит до монитора. Отмена внешним ct — пропускаем (монитор
+        // сам знает, что его остановили; таймаут 2 с выше уже вернул null).
+        try
+        {
+            // Тело недоверенное: больше 64 КБ — не парсим (JsonNode.Parse на 10 МБ — DoS)
+            if (text.Length > CcsMaxBodyChars) return null;
+            JsonNode? root;
+            try
+            {
+                root = JsonNode.Parse(text);
+            }
+            catch (JsonException)
+            {
+                return null;   // не-JSON
+            }
+            if (root is not JsonObject obj) return null;
+
+            // Версия контракта: 1 — поддерживаем; 2+ или её отсутствие — «unsupported» (различимая
+            // причина, чтобы панель честно сказала «узел не поддерживает», а не «не сообщает»).
+            // 404/сеть/не-JSON выше уже вернули null — сюда доходят только разобранные объекты.
+            int? version = null;
+            if (obj["version"] is JsonValue v && v.TryGetValue<int>(out var ver))
+                version = ver;
+            if (version is not 1)
+                return new ComfyCcsStats([], [], "unsupported");
+
+            return new ComfyCcsStats(
+                LoadedModels: CcsModelNames(obj["loadedModels"]),
+                Gpus: CcsGpus(obj["gpus"]),
+                Reason: null);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return null;   // мусорный/кривой ответ узла — данных нет, монитор жив
+        }
+    }
+
+    // Имена загруженных моделей (loadedModels[].name): basename, без управляющих символов, ≤ 96.
+    // ≤ 16 записей. null/не-массив → пусто.
+    private static IReadOnlyList<string> CcsModelNames(JsonNode? node)
+    {
+        if (node is not JsonArray items) return [];
+        var names = new List<string>();
+        foreach (var item in items)
+        {
+            if (names.Count >= CcsMaxModels) break;
+            if (item is not JsonObject o) continue;
+            var name = CcsName(StrOrNull(o["name"]));
+            if (name is not null) names.Add(name);
+        }
+        return names;
+    }
+
+    // Карты узла (gpus[]): index, имя, утилизация, память, температура, мощность. ≤ 8 карт.
+    // null (pynvml-сбой) → пусто. Числа — только int/double, иначе null (мусорный узел).
+    private static IReadOnlyList<ComfyGpuInfo> CcsGpus(JsonNode? node)
+    {
+        if (node is not JsonArray items) return [];
+        var gpus = new List<ComfyGpuInfo>();
+        foreach (var item in items)
+        {
+            if (gpus.Count >= CcsMaxGpus) break;
+            if (item is not JsonObject o) continue;
+            gpus.Add(new ComfyGpuInfo(
+                Index: o["index"] is JsonValue iv && iv.TryGetValue<int>(out var i) ? i : 0,
+                Uuid: "",
+                Name: CcsName(StrOrNull(o["name"])) ?? "",
+                UtilPerc: IntOrNull(o["utilPerc"]),
+                MemUsedMb: IntOrNull(o["memUsedMb"]),
+                MemTotalMb: IntOrNull(o["memTotalMb"]),
+                TempC: IntOrNull(o["tempC"]),
+                PowerW: o["powerW"] is JsonValue pv && pv.TryGetValue<double>(out var pw) ? pw : null,
+                PowerLimitW: o["powerLimitW"] is JsonValue plv && plv.TryGetValue<double>(out var plw) ? plw : null));
+        }
+        return gpus;
+    }
+
+    // Число (int) из недоверенного JSON; null/не-число/дробное → null
+    private static int? IntOrNull(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<int>(out var n) ? n : null;
+
+    // Строка из недоверенного JSON; null/не-строка (число/объект/массив) → null. GetValue<string>
+    // на нестроковом значении бросает InvalidOperationException — мусорный узел ронял бы монитор.
+    private static string? StrOrNull(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    // Имя модели/карты из недоверенного ответа: basename (пути ФС не пропускаем), управляющие
+    // символы → '_', ≤ 96. Пустое → null.
+    private static string? CcsName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        // basename: последний компонент после / или \ (пути к файлам/LoRA наружу не отдаём)
+        var name = raw;
+        var slash = Math.Max(name.LastIndexOf('/'), name.LastIndexOf('\\'));
+        if (slash >= 0) name = name[(slash + 1)..];
+        // управляющие символы (C0/C1, табы, переводы строк) → '_'
+        var cleaned = new string(name.Select(c => char.IsControl(c) ? '_' : c).ToArray());
+        if (cleaned.Length == 0) return null;
+        return cleaned.Length > CcsMaxName ? cleaned[..CcsMaxName] : cleaned;
+    }
+
+    // Потолки недоверенного ответа /ccs/stats: тело 64 КБ, 16 моделей, 8 карт, имя 96
+    private const int CcsMaxBodyChars = 64 * 1024;
+    private const int CcsMaxModels = 16;
+    private const int CcsMaxGpus = 8;
+    private const int CcsMaxName = 96;
 
     // Снять задачу из ожидающих: POST /queue {"delete":[id]}. Идущую задачу ComfyUI так не
     // снимает — для неё InterruptAsync
@@ -390,11 +552,11 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         try
         {
             var json = JsonNode.Parse(body);
-            var message = json?["error"]?["message"]?.GetValue<string>() ?? "";
+            var message = StrOrNull(json?["error"]?["message"]) ?? "";
             if (json?["node_errors"] is JsonObject nodes)
                 foreach (var (node, value) in nodes.Take(3))
                     if (value?["errors"] is JsonArray errors && errors.FirstOrDefault() is { } first)
-                        message += $"; {node}: {first["message"]?.GetValue<string>()} {first["details"]?.GetValue<string>()}";
+                        message += $"; {node}: {StrOrNull(first["message"])} {StrOrNull(first["details"])}";
             return Trim(message.Length > 0 ? message : body, 500);
         }
         catch (JsonException)

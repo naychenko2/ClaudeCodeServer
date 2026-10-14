@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -162,6 +163,34 @@ public static class LlmGatewayEndpoints
             await using var body = await response.Content.ReadAsStreamAsync(ctx.RequestAborted);
             var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
             var filtered = sse is null ? null : new ArrayBufferWriter<byte>();
+
+            // Наблюдатель метрик локальной модели (флаг local-model-stats): создаётся только
+            // в ветке БЕЗ нормализатора (sse is null) и только когда ответ — SSE, маршрут
+            // локальный и метрики включены; иначе поведение шлюза не меняется ни на байт.
+            // Копия каждого куска идёт наблюдателю ПОСЛЕ записи клиенту (клиент — первым).
+            // LlmProviderRegistry — из DI (GetService): в тестах шлюза без него null →
+            // наблюдатель не создаётся, поведение прежнее.
+            // Все опциональные швы — через GetService (единый стиль): биндинг endpoint'а
+            // не тянет их как обязательные параметры HandleAsync, а тесты без них — null.
+            var statsOptions = ctx.RequestServices.GetService<IOptionsMonitor<LocalModelStatsOptions>>();
+            var time = ctx.RequestServices.GetService<TimeProvider>();
+            var providers = ctx.RequestServices.GetService<LlmProviderRegistry>();
+            var sink = ctx.RequestServices.GetService<ILocalModelRequestSink>();
+            var observer = CreateUsageObserver(sse, mediaType, grant, providers, statsOptions, time, sink);
+            // observer non-null ⟹ sink non-null (CreateUsageObserver проверяет sink is null → null).
+            // requestId — уникальный на HTTP-запрос (Guid "N"): параллельные запросы одного
+            // хода (сабагенты, боковые) не затирают друг друга в счётчике (M4).
+            var requestId = Guid.NewGuid().ToString("N");
+            if (observer is not null)
+            {
+                sink!.OnRequestStarted(requestId, grant.TurnId);
+                // M5: живая скорость — наблюдатель шлёт счётчик токенов на каждую дельту.
+                observer.OnTokenCount = count => sink!.OnTokenCount(requestId, grant.TurnId, count);
+            }
+            // «Первый токен» сообщаем приёмнику один раз: SawFirstDelta после первой дельты
+            // остаётся true на всех последующих кусках, без флага OnFirstToken ушёл бы на каждый.
+            var firstTokenSent = false;
+
             try
             {
                 int read;
@@ -174,6 +203,28 @@ public static class LlmGatewayEndpoints
                         sse.Push(buffer.AsSpan(0, read), filtered!);
                         await WriteFilteredAsync(ctx, filtered!);
                     }
+                    // Наблюдатель — ПОСЛЕ клиента: клиент уже получил байты, копия только
+                    // для метрик. Любое исключение глотается (лог Debug), поток клиента не
+                    // искажается; упавший наблюдатель отключается до конца запроса.
+                    if (observer is { } obs)
+                    {
+                        try
+                        {
+                            obs.Feed(buffer.AsSpan(0, read));
+                            if (obs.SawFirstDelta && !firstTokenSent)
+                            {
+                                firstTokenSent = true;
+                                sink!.OnFirstToken(requestId, grant.TurnId);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            loggers.CreateLogger(LogCategory).LogDebug(ex,
+                                "Наблюдатель метрик локальной модели упал (ход {TurnId}) — отключён до конца запроса",
+                                grant.TurnId);
+                            observer = null;
+                        }
+                    }
                     await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
                 }
                 if (sse is not null)
@@ -181,6 +232,19 @@ public static class LlmGatewayEndpoints
                     sse.Complete(filtered!);
                     await WriteFilteredAsync(ctx, filtered!);
                     await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                }
+                // Поток закончился: снимаем итог и отдаём приёмнику.
+                if (observer is { } done)
+                {
+                    try
+                    {
+                        sink!.OnRequestCompleted(requestId, grant.TurnId, done.Complete());
+                    }
+                    catch (Exception ex)
+                    {
+                        loggers.CreateLogger(LogCategory).LogDebug(ex,
+                            "Итог наблюдателя метрик не доставлен (ход {TurnId})", grant.TurnId);
+                    }
                 }
             }
             finally
@@ -196,6 +260,27 @@ public static class LlmGatewayEndpoints
     public const string DumpFilePrefix = "gw-normalized-";
     private static readonly System.Text.RegularExpressions.Regex DumpFileName =
         new(@"^gw-normalized-\d{8}-\d{6}-\d{3}-[0-9a-f]{32}\.json$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Наблюдатель метрик локальной модели (флаг local-model-stats): создаётся только когда
+    // (а) ответ — SSE, (б) маршрут локальный (ResolveByModel → IsLocal) и (в) метрики
+    // включены (IOptionsMonitor<LocalModelStatsOptions>.Enabled). Иначе null — поведение
+    // шлюза не меняется ни на байт и ни на аллокацию. Нормализатор (sse != null) здесь
+    // исключает наблюдателя: он живёт в ветке «байт в байт без нормализатора».
+    // providers/sink — необязательные (GetService): null — наблюдатель не создаётся
+    // (нет локального маршрута / итог некуда отдать).
+    private static SseUsageObserver? CreateUsageObserver(
+        ToolInputResponseFilter? sse, string? mediaType, TurnTokenGrant grant,
+        LlmProviderRegistry? providers, IOptionsMonitor<LocalModelStatsOptions>? statsOptions,
+        TimeProvider? time, ILocalModelRequestSink? sink)
+    {
+        if (sse is not null) return null;
+        if (!string.Equals(mediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase)) return null;
+        if (statsOptions is null || !statsOptions.CurrentValue.Enabled) return null;
+        if (providers?.ResolveByModel(grant.Route?.Model)?.IsLocal is not true) return null;
+        if (sink is null) return null;
+        if (time is null) return null;
+        return new SseUsageObserver(time);
+    }
 
     private static async Task WriteFilteredAsync(HttpContext ctx, ArrayBufferWriter<byte> filtered)
     {

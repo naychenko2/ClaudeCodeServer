@@ -322,6 +322,67 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 (картинки и звуки): следы сохранений лежат в самих нитях. Событие в группу владельца — `chat_context_changed`
 (полный DTO). Агенту — MCP-сервер `turn-context`: [mcp-servers.md](mcp-servers.md).
 
+## Статистика локальных моделей (флаг `local-model-stats`)
+
+Панель «Локальные модели» и живые метрики чата ([ADR-029](../adr/ADR-029-local-model-stats.md),
+[local-model-stats.md](../features/local-model-stats.md)). Источник правды —
+[LocalModelStatsController.cs](../../backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs) и
+[SessionLocalModelController.cs](../../backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs).
+Все времена — unix-мс числом. Доли (`usagePerc`, `prefixHitPerc`, `cacheHitPerc` …) — 0..1. Поле, которого
+движок не дал, — `null`. Выключенная подсистема Llm или images — `200 { configured: false }`, а не 500.
+Серверный флаг пользователя ручки не проверяют: его проверяет фронт.
+
+```
+GET  /api/local-model/stats        ?window=15m|1h&since=<unix ms>   (только admin; иначе 403)
+     → { configured, engine?, model?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
+         othersCount?, speed: { genPerStream?, prefillPerStream? },
+         kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
+         gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
+         history: [{ t, genThroughput?, waiting?, running? }],
+         chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
+     window по умолчанию 15m, «<n>m»/«<n>h», иное — 400; since — только хвост истории новее момента.
+     history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
+     chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
+     othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi
+     (сейчас в массиве одна карта — первая строка nvidia-smi)
+GET  /api/local-model/stats/media  ?since=<unix ms>   (только admin)
+     → { configured, comfy: { status: working|busy|down|disabled, downSince?, version? },
+         slots: { used, limit }, gpus: [{ uuid, index, name, roles: ["media"], utilPerc?, memUsedMb?,
+         memTotalMb?, tempC?, powerW?, powerLimitW?, mediaMemMb? }] | null, loadedModels: string[] | null,
+         running: [{ kind, op, heavy, own, sessionId?, projectId?, title?, foreign?, steps?: { step, total, stage? },
+                     percent?, percentExact, etaSeconds?, remainingSeconds?, startedAt? }],
+         queue:   [{ position, kind, op, heavy, own, sessionId?, projectId?, title?, foreign?, etaSeconds?, startInSeconds? }],
+         lastHour:[{ kind, op, own, outcome: completed|failed|cancelled, runSeconds?, etaSeconds?, finishedAt }],
+         unsupported: string[] }
+     gpus/loadedModels — с маршрута узла /ccs/stats; null — узел не сообщает. foreign — instance|transcription|external.
+     Чужой прогон: sessionId/projectId null, title «Чат другого пользователя»; у своего title null — фронт берёт
+     название по sessionId. since фильтрует только lastHour
+GET  /api/sessions/{id}/local-model   (владелец чата; чужая или неизвестная — 404)
+     → { lastTurn: { genTps?, prefillTps?, ttftMs?, queueMsApprox?, cacheHitPerc?, outTokens? } | null }
+     null — ходов на локальной модели не было или сервер перезапущен (счётчик в памяти). prefillTps пока всегда null
+```
+
+События хаба `/hubs/session` (тип `message`, дискриминатор `type`) уходят только в группу сессии и только
+при живых зрителях чата. Оба **эфемерные**: в `history.json` и ленту не пишутся.
+
+```
+local_model_live        { sessionId, phase: queued|prefill|generating, genTps?, waitingTotal? }
+                        не чаще 1 Гц, пока у сессии есть запрос к локальной модели в работе;
+                        waitingTotal — всего ждущих у движка (номера в очереди нет);
+                        genTps — приближение: дельты SSE (≈ токен) в скользящем окне ~3 с,
+                        null при отсутствии приращения (не 0)
+local_model_turn_stats  { sessionId, genTps?, prefillTps?, ttftMs?, queueMsApprox?, cacheHitPerc?, outTokens? }
+                        итог хода по TurnCompleted, по точному usage; та же форма, что lastTurn выше;
+                        queueMsApprox — мс, округлено вверх до целой секунды
+```
+
+Карточки редакторов отдельных событий не получают: снимок очереди GPU `gpu` (`LocalGpuQueueInfo`:
+`ahead?, startInSeconds?, steps?: { step, total, stage? }, percent?, percentExact, remainingSeconds?,
+busy?: { kind, heavy, remainingSeconds? }, downSince?, running`) едет необязательным полем в уже существующих
+событиях и DTO прогресса картинки, звука и видео. `running: true` — задача идёт, `ahead` у неё `null`;
+ждущая — `running: false` и `ahead` = сколько впереди. Стенд лежит — `downSince` (unix-мс) и `running: false`,
+остальные поля `null`. Ошибка сборки снимка опрос задачи не роняет.
+
 ## SignalR-хаб `/hubs/session`
 
 Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —

@@ -61,6 +61,11 @@ public class LlmProviderConfig
     // скрытие блока баланса, исключение из егресс-логики) повесит на него ещё три места.
     public bool IsLocal { get; set; }
 
+    // Секция статистики локального движка (фича «Статистика локальных моделей»):
+    // тип движка (vllm|llama-server|ollama) и URL /metrics. Пусто (null) — движок
+    // не задаётся, источник метрик = заглушка (NullEngineMetricsSource), автоугадывания нет.
+    public LlmProviderStatsConfig? Stats { get; set; }
+
     public bool Enabled =>
         (IsLocal || !string.IsNullOrWhiteSpace(ApiKey)) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
 
@@ -215,4 +220,16 @@ public class LlmModelConfig
     public double PriceInMissPer1M { get; set; }
     public double PriceInHitPer1M { get; set; }
     public double PriceOutPer1M { get; set; }
+}
+
+// Секция статистики локального движка (фича «Статистика локальных моделей»).
+// Движок задаётся ЯВНО: пусто = заглушка (NullEngineMetricsSource), автоугадывания нет.
+// MetricsUrl задаётся явно (на деве/бое это http://127.0.0.1:18020/metrics: перед vLLM
+// стоит прокси, поэтому корень ApiBaseUrl для метрик не используется).
+public class LlmProviderStatsConfig
+{
+    // Тип движка: "vllm" | "llama-server" | "ollama". Пусто — заглушка.
+    public string Engine { get; set; } = "";
+    // URL Prometheus-метрик движка; пусто — источник не ходит в сеть.
+    public string MetricsUrl { get; set; } = "";
 }

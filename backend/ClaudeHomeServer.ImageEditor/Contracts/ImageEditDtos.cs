@@ -251,7 +251,11 @@ public record ImageEditJobDto(
     string? Op = null,
     // Итоги проходов подстановки по лицам (ADR-028, §9); null — не цепочка проходов
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<FacePassChain.FacePassResult>? FaceResults = null);
+    IReadOnlyList<FacePassChain.FacePassResult>? FaceResults = null,
+    // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
+    // или задача вне локальных моделей. camelCase как соседние поля, null не пишется
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 public static class ImageEditSizeNotes
 {

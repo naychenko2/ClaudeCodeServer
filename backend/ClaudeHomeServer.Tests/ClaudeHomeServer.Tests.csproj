@@ -160,6 +160,8 @@
     <!-- Настоящий вывод dotnet test (консоль, список тестов, TRX, ошибка сборки) для
          разборщиков run_tests: сторож на смену формата vstest -->
     <None Include="Services\TestRuns\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Живые Prometheus-метрики vLLM (снят со стенда): тесты парсера/источника LocalStats. -->
+    <None Include="Fixtures/LocalStats/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Динамический модуль-заглушка (сценарий Б): копируем собранный dll рядом с test-host

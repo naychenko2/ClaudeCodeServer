@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Панель «Локальные модели» в правом рельсе · макет v2 (Текст · Медиа)</title>
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,.12);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-press:inset 0 1px 4px rgba(0,0,0,.38);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5; }
+button { font-family:inherit; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.bar { position:sticky; top:0; z-index:500; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.tog { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.tog button { font-size:12px; padding:6px 14px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary); }
+.tog button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1680px; margin:0 auto; padding:24px 24px 96px; }
+h2.sec { margin:40px 0 4px; font-size:20px; font-weight:600; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+p.note { margin:0 0 14px; color:var(--c-text-secondary); max-width:96ch; }
+p.note code, td code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 6px; }
+.row { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+
+/* ===== Остров панели (ISLAND): фон C.bgPanel, рамка C.borderLight, R.xxl, SHADOW.island; шапка 40 на C.bgInset ===== */
+.dock { display:flex; gap:8px; align-items:flex-start; }
+.rail { width:44px; padding:6px 4px; display:flex; flex-direction:column; gap:4px; background:var(--c-bg-panel);
+  border:1px solid var(--c-border-light); border-radius:999px; box-shadow:var(--shadow-island); }
+.rail .ri { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
+.rail .ri.on { background:var(--c-accent-light); color:var(--c-accent); }
+.rail svg { width:18px; height:18px; }
+.isl { width:380px; background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px;
+  box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; }
+.ihead { height:40px; flex:0 0 40px; display:flex; align-items:center; gap:6px; padding:0 6px 0 12px; background:var(--c-bg-inset);
+  border-bottom:1px solid var(--c-border-light); font-weight:600; color:var(--c-text-heading); }
+.ihead .x { margin-left:auto; width:28px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:8px; color:var(--c-text-muted); cursor:pointer; }
+.ihead .x:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.ihead .x svg { width:16px; height:16px; }
+.ibody { padding:12px; display:flex; flex-direction:column; gap:12px; }
+
+/* Шапка модели */
+.mhead { display:flex; align-items:center; gap:8px; }
+.mname { font-family:"JetBrains Mono",monospace; font-size:13px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.st { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+.st i { width:7px; height:7px; border-radius:50%; display:block; }
+.st.ok { background:var(--c-success-bg); color:var(--c-success-text); } .st.ok i { background:var(--c-success); }
+.st.busy { background:var(--c-warning-bg); color:var(--c-warning-text); } .st.busy i { background:var(--c-warning); }
+.st.down { background:var(--c-danger-bg); color:var(--c-danger-text); } .st.down i { background:var(--c-danger); }
+.msub { font-size:11px; color:var(--c-text-muted); margin-top:-8px; }
+
+/* Карточка-секция: C.bgCard, C.borderLight, R.xl, паддинг SP.md */
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; }
+.sect { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.4px; margin:0 0 8px; display:flex; align-items:center; gap:8px; }
+.sect .r { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:400; }
+.kpis { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.kpi .n { font-family:"JetBrains Mono",monospace; font-size:18px; font-weight:700; color:var(--c-text-heading); line-height:1.2; }
+.kpi .n small { font-size:11px; font-weight:400; color:var(--c-text-muted); }
+.kpi .l { font-size:11px; color:var(--c-text-secondary); }
+.kpi.warn .n { color:var(--c-warning-text); }
+.kv { display:flex; justify-content:space-between; gap:12px; font-size:12px; padding:2px 0; }
+.kv .k { color:var(--c-text-secondary); }
+.kv .v { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); white-space:nowrap; }
+.kv.dz .k, .kv.dz .v { color:var(--c-danger-text); }
+.meter { height:6px; background:var(--c-track); border-radius:999px; overflow:hidden; margin:4px 0 2px; }
+.meter i { display:block; height:100%; border-radius:999px; background:var(--c-accent); }
+.meter i.info { background:var(--c-info); }
+.meter i.warn { background:var(--c-warning); }
+.hint { font-size:11px; color:var(--c-text-muted); line-height:1.4; }
+
+/* Видеокарты */
+.gpus { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:8px; }
+.gpu { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; }
+.gpu .h { display:flex; justify-content:space-between; flex-wrap:wrap; gap:0 6px; font-size:12px; font-weight:700; color:var(--c-text-heading); margin-bottom:4px; }
+.gpu .gs { font-size:11px; color:var(--c-text-muted); margin:-4px 0 4px; }
+.gpu .h span { font-weight:400; color:var(--c-text-muted); font-size:11px; }
+.gpu .kv { font-size:11.5px; padding:1px 0; }
+.gpu .kv .v.hot { color:var(--c-warning-text); }
+
+/* График */
+.segc { display:inline-flex; border:1px solid var(--c-border); border-radius:9px; overflow:hidden; background:var(--c-bg-white); }
+.segc button { border:none; background:transparent; font-size:11px; padding:2px 10px; color:var(--c-text-secondary); cursor:pointer; min-height:22px; }
+.segc button.on { background:var(--c-accent-light); color:var(--c-accent); font-weight:700; }
+.segc button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.chart { width:100%; height:120px; display:block; }
+.chart .grid { stroke:var(--c-border-light); stroke-width:1; }
+.chart .ax { font-family:"JetBrains Mono",monospace; font-size:9px; fill:var(--c-text-muted); }
+.chart .line { fill:none; stroke:var(--c-accent); stroke-width:1.75; stroke-linejoin:round; }
+.chart .area { fill:var(--c-accent); opacity:.10; }
+.chart .q { fill:var(--c-info); opacity:.55; }
+.chart .gap { fill:var(--c-bg-inset); }
+.legend { display:flex; gap:12px; font-size:11px; color:var(--c-text-secondary); margin-top:4px; flex-wrap:wrap; }
+.legend i { display:inline-block; width:10px; height:3px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+
+/* Кто на модели: строка 44 (тач) / 36 (десктоп) */
+.who { display:flex; flex-direction:column; margin:0 -6px; }
+.wr { display:flex; align-items:center; gap:8px; padding:6px; border-radius:8px; cursor:pointer; min-height:36px; text-align:left; border:none; background:transparent; width:100%; color:inherit; }
+.wr:hover { background:var(--c-bg-selected); }
+.wr:active { box-shadow:var(--shadow-press); }
+.wr:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.wr .av { width:24px; height:24px; flex:0 0 24px; border-radius:50%; background:var(--c-accent-muted); color:var(--c-text-heading); font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.wr .nm { flex:1; min-width:0; }
+.wr .nm b { display:block; font-size:12.5px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wr .nm span { display:block; font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wr .sp { font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:var(--c-text-secondary); white-space:nowrap; }
+.wr .sp.read { color:var(--c-text-muted); font-weight:400; }
+.wr .sp.wait { color:var(--c-warning-text); }
+.wr.me .nm b::after { content:" · этот чат"; font-weight:400; color:var(--c-text-muted); }
+
+/* Баннеры */
+.banner { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border-radius:10px; font-size:12px; }
+.banner.dz { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); color:var(--c-danger-text); }
+.banner.wn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.banner b { font-weight:700; }
+.banner svg { width:16px; height:16px; flex:0 0 16px; margin-top:1px; }
+.stale { opacity:.55; filter:grayscale(.6); pointer-events:none; }
+
+/* Кнопки (ui/Button): primary — C.accent / C.onAccent, R.xl, SHADOW.button; secondary — рамка C.border */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 14px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer; }
+.btn.p { background:var(--c-accent); color:var(--c-on-accent); border:none; box-shadow:var(--shadow-button); }
+.btn.s { background:var(--c-bg-white); color:var(--c-text-primary); border:1px solid var(--c-border); }
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.btn.s:hover { background:var(--c-bg-selected); }
+
+/* Пустое состояние */
+.empty { padding:40px 20px; display:flex; flex-direction:column; align-items:center; gap:10px; text-align:center; }
+.empty .ic { width:48px; height:48px; border-radius:50%; background:var(--c-bg-inset); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; }
+.empty .ic svg { width:22px; height:22px; }
+.empty h4 { margin:0; font-family:"PT Serif",Georgia,serif; font-size:16px; color:var(--c-text-heading); font-weight:600; }
+.empty p { margin:0; color:var(--c-text-secondary); font-size:12.5px; max-width:280px; }
+
+/* Загрузка: скелетон */
+.sk { background:var(--c-bg-inset); border-radius:6px; animation:sk 1.4s ease-in-out infinite; }
+@keyframes sk { 0%,100% { opacity:.5 } 50% { opacity:1 } }
+@media (prefers-reduced-motion: reduce) { .sk { animation:none; } }
+
+/* ===== Мобила: нижний лист (R.sheet 22, SHADOW.sheet, оверлей C.overlay) ===== */
+.phone { position:relative; height:780px; border:1px solid var(--c-border); border-radius:18px; overflow:hidden; background:var(--c-bg-main); }
+.phone .tb { height:56px; display:flex; align-items:center; padding:0 14px; border-bottom:1px solid var(--c-border); font-weight:600; color:var(--c-text-heading); }
+.phone .feed { padding:12px 14px; color:var(--c-text-muted); font-size:12px; }
+.phone .ov { position:absolute; inset:0; background:var(--c-overlay); }
+.sheet { position:absolute; left:0; right:0; bottom:0; max-height:88%; background:var(--c-bg-panel); border-radius:22px 22px 0 0;
+  box-shadow:var(--shadow-sheet); display:flex; flex-direction:column; }
+.sheet .grab { width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:8px auto 2px; flex:0 0 auto; }
+.sheet .ihead { background:transparent; border-bottom:1px solid var(--c-border-light); height:44px; flex-basis:44px; }
+.sheet .ihead .x { width:40px; height:40px; }
+.sheet .scroll { overflow:auto; flex:1; min-height:0; }
+.sheet .wr { min-height:44px; }
+.sheet .segc button { min-height:32px; padding:0 14px; }
+
+/* ===== Переключатель «Текст · Медиа» — ui/InlineSegmented: дорожка TB.pillTrack (C.bgSelected), радиус R.pill+1,
+   паддинг SP.xxs; сегмент FS.xs 600, высота TB.iconHitDesktop 32 / TB.iconHitMobile 40; активный C.accentLight / C.accent ===== */
+.iseg { display:flex; gap:2px; background:var(--c-bg-selected); border-radius:10px; padding:2px; }
+.iseg button { flex:1 1 0; min-width:0; display:inline-flex; align-items:center; justify-content:center; gap:4px; border:none; border-radius:7px;
+  font-size:11px; font-weight:600; padding:4px 8px; min-height:32px; background:transparent; color:var(--c-text-muted); cursor:pointer; }
+.iseg button.on { background:var(--c-accent-light); color:var(--c-accent); }
+.iseg button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.iseg button svg { width:14px; height:14px; }
+.sheet .iseg button { min-height:40px; }
+
+/* ===== Вкладка «Медиа» ===== */
+.kind { width:28px; height:28px; flex:0 0 28px; border-radius:8px; background:var(--c-bg-inset); color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; }
+.kind svg { width:15px; height:15px; }
+.job { display:flex; gap:8px; align-items:flex-start; padding:6px; border-radius:8px; border:none; background:transparent; width:100%; text-align:left; color:inherit; min-height:36px; font:inherit; }
+button.job { cursor:pointer; }
+button.job:hover { background:var(--c-bg-selected); }
+button.job:active { box-shadow:var(--shadow-press); }
+button.job:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.sheet .job { min-height:44px; }
+.job .nm { flex:1; min-width:0; }
+.job .nm b { display:flex; align-items:center; gap:4px; font-size:12.5px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; min-width:0; }
+.job .nm b .o { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.job .nm .s { display:block; font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.job .rt { font-family:"JetBrains Mono",monospace; font-size:11.5px; font-weight:600; color:var(--c-text-secondary); white-space:nowrap; text-align:right; }
+.job .rt.na { font-family:inherit; font-weight:400; color:var(--c-text-muted); }
+.job .rt.ok { color:var(--c-text-secondary); }
+.job .rt.late { color:var(--c-warning-text); }
+.job .rt.fail { color:var(--c-danger-text); }
+.job .rt small { display:block; font-weight:400; color:var(--c-text-muted); font-family:"Hanken Grotesk",system-ui,sans-serif; font-size:11px; }
+.heavy { display:inline-flex; align-items:center; gap:3px; font-size:10.5px; font-weight:700; padding:0 6px; border-radius:999px; background:var(--c-warning-bg); color:var(--c-warning-text); white-space:nowrap; flex:0 0 auto; }
+.heavy svg { width:11px; height:11px; }
+.prog { display:block; height:4px; border-radius:999px; background:var(--c-track); overflow:hidden; margin:6px 0 3px; }
+.prog i { display:block; height:100%; border-radius:999px; background:var(--c-accent); }
+.prog i.est { background:repeating-linear-gradient(90deg, var(--c-text-muted) 0 6px, transparent 6px 9px); }
+.pl { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--c-text-secondary); }
+.pl .m { font-family:"JetBrains Mono",monospace; }
+.slots { display:inline-flex; gap:3px; vertical-align:middle; margin-right:6px; }
+.slots i { width:10px; height:6px; border-radius:999px; background:var(--c-track); display:block; }
+.slots i.on { background:var(--c-accent); }
+.slots i.q { background:var(--c-info); }
+.loaded { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--c-text-secondary); }
+.loaded .mono { font-weight:600; color:var(--c-text-primary); font-size:12px; }
+.mempty { display:flex; gap:10px; align-items:center; padding:4px 0; }
+.mempty .ic { width:36px; height:36px; flex:0 0 36px; border-radius:50%; background:var(--c-success-bg); color:var(--c-success-text); display:flex; align-items:center; justify-content:center; }
+.mempty .ic svg { width:18px; height:18px; }
+.mempty b { display:block; font-size:12.5px; color:var(--c-text-heading); }
+.mempty span { font-size:11.5px; color:var(--c-text-secondary); }
+.tot { font-size:11px; color:var(--c-text-muted); margin-top:4px; }
+
+table.sp { border-collapse:collapse; font-size:12px; margin:8px 0 0; max-width:1100px; }
+table.sp td, table.sp th { border:1px solid var(--c-border); padding:6px 10px; text-align:left; vertical-align:top; }
+table.sp th { background:var(--c-bg-panel); color:var(--c-text-heading); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Панель «Локальные модели» · правый рельс чата · только админ</h1>
+  <div class="tog" id="theme"><button class="on" data-t="light">Светлая</button><button data-t="dark">Тёмная</button></div>
+</div>
+
+<div class="wrap">
+<p class="note">Сценарий: Андрей видит, что ответ в чате идёт медленно, и хочет понять почему — модель занята соседями,
+читает длинный промпт или стенд лёг. Панель отвечает на это сверху вниз: <b>жива ли модель → кто на ней → как быстро
+→ чем забита память → что с картами</b>. Значок в рельсе есть только у админа. Обновление раз в 2 с, пока панель открыта.</p>
+<p class="note"><b>v2:</b> панель стала «Локальные модели». Вверху переключатель <b>«Текст · Медиа»</b> (<code>InlineSegmented</code>
+из кита на всю ширину). Всё, что было в v1, — вкладка «Текст» (разделы 1–3). Вкладка «Медиа» про вторую видеокарту и ComfyUI: картинки, видео, звук
+в одной общей очереди (разделы 4–6). Вкладка запоминается на устройство. Если панель открыли из карточки генерации в чате,
+сразу открывается «Медиа».</p>
+<p class="note"><b>v3:</b> карты подписаны по месту работы — «RTX 3090 · текст» (две, TP=2, имя из <code>nvidia-smi</code> хоста) и
+«RTX 3090 · медиа». Строка «Модель в памяти» — честное «загружено сейчас» от маршрута узла; если маршрут молчит —
+«узел не сообщает». В «Кто на модели» ждущие подписаны «ждёт» без номера.</p>
+
+<h2 class="sec">1. Текст · десктоп — четыре состояния</h2>
+<div class="row" id="desk"></div>
+
+<h2 class="sec">2. Текст · мобила — нижний лист (360 и 320)</h2>
+<p class="note">Как другие панели рельса на мобиле: лист снизу на <code>C.bgPanel</code>, радиус <code>R.sheet</code> (22),
+граббер, высота до 88 %, прокрутка внутри. Строки «кто на модели» и кнопки — 44 px под палец, сегменты графика — 32.
+Карточки видеокарт встают на десктопе в две колонки, в листе в одну на 320 и 360 (сетка <code>minmax(160px, 1fr)</code>).</p>
+<div class="row" id="mob"></div>
+
+<h2 class="sec">3. Текст · спецификация для Киры</h2>
+<table class="sp">
+<tr><th>Блок</th><th>Токены и поведение</th></tr>
+<tr><td>Оболочка</td><td>Остров рельса: фон <code>C.bgPanel</code>, рамка <code>C.borderLight</code>, радиус <code>R.xxl</code>, тень <code>SHADOW.island</code>, шапка <code>ISLAND.headerH</code> 40 на <code>C.bgInset</code>, заголовок <code>FS.base</code> 600 <code>C.textHeading</code>. Тело — паддинг <code>SP.md</code>, зазор секций <code>SP.md</code>.</td></tr>
+<tr><td>Статус</td><td>Пилюля <code>R.max</code>, <code>FS.xs</code> 700, точка 7 px. Работает — <code>C.successBg</code>/<code>C.successText</code>/<code>C.success</code>; Занята (очередь &gt; 0) — <code>C.warningBg</code>/<code>C.warningText</code>/<code>C.warning</code>; Недоступна — <code>C.dangerBg</code>/<code>C.dangerText</code>/<code>C.danger</code>. Имя модели — <code>FONT.mono</code> <code>FS.base</code> 700, многоточие.</td></tr>
+<tr><td>Карточки секций</td><td><code>C.bgCard</code>, рамка <code>C.borderLight</code>, <code>R.xl</code>, паддинг <code>SP.md</code>. Заголовок секции — как <code>badgeSectionStyle</code> (11 / 700 / uppercase / <code>C.textMuted</code>). Крупные числа — <code>FONT.mono</code> <code>FS.xl</code> 700 <code>C.textHeading</code>, единица — <code>FS.xs</code> <code>C.textMuted</code>.</td></tr>
+<tr><td>Память</td><td>Полоса 6 px: дорожка <code>C.track</code>, KV-кэш — <code>C.accent</code>, тир в RAM — <code>C.info</code>. Подпись ровно «Занято блоками KV-кэша» плюс пояснение <code>FS.xs</code> <code>C.textMuted</code>: «Это не заполненность памяти: блоки освобождаются и переиспользуются». Строка «Вытеснения» рендерится только при значении &gt; 0, цвет <code>C.dangerText</code>.</td></tr>
+<tr><td>Видеокарты</td><td>Карточка на каждую карту текстовой части: <code>C.bgWhite</code>, <code>C.borderLight</code>, <code>R.lg</code>. Подпись — имя карты из <code>nvidia-smi</code> хоста плюс « · текст»: «RTX 3090 · текст» (<code>FS.sm</code> 700 <code>C.textHeading</code>), под ней «карта 0 из 2» <code>FS.xs</code> <code>C.textMuted</code> — карт две, тензорный параллелизм TP=2, это же написано в подстроке под статусом. Показываем <b>только карты, на которых стоит текстовая модель</b>: карта медиа, если она на другом узле, во вкладке «Текст» не появляется (она живёт во вкладке «Медиа»). Загрузка, память «18,2/24 ГБ», температура, мощность «212/220 Вт». Температура ≥ 80 °C — <code>C.warningText</code>. Сетка <code>repeat(auto-fill, minmax(160px, 1fr))</code>, зазор <code>SP.sm</code>.</td></tr>
+<tr><td>График</td><td>SVG 120 px. Линия ток/с — <code>C.accent</code> 1,75, заливка той же краской с прозрачностью 10 %; очередь — столбики <code>C.info</code> 55 %, своя ось справа. Сетка <code>C.borderLight</code>, подписи осей моно 9 px <code>C.textMuted</code>. Переключатель 15 мин / 1 ч — <code>InlineSegmented</code> из кита. Дыра в данных (стенд лежал) — полоса <code>C.bgInset</code>. Hover/tap по графику — вертикальная линия и подсказка «14:21 · 38 ток/с · очередь 1».</td></tr>
+<tr><td>Кто на модели</td><td>Строка — кнопка (36 desktop / 44 touch): аватар 24, имя чата <code>FS.sm</code> 600 с многоточием, проект <code>FS.xs</code> <code>C.textMuted</code>, справа скорость моно: «38 ток/с» <code>C.textSecondary</code>, «читает» <code>C.textMuted</code>, «ждёт» <code>C.warningText</code> — без номера: позицию в очереди стенд не отдаёт. Порядок строк — идущие, затем ждущие в порядке поступления, но номер не пишем. Hover — <code>C.bgSelected</code>, tap — <code>SHADOW.press</code>, focus — <code>SHADOW.focus</code>. Клик открывает чат (на мобиле лист закрывается). Чужие чаты (другого владельца) — строка «Чат другого пользователя» без перехода и без имени.</td></tr>
+<tr><td>Не подключена</td><td>Пустое состояние: кружок 48 <code>C.bgInset</code>, заголовок <code>FONT.serif</code> <code>FS.lg</code>, текст <code>FS.sm</code> <code>C.textSecondary</code>, кнопка primary «Открыть „Поставщики моделей“» — открывает диалог на месте локального движка.</td></tr>
+<tr><td>Не отвечает</td><td>Баннер <code>C.dangerBg</code>/<code>C.dangerBorder</code>/<code>C.dangerText</code>: «Стенд не отвечает с 14:32» и кнопка secondary «Проверить сейчас». Ниже — последние известные данные, приглушённые (opacity .55), с подписью «Данные на 14:32». Статус — «Недоступна».</td></tr>
+<tr><td>Загрузка</td><td>Первое открытие до первого ответа — скелетоны блоков <code>C.bgInset</code> (пульс гаснет при reduced-motion). Тёмная тема — те же токены, отдельных значений нет.</td></tr>
+</table>
+
+<h2 class="sec">4. Медиа · десктоп — шесть состояний</h2>
+<p class="note">Сценарий: Андрей запустил видео, а карточка в чате пишет «В очереди · 3-я». Он открывает «Медиа» и видит,
+что сейчас считается, кто в очереди и насколько честны обещания по времени. Сверху вниз: <b>жив ли ComfyUI и что в памяти → карта
+→ что считается → очередь → последний час</b>. Только просмотр: отменять и переставлять чужие задачи отсюда нельзя.
+Свою задачу отменяют из её карточки в чате.</p>
+<div class="row" id="mdesk"></div>
+
+<h2 class="sec">5. Медиа · мобила — нижний лист (360 и 320)</h2>
+<p class="note">Переключатель на всю ширину листа, сегменты по 40 px высотой. На 320 каждый сегмент шириной ≈ 143 px при подписи
+≈ 50 px, запас большой. Строки задач 44 px, справа колонка времени не уже текста, имя операции режется многоточием.</p>
+<div class="row" id="mmob"></div>
+
+<h2 class="sec">6. Медиа · спецификация для Киры</h2>
+<table class="sp">
+<tr><th>Блок</th><th>Токены и поведение</th></tr>
+<tr><td>Переключатель</td><td><code>InlineSegmented</code> из <code>components/ui/</code>, опции <code>text</code> «Текст» и <code>media</code> «Медиа», иконки lucide <code>MessageSquareText</code> / <code>Clapperboard</code> размером <code>ICON_SIZE.xs</code>. Обёртка растягивает сегменты (<code>flex:1</code>). Дорожка <code>TB.pillTrack</code>, активный <code>C.accentLight</code>/<code>C.accent</code>, неактивный <code>C.textMuted</code>, <code>FS.xs</code> 600. Высота <code>TB.iconHitDesktop</code> 32, на мобиле <code>isMobile</code> 40. Стоит первым элементом тела панели, над статусом, и не прокручивается вместе с телом: в листе он под шапкой, выше <code>.scroll</code>. Выбор запоминается в <code>localStorage</code> на устройство. Если в инстансе не подключён один из движков, его вкладка остаётся, а внутри рисуется своё «не подключено».</td></tr>
+<tr><td>Статус</td><td>Строка «ComfyUI» (<code>FONT.mono</code> <code>FS.base</code> 700) и пилюля, как во вкладке «Текст». <b>Работает</b>: отвечает, есть свободные места. <b>Занят</b>: заняты все 4 места или считается тяжёлая задача. <b>Не отвечает</b>: нет ответа дольше 10 с. «Занят» решён: <b>4 из 4 мест или идёт тяжёлая задача</b>. Ниже строка <code>FS.sm</code> <code>C.textSecondary</code> «Модель в памяти: <span class="mono">MiniMax H3</span>», имя модели — <code>FONT.mono</code> 600 <code>C.textPrimary</code>. Это честное «загружено сейчас»: его отдаёт наш маршрут на узле ComfyUI, а не догадка «последней работала». Ничего не загружено — «Модель в памяти: ничего, модель загрузится на первой задаче» <code>C.textMuted</code>. Маршрут узла не ответил (сам ComfyUI при этом может работать, статус от этого не меняется) — «Модель в памяти: узел не сообщает» <code>C.textMuted</code>, без ошибки и без кнопки: остальные блоки рисуются как обычно. Подстрока «1 карта · обновлено 2 с назад» — <code>FS.xs</code> <code>C.textMuted</code>.</td></tr>
+<tr><td>Карта</td><td>Подпись «RTX 3090 · медиа» (имя из опроса карты узла плюс « · медиа»), номера нет — карта одна. Та же <code>.gpu</code>, что во вкладке «Текст»: <code>C.bgWhite</code>, <code>C.borderLight</code>, <code>R.lg</code>; загрузка с полосой 4 px, память «/24 ГБ», температура (≥ 80 °C — <code>C.warningText</code>), мощность «/350 Вт» (лимит карты из того же опроса, что у «Текста»). Одна карта на всю ширину.</td></tr>
+<tr><td>Сейчас считается</td><td>Карточка секции (<code>C.bgCard</code>, <code>R.xl</code>, <code>SP.md</code>). Строка задачи: плитка вида 28 px (<code>C.bgInset</code>, <code>R.md</code>, иконка 15 <code>C.textSecondary</code>: <code>Image</code> / <code>Clapperboard</code> / <code>AudioLines</code>), операция <code>FS.sm</code> 600 <code>C.textHeading</code> с многоточием (режется только текст, бейдж «тяжёлая» стоит рядом с <code>flex:none</code> и не срезается), например «Видео 5 с · MiniMax H3». Тяжёлая — бейдж «тяжёлая» с иконкой <code>Weight</code>: <code>C.warningBg</code>/<code>C.warningText</code>, <code>R.max</code>, 10,5 px 700. Под ней чат и проект <code>FS.xs</code> <code>C.textMuted</code>. Полоса 4 px: дорожка <code>C.track</code>, заливка <code>C.accent</code> = шаг / шагов. Под полосой слева «Шаг 12 из 25», справа «осталось ≈ 2 мин» (<code>FONT.mono</code>). Если ETA нет, справа «время не замерено» <code>C.textMuted</code>. Если нет и шагов — <code>ProgressBar indeterminate</code> и подпись «идёт 1:40» (прошедшее время). Своя строка — кнопка, переход в чат, состояния как у «Кто на модели» (hover <code>C.bgSelected</code>, tap <code>SHADOW.press</code>, focus <code>SHADOW.focus</code>). Чужая — «Чат другого пользователя», <code>div</code> без перехода и без названия.</td></tr>
+<tr><td>Очередь</td><td>Заголовок секции, справа счётчик мест: 4 ячейки 10×6 px, скругление <code>R.max</code>, занятые считающейся задачей — <code>C.accent</code>, ожидающими — <code>C.info</code>, свободные — <code>C.track</code>, плюс текст «3 из 4 мест занято» <code>FS.xs</code>. Строки — те же <code>.job</code> с номером в имени («1. Картинка · Qwen-Image 2.1»), справа «старт ≈ 14:41» и под ним «через 3 мин». Без ETA — «время не замерено». Только просмотр: никаких кнопок, меню и drag. Под списком подсказка <code>FS.xs</code> <code>C.textMuted</code>: «Мест 4 на всех. У одного человека до 2 задач, из них 1 тяжёлая». Пустая очередь — строка «Очередь пуста» <code>C.textMuted</code>, секция остаётся.</td></tr>
+<tr><td>Последний час</td><td>Строки без перехода (<code>div</code>): плитка вида, операция, под ней «готово в 14:12» или «упала: нехватка памяти». Справа факт против обещания: «5:40» и под ним «обещали 5:30». Если факт больше обещания на 20 % и сильнее, факт пишется <code>C.warningText</code> (это сигнал, что замеры устарели). Упавшая — <code>C.dangerText</code> «упала · 1:12». Без замера — «2:05» и «без замера». Итог <code>FS.xs</code> <code>C.textMuted</code>: «Готово 6 · упало 1 · в среднем на 4 % дольше обещанного». Показываем до 8 последних, дальше «и ещё 5».</td></tr>
+<tr><td>Карта свободна</td><td>Вместо секций «Сейчас считается» и «Очередь» одна карточка: кружок 36 <code>C.successBg</code>/<code>C.successText</code> с иконкой <code>Check</code>, жирная строка «Видеокарта свободна» и текст «Локальная генерация начнётся сразу». Карта и «Последний час» остаются на месте.</td></tr>
+<tr><td>Недоступна</td><td>Баннер как во вкладке «Текст»: <code>C.dangerBg</code>/<code>C.dangerBorder</code>/<code>C.dangerText</code>, «<b>Локальная генерация недоступна с 14:32.</b> Картинки можно рисовать в облаке», кнопка secondary «Проверить сейчас». Ниже последние известные данные с <code>opacity .55</code>, подстрока «данные на 14:32». Статус — «Не отвечает».</td></tr>
+<tr><td>Загрузка</td><td>Скелетоны <code>C.bgInset</code>, как во вкладке «Текст». Переключатель виден сразу и рабочий.</td></tr>
+<tr><td>Мобила и темы</td><td>Нижний лист <code>R.sheet</code>, <code>SHADOW.sheet</code>. Строки 44 px, колонка времени <code>white-space:nowrap</code>, имя режется многоточием. Тёмная тема — те же токены, своих значений нет.</td></tr>
+</table>
+</div>
+
+<script>
+const X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+const I = {
+  chip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg>',
+  ctx:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>',
+  svc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+  plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8z"/></svg>',
+  alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>',
+};
+
+// График: ток/с линией, очередь столбиками; gapFrom/gapTo — дыра в данных
+function chart(seed, opt={}) {
+  const W = 340, H = 120, L = 26, R = 18, T = 8, B = 18, n = 45;
+  let s = seed; const rnd = () => (s = (s * 9301 + 49297) % 233280) / 233280;
+  const tok = [], q = [];
+  for (let i = 0; i < n; i++) {
+    const base = opt.busy ? 22 + 8*Math.sin(i/5) : 34 + 6*Math.sin(i/6);
+    tok.push(Math.max(0, base + (rnd()-.5)*8));
+    q.push(opt.busy ? Math.round(1 + rnd()*2.4 + (i > 30 ? 1 : 0)) : (rnd() > .82 ? 1 : 0));
+  }
+  const x = i => L + (W-L-R) * i/(n-1), y = v => T + (H-T-B) * (1 - v/50), yq = v => (H-B) - (H-T-B) * v/5;
+  const gap = i => opt.gap && i >= opt.gap[0];
+  let pts = []; tok.forEach((v,i) => { if (!gap(i)) pts.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); });
+  let svg = '';
+  [0,25,50].forEach(v => svg += `<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L-4}" y="${y(v)+3}" text-anchor="end">${v}</text>`);
+  [0,5].forEach(v => svg += `<text class="ax" x="${W-R+4}" y="${yq(v)+3}">${v}</text>`);
+  q.forEach((v,i) => { if (v && !gap(i)) svg += `<rect class="q" x="${x(i)-2}" y="${yq(v)}" width="4" height="${(H-B)-yq(v)}" rx="1"/>`; });
+  svg += `<path class="area" d="M${pts[0].split(',')[0]},${H-B} L${pts.join(' L')} L${pts[pts.length-1].split(',')[0]},${H-B} Z"/>`;
+  svg += `<polyline class="line" points="${pts.join(' ')}"/>`;
+  if (opt.gap) svg += `<rect class="gap" x="${x(opt.gap[0])}" y="${T}" width="${W-R-x(opt.gap[0])}" height="${H-T-B}"/><text class="ax" x="${(x(opt.gap[0])+W-R)/2}" y="${H/2}" text-anchor="middle">нет данных</text>`;
+  ['−15 мин','−10','−5','сейчас'].forEach((t,k) => svg += `<text class="ax" x="${L + (W-L-R)*k/3}" y="${H-4}" text-anchor="${k===0?'start':k===3?'end':'middle'}">${t}</text>`);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${svg}</svg>`;
+}
+
+function body(state) {
+  // state: full | busy | down
+  const busy = state === 'busy', down = state === 'down';
+  const st = down ? '<span class="st down"><i></i>Недоступна</span>' : busy ? '<span class="st busy"><i></i>Занята</span>' : '<span class="st ok"><i></i>Работает</span>';
+  const who = busy ? [
+      ['РС','Рефакторинг сторожа памяти','AI Home','38 ток/с','',true],
+      ['БК','Батарея II — прогон 4','AI Home','24 ток/с','',false],
+      ['КЗ','Кузьма: тесты ImageEditor','AI Home','читает','read',false],
+      ['ОП','Отчёт по продажам за сентябрь, черновик','Личное','ждёт','wait',false],
+      ['—','Чат другого пользователя','','ждёт','wait',false],
+    ] : [
+      ['РС','Рефакторинг сторожа памяти','AI Home','38 ток/с','',true],
+      ['КЗ','Кузьма: тесты ImageEditor','AI Home','читает','read',false],
+    ];
+  return `
+    ${down ? `<div class="banner dz">${I.alert}<div><b>Стенд не отвечает с 14:32.</b> Новые ходы на локальной модели встанут в ошибку, пока он не поднимется.<div style="margin-top:6px"><button class="btn s" style="height:28px">Проверить сейчас</button></div></div></div>` : ''}
+    <div><div class="mhead"><div class="mname">Qwen3.8-27B</div>${st}</div></div>
+    <div class="msub">vLLM · 2 карты, TP=2 · ${down ? 'данные на 14:32' : 'обновлено 2 с назад'}</div>
+    <div class="${down ? 'stale' : ''}" style="display:flex;flex-direction:column;gap:12px">
+    <div class="card"><div class="sect">Сейчас</div>
+      <div class="kpis">
+        <div class="kpi"><div class="n">${busy?3:2}</div><div class="l">запросов идёт</div></div>
+        <div class="kpi ${busy?'warn':''}"><div class="n">${busy?2:0}</div><div class="l">ждут в очереди</div></div>
+      </div></div>
+    <div class="card"><div class="sect">Скорость</div>
+      <div class="kpis">
+        <div class="kpi"><div class="n">${busy?'21':'38'} <small>ток/с</small></div><div class="l">генерация, на запрос</div></div>
+        <div class="kpi"><div class="n">${busy?'860':'1 240'} <small>ток/с</small></div><div class="l">чтение промпта</div></div>
+      </div></div>
+    <div class="card"><div class="sect">Память</div>
+      <div class="kv"><span class="k">Занято блоками KV-кэша</span><span class="v">${busy?'94':'61'} %</span></div>
+      <div class="meter"><i class="${busy?'warn':''}" style="width:${busy?94:61}%"></i></div>
+      <div class="hint">Это не заполненность памяти: блоки освобождаются и переиспользуются следующими запросами.</div>
+      <div class="kv" style="margin-top:8px"><span class="k">Тир в RAM</span><span class="v">${busy?'27,4':'11,8'} / 30 ГиБ</span></div>
+      <div class="meter"><i class="info" style="width:${busy?91:39}%"></i></div>
+      <div class="kv" style="margin-top:6px"><span class="k">Попадания в кэш</span><span class="v">${busy?'64':'87'} %</span></div>
+      ${busy ? '<div class="kv dz"><span class="k">Вытеснения за 15 мин</span><span class="v">7</span></div><div class="hint">Запросы выбивают друг друга из кэша и читают промпт заново — отсюда медленные ответы.</div>' : ''}
+    </div>
+    <div class="card"><div class="sect">Видеокарты</div>
+      <div class="gpus">
+        ${[[0, busy?98:71, busy?'23,1':'21,4', busy?81:68, busy?219:176], [1, busy?96:69, busy?'22,8':'21,2', busy?78:64, busy?216:171]].map(g => `
+        <div class="gpu"><div class="h">RTX 3090 · текст <span>24 ГБ</span></div><div class="gs">карта ${g[0]} из 2</div>
+          <div class="kv"><span class="k">Загрузка</span><span class="v">${g[1]} %</span></div>
+          <div class="meter" style="height:4px;margin:0 0 4px"><i style="width:${g[1]}%"></i></div>
+          <div class="kv"><span class="k">Память</span><span class="v">${g[2]}/24 ГБ</span></div>
+          <div class="kv"><span class="k">Темп.</span><span class="v ${g[3]>=80?'hot':''}">${g[3]} °C</span></div>
+          <div class="kv"><span class="k">Мощность</span><span class="v">${g[4]}/220 Вт</span></div>
+        </div>`).join('')}
+      </div></div>
+    <div class="card"><div class="sect">Нагрузка <span class="r"><span class="segc"><button class="on">15 мин</button><button>1 ч</button></span></span></div>
+      ${chart(busy?7:3, { busy, gap: down ? [36] : null })}
+      <div class="legend"><span><i style="background:var(--c-accent)"></i>ток/с, левая ось</span><span><i style="background:var(--c-info)"></i>очередь, правая ось</span><span style="color:var(--c-text-muted)">истории больше часа нет</span></div>
+    </div>
+    <div class="card"><div class="sect">Кто сейчас на модели <span class="r hint">${who.length}</span></div>
+      <div class="who">${who.map(w => `<button class="wr ${w[5]?'me':''}" ${w[0]==='—'?'disabled style="cursor:default"':''}><span class="av">${w[0]}</span><span class="nm"><b>${w[1]}</b>${w[2]?`<span>${w[2]}</span>`:''}</span><span class="sp ${w[4]}">${w[3]}</span></button>`).join('')}</div>
+    </div>
+    </div>`;
+}
+const emptyBody = `<div class="empty"><div class="ic">${I.plug}</div><h4>Локальная модель не подключена</h4>
+  <p>Адрес движка задаётся в «Поставщиках моделей». После подключения здесь появятся скорость, очередь и видеокарты.</p>
+  <button class="btn p" style="margin-top:6px">Открыть «Поставщики моделей»</button></div>`;
+const loadingBody = `<div style="display:flex;flex-direction:column;gap:12px">
+  <div class="sk" style="height:20px;width:60%"></div><div class="sk" style="height:76px"></div><div class="sk" style="height:76px"></div>
+  <div class="sk" style="height:120px"></div><div class="sk" style="height:110px"></div></div>`;
+
+// ===== Вкладка «Медиа» =====
+const K = {
+  img:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>',
+  vid:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9M12.4 3.4l3.1 4M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+  aud:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/></svg>',
+  txt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7M17 12H7"/></svg>',
+  wt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"/><path d="M6.5 8a2 2 0 0 0-1.9 1.5L2 20h20L19.4 9.5A2 2 0 0 0 17.5 8Z"/></svg>',
+  ok:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+};
+const tabs = (t) => `<div class="iseg" role="group" aria-label="Что показать"><button class="${t==='text'?'on':''}" aria-pressed="${t==='text'}">${K.txt}Текст</button><button class="${t==='media'?'on':''}" aria-pressed="${t==='media'}">${K.vid}Медиа</button></div>`;
+const heavy = `<span class="heavy">${K.wt}тяжёлая</span>`;
+const kind = k => `<span class="kind">${K[k]}</span>`;
+const slots = (run, q) => `<span class="slots">${[0,1,2,3].map(i => `<i class="${i<run?'on':i<run+q?'q':''}"></i>`).join('')}</span>`;
+
+// Строка «сейчас считается»: [вид, операция, тяжёлая, чат (null = чужой), шаг, шагов, осталось (null = не замерено)]
+function nowRow(k, op, hv, chat, step, steps, left) {
+  const tag = chat ? 'button' : 'div';
+  return `<${tag} class="job">${kind(k)}<span class="nm"><b><span class="o">${op}</span>${hv?heavy:''}</b><span class="s">${chat ?? 'Чат другого пользователя'}</span>
+    <span class="prog"><i style="width:${Math.round(step/steps*100)}%"></i></span>
+    <span class="pl"><span>Шаг ${step} из ${steps}</span>${left ? `<span class="m">осталось ≈ ${left}</span>` : '<span style="color:var(--c-text-muted)">время не замерено</span>'}</span></span></${tag}>`;
+}
+// Строка очереди: только просмотр, без кнопок
+const qRow = (n, k, op, hv, chat, at, inn) => `<${chat?'button':'div'} class="job">${kind(k)}<span class="nm"><b><span class="o">${n}. ${op}</span>${hv?heavy:''}</b><span class="s">${chat ?? 'Чат другого пользователя'}</span></span>${at ? `<span class="rt">старт ≈ ${at}<small>через ${inn}</small></span>` : '<span class="rt na">время<br>не замерено</span>'}</${chat?'button':'div'}>`;
+// Строка последнего часа: cls = ok | late | fail
+const hRow = (k, op, sub, fact, promised, cls) => `<div class="job">${kind(k)}<span class="nm"><b><span class="o">${op}</span></b><span class="s">${sub}</span></span><span class="rt ${cls}">${fact}<small>${promised}</small></span></div>`;
+
+const hourCard = `<div class="card"><div class="sect">Последний час</div>
+  ${hRow('vid','Видео 5 с · MiniMax H3','готово в 14:12','5:40','обещали 5:30','ok')}
+  ${hRow('img','Картинка · Qwen-Image 2.1','готово в 14:06','0:47','обещали 0:45','ok')}
+  ${hRow('aud','Песня 2 мин · ACE-Step','готово в 14:01','2:31','обещали 1:30','late')}
+  ${hRow('vid','Видео 10 с · MiniMax H3','упала: не хватило памяти','1:12','упала','fail')}
+  ${hRow('aud','Стемы · 4 дорожки','готово в 13:44','2:05','без замера','ok')}
+  <div class="tot">Готово 6 · упало 1 · в среднем на 4 % дольше обещанного · и ещё 2</div></div>`;
+
+function mediaBody(state) {
+  // state: run | heavy | idle | down | nomem (ComfyUI жив, наш маршрут узла не отвечает)
+  const down = state === 'down', hv = state === 'heavy', idle = state === 'idle', nomem = state === 'nomem';
+  const st = down ? '<span class="st down"><i></i>Не отвечает</span>' : hv ? '<span class="st busy"><i></i>Занят</span>' : '<span class="st ok"><i></i>Работает</span>';
+  const g = hv ? [100,'23,6',79,342] : idle ? [0,'9,8',41,28] : [97,'21,9',74,331];
+  const now = hv
+    ? nowRow('vid','Увеличение до 1440p · MiniMax H3',true,'Сцена «Рассвет» · AI Home',5,40,'12 мин')
+    : nowRow('vid','Видео 5 с · MiniMax H3',false,null,12,25,'2 мин');
+  const queue = hv
+    ? `${qRow(1,'img','Картинка · Qwen-Image 2.1',false,'Обложка для поста · Личное','14:53','12 мин')}
+       ${qRow(2,'aud','Речь · Qwen3-TTS',false,null,'14:54','13 мин')}
+       ${qRow(3,'aud','Обучение голоса · RVC',true,null,null,null)}`
+    : `${qRow(1,'img','Картинка · Qwen-Image 2.1',false,'Обложка для поста · Личное','14:41','2 мин')}
+       ${qRow(2,'aud','Стемы · 4 дорожки',false,null,null,null)}`;
+  const [run, q] = hv ? [1,3] : [1,2];
+  return `
+    ${tabs('media')}
+    ${down ? `<div class="banner dz">${I.alert}<div><b>Локальная генерация недоступна с 14:32.</b> Картинки можно рисовать в облаке.<div style="margin-top:6px"><button class="btn s" style="height:28px">Проверить сейчас</button></div></div></div>` : ''}
+    <div class="mhead"><div class="mname">ComfyUI</div>${st}</div>
+    <div class="msub">1 карта · ${down ? 'данные на 14:32' : 'обновлено 2 с назад'}</div>
+    <div class="${down?'stale':''}" style="display:flex;flex-direction:column;gap:12px">
+    <div class="loaded">Модель в памяти: ${nomem ? '<span style="color:var(--c-text-muted)">узел не сообщает</span>' : idle ? '<span style="color:var(--c-text-muted)">ничего, модель загрузится на первой задаче</span>' : '<span class="mono">MiniMax H3</span>'}</div>
+    <div class="card"><div class="sect">Видеокарта</div>
+      <div class="gpu"><div class="h">RTX 3090 · медиа <span>24 ГБ</span></div>
+        <div class="kv"><span class="k">Загрузка</span><span class="v">${g[0]} %</span></div>
+        <div class="meter" style="height:4px;margin:0 0 4px"><i style="width:${g[0]}%"></i></div>
+        <div class="kv"><span class="k">Память</span><span class="v">${g[1]}/24 ГБ</span></div>
+        <div class="kv"><span class="k">Темп.</span><span class="v ${g[2]>=80?'hot':''}">${g[2]} °C</span></div>
+        <div class="kv"><span class="k">Мощность</span><span class="v">${g[3]}/350 Вт</span></div>
+      </div></div>
+    ${idle ? `<div class="card"><div class="mempty"><span class="ic">${K.ok}</span><div><b>Видеокарта свободна</b><span>Локальная генерация начнётся сразу.</span></div></div></div>` : `
+    <div class="card"><div class="sect">Сейчас считается</div><div class="who">${now}</div>
+      ${hv ? '<div class="hint" style="margin-top:4px">Тяжёлая задача занимает карту целиком: очередь стартует после неё.</div>' : ''}</div>
+    <div class="card"><div class="sect">Очередь <span class="r">${slots(run,q)}${run+q} из 4 мест занято</span></div><div class="who">${queue}</div>
+      <div class="hint" style="margin-top:4px">Мест 4 на всех. У одного человека до 2 задач, из них 1 тяжёлая.</div></div>`}
+    ${hourCard}
+    </div>`;
+}
+const mediaLoading = tabs('media') + loadingBody;
+
+const panel = (title, inner, cap) => `<div><p class="cap">${cap}</p><div class="dock">
+  <div class="isl"><div class="ihead">${title}<span class="x" title="Закрыть">${X}</span></div><div class="ibody">${inner}</div></div>
+  <div class="rail"><span class="ri">${I.svc}</span><span class="ri">${I.ctx}</span><span class="ri on" title="Локальные модели">${I.chip}</span></div>
+  </div></div>`;
+const T = 'Локальные модели';
+
+document.getElementById('desk').innerHTML =
+  panel(T, tabs('text') + body('full'), 'Заполненное: работает') +
+  panel(T, tabs('text') + body('busy'), 'Занята + вытеснения') +
+  panel(T, tabs('text') + body('down'), 'Стенд не отвечает') +
+  panel(T, tabs('text') + emptyBody, 'Не подключена') +
+  panel(T, tabs('text') + loadingBody, 'Загрузка (первое открытие)');
+
+document.getElementById('mdesk').innerHTML =
+  panel(T, mediaBody('run'), 'Медиа: работает, чужая задача, очередь 2') +
+  panel(T, mediaBody('heavy'), 'Медиа: занят тяжёлой, своя задача, 4 из 4') +
+  panel(T, mediaBody('idle'), 'Медиа: карта свободна') +
+  panel(T, mediaBody('down'), 'Медиа: не отвечает') +
+  panel(T, mediaBody('nomem'), 'Медиа: маршрут узла не отвечает') +
+  panel(T, mediaLoading, 'Медиа: загрузка');
+
+// Лист: переключатель — над прокруткой, под шапкой
+const sheet = (w, inner, cap, tab) => `<div><p class="cap">${cap}</p><div class="phone" style="width:${w}px">
+  <div class="tb">‹ Рефакторинг сторожа…</div><div class="feed">…лента чата…</div><div class="ov"></div>
+  <div class="sheet"><div class="grab"></div><div class="ihead">${T}<span class="x" title="Закрыть">${X}</span></div>
+  <div style="padding:12px 12px 0">${tabs(tab)}</div>
+  <div class="scroll"><div class="ibody">${inner}</div></div></div></div></div>`;
+const noTabs = html => html.replace(tabs('media'), '');
+document.getElementById('mob').innerHTML =
+  sheet(360, body('full'), '360 · работает', 'text') +
+  sheet(320, body('busy'), '320 · занята + вытеснения', 'text') +
+  sheet(360, body('down'), '360 · не отвечает', 'text') +
+  sheet(320, emptyBody, '320 · не подключена', 'text');
+document.getElementById('mmob').innerHTML =
+  sheet(360, noTabs(mediaBody('run')), '360 · Медиа: работает', 'media') +
+  sheet(320, noTabs(mediaBody('heavy')), '320 · Медиа: занят тяжёлой', 'media') +
+  sheet(360, noTabs(mediaBody('idle')), '360 · Медиа: свободна', 'media') +
+  sheet(320, noTabs(mediaBody('nomem')), '320 · Медиа: узел не сообщает модель', 'media') +
+  sheet(320, noTabs(mediaBody('down')), '320 · Медиа: не отвечает', 'media');
+
+document.querySelectorAll('.segc, .iseg').forEach(g => g.querySelectorAll('button').forEach(b => b.onclick = () => {
+  g.querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+}));
+document.querySelectorAll('#theme button').forEach(b => b.onclick = () => {
+  document.documentElement.dataset.theme = b.dataset.t;
+  document.querySelectorAll('#theme button').forEach(x => x.classList.toggle('on', x === b));
+});
+</script>
+</body>
+</html>

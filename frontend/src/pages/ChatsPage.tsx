@@ -17,6 +17,7 @@ import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
+import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
@@ -58,6 +59,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const [creating, setCreating] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const isMobile = useIsMobile();
+  // Сторож configured локальной модели (опрос + подписка страницы), см. хук
+  useLocalModelWatcher(auth.role === 'admin');
   // Планшет (601–1199): боковые зоны уходят в компакт-режим drawer'ов поверх ленты,
   // как в проектном воркспейсе. Формула та же, что в ChatHeaderBar: флаг зависит от
   // ширины окна, иначе переход мобил↔десктоп через ресайз пропустил бы его.

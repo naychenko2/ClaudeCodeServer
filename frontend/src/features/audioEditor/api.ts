@@ -6,6 +6,7 @@
 // и инициатора — у них свой конвертер без политики имён («Running», «Human»).
 
 import { onMessage, readStoredToken, request } from 'aihome_shell/kit';
+import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 import { audioBase, chatBase, isPersonalScope } from './scope';
 
 export type AudioMode = 'voice' | 'music' | 'process';
@@ -255,6 +256,9 @@ export interface AudioJob {
   threadId: string | null;
   initiator: AudioInitiator;
   license: string;
+  // Снимок очереди GPU ComfyUI (шаг 29): живой, только отображение; null — поставщик не знает
+  // или задача вне локальных моделей
+  gpu?: LocalGpuQueueInfo | null;
 }
 
 // ── Схема «Дополнительно» (Contracts/AudioParamSchema.cs) ──
@@ -360,6 +364,8 @@ export interface AudioProgressEvent extends AudioEventBase {
   chatSessionId: string | null;
   threadId: string | null;
   initiator: AudioInitiator;
+  // Снимок очереди GPU ComfyUI (шаг 29): живой, только отображение; null — поставщик не знает
+  gpu?: LocalGpuQueueInfo | null;
 }
 
 export interface AudioCompletedEvent extends AudioEventBase {

@@ -355,4 +355,82 @@ public sealed class VideoEditJobServiceTests : IDisposable
 
         refused.ErrorCode.Should().Be(VideoEditorErrors.TooManyJobs);
     }
+
+    // Шаг 30: снимок очереди GPU из отчёта прогресса едет в событие VideoEditProgressMessage;
+    // статус запуска, трата и запись расхода от него не зависят (Gpu — только отображение, не учёт)
+    [Fact]
+    public async Task СобытиеПрогресса_НесётGpu_СтатусТратаИRecordTypeНеЗависят()
+    {
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 0, StartInSeconds: null, Steps: null, Percent: 50, PercentExact: true,
+            RemainingSeconds: 10, Busy: null, DownSince: null);
+        var engine = new Fake("local", "free", (r, p, ct) =>
+        {
+            p.Report(new VideoProgress(VideoStage.Queued, RemoteId: "r1", Accepted: true, Gpu: gpu));
+            p.Report(new VideoProgress(VideoStage.Running, RemoteId: "r1", Gpu: gpu));
+            return Task.FromResult(new VideoResult(VideoOutcome.Ok, new VideoFile([1, 2, 3], "video/mp4", ".mp4", 5, true),
+                null, false, "r1", null));
+        }, perSec: 0);
+        var svc = Service([engine]);
+        var scene = AddScene();
+        var quote = (await svc.QuoteAsync(Owner, Scope, QuoteOf(scene, "local", 1, 5), default)).Value!;
+        var started = await svc.StartAsync(Owner, Scope, new VideoLaunchRequest(quote.QuoteId, Session, scene), default);
+        await svc.WhenDone(started.Value!.JobId);
+
+        var done = svc.Get(Owner, Scope.Key, started.Value.JobId)!;
+        done.Status.Should().Be("completed");
+        // Событие прогресса несёт живой снимок очереди GPU
+        _events.Sent.OfType<VideoEditProgressMessage>().Should().Contain(m => m.Gpu == gpu);
+        // Трата по котировке (local — бесплатно), запись расхода — обычная: от Gpu не зависят
+        done.Cost.Should().Be(new VideoCostDto("local", 0));
+        var record = _spend.Records.Should().ContainSingle().Subject;
+        record.Provider.Should().Be("local");
+        record.Generations.Should().Be(1);
+    }
+
+    // Шаг 30: при Gpu=null ключ gpu не пишется ни в событие прогресса, ни в DTO карточки
+    // (JsonIgnore WhenWritingNull); заполненный снимок — пишется
+    [Fact]
+    public void GpuNull_НеПишетсяВJsonСобытияИDto()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        var empty = new VideoEditProgressMessage("j", Scope.Key, "s", "queued", 1, 5, 1, 1, VideoInitiators.Human);
+        var emptyDto = new VideoJobDto("j", Scope.Key, "queued", "local", "m", 1, [1],
+            new VideoCostDto("local", 0), null, null, null, 1, 5, new DateTime(2026, 10, 1), Session, "s", VideoInitiators.Human, "не указана");
+        System.Text.Json.JsonSerializer.Serialize(empty, options).Should().NotContain("gpu", "null не пишется");
+        System.Text.Json.JsonSerializer.Serialize(emptyDto, options).Should().NotContain("gpu", "null не пишется");
+
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 1, StartInSeconds: 30, Steps: null, Percent: 40, PercentExact: false,
+            RemainingSeconds: 20, Busy: null, DownSince: null);
+        var filled = new VideoEditProgressMessage("j", Scope.Key, "s", "running", null, null, 1, 1, VideoInitiators.Human, Gpu: gpu);
+        var filledDto = new VideoJobDto("j", Scope.Key, "running", "local", "m", 1, [1],
+            new VideoCostDto("local", 0), null, null, null, null, null, new DateTime(2026, 10, 1), Session, "s", VideoInitiators.Human, "не указана",
+            Gpu: gpu);
+        System.Text.Json.JsonSerializer.Serialize(filled, options).Should().Contain("gpu", "заполненный снимок пишется");
+        System.Text.Json.JsonSerializer.Serialize(filledDto, options).Should().Contain("gpu", "заполненный снимок пишется");
+    }
+
+    // Шаг 30: запрос драйвера несёт метку происхождения (владелец, чат, тяжёлый ли) — local H3 держит GPU
+    [Fact]
+    public async Task Запрос_НесётМеткуПроисхождения_ВладелецЧатИТяжёлый()
+    {
+        VideoRequest? captured = null;
+        var engine = new Fake("local", "free", (r, p, ct) =>
+        {
+            captured = r;
+            p.Report(new VideoProgress(VideoStage.Queued, RemoteId: "r1", Accepted: true));
+            return Task.FromResult(new VideoResult(VideoOutcome.Ok, new VideoFile([1, 2, 3], "video/mp4", ".mp4", 5, true),
+                null, false, "r1", null));
+        }, perSec: 0);
+        var svc = Service([engine]);
+        var scene = AddScene();
+        var quote = (await svc.QuoteAsync(Owner, Scope, QuoteOf(scene, "local", 1, 5), default)).Value!;
+        var started = await svc.StartAsync(Owner, Scope, new VideoLaunchRequest(quote.QuoteId, Session, scene), default);
+        await svc.WhenDone(started.Value!.JobId);
+
+        captured!.OwnerId.Should().Be(Owner);
+        captured!.SessionId.Should().Be(Session);
+        captured!.Heavy.Should().BeTrue("local H3 держит GPU — тяжёлый прогон");
+    }
 }

@@ -1,5 +1,7 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -348,6 +350,31 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Gateway.TurnTokenService(
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
+        // Счётчик хода локальной модели (флаг local-model-stats): реализует ILocalModelRequestSink
+        // (шлюз отводит ему копию SSE) и подписан на шину хода (TurnCompleted/SessionDeleted).
+        // Ленивая фабрика: подписка на шину (Subscribe) — в момент первого резолва, когда все
+        // швы на месте. Если убрать фабрику (простая регистрация без Subscribe) — ходы не
+        // собираются в итог: TurnCompleted не дойдёт до счётчика, OnTurn/GetLastTurn не вызовутся.
+        // ILocalModelLiveSink (рассылка живых событий в чат) регистрируется в Main (шаг 19);
+        // без него счётчик работает, события уходят в никуда. ISessionDirectory (Core-шов на
+        // SessionManager) — название/проект чата для ActiveChats; без шва — null.
+        services.AddSingleton<LocalModelTurnMeter>(sp =>
+        {
+            var meter = new LocalModelTurnMeter(
+                sp.GetRequiredService<Gateway.TurnTokenService>(),
+                sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<ILocalModelStatsReader>(),
+                sp.GetService<ILocalModelLiveSink>(),
+                sp.GetService<ISessionDirectory>());
+            meter.Subscribe(sp.GetRequiredService<Turn.ITurnEventBus>());
+            return meter;
+        });
+        // Два имени одного singleton'а: ILocalModelRequestSink (шлюз отводит сюда копию
+        // потока) и ILocalModelTurnMeter (панель «Локальные модели» в Main читает живые
+        // чаты движка и итог последнего хода).
+        services.AddSingleton<ILocalModelRequestSink>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
+        services.AddSingleton<ILocalModelTurnMeter>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
         // Шлюз MCP ходит в свой же Kestrel: без прокси (адрес локальный) и без таймаута —
         // streamable HTTP и долгие инструменты живут столько, сколько запрос клиента.
         // Логгеры HttpClient сняты: каждый вызов инструмента печатался бы строкой Information.
@@ -374,5 +401,32 @@ public sealed class LlmSubsystem : IAppSubsystem
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры
         // и кеш корней после Build).
+
+        // === Фича «Статистика локальных моделей»: поллер метрик стенда + видеокарты ===
+        // Опции читаются через IOptionsMonitor ВНУТРИ поллера (тумблер подсистемы не нужен):
+        // LocalModelStats:Enabled=false — поллер не ходит в сеть, цикл ждёт и перечитывает.
+        services.AddOptions<LocalModelStatsOptions>()
+            .Bind(config.GetSection(LocalModelStatsOptions.Section));
+        // Именованный тихий HttpClient для /metrics: перед vLLM стоит прокси, и мёртвый
+        // стенд (ECONNREFUSED) не должен заспамить консоль Error-ами — одна строка Warning.
+        services.AddQuietHttpClient(
+            LocalModelStatsPoller.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalModelStats",
+                Subject: "метриками локального стенда (vLLM)",
+                Consequence: "Панель «Локальные модели» не обновит снимок до следующего опроса."));
+        // Поллер — hosted (фоновый цикл) + singleton; читатель (ILocalModelStatsReader) —
+        // ТОТ ЖЕ инстанс (инвариант «интерфейс и конкретный тип — один объект»).
+        // Hosted — AddGatedHostedFrom (фабрика резолвит singleton): БЕЗ второго
+        // AddSingleton<LocalModelStatsPoller>, иначе дубль Singleton (гейт
+        // DuplicateSingletonRegistrationTests).
+        services.AddSingleton<LocalModelStatsPoller>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        services.AddSingleton<ILocalModelStatsReader>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        // Сэмплер видеокарт (nvidia-smi на хосте): по запросу, не в фоне. Кэш на GpuCacheTtl.
+        services.AddSingleton<IGpuSampler>(sp => new GpuSampler(
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>().CurrentValue.GpuCacheTtl,
+            sp.GetRequiredService<ILogger<GpuSampler>>()));
     }
 }

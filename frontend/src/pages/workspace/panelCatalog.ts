@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic,
+  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -41,6 +41,9 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
+  // «Локальные модели» (фича local-model-stats): только админ, значок — при
+  // настроенном локальном провайдере (условие — у фичи, см. manifest)
+  'localModel',
   // «Голоса» редактора звука: библиотека voices/ проекта отдельной панелью
   'voices',
   // Единая панель «Контекст» чата (ADR-023 §Д1): вместо прежних панелей генерации «Картинки», «Звук» и
@@ -139,6 +142,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
+  // Локальные модели (фича local-model-stats): статистика локального движка, только админ
+  localModel: { title: 'Локальные модели', Icon: Cpu },
   // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
   voices: { title: 'Голоса', Icon: Mic },
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
@@ -181,6 +186,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   context: 'right',
   toc: 'right',
   characters: 'right',
+  localModel: 'right',
   voices: 'right',
   chatContext: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
@@ -194,7 +200,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'voices', 'chatContext',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];

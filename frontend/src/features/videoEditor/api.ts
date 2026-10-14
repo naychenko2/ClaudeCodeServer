@@ -9,6 +9,7 @@
 
 import { onMessage, readStoredToken, request, type MediaFormatCaps, type MediaFormatWish, type ResolvedFormat } from 'aihome_shell/kit';
 import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
+import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 
 // ── Кадры и настройки сцены ──
 
@@ -234,6 +235,8 @@ export interface VideoJob {
   license: string;
   // Время увеличения «Макс» local H3, пока идёт съёмка («следом · ~15 мин»)
   upscaleEtaSeconds?: number;
+  // Снимок очереди GPU ComfyUI (шаг 30): локальные задачи; null — ключ не пишется
+  gpu?: LocalGpuQueueInfo | null;
 }
 
 // ── Фильм (блок 2) ──
@@ -330,6 +333,8 @@ export interface VideoProgressEvent extends VideoEventBase {
   variant: number;
   count: number;
   initiator: VideoInitiator;
+  // Снимок очереди GPU ComfyUI (шаг 30): локальные задачи; null — ключ не пишется
+  gpu?: LocalGpuQueueInfo | null;
 }
 export interface VideoCompletedEvent extends VideoEventBase {
   type: 'video_edit_completed';

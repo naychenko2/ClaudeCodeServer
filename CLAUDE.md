@@ -210,6 +210,13 @@ one-shot действия и разговор с исполнителем «Ло
 Пропорции, ступень и «Точно…» результата, чип «Формат»; сквозная фича (Core, ImageEditor, VideoEditor, фронт) ([ADR-025](docs/adr/ADR-025-media-format.md), контракты — [ADR-025-contracts.md](docs/adr/ADR-025-contracts.md)).
 **Арифметика только в `MediaFormatResolver`** (Core), фронт её не повторяет; **хранится желание, а не подмена**; схемы MCP статичны (пропорции модели в `enum` не попадают). Кадры видео подрезаются только по явному формату.
 
+## Статистика локальных моделей (флаг `local-model-stats`)
+
+Панель админа «Локальные модели» (текст — vLLM, медиа — ComfyUI), живая скорость и очередь в кольце Ctx, строка ожидания GPU в карточках редакторов; история — только ~1 ч в памяти ([ADR-029](docs/adr/ADR-029-local-model-stats.md), [local-model-stats.md](docs/features/local-model-stats.md)).
+**Учёт за ход — только шлюз `/gw`** (`LocalModelStats:Enabled` плюс обязательный `LlmGateway:Enabled`, иначе ход идёт напрямую); **атрибуция медиа — только реестр prompt_id `ComfyPromptLedger`** с меткой `LocalJobOrigin` через швы Core.
+Чужие чаты — «Чат другого пользователя» без названия и перехода, в карточку — только агрегаты; события `local_model_*` в `history.json` не пишутся.
+**Ответы vLLM, ComfyUI и узла — недоверенные:** исключение из их разбора не должно выходить из `BackgroundService` (по умолчанию .NET гасит весь хост).
+
 ## Сферы (Services/Spheres, Core/Models/PersonaZone)
 
 Сфера = группа проектов с уставом, командой персон и полкой памяти; за флагом `spheres` ([ADR-024](docs/adr/ADR-024-spheres.md), [spheres.md](docs/features/spheres.md)).

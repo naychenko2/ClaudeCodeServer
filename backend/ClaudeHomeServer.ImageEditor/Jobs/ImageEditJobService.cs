@@ -116,6 +116,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public int? Run { get; set; }
         public int? Runs { get; set; }
         public int? EtaSeconds { get; set; }
+        // Снимок очереди GPU ComfyUI (шаг 28): живой, обновляется каждым отчётом прогресса
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
         // Итоги проходов подстановки (ADR-028, §9): статус и сходство каждого лица; пусто — не цепочка
@@ -347,6 +349,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker,
         IReadOnlyList<FacePass>? facePasses)
     {
+        // Метка происхождения прогона (шаг 28): владелец, чат и тяжёлый ли — из задачи;
+        // вид=картинка и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут
+        requests = requests
+            .Select(r => r with { OwnerId = job.OwnerId, SessionId = job.ChatSessionId, Heavy = HeavyOf(job) })
+            .ToList();
         var request = requests[0];
         ImageEditResult result;
         var cancelled = false;
@@ -809,12 +816,13 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Run = value.Run;
                 job.Runs = value.Runs;
                 job.EtaSeconds = value.EtaSeconds;
+                job.Gpu = value.Gpu;
                 elapsed = owner.RunElapsedSeconds(job);
             }
             _ = owner.Broadcast(job.OwnerId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
                     job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
-                    elapsed));
+                    elapsed, value.Gpu));
         }
     }
 
@@ -854,12 +862,15 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
                 j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
                 j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null,
-                Op: OpName(j.Quote.Op),
-                FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null);
+                Op: ImageEditOpNames.OpName(j.Quote.Op),
+                FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
+                Gpu: j.Gpu);
     }
 
-    // camelCase-имя операции запуска (generate / edit / inpaint / outpaint / …); как у AudioEditJobService
-    public static string OpName(ImageEditOp op) => JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
+    // Тяжёлый ли прогон (шаг 28): у локальных картинок прогоны короткие (секунды–десятки секунд),
+    // поэтому не «тяжёлые» в смысле очереди GPU — длинными там считаются видео. Метка едет в
+    // LocalJobOrigin и в снимок очереди (Busy); при появлении долгой операции — сюда
+    private static bool HeavyOf(Job job) => false;
 
     // Сколько идёт текущий прогон по часам бэкенда; вне Running — null. Звать под j.Gate
     private int? RunElapsedSeconds(Job j) =>

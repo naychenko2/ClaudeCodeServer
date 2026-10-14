@@ -5,7 +5,7 @@ import { stagesOf, upscaleFailView, upscaleInfo, upscaledCaption } from './upsca
 
 const job = (extra: Partial<JobProgress>): JobProgress => ({
   jobId: 'job-7', sessionId: 'c1', sceneId: 's1', stage: 'running', queuePosition: null, etaSeconds: 330, upscaleEtaSeconds: 915,
-  variant: 1, count: 1, runStartedAt: 0, percent: null, floor: 0, ...extra,
+  variant: 1, count: 1, runStartedAt: 0, percent: null, floor: 0, gpu: null, ...extra,
 });
 const h3 = upscaleInfo(CATALOG, 'local', 'minimax-h3', '16:9');
 

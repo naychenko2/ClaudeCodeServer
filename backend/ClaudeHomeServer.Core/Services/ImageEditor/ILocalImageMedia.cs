@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Media;
+
 namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Шов «локальные модели картинок» для редактора (ADR-018, раздел «Локальные модели»): движок
@@ -103,7 +105,9 @@ public sealed record LocalImageRequest(
     byte[]? KeepMask = null,
     LocalImageCrop? Crop = null,
     byte[]? VeilMask = null,
-    string? Model = null);
+    string? Model = null,
+    // Метка происхождения прогона (шаг 23): null — вызывающая сторона ещё не передаёт (шаги 28–30).
+    LocalJobOrigin? Origin = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);
@@ -124,13 +128,15 @@ public sealed record LocalImageSubmitted(string? Ticket, int? QueuePosition, int
 
 public enum LocalImageState { Queued, Running, Completed, Failed }
 
-// Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива
+// Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива; Gpu — снимок очереди
+// GPU (шаг 26; пока null)
 public sealed record LocalImagePoll(
     LocalImageState State,
     int? QueuePosition,
     IReadOnlyList<LocalImageFile> Files,
     string? Error,
-    string? Warning = null);
+    string? Warning = null,
+    LocalGpuQueueInfo? Gpu = null);
 
 // Similarity — сходство лица с эталоном (0..1); null — не считалось или лицо не найдено
 public sealed record LocalImageFile(byte[] Bytes, string ContentType, double? Similarity = null);

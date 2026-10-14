@@ -10,12 +10,14 @@ import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Info, Save, Target, TriangleAlert, Zap } from 'lucide-react';
 import {
   Badge, Button, ByClaude, C, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext,
+  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
 import { filmFolder, filmPathOf, newFilmPath, saveTargetFor, snapshotOf, type SaveTarget } from '../film/model';
 import { progressLabel } from '../editor/useScene';
-import { downloadClip, openFilmPanel, openScenePanel, retryUpscale, saveScene, selectFilmByHuman, selectSceneByHuman, stopJob, stopUpscale, takeVersion } from '../scene/actions';
+import { currentResolved, downloadClip, openFilmPanel, openScenePanel, retryUpscale, saveScene, selectFilmByHuman, selectSceneByHuman, stopJob, stopUpscale, takeVersion } from '../scene/actions';
+import { GpuQueueBlock } from './gpuCard';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
@@ -208,7 +210,7 @@ function Stages({ rows, a }: { rows: CardStage[]; a: SceneCardActions }) {
   );
 }
 
-export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; src: string | null; busy: boolean; a: SceneCardActions; chooser?: ReactNode }) {
+export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: SceneCardView; src: string | null; busy: boolean; a: SceneCardActions; chooser?: ReactNode; gpuBlock?: ReactNode }) {
   return (
     <div data-video-card={v.kind} data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
       onClick={e => { if (isCardPick(e.target, e.currentTarget)) a.onPick(); }}
@@ -233,6 +235,7 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
           {v.progress.p !== undefined && <ProgressBar value={v.progress.p} />}
         </div>
       )}
+      {gpuBlock}
       {v.failure && <Line>{v.failure}</Line>}
       {v.version && src && (
         <video data-video-player="" controls preload="metadata" playsInline src={src}
@@ -363,10 +366,12 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'save' | 'film' | null>(null);
+  const feature = useFeature(FLAGS.localModelStats);
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
+  const jobs = getJobsOf(sessionId, scene.sceneId);
   const v = sceneCardView({
-    scene, jobId, record, personal, focused: primary?.kind === SCENE_KIND && primary.ref.sceneId === scene.sceneId, jobs: getJobsOf(sessionId, scene.sceneId), pos, catalog: getCatalog(scope),
+    scene, jobId, record, personal, focused: primary?.kind === SCENE_KIND && primary.ref.sceneId === scene.sceneId, jobs, pos, catalog: getCatalog(scope),
   });
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const ver = v.version;
@@ -378,8 +383,16 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
     ? saveToFolder(scope, sessionId, scene, ver?.versionId, { folder })
     : addToFilm(scope, sessionId, scene, ver?.versionId, { folder })));
   const start = (kind: 'save' | 'film') => { if (!startSceneSave(scope, sessionId, scene, ver?.versionId, kind)) setAsk(kind); };
+  // Строка ожидания GPU и «Сделать в облаке»: только у полной карточки сцены (строка запуска её не дублирует),
+  // за флагом и когда идущая задача несёт живой снимок очереди. Параметры — из тех же источников, что фактический запуск
+  const r = currentResolved(sessionId, scope, scene);
+  const gpu = jobs[0]?.gpu ?? null;
+  const gpuBlock = !jobId && feature && gpu
+    ? <GpuQueueBlock scope={scope} sessionId={sessionId} sceneId={scene.sceneId} feature={feature} gpu={gpu}
+        params={{ count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound }} />
+    : null;
   return (
-    <SceneCardView v={v} busy={busy}
+    <SceneCardView v={v} busy={busy} gpuBlock={gpuBlock}
       chooser={ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
         onPick={folder => { const k = ask; setAsk(null); void act(k, folder); }} />}
       src={ver ? videoApi.versionFileUrl(scope, sessionId, scene.sceneId, ver.versionId) : null}

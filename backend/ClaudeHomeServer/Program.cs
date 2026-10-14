@@ -813,6 +813,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceConnection
 // Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.ILocalHandsNotifier,
     ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
+// Живые события локальной модели (флаг local-model-stats): тиковый снимок генерации и
+// итог хода — в session-группу чата, только при наличии зрителя (LocalModelLiveSink).
+// Интерфейс (ILocalModelLiveSink) — в Llm; счётчик ходов (LocalModelTurnMeter) резолвит
+// его лениво, поэтому порядок регистрации не важен.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILocalModelLiveSink,
+    ClaudeHomeServer.Services.Composition.LocalModelLiveSink>();
 // Наблюдатель соединений — диспетчер выхода устройства в онлайн (ADR-016, план §5;
 // регистрация блоком ниже): форвард на тот же синглтон, не второй экземпляр.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceConnectionObserver>(

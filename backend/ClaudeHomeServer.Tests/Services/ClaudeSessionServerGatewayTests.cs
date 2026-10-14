@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Tests.Services.Gateway;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -82,10 +83,23 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
         }
     }
 
+    // Логгер-счётчик: считает записи LogLevel.Warning (LogWarning — обёртка над Log).
+    private sealed class CountingLogger : ILogger
+    {
+        public int WarningCount;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning) Interlocked.Increment(ref WarningCount);
+        }
+    }
+
     private sealed record TurnResult(Dictionary<string, string>? Env, ClaudeSession Session, TaskCompletionSource Exited);
 
     private async Task<TurnResult> RunTurnAsync(string model, string? gatewayApiUrl = GatewayApi,
-        bool gatewayEnabled = true, bool failStart = false)
+        bool gatewayEnabled = true, bool failStart = false, bool localStatsEnabled = false)
     {
         _kit.Options.CurrentValue = new LlmGatewayOptions
         {
@@ -109,7 +123,9 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
             LlmGatewayApiUrl: gatewayApiUrl);
         var session = new ClaudeSession(new Session { Model = model, OwnerId = "owner-1" }, context,
             providers: _kit.Providers,
-            serverGateway: new ServerTurnGateway(_kit.Selector, _tokens, _kit.Options));
+            serverGateway: new ServerTurnGateway(_kit.Selector, _tokens, _kit.Options),
+            localModelStats: new MutableOptionsMonitor<LocalModelStatsOptions>(
+                new LocalModelStatsOptions { Enabled = localStatsEnabled }));
 
         try { await session.SendMessageAsync("тестовый ход"); }
         catch (InvalidOperationException) when (failStart) { }
@@ -208,5 +224,77 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
         turn.Env.ContainsKey("ANTHROPIC_CUSTOM_HEADERS").Should().BeFalse();
         _tokens.ActiveCount.Should().Be(0);
         await KillAndWaitAsync(turn);
+    }
+
+    // Локальная модель (IsLocal) идёт через шлюз ТОЛЬКО когда включена статистика
+    // (LocalModelStats:Enabled) И шлюз включён: счётчику хода нужна копия потока.
+    // Таблица: (модель, LocalModelStats:Enabled, LlmGateway:Enabled, ожидаем шлюз).
+    [Theory]
+    [InlineData("qwen3.8-27b", true, true, true)] // локаль + статистика + шлюз — через шлюз
+    [InlineData("qwen3.8-27b", true, false, false)] // локаль + статистика, шлюз выключен — напрямую
+    [InlineData("qwen3.8-27b", false, true, false)] // локаль, статистика выключена — напрямую
+    [InlineData("deepseek-v4-pro", true, true, false)] // не локаль, статистика включена — напрямую
+    public async Task ЛокальнаяМодель_ШлюзТолькоСоВключённойСтатистикой(
+        string model, bool statsEnabled, bool gatewayEnabled, bool expectGateway)
+    {
+        var turn = await RunTurnAsync(model, GatewayApi, gatewayEnabled, localStatsEnabled: statsEnabled);
+        var env = turn.Env!;
+
+        if (expectGateway)
+        {
+            var (turnId, _) = GatewayOf(env);
+            turnId.Should().NotBe(new string('0', 32), "новому процессу — настоящий ход шлюза, а не заглушка");
+            _tokens.ActiveCount.Should().Be(1, "токен хода выдан");
+        }
+        else
+        {
+            env["ANTHROPIC_BASE_URL"].Should().Be(_kit.Providers.ResolveByModel(model)!.AnthropicBaseUrl,
+                "без включённой статистики локальный ход идёт напрямую на эндпоинт провайдера");
+            // Локальная модель несёт собственный заголовок X-CCS-Session (id сессии для
+            // локального прокси) — проверяем, что заголовка ТОКЕНА ХОДА нет.
+            var hasTurnTokenHeader = env.TryGetValue("ANTHROPIC_CUSTOM_HEADERS", out var headers)
+                && headers.Split('\n').Any(h => h.StartsWith(TurnTokenEndpointFilter.HeaderName + ": ", StringComparison.Ordinal));
+            hasTurnTokenHeader.Should().BeFalse("токен хода выдают только шлюзу");
+            _tokens.ActiveCount.Should().Be(0);
+        }
+        await KillAndWaitAsync(turn);
+    }
+
+    // Выключенный шлюз (LlmGateway:Enabled=false) при локальной модели со статистикой:
+    // UseServerGateway() зовётся на каждый новый процесс CLI, и предупреждение — одно за
+    // жизнь процесса. Мутация: убрать защиту (Interlocked.CompareExchange) → два вызова
+    // дают две записи, тест краснеет.
+    [Fact]
+    public void ШлюзВыключен_ПредупреждениеОдно_НаДваВызова()
+    {
+        ClaudeSession.ResetGatewayDisabledWarning();
+        _kit.Options.CurrentValue = new LlmGatewayOptions
+        {
+            Enabled = false, AllowSubscriptions = false, AnthropicBaseUrl = "https://anthropic.test",
+        };
+        var logger = new CountingLogger();
+        var root = Path.Combine(Path.GetTempPath(), "ccs-gw-warn");
+        Directory.CreateDirectory(root);
+        var context = new LlmSessionContext(
+            RootPath: root,
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            Launcher: null,
+            LlmGatewayApiUrl: GatewayApi);
+        var session = new ClaudeSession(
+            new Session { Model = "qwen3.8-27b", OwnerId = "owner-1" },
+            context,
+            providers: _kit.Providers,
+            serverGateway: new ServerTurnGateway(_kit.Selector, _tokens, _kit.Options),
+            localModelStats: new MutableOptionsMonitor<LocalModelStatsOptions>(
+                new LocalModelStatsOptions { Enabled = true }),
+            logger: logger);
+
+        // Два вызова (как на каждый новый процесс CLI): предупреждение — одно.
+        session.UseServerGateway();
+        session.UseServerGateway();
+        logger.WarningCount.Should().Be(1, "одно предупреждение за жизнь процесса");
     }
 }

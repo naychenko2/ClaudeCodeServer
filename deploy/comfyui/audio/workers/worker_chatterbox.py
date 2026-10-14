@@ -9,7 +9,7 @@ import re
 import numpy as np
 import torch
 
-from ccs_common import MODELS, fail, load_job
+from ccs_common import MODELS, emit_progress, fail, load_job
 
 CHUNK = 300
 
@@ -40,10 +40,13 @@ def main():
     model = ChatterboxMultilingualTTS.from_local(os.path.join(MODELS, "ResembleAI", "chatterbox"), device="cuda")
     job.lap("load")
     pieces = []
-    for part in chunks(text):
+    parts = chunks(text)
+    emit_progress(0, len(parts))
+    for k, part in enumerate(parts):
         wav = model.generate(part, language_id=lang, audio_prompt_path=ref,
                              exaggeration=exaggeration, cfg_weight=cfg)
         pieces += [wav.squeeze(0).cpu().numpy(), np.zeros(int(model.sr * 0.25), dtype=np.float32)]
+        emit_progress(k + 1, len(parts))
     audio = np.concatenate(pieces)
     job.lap("infer")
     job.stats["audio_s"] = round(len(audio) / model.sr, 2)

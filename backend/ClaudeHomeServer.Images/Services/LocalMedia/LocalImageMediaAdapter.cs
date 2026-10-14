@@ -2,6 +2,7 @@ using System.Globalization;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -24,6 +25,11 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     private readonly ILogger<LocalImageMediaAdapter> log;
     private readonly IImageRaster? raster;
     private readonly LocalMediaJobStore? store;
+    private readonly ComfyPromptLedger? ledger;
+    private readonly ComfyProgressTracker? steps;
+    private readonly ComfyQueueMonitor? monitor;
+    // Снимок очереди GPU (шаг 26б): общий билдер — логика изоляции/процента/ETA не дублируется по адаптерам
+    private readonly ComfyGpuSnapshotBuilder _gpuBuilder;
 
     private readonly Lock _probeGate = new();
     private DateTime _probedAt = DateTime.MinValue;
@@ -31,13 +37,18 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     private Task? _probing;
 
     public LocalImageMediaAdapter(ComfyClient comfy, IConfiguration config, ILogger<LocalImageMediaAdapter> log,
-        IImageRaster? raster = null, LocalMediaJobStore? store = null)
+        IImageRaster? raster = null, LocalMediaJobStore? store = null, ComfyPromptLedger? ledger = null,
+        ComfyProgressTracker? steps = null, ComfyQueueMonitor? monitor = null)
     {
         this.store = store;
         this.comfy = comfy;
         this.config = config;
         this.log = log;
         this.raster = raster;
+        this.ledger = ledger;
+        this.steps = steps;
+        this.monitor = monitor;
+        this._gpuBuilder = new(monitor, ledger, steps, log);
         // Прогрев: к первому вопросу каталога ответ ComfyUI обычно уже есть, и поставщик
         // не мигает «скрыт» на старте
         if (LocalMediaOptions.IsEnabled(config)) StartProbe();
@@ -354,7 +365,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
             promptId = queued.PromptId;
-            return new LocalImageSubmitted(queued.PromptId, queue.Length, EtaSeconds(request.Op, count, names.Count, request.Model), null);
+            var eta = EtaSeconds(request.Op, count, names.Count, request.Model);
+            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
+            ledger?.Register(queued.PromptId, request.Origin, eta);
+            return new LocalImageSubmitted(queued.PromptId, queue.Length, eta, null);
         }
         catch (ComfyException ex)
         {
@@ -450,21 +464,27 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
     public async Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct)
     {
+        // Опрос задачи — панель активна: быстрый опрос очереди (2 с) на время TouchWindow
+        monitor?.Touch();
         try
         {
             var history = await comfy.GetHistoryAsync(ticket, ct);
             if (history is null)
             {
-                var position = (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
+                // Снимок монитора (шаг 26б): позиция и Gpu из общего /queue, не поштучный запрос
+                var position = monitor?.Snapshot is { } snap && !snap.Down
+                    ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
+                    : (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
                 if (position is not null)
-                    return new LocalImagePoll(position == 0 ? LocalImageState.Running : LocalImageState.Queued, position, [], null);
+                    return new LocalImagePoll(position == 0 ? LocalImageState.Running : LocalImageState.Queued, position, [], null,
+                        Gpu: _gpuBuilder.Build(ticket, position));
                 // Могла закончиться между двумя запросами — история решает
                 history = await comfy.GetHistoryAsync(ticket, ct);
                 if (history is null)
                     return Failed("Задача пропала из очереди ComfyUI (перезапуск или отмена на стенде).");
             }
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
-            if (!history.Completed) return new LocalImagePoll(LocalImageState.Running, 0, [], null);
+            if (!history.Completed) return new LocalImagePoll(LocalImageState.Running, 0, [], null, Gpu: _gpuBuilder.Build(ticket, 0));
 
             var similarity = ParseSimilarity(history.Texts);
             var files = new List<LocalImageFile>();
@@ -480,7 +500,14 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
         catch (ComfyException ex)
         {
-            return new LocalImagePoll(LocalImageState.Running, null, [], null, ex.Message);
+            // M1: стенд недоступен — снимок несёт downSince (фронт isStandDown видит «стенд недоступен»)
+            // Minor 3: позиция из снимка (не хардкод 0): если задачи нет в queue_running снимка,
+            // билдер не ставит ложный Running=true (монитор ещё не заметил падение, снимок stale).
+            var position = monitor?.Snapshot is { } snap
+                ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
+                : null;
+            return new LocalImagePoll(LocalImageState.Running, null, [], null, ex.Message,
+                Gpu: _gpuBuilder.Build(ticket, position));
         }
         catch (Exception ex) when (ex is InvalidOperationException or FormatException)
         {

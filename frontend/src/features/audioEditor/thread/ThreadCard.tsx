@@ -8,9 +8,10 @@ import { useState, type ReactNode } from 'react';
 import { AudioLines, Download, Mic, Music, Save, Sparkles, Target, X } from 'lucide-react';
 import {
   Badge, Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick,
+  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
+import { audioApi, type AudioMode, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
 import { opInfo } from '../ops';
 import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { audioScope, isPersonalScope } from '../scope';
@@ -22,6 +23,7 @@ import {
 import { recordOf, str } from './records';
 import { SaveAsDialog } from './SaveAsDialog';
 import { getJobsOf, useAudioThreads, type JobProgress } from './threadStore';
+import { GpuQueueBlock } from './gpuCard';
 import { VersionBody } from './VersionBody';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -173,9 +175,13 @@ export function progressText(j: JobProgress | null): string {
   return `идёт${of}${j.etaSeconds != null ? ` · ещё ≈ ${eta(j.etaSeconds)}` : ''}`;
 }
 
-function RunningLine({ scope, sessionId, threadId, jobId }: { scope: string; sessionId: string; threadId: string; jobId: string }) {
-  const job = getJobsOf(sessionId, threadId).find(j => j.jobId === jobId) ?? null;
+function RunningLine({ scope, sessionId, thread, jobId, op, mode, count }: {
+  scope: string; sessionId: string; thread: AudioThread; jobId: string;
+  op: AudioOp | null; mode: AudioMode | null; count: number;
+}) {
+  const job = getJobsOf(sessionId, thread.id).find(j => j.jobId === jobId) ?? null;
   const [cancelling, setCancelling] = useState(false);
+  const feature = useFeature(FLAGS.localModelStats);
   const percent = job && job.count > 0 && job.stage !== 'queued' ? Math.round(((job.variant - 1) / job.count) * 100) : 0;
   return (
     <div data-audio-running="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
@@ -190,6 +196,8 @@ function RunningLine({ scope, sessionId, threadId, jobId }: { scope: string; ses
         </Button>
       </div>
       <ProgressBar value={percent} transition="width .5s linear" />
+      <GpuQueueBlock scope={scope} sessionId={sessionId} thread={thread} job={job}
+        feature={feature} op={op} mode={mode} count={count} />
       <Note>Варианты появятся здесь по мере готовности.</Note>
     </div>
   );
@@ -228,7 +236,8 @@ export function LaunchCard({ scope, sessionId, thread, data, events }: {
             <License badge={licenseBadgeOf(str(data.license) ?? launch?.license)} />
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
-          <RunningLine scope={scope} sessionId={sessionId} threadId={thread.id} jobId={jobId} />
+          <RunningLine scope={scope} sessionId={sessionId} thread={thread} jobId={jobId}
+            op={op?.op ?? null} mode={op?.mode ?? null} count={count} />
         </Frame>
       )}
 

@@ -418,6 +418,54 @@ public class ImageEditJobServiceTests : IDisposable
         (await WaitDone(service, "owner", jobId)).RunElapsedSeconds.Should().BeNull();
     }
 
+    // Шаг 28: снимок очереди GPU из отчёта прогресса едет в событие ImageEditProgressMessage;
+    // статус запуска, трата и recordType от него не зависят (Gpu — только отображение, не учёт)
+    [Fact]
+    public async Task СобытиеПрогресса_НесётGpu_СтатусТратаИRecordTypeНеЗависят()
+    {
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 0, StartInSeconds: null, Steps: null, Percent: 50, PercentExact: true,
+            RemainingSeconds: 10, Busy: null, DownSince: null);
+        var editor = new ScriptedEditor("fal", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Running, Run: 1, Runs: 1, EtaSeconds: 40, Gpu: gpu));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok,
+                [new EditedImage(TestImages.Png(2, 2), "image/png")],
+                new EditCost(3.0, ImageEditPriceUnits.Credits), true, "r", null));
+        });
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal");
+        var done = await WaitDone(service, "owner", jobId);
+
+        done.Status.Should().Be(ImageEditJobStatus.Completed);
+        // Событие прогресса несёт живой снимок очереди GPU
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditProgressMessage>()
+            .Should().ContainSingle().Which.Gpu.Should().Be(gpu);
+        // Статус, трата и recordType не зависят от Gpu: итог Completed, трата по котировке,
+        // подпись записи — обычный (не «сумма уточняется»)
+        done.Cost.Should().Be(new EditCost(3.0, ImageEditPriceUnits.Credits));
+        var record = _spend.Records.Should().ContainSingle().Subject;
+        record.Provider.Should().Be("fal");
+        record.Label.Should().Be(ImageEditJobService.SpendLabel);
+        record.Generations.Should().Be(1);
+    }
+
+    // Ревью шага 28 (Глеб, minor): ImageEditProgressMessage.Gpu теперь с JsonIgnore(WhenWritingNull),
+    // как ImageEditJobDto.Gpu: при Gpu=null ключ gpu не пишется в JSON события
+    [Fact]
+    public void СобытиеПрогресса_GpuNull_НеПишетКлючGpu()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        var empty = new ImageEditProgressMessage("j", "p1", EditStage.Queued, 1);
+        System.Text.Json.JsonSerializer.Serialize(empty, options).Should().NotContain("gpu", "null не пишется");
+
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 1, StartInSeconds: 30, Steps: null, Percent: 40, PercentExact: false,
+            RemainingSeconds: 20, Busy: null, DownSince: null);
+        var filled = new ImageEditProgressMessage("j", "p1", EditStage.Running, null, Gpu: gpu);
+        System.Text.Json.JsonSerializer.Serialize(filled, options).Should().Contain("gpu", "заполненный снимок пишется");
+    }
+
     // ── Варианты по готовности (EditProgress.Ready) ──────────────────────────
 
     private static EditedImage Variant(byte shade) => new(TestImages.Png(4, 4, shade), "image/png");

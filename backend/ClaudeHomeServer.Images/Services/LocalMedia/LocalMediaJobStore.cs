@@ -41,6 +41,17 @@ public static class LocalMediaOps
 
     // Видео, чей латент сохраняется и годится для апскейла
     public static bool KeepsLatent(string? op) => op is TextToVideo or ImageToVideo;
+
+    // Вид прогона по операции: image | video | audio | train | other (снимок очереди, шаг 26).
+    // Та же логика, что у LocalMediaService.JobKind — единственный источник «операция → вид»
+    public static string KindOf(string? op) => op switch
+    {
+        GenerateImage or EditImage or FaceDetail => "image",
+        ImageToVideo or TextToVideo or VideoUpscale or VideoInpaint or ReferenceToVideo => "video",
+        _ when IsAudio(op) => "audio",
+        LoraTrain => "train",
+        _ => "other",
+    };
 }
 
 public static class LocalMediaStatuses
@@ -126,6 +137,19 @@ public sealed class LocalMediaJob
     public bool CancelRequested { get; set; }
     public DateTime? CancelRequestedAt { get; set; }
 }
+
+// Тонкая запись активной задачи для снимка очереди (ComfyStats, шаг 26): только то, что снимку
+// нужно (op/kind/heavy/eta/promptId/startedAt/ownerId/sessionId), без Prompt/ComfyFirstFrame/Lora*.
+// Служебная проекция: в файл стора не пишется, FormatVersion не меняется
+public sealed record LocalMediaJobSnapshot(
+    string Op,
+    string Kind,
+    bool Heavy,
+    int? EtaSeconds,
+    string PromptId,
+    DateTime? StartedAt,
+    string OwnerId,
+    string? SessionId);
 
 public sealed class LoraPhotoRejectionDto
 {
@@ -223,6 +247,25 @@ public sealed class LocalMediaJobStore
     {
         lock (_writeLock)
             return _jobs.Where(j => !LocalMediaStatuses.IsTerminal(j.Status)).Select(Clone).ToList();
+    }
+
+    // Тонкие записи активных задач для снимка очереди (ComfyStats, шаг 26): только op/kind/heavy/
+    // eta/promptId/startedAt/ownerId/sessionId, без Prompt/ComfyFirstFrame/Lora*. Только чтение:
+    // FormatVersion стора не меняется, новое хранилище не заводится
+    public IReadOnlyList<LocalMediaJobSnapshot> ActiveSnapshot()
+    {
+        lock (_writeLock)
+            return _jobs.Where(j => !LocalMediaStatuses.IsTerminal(j.Status))
+                .Select(j => new LocalMediaJobSnapshot(
+                    Op: j.Op,
+                    Kind: LocalMediaOps.KindOf(j.Op),
+                    Heavy: j.Heavy,
+                    EtaSeconds: j.EtaSeconds,
+                    PromptId: j.PromptId,
+                    StartedAt: j.StartedAt,
+                    OwnerId: j.OwnerId,
+                    SessionId: j.SessionId))
+                .ToList();
     }
 
     public bool HasActive()

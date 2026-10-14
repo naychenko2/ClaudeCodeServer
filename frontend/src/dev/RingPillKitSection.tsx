@@ -3,6 +3,7 @@ import { Island, IslandHeader } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { C, FS, ISLAND, SP } from '../lib/design';
 import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../components/chat/ChatHeaderBar';
+import type { LocalModelLiveState } from '../features/localModel/useLocalModelLive';
 import type { ContextEstimate } from '../lib/context';
 import type { GlifGenStats } from '../components/chat/glifStats';
 import { toRateWindows, type RateWindow } from '../lib/rateLimit';
@@ -43,6 +44,7 @@ interface Sample {
   compact?: boolean;
   reducedMotion?: boolean;
   empty?: boolean;                      // пилюли нет: на её месте — пояснение
+  localModel?: LocalModelLiveState;    // форсированное состояние локальной модели
 }
 
 const DS_OK: ProviderBalance = { available: true, currency: 'USD', totalBalance: '4.20' };
@@ -67,6 +69,17 @@ const SAMPLES: Sample[] = [
   { caption: '5.8b DeepSeek — начало сессии, контекста нет', estimate: NO_CTX, provider: { name: 'DeepSeek', balance: DS_OK } },
   { caption: '5.9 workflow (мобила)', estimate: ctx(62), windows: wins({ five_hour: 0.41, seven_day: 0.12 }), workflow: { phasesDone: 2, phasesTotal: 5 }, fal: FAL, compact: true },
   { caption: '5.10 нечего показывать — пилюли нет', estimate: NO_CTX, empty: true },
+  // Локальная модель: все состояния
+  { caption: 'LM генерация 38 ток/с', estimate: ctx(45), localModel: { seen: true, phase: 'generating', genTps: 38, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM читает промпт', estimate: ctx(45), localModel: { seen: true, phase: 'prefill', genTps: null, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM очередь · ждут 3', estimate: ctx(45), localModel: { seen: true, phase: 'queued', genTps: null, waitingTotal: 3, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM после хода (idle)', estimate: ctx(45), localModel: { seen: true, phase: 'idle', genTps: null, waitingTotal: 0, lastTurn: { genTps: 30, prefillTps: 1200, ttftMs: 800, queueMsApprox: 4000, cacheHitPerc: 0.87, outTokens: 500 }, lastActivityAt: Date.now() } },
+  // Мобила, вариант А: лицо заменено компактным словом (≤ 7 знаков)
+  { caption: 'LM моб: генерация 38 т/с', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'generating', genTps: 38, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: читает', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'prefill', genTps: null, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: очередь', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'queued', genTps: null, waitingTotal: 3, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: после хода (idle) — Ctx 61k', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'idle', genTps: null, waitingTotal: 0, lastTurn: { genTps: 30, prefillTps: 1200, ttftMs: 800, queueMsApprox: 4000, cacheHitPerc: 0.87, outTokens: 500 }, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: тревога Ctx 92% побеждает', estimate: ctx(92), compact: true, localModel: { seen: true, phase: 'generating', genTps: 38, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
 ];
 
 function RingSample({ s }: { s: Sample }) {
@@ -81,6 +94,7 @@ function RingSample({ s }: { s: Sample }) {
         balance={s.provider?.balance ?? null} billing={s.billing ?? 'subscription'} windows={s.windows ?? []}
         activeWorkflow={s.workflow} isMobile={s.compact} isCompact={s.compact} resetKey={s.caption}
         forceReducedMotion={s.reducedMotion}
+        forceLocalModel={s.localModel}
       />
       {s.empty && <div style={{ fontSize: FS.sm, color: C.textMuted }}>(компонент вернул null)</div>}
     </div>

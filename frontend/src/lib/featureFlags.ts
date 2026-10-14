@@ -17,6 +17,8 @@ export const FLAGS = {
   characterSmartPhotos: 'character-smart-photos',
   // «Подставить персонажа» на лицо (этап 2): тап по лицу на картинке версии → выбор персонажа.
   characterFaceSwap: 'character-face-swap',
+  // Статистика локальных моделей: живые метрики в чипе Ctx + панель админа по медиа-стенду ComfyUI.
+  localModelStats: 'local-model-stats',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

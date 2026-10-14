@@ -129,6 +129,8 @@ public sealed class VideoEditJobService : IDisposable
         public int Variant { get; set; } = 1;
         public int? QueuePosition { get; set; }
         public int? EtaSeconds { get; set; }
+        // Снимок очереди GPU ComfyUI (шаг 30): живой, обновляется каждым отчётом прогресса
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         // Время апскейла «Макс» (пока идёт съёмка) и тикет текущей задачи GPU: по нему отменяется только увеличение
         public int? UpscaleEtaSeconds { get; set; }
         public string? RemoteId { get; set; }
@@ -430,8 +432,11 @@ public sealed class VideoEditJobService : IDisposable
         await _threads.OnLaunchedAsync(ownerId, scope.Key, input.SessionId, input.SceneId, job.Id, ToDto(quote),
             prompt, initiator, chosen, ct, framesCropped);
 
+        // Метка происхождения прогона (шаг 30): владелец, чат/сцена и тяжёлый ли — из задачи;
+        // вид=видео и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут
         var request = new VideoRequest(quote.Model.Id, scope, prompt, frameA.Bytes, frameB.Bytes, quote.DurationSec,
-            quote.Aspect, quote.Sound, parameters, input.Seed, quote.Format);
+            quote.Aspect, quote.Sound, parameters, input.Seed, quote.Format,
+            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: IsLocalHeavy(job.Quote));
         job.Completion = Task.Run(() => RunAsync(job, engine, (variant, progress, token) =>
             engine.RunAsync(request.Seed is { } seed ? request with { Seed = seed + variant - 1 } : request, progress, token)));
 
@@ -884,13 +889,14 @@ public sealed class VideoEditJobService : IDisposable
                 };
                 job.QueuePosition = value.QueuePosition;
                 job.EtaSeconds = value.EtaSeconds;
+                job.Gpu = value.Gpu;
                 if (value.UpscaleEtaSeconds is { } upscaleEta) job.UpscaleEtaSeconds = upscaleEta;
                 else if (value.Stage != VideoStage.Queued && value.Stage != VideoStage.Running) job.UpscaleEtaSeconds = null;
                 if (value.RemoteId is { } remote) job.RemoteId = remote;
             }
             _ = owner.Broadcast(job.OwnerId, new VideoEditProgressMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
                 StageName(value.Stage), value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.Initiator, value.Percent,
-                value.UpscaleEtaSeconds)
+                value.UpscaleEtaSeconds, Gpu: value.Gpu)
             { SessionId = job.ChatSessionId ?? "" });
         }
     }
@@ -956,6 +962,8 @@ public sealed class VideoEditJobService : IDisposable
         catch { return false; }
     }
 
+    // Тяжёлый ли прогон (шаг 30): у видео local H3 держит GPU на весь прогон (съёмка + апскейл) —
+    // метка едет в LocalJobOrigin и в снимок очереди (Busy); облачные поставщики GPU не держат
     private static bool IsLocalHeavy(Quote q) =>
         q.Heavy || string.Equals(q.Provider, VideoCatalog.LocalKey, StringComparison.OrdinalIgnoreCase);
 
@@ -970,7 +978,7 @@ public sealed class VideoEditJobService : IDisposable
             return new VideoJobDto(j.Id, j.Scope.Key, StatusName(j.Status), j.Quote.Provider, j.Quote.Model.Id, j.Quote.Count,
                 [.. j.Variants.Select(v => v.Variant)], j.Cost, j.Outcome?.ToString().ToLowerInvariant(), j.Charged, j.Error,
                 j.QueuePosition, j.EtaSeconds, j.CreatedAt, j.ChatSessionId, j.SceneId, j.Initiator, j.Quote.License,
-                j.UpscaleEtaSeconds, j.Quote.Count > 1 ? j.Variant : null);
+                j.UpscaleEtaSeconds, j.Quote.Count > 1 ? j.Variant : null, Gpu: j.Gpu);
     }
 
     private static string StatusName(VideoEditJobStatus s) => s.ToString().ToLowerInvariant();

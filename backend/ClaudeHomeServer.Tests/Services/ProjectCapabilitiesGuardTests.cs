@@ -40,9 +40,16 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (7, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (4, "LLM-провайдер"),
+        // +1 (5) на ветке local-model-stats: UseServerGateway спрашивает provider.IsLocal
+        // (локальный LLM-провайдер), не локальность проекта.
+        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (5, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
+        // Шлюз: наблюдатель метрик создаётся, когда маршрут — локальный LLM-провайдер
+        // (LlmProviderConfig.IsLocal), не «локальный проект» — чужой смысл того же слова.
+        ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),
+        // Поллер: источник метрик выбирается по провайдеру, помеченному IsLocal (LLM-провайдер).
+        ["backend/ClaudeHomeServer.Llm/LocalStats/LocalModelStatsPoller.cs"] = (2, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

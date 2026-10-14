@@ -161,7 +161,12 @@ public sealed record VideoRequest(
     bool Sound = false,
     JsonObject? Params = null,
     long? Seed = null,
-    ResolvedFormat? Format = null);
+    ResolvedFormat? Format = null,
+    // Метка происхождения прогона (шаг 30): владелец, чат/сцена и тяжёлый ли — для LocalJobOrigin;
+    // заполняет исполнитель (VideoEditJobService) из задачи, драйверы без задачи (тесты) — null
+    string? OwnerId = null,
+    string? SessionId = null,
+    bool Heavy = false);
 
 // Клип варианта: байты mp4 и признаки, которые драйвер знает от поставщика (null — неизвестно). Width и Height —
 // размер ролика. UpscaleError — «Макс» local H3: увеличение не удалось или отменено, в Bytes — съёмка 768p как есть
@@ -174,7 +179,10 @@ public sealed record VideoCost(double Amount, string Unit);
 // через IProgress с Stage=Queued/Running и RemoteId). Percent — настоящая доля готовности 0..1 от поставщика;
 // null — данных нет (не выдумываем, фронт остаётся на оценке по времени). Charged: true — списано, false — точно не списано, null — неизвестно
 public sealed record VideoProgress(VideoStage Stage, int? QueuePosition = null, int? EtaSeconds = null,
-    string? RemoteId = null, bool Accepted = false, double? Percent = null, int? UpscaleEtaSeconds = null);
+    string? RemoteId = null, bool Accepted = false, double? Percent = null, int? UpscaleEtaSeconds = null,
+    // Снимок очереди GPU ComfyUI (шаг 30): живой, только отображение, в статус запуска, траты
+    // и recordType не идёт; заполняет драйвер, который его знает (local), остальные — null
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 public sealed record VideoResult(
     VideoOutcome Outcome,

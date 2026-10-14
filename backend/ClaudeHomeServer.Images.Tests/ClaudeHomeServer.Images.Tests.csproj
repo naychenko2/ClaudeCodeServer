@@ -24,6 +24,8 @@
   <ItemGroup>
     <!-- Эталоны графов стенда и снимок схемы нод для ComfyWorkflowsTests -->
     <None Update="Images\ComfyReference\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Пример ответа маршрута /ccs/stats узла ComfyUI (шаг 31) для ComfyCcsStatsTests -->
+    <None Update="Images\CcsStats\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

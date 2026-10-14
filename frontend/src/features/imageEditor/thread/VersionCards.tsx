@@ -39,6 +39,7 @@ import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
 import { CardContextActions, primaryVersion, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
+import { GpuQueueBlock } from './gpuCard';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -286,11 +287,13 @@ function estimateText(e: unknown): string | null {
   return `${x.approx ? '≈ ' : ''}${money(x.amount, x.unit)}`;
 }
 
-function RunningLine({ projectId, jobId, model, faces }: {
-  projectId: string; jobId: string; model: string | null; faces: ImageThreadFaceTarget[];
+function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count }: {
+  projectId: string; sessionId: string; thread: ImageThread; jobId: string; model: string | null;
+  faces: ImageThreadFaceTarget[]; count: number;
 }) {
   const { status, cancel } = useJobStatus(projectId, jobId);
   const mobile = useIsMobile();
+  const feature = useFeature(FLAGS.localModelStats);
   const running = (status?.phase ?? 'run') === 'run';
   const progress = useProgress(status, running);
   // Несколько лиц (ADR-028): «Проход k из N · лицо n» по run/runs из событий задачи; их нет — «Рисуем…»
@@ -308,6 +311,8 @@ function RunningLine({ projectId, jobId, model, faces }: {
         ? <PassBar segments={stage.segments} run={status?.run ?? 0} />
         : <ProgressBar value={progress.percent} transition="width .5s linear" />}
       {stage?.hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{stage.hint}</div>}
+      <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
+        feature={feature} count={count} />
     </div>
   );
 }
@@ -382,7 +387,8 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
             <span>{threadName(thread)}{faceCap ? ` · ${faceCap}` : ''} · {info}</span>
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
-          <RunningLine projectId={projectId} jobId={jobId} model={model} faces={faces} />
+          <RunningLine projectId={projectId} sessionId={sessionId} thread={thread} jobId={jobId} model={model} faces={faces}
+            count={count} />
           <div className="cc-skel" style={{ aspectRatio: PREVIEW_RATIO, maxHeight: PREVIEW_MAX_HEIGHT, borderRadius: R.md }} />
         </Shell>
       )}

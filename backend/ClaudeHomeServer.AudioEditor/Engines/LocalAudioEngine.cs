@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
+using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Engines;
@@ -116,16 +117,19 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
     {
         var stage = AudioStage.Queued;
         int? position = null;
+        // Снимок очереди GPU (шаг 29): живой, меняется каждый опрос — обновляем и вешаем на отчёт
+        LocalGpuQueueInfo? gpu = null;
         while (true)
         {
             var poll = await media!.PollAsync(ticket, ct);
             if (poll.State is LocalAudioState.Completed or LocalAudioState.Failed) return poll;
             var next = poll.State == LocalAudioState.Running ? AudioStage.Running : AudioStage.Queued;
+            gpu = poll.Gpu;
             if (poll.Warning is null && (next != stage || poll.QueuePosition != position))
             {
                 stage = next;
                 position = poll.QueuePosition;
-                progress.Report(new AudioProgress(stage, stage == AudioStage.Queued ? position : null, eta));
+                progress.Report(new AudioProgress(stage, stage == AudioStage.Queued ? position : null, eta, Gpu: gpu));
             }
             await Task.Delay(PollInterval, ct);
         }
@@ -191,13 +195,19 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
         if (req.EndSec is { } end) args["end_seconds"] = end;
         foreach (var (key, value) in binding.Args) args[key] = value;
 
+        // Метка происхождения прогона (шаг 29): владелец, чат, вид=звук, операция, тяжёлый ли.
+        // Данные у движка есть из задачи (AudioEditJobService кладёт их в запрос); без задачи (тесты) — null
+        var origin = req.OwnerId is { } owner
+            ? new LocalJobOrigin(owner, req.SessionId, "audio", AudioEditJobService.OpName(req.Op), req.Heavy)
+            : null;
         return new LocalAudioRequest(binding.Op, req.Prompt, args,
             Audio: req.Source?.Bytes,
             Reference: (req.Reference ?? req.Voice?.Sample)?.Bytes,
             Clips: req.Clips?.Select(c => c.Bytes).ToList(),
             VoiceModel: req.VoiceModel ?? req.Voice?.RvcModel,
             VoiceIndex: req.VoiceIndex ?? req.Voice?.RvcIndex,
-            Seed: req.Seed);
+            Seed: req.Seed,
+            Origin: origin);
     }
 
     private static readonly AudioCost Free = new(0, AudioPriceUnits.Free);

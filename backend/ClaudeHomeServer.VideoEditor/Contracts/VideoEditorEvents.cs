@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
@@ -39,9 +40,12 @@ public record VideoPrefsChangedMessage(string ScopeKey, VideoPrefsDto Prefs)
 // Percent — доля готовности 0..1 текущей стадии от поставщика (необязательно: нет данных — поля нет, клиент считает
 // по ETA). EtaSeconds и Percent всегда относятся к ТЕКУЩЕЙ стадии: на upscaling они отдельные от съёмки.
 // UpscaleEtaSeconds — сколько займёт апскейл «Макс» local H3 после съёмки («следом · ~15 мин»); у запуска без
-// апскейла и у самого upscaling поля нет
+// апскейла и у самого upscaling поля нет. Gpu — живой снимок очереди GPU ComfyUI (шаг 30): только
+// отображение, null — поставщик не знает; null не пишется (camelCase как соседние поля)
 public record VideoEditProgressMessage(string JobId, string ScopeKey, string SceneId, string Stage, int? QueuePosition,
-    int? EtaSeconds, int Variant, int Count, string Initiator, double? Percent = null, int? UpscaleEtaSeconds = null)
+    int? EtaSeconds, int Variant, int Count, string Initiator, double? Percent = null, int? UpscaleEtaSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null)
     : ServerMessage(VideoEditorEventNames.Progress);
 
 // Error — у частичного успеха: часть вариантов готова, следующий не получился

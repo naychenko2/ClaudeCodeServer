@@ -10,6 +10,7 @@ import {
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
 import { isPersonalScope } from '../scope';
+import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 
 export const VIDEO_PANEL = 'videoEditor';
 // Ожидаемая длительность прогона, когда сервер её не прислал (облачные модели снимают 1–2,5 минуты)
@@ -38,6 +39,8 @@ export interface JobProgress {
   percent: number | null;
   // Нижняя граница показанной доли: полоса не откатывается назад, когда приходит настоящий процент
   floor: number;
+  // Снимок очереди GPU ComfyUI (шаг 30): локальные задачи; null — поставщик не знает
+  gpu: LocalGpuQueueInfo | null;
 }
 
 // Доля хода съёмки 0..1 на момент now. Есть Percent поставщика — берём его (доля варианта среди всех); нет —
@@ -210,6 +213,7 @@ export function handleEvent(ev: VideoEvent) {
         percent: same && prev.percent !== null && percent !== null ? Math.max(prev.percent, percent) : percent,
         // Полоса не откатывается внутри прогона: прошлая показанная доля — нижняя граница
         floor: same ? jobFraction(prev) : 0,
+        gpu: ev.gpu ?? null,
       };
       _jobs.set(ev.jobId, next);
       emit();

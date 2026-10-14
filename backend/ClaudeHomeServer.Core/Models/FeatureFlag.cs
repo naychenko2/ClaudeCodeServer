@@ -41,6 +41,10 @@ public static class FeatureFlagKeys
     // Этап 2 «Подставить персонажа на лицо» (ADR-028): тап по лицу на картинке, выбор
     // персонажа, замена лица. Гейтится на сервере. Dark launch, выключено по умолчанию
     public const string CharacterFaceSwap = "character-face-swap";
+
+    // Статистика локальных моделей: живые метрики в чипе Ctx для чатов на локальной модели
+    // (скорость генерации, очередь GPU) + панель админа по медиа-стенду ComfyUI. Dark launch.
+    public const string LocalModelStats = "local-model-stats";
 }
 
 /// <summary>
@@ -92,6 +96,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.CharacterFaceSwap,
             Title: "Подставить персонажа на лицо",
             Description: "На картинке тапаете по лицу и выбираете персонажа — лицо заменяется, остальное остаётся.",
+            Default: false,
+            Stage: "dev"),
+
+        // Статистика локальных моделей: живые метрики в чипе Ctx (скорость генерации, очередь GPU)
+        // для чатов на локальной модели + панель админа по медиа-стенду ComfyUI.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LocalModelStats,
+            Title: "Статистика локальных моделей",
+            Description: "Для чатов на локальной модели: живые метрики генерации и очередь GPU прямо в чате, плюс панель админа по медиа-стенду ComfyUI.",
             Default: false,
             Stage: "dev"),
     ];

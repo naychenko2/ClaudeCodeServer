@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Turn;
+using Microsoft.Extensions.Options;
 
 // Швы из Core, оставшиеся в namespace ClaudeHomeServer.Services.Skills после выноса
 // SkillsService в отдельную вертикаль: используются полным именем, чтобы Llm не тащил
@@ -78,6 +79,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Серверный ход провайдера с NormalizeToolInputArrays через шлюз LLM (ADR-016 §2). null —
     // тесты без DI: ход провайдера идёт напрямую, как раньше.
     private readonly Gateway.ServerTurnGateway? _serverGateway;
+    // Тумблер статистики локальной модели (LocalModelStats:Enabled) — ход локальной модели
+    // идёт через шлюз, когда метрики включены (счётчику хода нужна копия потока).
+    private readonly IOptionsMonitor<LocalModelStatsOptions>? _localModelStats;
 
     public LlmSessionAdapterFactory(IConfiguration config, IAgentPromptSource agentPrompt,
         IWorkspaceDatasetLookup workspaceStore, LlmProviderRegistry providers,
@@ -93,9 +97,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ILoggerFactory? loggerFactory = null,
         ICommandExpansion? commandExpansion = null,
         ISkillSnapshotSource? skillSnapshot = null,
-        Gateway.ServerTurnGateway? serverGateway = null)
+        Gateway.ServerTurnGateway? serverGateway = null,
+        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null)
     {
         _serverGateway = serverGateway;
+        _localModelStats = localModelStats;
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
         _fallbackSettings = fallbackSettings;
@@ -182,7 +188,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _agentPrompt,
             _commandExpansion, _skillSnapshot, _workspaceStore, _disallowedTools, _providers,
             _subscriptionPool, _fileWatcherOptions, _bgLingerTimeout, _falMcpApiKey,
-            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog, _serverGateway);
+            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog, _serverGateway,
+            _localModelStats);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,

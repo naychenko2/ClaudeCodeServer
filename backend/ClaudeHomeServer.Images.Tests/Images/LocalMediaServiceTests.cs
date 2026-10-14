@@ -237,7 +237,9 @@ public class LocalMediaServiceTests : IDisposable
     [Fact]
     public void Клиент_ПозицияВОчереди()
     {
-        var queue = new ComfyQueueState(["a"], ["b", "c"]);
+        var queue = new ComfyQueueState(
+            [new ComfyQueueItem("a", null, [])],
+            [new ComfyQueueItem("b", null, []), new ComfyQueueItem("c", null, [])]);
         queue.PositionOf("a").Should().Be(0);
         queue.PositionOf("c").Should().Be(2);
         queue.PositionOf("zzz").Should().BeNull();

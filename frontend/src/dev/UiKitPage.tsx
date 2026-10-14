@@ -75,6 +75,7 @@ import { RingPillKitSection } from './RingPillKitSection';
 import { ContextPanelKitSection } from './ContextPanelKitSection';
 import { FormatKitSection } from './FormatKitSection';
 import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
+import { LocalGpuQueueKitSection } from './LocalGpuQueueKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -146,6 +147,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-headers',    label: 'Шапки'              },
   { id: 'sec-ring-pill',  label: 'Пилюля «кольца»'    },
   { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
+  { id: 'sec-local-gpu-queue', label: 'Очередь локальной GPU' },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -344,6 +346,11 @@ export function UiKitPage() {
                 на настоящем ToolUseView (см. ToolProgressSection) */}
             <div id="sec-tool-progress" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <ToolProgressSection />
+            </div>
+
+            {/* Строка ожидания локальной GPU-генерации (шаг 34): форматтер + компонент */}
+            <div id="sec-local-gpu-queue" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <LocalGpuQueueKitSection />
             </div>
           </div>
 

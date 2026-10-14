@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "loadedModels": [
+    {
+      "name": "qwen_image_2.1_int8_convrot.safetensors",
+      "sizeMb": 19530,
+      "loadedMb": 19530
+    },
+    {
+      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "sizeMb": 8740,
+      "loadedMb": 0
+    },
+    {
+      "name": "AutoencoderKL",
+      "sizeMb": 242,
+      "loadedMb": 242
+    }
+  ],
+  "gpus": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 3090",
+      "utilPerc": 97,
+      "memUsedMb": 21874,
+      "memTotalMb": 24576,
+      "tempC": 71,
+      "powerW": 338,
+      "powerLimitW": 350
+    }
+  ]
+}

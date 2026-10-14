@@ -1,7 +1,8 @@
 """Общее для аудио-воркеров: разбор job.json, замер времени, запись результата.
 
 Воркер — одноразовый процесс: загрузил модель, сделал работу, напечатал строку
-CCS_RESULT и вышел (видеопамять освобождается вместе с процессом).
+CCS_RESULT и вышел (видеопамять освобождается вместе с процессом). По ходу работы воркер
+с естественными шагами печатает строки CCS_PROGRESS (emit_progress).
 """
 import json
 import os
@@ -91,6 +92,27 @@ class Job:
         except Exception:
             pass
         print("CCS_RESULT " + json.dumps({"files": self.files, "stats": self.stats}, ensure_ascii=False), flush=True)
+
+
+PROGRESS_MARK = "CCS_PROGRESS "
+
+
+def emit_progress(step, total):
+    """Строка протокола CCS_PROGRESS {"step": N, "total": M}: узел держит последнюю и двигает ProgressBar.
+
+    Прогресс — подсказка, а не результат: кривые значения и закрытый stdout работу не роняют.
+    """
+    try:
+        step, total = int(step), int(total)
+    except (TypeError, ValueError):
+        return
+    if total <= 0:
+        return
+    step = max(0, min(step, total))
+    try:
+        print(PROGRESS_MARK + json.dumps({"step": step, "total": total}), flush=True)
+    except (OSError, ValueError):
+        pass
 
 
 def fail(message):

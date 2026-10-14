@@ -42,6 +42,13 @@ public interface IImageEditor
 // EnhanceFaces — быстрое действие «Улучшить лица» (локальные модели: FaceDetailer)
 public enum ImageEditOp { Generate, Edit, Inpaint, Outpaint, RemoveBackground, Upscale, EnhanceFaces }
 
+// camelCase-имя операции (generate / edit / inpaint / …). Нейтральный дом (шаг 28): рядом с
+// ImageEditOp, чтобы и драйвер (Providers/) и исполнитель задач (Jobs/) не тянули друг на друга
+public static class ImageEditOpNames
+{
+    public static string OpName(ImageEditOp op) => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
+}
+
 // «Авто / Быстрая / Точная правка / Фотореализм»; режим имеет смысл только при модели «Авто»
 public enum EditMode { Auto, Fast, Precise, Photoreal }
 
@@ -167,7 +174,12 @@ public record ImageEditRequest(
     LocalImageCrop? FaceCrop = null,
     // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал подстановки на лицо;
     // null — драйвер берёт её из References по метке mask, как раньше
-    ImageBytes? KeepMask = null);
+    ImageBytes? KeepMask = null,
+    // Метка происхождения прогона (шаг 28): владелец, чат и тяжёлый ли — для LocalJobOrigin;
+    // заполняет исполнитель (ImageEditJobService) из задачи, драйверы без задачи (тесты) — null
+    string? OwnerId = null,
+    string? SessionId = null,
+    bool Heavy = false);
 
 // Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
 public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);
@@ -178,9 +190,13 @@ public record EditCost(double Amount, string Unit);
 // Run/Runs — номер текущего прогона (с 1) и их число, EtaSeconds — ожидаемое время прогона;
 // заполняет только драйвер, который это знает (local), остальные оставляют null.
 // Ready — варианты, готовые прямо сейчас (скачан прогон): исполнитель отдаёт их в нить, не дожидаясь
-// остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку
+// остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку.
+// Gpu — живой снимок очереди GPU ComfyUI (шаг 28): только отображение, в статус запуска, траты
+// и журналы не идёт; null — поставщик не знает или задача вне локальных моделей, заполняет
+// драйвер, который его знает (local)
 public record EditProgress(EditStage Stage, int? QueuePosition = null, int? Run = null, int? Runs = null,
-    int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null);
+    int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null,
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно («Списание
 // уточняется у сервиса»)

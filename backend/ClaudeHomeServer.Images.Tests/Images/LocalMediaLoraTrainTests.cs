@@ -36,16 +36,19 @@ public class LocalMediaLoraTrainTests : IDisposable
             ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
         }).Build();
 
-    private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool loraEnabled = true, TimeProvider? time = null)
+    // Трекер шагов последнего Build: тесты кормят его событиями progress, как живой сокет ComfyUI
+    private ComfyProgressTracker? _steps;
+
+    private (LocalMediaService Service, LocalMediaJobStore Store) Build(
+        bool loraEnabled = true, TimeProvider? time = null, ComfyPromptLedger? ledger = null)
     {
         var config = Config(loraEnabled);
         var store = new LocalMediaJobStore(config);
+        _steps = ledger is { } l
+            ? new ComfyProgressTracker(store, l, time)
+            : new ComfyProgressTracker(store, time);
         var service = new LocalMediaService(new ComfyClient(new FakeComfyFactory(_comfy), config), store,
-            new FakeProjectAccess(), config, NullLogger<LocalMediaService>.Instance, null, null, time)
-        {
-            // Сокет ComfyUI в тестах не открываем
-            LoraProgressListener = (_, _, ct) => Task.Delay(Timeout.Infinite, ct),
-        };
+            new FakeProjectAccess(), config, NullLogger<LocalMediaService>.Instance, _steps, null, time, ledger);
         return (service, store);
     }
 
@@ -443,6 +446,81 @@ public class LocalMediaLoraTrainTests : IDisposable
         state.LoraFile.Should().BeNull();
     }
 
+    // Мусор в ccs_lora/ccs_stats (ревью C1-подобный): GetValue<string>() на нестроковых значениях
+    // бросал InvalidOperationException, прогон «зависал» на «ComfyUI вернул неожиданный ответ».
+    // Теперь разбор безопасный: мусорный элемент → null/"" , прогон доходит до осмысленного исхода.
+    private async Task<LoraTrainState> CollectWithRawAsync(JsonNode ccsLora, JsonNode? ccsStats = null)
+    {
+        var (service, id) = await Started();
+        var prompt = _comfy.Pending.Single();
+        _comfy.Complete(prompt);
+        _comfy.History[prompt]["outputs"]!.AsObject()["worker"] = new JsonObject
+        {
+            ["ccs_lora"] = ccsLora,
+            ["ccs_stats"] = ccsStats,
+        };
+        return (await service.GetLoraTrainAsync(Owner, id, default))!;
+    }
+
+    // ccs_lora с нестроковым name ({"name":37}) → имя null → mismatch → bad_result, не «зависание»
+    [Fact]
+    public async Task Collect_LoraNameNumber_FailsWithBadResult()
+    {
+        var state = await CollectWithRawAsync(new JsonArray(new JsonObject { ["name"] = 37 }));
+
+        state.Status.Should().Be(LoraTrainStatus.Failed);
+        state.Error!.Code.Should().Be("bad_result");
+    }
+
+    // ccs_lora без поля name ({"filename":[]}) → имя null → bad_result
+    [Fact]
+    public async Task Collect_LoraNoNameField_FailsWithBadResult()
+    {
+        var state = await CollectWithRawAsync(new JsonArray(new JsonObject { ["filename"] = new JsonArray() }));
+
+        state.Status.Should().Be(LoraTrainStatus.Failed);
+        state.Error!.Code.Should().Be("bad_result");
+    }
+
+    // ccs_lora с элементом-не-объектом (42) → имя null → bad_result
+    [Fact]
+    public async Task Collect_LoraElementNotObject_FailsWithBadResult()
+    {
+        var state = await CollectWithRawAsync(new JsonArray(42));
+
+        state.Status.Should().Be(LoraTrainStatus.Failed);
+        state.Error!.Code.Should().Be("bad_result");
+    }
+
+    // ccs_lora пустой массив → имя null → bad_result
+    [Fact]
+    public async Task Collect_LoraEmptyArray_FailsWithBadResult()
+    {
+        var state = await CollectWithRawAsync(new JsonArray());
+
+        state.Status.Should().Be(LoraTrainStatus.Failed);
+        state.Error!.Code.Should().Be("bad_result");
+    }
+
+    // ccs_stats с нестроковыми полями (name:37, reason:[]) → разбор без исключения,
+    // прогон завершается, rejected с пустыми строками
+    [Fact]
+    public async Task Collect_StatsNonStringFields_CompletesWithoutThrow()
+    {
+        var ccsLora = new JsonArray(new JsonObject { ["name"] = LoraNamespace.RunLoraFile(Owner, Slug, RunId) });
+        var ccsStats = new JsonArray(new JsonObject
+        {
+            ["photos_kept"] = "много",
+            ["rejected"] = new JsonArray(new JsonObject { ["name"] = 37, ["reason"] = new JsonArray() }),
+        });
+
+        var state = await CollectWithRawAsync(ccsLora, ccsStats);
+
+        state.Status.Should().Be(LoraTrainStatus.Completed);
+        state.PhotosKept.Should().BeNull("нечисловой photos_kept → null, не исключение");
+        state.Rejected.Should().ContainSingle(r => r.Name == "" && r.Reason == "");
+    }
+
     [Theory]
     [InlineData("CcsAudioWorker: lora failed ccs_error=too_few_faces", "too_few_faces")]
     [InlineData("CUDA out of memory", "oom")]
@@ -489,24 +567,16 @@ public class LocalMediaLoraTrainTests : IDisposable
     }
 
     [Fact]
-    public async Task Running_ReportsStepFromProgressListener()
+    public async Task Running_ReportsStepFromProgressTracker()
     {
         var (service, id) = await Started();
         var prompt = _comfy.Pending.Single();
         _comfy.Pending.Clear();
         _comfy.Running.Add(prompt);
-        Action<double>? report = null;
-        var listening = new TaskCompletionSource();
-        service.LoraProgressListener = (_, on, ct) =>
-        {
-            report = on;
-            listening.SetResult();
-            return Task.Delay(Timeout.Infinite, ct);
-        };
 
-        await service.GetLoraTrainAsync(Owner, id, default);
-        await listening.Task;
-        report!(0.5);
+        // Событие progress с реальным prompt_id: трекер хранит долю шагов, как живой сокет ComfyUI
+        _steps!.Handle("""{"type":"progress","data":{"value":1000,"max":2000,"prompt_id":"PROMPT","node":"sampler"}}"""
+            .Replace("PROMPT", prompt));
 
         var state = (await service.GetLoraTrainAsync(Owner, id, default))!;
         state.Status.Should().Be(LoraTrainStatus.Running);
@@ -527,6 +597,84 @@ public class LocalMediaLoraTrainTests : IDisposable
         _comfy.Complete(_comfy.Pending.Single());
         (await service.DeleteLoraRunAsync(Owner, "proj-1", Slug, RunId, default)).Should().Be(LoraDeleteState.Deleted);
         _comfy.Prompts.Should().ContainSingle();
+    }
+
+    // ─── Реестр (шаг 7): все выходы LoRA снимают запись из активных, иначе утечка ─────────
+
+    // (а) Отмена через CancelLoraTrainAsync: успешное снятие из очереди снимает запись из реестра
+    [Fact]
+    public async Task Ledger_CancelViaCancelAsync_RemovesActiveRecord()
+    {
+        var ledger = new ComfyPromptLedger();
+        var (service, _) = Build(ledger: ledger);
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+
+        ledger.Contains(prompt).Should().BeTrue("постанка обучения зарегистрировала prompt_id");
+        ledger.Active().Should().ContainSingle();
+
+        (await service.CancelLoraTrainAsync(Owner, id, asAdmin: false, default)).Should().Be(LoraCancelResult.Cancelled);
+
+        ledger.Contains(prompt).Should().BeFalse("отмена сняла запись из активных");
+        ledger.Active().Should().BeEmpty();
+    }
+
+    // (б) Отмена, дозревшая в стороже (SweepLoraTimeoutsAsync): MarkLoraCancelled снимает запись
+    [Fact]
+    public async Task Ledger_CancelViaSweepMatured_RemovesActiveRecord()
+    {
+        var clock = new FakeClock(DateTime.UtcNow);
+        var ledger = new ComfyPromptLedger();
+        var (service, _) = Build(time: clock, ledger: ledger);
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+        _comfy.Pending.Clear();
+        _comfy.Running.Add(prompt);
+        _comfy.Down = true;
+        await service.CancelLoraTrainAsync(Owner, id, asAdmin: false, default);
+        _comfy.Down = false;
+
+        ledger.Contains(prompt).Should().BeTrue("отмена ещё не дозрела — запись активна");
+
+        clock.Now = clock.Now.AddMinutes(29); // внутри потолка отмены: дозревает в «отменено»
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(1);
+
+        ledger.Contains(prompt).Should().BeFalse("дозревшая отмена сняла запись из активных");
+        ledger.Active().Should().BeEmpty();
+    }
+
+    // (г) Успех LoraTrain: сбор результата завершает прогон и снимает запись из активных
+    [Fact]
+    public async Task Ledger_LoraTrainSuccess_RemovesActiveRecord()
+    {
+        var ledger = new ComfyPromptLedger();
+        var (service, _) = Build(ledger: ledger);
+        var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+        ledger.Contains(prompt).Should().BeTrue();
+
+        Finish(LoraNamespace.RunLoraFile(Owner, Slug, RunId));
+        (await service.GetLoraTrainAsync(Owner, id, default))!.Status.Should().Be(LoraTrainStatus.Completed);
+
+        ledger.Contains(prompt).Should().BeFalse("успех обучения снял запись из активных");
+        ledger.Active().Should().BeEmpty();
+    }
+
+    // (в) Успех LoraDelete: запись не регистрировалась (лёгкая уборка), Complete — no-op,
+    // активных не прибавляется
+    [Fact]
+    public async Task Ledger_LoraDeleteSuccess_DoesNotLeakActiveRecord()
+    {
+        var ledger = new ComfyPromptLedger();
+        var (service, _) = Build(ledger: ledger);
+        await service.DeleteLoraRunAsync(Owner, "proj-1", Slug, RunId, default);
+        var prompt = _comfy.Pending.Single();
+        ledger.Active().Should().BeEmpty("lora_delete не регистрирует prompt_id в реестре");
+
+        _comfy.Complete(prompt);
+        (await service.DeleteLoraRunAsync(Owner, "proj-1", Slug, RunId, default)).Should().Be(LoraDeleteState.Deleted);
+
+        ledger.Active().Should().BeEmpty("успех уборки не оставил активной записи");
     }
 
     [Fact]

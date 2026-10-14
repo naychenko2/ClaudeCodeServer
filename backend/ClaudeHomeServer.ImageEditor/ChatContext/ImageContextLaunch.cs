@@ -85,7 +85,7 @@ public sealed class ImageContextLaunch(
                 hasImage = version is not null && (thread.ImageStepOf(version) is { Length: > 0 } || thread.File is { Length: > 0 });
             }
 
-            var accepted = owner.AcceptedRefs(ctx, primary, OpName(op));
+            var accepted = owner.AcceptedRefs(ctx, primary, ImageEditOpNames.OpName(op));
             foreach (var item in state.Refs)
             {
                 if (!accepted.Any(a => a.Role == item.Role && a.Kinds.Contains(item.Kind))) continue;
@@ -176,8 +176,6 @@ public sealed class ImageContextLaunch(
         ImageContextRoles.Character => ReferenceRole.Character,
         _ => ReferenceRole.Object,
     };
-
-    public static string OpName(ImageEditOp op) => JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
 
     private static ImageEditCallResult<IReadOnlyList<ReferenceImage>> SampleFail(string error) =>
         ImageEditCallResult<IReadOnlyList<ReferenceImage>>.Fail(ImageEditErrorCodes.InvalidRequest, error);

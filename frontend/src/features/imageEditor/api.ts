@@ -10,6 +10,7 @@
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
+import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 import { mockFormatState, mockTierFactor } from './mockFormat';
 import { isPersonalScope, projectBase, scopeBase, threadsBase } from './scope';
 import { transformedSize } from './transforms';
@@ -150,6 +151,9 @@ export interface ImageEditJob {
   runs?: number | null;
   etaSeconds?: number | null;
   runElapsedSeconds?: number | null;
+  // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
+  // или задача вне локальных моделей
+  gpu?: LocalGpuQueueInfo | null;
 }
 
 // Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
@@ -369,7 +373,9 @@ interface ImageEditEventOrigin { chatSessionId?: string | null; initiator?: Imag
 
 export type ImageEditEvent = ImageEditEventOrigin & (
   | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null;
-      run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null }
+      run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null;
+      // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
+      gpu?: LocalGpuQueueInfo | null }
   | { type: 'image_edit_completed'; jobId: string; projectId: string; variants: number[]; cost?: EditCost | null }
   | { type: 'image_edit_failed'; jobId: string; projectId: string; outcome: EditOutcome; charged?: boolean | null; error?: string | null; retryQuote?: ImageEditQuote | null });
 

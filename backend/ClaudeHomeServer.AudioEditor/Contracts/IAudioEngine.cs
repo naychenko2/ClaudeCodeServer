@@ -219,14 +219,22 @@ public sealed record AudioRequest(
     byte[]? VoiceModel = null,
     byte[]? VoiceIndex = null,
     long? Seed = null,
-    AudioVoiceUse? Voice = null);
+    AudioVoiceUse? Voice = null,
+    // Метка происхождения прогона (шаг 29): владелец, чат и тяжёлый ли — для LocalJobOrigin;
+    // заполняет исполнитель (AudioEditJobService) из задачи, драйверы без задачи (тесты) — null
+    string? OwnerId = null,
+    string? SessionId = null,
+    bool Heavy = false);
 
 // Role — роль файла версии (LocalAudioRoles.*); Extension — с точкой
 public sealed record AudioFile(string Role, byte[] Bytes, string ContentType, string Extension);
 
 public sealed record AudioCost(double Amount, string Unit);
 
-public sealed record AudioProgress(AudioStage Stage, int? QueuePosition = null, int? EtaSeconds = null);
+// Gpu — живой снимок очереди GPU ComfyUI (шаг 29): только отображение, в статус запуска, траты
+// и журналы не идёт; заполняет драйвер, который его знает (local), остальные — null
+public sealed record AudioProgress(AudioStage Stage, int? QueuePosition = null, int? EtaSeconds = null,
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно. VoiceCache — привязки голоса из
 // библиотеки, созданные этим запуском (кешируются и при сбое: клон уже оплачен)

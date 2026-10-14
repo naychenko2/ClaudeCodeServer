@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 // Состояние задачи для GET jobs/{jobId} (добавлено после КТ-1). Status — VideoJobStatuses.*: файлы вариантов в рабочей папке читаются ручкой версии сцены
@@ -21,7 +23,11 @@ public sealed record VideoJobDto(
     string Initiator,
     string License,
     int? UpscaleEtaSeconds = null,
-    int? Variant = null);
+    int? Variant = null,
+    // Снимок очереди GPU ComfyUI (шаг 30): живой, только отображение; null — поставщик не знает
+    // или задача вне локальных моделей. camelCase как соседние поля, null не пишется
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 public static class VideoJobStatuses
 {

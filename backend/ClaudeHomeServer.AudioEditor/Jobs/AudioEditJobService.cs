@@ -137,6 +137,8 @@ public sealed class AudioEditJobService : IDisposable
         public int Variant { get; set; } = 1;
         public int? QueuePosition { get; set; }
         public int? EtaSeconds { get; set; }
+        // Снимок очереди GPU ComfyUI (шаг 29): живой, обновляется каждым отчётом прогресса
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         public List<AudioJobVariantDto> Variants { get; } = [];
         public AudioCost? Cost { get; set; }
         public AudioOutcome? Outcome { get; set; }
@@ -399,9 +401,12 @@ public sealed class AudioEditJobService : IDisposable
                     quote.Fields.DeepClone().AsObject(), quote.Count) { Inputs = thread.Settings?.Inputs?.DeepClone().AsObject() }, ct);
         }
 
+        // Метка происхождения прогона (шаг 29): владелец, чат и тяжёлый ли — из задачи;
+        // вид=звук и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут
         var request = new AudioRequest(quote.Op, quote.Model.Id, scope, input.Text, input.Prompt, input.Lyrics,
             input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
-            input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value);
+            input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value,
+            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: HeavyOf(job));
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 
         _workspace.Sweep(Now());
@@ -833,9 +838,11 @@ public sealed class AudioEditJobService : IDisposable
                 };
                 job.QueuePosition = value.QueuePosition;
                 job.EtaSeconds = value.EtaSeconds;
+                job.Gpu = value.Gpu;
             }
             _ = owner.Broadcast(job.OwnerId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
-                value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator));
+                value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator,
+                Gpu: value.Gpu));
         }
     }
 
@@ -902,6 +909,10 @@ public sealed class AudioEditJobService : IDisposable
 
     private static bool IsLocalHeavy(Quote q) => q.Heavy && q.Provider == Engines.LocalAudioEngine.ProviderKey;
 
+    // Тяжёлый ли прогон (шаг 29): у звука тяжёлые операции реально держат GPU (обучение RVC, разбор
+    // на дорожки, ACE-Step) — метка едет в LocalJobOrigin и в снимок очереди (Busy)
+    private static bool HeavyOf(Job job) => job.Quote.Heavy;
+
     public static string OpName(AudioOp op) => JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
 
     private static bool TryParseOp(string? name, out AudioOp op)
@@ -932,7 +943,8 @@ public sealed class AudioEditJobService : IDisposable
         lock (j.Gate)
             return new AudioJobDto(j.Id, j.Scope.Key, j.Status, j.Quote.Provider, j.Quote.Model.Id, j.Quote.Op, j.Quote.Count,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.EtaSeconds, j.CreatedAt,
-                j.ChatSessionId, j.ThreadId, j.Initiator, j.Quote.License);
+                j.ChatSessionId, j.ThreadId, j.Initiator, j.Quote.License,
+                Gpu: j.Gpu);
     }
 
     private void PruneQuotes()

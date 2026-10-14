@@ -17,7 +17,9 @@ ComfyUI ставится этот узел — так у GPU1 остаётся �
 Конфиг: $CCS_AUDIO_WORKERS или ~/ai-data/audio-workers/workers.json
   {"families": {"tts": {"python": ".../.venv/bin/python", "script": ".../worker_tts.py", "env": {...}}}}
 Протокол воркера: argv[1] — путь к job.json; последняя строка stdout, начинающаяся с
-CCS_RESULT, — JSON {"files": [имена в out_dir], "stats": {...}}.
+CCS_RESULT, — JSON {"files": [имена в out_dir], "stats": {...}}. Необязательные строки
+CCS_PROGRESS {"step": N, "total": M} узел превращает в ProgressBar ComfyUI (сообщение сокета
+progress); воркер без них работает как раньше, только без шагов.
 """
 import gc
 import json
@@ -73,6 +75,49 @@ def _tail_no_paths(lines, limit=2000):
     cleaned = [l for l in lines if not l.startswith(RESULT_MARK)]
     cleaned = cleaned[-limit:]
     return re.sub(r"/[\w./-]{6,}", "<path>", "\n".join(cleaned))
+
+
+_PROGRESS_RE = re.compile(r"^CCS_PROGRESS\s+(.+)$")
+
+
+class _Progress:
+    """Последний шаг воркера из строк CCS_PROGRESS (НЕ путать с CCS_RESULT).
+
+    feed() зовёт поток чтения stdout, report() — только поток задачи: ProgressBar шлёт сообщение
+    сокета от имени исполняемого узла (ADR-026 §5.1). Воркер без прогресса строк не печатает —
+    ProgressBar не создаётся, сообщений сокета нет, всё как до появления прогресса.
+    """
+
+    def __init__(self):
+        self.last = None
+        self.reported = None
+        self.bar = None
+
+    def feed(self, line):
+        """True — строка прогресса (в лог и хвост исключения не идёт), даже если она битая."""
+        m = _PROGRESS_RE.match(line)
+        if not m:
+            return False
+        try:
+            payload = json.loads(m.group(1))
+            step, total = int(payload["step"]), int(payload["total"])
+            if total > 0:
+                self.last = (max(0, min(step, total)), total)
+        except Exception:
+            pass
+        return True
+
+    def report(self):
+        last = self.last
+        if last is None or last == self.reported:
+            return
+        try:
+            from comfy.utils import ProgressBar  # лениво, чтобы не требовать его вне ComfyUI
+            self.bar = self.bar or ProgressBar(last[1])  # свой на каждый запуск: экземпляр узла переживает прогоны
+            self.bar.update_absolute(last[0], last[1])
+            self.reported = last
+        except Exception:
+            pass
 
 
 def _config():
@@ -185,10 +230,13 @@ class CcsAudioWorker:
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 start_new_session=True)
         lines = []
+        progress = _Progress()
 
         def pump():
             for line in proc.stdout:
                 line = line.rstrip("\n")
+                if progress.feed(line):
+                    continue
                 lines.append(line)
                 if not line.startswith(RESULT_MARK):
                     log.info("[%s] %s", op, line[:300])
@@ -202,9 +250,11 @@ class CcsAudioWorker:
             while True:
                 if proc.poll() is not None:
                     reader.join(timeout=10)
+                    progress.report()
                     break
                 if time.time() > deadline:
                     raise TimeoutError(f"воркер {op} не уложился в {timeout_minutes} мин")
+                progress.report()
                 # отмена кнопкой или /interrupt
                 mm.throw_exception_if_processing_interrupted()
                 time.sleep(0.5)
@@ -345,24 +395,14 @@ class CcsAudioWorker:
                                 start_new_session=True)
 
         # Сбор прогресса CCS_PROGRESS (НЕ путать с CCS_RESULT) и хвост логов
-        progress_lines = []  # последние пары (step, total) — узел в цикле ожидания берёт последнюю
+        progress = _Progress()
         log_tail = []
-        progress_re = re.compile(r"^CCS_PROGRESS\s+(.+)$")
 
         def pump():
             for line in proc.stdout:
                 line = line.rstrip("\n")
-                m = progress_re.match(line)
-                if m:
-                    try:
-                        payload = json.loads(m.group(1))
-                        if "step" in payload and "total" in payload:
-                            progress_lines.append((int(payload["step"]), int(payload["total"])))
-                            if len(progress_lines) > 200:
-                                del progress_lines[:-100]
-                    except Exception:
-                        pass
-                    # Прогресс узел сам НЕ печатает — только хранит
+                # Прогресс узел сам НЕ печатает — только хранит последний шаг
+                if progress.feed(line):
                     continue
                 log_tail.append(line)
                 if not line.startswith(RESULT_MARK):
@@ -373,27 +413,17 @@ class CcsAudioWorker:
         reader = threading.Thread(target=pump, daemon=True)
         reader.start()
 
-        def last_progress():
-            return progress_lines[-1] if progress_lines else (None, None)
-
-        bar = None
         try:
             deadline = started + timeout_minutes * 60
             while True:
                 if proc.poll() is not None:
                     reader.join(timeout=10)
+                    progress.report()
                     break
                 if time.time() > deadline:
                     raise TimeoutError(f"lora-воркер {op} не уложился в {timeout_minutes} мин")
                 # Прогресс в ProgressBar — только из потока задачи, не из pump (ADR §5.1)
-                step, total = last_progress()
-                if step is not None and total:
-                    try:
-                        from comfy.utils import ProgressBar  # лениво, чтобы не требовать его вне ComfyUI
-                        bar = bar or ProgressBar(total)  # свой на каждый запуск: экземпляр узла переживает прогоны
-                        bar.update_absolute(step, total)
-                    except Exception:
-                        pass
+                progress.report()
                 mm.throw_exception_if_processing_interrupted()
                 time.sleep(0.5)
         except BaseException:

@@ -2,7 +2,7 @@ import type { ReactNode, CSSProperties } from 'react';
 import { useEffect, useRef, useState, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { MoreHorizontal } from 'lucide-react';
-import { C, R, TB, FONT, SHADOW, Z } from '../lib/design';
+import { C, R, TB, FONT, FS, SHADOW, Z } from '../lib/design';
 import { ToolbarIconButton } from './Toolbar';
 
 // === Единый overflow-примитив тулбаров ===
@@ -22,6 +22,9 @@ export type OverflowItem = {
   icon?: ReactNode;
   label: string;
   sublabel?: string;
+  // Значение справа от подписи (моно): «Срок чата · осталось 2 ч». Цвет задаёт
+  // вызывающий (C.textSecondary / C.warningText) — строка только выравнивает и шрифт
+  value?: ReactNode;
   onClick?: () => void;
   // undefined — обычный пункт (клик закрывает меню); boolean — строка-переключатель
   // (клик переключает, меню остаётся открытым, справа рисуется свитч по значению).
@@ -340,6 +343,10 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         )}
         {item.sublabel && <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, fontWeight: 400 }}>{item.sublabel}</span>}
       </span>
+      {/* Значение справа (моно): подпись тянет flex:1, поэтому значение прижато к краю */}
+      {item.value != null && (
+        <span style={{ flexShrink: 0, fontFamily: FONT.mono, fontSize: FS.sm, whiteSpace: 'nowrap' }}>{item.value}</span>
+      )}
       {isToggle && (
         <span style={{ ...switchTrack, background: item.toggle ? C.accent : C.track }}>
           <span style={{ ...switchThumb, transform: item.toggle ? 'translateX(16px)' : 'translateX(0)' }} />

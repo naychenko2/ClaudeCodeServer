@@ -36,6 +36,7 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
+import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
 import { BackButton, Button, IconButton } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -302,6 +303,8 @@ function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryStat
 }
 
 export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
+  // Сторож configured локальной модели (опрос + подписка страницы), см. хук
+  useLocalModelWatcher(auth.role === 'admin');
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
   // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
   // PanelZone из `allowedKeys` и `panels`: если ключ есть в WORKSPACE_KEYS, но

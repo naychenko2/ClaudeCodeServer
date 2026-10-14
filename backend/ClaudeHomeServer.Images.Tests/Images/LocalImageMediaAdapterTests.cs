@@ -3,6 +3,7 @@ using System.Text;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Images.LocalMedia;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -1241,5 +1242,135 @@ public class LocalImageMediaAdapterTests
 
         result.Error.Should().Be($"Картинка больше {LocalMediaService.MaxMediaInputBytes / 1024 / 1024} МБ.");
         _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // ─── Шаг 26б: Gpu из общего снимка монитора ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Gpu_заполняется_из_снимка_монитора()
+    {
+        _comfy.Running.Add("чужой");
+        _comfy.Pending.Add("наш");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        ledger.Register("наш", new LocalJobOrigin("owner1", "sess1", "image", "generate", false), 30);
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default);
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance,
+            null, null, ledger, null, monitor);
+
+        var poll = await adapter.PollAsync("наш", default);
+        poll.Gpu.Should().NotBeNull();
+        poll.Gpu!.Ahead.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Null_монитор_Gpu_null()
+    {
+        _comfy.Running.Add("наш");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance);
+
+        var poll = await adapter.PollAsync("наш", default);
+        poll.State.Should().Be(LocalImageState.Running);
+        poll.Gpu.Should().BeNull();
+    }
+
+    // Minor 3 (адаптер, MAJOR): стенд лежит (GetHistoryAsync → ComfyException → catch адаптера),
+    // задача в pending снимка монитора. Позиция берётся из снимка (1), не хардкод 0: Gpu.Running=false,
+    // Ahead=1 — не ложный «идёт». Мутация «Build(ticket, 0)» в catch (ComfyException) адаптера →
+    // Running=true → тест краснеет (примитивы PositionInSnapshot/Build покрывают это лишь косвенно).
+    [Fact]
+    public async Task Gpu_адаптер_СтендDown_ЗадачаВPending_НеЛожныйRunning()
+    {
+        _comfy.Running.Add("чужой");
+        _comfy.Pending.Add("наш");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default);
+        // Стенд лёг ПОСЛЕ снимка: GetHistoryAsync бросит ComfyException, адаптер пойдёт в catch,
+        // а снимок монитора ещё несёт задачу в pending (stale, монитор не заметил падения)
+        _comfy.Down = true;
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance,
+            null, null, ledger, null, monitor);
+
+        var poll = await adapter.PollAsync("наш", default);
+
+        poll.Gpu.Should().NotBeNull("задача в pending снимка — позиция есть");
+        poll.Gpu!.Running.Should().BeFalse("задача не в queue_running снимка → Running=false, не ложный «идёт»");
+        poll.Gpu.Ahead.Should().Be(1, "позиция из снимка: 1 идущая впереди");
+    }
+
+    // Minor 3 (адаптер, MAJOR): стенд лежит, задачи НЕТ в снимке монитора (ушла/чужая) —
+    // позиции нет → Gpu=null, ложного «идёт» нет. Мутация «Build(ticket, 0)» → Gpu!=null, Running=true → красный.
+    [Fact]
+    public async Task Gpu_адаптер_СтендDown_ЗадачиНетВСнимке_GpuNull()
+    {
+        _comfy.Running.Add("чужой");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default);
+        // Стенд лёг ПОСЛЕ снимка: снимок несёт только «чужой», нашей задачи в нём нет
+        _comfy.Down = true;
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance,
+            null, null, ledger, null, monitor);
+
+        var poll = await adapter.PollAsync("наш", default);
+
+        poll.Gpu.Should().BeNull("задачи нет в снимке — позиции нет, Gpu=null, ложного «идёт» нет");
+    }
+
+    [Fact]
+    public async Task Тест_изоляция_Busy_изображения()
+    {
+        _comfy.Running.Add("чужой");
+        _comfy.Pending.Add("наш");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+            ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
+            ["LocalMedia:MaxComfyQueue"] = "4",
+        }).Build();
+        var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
+        var ledger = new ComfyPromptLedger();
+        ledger.Register("чужой", new LocalJobOrigin("otherOwner", "otherSess", "image", "edit", Heavy: true), 300);
+        var monitor = new ComfyQueueMonitor(client, ledger, config, NullLogger<ComfyQueueMonitor>.Instance);
+        await monitor.TickAsync(default);
+        var adapter = new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance,
+            null, null, ledger, null, monitor);
+
+        var poll = await adapter.PollAsync("наш", default);
+        poll.Gpu!.Busy.Should().NotBeNull();
+        poll.Gpu.Busy!.Kind.Should().Be("image");
+        poll.Gpu.Busy.Heavy.Should().BeTrue();
+        var jsonStr = System.Text.Json.JsonSerializer.SerializeToElement(poll.Gpu.Busy).GetRawText();
+        jsonStr.Should().NotContain("otherOwner");
+        jsonStr.Should().NotContain("otherSess");
     }
 }

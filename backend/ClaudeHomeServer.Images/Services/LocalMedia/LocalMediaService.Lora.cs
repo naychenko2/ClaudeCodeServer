@@ -9,14 +9,6 @@ public sealed partial class LocalMediaService
     public const int LoraMinPhotos = 20;
     public const int LoraMaxPhotos = 50;
 
-    // Прогресс шагов (ADR-026 §4): не больше одного слушателя WebSocket на задачу; шаг живёт в памяти и в стор не пишется
-    private readonly Lock _loraProgressLock = new();
-    private readonly Dictionary<string, CancellationTokenSource> _loraListeners = [];
-    private readonly Dictionary<string, int> _loraSteps = [];
-
-    // Слушатель прогресса; тесты подменяют сокет ComfyUI
-    internal Func<string, Action<double>, CancellationToken, Task>? LoraProgressListener { get; set; }
-
     public bool LoraTrainEnabled => Options is { Enabled: true, LoraTrainEnabled: true };
 
     // Идущее на инстансе обучение (любого владельца)
@@ -114,6 +106,8 @@ public sealed partial class LocalMediaService
                 return LoraRefusal(LoraTrainErrorCode.Unavailable, ex.Message);
             }
 
+            // Реестр (шаг 7): «чей этот prompt_id» — обучение LoRA
+            ledger?.Register(job.PromptId, OriginOf(job), job.EtaSeconds);
             store.Add(job);
             return new LoraTrainStartResult(jobId, queue.Length, eta);
         }
@@ -153,6 +147,7 @@ public sealed partial class LocalMediaService
             log.LogWarning("ComfyUI не принял удаление прогона LoRA: {Error}", ex.Message);
             return null;
         }
+        // prompt_id в реестр не регистрируем: lora_delete — лёгкая уборка, не прогон (шаг 8)
         store.Add(job);
         return job;
     }
@@ -220,7 +215,7 @@ public sealed partial class LocalMediaService
     {
         try
         {
-            return !(await comfy.GetQueueAsync(ct)).Running.Contains(promptId);
+            return !(await comfy.GetQueueAsync(ct)).RunningIds.Contains(promptId);
         }
         catch (ComfyException ex)
         {
@@ -237,7 +232,8 @@ public sealed partial class LocalMediaService
             j.Cancelled = true;
             j.FinishedAt = DateTime.UtcNow;
         });
-        StopLoraProgress(job.Id);
+        // Реестр (шаг 7): отмена — прогон снят из активных (одна точка для всех путей отмены)
+        ledger?.Complete(job.PromptId, "cancelled", RunSecondsOf(job));
     }
 
     // Сторож зависшего обучения: потолок узла 240 мин + запас (LoraTrainTimeoutMinutes); иначе Running держит карту вечно
@@ -263,7 +259,6 @@ public sealed partial class LocalMediaService
                     if (!await IsLoraPromptConfirmedIdleAsync(pending.PromptId, ct)) continue;
                     Fail(pending, $"Отмена не дошла до воркера за {Options.LoraCancelTimeoutMinutes} мин (cancel_timeout).",
                         code: LoraErrorCodes.CancelTimeout);
-                    StopLoraProgress(pending.Id);
                 }
                 else
                 {
@@ -290,7 +285,6 @@ public sealed partial class LocalMediaService
                     log.LogWarning("ComfyUI не подтвердил прерывание зависшего обучения LoRA {Job}: {Error}", current.Id, ex.Message);
                 }
                 Fail(current, $"Обучение превысило потолок {Options.LoraTrainTimeoutMinutes} мин (timeout).", code: LoraErrorCodes.Timeout);
-                StopLoraProgress(current.Id);
                 swept++;
             }
             finally
@@ -345,7 +339,11 @@ public sealed partial class LocalMediaService
                 return Complete(current, history, null, null, null);
 
             var expected = LoraNamespace.RunLoraFile(current.OwnerId, current.LoraSlug ?? "", current.LoraRunId ?? "");
-            var name = history.CcsLora is { Count: > 0 } list ? (list[0] as JsonObject)?["name"]?.GetValue<string>() : null;
+            // Мусор в ccs_lora/ccs_stats (ревью C1-подобный): GetValue<string>() на нестроковых
+            // значениях бросал InvalidOperationException, прогон «зависал». Разбор безопасный:
+            // JsonValue + TryGetValue, мусорный элемент → null/""
+            var name = history.CcsLora is { Count: > 0 } list
+                && (list[0] as JsonObject)?["name"] is JsonValue nv && nv.TryGetValue<string>(out var loraName) ? loraName : null;
             if (!string.Equals(name, expected, StringComparison.Ordinal))
                 return Fail(current, "Воркер вернул неожиданное имя весов LoRA.", history, LoraErrorCodes.BadResult);
 
@@ -354,8 +352,8 @@ public sealed partial class LocalMediaService
             var rejected = (stats?["rejected"] as JsonArray)?.OfType<JsonObject>()
                 .Select(r => new LoraPhotoRejectionDto
                 {
-                    Name = r["name"]?.GetValue<string>() ?? "",
-                    Reason = r["reason"]?.GetValue<string>() ?? "",
+                    Name = r["name"] is JsonValue rn && rn.TryGetValue<string>(out var ns) ? ns : "",
+                    Reason = r["reason"] is JsonValue rr && rr.TryGetValue<string>(out var rs) ? rs : "",
                 }).ToList();
             return Complete(current, history, expected, kept, rejected);
         }
@@ -377,7 +375,8 @@ public sealed partial class LocalMediaService
             j.LoraRejected = rejected;
             ApplyRunStats(j, history);
         }) ?? job;
-        StopLoraProgress(job.Id);
+        // Реестр (шаг 7): успех — прогон завершён (одна точка для успеха LoraTrain и LoraDelete)
+        ledger?.Complete(job.PromptId, "completed", RunSecondsOf(job));
         return done;
     }
 
@@ -391,9 +390,7 @@ public sealed partial class LocalMediaService
             _ => LoraTrainStatus.Queued,
         };
 
-        int? step = null;
-        if (status == LoraTrainStatus.Running) step = EnsureLoraProgress(job);
-        else StopLoraProgress(job.Id);
+        int? step = status == LoraTrainStatus.Running ? EnsureLoraProgress(job) : null;
 
         int? eta = status switch
         {
@@ -413,47 +410,13 @@ public sealed partial class LocalMediaService
             job.LoraRejected?.Select(r => new LoraPhotoRejection(r.Name, r.Reason)).ToList());
     }
 
-    // Запускает слушателя, если его нет; возвращает последний известный шаг
+    // Последний известный шаг обучения: доля шагов текущего сэмплера из общего трекера
+    // (ComfyProgressTracker слушает сокет под ClientId), пересчитанная на полное число шагов пресета
     private int? EnsureLoraProgress(LocalMediaJob job)
     {
-        lock (_loraProgressLock)
-        {
-            if (!_loraListeners.ContainsKey(job.Id) && job.PromptId.Length > 0)
-            {
-                var cts = new CancellationTokenSource();
-                _loraListeners[job.Id] = cts;
-                var listen = LoraProgressListener ?? comfy.ListenProgressAsync;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await listen(job.PromptId, f =>
-                        {
-                            lock (_loraProgressLock) _loraSteps[job.Id] = (int)Math.Round(f * LoraTrainPresets.Steps);
-                        }, cts.Token);
-                    }
-                    catch (Exception ex) when (ex is not OutOfMemoryException)
-                    {
-                        // Прогресс необязателен: сорвавшегося слушателя поднимет следующий опрос
-                    }
-                    finally
-                    {
-                        lock (_loraProgressLock)
-                            if (_loraListeners.TryGetValue(job.Id, out var own) && own == cts) _loraListeners.Remove(job.Id);
-                    }
-                });
-            }
-            return _loraSteps.TryGetValue(job.Id, out var step) ? step : null;
-        }
-    }
-
-    private void StopLoraProgress(string jobId)
-    {
-        lock (_loraProgressLock)
-        {
-            if (_loraListeners.Remove(jobId, out var cts)) cts.Cancel();
-            _loraSteps.Remove(jobId);
-        }
+        if (job.PromptId.Length == 0) return null;
+        if (steps?.Get(job.PromptId) is not { } progress) return null;
+        return (int)Math.Clamp(Math.Round(progress.Fraction * LoraTrainPresets.Steps), 0, LoraTrainPresets.Steps);
     }
 }
 

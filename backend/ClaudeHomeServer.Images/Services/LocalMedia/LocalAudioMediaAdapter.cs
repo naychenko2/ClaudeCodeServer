@@ -14,9 +14,15 @@ public sealed class LocalAudioMediaAdapter(
     ComfyClient comfy,
     IConfiguration config,
     ILocalImageMedia images,
-    ILogger<LocalAudioMediaAdapter> log) : ILocalAudioMedia
+    ILogger<LocalAudioMediaAdapter> log,
+    ComfyPromptLedger? ledger = null,
+    ComfyProgressTracker? steps = null,
+    ComfyQueueMonitor? monitor = null) : ILocalAudioMedia
 {
     private const string IdPrefix = "la_";
+
+    // Снимок очереди GPU (шаг 26б): общий билдер — логика изоляции/процента/ETA не дублируется по адаптерам
+    private readonly ComfyGpuSnapshotBuilder _gpuBuilder = new(monitor, ledger, steps, log);
 
     // Ссылки на входы в аргументах сборки — они же подписи входов в отказах
     private const string AudioSlot = "исходный звук";
@@ -70,6 +76,8 @@ public sealed class LocalAudioMediaAdapter(
                 new LocalMediaService.AudioBuildInfo(id), new BytesInputs(request, comfy), prompt, seed,
                 $"{ComfyWorkflows.OutputFolder}/{id}", options.MaxAudioInputSeconds, ct);
             var queued = await comfy.QueuePromptAsync(graph, ct);
+            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
+            ledger?.Register(queued.PromptId, request.Origin, eta);
             return new LocalAudioSubmitted(queued.PromptId, queue, eta, null);
         }
         catch (LocalMediaInputException ex)
@@ -85,21 +93,27 @@ public sealed class LocalAudioMediaAdapter(
 
     public async Task<LocalAudioPoll> PollAsync(string ticket, CancellationToken ct)
     {
+        // Опрос задачи — панель активна: быстрый опрос очереди (2 с) на время TouchWindow
+        monitor?.Touch();
         try
         {
             var history = await comfy.GetHistoryAsync(ticket, ct);
             if (history is null)
             {
-                var position = (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
+                // Снимок монитора (шаг 26б): позиция и Gpu из общего /queue, не поштучный запрос
+                var position = monitor?.Snapshot is { } snap && !snap.Down
+                    ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
+                    : (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
                 if (position is not null)
-                    return new LocalAudioPoll(position == 0 ? LocalAudioState.Running : LocalAudioState.Queued, position, [], null);
+                    return new LocalAudioPoll(position == 0 ? LocalAudioState.Running : LocalAudioState.Queued, position, [], null,
+                        Gpu: _gpuBuilder.Build(ticket, position));
                 // Могла закончиться между двумя запросами — история решает
                 history = await comfy.GetHistoryAsync(ticket, ct);
                 if (history is null)
                     return Failed("Задача пропала из очереди ComfyUI (перезапуск или отмена на стенде).");
             }
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
-            if (!history.Completed) return new LocalAudioPoll(LocalAudioState.Running, 0, [], null);
+            if (!history.Completed) return new LocalAudioPoll(LocalAudioState.Running, 0, [], null, Gpu: _gpuBuilder.Build(ticket, 0));
 
             var files = await CollectAsync(history, ct);
             return files.Count == 0
@@ -108,7 +122,14 @@ public sealed class LocalAudioMediaAdapter(
         }
         catch (ComfyException ex)
         {
-            return new LocalAudioPoll(LocalAudioState.Running, null, [], null, ex.Message);
+            // M1: стенд недоступен — снимок несёт downSince (фронт isStandDown видит «стенд недоступен»)
+            // Minor 3: позиция из снимка (не хардкод 0): если задачи нет в queue_running снимка,
+            // билдер не ставит ложный Running=true (монитор ещё не заметил падение, снимок stale).
+            var position = monitor?.Snapshot is { } snap
+                ? ComfyGpuSnapshotBuilder.PositionInSnapshot(snap, ticket)
+                : null;
+            return new LocalAudioPoll(LocalAudioState.Running, null, [], null, ex.Message,
+                Gpu: _gpuBuilder.Build(ticket, position));
         }
         catch (Exception ex) when (ex is InvalidOperationException or FormatException)
         {

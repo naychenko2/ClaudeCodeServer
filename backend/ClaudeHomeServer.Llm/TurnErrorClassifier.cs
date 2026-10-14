@@ -434,14 +434,17 @@ public static class TurnErrorClassifier
         "gateway timeout",
     ];
 
-    // 5xx-код отдельным числом в тексте («API Error: 529 …», «(503)», «Error 500:») — но не
-    // кусок «1529»/«5000». Паритет с TurnFailureText.HttpServerErrorCode: 529 у Anthropic — та
-    // же перегрузка, и CLI отдаёт её в api_error_status=null, когда код есть только в тексте.
-    // Спрашивается только при ПУСТОМ статусе (ветка статусов решает по коду раньше), поэтому
-    // цитата 5xx в разборе инцидента при живом статусе сюда не доходит — тот же гейт, что у
-    // RateLimit (429 с квалификатором) и ContextOverflow (маркеры только при 400/413).
+    // 5xx-код отдельным числом в тексте — но только с контекстом кода: «API Error: 529»,
+    // «status 503», «HTTP 500», «(503)», «Error 500:». Без контекста ловило «line 512»,
+    // «took 503 ms», «port 500» — и ошибка, которая должна была кончиться None (без фолбэка),
+    // уезжала в ProviderError и запускала цепочку (нарушение «None фолбэк не запускает»).
+    // Паритет с TurnFailureText.HttpServerErrorCode: 529 у Anthropic — та же перегрузка, и CLI
+    // отдаёт её в api_error_status=null, когда код есть только в тексте. Спрашивается только
+    // при ПУСТОМ статусе (ветка статусов решает по коду раньше), поэтому цитата 5xx в разборе
+    // инцидента при живом статусе сюда не доходит — тот же гейт, что у RateLimit (429 с
+    // квалификатором) и ContextOverflow (маркеры только при 400/413).
     private static readonly System.Text.RegularExpressions.Regex ProviderErrorHttpCode =
-        new(@"(?<!\d)5\d{2}(?!\d)", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new(@"(?i)(?:API Error:|status|HTTP|\(|Error )\s*(?<!\d)5\d{2}(?!\d)", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static bool LooksProviderError(string? value)
     {

@@ -160,6 +160,18 @@ public class TurnErrorClassifierTests
         => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError,
             "5xx-код в тексте при пустом статусе — перегрузка провайдера, не цитата");
 
+    // 5xx-код БЕЗ контекста кода — цитата числа, не ошибка провайдера: «line 512», «took 503 ms»,
+    // «port 500». Без гейта по контексту такая ошибка кончалась бы ProviderError и запускала
+    // цепочку фолбэка, хотя должна была остаться None (инвариант «None фолбэк не запускает»).
+    [Theory]
+    [InlineData("line 512")]
+    [InlineData("took 503 ms")]
+    [InlineData("port 500")]
+    [InlineData("512 tokens in the prompt")]
+    public void Цитата5xxБезКонтекста_ПустойСтатус_НеКлассифицируетсяКакProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голое 5xx-число без контекста кода (line/took/port) — цитата, не перегрузка");
+
     // Цитата 5xx-кода в разборе инцидента при ЖИВОМ статусе не доходит до LooksProviderError
     // (ветка статусов решает по коду раньше) — регрессия на ложный ProviderError.
     [Fact]

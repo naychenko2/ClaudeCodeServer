@@ -824,8 +824,10 @@ TCP-коннект к адресу прокси. Источников два —
 стороннему) `LlmProviderRegistry.RetryCeilings` ставит `CLAUDE_CODE_OVERLOADED_RETRY_*_MS`,
 `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS` и `CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES` — по
 умолчанию 2 с / 10 с / 30 с / 2 повтора, значения — в конфиге `LlmProviders:Retry`, не в коде.
-Итог: 429/529 доходит до классификатора за **десятки секунд, не минуты**, и passport хода
-(`TurnRunPassport.CliRetryWatchdogMs`) фиксирует, насколько долго CLI мог молча ждать.
+Итог: 429/529 доходит до классификатора за **десятки секунд, не минуты**, а passport хода
+(`TurnRunPassport.CliRetries`/`CliRetryWaitMs`/`CliRetryLastStatus`) фиксирует ФАКТ: сколько раз
+CLI сам переждал 429/529 внутри процесса (событие system/api_retry), суммарное ожидание (мс)
+и последний HTTP-статус.
 
 ## Паспорта ходов (диагностика)
 
@@ -839,7 +841,8 @@ TCP-коннект к адресу прокси. Источников два —
 сверен с присваиваниями `turnOutcome` в `FallbackLlmSessionAdapter` 2026-09-22) — пара
 «модель × провайдер» на старте и в конце, число попыток и подмен, повторы
 из-за канала, цепочка хода, класс и текст последней ошибки, размер контекста,
-и потолок ожидания внутренних повторов CLI (`CliRetryWatchdogMs`, см. § «Кто ждёт 429/529»).
+и факт внутренних повторов CLI (`CliRetries`/`CliRetryWaitMs`/`CliRetryLastStatus`,
+см. § «Кто ждёт 429/529»).
 
 Исходы не `enum`, а строки, и новые появляются вместе с новыми ветками выхода: `local_down` —
 локальный движок не ответил на pre-flight пробе, `window_1m_unavailable` — нет живой подписки

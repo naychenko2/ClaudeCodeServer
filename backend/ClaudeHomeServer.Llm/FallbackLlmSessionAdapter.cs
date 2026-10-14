@@ -70,6 +70,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
     private readonly ILogger? _log;
+    // Факт внутренних повторов CLI текущего хода (ClaudeSession.CliRetryStats, system/api_retry):
+    // сколько раз headless-сессия сама переждала 429/529, суммарное ожидание (мс) и последний
+    // HTTP-статус. null (тесты/без фабрики) — паспорт пишет нули (повторов не было).
+    private readonly Func<CliRetryStats>? _cliRetryStats;
     // Колбэк персиста сессий (SessionManager.SaveSessions через фабрику/контекст): нужен,
     // чтобы переписать sessions.json ВОССТАНОВЛЕННЫМИ значениями после restore в finally —
     // иначе финальный result успевает сохранить подменённую модель (ApplyStatusAsync →
@@ -139,6 +143,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
         Action<string>? orchestrationDone = null,
         Func<string>? contextSource = null,
+        Func<CliRetryStats>? cliRetryStats = null,
         IEgressProbe? egress = null,
         Turn.ITurnEventBus? events = null,
         TimeSpan? egressRetryDelay = null,
@@ -160,6 +165,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _capacity = capacity;
         _lastContextTokens = lastContextTokens;
         _contextSource = contextSource;
+        _cliRetryStats = cliRetryStats;
         _log = log;
         _persist = persist;
         _enqueueBypass = enqueueBypass;
@@ -1184,6 +1190,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 try
                 {
                     var endedAt = DateTime.UtcNow;
+                    // Факт внутренних повторов CLI этого хода (system/api_retry): null — без
+                    // фабрики/тесты, CLI не дотягивал (нули в паспорте).
+                    var cliRetry = _cliRetryStats?.Invoke();
                     passport = new TurnRunPassport(
                         SessionId: Info.Id,
                         StartedAt: startedAt,
@@ -1203,10 +1212,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         ContextTokens: ContextEstimate(),
                         RecordedAt: endedAt)
                     {
-                        // На сколько долго CLI мог молча переждать 429/529 внутри процесса,
-                        // прежде чем отдать ход нам (см. LlmProviderRegistry.RetryCeilings).
-                        // null — реестр не подставил потолок (тесты/без DI), CLI держит свой дефолт.
-                        CliRetryWatchdogMs = _providers?.RetryWatchdogMaxWaitMs,
+                        // Факт внутренних повторов CLI (system/api_retry) этого хода: сколько раз
+                        // headless-сессия сама переждала 429/529, суммарное ожидание (мс) и
+                        // последний HTTP-статус. 0/null — повторов не было (CLI не дотягивал).
+                        CliRetries = cliRetry?.Count ?? 0,
+                        CliRetryWaitMs = cliRetry?.WaitMs ?? 0,
+                        CliRetryLastStatus = cliRetry?.LastStatus,
                     };
                 }
                 catch (Exception ex)

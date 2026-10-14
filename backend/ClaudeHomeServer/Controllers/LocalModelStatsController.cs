@@ -56,13 +56,14 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
                 Unsupported = [],
             });
 
-        // gpus — из IGpuSampler (null, если нет nvidia-smi); одна карта «текст» (индекс 0).
+        // gpus — из IGpuSampler: ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
+        // Пустой список/ошибка nvidia-smi → null (без блока).
         GpuDto[]? gpus = null;
         if (_gpus is { } sampler)
         {
-            var sample = await sampler.ReadAsync(ct);
-            if (sample is not null)
-                gpus = [MapGpu(sample)];
+            var samples = await sampler.ReadAsync(ct);
+            if (samples.Count > 0)
+                gpus = samples.Select(MapGpu).ToArray();
         }
 
         // history — из GetHistory(window, since); при since — только хвост новее момента.
@@ -108,6 +109,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             Configured = current.Configured,
             Engine = current.Engine,
             Model = current.Model,
+            TensorParallel = current.TensorParallel,
             Status = current.Status,
             DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
             Running = current.Running,
@@ -303,6 +305,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
         // Идентификатор модели стенда; null — неизвестен.
         public string? Model { get; init; }
+
+        // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
+        public int? TensorParallel { get; init; }
 
         // working | busy | down | notConnected.
         public string Status { get; init; } = "notConnected";

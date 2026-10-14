@@ -154,7 +154,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     internal async Task<TimeSpan> PollOnceAsync(CancellationToken ct = default)
     {
         var opts = _options.CurrentValue;
-        var (source, engine, model, configured) = ResolveSource();
+        var (source, engine, model, tensorParallel, configured) = ResolveSource();
         if (!configured)
         {
             // notConnected: сбрасываем _downSince (движок «не мёртв» — его просто нет).
@@ -164,6 +164,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 Status = "notConnected",
                 Engine = engine,
                 Model = model,
+                TensorParallel = tensorParallel,
                 Configured = false,
             });
             return opts.PollInterval;
@@ -197,6 +198,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 DownSince = _downSince,
                 Engine = engine,
                 Model = model,
+                TensorParallel = tensorParallel,
                 Configured = true,
             });
             return opts.DownPollInterval;
@@ -210,7 +212,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         }
         UpdateRing(now, snapshot);
         UpdateCounters(now, snapshot);
-        UpdateCurrent(now, snapshot, engine, model);
+        UpdateCurrent(now, snapshot, engine, model, tensorParallel);
 
         var busy = (snapshot.Running ?? 0) > 0 || (snapshot.Waiting ?? 0) > 0;
         return busy ? opts.ActivePollInterval : opts.PollInterval;
@@ -218,24 +220,25 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
 
     // Фабрика источника: по умолчанию ResolveSource (по провайдеру). Тест подменяет,
     // чтобы подставить фейковый IEngineMetricsSource.
-    internal Func<(IEngineMetricsSource, string?, string?, bool)>? SourceFactoryOverride { get; set; }
+    internal Func<(IEngineMetricsSource, string?, string?, int?, bool)>? SourceFactoryOverride { get; set; }
 
     // Источник метрик по локальному провайдеру с секцией Stats.
-    // (source, engine, model, configured): configured=false — notConnected.
-    private (IEngineMetricsSource, string?, string?, bool) ResolveSource()
+    // (source, engine, model, tensorParallel, configured): configured=false — notConnected.
+    private (IEngineMetricsSource, string?, string?, int?, bool) ResolveSource()
     {
         if (SourceFactoryOverride is { } f)
             return f();
         var local = _providers.All.FirstOrDefault(p => p.IsLocal);
         if (local is null || local.Stats is null)
-            return (new NullEngineMetricsSource(), null, FirstModel(local), false);
+            return (new NullEngineMetricsSource(), null, FirstModel(local), null, false);
 
         var engine = local.Stats.Engine.Trim().ToLowerInvariant();
         var model = FirstModel(local);
+        var tensorParallel = local.Stats.TensorParallel;
         if (engine == "vllm" && !string.IsNullOrWhiteSpace(local.Stats.MetricsUrl))
-            return (new VllmMetricsSource(_httpFactory.CreateClient(HttpClientName), local.Stats.MetricsUrl), engine, model, true);
+            return (new VllmMetricsSource(_httpFactory.CreateClient(HttpClientName), local.Stats.MetricsUrl), engine, model, tensorParallel, true);
         // llama-server / ollama / пусто — заглушка (метрики не отдают Prometheus).
-        return (new NullEngineMetricsSource(), string.IsNullOrEmpty(engine) ? null : engine, model, true);
+        return (new NullEngineMetricsSource(), string.IsNullOrEmpty(engine) ? null : engine, model, tensorParallel, true);
     }
 
     private static string? FirstModel(LlmProviderConfig? p) =>
@@ -436,7 +439,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     }
 
     // Current: status по running/waiting, KV-блок (hit-доли и скорость за окно), preemptions за окно.
-    private void UpdateCurrent(DateTimeOffset now, EngineSnapshot snap, string? engine, string? model)
+    private void UpdateCurrent(DateTimeOffset now, EngineSnapshot snap, string? engine, string? model, int? tensorParallel)
     {
         var busy = (snap.Running ?? 0) > 0 || (snap.Waiting ?? 0) > 0;
         var status = busy ? "busy" : "working";
@@ -477,6 +480,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             Unsupported = snap.Unsupported,
             Engine = engine,
             Model = model,
+            TensorParallel = tensorParallel,
             Configured = true,
         });
     }

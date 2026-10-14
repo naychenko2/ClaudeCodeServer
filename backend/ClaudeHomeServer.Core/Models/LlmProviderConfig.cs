@@ -232,4 +232,7 @@ public class LlmProviderStatsConfig
     public string Engine { get; set; } = "";
     // URL Prometheus-метрик движка; пусто — источник не ходит в сеть.
     public string MetricsUrl { get; set; } = "";
+    // Число карт тензор-параллелизма (vLLM --tensor-parallel-size). null — не задано:
+    // панель «Текст» покажет число карт хоста (gpus.length), а не это значение.
+    public int? TensorParallel { get; set; }
 }

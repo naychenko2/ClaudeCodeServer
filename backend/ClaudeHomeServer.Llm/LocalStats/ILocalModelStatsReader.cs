@@ -24,6 +24,9 @@ public sealed record LocalModelStatsCurrent
     // Тип движка из секции Stats ("vllm" | "llama-server" | "ollama"); null — не задан.
     public string? Engine { get; init; }
 
+    // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
+    public int? TensorParallel { get; init; }
+
     // Идентификатор модели стенда (из каталога провайдера); null — неизвестен.
     public string? Model { get; init; }
 

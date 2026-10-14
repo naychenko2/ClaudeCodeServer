@@ -334,7 +334,7 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 
 ```
 GET  /api/local-model/stats        ?window=15m|1h&since=<unix ms>   (только admin; иначе 403)
-     → { configured, engine?, model?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
+     → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
          othersCount?, speed: { genPerStream?, prefillPerStream?, avgGenTps?, avgPromptTps? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
@@ -350,8 +350,10 @@ GET  /api/local-model/stats        ?window=15m|1h&since=<unix ms>   (тольк�
      Простой (движок молчит) в среднее не входит;
      нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
      chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
-     othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi
-     (сейчас в массиве одна карта — первая строка nvidia-smi)
+     othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi;
+     иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
+     tensorParallel? — из секции Stats провайдера (vLLM --tensor-parallel-size); null — фронт
+     показывает число карт (gpus.length)
 GET  /api/local-model/stats/media  ?since=<unix ms>   (только admin)
      → { configured, comfy: { status: working|busy|down|disabled, downSince?, version? },
          slots: { used, limit }, gpus: [{ uuid, index, name, roles: ["media"], utilPerc?, memUsedMb?,

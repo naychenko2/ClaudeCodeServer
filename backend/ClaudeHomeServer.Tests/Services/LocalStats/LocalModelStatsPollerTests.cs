@@ -117,7 +117,7 @@ public class LocalModelStatsPollerTests
                 Time,
                 NullLogger<LocalModelStatsPoller>.Instance);
             // Фейковый источник: подменяем фабрику, чтобы не ходить в реальную сеть.
-            Poller.SourceFactoryOverride = () => (Source, "vllm", "qwen3.8-27b", true);
+            Poller.SourceFactoryOverride = () => (Source, "vllm", "qwen3.8-27b", null, true);
         }
     }
 

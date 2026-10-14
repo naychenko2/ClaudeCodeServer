@@ -7,7 +7,7 @@
 // pointer-events: none); загрузка — скелетоны; поле в `unsupported` — строка
 // «Движок {имя} это не сообщает» вместо блока (нули не рисуем).
 
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, type CSSProperties } from 'react';
 import { AlertTriangle, Plug, FolderOpen } from 'lucide-react';
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { Button, EmptyState } from '../../components/ui';
@@ -267,14 +267,15 @@ function GpusCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Выработка стенда, всего»: график суммарной выработки (ток/с) за 5 мин / 15 мин / 1 ч ===
-// Окно держит TextTab, чтобы переключатель стоял в шапке карточки (как в макете).
+// === «Нагрузка и кэш»: выработка (ток/с) + график «Кэш, %» + полоса «Вытеснения»
+// на общей оси времени. Окно держит LocalModelPanel (его же читает серверный опрос),
+// переключатель стоит в шапке карточки (как в макете).
 function ChartCard({ data, window, onWindowChange, isMobile }: {
   data: LocalModelStats; window: Window; onWindowChange: (w: Window) => void; isMobile: boolean;
 }) {
   return (
-    <Card title="Выработка стенда, всего" right={<WindowToggle value={window} onChange={onWindowChange} isMobile={isMobile} />}>
-      <ThroughputChart history={data.history} window={window} />
+    <Card title="Нагрузка и кэш" right={<WindowToggle value={window} onChange={onWindowChange} isMobile={isMobile} />}>
+      <ThroughputChart history={data.history} window={window} engine={data.engine} />
     </Card>
   );
 }
@@ -417,20 +418,23 @@ function TextTabSkeleton() {
       <div style={block(76)} />
       <div style={block(120)} />
       <div style={block(110)} />
+      {/* «Нагрузка и кэш»: 280 px — карточка без поля вытеснений (самое частое состояние) */}
+      <div style={block(280)} />
+      <div style={block(110)} />
     </div>
   );
 }
 
 // === Вкладка ===
-export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
+export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window, onWindowChange }: {
   data: LocalModelStats | null;
   loading: boolean;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
+  window: Window;
+  onWindowChange: (w: Window) => void;
 }) {
-  // Окно графика (5 мин / 15 мин / 1 ч) — хуки наверху, до ранних return (правило хуков)
-  const [window, setWindow] = useState<Window>('15m');
   const now = useMemo(() => Date.now(), []);
   // Пик выработки за окно — для «пик» в блоке «Скорость» (то же окно, что у графика)
   const peakGenTps = useMemo(
@@ -458,7 +462,7 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
         <SpeedCard data={data} peakGenTps={peakGenTps} />
         <MemoryCard data={data} />
         <GpusCard data={data} />
-        <ChartCard data={data} window={window} onWindowChange={setWindow} isMobile={isMobile} />
+        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>
     </>

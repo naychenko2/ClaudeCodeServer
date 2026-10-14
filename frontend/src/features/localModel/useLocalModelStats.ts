@@ -3,8 +3,9 @@
 // вкладка видима. Паттерн стора — как lib/featureFlags.ts: модульное состояние,
 // подписки, useSyncExternalStore.
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { fetchLocalModelStats, type LocalModelStats } from './api';
+import type { Window as StatsWindow } from './ThroughputChart';
 
 // === Условие показа значка и панели: все три сразу ===
 // Флаг фичи включён, пользователь — админ, локальный провайдер настроен на
@@ -171,12 +172,16 @@ export function createStatsPoller(
 // Контроллер — ленивым useState (паттерн ChatSwitcherSheet): стабильен между
 // рендерами, без чтения ref в рендере. refetch — внеочередной опрос (кнопка
 // «Проверить сейчас»); стабильная обёртка, чтобы панель не перерисовывалась.
-export function useLocalModelStats(active: boolean): {
+// window — выбранное окно графика (5m/15m/1h): сервер отдаёт средние
+// speed.avg* за это окно, поэтому fetch читает текущее окно через ref.
+export function useLocalModelStats(active: boolean, window: StatsWindow = '15m'): {
   data: LocalModelStats | null;
   loading: boolean;
   refetch: () => void;
 } {
-  const [poller] = useState(() => createStatsPoller(() => fetchLocalModelStats(), 2000));
+  const windowRef = useRef<StatsWindow>(window);
+  windowRef.current = window;
+  const [poller] = useState(() => createStatsPoller(() => fetchLocalModelStats(windowRef.current), 2000));
 
   const snap = useSyncExternalStore(
     cb => poller.subscribe(cb),

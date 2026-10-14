@@ -32,7 +32,7 @@ export const USE_MOCK = false;
 
 // Тонкая обёртка вызова: панель и значок знают только эту функцию,
 // а не транспорт.
-export function fetchLocalModelStats(window: '15m' | '1h' = '15m', since?: number): Promise<LocalModelStats> {
+export function fetchLocalModelStats(window: '5m' | '15m' | '1h' = '15m', since?: number): Promise<LocalModelStats> {
   return api.localModel.stats(window, since);
 }
 

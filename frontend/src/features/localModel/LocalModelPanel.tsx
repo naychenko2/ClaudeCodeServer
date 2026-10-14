@@ -39,6 +39,7 @@ import {
 import { useLocalModelMedia } from './useLocalModelMedia';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
+import type { Window as StatsWindow } from './ThroughputChart';
 
 // Вкладка запоминается на устройство (localStorage): «LLM · Медиа» — выбор
 // человека, не состояние сессии
@@ -79,9 +80,13 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     try { localStorage.setItem(TAB_KEY, t); } catch { /* приватный режим */ }
   }, []);
 
+  // Окно графика (5m/15m/1h): держим здесь, чтобы и тяжёлый опрос (сервер отдаёт
+  // средние за это окно), и вкладка «LLM» видели один и тот же выбор.
+  const [window, setWindow] = useState<StatsWindow>('15m');
+
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
   // «LLM» — stats, «Медиа» — media; переключение — немедленный снимок.
-  const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text');
+  const { data: textData, loading: textLoading, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
 
   // Клик по строке «Кто на модели»: открыть чат; на мобиле после перехода лист
@@ -102,7 +107,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const body = (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.md, padding: SP.md }}>
       {tab === 'text'
-        ? <TextTab data={textData} loading={textLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} />
+        ? <TextTab data={textData} loading={textLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} window={window} onWindowChange={setWindow} />
         : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} />}
     </div>
   );

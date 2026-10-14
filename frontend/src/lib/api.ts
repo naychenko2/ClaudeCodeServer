@@ -47,7 +47,24 @@ export interface LocalModelStats {
   // preemptions15m — вытеснения за 15 мин
   kv?: { usagePerc?: number; ramTierPerc?: number; prefixHitPerc?: number; ramTierHitPerc?: number; preemptions15m?: number };
   gpus?: { index: number; name: string; utilPerc?: number; memUsedMb?: number; memTotalMb?: number; tempC?: number; powerW?: number; powerLimitW?: number }[] | null;
-  history?: { t: number; genThroughput?: number; waiting?: number; running?: number }[];
+  // Точка кольца истории (шаг 5 с, глубина 1 ч). genThroughput/waiting/running — как раньше;
+  // серии кэша v2.1 (карточка «Нагрузка и кэш»): kvUsage — доля 0..1 (максимум по опросам с
+  // прошлой точки); prefixHits/prefixQueries/ramHits/ramQueries/preemptions — приращения
+  // счётчиков с прошлой точки (фронт сводит в интервалы и считает долю из сумм).
+  // Все `number | null`: null — нет прошлой точки, метрика не отдана или счётчик упал
+  // (рестарт); отрицательных значений нет. Старый бэкенд — поля отсутствуют (undefined).
+  history?: {
+    t: number;
+    genThroughput?: number | null;
+    waiting?: number | null;
+    running?: number | null;
+    kvUsage?: number | null;
+    prefixHits?: number | null;
+    prefixQueries?: number | null;
+    ramHits?: number | null;
+    ramQueries?: number | null;
+    preemptions?: number | null;
+  }[];
   // tensorParallel — необязательное: число GPU в tensor-parallel (Денис добавляет
   // следующим); нет поля — TP = число карт (gpus.length)
   tensorParallel?: number;
@@ -559,8 +576,8 @@ export const api = {
   // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
   // LocalModelStatsController / SessionLocalModelController (типы выше).
   localModel: {
-    // GET /api/local-model/stats?window=15m|1h&since=<unix ms>
-    stats: (window: '15m' | '1h' = '15m', since?: number) => {
+    // GET /api/local-model/stats?window=5m|15m|1h&since=<unix ms>
+    stats: (window: '5m' | '15m' | '1h' = '15m', since?: number) => {
       const qs = new URLSearchParams({ window });
       if (since != null) qs.set('since', String(since));
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);

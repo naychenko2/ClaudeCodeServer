@@ -271,4 +271,38 @@ public partial class SessionManagerTests
         EndTurn(session, fake);
         GateDenies(session.Id, ChatsSend).Should().BeTrue("и его фоновые агенты после result — делегированные");
     }
+
+    // Ревью F1-10 (B1): Workflow-агенты переживают смерть процесса CLI (NoteOwnerProcessGone) и
+    // ходят в MCP с заголовком этого чата. Настоящий ClaudeSession: прогон уже финализирован
+    // (_run пуст), а ватчер Workflow жив — делегированность прогона держится, admin-ручки закрыты.
+    // Workflow похоронен — признак снят.
+    [Fact]
+    public async Task ПроцессУмер_WorkflowЖив_ГейтыЗакрыты_ПохоронилиWorkflow_Сняты()
+    {
+        var session = await MkBusySessionAsync("rd-wf", SessionStatus.Active);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var claude = new ClaudeHomeServer.Services.Llm.Claude.ClaudeSession(new Session(), new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null));
+        SetProcess(entry, claude);
+        // Прогон делегированного хода отметился и умер: _run у ClaudeSession пуст
+        entry.GetType().GetField("RunDelegation")!.SetValue(entry, new TurnDelegationState(1, false));
+        var watchers = (List<WorkflowWatcher>)typeof(ClaudeHomeServer.Services.Llm.Claude.ClaudeSession)
+            .GetField("_workflowWatchers", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(claude)!;
+        using var watcher = new WorkflowWatcher(Path.Combine(Path.GetTempPath(), "wf_" + Guid.NewGuid().ToString("N")),
+            "toolu_wf", _ => Task.CompletedTask);
+        lock (watchers) watchers.Add(watcher);
+        var handler = AdminHandler();
+
+        claude.HasLiveTurn.Should().BeFalse("процесса хода нет");
+        await AssertDelegatedAsync(session.Id, handler, denied: true, "Workflow делегированного хода жив после смерти CLI");
+
+        watcher.Dispose();
+        await AssertDelegatedAsync(session.Id, handler, denied: false, "Workflow похоронен — фоновых не осталось");
+    }
 }

@@ -8,13 +8,16 @@ import type { TodoItem } from '../../hooks/useSessionArtifacts';
 // Кружки нарисованы inline-SVG, а не иконками lucide: нужны три разных состояния
 // одного размера (сплошной с галочкой / точка в кольце / пунктирный контур), и в наборе
 // готовой тройки нет.
+//
+// Подпись — всегда content, даже у активного шага: activeForm модели пишут ленивым
+// («Волна 4 в работе»), и в списке он затирал название. Активность видна по кружку,
+// а activeForm остаётся подсказке над полем ввода (planHint).
 export function TodoList({ todos }: { todos: TodoItem[] }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {todos.map((t, i) => {
         const isDone = t.status === 'completed';
         const isActive = t.status === 'in_progress';
-        const label = isActive && t.activeForm ? t.activeForm : t.content;
         return (
           <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '4px 0' }}>
             <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
@@ -40,7 +43,7 @@ export function TodoList({ todos }: { todos: TodoItem[] }) {
               textDecoration: isDone ? 'line-through' : 'none',
               fontWeight: isActive ? 600 : 400,
             }}>
-              {label}
+              {t.content}
             </span>
           </div>
         );

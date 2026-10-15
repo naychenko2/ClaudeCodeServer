@@ -147,7 +147,7 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
         WatchMcp: new WatchMcpContext("http://localhost:5999", () => "tok", UseHttp: true),
         // Файловые сабагенты: только имена (pmem-серверов не заводим) — от них зависит
         // секция workflow-subagents
-        PersonaAgentsProvider: () => new PersonaAgentsContext([], [], ["gleb", "denis"]),
+        PersonaAgentsProvider: () => new PersonaAgentsContext([], [], ["gleb", "denis"], []),
         Launcher: launcher,
         Events: bus,
         ContentRootPath: _serverRoot);

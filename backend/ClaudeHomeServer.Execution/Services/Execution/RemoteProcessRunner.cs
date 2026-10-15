@@ -44,6 +44,9 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         "--mcp-config",
         "--system-prompt-file",
         "--append-system-prompt-file",
+        // per-run JSON сабагентов-персон: содержимое доезжает на устройство, путь —
+        // placeholder (как у остальных файловых аргументов)
+        "--agents",
     };
 
     // Серверы нашего MCP-over-HTTP: только их адреса переводятся на сайдкар

@@ -64,7 +64,15 @@ public sealed class PersonaAgentFileSync
     // Назначения моделей: персона без своей модели пинит тир места «сабагенты-консультанты»
     private readonly Llm.ModelAssignmentResolver? _assignments;
     private readonly string _baseDir;
+    // Файловый синк .claude/agents/*.md (Persona:AgentFiles, дефолт — JSON-канал, т.е.
+    // false): в JSON-режиме определения уезжают в per-run --agents-файл (CLI ≥ 2.1.281),
+    // а миграция при старте убирает старые .md.
+    private readonly bool _agentFilesEnabled;
     private readonly ConcurrentDictionary<string, DateTime> _lastSync = new();
+
+    // Файловый синк .claude/agents/*.md активен (Persona:AgentFiles, дефолт — JSON-канал,
+    // т.е. false). В JSON-режиме определения уезжают в per-run --agents-файл
+    public bool AgentFilesEnabled => _agentFilesEnabled;
 
     public PersonaAgentFileSync(IConfiguration config, PersonaManager personas,
         ProjectManager projects, LlmProviderRegistry providers, PersonaBindingsService bindings,
@@ -85,6 +93,8 @@ public sealed class PersonaAgentFileSync
         _users = users;
         _log = log;
         _filesMax = int.TryParse(config["Persona:AgentFilesMax"], out var max) && max > 0 ? max : 50;
+        // Дефолт — JSON-канал (продукт .md не пишет); "true" — откат на файловый синк
+        _agentFilesEnabled = config["Persona:AgentFiles"] is { } v && bool.TryParse(v, out var on) && on;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
@@ -132,8 +142,10 @@ public sealed class PersonaAgentFileSync
 
     // Папки для --add-dir хода: только для чатов БЕЗ проекта (личные сессии).
     // Для проектных сессий файлы уже лежат в .claude/agents/ на cwd проекта.
+    // JSON-канал: --add-dir не нужен вовсе — определения едут в per-run --agents-файле.
     public IReadOnlyList<string> GetAddDirs(string ownerId, string? sessionModel, string? projectId)
     {
+        if (!_agentFilesEnabled) return [];
         SyncOwner(ownerId);
         if (projectId is not null) return []; // проектная сессия — cwd сам подхватит .claude/agents/
 
@@ -152,6 +164,9 @@ public sealed class PersonaAgentFileSync
 
     public void SyncPersona(Persona persona)
     {
+        // JSON-канал: .md не пишутся — событие персоны лишь пересоберёт per-run-файл
+        // на следующем ходу (состав детерминирован по сессии)
+        if (!_agentFilesEnabled) return;
         if (IsReserved(persona.Handle))
         {
             _log.LogWarning("Персона @{Handle}: handle совпадает со встроенным агентом CLI — файл не создаётся", persona.Handle);
@@ -170,8 +185,85 @@ public sealed class PersonaAgentFileSync
 
     public void RemovePersona(Persona persona)
     {
+        if (!_agentFilesEnabled) return;
         foreach (var path in ResolvePaths(persona))
             TryDelete(path);
+    }
+
+    // Определения для per-run --agents JSON (CLI ≥ 2.1.281): те же персоны, что видит
+    // сессия (состав задаёт вызывающий — SplitConsultants), тот же контент, что в .md
+    // (BuildSpec — единый источник). omitClaudeMd — по сессии (BareMode), не по персоне.
+    public IReadOnlyList<Llm.PersonaAgentDef> GetAgentsDefs(IReadOnlyList<Persona> subagents, bool omitClaudeMd)
+    {
+        var defs = new List<Llm.PersonaAgentDef>(subagents.Count);
+        foreach (var p in subagents)
+            defs.Add(_generator.ToAgentDef(p, BuildContext(p), omitClaudeMd));
+        return defs;
+    }
+
+    // Срез эффективных возможностей персоны для генерации (общая точка .md и JSON)
+    private PersonaAgentFileContext BuildContext(Persona persona)
+    {
+        var ownerId = persona.OwnerId ?? "";
+        return new PersonaAgentFileContext(
+            _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
+            _bindings.EffectiveToolEnabled(ownerId, persona, "tasks"),
+            _bindings.EffectiveToolEnabled(ownerId, persona, "notes"),
+            // Граф кода: только явная активная привязка, а НЕ ServerToolEnabled с его
+            // дефолтом «включено» — у файлового сабагента allow-list deny-by-default
+            // (см. PersonaBindingsService.ToolBindingActive)
+            _bindings.ToolBindingActive(persona, "codegraph"),
+            _bindings.BuildSubagentIndex(ownerId, persona),
+            // Персона без своей модели идёт своим уровнем, без уровня — тиром назначения
+            // «сабагенты-консультанты»; резолвер может вернуть и модель стороннего
+            // провайдера — ModelTierAlias отсеет её в null (пин только Claude-тиров).
+            // Формула пина — общая точка с чипом модели карточки (ModelAssignmentResolver).
+            ModelAliasFor(_providers,
+                _assignments?.PersonaSubagentPinModel(persona, ownerId) ?? persona.Model));
+    }
+
+    // Разовая миграция на JSON-канал: убирает сгенерированные .md-агентов (по маркеру
+    // в description) из проектов, Chats и резерва persona-agents. Папку целиком никогда
+    // не удаляет: пользовательский файл с тем же именем, но без маркера, — не наш.
+    // Только в JSON-режиме: при откате на файловый синк файлы ещё в деле.
+    public int MigrateLegacyAgentFiles()
+    {
+        if (_agentFilesEnabled) return 0;
+        var removed = 0;
+        foreach (var user in _users.GetAll())
+        {
+            // Проекты на сервере (локальные .md не пишут — синк их не трогал)
+            foreach (var p in _projects.GetByOwner(user.Id))
+                if (ServerRootOf(p) is { } root)
+                    removed += CleanAgentDir(Path.Combine(root, ".claude", "agents"));
+            // Чаты вне проекта
+            if (ChatRoot(user.Id) is { } chatRoot)
+                removed += CleanAgentDir(Path.Combine(chatRoot, ".claude", "agents"));
+            // Резерв persona-agents (все dirKey: shared + провайдеры)
+            foreach (var dirKey in new[] { SharedDirKey }.Concat(_providers.All.Select(p => p.Key)))
+                removed += CleanAgentDir(Path.Combine(_baseDir, user.Id, dirKey, ".claude", "agents"));
+        }
+        if (removed > 0)
+            _log.LogInformation("Миграция на JSON-канал: удалено синхронизированных .md-агентов — {Count}", removed);
+        return removed;
+    }
+
+    // .md с нашим маркером в папке; сама папка (и файлы без маркера) не трогается
+    private static int CleanAgentDir(string dir)
+    {
+        if (!Directory.Exists(dir)) return 0;
+        var removed = 0;
+        foreach (var file in Directory.EnumerateFiles(dir, "*.md"))
+        {
+            try
+            {
+                if (!PersonaAgentFileGenerator.IsOurAgentFile(File.ReadAllText(file))) continue;
+                File.Delete(file);
+                removed++;
+            }
+            catch { /* не критично: миграция best-effort */ }
+        }
+        return removed;
     }
 
     // Полный reconcile владельца. Троттлинг 5 мин.
@@ -184,6 +276,14 @@ public sealed class PersonaAgentFileSync
 
         try
         {
+            // Справочник категорий делегирования — по одному файлу на рабочую папку владельца
+            // (от персон не зависит, пишется в обоих каналах)
+            foreach (var root in CategoryProfileRoots(ownerId))
+                WriteCategoryProfiles(CategoryProfilesPath(root));
+
+            // JSON-канал: .md не пишутся, reconcile файлов нечего сверять
+            if (!_agentFilesEnabled) return;
+
             var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var persona in EligiblePersonas(ownerId))
                 foreach (var path in ResolvePaths(persona))
@@ -191,11 +291,6 @@ public sealed class PersonaAgentFileSync
 
             foreach (var (path, content) in expected)
                 WriteIfChanged(path, content);
-
-            // Справочник категорий делегирования — по одному файлу на рабочую папку владельца
-            // (от персон не зависит, поэтому пишется отдельно от expected)
-            foreach (var root in CategoryProfileRoots(ownerId))
-                WriteCategoryProfiles(CategoryProfilesPath(root));
 
             // Чистка persona-agents: удаляем лишнее
             foreach (var dirKey in new[] { SharedDirKey }.Concat(_providers.All.Select(p => p.Key)))

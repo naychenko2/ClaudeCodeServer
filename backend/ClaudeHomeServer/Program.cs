@@ -1553,6 +1553,36 @@ app.Services.GetRequiredService<ClaudeHomeServer.Services.Watchdog.WatchdogNotif
 // из восстановленного projects.json — то есть в рабочие каталоги на диске.
 if (!inspectionMode) app.Services.GetRequiredService<PersonaAgentFileSync>();
 
+// Разовая миграция на JSON-канал (CLI ≥ 2.1.281): убирает синхронизированные .md-агентов
+// (только с маркером, папку целиком не трогает) из проектов, Chats и резерва persona-agents.
+// В JSON-режиме (дефолт) продукт .md больше не пишет — файлы мёртвый груз; в файловом
+// синке (Persona:AgentFiles=true) миграция no-op и маркер НЕ пишется: поздний переход
+// на JSON прогонит её ещё раз (за время файлового режима могли появиться новые .md).
+if (!inspectionMode)
+    try
+    {
+        var agentSync = app.Services.GetRequiredService<PersonaAgentFileSync>();
+        if (!agentSync.AgentFilesEnabled)
+        {
+            var dataDir = Path.GetDirectoryName(
+                app.Configuration["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+                ?? Path.Combine(AppContext.BaseDirectory, "data");
+            var marker = Path.Combine(dataDir, "agents-json-migration-v1.done");
+            if (!File.Exists(marker))
+            {
+                var removed = agentSync.MigrateLegacyAgentFiles();
+                Directory.CreateDirectory(dataDir);
+                File.WriteAllText(marker, $"{DateTime.UtcNow:O} removed={removed}");
+                if (removed > 0)
+                    Console.WriteLine($"[AgentsJsonMigration] удалено синхронизированных .md-агентов: {removed}");
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[AgentsJsonMigration] миграция пропущена: {ex.Message}");
+    }
+
 // Однократная миграция @handle персон под контекстное правило: схлопывает лишние суффиксы
 // (masha-2 → masha там, где контексты не пересекаются) и чистит старые .md-файлы сабагентов
 // по прежнему handle. Маркер-файл — чтобы не гонять на каждом старте. Best-effort: сбой

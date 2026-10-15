@@ -336,6 +336,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // ход можно отдать живому процессу только при полном совпадении (см. BuildLaunchSignature)
         public required string Signature { get; init; }
         public string? TurnMcpPath { get; init; }
+        // Per-run файл --agents (состав сабагентов-персон): та же жизнь, что у MCP-конфига —
+        // нужен только на старте процесса, на same-process-ходах не перечитывается
+        public string? TurnAgentsPath { get; init; }
         // Ход шлюза LLM этого процесса (серверный ход провайдера, ADR-016 §2): отзывается
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
@@ -3293,6 +3296,38 @@ public class ClaudeSession : ILlmSessionAdapter
                 catch (InvalidOperationException) { }
             }
 
+        // Per-run файл --agents (CLI ≥ 2.1.281 принимает путь к JSON при -p): определения
+        // сабагентов-персон. Имя файла — хэш содержимого, а содержимое детерминировано
+        // по сессии (владелец + персоны + их настройки), поэтому путь входит в сигнатуру
+        // запуска стабильно: правка персоны → новый хэш → новый путь → штатный перезапуск
+        // процесса. omitClaudeMd — по факту BareMode ЭТОГО прогона (блок выше): сессия,
+        // где CLAUDE.md проекта не грузится целиком, не должна тянуть его и в сабагента.
+        // Локальный проект (ADR-016): файл доезжает на устройство в составе spawn
+        // (RemoteProcessRunner.FileArgFlags), как --mcp-config.
+        string? turnAgentsPath = null;
+        if (personaAgents is { Agents.Count: > 0 })
+        {
+            var defs = _lastBareModeApplied
+                ? personaAgents.Agents.Select(a => a with { OmitClaudeMd = true }).ToList()
+                : personaAgents.Agents.ToList();
+            try
+            {
+                var json = ClaudeAgentsJson.Serialize(defs);
+                var hash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json)))
+                    [..16].ToLowerInvariant();
+                var path = Path.Combine(_launcher.HostTempDir, $"claude-agents-{hash}.json");
+                if (!File.Exists(path) || File.ReadAllText(path) != json)
+                    File.WriteAllText(path, json);
+                turnAgentsPath = path;
+                args.AddRange(["--agents", _launcher.Paths.ToRuntime(path)]);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Файл --agents не собрался, ход без файловых консультантов: {ex.Message}");
+            }
+        }
+
         // pmem-серверы консультантов: сессионный allow, БЕЗ него вызов из фонового сабагента
         // упирается в permission-запрос, на который некому ответить (проверено вживую).
         // Закрыть их от ГЛАВНОЙ сессии технически нельзя — permission-правила общие на процесс,
@@ -4244,6 +4279,14 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг same-process хода {turnMcpPath}: {ex.Message}");
                     }
+                // --agents-файл: та же логика (DiedEmpty-ветка не трогает: ретрай стартует
+                // новый процесс с теми же args, финализация нового прогона его уберёт)
+                if (turnAgentsPath != null)
+                    try { File.Delete(turnAgentsPath); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents same-process хода {turnAgentsPath}: {ex.Message}");
+                    }
                 return;
             }
             existing.DiedEmpty = false;
@@ -4333,7 +4376,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -4406,6 +4449,9 @@ public class ClaudeSession : ILlmSessionAdapter
             if (gatewayTurnId is not null) _serverGateway!.End(gatewayTurnId);
             if (turnMcpPath != null)
                 try { File.Delete(turnMcpPath); }
+                catch { /* temp-каталог приберёт ОС */ }
+            if (turnAgentsPath != null)
+                try { File.Delete(turnAgentsPath); }
                 catch { /* temp-каталог приберёт ОС */ }
             await _onMessage(new ExitedMessage(turnSeq));
             throw;
@@ -4657,6 +4703,13 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 // В temp-конфиге сервисный токен — важно знать, если он не удалился
                 Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг {run.TurnMcpPath}: {ex.Message}");
+            }
+
+        if (run.TurnAgentsPath != null)
+            try { File.Delete(run.TurnAgentsPath); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents {run.TurnAgentsPath}: {ex.Message}");
             }
 
         // Процесс мёртв, но Workflow-агенты — независимые процессы и не обязаны погибнуть

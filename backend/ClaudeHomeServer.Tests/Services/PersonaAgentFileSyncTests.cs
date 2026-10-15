@@ -45,6 +45,8 @@ public class PersonaAgentFileSyncTests : IDisposable
         {
             ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
             ["Persona:AgentFilesMax"] = "3", // маленький кап для теста
+            // Набор проверяет файловый синк (откат) — JSON-канал (дефолт) его выключает
+            ["Persona:AgentFiles"] = "true",
         });
 
         var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
@@ -381,6 +383,8 @@ public class PersonaAgentFileSyncTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(dir, "projects.json"),
+                // Тест проверяет .md-файл (файловый синк) — JSON-канал (дефолт) его выключает
+                ["Persona:AgentFiles"] = "true",
             })
             .Build();
         var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);

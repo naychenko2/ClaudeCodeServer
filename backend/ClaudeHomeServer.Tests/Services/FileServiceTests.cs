@@ -67,6 +67,60 @@ public class FileServiceTests : IDisposable
         result.TrimEnd(Path.DirectorySeparatorChar).Should().Be(_root.TrimEnd(Path.DirectorySeparatorChar));
     }
 
+    // ─── JoinBelowRoot: однофайловые git-операции не принимают корень ────────
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    [InlineData("./")]
+    [InlineData("d/..")]
+    [InlineData("/")]
+    public void JoinBelowRoot_ПутьКорень_Отказ(string path)
+    {
+        var act = () => SafePath.JoinBelowRoot(_root, path);
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Theory]
+    [InlineData("d/")]
+    [InlineData("a.txt")]
+    public void JoinBelowRoot_ПутьНижеКорня_Пропускает(string path) =>
+        SafePath.JoinBelowRoot(_root, path).Should().StartWith(_root);
+
+    // Фолбэк без GitService: с «:(literal)» пустой путь — всё дерево, откат «одного
+    // файла» вернул бы к HEAD все правки репозитория
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    public void RevertFile_БезGitService_ПутьКорень_ПравкиЦелы(string path)
+    {
+        Git("init", "-q");
+        Git("config", "user.email", "t@t");
+        Git("config", "user.name", "t");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "один\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "init");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "правка\n");
+
+        _svc.RevertFile(_root, path).Should().BeFalse();
+        File.ReadAllText(Path.Combine(_root, "a.txt")).Should().Be("правка\n");
+    }
+
+    private void Git(params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = _root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        p.WaitForExit();
+        p.ExitCode.Should().Be(0, string.Join(' ', args));
+    }
+
     [SkippableFact]
     public void SafeJoin_CaseInsensitive_ReEnterRootInDifferentCase_Allowed()
     {
@@ -583,7 +637,12 @@ public class FileServiceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_root))
-            Directory.Delete(_root, recursive: true);
+        if (!Directory.Exists(_root)) return;
+        // Объекты .git на Windows read-only — без сброса атрибутов удаление падает
+        var dotGit = Path.Combine(_root, ".git");
+        if (Directory.Exists(dotGit))
+            foreach (var f in Directory.EnumerateFiles(dotGit, "*", SearchOption.AllDirectories))
+                File.SetAttributes(f, FileAttributes.Normal);
+        Directory.Delete(_root, recursive: true);
     }
 }

@@ -485,8 +485,8 @@ public class FileService(
         if (!IsGitRepo(rootPath)) return null;
         try
         {
-            // Путь через SafeJoin — валидация до передачи в git
-            SafeJoin(rootPath, relativePath);
+            // Валидация до передачи в git; корень — отказ: с «:(literal)» это всё дерево
+            SafePath.JoinBelowRoot(rootPath, relativePath);
             return await DiffFileVsHeadAsync(rootPath, relativePath, ct);
         }
         catch
@@ -571,7 +571,8 @@ public class FileService(
         // git checkout HEAD -- file
         try
         {
-            SafeJoin(rootPath, relativePath);
+            // Корень — отказ: с «:(literal)» откат «одного файла» снёс бы всё дерево
+            SafePath.JoinBelowRoot(rootPath, relativePath);
             if (git is not null)
             {
                 // Через слой Execution (container-юзеры) — DiscardAsync бросает при ошибке

@@ -466,6 +466,58 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         (await File.ReadAllTextAsync(Path.Combine(_repo, "na.txt"))).ReplaceLineEndings("\n").Should().Be("сосед 2\n");
     }
 
+    // ---------- Однофайловая операция не принимает корень ----------
+    // С «:(literal)» пустой путь (и «.») совпадает со всем деревом: discard {path:""}
+    // откатил бы всё в обход подтверждения discard-all. Отказ — до запуска git.
+
+    public static TheoryData<string> КорневыеПути => ["", ".", "./", "d/..", "/"];
+
+    [Theory]
+    [MemberData(nameof(КорневыеПути))]
+    public async Task Discard_ПутьКорень_Отказ_ПравкиЦелы(string path)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "new.txt"), "новый\n");
+
+        var act = () => _git.DiscardAsync(null, _repo, path);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).ReplaceLineEndings("\n").Should().Be("правка\n");
+        File.Exists(Path.Combine(_repo, "new.txt")).Should().BeTrue();
+    }
+
+    [Theory]
+    [MemberData(nameof(КорневыеПути))]
+    public async Task StageUnstageRestore_ПутьКорень_Отказ(string path)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        var sha = (await _git.LogAsync(null, _repo, 1))[0].Sha;
+
+        await FluentActions.Awaiting(() => _git.StageAsync(null, _repo, path))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        await FluentActions.Awaiting(() => _git.UnstageAsync(null, _repo, path))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        await FluentActions.Awaiting(() => _git.RestoreFileFromCommitAsync(null, _repo, sha, path))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+
+        (await _git.StatusAsync(null, _repo)).Staged.Should().BeEmpty();
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).ReplaceLineEndings("\n").Should().Be("правка\n");
+    }
+
+    // Каталог — не корень: откат новой папки «d/» по-прежнему работает
+    [Fact]
+    public async Task Discard_Каталог_Работает()
+    {
+        Directory.CreateDirectory(Path.Combine(_repo, "d"));
+        await File.WriteAllTextAsync(Path.Combine(_repo, "d", "x.txt"), "новый\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+
+        await _git.DiscardAsync(null, _repo, "d/");
+
+        Directory.Exists(Path.Combine(_repo, "d")).Should().BeFalse();
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).ReplaceLineEndings("\n").Should().Be("правка\n");
+    }
+
     // Буквальность путей не утекает в хуки: глобальный --literal-pathspecs выставлял
     // GIT_LITERAL_PATHSPECS=1, хук наследовал его, и маска «*.cs» молча давала пустой список
     [Fact]

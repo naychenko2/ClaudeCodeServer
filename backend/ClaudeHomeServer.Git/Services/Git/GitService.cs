@@ -62,9 +62,13 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // только ради статической проверки путей. Возврат — с прямыми слэшами: git ждёт
     // POSIX-разделители, и на Linux путь с обратными молча даёт пустой вывод
     // (log --follow) вместо ошибки.
+    // Все вызывающие — однофайловые операции, поэтому путь, сводящийся к корню («»,
+    // «.», «./», «d/..»), — отказ (JoinBelowRoot): с «:(literal)» он совпадает со всем
+    // деревом, и discard одного файла откатил бы всё в обход подтверждения discard-all.
+    // Операции над целым репозиторием идут своими методами и сюда не попадают.
     private static string ValidateRel(string root, string relPath)
     {
-        SafePath.Join(root, relPath);
+        SafePath.JoinBelowRoot(root, relPath);
         return relPath.Replace('\\', '/');
     }
 

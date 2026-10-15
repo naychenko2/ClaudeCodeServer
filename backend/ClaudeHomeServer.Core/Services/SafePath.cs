@@ -37,6 +37,19 @@ public static class SafePath
         return full;
     }
 
+    // То же, что Join, но путь обязан указывать НИЖЕ корня: «», «.», «./», «d/..» — отказ.
+    // Для однофайловых git-операций: с «:(literal)» путь-корень совпадает со всем деревом,
+    // и откат одного файла снёс бы все правки в обход подтверждения «откатить всё».
+    public static string JoinBelowRoot(string root, string relativePath)
+    {
+        var full = Join(root, relativePath);
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Equals(rootFull,ComparisonFor(OperatingSystem.IsWindows())))
+            throw new UnauthorizedAccessException("Путь указывает на корень проекта, а не на файл");
+        return full;
+    }
+
     // Выбор компаратора вынесен ради теста: ветку чужой ОС иначе на CI не проверить.
     public static StringComparison ComparisonFor(bool isWindows) =>
         isWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;

@@ -35,3 +35,13 @@ export function usePromptCache(items: ChatItem[]): PromptCacheState {
 
   return state;
 }
+
+// Лента для индикатора кэша: пока идёт ход, держим ту, что была до него. Состояние кэша
+// меняет только result хода, а стрим-дельты обновляют ленту на каждый токен — без заморозки
+// шапка пересчитывала бы кэш (обход всей ленты) на каждую дельту впустую.
+export function usePromptCacheItems(items: ChatItem[], isWaiting: boolean): ChatItem[] {
+  const [held, setHeld] = useState(items);
+  // Хранение значения прошлых рендеров — штатный приём React (setState во время рендера)
+  if (!isWaiting && held !== items) setHeld(items);
+  return isWaiting ? held : items;
+}

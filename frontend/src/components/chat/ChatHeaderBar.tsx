@@ -3,7 +3,7 @@ import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { promptCacheState, rewriteCostUsd, cacheLeftText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
-import { usePromptCache } from '../../hooks/usePromptCache';
+import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
@@ -728,7 +728,9 @@ function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; stat
       <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
         {cold
           ? <>Следующий ход перепишет кэш заново{prefixTokens !== undefined ? ` — ≈${fmtTokens(prefixTokens)} токенов` : ''}
-              {rewrite !== undefined ? `, ≈${fmtUsd(rewrite)}${billing === 'subscription' ? ' по API-тарифу' : ''}` : ''}.</>
+              {rewrite !== undefined ? `, ≈${fmtUsd(rewrite)}${billing === 'subscription' ? ' по API-тарифу' : ''}` : ''}.
+              {/* База цены — стоимость прошлого хода целиком: сабагенты на других моделях её искажают */}
+              {rewrite !== undefined ? ' Цена — ориентир: если в ходах работали сабагенты на других моделях, она может быть занижена.' : ''}</>
           : 'Ход до конца срока читает префикс из кэша — в десять раз дешевле обычного входа. Каждый ход продлевает срок.'}
       </div>
     </>
@@ -1153,6 +1155,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
+  // Лента для индикатора кэша — замороженная на время хода (см. usePromptCacheItems)
+  const cacheItems = usePromptCacheItems(items, isWaiting);
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1572,12 +1576,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       balance={provBalance} billing={billing} windows={limitWindows}
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
-      cacheItems={items}
+      cacheItems={cacheItems}
     />
   );
   // Чип кэша промпта — только на десктопе: на узких раскладках кэш живёт точкой на
   // кольцевой пилюле и секцией её шторки. Таймер внутри чипа, шапка по нему не перерисовывается
-  const cacheBadge = <PromptCacheBadge items={items} isWaiting={isWaiting} billing={billing} resetKey={session.id} />;
+  const cacheBadge = <PromptCacheBadge items={cacheItems} isWaiting={isWaiting} billing={billing} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
   const spendBadge = spendBadgeSlot?.render?.({ sessionId: session.id, chatName: session.name, resultCount: cost.results, isMobile: isCompact });
@@ -1784,7 +1788,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // бы про состав шапки. Скрытая глазиком пилюля из списка не исчезает — её
   // доступность считается по данным, а не по видимости
   // Чип кэша доступен только у родного Claude с якорем — у сторонних провайдеров его нет
-  const cacheAvailable = useMemo(() => hasPromptCacheInfo(items), [items]);
+  const cacheAvailable = useMemo(() => hasPromptCacheInfo(cacheItems), [cacheItems]);
   const badgeAvailable: Record<ChatBadgeKey, boolean> = {
     mechanic: !!lastMechanic,
     workflow: !!activeWorkflow,

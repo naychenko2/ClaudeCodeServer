@@ -37,7 +37,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { BackButton, Button, IconButton } from '../components/ui';
+import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
@@ -318,6 +318,15 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // ключ зарезервирован в panelCatalog, тело рисует подсистема. Выключенная подсистема
   // вкладов не отдаёт — контента нет, и keyAvailable прячет кнопку в рельсе
   const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF)
+  // Панель «Локальные модели» (подсистема, слот workspace-panel-def): на мобиле в
+  // таб-баре её нет — триггер живёт в меню «Ещё», а сама панель открывается шторкой
+  // (Modal = bottom-sheet на мобиле). Видимость — тот же гейт, что у значка в рельсе:
+  // флаг + admin + configured (isAvailable); не открыт — ни пункта в «Ещё», ни шторки.
+  const [localModelOpen, setLocalModelOpen] = useState(false);
+  const localModelDef = panelDefs.find(d => d.name === 'localModel');
+  const localModelAction = localModelDef?.action;
+  const localModelRender = localModelDef?.render;
+  const localModelVisible = !!localModelAction?.isAvailable?.(project.id);
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -927,6 +936,13 @@ const windowWidth = useWindowWidth();
       key: 'arch', label: 'Архитектура',
       icon: <DraftingCompass size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
       onClick: () => ensureArchOpen(),
+    }] : []),
+    // «Локальные модели» — панель подсистемы: пункт есть, только когда гейт (флаг +
+    // admin + configured) открыт; клик открывает её шторкой, а не вкладкой
+    ...(localModelVisible && localModelAction ? [{
+      key: 'localModel', label: localModelAction.title,
+      icon: localModelAction.icon,
+      onClick: () => setLocalModelOpen(true),
     }] : []),
     ...overflowTabItems.slice(splitAt),
     {
@@ -1965,6 +1981,13 @@ const windowWidth = useWindowWidth();
         )}
         {columnsDialogEl}
         {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
+        {/* «Локальные модели» — шторка (Modal = bottom-sheet на мобиле): открывается
+            из меню «Ещё»; панель сама рисует переключатель «LLM · Медиа» в теле */}
+        {localModelOpen && localModelVisible && localModelRender && (
+          <Modal title="Локальные модели" onClose={() => setLocalModelOpen(false)}>
+            {localModelRender({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: true, onClose: () => setLocalModelOpen(false) })}
+          </Modal>
+        )}
         {editProjectOpen && (
           <EditDialog
             project={projectForEdit}

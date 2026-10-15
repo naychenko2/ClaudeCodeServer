@@ -58,7 +58,8 @@ public class HandsBridgeSourceGuardTests
         var notYetInBridge = new[]
         {
             HandsTools.ClipboardText, HandsTools.HandsBatch,
-            HandsTools.ScanDocument, HandsTools.ScanCanvas,
+            // ScanDocument убран из списка: инструмент scan_document теперь в мосту (A5).
+            HandsTools.ScanCanvas,
         };
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
 

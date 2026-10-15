@@ -3117,13 +3117,6 @@ public class ClaudeSession : ILlmSessionAdapter
         if (persona is { Access: PersonaAccess.ReadOnly } && CliAtLeast(CurrentCliVersion(), 2, 1, 248))
             args.Add("--restricted");
 
-        // --permission-prompts none (CLI ≥ 2.1.259): ход, где человека нет (исполнитель задачи
-        // трекера, периодическая автоматика) — всё, что просило бы подтверждения, отказывается
-        // автоматически, активный режим прав продолжает решать. Без флага такой ход виснет на
-        // stdio-запросе прав до истечения TTL чата исполнения.
-        if (Info.Origin != ChatOrigin.Manual && CliAtLeast(CurrentCliVersion(), 2, 1, 259))
-            args.AddRange(["--permission-prompts", "none"]);
-
         // Пустая модель сессии = «по умолчанию»: подставляем глобальную настройку, а не
         // отдаём выбор CLI (иначе «по умолчанию» значило бы в разных местах разные модели)
         if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))

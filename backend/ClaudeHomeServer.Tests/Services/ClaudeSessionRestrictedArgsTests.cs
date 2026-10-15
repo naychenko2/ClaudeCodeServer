@@ -8,14 +8,15 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// CLI 2.1.300: два флага в сигнатуре запуска, решаемые по СЕССИИ (не по ходу):
+// CLI 2.1.300: флаги в сигнатуре запуска, решаемые по СЕССИИ (не по ходу):
 //   • --restricted (CLI ≥ 2.1.248) — персоны «Только чтение» (консультанты): убирает
 //     встроенные инструменты запуска команд и WebFetch, держит файловые инструменты внутри
 //     рабочего каталога, отказывает bypassPermissions (fail-closed на стороне CLI поверх
 //     disallowed-инструментов PersonaAccessPolicy);
-//   • --permission-prompts none (CLI ≥ 2.1.259) — ход, где человека нет (исполнитель задачи
-//     трекера, периодическая автоматика): всё, что просило бы подтверждения, отказывается
-//     автоматически, иначе ход виснет на stdio-запросе прав до истечения TTL чата.
+//   • --permission-prompts НЕ ставим никогда, в том числе ходам без человека (исполнитель
+//     задачи, автоматика): права таких ходов решает сервер через --permission-prompt-tool stdio
+//     (DecidePermissionAsync), а флаг CLI перекрывает этот канал и отказывает сам. Тесты ниже —
+//     сторож от повторного внесения.
 //
 // Сквозной BuildArgs (ArgsCapturingLauncher по образцу ClaudeSessionEffortArgsTests):
 // реальный набор флагов, уходящих в процесс хода. Версия CLI — через шов
@@ -86,8 +87,8 @@ public class ClaudeSessionRestrictedArgsTests : IDisposable
     }
 
     // Запустить ход и вернуть собранные аргументы. personaAccess — профиль доступа персоны
-    // (ReadOnly → --restricted), origin — происхождение чата (Task/Automation → --permission-prompts
-    // none), cliVersion — версия CLI хоста (гейт по порогу).
+    // (ReadOnly → --restricted), origin — происхождение чата (Manual/Task/Automation),
+    // cliVersion — версия CLI хоста (гейт по порогу).
     private async Task<IReadOnlyList<string>> RunTurnAsync(
         PersonaAccess personaAccess, ChatOrigin origin, string? cliVersion)
     {
@@ -150,36 +151,43 @@ public class ClaudeSessionRestrictedArgsTests : IDisposable
         args.Should().Contain("--restricted",
             "ReadOnly-персона на CLI ≥ 2.1.248 получает --restricted");
         args.Should().NotContain("--permission-prompts",
-            "обычный (Manual) чат без человека не получает --permission-prompts");
+            "--permission-prompts не ставится никому");
     }
 
-    // --- исполнитель задачи: --permission-prompts none ---
+    // --- ходы без человека: права решает сервер по stdio, --permission-prompts нет ---
+
+    private const string NoPermissionPromptsReason =
+        "права ходов без человека решает сервер через stdio-канал (DecidePermissionAsync), " +
+        "а --permission-prompts перекрывает его: CLI сам отказывает в подтверждаемом " +
+        "(tasks_complete, chats_report_up и пр.)";
 
     [Fact]
-    public async Task ИсполнительЗадачи_СвежийCli_СтавитPermissionPromptsNone()
+    public async Task ИсполнительЗадачи_СвежийCli_БезPermissionPrompts_СоStdioКаналом()
     {
         var args = await RunTurnAsync(PersonaAccess.Full, ChatOrigin.Task, "2.1.300");
 
-        var arr = args.ToArray();
-        var idx = Array.IndexOf(arr, "--permission-prompts");
-        idx.Should().BeGreaterOrEqualTo(0, "ход без человека (исполнитель задачи) получает --permission-prompts");
-        idx.Should().BeLessThan(arr.Length - 1, "за флагом должно следовать значение");
-        arr[idx + 1].Should().Be("none", "всё, что просило бы подтверждения, отказывается автоматически");
+        args.Should().NotContain("--permission-prompts", NoPermissionPromptsReason);
+        AssertStdioPermissionTool(args);
         args.Should().NotContain("--restricted",
             "Full-персона (не ReadOnly) --restricted не получает");
     }
 
-    // --- периодическая автоматика: тот же путь «нет человека» ---
-
     [Fact]
-    public async Task Автоматика_СвежийCli_СтавитPermissionPromptsNone()
+    public async Task Автоматика_СвежийCli_БезPermissionPrompts_СоStdioКаналом()
     {
         var args = await RunTurnAsync(PersonaAccess.Full, ChatOrigin.Automation, "2.1.300");
 
+        args.Should().NotContain("--permission-prompts", NoPermissionPromptsReason);
+        AssertStdioPermissionTool(args);
+    }
+
+    private static void AssertStdioPermissionTool(IReadOnlyList<string> args)
+    {
         var arr = args.ToArray();
-        var idx = Array.IndexOf(arr, "--permission-prompts");
-        idx.Should().BeGreaterOrEqualTo(0, "автоматический ход (Origin=Automation) — человек не отвечает");
-        arr[idx + 1].Should().Be("none");
+        var idx = Array.IndexOf(arr, "--permission-prompt-tool");
+        idx.Should().BeGreaterOrEqualTo(0, "запросы прав обязаны идти на сервер по stdio-каналу");
+        idx.Should().BeLessThan(arr.Length - 1, "за флагом должно следовать значение");
+        arr[idx + 1].Should().Be("stdio");
     }
 
     // --- обычный чат: ни одного флага ---
@@ -190,7 +198,7 @@ public class ClaudeSessionRestrictedArgsTests : IDisposable
         var args = await RunTurnAsync(PersonaAccess.Full, ChatOrigin.Manual, "2.1.300");
 
         args.Should().NotContain("--restricted", "Full-персона (не ReadOnly) --restricted не получает");
-        args.Should().NotContain("--permission-prompts", "Manual-чат (человек есть) --permission-prompts не получает");
+        args.Should().NotContain("--permission-prompts", "--permission-prompts не ставится никому");
     }
 
     // --- гейт по версии: старый CLI флага не получает ---
@@ -205,22 +213,13 @@ public class ClaudeSessionRestrictedArgsTests : IDisposable
     }
 
     [Fact]
-    public async Task ИсполнительЗадачи_СтарыйCli_НиPermissionPrompts()
-    {
-        // 2.1.258 < 2.1.259: --permission-prompts ещё не существует
-        var args = await RunTurnAsync(PersonaAccess.Full, ChatOrigin.Task, "2.1.258");
-
-        args.Should().NotContain("--permission-prompts", "CLI 2.1.258 не знает --permission-prompts");
-    }
-
-    [Fact]
     public async Task НеизвестнаяВерсия_ОбаФлагаОтсутствуют()
     {
         // null — опроса CLI ещё не было: fail-safe, не ставим флаг, который CLI может не понять
         var args = await RunTurnAsync(PersonaAccess.ReadOnly, ChatOrigin.Task, null);
 
         args.Should().NotContain("--restricted", "неизвестная версия — не ставим --restricted");
-        args.Should().NotContain("--permission-prompts", "неизвестная версия — не ставим --permission-prompts");
+        args.Should().NotContain("--permission-prompts", "--permission-prompts не ставится никому");
     }
 
     // --- чистая функция сравнения версий ---

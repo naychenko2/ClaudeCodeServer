@@ -477,10 +477,12 @@ public class HandsBridgeSourceGuardTests
 
     /// <summary>
     /// Запись файлов (D2d): вся запись в проект — только через <c>Hands/HandsProjectFiles.cs</c>.
-    /// Прямые <c>File.WriteAllBytes</c>/<c>WriteAllText</c>/<c>Create</c>/<c>OpenWrite</c>/<c>AppendAll*</c>
-    /// и <c>new FileStream</c> в остальных файлах моста — красный. Исключения — файлы, которые пишут
-    /// НЕ файлы проекта: лог (<c>HandsLog</c>), макросы (<c>MacroService</c>), legacy-путь
-    /// <c>outputMode=file</c> снимка (<c>ScreenshotService</c>).
+    /// Прямая запись в остальных файлах моста — красный: <c>File.WriteAll*</c>/<c>AppendAll*</c>/
+    /// <c>Create</c>/<c>OpenWrite</c>/<c>CreateText</c>/<c>AppendText</c>/<c>Copy</c>/<c>Replace</c>,
+    /// <c>File.Move</c> с перезаписью, <c>File.Open</c> в режиме записи, <c>FileInfo.Create/OpenWrite/
+    /// CreateText/AppendText/CopyTo/MoveTo</c> и <c>new FileStream</c> (квалифицированный и нет).
+    /// Исключения — файлы, которые пишут НЕ файлы проекта: лог (<c>HandsLog</c>), макросы
+    /// (<c>MacroService</c>), legacy-путь <c>outputMode=file</c> снимка (<c>ScreenshotService</c>).
     /// </summary>
     [Fact]
     public void File_writes_go_through_HandsProjectFiles()
@@ -494,12 +496,20 @@ public class HandsBridgeSourceGuardTests
             "Capture/ScreenshotService.cs",
         };
 
-        // Методы File.*, которые создают/дописывают файл.
+        // Методы File.*, которые всегда создают/дописывают файл.
         var writeMethods = new HashSet<string>
         {
             "WriteAllBytes", "WriteAllBytesAsync", "WriteAllText", "WriteAllTextAsync",
+            "WriteAllLines", "WriteAllLinesAsync",
             "AppendAllText", "AppendAllTextAsync", "AppendAllBytes", "AppendAllBytesAsync",
-            "Create", "OpenWrite", "CreateText",
+            "AppendAllLines", "AppendAllLinesAsync",
+            "AppendText", "Create", "OpenWrite", "CreateText", "Copy", "Replace",
+        };
+
+        // Методы FileInfo, которые создают/дописывают файл (цепочка new FileInfo(...).X()).
+        var fileInfoWriteMethods = new HashSet<string>
+        {
+            "Create", "OpenWrite", "CreateText", "AppendText", "CopyTo", "MoveTo",
         };
 
         var offenders = new List<string>();
@@ -518,6 +528,21 @@ public class HandsBridgeSourceGuardTests
                 if (inv.Expression is not MemberAccessExpressionSyntax member)
                     continue;
                 var name = member.Name.Identifier.Text;
+
+                // File.Open: запись, только если режим — не Read.
+                if (name == "Open" && IsFileQualifier(member.Expression) && IsWriteFileMode(inv))
+                {
+                    offenders.Add($"{rel}: File.Open (write mode)");
+                    continue;
+                }
+
+                // File.Move: перезапись — только 3-аргументная форма (src, dst, overwrite).
+                if (name == "Move" && IsFileQualifier(member.Expression) && inv.ArgumentList.Arguments.Count == 3)
+                {
+                    offenders.Add($"{rel}: File.Move (overwrite)");
+                    continue;
+                }
+
                 if (!writeMethods.Contains(name))
                     continue;
                 // Квалификатор «File»: некавалифицированный File.X или System.IO.File.X
@@ -526,11 +551,24 @@ public class HandsBridgeSourceGuardTests
                 offenders.Add($"{rel}: File.{name}");
             }
 
+            // new FileInfo(...).Create/OpenWrite/... — запись через FileInfo (цепочка).
+            foreach (var inv in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (inv.Expression is not MemberAccessExpressionSyntax member)
+                    continue;
+                if (member.Expression is not ObjectCreationExpressionSyntax obj)
+                    continue;
+                if (!IsFileInfoType(obj.Type))
+                    continue;
+                if (fileInfoWriteMethods.Contains(member.Name.Identifier.Text))
+                    offenders.Add($"{rel}: FileInfo.{member.Name.Identifier.Text}");
+            }
+
+            // new FileStream (некавалифицированный или System.IO.FileStream): поток на запись.
             foreach (var obj in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
             {
-                if (obj.Type is not IdentifierNameSyntax { Identifier.Text: "FileStream" })
-                    continue;
-                offenders.Add($"{rel}: new FileStream");
+                if (IsFileStreamType(obj.Type))
+                    offenders.Add($"{rel}: new FileStream");
             }
         }
 
@@ -548,10 +586,55 @@ public class HandsBridgeSourceGuardTests
     {
         if (expr is IdentifierNameSyntax { Identifier.Text: "File" })
             return true;
-        if (expr is MemberAccessExpressionSyntax { Name.Identifier.Text: "File" })
+        if (expr is MemberAccessExpressionSyntax { Name.Identifier.Text: "File" } ma)
+        {
+            // System.IO.File: Expression — System.IO (MemberAccess) или IO (using System).
+            if (ma.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "IO" })
+                return true;
+            if (ma.Expression is IdentifierNameSyntax { Identifier.Text: "IO" })
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// <c>File.Open</c> в режиме записи: второй аргумент — <c>FileMode.X</c>, где X пишет.
+    /// <c>Open</c> открывает на ReadWrite по умолчанию, поэтому всё, кроме <c>Read</c>, — запись;
+    /// режим не константой <c>FileMode.X</c> — считаем записью (безопаснее пропустить, чем пропустить).
+    /// </summary>
+    private static bool IsWriteFileMode(InvocationExpressionSyntax inv)
+    {
+        if (inv.ArgumentList.Arguments.Count < 2)
+            return false;
+        var mode = inv.ArgumentList.Arguments[1].Expression;
+        if (mode is MemberAccessExpressionSyntax { Name.Identifier.Text: { } name })
+            return WriteFileModes.Contains(name);
+        return true;
+    }
+
+    /// <summary>Тип <c>FileInfo</c>: некавалифицированный или <c>System.IO.FileInfo</c>.</summary>
+    private static bool IsFileInfoType(TypeSyntax type) =>
+        IsIoType(type, "FileInfo");
+
+    /// <summary>Тип <c>FileStream</c>: некавалифицированный или <c>System.IO.FileStream</c>.</summary>
+    private static bool IsFileStreamType(TypeSyntax type) =>
+        IsIoType(type, "FileStream");
+
+    /// <summary>Тип из <c>System.IO</c>: некавалифицированный <c>name</c> или <c>System.IO.name</c>.</summary>
+    private static bool IsIoType(TypeSyntax type, string name)
+    {
+        if (type is IdentifierNameSyntax { Identifier.Text: var t } && t == name)
+            return true;
+        if (type is QualifiedNameSyntax { Right.Identifier.Text: var q } && q == name)
             return true;
         return false;
     }
+
+    /// <summary>Режимы <c>FileMode</c>, которые пишут (кроме <c>Read</c>).</summary>
+    private static readonly HashSet<string> WriteFileModes =
+    [
+        "Append", "Create", "CreateNew", "Open", "OpenOrCreate", "Truncate",
+    ];
 
     /// <summary>Вызов <c>NativeMethods.SendInput(...)</c> — любой метод с именем SendInput через MemberAccess.</summary>
     private static bool IsSendInputCall(InvocationExpressionSyntax inv) =>

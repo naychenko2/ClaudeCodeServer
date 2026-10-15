@@ -202,4 +202,63 @@ public class HandsProjectFilesTests
         Assert.Null(path);
         Assert.NotNull(reason);
     }
+
+    /// <summary>
+    /// Второй уровень защиты (D2d.1): <c>FileMode.CreateNew</c>. Имя, которое <c>NextFreeName</c>
+    /// счёл свободным, оказывается занятым в момент записи (файл появляется между проверкой и
+    /// открытием) — <c>CreateNew</c> даёт IOException, а не тихую перезапись. Мутация
+    /// <c>CreateNew</c>→<c>Create</c> (в шве <c>OpenNew</c>) краснеет: файл перезаписывается.
+    /// </summary>
+    [Fact]
+    public void WriteNew_create_new_does_not_overwrite_a_file_taken_after_the_check()
+    {
+        var (instance, root) = Create();
+        File.WriteAllBytes(Path.Combine(root, "x.png"), [9]); // занято → NextFreeName → x.v2.png (свободно)
+
+        // Оборачиваю дефолтный OpenNew: файл появляется в момент открытия, а не до NextFreeName.
+        var openNewField = instance.GetType().GetField("OpenNew", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var defaultOpenNew = (Func<string, FileStream>)openNewField.GetValue(instance)!;
+        openNewField.SetValue(instance, (Func<string, FileStream>)(path =>
+        {
+            File.WriteAllBytes(path, [9, 9, 9]); // файл появляется между проверкой и открытием
+            return defaultOpenNew(path);
+        }));
+
+        // CreateNew: файл уже есть — IOException (обёрнут рефлексией), а не тихая перезапись.
+        try
+        {
+            WriteNew(instance, "x.png", [1, 2, 3]);
+        }
+        catch (Exception ex) when (ex is TargetInvocationException { InnerException: IOException })
+        {
+            // ожидаемо: CreateNew упёрся в появившийся файл
+        }
+
+        // Файл НЕ перезаписан: содержимое осталось прежним (мутация на Create дала бы [1,2,3]).
+        Assert.Equal([9, 9, 9], File.ReadAllBytes(Path.Combine(root, "x.v2.png")));
+    }
+
+    /// <summary>
+    /// AppendOwn находит свой файл, записанный под <c>.vN</c> (D2d.1): имя занято, <c>WriteNew</c>
+    /// записал <c>x.v2.png</c>; дописывание по исходному имени <c>x.png</c> идёт в ФАКТИЧЕСКИЙ файл,
+    /// а не создаёт пустой <c>x.png</c>.
+    /// </summary>
+    [Fact]
+    public void AppendOwn_finds_the_file_written_under_a_versioned_name()
+    {
+        var (instance, root) = Create();
+        File.WriteAllBytes(Path.Combine(root, "x.png"), [9]); // занято → WriteNew запишет x.v2.png
+
+        var (path, reason) = WriteNew(instance, "x.png", [1, 2, 3]);
+        Assert.Null(reason);
+        Assert.Equal("x.v2.png", path);
+
+        var (appendPath, appendReason) = AppendOwn(instance, "x.png", [7, 8]);
+        Assert.Null(appendReason);
+        Assert.Equal("x.v2.png", appendPath);
+
+        // Дописано в фактический файл x.v2.png, а не в пустой x.png.
+        Assert.Equal([1, 2, 3, 7, 8], File.ReadAllBytes(Path.Combine(root, "x.v2.png")));
+        Assert.Equal([9], File.ReadAllBytes(Path.Combine(root, "x.png")));
+    }
 }

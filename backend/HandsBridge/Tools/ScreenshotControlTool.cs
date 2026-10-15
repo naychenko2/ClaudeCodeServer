@@ -158,19 +158,6 @@ public static partial class ScreenshotControlTool
                         $"Invalid outputMode: '{outputMode}'. Valid values: 'inline', 'file'"));
             }
 
-            // Validate output path if provided
-            if (outputPath != null)
-            {
-                var directory = Path.GetDirectoryName(outputPath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    return ToCallToolResult(
-                        ScreenshotControlResult.Error(
-                            ScreenshotErrorCode.InvalidRequest,
-                            $"Output directory does not exist: '{directory}'"));
-                }
-            }
-
             // Build region if target is region
             CaptureRegion? region = null;
             if (captureTarget == CaptureTarget.Region)
@@ -362,12 +349,25 @@ public static partial class ScreenshotControlTool
     /// Если сохранено — результат несёт фактический путь (с <c>.vN</c>, если имя занято).
     /// Картинка: annotate-снимок сохраняет её, только если модель явно просила (<c>includeImage</c>);
     /// обычный снимок — без inline-картинки (экономия токенов), модель получает путь.
-    /// Отказ политики — понятная причина.
+    /// <c>annotate</c> без <c>includeImage</c> — снимок не в памяти, saveTo молча потерялся бы:
+    /// отказ с понятной причиной. Отказ политики — тоже понятная причина.
     /// </summary>
     private static ScreenshotControlResult SaveToProject(ScreenshotControlResult result, string saveTo)
     {
-        if (!result.Success || result.ImageData is null)
+        if (!result.Success)
             return result;
+
+        // annotate=true без includeImage: снимок не держится в памяти (ImageData == null) — saveTo
+        // молча потерялся бы (модель не получила бы ни пути, ни картинки, ни ошибки). Отказываем явно:
+        // проще и безопаснее, чем тащить буфер AnnotatedScreenshotService.
+        if (result.ImageData is null)
+            return result.ElementCount is not null
+                ? ScreenshotControlResult.Error(
+                    ScreenshotErrorCode.CaptureError,
+                    "annotate + saveTo requires includeImage=true: the annotated screenshot is not held in memory without the image.")
+                : ScreenshotControlResult.Error(
+                    ScreenshotErrorCode.CaptureError,
+                    "The screenshot carries no image data to save; set includeImage=true.");
 
         var bytes = Convert.FromBase64String(result.ImageData);
         var (path, reason) = HandsGate.ProjectFiles.WriteNew(HandsTools.ScreenshotControl, saveTo, bytes);

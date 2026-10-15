@@ -23,7 +23,12 @@ internal sealed class HandsProjectFiles
 
     private readonly string? _projectRoot;
     private int _filesWrittenThisTurn;
-    private readonly HashSet<string> _ownFiles = new(StringComparer.OrdinalIgnoreCase);
+    // Запрошенное имя → фактический файл хода (с .vN, если имя занято); ключи — оба варианта имени.
+    private readonly Dictionary<string, string> _ownFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    // Шов: открыть новый файл (FileMode.CreateNew — второй уровень защиты от перезаписи).
+    // Тест подменяет его, чтобы доказать: CreateNew→Create тихо перезаписывает, CreateNew — нет.
+    internal Func<string, FileStream> OpenNew = path => new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
 
     public HandsProjectFiles(string? projectRoot)
     {
@@ -62,20 +67,25 @@ internal sealed class HandsProjectFiles
 
         Directory.CreateDirectory(Path.GetDirectoryName(freeFull)!);
 
-        // FileMode.CreateNew: файл (или ссылка) уже есть — IOException, а не тихая перезапись.
-        using (var stream = new FileStream(freeFull, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        // FileMode.CreateNew (шов OpenNew): файл (или ссылка) уже есть — IOException, а не тихая
+        // перезапись; второй уровень защиты, если NextFreeName вернул занятое имя.
+        using (var stream = OpenNew(freeFull))
         {
             stream.Write(bytes, 0, bytes.Length);
         }
 
         _filesWrittenThisTurn++;
-        _ownFiles.Add(free);
+        // В учёт — и исходное имя, и фактическое (.vN): AppendOwn по любому из них находит свой файл.
+        _ownFiles[normalized] = free;
+        _ownFiles[free] = free;
         return (free, null);
     }
 
     /// <summary>
     /// Дописывает <paramref name="bytes"/> в файл, который этот же экземпляр создал
     /// <see cref="WriteNew"/> в этом ходу; чужой файл — отказ. Возвращает (путь, причина отказа).
+    /// Имя может быть исходным или фактическим (<c>.vN</c>): в обоих случаях дописывается в файл,
+    /// записанный этим ходом.
     /// </summary>
     public (string? Path, string? Reason) AppendOwn(string tool, string relativePath, byte[] bytes)
     {
@@ -83,20 +93,30 @@ internal sealed class HandsProjectFiles
             return (null, NoRoot);
 
         var decision = HandsGate.Policy.CheckOutputPath(tool, _projectRoot, relativePath, bytes.Length,
-            _filesWrittenThisTurn, appendOwn: true, ownFiles: _ownFiles);
+            _filesWrittenThisTurn, appendOwn: true, ownFiles: _ownFiles.Keys);
         if (!decision.Allowed)
             return (null, decision.Reason);
 
         var normalized = decision.Path!;
-        var full = ToFull(normalized);
+        // Файл мог записаться под .vN (имя занято): дописываем в ФАКТИЧЕСКИЙ файл, а не в
+        // исходное имя (иначе FileMode.Append молча создал бы пустой файл под исходным именем).
+        var actual = ResolveOwn(normalized);
+        var full = ToFull(actual);
 
         using (var stream = new FileStream(full, FileMode.Append, FileAccess.Write, FileShare.None))
         {
             stream.Write(bytes, 0, bytes.Length);
         }
 
-        return (normalized, null);
+        return (actual, null);
     }
+
+    /// <summary>
+    /// Фактический путь дописываемого файла: из учёта хода (запрошенное имя → файл, записанный
+    /// <see cref="WriteNew"/>, с <c>.vN</c>, если имя было занято); не в учёте — само имя.
+    /// </summary>
+    private string ResolveOwn(string normalized) =>
+        _ownFiles.TryGetValue(normalized, out var actual) ? actual : normalized;
 
     /// <summary>Полный путь: корень + нормализованный относительный путь (оба разделителя → локальный).</summary>
     private string ToFull(string normalized) =>

@@ -101,9 +101,16 @@ public sealed class MediaHistoryThumbService
             : null;
     }
 
-    // Запуск ffmpeg: true — файл создан, false — отказ (фронт рисует плитку)
+    // Запуск ffmpeg: true — файл создан, false — отказ (фронт рисует плитку).
+    // Атомарная запись: ffmpeg пишет в .tmp, при успехе — rename на целевой путь;
+    // при таймауте/сбое — .tmp удаляется, целевой файл не тронут
     private async Task<bool> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
     {
+        var finalPath = args[^1];
+        var tmpPath = finalPath + ".tmp";
+        var tmpArgs = args.ToList();
+        tmpArgs[^1] = tmpPath;
+
         var psi = new ProcessStartInfo(_ffmpeg)
         {
             RedirectStandardOutput = true,
@@ -111,7 +118,7 @@ public sealed class MediaHistoryThumbService
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        foreach (var a in tmpArgs) psi.ArgumentList.Add(a);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Timeout);
         Process? p;
@@ -130,15 +137,34 @@ public sealed class MediaHistoryThumbService
             {
                 try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
                 _log.LogDebug("Миниатюра: ffmpeg не уложился в {Timeout} с", Timeout.TotalSeconds);
+                DeleteQuiet(tmpPath);
                 return false;
             }
             if (p.ExitCode != 0)
             {
                 _log.LogDebug("Миниатюра: ffmpeg завершился с кодом {Code}", p.ExitCode);
+                DeleteQuiet(tmpPath);
                 return false;
             }
-            return File.Exists(args[^1]);
+            // Успех: атомарный rename .tmp → целевой
+            try
+            {
+                File.Move(tmpPath, finalPath, overwrite: true);
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _log.LogDebug(ex, "Миниатюра: rename .tmp → {Path} не удался", finalPath);
+                DeleteQuiet(tmpPath);
+                return false;
+            }
         }
+    }
+
+    private static void DeleteQuiet(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception) { /* .tmp — не критично */ }
     }
 
     // Захват вывода (ffprobe): текст или null

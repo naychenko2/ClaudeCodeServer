@@ -118,7 +118,8 @@ public sealed partial class LocalMediaService(
         string.IsNullOrEmpty(job.Prompt) ? null
             : new LocalRunDetails(model, job.Prompt, new LocalRunParams(
                 Width: job.Width, Height: job.Height, DurationSec: job.DurationSeconds,
-                Frames: job.Frames, Steps: job.Steps, Seed: job.Seed, Engine: job.Engine, Fast: job.Fast));
+                Frames: job.Frames, Steps: job.Steps, Seed: job.Seed, Engine: job.Engine, Fast: job.Fast,
+                Count: 1));
 
     // Вид прогона по операции: image | video | audio | train | other
     private static string JobKind(string op) => op switch

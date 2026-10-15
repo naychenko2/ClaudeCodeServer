@@ -32,6 +32,11 @@ public sealed class LocalMediaHistorySource(
         var outputs = job.Outputs;
         var variantCount = outputs.Count;
 
+        // Задача завершилась (failed) или отменена, но файлов нет — no_result (не missing:
+        // файл не «удалён», а просто не произведён)
+        if (variantCount == 0 && (LocalMediaStatuses.IsTerminal(job.Status) || job.Cancelled))
+            return Task.FromResult<MediaHistoryResolution?>(new(0, null, null, MediaHistoryGoneReason.NoResult));
+
         // Проект: удалён / на устройстве / на сервере. null — записи без проекта (не ждём, но
         // локальная генерация проект всегда имеет)
         var probe = projects.ProbeProject(reference.OwnerId ?? "", reference.ProjectId ?? "");

@@ -44,7 +44,15 @@ public class HandsBridgeSourceGuardTests
             .Order()
             .ToList();
 
-        Assert.Equal(HandsTools.All.Order(), names);
+        // D1a: новые инструменты (keyboard_control, mouse_control, clipboard_text, hands_batch) уже
+        // в HandsTools.All, но в мосту появятся в D2a–D2e — до того их отсутствие в сборке норма.
+        var notYetInBridge = new[]
+        {
+            HandsTools.KeyboardControl, HandsTools.MouseControl, HandsTools.ClipboardText, HandsTools.HandsBatch,
+        };
+        var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
+
+        Assert.Equal(expected, names);
     }
 
     [Theory]

@@ -114,8 +114,9 @@ public static class HandsFiles
 /// <summary>
 /// Программы, которые мост не запускает никогда (решение владельца 2б, 2026-09-27): белого
 /// списка нет, любая другая <c>.exe</c> по полному пути запускается. Здесь — интерпретаторы,
-/// оболочки и терминалы: каждый исполняет произвольные команды, поэтому и ввода (клика, текста)
-/// в окна их процессов у рук нет — читать и снимать их можно.
+/// оболочки, терминалы и запускалки оболочки («Пуск», поиск, диспетчер задач): каждый исполняет
+/// произвольные команды или ведёт в оболочку, поэтому и ввода (клика, текста) в окна их процессов
+/// у рук нет — читать и снимать их можно.
 /// Сравнение по имени файла без учёта регистра (и по имени без расширения); <c>python*</c> и
 /// <c>pwsh*</c> — по префиксу (сборки <c>pwsh-preview.exe</c>, <c>pwsh-7.4-preview.exe</c>).
 /// </summary>
@@ -130,6 +131,8 @@ public static class HandsForbiddenApps
         // оболочки и терминалы
         "bash.exe", "sh.exe", "wsl.exe", "wslhost.exe", "mintty.exe", "git-bash.exe",
         "wt.exe", "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe",
+        // запускалки оболочки: «Пуск», поиск, диспетчер задач, FAR
+        "StartMenuExperienceHost.exe", "SearchHost.exe", "SearchApp.exe", "Taskmgr.exe", "far.exe",
     ];
 
     public static readonly IReadOnlyList<string> NamePrefixes = ["python", "pwsh"];

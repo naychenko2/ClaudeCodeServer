@@ -44,6 +44,12 @@ public class HandsActivityTests
         // Первый browser_* поднимает на столе владельца окно Chrome, даже если он только читает DOM
         { HandsTools.BrowserQuery, null },
         { HandsTools.BrowserEvaluate, null },
+        // Руки без UIA: клавиатура, мышь (все действия, включая move) и пакет — всегда трогают машину
+        { HandsTools.KeyboardControl, null },
+        { HandsTools.MouseControl, null },
+        { HandsTools.HandsBatch, null },
+        // Буфер: write трогает машину
+        { HandsTools.ClipboardText, "write" },
     };
 
     public static readonly TheoryData<string, string?> ReadingOnly = new()
@@ -58,6 +64,8 @@ public class HandsActivityTests
         { HandsTools.WindowManagement, "get_state" },
         { HandsTools.WindowManagement, "wait_for_state" },
         { HandsTools.ScreenshotControl, "list_monitors" },
+        // Буфер: read — только чтение, машину не трогает
+        { HandsTools.ClipboardText, "read" },
     };
 
     [Theory]

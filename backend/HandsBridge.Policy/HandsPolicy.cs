@@ -24,11 +24,19 @@ public static class HandsTools
     public const string BrowserQuery = "browser_query";
     public const string BrowserEvaluate = "browser_evaluate";
 
+    // Руки для окон без UIA (Citrix, Vidi, Visio): полная клавиатура, мышь, текстовый буфер, пакеты шагов.
+    // Константы и перечни гейта — здесь; сами инструменты в мосту появятся в D2a–D2e.
+    public const string KeyboardControl = "keyboard_control";
+    public const string MouseControl = "mouse_control";
+    public const string ClipboardText = "clipboard_text";
+    public const string HandsBatch = "hands_batch";
+
     public static readonly IReadOnlyList<string> All =
     [
         App, UiSnapshot, UiFind, UiClick, UiType, UiRead, WindowManagement, ScreenshotControl,
         BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserTabs, BrowserWait, BrowserScreenshot,
         BrowserQuery, BrowserEvaluate,
+        KeyboardControl, MouseControl, ClipboardText, HandsBatch,
     ];
 }
 
@@ -445,13 +453,22 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         public const int RightControl = 0xA3;
         public const int LeftMenu = 0xA4;
         public const int RightMenu = 0xA5;
+
+        // Клавиши, которые с Win ведут в запускалки оболочки: R — «Выполнить», X — меню,
+        // S и Q — поиск, L — блокировка.
+        public const int Q = 0x51;
+        public const int R = 0x52;
+        public const int S = 0x53;
+        public const int X = 0x58;
+        public const int L = 0x4C;
     }
 
     /// <summary>
-    /// Системные сочетания не уходят никогда: любое с Win, клавиша Win сама по себе, Alt+Tab,
-    /// Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc и всё с Ctrl+Alt. Они открывают «Пуск», «Выполнить»,
-    /// переключение окон, диспетчер задач и экран безопасности — ввод в оболочку в обход запрета
-    /// ввода в окна Проводника. Проверка — по
+    /// Узкий запрет системных сочетаний: только те, что ведут в оболочку. Запрещены — клавиша Win
+    /// сама по себе (без другой клавиши), Win+R («Выполнить»), Win+X (меню), Win+Q (поиск), Win+L
+    /// (блокировка), Win+S (поиск; Win+Shift+S — сниппинг — разрешён), Ctrl+Esc («Пуск») и
+    /// Ctrl+Shift+Esc (диспетчер задач). Всё остальное разрешено: Alt+Tab, Alt+Esc, Ctrl+Alt (AltGr)
+    /// в любых сочетаниях, Win+D, Win+стрелки, Win+Shift+S, Win+1..9, Alt+F4. Проверка — по
     /// виртуальному коду ПОСЛЕ сопоставления имени: синонимы вроде «meta»/«super» её не обходят.
     /// </summary>
     public static HandsDecision CheckKeys(int virtualKey, bool ctrl, bool alt, bool shift, bool win)
@@ -460,12 +477,21 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         alt |= virtualKey is VirtualKeys.Menu or VirtualKeys.LeftMenu or VirtualKeys.RightMenu;
         win |= virtualKey is VirtualKeys.LeftWin or VirtualKeys.RightWin;
 
+        // Win сама по себе: клавиша Win без другой клавиши — иначе «Пуск» (и Win не «залипает»).
+        if (win && (virtualKey is VirtualKeys.LeftWin or VirtualKeys.RightWin) && !ctrl && !alt && !shift)
+            return HandsDecision.Deny("The Windows key alone is not allowed: it opens the Start menu.");
+
         if (win)
-            return HandsDecision.Deny("Key combinations with the Windows key are not allowed.");
-        if (ctrl && alt)
-            return HandsDecision.Deny("Ctrl+Alt combinations are not allowed.");
-        if (alt && virtualKey is VirtualKeys.Tab or VirtualKeys.Escape)
-            return HandsDecision.Deny("Alt+Tab and Alt+Esc switch windows and are not allowed; use window_management(action='activate').");
+        {
+            // Win + R/X/Q/L — «Выполнить», меню, поиск, блокировка.
+            if (virtualKey is VirtualKeys.R or VirtualKeys.X or VirtualKeys.Q or VirtualKeys.L)
+                return HandsDecision.Deny("Win+R/X/Q/L open shell launchers (Run, menu, Search, Lock) and are not allowed.");
+            // Win + S — поиск; Win+Shift+S — сниппинг (разрешён).
+            if (virtualKey == VirtualKeys.S && !shift)
+                return HandsDecision.Deny("Win+S opens Windows Search and is not allowed; Win+Shift+S (the snip tool) is allowed.");
+        }
+
+        // Ctrl+Esc — «Пуск», Ctrl+Shift+Esc — диспетчер задач.
         if (ctrl && virtualKey == VirtualKeys.Escape)
             return HandsDecision.Deny(shift
                 ? "Ctrl+Shift+Esc opens Task Manager and is not allowed."
@@ -475,15 +501,13 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     }
 
     /// <summary>
-    /// Зажать можно только обычную клавишу: зажатые Win, Ctrl или Alt собрали бы системное
-    /// сочетание из следующих нажатий в обход <see cref="CheckKeys"/>.
+    /// Клавиша нажимается: удержание любых клавиш разрешено, но «удержанные модификаторы +
+    /// нажимаемая клавиша» проверяются тем же <see cref="CheckKeys"/>. Удержание самой Win без
+    /// другой клавиши запрещено: иначе Win «залипнет» и откроет «Пуск». Без аргументов — ни одна
+    /// клавиша не удержана (существующие вызовы).
     /// </summary>
-    public static HandsDecision CheckKeyDown(int virtualKey) =>
-        virtualKey is VirtualKeys.LeftWin or VirtualKeys.RightWin
-            or VirtualKeys.Control or VirtualKeys.LeftControl or VirtualKeys.RightControl
-            or VirtualKeys.Menu or VirtualKeys.LeftMenu or VirtualKeys.RightMenu
-            ? HandsDecision.Deny("Holding Windows, Ctrl or Alt keys is not allowed.")
-            : HandsDecision.Allow;
+    public static HandsDecision CheckKeyDown(int virtualKey, bool ctrl = false, bool alt = false, bool shift = false, bool win = false) =>
+        CheckKeys(virtualKey, ctrl, alt, shift, win);
 
     // ---------- разбор ----------
 

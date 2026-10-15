@@ -24,6 +24,29 @@ public interface IHandsWindowSystem
 
     /// <summary>Границы виртуального рабочего стола (все мониторы); null — узнать не удалось.</summary>
     HandsScreenBounds? GetVirtualScreenBounds();
+
+    /// <summary>
+    /// Верхнеуровневые окна в z-порядке (сверху вниз); null — перечисление не удалось (сбой WinAPI).
+    /// Свёрнутые, невидимые и cloaked-окна исключены (их пиксели в снимке не участвуют); DWM-тени
+    /// не считаются.
+    /// </summary>
+    IReadOnlyList<HandsVisibleWindow>? EnumerateVisibleWindows();
+}
+
+/// <summary>
+/// Верхнеуровневое окно в z-порядке. Прямоугольник — в физических пикселях экрана (левый/верхний
+/// край включены, правый/нижний — нет). <see cref="ImagePath"/> — путь образа процесса; null —
+/// процесс не распознан (окно закрыто по умолчанию для ввода). <see cref="IsVisible"/> — видно ли
+/// окно на экране: свёрнутое, невидимое или cloaked — нет, и его пиксели в снимке не участвуют.
+/// </summary>
+public readonly record struct HandsVisibleWindow(
+    long Hwnd,
+    int Left, int Top, int Right, int Bottom,
+    string? ImagePath,
+    bool IsVisible)
+{
+    /// <summary>Прямоугольник не вырожден (окно имеет ненулевой размер).</summary>
+    public bool HasSize => Right > Left && Bottom > Top;
 }
 
 /// <summary>

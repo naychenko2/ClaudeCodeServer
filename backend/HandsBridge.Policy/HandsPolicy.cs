@@ -406,9 +406,11 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// монитор, окно, область, все мониторы). Запрет идёт через <see cref="AcceptsInput"/>: окно
     /// процесса из <see cref="HandsForbiddenApps"/> (терминал, интерпретатор, Проводник) — чтение
     /// его экрана равно чтению команд, а снимок (<c>screenshot_control</c>) такое окно разрешает.
-    /// Для <c>window</c> проверяется переданное окно; для <c>region</c> и экранных целей — сетка
-    /// точек по снимаемой области: любое ВИДИМОЕ окно под ней, которое не принимает ввод,
-    /// отказывает ДО снимка (маленький терминал в углу области не проскочит).
+    /// Для <c>window</c> проверяется переданное окно; для <c>region</c> и экранных целей —
+    /// перечисление видимых окон (сверху вниз, с вычитанием перекрытий): любое окно, чья видимая
+    /// часть пересекает область и которое не принимает ввод, отказывает ДО снимка (маленький
+    /// терминал между узлами сетки не проскочит). Сбой перечисления — fail-closed; запасной путь —
+    /// сетка точек (A4.1).
     /// </summary>
     public HandsDecision CheckOcr(string? target, string? windowHandle, int? regionX, int? regionY, int? regionWidth, int? regionHeight)
     {
@@ -442,13 +444,29 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     }
 
     /// <summary>
-    /// Снимаемая область (region или весь виртуальный экран): сетка точек (шаг 200 px, четыре
-    /// угла и центр). По каждой точке — верхнее окно; окно, которое не принимает ввод
-    /// (<see cref="AcceptsInput"/>: запрещённое приложение или неизвестный процесс), — отказ ДО
-    /// снимка. Фон рабочего стола (окна под точкой нет) запретом не считается.
+    /// Снимаемая область (region или весь виртуальный экран). Полный путь — перечисление видимых
+    /// окон: идём по ним сверху вниз, вычитая перекрытия, и смотрим, какая часть области ещё видна;
+    /// окно, которое не принимает ввод (<see cref="AcceptsInput"/>: запрещённое приложение или
+    /// неизвестный процесс), — отказ ДО снимка. Перечисление ловит и маленькое окно, провалившееся
+    /// между узлами сетки (остаточный риск A4.1). Сбой перечисления — fail-closed (отказ, а не
+    /// сетка): не знаем, что под областью. Пустое перечисление (видимых окон нет) — запасная сетка,
+    /// которая и так найдёт только фон.
     /// </summary>
     private HandsDecision CheckOcrArea(int left, int top, int width, int height)
     {
+        var visible = SafeEnumerateVisibleWindows();
+        if (visible is { Count: > 0 })
+        {
+            foreach (var window in VisibleIntersections(visible, left, top, left + width, top + height))
+                if (!AcceptsInputByImage(window.ImagePath))
+                    return HandsDecision.Deny(NoOcrArea(ProcessNameByImage(window.ImagePath)));
+            return HandsDecision.Allow;
+        }
+
+        if (visible is null)
+            return HandsDecision.Deny(NoOcrArea("the window list could not be read"));
+
+        // Пустое перечисление: видимых окон нет, область — фон. Сетка — запасной путь (найдёт фон).
         foreach (var (x, y) in OcrGridPoints(left, top, width, height))
         {
             var root = windows.GetRootWindowAt(x, y);
@@ -468,6 +486,102 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         if (bounds is not { } b)
             return HandsDecision.Allow;
         return CheckOcrArea(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top);
+    }
+
+    /// <summary>
+    /// Перечисление видимых окон; исключение (сбой WinAPI) — null, как «не удалось».
+    /// </summary>
+    private IReadOnlyList<HandsVisibleWindow>? SafeEnumerateVisibleWindows()
+    {
+        try
+        {
+            return windows.EnumerateVisibleWindows();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Окно принимает ввод по его образу (та же логика, что <see cref="AcceptsInput"/>): образ
+    /// прочитан и не из <see cref="HandsForbiddenApps"/>. null/неизвестный процесс — нет.
+    /// </summary>
+    private bool AcceptsInputByImage(string? imagePath)
+    {
+        var image = HandsAppPaths.TryNormalize(imagePath);
+        return image is not null && !HandsAppPaths.IsForbidden(image);
+    }
+
+    /// <summary>Имя процесса по образу; «unknown process» — образ не прочитался.</summary>
+    private static string ProcessNameByImage(string? imagePath)
+    {
+        var image = HandsAppPaths.TryNormalize(imagePath);
+        return image is null ? "unknown process" : HandsAppPaths.FileName(image);
+    }
+
+    /// <summary>
+    /// Окна из перечисления, чья видимая часть пересекает область [left, right)×[top, bottom).
+    /// Идём сверху вниз: каждое окно вычитает из области уже закрытое окнами выше, поэтому окно,
+    /// полностью перекрытое разрешённым сверху, не считается видимым.
+    /// </summary>
+    private static IEnumerable<HandsVisibleWindow> VisibleIntersections(
+        IReadOnlyList<HandsVisibleWindow> windows, int left, int top, int right, int bottom)
+    {
+        var covered = new List<(int Left, int Top, int Right, int Bottom)>();
+        foreach (var window in windows)
+        {
+            if (!window.IsVisible || !window.HasSize)
+                continue;
+
+            // Пересечение окна с областью; пусто — окно вне снимаемой области.
+            var ix = Math.Max(window.Left, left);
+            var iy = Math.Max(window.Top, top);
+            var ix2 = Math.Min(window.Right, right);
+            var iy2 = Math.Min(window.Bottom, bottom);
+            if (ix >= ix2 || iy >= iy2)
+                continue;
+
+            // Часть пересечения, не закрытая окнами выше: есть — окно видно.
+            if (HasVisiblePart(ix, iy, ix2, iy2, covered))
+                yield return window;
+
+            covered.Add((window.Left, window.Top, window.Right, window.Bottom));
+        }
+    }
+
+    /// <summary>
+    /// Есть ли у прямоугольника [x, x2)×[y, y2) часть, не покрытая ни одним прямоугольником
+    /// <paramref name="covered"/>. Разбиение по пересечениям: если весь прямоугольник закрыт —
+    /// нет, иначе — да (достаточно прямоугольной арифметики, без растровой сетки).
+    /// </summary>
+    private static bool HasVisiblePart(int x, int y, int x2, int y2,
+        List<(int Left, int Top, int Right, int Bottom)> covered)
+    {
+        if (x >= x2 || y >= y2)
+            return false;
+
+        foreach (var (cl, ct, cr, cb) in covered)
+        {
+            var ix = Math.Max(x, cl);
+            var iy = Math.Max(y, ct);
+            var ix2 = Math.Min(x2, cr);
+            var iy2 = Math.Min(y2, cb);
+            if (ix >= ix2 || iy >= iy2)
+                continue;
+
+            // Окно вырезает из прямоугольника пересечение [ix,ix2)×[iy,iy2). Остаток — четыре
+            // части (лево, право, верх, низ); они не пересекают это окно, поэтому в рекурсии оно
+            // пропускается, а остальные окна учитываются. Если ни одна часть не видна — закрыто.
+            if (HasVisiblePart(x, y, ix, y2, covered) ||
+                HasVisiblePart(ix2, y, x2, y2, covered) ||
+                HasVisiblePart(ix, y, ix2, iy, covered) ||
+                HasVisiblePart(ix, iy2, ix2, y2, covered))
+                return true;
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

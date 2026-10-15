@@ -4,6 +4,7 @@ using ClaudeHomeServer.HandsBridge.Policy;
 using ClaudeHomeServer.Protocol;
 using ModelContextProtocol.Protocol;
 using Sbroenne.WindowsMcp.Automation;
+using Sbroenne.WindowsMcp.Tools;
 
 namespace ClaudeHomeServer.HandsBridge;
 
@@ -74,6 +75,8 @@ internal static class HandsGate
             NamedTurnEndWatch.Start(turnEndEvent, () =>
             {
                 if (hold.Release()) HandsLog.Write("конец хода: замок рук отпущен");
+                // key_down без key_up: удержанные клавиши отпускаем, иначе они «залипнут» на машине
+                _ = WindowsToolsBase.KeyboardInputService.ReleaseAllKeysAsync(CancellationToken.None);
             });
     }
 
@@ -139,5 +142,6 @@ internal static class HandsGate
         public long GetRootWindow(long hwnd) => 0;
         public long GetForegroundWindow() => 0;
         public HandsScreenBounds? GetVirtualScreenBounds() => null;
+        public IReadOnlyList<HandsVisibleWindow>? EnumerateVisibleWindows() => null;
     }
 }

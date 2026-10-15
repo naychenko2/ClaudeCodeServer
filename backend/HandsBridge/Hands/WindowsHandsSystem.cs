@@ -146,6 +146,51 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
         return new HandsScreenBounds(left, top, left + width, top + height);
     }
 
+    /// <summary>
+    /// Верхнеуровневые видимые окна в z-порядке (сверху вниз). Свёрнутые (<c>IsIconic</c>),
+    /// невидимые (<c>IsWindowVisible</c>) и cloaked-окна (<c>DWMWA_CLOAKED</c>) исключены — их
+    /// пиксели в снимке не участвуют; DWM-тени не считаются. Сбой <c>EnumWindows</c> — null.
+    /// </summary>
+    public IReadOnlyList<HandsVisibleWindow>? EnumerateVisibleWindows()
+    {
+        var windows = new List<HandsVisibleWindow>();
+
+        bool Callback(nint hWnd, nint _)
+        {
+            if (!IsVisibleOnScreen(hWnd))
+                return true;
+
+            if (!NativeMethods.GetWindowRect(hWnd, out var rect))
+                return true;
+
+            var pid = GetWindowProcessId((long)hWnd);
+            windows.Add(new HandsVisibleWindow(
+                (long)hWnd, rect.Left, rect.Top, rect.Right, rect.Bottom,
+                pid is { } id ? GetProcessImagePath(id) : null,
+                IsVisible: true));
+            return true;
+        }
+
+        return NativeMethods.EnumWindows(Callback, 0) ? windows : null;
+    }
+
+    /// <summary>
+    /// Окно видно на экране: <c>IsWindowVisible</c> и не свёрнуто (<c>IsIconic</c>) и не cloaked
+    /// (<c>DWMWA_CLOAKED</c>). Sбой <c>DwmGetWindowAttribute</c> — не cloaked (окно обычное).
+    /// </summary>
+    private static bool IsVisibleOnScreen(nint hWnd)
+    {
+        if (!NativeMethods.IsWindowVisible(hWnd) || NativeMethods.IsIconic(hWnd))
+            return false;
+
+        // Cloaked-окно (DWM): IsWindowVisible его не видит, а пиксели в снимке не участвуют.
+        if (NativeMethods.DwmGetWindowAttributeInt(hWnd, NativeConstants.DWMWA_CLOAKED, out var cloaked, Marshal.SizeOf<int>()) == 0
+            && cloaked != 0)
+            return false;
+
+        return true;
+    }
+
     public void Dispose()
     {
         lock (_sync)

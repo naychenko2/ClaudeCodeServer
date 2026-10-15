@@ -9,6 +9,8 @@ internal sealed class FakeWindows : IHandsWindowSystem
     private readonly Dictionary<int, string?> _images = [];
     private readonly Dictionary<(int, int), long> _pointWindow = [];
     private readonly List<(int Left, int Top, int Right, int Bottom, long Root)> _rectWindows = [];
+    private readonly List<HandsVisibleWindow> _visibleWindows = [];
+    private bool _enumerateFails;
     private long _foreground;
     private HandsScreenBounds? _bounds = new(0, 0, 1920, 1080);
 
@@ -55,6 +57,24 @@ internal sealed class FakeWindows : IHandsWindowSystem
         return this;
     }
 
+    /// <summary>
+    /// Видимое окно для перечисления: прямоугольник в физических пикселях, путь образа процесса
+    /// (null — неизвестный процесс), видно ли на экране. Окна добавляются в z-порядке (сверху вниз)
+    /// — порядок в списке и есть порядок перечисления.
+    /// </summary>
+    public FakeWindows Visible(long hwnd, int left, int top, int right, int bottom, string? image, bool isVisible = true)
+    {
+        _visibleWindows.Add(new HandsVisibleWindow(hwnd, left, top, right, bottom, image, isVisible));
+        return this;
+    }
+
+    /// <summary>Перечисление окон бросает сбой (null) — fail-closed.</summary>
+    public FakeWindows EnumerateFails(bool fails = true)
+    {
+        _enumerateFails = fails;
+        return this;
+    }
+
     public int? GetWindowProcessId(long hwnd) => _windowProcess.TryGetValue(hwnd, out var pid) ? pid : null;
 
     public string? GetProcessImagePath(int processId) => _images.TryGetValue(processId, out var image) ? image : null;
@@ -75,6 +95,9 @@ internal sealed class FakeWindows : IHandsWindowSystem
     public long GetForegroundWindow() => _foreground;
 
     public HandsScreenBounds? GetVirtualScreenBounds() => _bounds;
+
+    public IReadOnlyList<HandsVisibleWindow>? EnumerateVisibleWindows() =>
+        _enumerateFails ? null : _visibleWindows;
 }
 
 /// <summary>Типовая машина теста: блокнот запущен ходом, остальное открыл человек.</summary>

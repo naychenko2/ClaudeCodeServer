@@ -313,6 +313,23 @@ LOOP_RETRY = os.environ.get("LOOP_RETRY", "on")
 LOOP_RETRY_SAMPLING = _parse_kv(os.environ.get("LOOP_RETRY_SAMPLING",
                                                "presence_penalty=0.5,temperature=0.1"))
 
+# --- Предохранитель от мусорной генерации ---------------------------------------------------
+#
+# 2026-10-15: три хода исполнителей (промпты 66–110K) после попадания в prefix cache выдали шум
+# до упора в лимит 20 000 токенов, 569 с на ход: «compressа应急arco1ács Vat�业务能力igel…».
+# Причина — vLLM #60174 (DFlash2-драфтер + prefix cache на compressed-tensors). Предохранитель
+# петли такое не ловит: повтора нет, есть шум. Слово мусорное, если в нём смешаны письменности,
+# есть U+FFFD или оно длинное и без единого разделителя; доля таких слов в скользящем окне
+# JUNK_RATIO и выше — upstream закрывается, ответ обрывается пометкой. Повтора нет: тот же префикс
+# попадёт в тот же кэш и выдаст тот же мусор.
+#
+# Дефолт off по той же причине, что у предохранителя петли: включает mode.conf.
+# Откат: JUNK_GUARD=off и рестарт.
+JUNK_GUARD = os.environ.get("JUNK_GUARD", "off")
+JUNK_WINDOW = int(os.environ.get("JUNK_WINDOW", "80"))          # слов в скользящем окне
+JUNK_RATIO = float(os.environ.get("JUNK_RATIO", "0.35"))        # доля мусорных слов — обрыв
+JUNK_MIN_WORDS = int(os.environ.get("JUNK_MIN_WORDS", "60"))    # раньше не срабатывать
+
 # --- Прунинг картинок -----------------------------------------------------------------------
 #
 # Картинки (скриншоты через Read, вложения человека) живут в истории вечно: CLI шлёт её целиком
@@ -340,7 +357,8 @@ stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
-         "loops_truncated": 0, "loop_guard_errors": 0}
+         "loops_truncated": 0, "loop_guard_errors": 0,
+         "junk_aborts": 0, "junk_words_max_ratio": 0.0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -1391,6 +1409,112 @@ class ДетекторПетли:
         return True
 
 
+# Разделители: длинное слово с любым из них — путь, URL, идентификатор или base64, а не склейка.
+_JUNK_SEP = frozenset("/\\.-_:=,;()[]{}<>\"'")
+_JUNK_HEX = frozenset("0123456789abcdefABCDEF")
+# Края, которые не делают длинную склейку осмысленной: конец предложения, кавычки, разметка.
+_JUNK_TRIM = ".,;:!?\"'()[]{}<>«»*"
+
+
+def _письменность(ch):
+    """lat, cyr, cjk (иероглифы, кана, хангыль) или None — прочее не считаем."""
+    к = ord(ch)
+    if 0x4E00 <= к <= 0x9FFF or 0x3040 <= к <= 0x30FF or 0xAC00 <= к <= 0xD7AF:
+        return "cjk"
+    if not ch.isalpha():
+        return None
+    if к < 0x250:
+        return "lat"
+    return "cyr" if 0x400 <= к <= 0x4FF else None
+
+
+def мусорное_слово(w):
+    """U+FFFD; смесь письменностей в куске между разделителями; длинная склейка без разделителей.
+
+    Письменности сверяются внутри куска, а не всего слова: «vLLM-ом», «API-ключ», «PR'а» —
+    нормальная русская техническая речь. Длинное слово с иероглифами или каной — китайская или
+    японская фраза (пробелов там нет), чистый hex — хеш. Слово в обратных кавычках — инлайн-код.
+    """
+    if "\ufffd" in w:
+        return True
+    if "`" in w:
+        return False
+    кусок, есть_cjk = set(), False
+    for ch in w:
+        if ch in _JUNK_SEP:
+            if len(кусок) > 1:
+                return True
+            кусок = set()
+            continue
+        п = _письменность(ch)
+        if п:
+            кусок.add(п)
+            есть_cjk = есть_cjk or п == "cjk"
+    if len(кусок) > 1:
+        return True
+    ядро = w.strip(_JUNK_TRIM)
+    return (len(ядро) >= 25 and not есть_cjk and not any(ch in _JUNK_SEP for ch in ядро)
+            and not set(ядро) <= _JUNK_HEX)
+
+
+class ДетекторМусора:
+    """Скользящее окно слов из дельт thinking/text; мусор — доля мусорных слов `ratio` и выше.
+
+    Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
+    ```-заборов не считается (длинные токены там легальны), «слова» без букв и цифр — тоже.
+    """
+
+    def __init__(self, window=None, ratio=None, min_words=None):
+        self.window = window or JUNK_WINDOW
+        self.ratio = JUNK_RATIO if ratio is None else ratio
+        self.min_words = JUNK_MIN_WORDS if min_words is None else min_words
+        self.окно = deque(maxlen=self.window)  # True — мусорное слово
+        self.мусорных = 0
+        self.всего = 0
+        self.хвост = ""
+        self.в_коде = False
+        self.доля = 0.0  # доля мусора в окне на последней проверке
+        self.сработал = False
+
+    def новый_блок(self):
+        if self.хвост:
+            self._слово(self.хвост)
+            self.хвост = ""
+        self.в_коде = False
+
+    def усвоить(self, текст):
+        """True — мусор. Повторный вызов после срабатывания тоже True."""
+        if self.сработал:
+            return True
+        if not текст:
+            return False
+        текст = self.хвост + текст
+        слова = текст.split()
+        self.хвост = слова.pop() if слова and not текст[-1].isspace() else ""
+        return any(self._слово(w) for w in слова)
+
+    def _слово(self, w):
+        if "```" in w:
+            if w.count("```") % 2:
+                self.в_коде = not self.в_коде
+            return False
+        if self.в_коде or ("\ufffd" not in w and not any(ch.isalnum() for ch in w)):
+            return False
+        мусор = мусорное_слово(w)
+        if len(self.окно) == self.окно.maxlen:
+            self.мусорных -= self.окно[0]
+        self.окно.append(мусор)
+        self.мусорных += мусор
+        self.всего += 1
+        if self.всего < self.min_words:
+            return False
+        self.доля = self.мусорных / len(self.окно)
+        if self.доля < self.ratio:
+            return False
+        self.сработал = True
+        return True
+
+
 def _sse(тип, данные):
     return (f"event: {тип}\ndata: " + json.dumps(данные, ensure_ascii=False) + "\n\n").encode()
 
@@ -1408,11 +1532,14 @@ class РелеПотока:
 
     БУФЕР_МАКС = 1 << 20  # событие без разделителя длиннее мегабайта — чужой формат, сдаёмся
 
-    def __init__(self, отдать, сдвиг=0, повтор=False, детектор=None):
+    def __init__(self, отдать, сдвиг=0, повтор=False, детектор=None, петли=True,
+                 детектор_мусора=None):
         self.отдать = отдать
         self.сдвиг = сдвиг
         self.повтор = повтор
-        self.детектор = детектор or ДетекторПетли()
+        self.детектор = (детектор or ДетекторПетли()) if петли else None
+        self.детектор_мусора = детектор_мусора
+        self.мусор = False  # поймана мусорная генерация
         self.буфер = b""
         self.открыт = None  # [индекс у клиента, вид блока, пришла ли подпись]
         self.следующий = сдвиг  # индекс клиента для следующего блока
@@ -1423,8 +1550,8 @@ class РелеПотока:
         self.завершён = False  # message_stop клиенту отдан
 
     def усвоить(self, chunk):
-        """Пересылает целые события из куска; True — поймана петля (хвост куска отброшен)."""
-        if self.петля:
+        """Пересылает целые события из куска; True — поймана петля или мусор (хвост отброшен)."""
+        if self.петля or self.мусор:
             return True
         if self.сквозной:
             self.отдать(chunk)
@@ -1455,7 +1582,7 @@ class РелеПотока:
 
     def дослать(self):
         """Конец потока: недописанный хвост буфера уходит клиенту как есть."""
-        if self.буфер and not self.петля:
+        if self.буфер and not self.петля and not self.мусор:
             self.отдать(self.буфер)
         self.буфер = b""
 
@@ -1480,7 +1607,10 @@ class РелеПотока:
                 вид = (данные.get("content_block") or {}).get("type")
                 self.открыт = [индекс, вид, False]
                 self.следующий = max(self.следующий, индекс + 1)
-                self.детектор.новый_блок()
+                if self.детектор is not None:
+                    self.детектор.новый_блок()
+                if self.детектор_мусора is not None:
+                    self.детектор_мусора.новый_блок()
             elif тип == "content_block_delta":
                 дельта = данные.get("delta") or {}
                 вид = дельта.get("type")
@@ -1488,10 +1618,14 @@ class РелеПотока:
                     self.открыт[2] = True
                 текст = (дельта.get("thinking") if вид == "thinking_delta"
                          else дельта.get("text") if вид == "text_delta" else None)
-                if isinstance(текст, str) and self.детектор.усвоить(текст):
-                    self.петля = True
-                    self.петля_в = self.открыт[1] if self.открыт else None
-                    return True
+                if isinstance(текст, str):
+                    if self.детектор is not None and self.детектор.усвоить(текст):
+                        self.петля = True
+                        self.петля_в = self.открыт[1] if self.открыт else None
+                        return True
+                    if self.детектор_мусора is not None and self.детектор_мусора.усвоить(текст):
+                        self.мусор = True
+                        return True
             else:
                 self.открыт = None
         elif тип == "message_delta":
@@ -1729,6 +1863,8 @@ class Handler(BaseHTTPRequestHandler):
                                   effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET,
                                   loop_guard=(f"{LOOP_GUARD}: {LOOP_NGRAM}-грамма x{LOOP_REPEATS} "
                                               f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"),
+                                  junk_guard=(f"{JUNK_GUARD}: доля {JUNK_RATIO} в {JUNK_WINDOW} "
+                                              f"словах, не раньше {JUNK_MIN_WORDS}"),
                                   image_prune=(f"{IMAGE_PRUNE}: свежих {IMAGE_KEEP}, "
                                                f"потолок {IMAGE_MAX}"))).encode()
         self.send_response(200)
@@ -1952,9 +2088,10 @@ class Handler(BaseHTTPRequestHandler):
         # Предохранитель — только на потоке локальной модели: облако (автосжатие) не петляет,
         # а ответы-ошибки и не-SSE идут как раньше, байт в байт.
         реле = None
-        if (LOOP_GUARD == "on" and первый is None and resp.status == 200
+        if ((LOOP_GUARD == "on" or JUNK_GUARD == "on") and первый is None and resp.status == 200
                 and "text/event-stream" in (resp.getheader("Content-Type") or "")):
-            реле = РелеПотока(отдать)
+            реле = РелеПотока(отдать, петли=LOOP_GUARD == "on",
+                              детектор_мусора=ДетекторМусора() if JUNK_GUARD == "on" else None)
         итог_петли = {"петли": 0, "повторён": False, "conn": None}
         try:
             if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
@@ -1975,7 +2112,9 @@ class Handler(BaseHTTPRequestHandler):
                     отдать(chunk)
                 elif реле.усвоить(chunk):
                     break
-            if реле is not None and реле.петля:
+            if реле is not None and реле.мусор:
+                self._после_мусора(реле, conn)
+            elif реле is not None and реле.петля:
                 self._после_петли(реле, conn, body, headers, итог_петли)
             elif реле is not None:
                 реле.дослать()
@@ -2068,6 +2207,24 @@ class Handler(BaseHTTPRequestHandler):
                      + (", повтор запроса тоже" if итог["повторён"] else "") + "]")
         реле.хвост()
 
+    @staticmethod
+    def _после_мусора(реле, conn):
+        """Мусор пойман: гасим генерацию и обрываем ответ пометкой — без повтора.
+
+        Повтор того же тела попадёт в тот же prefix cache и выдаст тот же мусор (vLLM #60174).
+        """
+        conn.close()
+        д = реле.детектор_мусора
+        with lock:
+            stats["junk_aborts"] += 1
+            stats["junk_words_max_ratio"] = round(д.доля, 3)
+        print(f"мусор в потоке ({д.всего} слов, доля {д.доля:.2f} в окне {д.window}) — ответ оборван",
+              file=sys.stderr, flush=True)
+        реле.закрыть_блок()
+        реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор (vLLM #60174, DFlash2 + "
+                     "prefix cache). Повтори ход.]")
+        реле.хвост()
+
     def handle_one_request(self):
         try:
             super().handle_one_request()
@@ -2102,6 +2259,8 @@ if __name__ == "__main__":
              else ", карточка сдвига границы выкл")
           + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "
              f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл")
+          + (f", предохранитель мусора вкл (доля {JUNK_RATIO} в {JUNK_WINDOW} словах)"
+             if JUNK_GUARD == "on" else ", предохранитель мусора выкл")
           + (f", прунинг картинок вкл (свежих {IMAGE_KEEP}, потолок {IMAGE_MAX})"
              if IMAGE_PRUNE == "on" else ", прунинг картинок выкл"),
           flush=True)

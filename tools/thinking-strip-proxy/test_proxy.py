@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Тесты чистых функций прокси. Без сети и без поднятого vLLM:
 #   python3 -m unittest discover -s tools/thinking-strip-proxy
+import base64
 import contextlib
 import copy
 import http.client
@@ -2179,6 +2180,178 @@ class ПетляСквознаяTests(unittest.TestCase):
         c.close()
         self.assertEqual((отдано["loops_detected"], отдано["loops_retried"]), (1, 1))
         self.assertTrue(отдано["loop_guard"].startswith("on"))
+
+
+# --- Предохранитель от мусорной генерации -----------------------------------------------------
+
+# Живой мусор из транскриптов 15.10.2026 (vLLM #60174, DFlash2 + prefix cache).
+МУСОР_1 = ("compressа应急arco1ács Vat�业务能力igel)compress国强ogaács Vat_VMelm压adium吐血戎elm真假 Wat可以放心\n"
+           "compressadiumcompress压0戎ona (emmaasha_TA国强�磕火烧粗暴�BUS逆变压wcs_VM大方的._TAelmcompress "
+           "Punch, Punch 应急arco�真假adiumarco压orius Vat� Vat 태磕火烧文化知识ule punching文化知识马蹄elm_VM "
+           "compression\"压\"炊�_TAonarise_TA牛的Tagfit_TAácsadiumитель磕业务能力�adium太过 "
+           "punchingács_TAcompress_TA\n")
+МУСОР_2 = ("戎国强iringluancompress/comcompress压adiumcompress/comång\"compressadiumadiumитель\"compressadium牛 "
+           "Tags: compress逆变ång\"compressadium逆变compressadium真假\"compresscompresscompress compression "
+           "PunchTransferTransferCompress吐血compresscompress\n")
+# Первый инцидент начался с осмысленных слов и деградировал постепенно.
+МУСОР_НАЧАЛО = "Charles enough to understandadium the "
+
+РУССКАЯ_ПРОЗА = (
+    "Я посмотрел, как прокси разбирает поток ответа, и нашёл место, где удобно поставить второй "
+    "предохранитель. Детектор петли уже режет дельты на слова, держит окно и не смотрит в код "
+    "внутри заборов, поэтому новый детектор повторяет ту же нарезку. Порог выбран с запасом: в "
+    "обычном ответе длинных склеек почти не бывает, а в мусоре их больше половины. Дальше прогоню "
+    "тесты, проверю, что README не даёт срабатываний, и опишу пороги рядом с разделом про петли. "
+    "Если что-то пойдёт не так, откат простой — выключатель в mode.conf и рестарт службы.\n")
+АНГЛИЙСКАЯ_ПРОЗА = (
+    "I traced the stream relay and found a natural place for the second guard. The loop detector "
+    "already splits deltas into words, keeps a sliding window and skips fenced code, so the new "
+    "detector reuses the same tokenisation. The threshold is generous: ordinary answers almost "
+    "never contain long glued tokens, while the garbage is more than half of them. Next I will run "
+    "the tests, make sure the README stays clean, and document the thresholds next to the loop "
+    "section. Rollback is a single switch in mode.conf followed by a service restart.\n")
+ПУТИ_И_ХЕШИ = "".join(
+    f"Файл C:\\Users\\naych\\.claude\\plans\\ClaudeCodeServer\\plan-2026-10-{i:02d}-junk-guard.md, "
+    f"копия https://github.com/example/ClaudeCodeServer/blob/master/tools/thinking-strip-proxy/proxy.py#L{i}, "
+    f"sha256 {'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}, "
+    f"модуль ClaudeCodeServer.Llm, движок vLLM-0.31, под vLLM-ом, ключ API-ключ.\n" for i in range(1, 30))
+BASE64_В_КОДЕ = ("Вот картинка в base64:\n```\n"
+                 + "".join(base64.b64encode(bytes(range(i, i + 120))).decode() + "\n" for i in range(60))
+                 + "```\nГотово, файл сохранён.\n")
+JSON_ВЫЗОВА = ("Вызываю инструмент так:\n"
+               + json.dumps({"name": "Read", "input": {
+                   "file_path": "/home/an/Sources/ClaudeCodeServer/tools/thinking-strip-proxy/proxy.py",
+                   "offset": 1295, "limit": 260}}, ensure_ascii=False) + "\n") * 20
+КИТАЙСКИЙ = ("这是一个用于测试的中文句子，它不应该被认为是垃圾文本，因为每个词只使用一种文字。\n"
+             "模型在长上下文中有时会输出混乱的字符，但正常的中文段落没有空格也是完全正常的。\n") * 40
+
+
+def прогнать_мусор(текст, детектор=None, шаг=7):
+    """Сколько слов детектор мусора успел увидеть до срабатывания; None — не сработал."""
+    д = детектор or proxy.ДетекторМусора()
+    for кусок in по_кусочкам(текст, шаг):
+        if д.усвоить(кусок):
+            return д.всего
+    д.новый_блок()
+    return д.всего if д.сработал else None
+
+
+class ДетекторМусораTests(unittest.TestCase):
+    def test_образцы_инцидента_ловятся_за_окно(self):
+        вступление = ВСТУПЛЕНИЕ * 3
+        до_мусора = len(вступление.split())
+        for мусор in (МУСОР_1, МУСОР_2, МУСОР_НАЧАЛО + МУСОР_1 + МУСОР_2):
+            with self.subTest(мусор=мусор[:30]):
+                слов = прогнать_мусор(вступление + мусор * 40)
+                self.assertIsNotNone(слов)
+                self.assertLessEqual(слов - до_мусора, 80, "перехват обязан уложиться в окно")
+                # Мусор с первого слова — ровно на минимальной длине ответа
+                self.assertEqual(прогнать_мусор(мусор * 40), proxy.JUNK_MIN_WORDS)
+
+    def test_обычный_текст_не_мусор(self):
+        случаи = {"русская проза": РУССКАЯ_ПРОЗА * 8, "английская проза": АНГЛИЙСКАЯ_ПРОЗА * 8,
+                  "пути, URL, хеши, идентификаторы": ПУТИ_И_ХЕШИ, "base64 в коде": BASE64_В_КОДЕ,
+                  "JSON вызова": JSON_ВЫЗОВА, "китайский": КИТАЙСКИЙ,
+                  "петля — не мусор": ВСТУПЛЕНИЕ + ПЛАН * 20}
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertGreaterEqual(len(текст.split()), proxy.JUNK_MIN_WORDS, "проверка вакуумна")
+                self.assertIsNone(прогнать_мусор(текст))
+
+    def test_живой_документ_без_срабатываний(self):
+        with open(os.path.join(os.path.dirname(__file__), "README.md"), encoding="utf-8") as f:
+            self.assertIsNone(прогнать_мусор(f.read()))
+
+    def test_код_в_заборе_не_считается(self):
+        текст = РУССКАЯ_ПРОЗА + "```text\n" + МУСОР_1 * 20 + "```\n" + РУССКАЯ_ПРОЗА
+        self.assertIsNone(прогнать_мусор(текст))
+        self.assertIsNone(прогнать_мусор(текст, шаг=2), "забор, разорванный между дельтами")
+        # Тот же мусор вне забора — срабатывание: тест выше не вакуумный
+        self.assertIsNotNone(прогнать_мусор(текст.replace("```", "")))
+
+    def test_мусорное_слово(self):
+        мусор = ["compressа应急arco1ács", "Vat_VMelm压adium吐血戎elm真假", "Vat�", "\ufffd",
+                 "PunchTransferTransferCompress", "compresscompresscompresscompress."]
+        норма = ["ClaudeCodeServer.Llm", "vLLM-0.31", "vLLM-ом", "PR'а", "`ДетекторМусораTests`",
+                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                 "C:\\Users\\naych\\.claude\\plans\\ClaudeCodeServer\\plan.md",
+                 "https://github.com/example/ClaudeCodeServer", "这是一个用于测试的中文句子，它不应该被认为是垃圾文本。",
+                 "высокопроизводительный", "Punch,", "compression"]
+        for w in мусор:
+            self.assertTrue(proxy.мусорное_слово(w), w)
+        for w in норма:
+            self.assertFalse(proxy.мусорное_слово(w), w)
+
+
+class МусорСквознойTests(unittest.TestCase):
+    """CLI → прокси → vLLM-заглушка с мусором → обрыв без повтора, пометка и счётчики."""
+
+    спросить = ПетляСквознаяTests.спросить
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.мусор_был = proxy.JUNK_GUARD
+        proxy.JUNK_GUARD = "on"
+        proxy.stats["junk_aborts"], proxy.stats["junk_words_max_ratio"] = 0, 0.0
+
+    def tearDown(self):
+        proxy.JUNK_GUARD = self.мусор_был
+        ПетляСквознаяTests.tearDown(self)
+
+    def мусорный_поток(self):
+        # Мусор длиннее буферов сокета (~2,5 МБ): иначе заглушка успела бы дописать его до обрыва
+        return поток_ответа([("thinking", "Plan quickly."),
+                             ("text", ВСТУПЛЕНИЕ * 3 + МУСОР_НАЧАЛО + (МУСОР_1 + МУСОР_2) * 1000)],
+                            stop_reason="max_tokens", output_tokens=20000)
+
+    def test_мусор_оборван_без_повтора(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
+                         ["end_turn"])
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор (vLLM #60174, DFlash2 + prefix "
+                      "cache). Повтори ход.]", текст)
+        self.assertLess(текст.count("PunchTransfer"), 20, "мусор оборван рано")
+        self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
+        # Обрыв заглушка замечает на следующей записи в сокет — уже после ответа клиенту
+        срок = time.monotonic() + 5
+        while not self.Модель.оборваны and time.monotonic() < срок:
+            time.sleep(0.005)
+        self.assertEqual(self.Модель.оборваны, [1], "генерация остановлена обрывом")
+        self.assertEqual(proxy.stats["junk_aborts"], 1)
+        self.assertGreaterEqual(proxy.stats["junk_words_max_ratio"], proxy.JUNK_RATIO)
+        self.assertEqual(proxy.stats["loops_detected"], 0)
+
+    def test_счётчики_видны_в_stats(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual(отдано["junk_aborts"], 1)
+        self.assertGreaterEqual(отдано["junk_words_max_ratio"], 0.35)
+        self.assertTrue(отдано["junk_guard"].startswith("on"))
+
+    def test_петля_без_своего_выключателя_не_ловится(self):
+        """JUNK_GUARD=on при LOOP_GUARD=off: реле есть, но детектор петли в нём выключен."""
+        proxy.LOOP_GUARD = "off"
+        сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
+        self.Модель.ответы = [сырое]
+        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["junk_aborts"]), (0, 0))
+
+    def test_обычный_ответ_без_изменений(self):
+        # Без дословных повторов: предохранитель петли в этом наборе тоже включён
+        сырое = поток_ответа([("thinking", АНГЛИЙСКАЯ_ПРОЗА),
+                              ("text", РУССКАЯ_ПРОЗА + ПУТИ_И_ХЕШИ + BASE64_В_КОДЕ)])
+        self.Модель.ответы = [сырое]
+        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual((proxy.stats["junk_aborts"], proxy.stats["loops_detected"]), (0, 0))
 
 
 # --- Прунинг картинок ---------------------------------------------------------------------

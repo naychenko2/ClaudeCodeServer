@@ -68,4 +68,6 @@
   <Project Path="HandsBridge.Browser/HandsBridge.Browser.csproj" />
   <Project Path="HandsBridge.Policy/HandsBridge.Policy.csproj" />
   <Project Path="HandsBridge.Policy.Tests/HandsBridge.Policy.Tests.csproj" />
+  <Project Path="HandsBridge.Scanning/HandsBridge.Scanning.csproj" />
+  <Project Path="HandsBridge.Scanning.Tests/HandsBridge.Scanning.Tests.csproj" />
 </Solution>

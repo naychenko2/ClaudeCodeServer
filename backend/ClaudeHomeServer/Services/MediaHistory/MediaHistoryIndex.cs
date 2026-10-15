@@ -15,23 +15,28 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
     private readonly string _dir;
     private readonly UserStore _users;
     private readonly TimeProvider _time;
+    private readonly DateTimeOffset _processStart;
     private bool _loaded;
 
     // Web-конвенции: camelCase, как в ComfyRunHistory (строки журнала)
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web);
 
-    public MediaHistoryIndex(IConfiguration config, UserStore users, TimeProvider? time = null)
+    public MediaHistoryIndex(IConfiguration config, UserStore users, TimeProvider? time = null,
+        DateTimeOffset? processStart = null)
     {
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dir = Path.Combine(Path.GetDirectoryName(dataPath)!, "local-media-history");
         _users = users;
         _time = time ?? TimeProvider.System;
+        // Singleton создаётся при старте процесса: UtcNow в момент конструирования ≈ момент старта
+        _processStart = processStart ?? DateTimeOffset.UtcNow;
     }
 
     // Каталог журнала (data/local-media-history) — для миниатюр и ротации
     public string Dir => _dir;
 
-    // Загрузка 7 файлов дня; идемпотентна. Битые строки и незнакомая версия пропускаются
+    // Загрузка 7 файлов дня; идемпотентна. Битые строки и незнакомая версия пропускаются.
+    // После загрузки: записи без finished, чьё последнее событие старше ProcessStart → interrupted
     public void Load()
     {
         lock (_lock)
@@ -47,6 +52,10 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
                 foreach (var line in File.ReadLines(file))
                     ParseLine(line);
             }
+            // Прерванные ходы: процесс умер до записи finished — помечаем interrupted
+            foreach (var r in _records.Values)
+                if (r.FinishedAt is null)
+                    r.ProcessStart = _processStart;
         }
     }
 
@@ -236,6 +245,7 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
         EnqueuedAt = r.EnqueuedAt,
         StartedAt = r.StartedAt,
         FinishedAt = r.FinishedAt,
+        ProcessStart = r.ProcessStart,
     };
 
     public void Dispose()

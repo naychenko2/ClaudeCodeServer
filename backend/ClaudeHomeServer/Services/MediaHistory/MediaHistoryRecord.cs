@@ -21,6 +21,10 @@ public sealed class MediaHistoryRecord
     public DateTimeOffset? StartedAt { get; internal set; }
     public DateTimeOffset? FinishedAt { get; internal set; }
 
+    // Момент старта процесса (ADR-030): запись без finished, чьё последнее событие старше
+    // ProcessStart, считается interrupted (процесс умер до записи finished)
+    internal DateTimeOffset? ProcessStart { get; set; }
+
     internal MediaHistoryRecord(string promptId) => PromptId = promptId;
 
     // Вид прогона (image|video|audio|train|other) — из метки происхождения
@@ -29,10 +33,13 @@ public sealed class MediaHistoryRecord
     // Операция (generate_image, text_to_video, …) — из метки происхождения
     public string? Op => Origin?.Op;
 
-    // Статус для ленты: завершённые — по исходу, в процессе — «идёт»/«ждёт»
+    // Статус для ленты: завершённые — по исходу; в процессе — «идёт»/«ждёт»;
+    // без finished, чьё последнее событие старше ProcessStart — interrupted (процесс умер)
     public string Status =>
         FinishedAt is not null ? (Outcome ?? "failed")
+        : StartedAt is not null && ProcessStart is not null && StartedAt < ProcessStart ? "interrupted"
         : StartedAt is not null ? "running"
+        : EnqueuedAt is not null && ProcessStart is not null && EnqueuedAt < ProcessStart ? "interrupted"
         : EnqueuedAt is not null ? "queued"
         : "unknown";
 }

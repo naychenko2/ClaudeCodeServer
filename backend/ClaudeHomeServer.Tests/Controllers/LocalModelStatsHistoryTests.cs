@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -46,7 +47,7 @@ public class LocalModelStatsHistoryTests
         public string AdminId { get; }
 
         public Harness(string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve,
-            TimeProvider? time = null)
+            TimeProvider? time = null, DateTimeOffset? processStart = null)
         {
             Fake = new FakeHistorySource { Source = source, Resolve = resolve };
             Factory = new TestWebApplicationFactory();
@@ -54,6 +55,13 @@ public class LocalModelStatsHistoryTests
             {
                 s.AddSingleton<IMediaHistoryResultSource>(Fake);
                 if (time is not null) s.AddSingleton<TimeProvider>(time);
+                if (processStart is not null)
+                    s.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>(sp =>
+                        new ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex(
+                            sp.GetRequiredService<IConfiguration>(),
+                            sp.GetRequiredService<UserStore>(),
+                            sp.GetService<TimeProvider>(),
+                            processStart));
             };
             // Админу (testuser) включаем флаг local-model-stats
             var users = Factory.Services.GetRequiredService<UserStore>();
@@ -164,6 +172,36 @@ public class LocalModelStatsHistoryTests
                 ["outcome"] = "completed", ["runSeconds"] = 5, ["error"] = null,
             };
             File.AppendAllText(Path.Combine(dir, fileDay + ".jsonl"), enqueued.ToJsonString() + "\n" + finished.ToJsonString() + "\n");
+        }
+
+        // Запись «прерванная»: enqueued + started, но БЕЗ finished (процесс умер).
+        // ts — время обоих событий; fileDay — дата файла журнала.
+        public void WriteBareRunning(string promptId, string source, string ts, string fileDay)
+        {
+            var dir = Path.Combine(Factory.TempDir, "local-media-history");
+            Directory.CreateDirectory(dir);
+            var origin = new LocalJobOrigin(
+                OwnerId: AdminId, SessionId: "chat-1", Kind: "image", Op: "generate_image",
+                Heavy: false, ProjectId: "proj-1", Source: source, SourceJobId: "job-1");
+            var wire = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+            var originNode = (JsonNode)JsonSerializer.SerializeToNode(origin, wire)!;
+            var originNode2 = (JsonNode)JsonSerializer.SerializeToNode(origin, wire)!;
+            var enqueued = new JsonObject
+            {
+                ["v"] = 1, ["t"] = "enqueued", ["ts"] = ts,
+                ["id"] = promptId, ["origin"] = originNode,
+                ["model"] = "sdxl", ["prompt"] = "a cat", ["params"] = null, ["card"] = null,
+                ["outcome"] = null, ["runSeconds"] = null, ["error"] = null,
+            };
+            var started = new JsonObject
+            {
+                ["v"] = 1, ["t"] = "started", ["ts"] = ts,
+                ["id"] = promptId, ["origin"] = originNode2,
+                ["model"] = null, ["prompt"] = null, ["params"] = null, ["card"] = null,
+                ["outcome"] = null, ["runSeconds"] = null, ["error"] = null,
+            };
+            File.AppendAllText(Path.Combine(dir, fileDay + ".jsonl"),
+                enqueued.ToJsonString() + "\n" + started.ToJsonString() + "\n");
         }
 
         public void Dispose() => Factory.Dispose();
@@ -411,6 +449,31 @@ public class LocalModelStatsHistoryTests
         var d7 = await h.Admin.GetAsync("/api/local-model/history?period=7d");
         d7.StatusCode.Should().Be(HttpStatusCode.OK);
         Ids(await d7.Content.ReadFromJsonAsync<JsonElement>()).Should().BeEquivalentTo("r_today", "r_2d");
+    }
+
+    // Блок 2 (ADR-030): запись без finished, чьё последнее событие старше старта процесса → interrupted.
+    // Живой ход (после старта) остаётся running. Мутация: убрать проверку ProcessStart — interrupted
+    // превращается в running, тест краснеет.
+    [Fact]
+    public async Task ПрерванныйХод_ПослеРестарта_Interrupted()
+    {
+        var processStart = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+        using var h = new Harness("test-source", null, time: null, processStart: processStart);
+
+        // До рестарта: enqueued+started в 10:00, finished НЕ записан → interrupted
+        h.WriteBareRunning("p_old", "test-source", "2026-10-15T10:00:00Z", "2026-10-15");
+        // Живой ход: enqueued+started в 12:30 (после старта) → running
+        h.WriteBareRunning("p_live", "test-source", "2026-10-15T12:30:00Z", "2026-10-15");
+
+        var resp = await h.Admin.GetAsync("/api/local-model/history");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var records = body.GetProperty("records");
+        records.GetArrayLength().Should().Be(2);
+
+        var byId = records.EnumerateArray().ToDictionary(r => r.GetProperty("id").GetString()!);
+        byId["p_old"].GetProperty("status").GetString().Should().Be("interrupted");
+        byId["p_live"].GetProperty("status").GetString().Should().Be("running");
     }
 
     // id записей страницы (для сравнения набора, не порядка)

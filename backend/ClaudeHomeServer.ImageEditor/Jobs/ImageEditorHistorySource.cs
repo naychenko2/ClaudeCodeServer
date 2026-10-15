@@ -22,8 +22,11 @@ public sealed class ImageEditorHistorySource(ImageEditWorkspace workspace, TimeP
         var variantCount = variants.Count;
         if (variantCount == 0)
             return Task.FromResult<MediaHistoryResolution?>(new(0, null, null, MediaHistoryGoneReason.Missing));
-
-        var path = workspace.VariantPath(owner, jobId, variant);
+        // n — 0-based индекс клиента; редактор хранит варианты с 1 (v1, v2, …), поэтому идём по
+        // реальному списку. n за пределами — 404 (читатель проверяет n < VariantCount)
+        if (variant < 0 || variant >= variantCount)
+            return Task.FromResult<MediaHistoryResolution?>(new(variantCount, null, null, null));
+        var path = workspace.VariantPath(owner, jobId, variants[variant]);
         if (path is null || !File.Exists(path))
             return Task.FromResult<MediaHistoryResolution?>(new(variantCount, null, null, MediaHistoryGoneReason.Missing));
 

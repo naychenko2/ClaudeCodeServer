@@ -18,11 +18,15 @@ public sealed class AudioEditorHistorySource(AudioEditWorkspace workspace, TimeP
             return Task.FromResult<MediaHistoryResolution?>(new(0, null, null, MediaHistoryGoneReason.Missing));
 
         var owner = reference.OwnerId ?? "";
-        var variantCount = workspace.VariantNumbers(owner, jobId).Count;
+        var variants = workspace.VariantNumbers(owner, jobId);
+        var variantCount = variants.Count;
         if (variantCount == 0)
             return Task.FromResult<MediaHistoryResolution?>(new(0, null, null, MediaHistoryGoneReason.Missing));
-
-        var path = workspace.MainFile(owner, jobId, variant);
+        // n — 0-based индекс клиента; редактор хранит варианты с 1 (папки 1/, 2/, …), поэтому
+        // идём по реальному списку. n за пределами — 404 (читатель проверяет n < VariantCount)
+        if (variant < 0 || variant >= variantCount)
+            return Task.FromResult<MediaHistoryResolution?>(new(variantCount, null, null, null));
+        var path = workspace.MainFile(owner, jobId, variants[variant]);
         if (path is null || !File.Exists(path))
             return Task.FromResult<MediaHistoryResolution?>(new(variantCount, null, null, MediaHistoryGoneReason.Missing));
 

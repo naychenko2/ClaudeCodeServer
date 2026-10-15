@@ -82,8 +82,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         {
             FileName = "git",
             // core.quotepath=false: иначе не-ASCII пути в выводе (--name-status и др.)
-            // экранируются восьмеричными последовательностями («\320\232…» вместо кириллицы)
-            Args = ["-c", "core.quotepath=false", .. args],
+            // экранируются восьмеричными последовательностями («\320\232…» вместо кириллицы).
+            // --literal-pathspecs: путь после «--» — имя файла, а не маска. Без флага
+            // «*», «?» и «[…]» в имени задевают соседей: откат «n[ab].txt» сносил чужой
+            // неотслеживаемый «na.txt» (clean -fd), add/restore/log цепляли лишние файлы.
+            // Одна точка на все вызовы — масок pathspec сервис намеренно не использует.
+            Args = ["--literal-pathspecs", "-c", "core.quotepath=false", .. args],
             WorkingDirectory = root,
             Env = env,
             RedirectStdin = stdin is not null,
@@ -351,14 +355,14 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return r.Ok ? ParseLog(r.Stdout) : null;
     }
 
-    // История одного файла (--follow: переживает переименования). --literal-pathspecs: путь —
-    // имя файла, а не маска; иначе «*», «?» и «[…]» в имени подсовывали бы историю чужого файла
+    // История одного файла (--follow: переживает переименования). Путь буквальный
+    // (--literal-pathspecs в RunAsync): «*», «?» и «[…]» не подсовывают историю чужого файла
     public async Task<IReadOnlyList<GitLogEntry>> FileLogAsync(string? ownerId, string root, string relPath, int limit = 100, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
         ValidateRel(root, relPath);
         var r = await RunReadAsync(ownerId, root,
-            ["--literal-pathspecs", "log", "--follow", "-n", limit.ToString(),
+            ["log", "--follow", "-n", limit.ToString(),
              "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
@@ -369,7 +373,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
     // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история
     // одного файла через log --follow (переживает переименования, как FileLogAsync);
-    // --literal-pathspecs — путь буквальный, «[ab].txt» не считает коммиты a.txt.
+    // путь буквальный (--literal-pathspecs в RunAsync), «[ab].txt» не считает коммиты a.txt.
     // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
     // листинг паспортов не должен падать из-за метрики.
     public async Task<int> CountRecentCommitsAsync(
@@ -384,7 +388,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
         }
         var log = await RunReadAsync(ownerId, root,
-            ["--literal-pathspecs", "log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
+            ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
         return log.Ok
             ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
             : 0;

@@ -396,6 +396,56 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         Norm(await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).Should().Be(before);
     }
 
+    // ---------- Путь — не маска: запись (--literal-pathspecs в RunAsync) ----------
+    // «n[ab].txt» маской pathspec совпадает и с «na.txt». Без флага откат нового файла
+    // шёл через clean -fd по маске и безвозвратно сносил соседний неотслеживаемый файл.
+
+    [Fact]
+    public async Task Discard_СкобкиВИмени_ЧужойНеотслеживаемыйФайлЦел()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+
+        await _git.DiscardAsync(null, _repo, "n[ab].txt");
+
+        File.Exists(Path.Combine(_repo, "n[ab].txt")).Should().BeFalse();
+        File.Exists(Path.Combine(_repo, "na.txt")).Should().BeTrue();
+    }
+
+    // add раскрывает маску, когда буквального пути уже нет (файл удалили, а список в
+    // интерфейсе устарел): без флага в индекс молча уезжал сосед «na.txt»
+    [Fact]
+    public async Task Stage_СкобкиВИмени_ПутиНет_СоседНеПопадаетВИндекс()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+
+        try { await _git.StageAsync(null, _repo, "n[ab].txt"); }
+        catch (GitCommandException) { /* «pathspec did not match» — честный отказ */ }
+
+        var st = await _git.StatusAsync(null, _repo);
+        st.Staged.Should().BeEmpty();
+        st.Untracked.Should().ContainSingle(f => f.Path == "na.txt");
+    }
+
+    // restore --staged раскрывает маску по индексу: без флага снималась и правка соседа
+    [Fact]
+    public async Task Unstage_СкобкиВИмени_СоседОстаётсяВИндексе()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "скобки и сосед");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки 2\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед 2\n");
+        await _git.StageAllAsync(null, _repo);
+
+        await _git.UnstageAsync(null, _repo, "n[ab].txt");
+
+        var st = await _git.StatusAsync(null, _repo);
+        st.Staged.Select(f => f.Path).Should().BeEquivalentTo(["na.txt"]);
+        st.Unstaged.Should().ContainSingle(f => f.Path == "n[ab].txt");
+    }
+
     // Без origin «неопубликовано» = вся история ветки: иначе кнопка публикации не появилась
     // бы вовсе и подключить удалённый репозиторий из интерфейса было бы неоткуда
     [Fact]

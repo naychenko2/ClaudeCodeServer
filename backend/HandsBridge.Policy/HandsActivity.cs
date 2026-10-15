@@ -21,7 +21,8 @@ public interface IHandsActivitySignal
 /// <c>keyboard_control</c>, <c>mouse_control</c> (кроме <c>get_position</c> — это только чтение позиции
 /// курсора) и <c>hands_batch</c> — всегда, <c>clipboard_text</c> — только <c>write</c> (<c>read</c> — это чтение).
 /// Чтение дерева окна
-/// (<c>ui_snapshot</c>, <c>ui_find</c>, <c>ui_read</c>) машину не трогает.
+/// (<c>ui_snapshot</c>, <c>ui_find</c>, <c>ui_read</c>) и <c>ocr</c> (снимок → сервер → текст)
+/// машину не трогает.
 /// </para>
 /// Зовётся только после разрешения гейта; отказ сигнал не поднимает.
 /// </summary>
@@ -52,6 +53,8 @@ public sealed class HandsActivity(IHandsActivitySignal signal)
         HandsTools.ClipboardText => !string.Equals(action, "read", StringComparison.OrdinalIgnoreCase),
         HandsTools.WindowManagement => action is null || !ReadOnlyWindowActions.Contains(action),
         HandsTools.ScreenshotControl => !string.Equals(action, "list_monitors", StringComparison.OrdinalIgnoreCase),
+        // OCR (A4): чтение — снимок уходит на сервер, текст приходит; машину не трогает, плашка не горит.
+        HandsTools.Ocr => false,
         _ => tool.StartsWith("browser_", StringComparison.Ordinal),
     };
 

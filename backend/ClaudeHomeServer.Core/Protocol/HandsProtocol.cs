@@ -207,6 +207,18 @@ public static class HandsBridgeArgs
 }
 
 /// <summary>
+/// Контракт OCR «рук без UIA» (этап A): одна константа потолка картинки на сервер
+/// (<c>LocalOcrService</c>, <c>SidecarProxy</c>) и мост (<c>OcrClient</c>) — стороны не
+/// разойдутся. Ядро видно и мосту (сборка <c>HandsBridge.Policy</c> компилирует этот файл),
+/// и серверу (проектная ссылка).
+/// </summary>
+public static class HandsOcr
+{
+    /// <summary>Потолок картинки: 8 МБ.</summary>
+    public const long MaxImageBytes = 8L * 1024 * 1024;
+}
+
+/// <summary>
 /// Инструменты моста, которые отдают модели картинку: у провайдера без зрения агент выключает их
 /// все (<see cref="HandsBridgeArgs.ExcludeTools"/>, решение 7; браузер — ADR-016 §7.1). Одно
 /// определение на агента и мост — списки не разойдутся.

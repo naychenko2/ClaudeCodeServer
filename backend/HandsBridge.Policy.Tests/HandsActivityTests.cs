@@ -75,6 +75,8 @@ public class HandsActivityTests
         { HandsTools.MouseControl, "get_position" },
         // Буфер: read — только чтение, машину не трогает
         { HandsTools.ClipboardText, "read" },
+        // OCR (A4): снимок → сервер → текст — чтение, машину не трогает
+        { HandsTools.Ocr, null },
     };
 
     [Theory]

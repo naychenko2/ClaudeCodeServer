@@ -231,9 +231,10 @@ public static partial class ScreenshotControlTool
     }
 
     /// <summary>
-    /// Parses the target string to enum.
+    /// Parses the target string to enum. Internal: <c>ocr</c> (A4) reuses the same target
+    /// selection (screen, monitor, window, region, all monitors) without copying the logic.
     /// </summary>
-    private static CaptureTarget? ParseTarget(string? target)
+    internal static CaptureTarget? ParseTarget(string? target)
     {
         if (string.IsNullOrWhiteSpace(target))
         {

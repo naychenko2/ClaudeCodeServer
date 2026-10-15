@@ -32,6 +32,8 @@ public static class HandsTools
     public const string HandsBatch = "hands_batch";
     public const string ScanDocument = "scan_document";
     public const string ScanCanvas = "scan_canvas";
+    // OCR (A4 «руки без UIA»): снимок → сервер → текст; чтение, не ввод.
+    public const string Ocr = "ocr";
 
     public static readonly IReadOnlyList<string> All =
     [
@@ -39,6 +41,7 @@ public static class HandsTools
         BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserTabs, BrowserWait, BrowserScreenshot,
         BrowserQuery, BrowserEvaluate,
         KeyboardControl, MouseControl, ClipboardText, HandsBatch, ScanDocument, ScanCanvas,
+        Ocr,
     ];
 }
 
@@ -398,6 +401,45 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         return HandsDecision.Allow;
     }
 
+    /// <summary>
+    /// <c>ocr</c> (A4 «руки без UIA»): цель — та же, что у <c>screenshot_control</c> (экран,
+    /// монитор, окно, область, все мониторы). Окно НЕ должно быть запрещённым приложением
+    /// (<see cref="HandsForbiddenApps"/>): чтение терминала — чтение его команд, а снимок
+    /// (<c>screenshot_control</c>) такое окно разрешает. Экран и область окном не проверяются:
+    /// модель знает, что снимает.
+    /// </summary>
+    public HandsDecision CheckOcr(string? target, string? windowHandle, int? regionWidth, int? regionHeight)
+    {
+        var t = string.IsNullOrWhiteSpace(target) ? "primary" : target.Trim().ToLowerInvariant();
+
+        if (t is not ("primary" or "primaryscreen" or "primary_screen"
+            or "secondary" or "secondaryscreen" or "secondary_screen"
+            or "monitor" or "window" or "region" or "allmonitors" or "all_monitors"))
+            return HandsDecision.Deny(
+                $"Unknown ocr target '{target}'. Valid values: 'primary_screen', 'secondary_screen', 'monitor', 'window', 'region', 'all_monitors'.");
+
+        if (t is "window")
+        {
+            if (string.IsNullOrWhiteSpace(windowHandle)
+                || !TryParseHandle(windowHandle, out var hwnd)
+                || !AcceptsInput(hwnd))
+                return HandsDecision.Deny(NoOcr($"Window '{windowHandle}'"));
+        }
+
+        if (t is "region" && (regionWidth is not > 0 || regionHeight is not > 0))
+            return HandsDecision.Deny("ocr target 'region' requires positive regionWidth and regionHeight.");
+
+        return HandsDecision.Allow;
+    }
+
+    /// <summary>
+    /// Окно для OCR: процесс из <see cref="HandsForbiddenApps"/> (или неизвестный) — чтение его
+    /// экрана равно чтению команд; в отличие от снимка, OCR такое окно не читает.
+    /// </summary>
+    private static string NoOcr(string what) =>
+        $"{what} belongs to an interpreter, a terminal or Explorer (or its program is unknown): " +
+        "ocr would read its screen — the commands and their output — so hands do not ocr it.";
+
     // ---------- браузер ----------
 
     /// <summary>Потолок <c>browser_wait</c>: дольше модель ход не вешает.</summary>
@@ -670,6 +712,8 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         [HandsTools.ScreenshotControl] = [".png", ".jpg"],
         [HandsTools.ScanDocument] = [".md", ".txt", ".json"],
         [HandsTools.ScanCanvas] = [".png"],
+        // OCR (A4): полный текст — только текстовый файл.
+        [HandsTools.Ocr] = [".txt", ".md"],
     };
 
     /// <summary>

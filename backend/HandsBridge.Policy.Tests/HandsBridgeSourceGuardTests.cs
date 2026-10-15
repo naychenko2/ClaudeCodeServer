@@ -39,6 +39,8 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.BrowserEvaluate, "Tools/BrowserEvaluateTool.cs", "HandsPolicy.CheckBrowserEvaluate(" },
         // Руки без UIA: мышь — гейт по точке (форма + границы + окно под точкой) до первого действия
         { HandsTools.MouseControl, "Tools/MouseControlTool.cs", "HandsGate.Policy.CheckPointer(" },
+        // OCR (A4): цель как у снимка, окно — не запрещённое приложение; гейт до первого действия
+        { HandsTools.Ocr, "Tools/OcrTool.cs", "HandsGate.Policy.CheckOcr(" },
     };
 
     [Fact]
@@ -91,7 +93,8 @@ public class HandsBridgeSourceGuardTests
         var body = ToolBody(file, tool);
         var actedAt = body.IndexOf("HandsGate.Acted(HandsTools.", StringComparison.Ordinal);
 
-        if (tool is HandsTools.UiSnapshot or HandsTools.UiFind or HandsTools.UiRead)
+        // OCR (A4) — чистое чтение: снимок уходит на сервер, текст приходит; плашка не горит.
+        if (tool is HandsTools.UiSnapshot or HandsTools.UiFind or HandsTools.UiRead or HandsTools.Ocr)
         {
             Assert.True(actedAt < 0, $"{tool}: чтение не должно зажигать плашку");
             return;

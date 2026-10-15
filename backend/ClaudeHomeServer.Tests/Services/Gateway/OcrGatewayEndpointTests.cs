@@ -400,10 +400,14 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
 
     // MINOR (ревью A3): сайдкар (устройство) и серверный OCR держат один потолок тела.
     // Живёт в ClaudeHomeServer.Tests: только он видит обе сборки (DeviceAgent + Llm).
+    // A4: клиент моста (OcrClient) держит тот же потолок — единая константа
+    // HandsOcr.MaxImageBytes в Core/Protocol (видна и мосту, и серверу).
     [Fact]
     public void ПотолокСайдкара_СовпадаетСПотолкомOcr()
     {
         SidecarProxy.MaxOcrBodyBytes.Should().Be(LocalOcrService.MaxImageBytes);
+        LocalOcrService.MaxImageBytes.Should().Be(HandsOcr.MaxImageBytes);
+        SidecarProxy.MaxOcrBodyBytes.Should().Be(HandsOcr.MaxImageBytes);
     }
 
     // Пересборка app с заданным handler'ом (для BusyTimeout / PageTimeout).

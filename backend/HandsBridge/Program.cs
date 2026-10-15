@@ -58,6 +58,10 @@ var browserProfile = GetOption(args, HandsBridgeArgs.BrowserProfile);
 HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent),
     GetOption(args, HandsBridgeArgs.BusyEvent), GetOption(args, HandsBridgeArgs.TurnEndEvent),
     GetOption(args, HandsBridgeArgs.ProjectRoot));
+
+// OCR (A4 «руки без UIA»): эндпоинт хода в сайдкаре; без него инструмент отвечает
+// «update the agent» (агент старый, --ocr-endpoint не передаёт).
+OcrClient.Endpoint = GetOption(args, HandsBridgeArgs.OcrEndpoint);
 BrowserHost.Configure(browserProfile);
 
 var builder = Host.CreateApplicationBuilder(args);

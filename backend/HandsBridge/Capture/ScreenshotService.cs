@@ -5,8 +5,10 @@ namespace Sbroenne.WindowsMcp.Capture;
 
 /// <summary>
 /// Provides screenshot capture services for screens, monitors, windows, and regions.
+/// Not sealed: <c>ocr</c> (A4) captures through the same <see cref="ExecuteAsync"/> (PNG in memory,
+/// no disk), and tests substitute a fake capture.
 /// </summary>
-public sealed class ScreenshotService
+public class ScreenshotService
 {
     private readonly MonitorService _monitorService;
     private readonly Automation.SecureDesktopDetector _secureDesktopDetector;
@@ -29,7 +31,7 @@ public sealed class ScreenshotService
     }
 
     /// <inheritdoc />
-    public async Task<ScreenshotControlResult> ExecuteAsync(
+    public virtual async Task<ScreenshotControlResult> ExecuteAsync(
         ScreenshotControlRequest request,
         CancellationToken cancellationToken = default)
     {

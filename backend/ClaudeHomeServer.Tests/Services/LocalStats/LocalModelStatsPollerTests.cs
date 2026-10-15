@@ -835,6 +835,124 @@ public class LocalModelStatsPollerTests
         history[1].ItlSeconds.Should().BeNull("метрики нет (null на обеих точках) → null, не 0");
     }
 
+    // ─── Занятое время генерации стенда (busySeconds) ─────────────────────────────────────
+    //
+    // busySeconds — сколько секунд за интервал хотя бы один запрос генерировал: wall-clock,
+    // НЕ сумма по потокам (два параллельных агента дают одну занятую секунду). Правило null
+    // то же, что у серий: нет прошлой точки, метрики generation_tokens нет или рестарт (счётчик
+    // упал) → null; генерации в интервале не было → 0, не null. Фронт: выработка стенда =
+    // ΣgenTokens/ΣbusySeconds; в интервале без генерации → 0.
+
+    // (29) Один агент генерирует весь интервал (5 с) → busySeconds = 5 (весь интервал).
+    // Мутация: не копировать занятое время (всегда 0) → тест краснеет.
+    [Fact]
+    public async Task BusySeconds_SingleAgentWholeInterval_FullInterval()
+    {
+        var h = new Harness();
+        // t=0: старт (первая точка: busySeconds=null — нет прошлой точки).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, Running = 1 });
+        await h.Poller.PollOnceAsync();
+
+        // t=1..5: агент генерирует каждую секунду (running=1, токены растут).
+        for (var i = 1; i <= 5; i++)
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 10L * i, Running = 1 });
+            await h.Poller.PollOnceAsync();
+        }
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+        history[0].BusySeconds.Should().BeNull("нет прошлой точки → null, не 0");
+        history[1].BusySeconds.Should().Be(5.0, "агент генерировал все 5 с → занято 5 с");
+    }
+
+    // (30) Агент пишет 2 с, потом 13 с простаивает: занятое время = 2 с, не 15.
+    // Интервалы без генерации дают busySeconds=0 (не null) и не тянут «всего по стенду» вниз.
+    // Мутация: делить на всё время интервала (15 с) → busySeconds=15, тест краснеет.
+    [Fact]
+    public async Task BusySeconds_TwoSecondsWritingThirteenIdle_NotDoubledByIdle()
+    {
+        var h = new Harness();
+        // t=0: старт.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        // t=1, t=2: агент генерирует (2 с).
+        for (var i = 1; i <= 2; i++)
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100L * i, Running = 1 });
+            await h.Poller.PollOnceAsync();
+        }
+        // t=3..15: 13 с простоя (running=0, токены не растут).
+        for (var i = 0; i < 13; i++)
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 200, Running = 0 });
+            await h.Poller.PollOnceAsync();
+        }
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        // Точки: t=0 (старт), t=5, t=10, t=15.
+        history.Should().HaveCount(4);
+        history[0].BusySeconds.Should().BeNull("нет прошлой точки → null");
+        // [0..5]: генерация 2 с (t=1,2) + простой 3 с → занято 2 с, не 5.
+        history[1].BusySeconds.Should().Be(2.0, "2 с генерации + 3 с простоя → занято 2 с, не 5");
+        // [5..10] и [10..15]: только простой → 0 (не null).
+        history[2].BusySeconds.Should().Be(0.0, "интервал без генерации → 0, не null");
+        history[3].BusySeconds.Should().Be(0.0, "интервал без генерации → 0, не null");
+    }
+
+    // (31) Два агента параллельно: занятое время НЕ удваивается (wall-clock, не сумма по потокам).
+    // running=2, токены растут → одна занятая секунда, не две.
+    // Мутация: копировать время по потокам (running × dt) → busySeconds=10, тест краснеет.
+    [Fact]
+    public async Task BusySeconds_TwoParallelAgents_NotDoubled()
+    {
+        var h = new Harness();
+        // t=0: старт (2 агента уже в работе).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 0, Running = 2 });
+        await h.Poller.PollOnceAsync();
+
+        // t=1..5: два агента генерируют параллельно (running=2, токены растут).
+        for (var i = 1; i <= 5; i++)
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 10L * i, Running = 2 });
+            await h.Poller.PollOnceAsync();
+        }
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+        history[0].BusySeconds.Should().BeNull("нет прошлой точки → null");
+        history[1].BusySeconds.Should().Be(5.0,
+            "два параллельных агента = одна занятая секунда (wall-clock), не 10");
+    }
+
+    // (32) Рестарт счётчика: generation_tokens упал (1000 → 100) → busySeconds=null (разрыв),
+    // не накопленное время. Мутация: не резать по разрыву (вернуть накопленное) → тест краснеет.
+    [Fact]
+    public async Task BusySeconds_CounterRestart_IsNull()
+    {
+        var h = new Harness();
+        // t=0: старт.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        // t=1: генерация (токены растут) → копим занятое время.
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1100, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        // t=5: рестарт — счётчик упал (1100 → 100) → разрыв.
+        h.Time.Advance(TimeSpan.FromSeconds(4));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+        history[0].BusySeconds.Should().BeNull("нет прошлой точки → null");
+        history[1].BusySeconds.Should().BeNull("рестарт (счётчик упал) → null, не накопленное время");
+    }
+
     // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).
     private sealed class ThrowingSource : IEngineMetricsSource
     {

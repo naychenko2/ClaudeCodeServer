@@ -189,6 +189,13 @@ public static class HandsBridgeArgs
     /// по концу хода гасит всё, что ход открыл; имя остаётся для журнала.
     /// </summary>
     public const string TurnJobPrefix = @"Local\AiHome.Turn.";
+
+    /// <summary>
+    /// Эндпоинт OCR (этап A «руки без UIA»): мост шлёт сюда картинку страницы на распознавание
+    /// текста. Значение — адрес хода в сайдкаре с сегментом <c>ocr</c>; создаёт агент,
+    /// сервер и модель его не задают.
+    /// </summary>
+    public const string OcrEndpoint = "--ocr-endpoint";
 }
 
 /// <summary>

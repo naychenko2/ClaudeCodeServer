@@ -15,9 +15,10 @@ internal interface IDeviceIdentity
 
 /// <summary>
 /// Сайдкар на 127.0.0.1 (ADR-016 §2): CLI ходит сюда за LLM (<c>ANTHROPIC_BASE_URL</c>) и
-/// MCP (<c>http</c>-серверы конфига). Маршрут <c>/t/{ключ}/{llm|mcp}/…</c> уходит на
-/// <c>{сервер}/gw/t/{ход}/{llm|mcp}/…</c>: авторизация CLI (заглушка) выбрасывается,
-/// ставятся токен устройства с отпечатком (кто звонит) и токен хода (какой ход).
+/// MCP (<c>http</c>-серверы конфига), мост рук — за OCR (этап A «руки без UIA»). Маршрут
+/// <c>/t/{ключ}/{llm|mcp|ocr}/…</c> уходит на <c>{сервер}/gw/t/{ход}/{llm|mcp|ocr}/…</c>:
+/// авторизация CLI (заглушка) выбрасывается, ставятся токен устройства с отпечатком (кто
+/// звонит) и токен хода (какой ход). Тело OCR — до потолка картинки сервера, иначе 413.
 /// Пропускается любой метод — MCP streamable HTTP шлёт GET и DELETE. Ответ отдаётся
 /// потоком, без буферизации: SSE-дельты доходят до CLI по мере прихода.
 /// </summary>
@@ -28,6 +29,12 @@ internal sealed partial class SidecarProxy(TurnGrants grants, IDeviceIdentity de
     public const string DeviceAuthPrefix = "Device ";
     public const string FingerprintHeader = "X-Device-Fingerprint";
     public const string TurnTokenHeader = "X-Turn-Token";
+
+    /// <summary>
+    /// Потолок тела OCR: 8 МБ, тот же, что у картинки на сервере (LocalOcrService.MaxImageBytes).
+    /// Превышение — 413 до чтения тела: по Content-Length, а не по факту передачи.
+    /// </summary>
+    public const long MaxOcrBodyBytes = 8L * 1024 * 1024;
 
     // Что клиент не вправе передать дальше: его авторизация, наши заголовки (их ставим мы),
     // контекст MCP (его ставит шлюз по привязке токена) и hop-by-hop
@@ -46,7 +53,7 @@ internal sealed partial class SidecarProxy(TurnGrants grants, IDeviceIdentity de
     };
 
     [GeneratedRegex("^/" + DeviceSidecarRoutes.TurnSegment + "/(?<key>[0-9a-f]{32})/(?<kind>"
-        + DeviceSidecarRoutes.Llm + "|" + DeviceSidecarRoutes.Mcp + ")(?<rest>/.*)?$")]
+        + DeviceSidecarRoutes.Llm + "|" + DeviceSidecarRoutes.Mcp + "|" + DeviceSidecarRoutes.Ocr + ")(?<rest>/.*)?$")]
     private static partial Regex RouteRegex();
 
     public async Task HandleAsync(HttpContext context)
@@ -66,6 +73,13 @@ internal sealed partial class SidecarProxy(TurnGrants grants, IDeviceIdentity de
         }
 
         var kind = match.Groups["kind"].Value;
+        // OCR: картинка не выше потолка сервера — 413 по Content-Length, до чтения тела
+        if (kind == DeviceSidecarRoutes.Ocr
+            && context.Request.ContentLength is { } declared && declared > MaxOcrBodyBytes)
+        {
+            context.Response.StatusCode = StatusCodes.Status413RequestEntityTooLarge;
+            return;
+        }
         var rest = match.Groups["rest"].Success ? match.Groups["rest"].Value : "/";
         var target = new Uri(device.ServerUri,
             $"gw/t/{Uri.EscapeDataString(grant.TurnId)}/{kind}{rest}{context.Request.QueryString}");

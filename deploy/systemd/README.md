@@ -17,7 +17,7 @@ Unit-файлы, drop-in'ы и sysctl для машины, на которой �
 | `ccs.service` | Основной unit-файл бэкенда (dotnet, Kestrel, `/opt/ccs/app`). |
 | `ccs.service.d/50-oom-preference.conf` | `ManagedOOMPreference=omit` — oomd не выбирает бэкенд жертвой. |
 | `ccs-agents.slice.d/50-memory-limits.conf` | `MemoryMax=18G`, `MemorySwapMax=0`. **Без `MemoryHigh`** — см. ниже. |
-| `ccs-agents.slice.d/50-oom-preference.conf` | `ManagedOOMMemoryPressure=kill` — предохранитель на PSI самого slice. |
+| `ccs-agents.slice.d/50-oom-preference.conf` | `ManagedOOMMemoryPressure=kill` + `ManagedOOMMemoryPressureLimit=80%` — предохранитель на PSI самого slice (порог 80 % вместо 60 %, инцидент 15.10). |
 | `system/user@.service.d/50-ccs-oomd.conf` | **root.** Сессионный порог oomd 50 % → 80 %. |
 | `../sysctl.d/60-inotify.conf` | **root.** `max_user_watches=1048576`, `max_user_instances=8192`. |
 | `install-user-units.sh` | Раскладка user-части в `~/.config/systemd/user/` и очистка `user.control/`. |
@@ -62,8 +62,10 @@ Per-scope пределы (`Execution:Isolation:MemoryHigh/MemoryMax` в
    или узел MSBuild). Сборка в ходе падает с понятной ошибкой, сам ход и соседние
    scope живут. `MemorySwapMax=0` — память агентов не уходит в подкачку: swap-out
    на 4 GB (пики scope 21.09) даёт минуты рефолтов вместо секунды OOM.
-2. **oomd на самом slice**, порог по умолчанию 60 % PSI за 20 с: настоящий
-   thrash у потолка → убить самый давящий scope целиком.
+2. **oomd на самом slice**, порог 80 % PSI за 20 с (длительность общая из
+   `oomd.conf`): настоящий thrash у потолка → убить самый давящий scope целиком.
+   Дефолтные 60 % подняты после инцидента 15.10: reclaim файлового кэша у
+   `MemoryMax` давал PSI 63,7 % без настоящего thrash, и oomd убил ход.
 3. **oomd на сессии** `user@<uid>.service`, порог 80 % (дефолт Ubuntu — 50 %):
    защита рабочего стола от собственных утечек; при таком стойле сессия и так
    неработоспособна.

@@ -124,7 +124,7 @@
   `Execution:Isolation:MaxConcurrentBuilds`, дефолт 2; явный `0` — без ограничения, откат
   без пересборки). **Это дополнение к лимитам cgroup, а не замена им.** Основная защита от
   OOM — жёсткий потолок на `ccs-agents.slice` (`MemoryMax` + `MemorySwapMax=0` +
-  `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit` на самом `ccs.service`):
+  `ManagedOOMMemoryPressure=kill` с порогом 80 % (`ManagedOOMMemoryPressureLimit`; 60 % по умолчанию ловили reclaim файлового кэша, инцидент 15.10), плюс `ManagedOOMPreference=omit` на самом `ccs.service`):
   лимит cgroup наследуется ВСЕМУ поддереву scope, включая сборки, которые агент запускает
   внутри хода своим Bash, — а это ровно те, что дали инцидент 21 сентября (четыре scope по
   4–5 GB, внутри `testhost.dll`, прогревов среди них не было). Гейт же считает только

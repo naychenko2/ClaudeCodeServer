@@ -5,9 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   avgThroughputOf, breakRuns, buildIntervals, buildThroughputSegments, cacheHitAvg,
-  chartAriaLabel, evChartAriaLabel, formatAxisTps, intervalCountFor, kvChartAriaLabel,
-  maxThroughputOf, niceAxisMax, peakThroughputOf, preemptionTotal, shouldShowNoDataLabel,
-  tpChartAriaLabel, xForTime, yForThroughput,
+  chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
+  kvChartAriaLabel, maxThroughputOf, niceAxisMax, peakThroughputOf, preemptionTotal,
+  shouldShowNoDataLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type ThroughputSample,
 } from './ThroughputChart';
 
@@ -343,7 +343,8 @@ describe('intervalCountFor: число интервалов окна', () => {
 
 describe('breakRuns: непрерывные прогоны разрыва (throughput == null)', () => {
   const mk = (tStart: number, tEnd: number, tp: number | null): Interval =>
-    ({ tStart, tEnd, throughput: tp, kvUsage: null, prefix: null, ram: null, preemptions: null });
+    ({ tStart, tEnd, throughput: tp, kvUsage: null, prefix: null, ram: null, preemptions: null,
+      hasData: { prefix: false, ram: false } });
 
   it('один прогон: серия null → пара [start, end]', () => {
     const intervals = [mk(0, 1, 10), mk(1, 2, null), mk(2, 3, null), mk(3, 4, 20)];
@@ -442,5 +443,141 @@ describe('shouldShowNoDataLabel: текст «данных нет» только
   it('> 40 → true', () => {
     expect(shouldShowNoDataLabel(41)).toBe(true);
     expect(shouldShowNoDataLabel(120)).toBe(true);
+  });
+});
+
+// === П.3: сетка интервалов на абсолютном времени (не на tMin = now − window) ===
+// Старая логика строила сетку от tMin: при живом now (сдвигается на 2 с каждый
+// опрос) границы прыгали каждый опрос. Мутация «rightEdge = tMax» (без ceil до
+// кратного шагу) краснит тест кратности.
+
+describe('intervalGrid: границы кратны шагу, сетка стабильна при живом now', () => {
+  it('tMax кратный шагу — сетка совпадает со старым поведением (от tMin)', () => {
+    const grid = intervalGrid(0, 60_000, 30_000);
+    expect(grid).toEqual([[0, 30_000], [30_000, 60_000]]);
+  });
+
+  it('все границы кратны intervalMs (абсолютное время), даже если tMin не кратен', () => {
+    const grid = intervalGrid(5_000, 65_000, 30_000);
+    for (const [a, b] of grid) {
+      expect(a % 30_000).toBe(0);
+      expect(b % 30_000).toBe(0);
+      expect(b - a).toBe(30_000);
+    }
+  });
+
+  it('now сдвинулся на 500 мс (в пределах интервала) — сетка НЕ пересчиталась', () => {
+    const before = intervalGrid(5_000, 65_000, 30_000);
+    const after = intervalGrid(5_500, 65_500, 30_000);
+    expect(after).toEqual(before);
+  });
+
+  it('now перешагнул границу интервала — появился новый интервал справа, старые на месте', () => {
+    const before = intervalGrid(0, 89_000, 30_000);
+    const after = intervalGrid(0, 90_001, 30_000);
+    // правый край: 90_000 → 120_000; все интервалы сдвинулись ровно на один шаг вправо
+    expect(after[0]).toEqual([before[0][0] + 30_000, before[0][1] + 30_000]);
+    expect(after[after.length - 1][1]).toBe(120_000);
+  });
+});
+
+// === П.3/5: «сейчас» — из серверных таймштампов, не Date.now() клиента ===
+// Мутация «chartNow = () => fallback» красит первый тест; «max → min» — второй.
+
+describe('chartNow: «сейчас» = время последней точки истории', () => {
+  it('максимальный t из истории (серверные таймштампы), не дата клиента', () => {
+    const history = [
+      { t: 1_000, genThroughput: 1 },
+      { t: 3_000, genThroughput: 2 },
+      { t: 2_000, genThroughput: 3 },
+    ];
+    expect(chartNow(history, 99_999)).toBe(3_000);
+  });
+
+  it('пустая история — fallback (Date.now() на стороне вызывающего)', () => {
+    expect(chartNow([], 42_424)).toBe(42_424);
+    expect(chartNow(undefined, 7)).toBe(7);
+  });
+});
+
+// === П.4: «рваный» кэш — «не спрашивали» не рвёт линию, молчание движка — рвёт ===
+// Старая логика: Σ queries = 0 → null (обрыв) — на лёгкой нагрузке линия рвалась
+// постоянно. Мутация «else if (hasPH) prefix = prevPrefix → prefix = null» красит
+// тест несения; «hasPH → !hasPH» (молчание) красит тест разрыва.
+
+describe('buildIntervals: кэш — несение при «не спрашивали», разрыв при молчании', () => {
+  // Окно 60 с, 4 интервала по 15 с; точки с шагом 5 с (контракт PointStep).
+  const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 15_000;
+
+  // Точка: t + серии кэша. asked — движок отдал счётчики (hits/queries, в т.ч. 0/0);
+  // silent — движок молчит (null/null).
+  const cachePoint = (t: number, hits: number | null, queries: number | null): ThroughputSample =>
+    sample({ t, throughput: 10, running: 1, prefixHits: hits, prefixQueries: queries });
+
+  it('интервал без обращений (0/0) несёт предыдущее значение — линия не рвётся', () => {
+    const samples = [
+      // интервал 0: 80/100 → 0.8
+      cachePoint(5_000, 80, 100),
+      // интервал 1: 0/0 — «не спрашивали» (не разрыв!)
+      cachePoint(20_000, 0, 0),
+      cachePoint(25_000, 0, 0),
+      // интервал 2: движок молчит (null) — разрыв
+      cachePoint(35_000, null, null),
+      cachePoint(40_000, null, null),
+      // интервал 3: 50/100 → 0.5
+      cachePoint(50_000, 50, 100),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].prefix).toBeCloseTo(0.8, 6);
+    expect(intervals[1].prefix).toBeCloseTo(0.8, 6);   // несётся (старая логика: null)
+    expect(intervals[2].prefix).toBeNull();             // молчание — разрыв
+    expect(intervals[3].prefix).toBeCloseTo(0.5, 6);
+  });
+
+  it('hasData: «не спрашивали» — серия отдана (true), молчание — false', () => {
+    const samples = [
+      cachePoint(5_000, 80, 100),
+      cachePoint(20_000, 0, 0),
+      cachePoint(35_000, null, null),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].hasData.prefix).toBe(true);
+    expect(intervals[1].hasData.prefix).toBe(true);   // 0/0 — счётчики отданы
+    expect(intervals[2].hasData.prefix).toBe(false);  // null — движок молчал
+  });
+
+  it('первый интервал «не спрашивали» — нечего нести: null, но без фона разрыва', () => {
+    const samples = [cachePoint(5_000, 0, 0), cachePoint(10_000, 0, 0)];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].prefix).toBeNull();
+    expect(intervals[0].hasData.prefix).toBe(true);
+  });
+
+  it('из RAM — то же правило: 0/0 несёт, null/null рвёт', () => {
+    const ramPoint = (t: number, hits: number | null, queries: number | null): ThroughputSample =>
+      sample({ t, throughput: 10, running: 1, ramHits: hits, ramQueries: queries });
+    const samples = [
+      ramPoint(5_000, 20, 100),     // интервал 0: 0.2
+      ramPoint(20_000, 0, 0),       // интервал 1: «не спрашивали» → 0.2
+      ramPoint(35_000, null, null), // интервал 2: молчание → null
+      ramPoint(50_000, 10, 100),    // интервал 3: 0.1
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].ram).toBeCloseTo(0.2, 6);
+    expect(intervals[1].ram).toBeCloseTo(0.2, 6);
+    expect(intervals[2].ram).toBeNull();
+    expect(intervals[3].ram).toBeCloseTo(0.1, 6);
+  });
+
+  it('разрыв в середине не «залипает»: после молчания новое значение, не несение', () => {
+    const samples = [
+      cachePoint(5_000, 90, 100),      // 0.9
+      cachePoint(20_000, null, null),  // молчание → null
+      cachePoint(35_000, 10, 100),     // 0.1 (НЕ 0.9: после разрыва несения нет)
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].prefix).toBeCloseTo(0.9, 6);
+    expect(intervals[1].prefix).toBeNull();
+    expect(intervals[2].prefix).toBeCloseTo(0.1, 6);
   });
 });

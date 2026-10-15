@@ -44,7 +44,7 @@ public class DelegatedTurnGateAdapterTests : IDisposable
 
         public Task StartAsync() => Task.CompletedTask;
         public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-            int agentDepth = 0, bool suppressTasksExecute = false) => Task.CompletedTask;
+            int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null) => Task.CompletedTask;
         public Task CompactAsync() => Task.CompletedTask;
         public void RespondPermission(string requestId, string behavior) { }
         public void AnswerQuestion(string toolUseId, string updatedInputJson) { }

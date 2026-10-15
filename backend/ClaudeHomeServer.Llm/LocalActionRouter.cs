@@ -41,6 +41,9 @@ public sealed class LocalActionRouter
     private readonly Dictionary<CheapProfile, CheapProfileSpec> _profiles;
     private readonly ILogger<LocalActionRouter> _log;
     private readonly ILocalImageMedia? _localMedia;
+    // Слоты тиров (UserModelTierResolver) — нужны голосовому ходу: выбор слота места
+    // chat-voice разворачивается в модель единственной точкой (см. VoiceModelFor).
+    private readonly UserModelTierResolver? _userTiers;
 
     // Значение LocalLlm:BackgroundWhileTurn — что делать с фоновым действием, пока на
     // локальном движке идёт ход исполнителя.
@@ -50,13 +53,14 @@ public sealed class LocalActionRouter
     public LocalActionRouter(ILocalLlmClient ollama, LocalActionOverridesStore store,
         IConfiguration config, ILogger<LocalActionRouter> log,
         SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null,
-        ILocalImageMedia? localMedia = null)
+        ILocalImageMedia? localMedia = null, UserModelTierResolver? userTiers = null)
     {
         _localMedia = localMedia;
         _ollama = ollama;
         _store = store;
         _specialty = specialty;
         _busy = busy ?? LocalEngineBusyTracker.Instance;
+        _userTiers = userTiers;
         _log = log;
 
         // Правило «локаль занята ходом»: fallback (по умолчанию) — фоновое действие пропускает
@@ -125,6 +129,24 @@ public sealed class LocalActionRouter
     // Начинается ли действие с локальной модели. Требует настроенного Ollama; иначе — нет.
     public bool UsesLocal(string actionKey) =>
         _ollama.Enabled && Resolve(actionKey).Kind == RouteKind.Local;
+
+    // Модель голосового хода (место chat-voice) по ЯВНОМУ выбору админа: слот →
+    // UserModelTierResolver.ModelFor (единственная точка разворачивания уровня), конкретная
+    // модель → как есть. «Локальная» (свой быстрый HTTP-путь), «по умолчанию» (модель чата),
+    // пресет и отсутствие выбора → null: голосовой ход идёт на модели чата, как раньше.
+    // null — штатный резолв (модель чата), вызывающий подмены модель только при не-null.
+    public string? VoiceModelFor(string actionKey, string? ownerId)
+    {
+        if (_store.TryGet(actionKey) is not { } raw) return null;
+        var v = raw.Trim();
+        if (v is LocalActionOverridesStore.LocalRoute or LocalActionOverridesStore.ClaudeRoute
+            or LocalActionOverridesStore.DefaultRoute or LocalActionOverridesStore.FacePoseRoute)
+            return null;
+        if (LocalActionOverridesStore.ParseTierRoute(v) is { } tier)
+            return _userTiers?.ModelFor(tier, ownerId);
+        if (LocalActionOverridesStore.IsPresetRoute(v)) return null;
+        return v;
+    }
 
     // Действующий маршрут и его источник — БЕЗ учёта доступности Ollama: UI показывает
     // настройку и при выключенной локали (иначе выбор выглядел бы сброшенным).

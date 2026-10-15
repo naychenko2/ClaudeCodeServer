@@ -49,7 +49,7 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public Task StartAsync() => Task.CompletedTask;
 
     public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-        int agentDepth = 0, bool suppressTasksExecute = false)
+        int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
     {
         lock (SentMessages) SentMessages.Add(text);
         return Task.CompletedTask;

@@ -30,11 +30,20 @@ public class ClaudeSession : ILlmSessionAdapter
     // (слоты тиров + таблица назначений, ModelAssignmentResolver), а не дефолт claude CLI.
     // Резолвим на каждом обращении, а не при создании адаптера: смена настройки применяется
     // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
-    private string? EffectiveModel => _assignments?.Resolve(UsageKey, Info.Model, Info.OwnerId) ?? Info.Model;
+    // _turnModelOverride (голосовой ход на модели места chat-voice) — явная модель: она
+    // сильнее Info.Model и места, поэтому подставляется в резолв как explicit.
+    private string? EffectiveModel =>
+        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, Info.OwnerId)
+        ?? (_turnModelOverride ?? Info.Model);
 
     // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
     internal string? EffectiveTurnModel => EffectiveModel;
+
+    // Явная модель хода (per-turn override): голосовой ход на модели места chat-voice. Ставится
+    // ДО чтения цепочки фолбэком (адаптер зовёт это перед RunFallbackLoopAsync) и в RunTurnAsync
+    // (сброс в finally). null — штатный резолв по UsageKey.
+    internal void SetTurnModelOverride(string? model) => _turnModelOverride = model;
 
     // Владелец хода: у проектной сессии Info.OwnerId пуст, владелец приходит из контекста
     private readonly string? _turnOwnerId;
@@ -64,7 +73,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // хвост тира строится по её узким матрицам (персона → специальность), а не по общему слоту
     // владельца — старт и фолбэк идут по одним правилам.
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId, _personaProvider?.Invoke())
+        _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, Info.OwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
     // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
@@ -896,6 +905,13 @@ public class ClaudeSession : ILlmSessionAdapter
     // каждого ответа (TurnTelemetry.ModelFromEvent). EffectiveModel — лишь намерение, и при
     // пустом слоте он null, из-за чего в телеметрию уходил литерал unknown.
     private string? _turnCliModel;
+
+    // Явная модель хода (per-turn override): голосовой ход на выбранной модели/слоте места
+    // chat-voice. null — штатный резолв по UsageKey (модель чата). Ставится в RunTurnAsync
+    // (и фолбэк-адаптером до чтения цепочки), сбрасывается в finally RunTurnAsync: ход живёт
+    // внутри _turnLock, поэтому поле не гонится. volatile — EffectiveModel/EffectiveTurnChain
+    // читаются из других потоков (Capabilities, фолбэк-оркестратор).
+    private volatile string? _turnModelOverride;
 
     // Сигнатура запуска последнего собранного хода (BuildLaunchSignature) — для сторожей
     // стабильности: два хода чата с одинаковыми свойствами обязаны дать одну сигнатуру
@@ -2405,7 +2421,7 @@ public class ClaudeSession : ILlmSessionAdapter
     public Task StartAsync() => Task.CompletedTask;
 
     public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0,
-        bool suppressTasksExecute = false)
+        bool suppressTasksExecute = false, string? turnModelOverride = null)
     {
         // Счётчик ходов процесса: растёт и на служебных директивах — они реально уходят в CLI,
         // меняют ленту и служат признаком «ход запускался» (SessionLiveness, ревизия синка).
@@ -2415,6 +2431,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // (BuildCliTurnText), а при фолбэке этот вызов повторяется на каждой попытке — сырая
         // директива и протокол цикла утекали бы в карточку чата. Превью ставит единственная
         // точка — SessionManager, тем текстом, который видел человек.
+        // turnModelOverride (голосовой ход на модели места chat-voice) ставится в RunTurnAsync
+        // и сбрасывается в его finally — здесь только прокидываем параметр.
         Info.MessageCount++;
         Info.UpdatedAt = DateTime.UtcNow;
 
@@ -2436,7 +2454,7 @@ public class ClaudeSession : ILlmSessionAdapter
             imagePaths = [];
         }
 
-        return QueueTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute);
+        return QueueTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, turnModelOverride);
     }
 
     // Ручное сворачивание контекста: /compact как обычный ход,
@@ -2444,7 +2462,8 @@ public class ClaudeSession : ILlmSessionAdapter
     public Task CompactAsync() => QueueTurnAsync("/compact", [], 0, false);
 
     // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
-    private Task QueueTurnAsync(string fullText, List<string> imagePaths, int agentDepth, bool suppressTasksExecute)
+    private Task QueueTurnAsync(string fullText, List<string> imagePaths, int agentDepth, bool suppressTasksExecute,
+        string? turnModelOverride = null)
     {
         _ = Task.Run(async () =>
         {
@@ -2462,7 +2481,7 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 if (_cts.IsCancellationRequested) return;
                 await _turnLock.WaitAsync(_cts.Token);
-                try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token); }
+                try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token, turnModelOverride); }
                 catch (OperationCanceledException) { /* остановка сессии — штатно */ }
                 // Адаптер снесли из-под хода (закрытие сессии, реанимация чата) — это остановка,
                 // а не сбой модели: показывать человеку «Cannot access a disposed object» нельзя
@@ -2530,6 +2549,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     // набором инструментов; действует ровно на ход внутри _turnLock
                     _currentTurnAgentDepth = 0;
                     _currentTurnSuppressTasksExecute = false;
+                    // Явная модель хода (голосовой) тоже действует ровно на ход: сбрасываем,
+                    // чтобы следующий (обычный) ход шёл на модели чата, а не на голосовой
+                    _turnModelOverride = null;
                     // Семафор мог уйти вместе с адаптером — Release тогда некому и незачем
                     try { _turnLock.Release(); } catch (ObjectDisposedException) { /* адаптер уже снесён */ }
                 }
@@ -2985,12 +3007,16 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
-        bool suppressTasksExecute, CancellationToken ct)
+        bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null)
     {
         // Глубина делегирования действует ровно на этот ход (внутри _turnLock):
         // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
+        // Явная модель хода (голосовой ход на модели места chat-voice): действует ровно на этот
+        // ход, сброс в finally ниже. Фолбэк-адаптер ставит то же значение ДО чтения цепочки,
+        // поэтому EffectiveModel/EffectiveTurnChain видят его и на старте оркестрации.
+        _turnModelOverride = turnModelOverride;
 
         // P31: подстраховка от залипания pending control-состояния. К началу нового хода
         // (предыдущий завершился result'ом) _pendingQuestions/_pendingPlans/_permissionWaiters

@@ -28,9 +28,14 @@ public class VoiceLocalTurnTests : IDisposable
     private readonly string _tempDir;
     private readonly ChatHistoryService _historyService;
     private readonly LocalActionOverridesStore _actionOverrides;
+    private readonly AppSettingsService _appSettings;
     private readonly SessionManager _sut;
     private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly FakeOllamaHttp _ollamaHttp = new();
+    // Резолвер слотов тиров + роутер, который его видит: для проверки VoiceModelFor
+    // (слот места chat-voice разворачивается UserModelTierResolver.ModelFor).
+    private readonly UserModelTierResolver _tierResolver;
+    private readonly LocalActionRouter _routerWithTiers;
 
     private List<T> Sent<T>()
     {
@@ -63,7 +68,8 @@ public class VoiceLocalTurnTests : IDisposable
             .Build();
 
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(config);
+        _appSettings = new AppSettingsService(config);
+        var appSettings = _appSettings;
         var projectManager = new ProjectManager(config, userStore, appSettings);
         _historyService = new ChatHistoryService(config);
 
@@ -95,6 +101,9 @@ public class VoiceLocalTurnTests : IDisposable
         // Настоящий OllamaClient с перехватчиком HTTP: ответы задаёт тест
         var ollama = new OllamaClient(_ollamaHttp, config, NullLogger<OllamaClient>.Instance);
         var router = new LocalActionRouter(ollama, _actionOverrides, config, NullLogger<LocalActionRouter>.Instance);
+        _tierResolver = new UserModelTierResolver(userStore, appSettings);
+        _routerWithTiers = new LocalActionRouter(ollama, _actionOverrides, config, NullLogger<LocalActionRouter>.Instance,
+            userTiers: _tierResolver);
 
         _sut = new SessionManager(projectManager, _historyService, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
@@ -427,6 +436,143 @@ public class VoiceLocalTurnTests : IDisposable
         await Task.Delay(300);
         _sut.GetById(session.Id)!.MessageCount.Should().Be(messageCountBefore,
             "реплика без ответа не уходит в CLI повторно");
+    }
+
+    // === Голосовой ход на НЕ-локальном выборе места chat-voice (слот/конкретная модель) ===
+    // Локальная ветка (UsesLocal) — выше. Здесь: админ выбрал слот или конкретную модель,
+    // и голосовой ход (не-локальный, через CLI) обязан идти на ней, а не на модели чата.
+
+    [Fact]
+    public void VoiceModelFor_Слот_РазворачиваетсяЧерезModelFor()
+    {
+        // Слот strong в AppSettings → VoiceModelFor(tier:strong) = его модель
+        _appSettings.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, LocalActionOverridesStore.TierRoute(ModelTier.Strong));
+        _routerWithTiers.VoiceModelFor(LocalActionCatalog.ChatVoice, ownerId: null)
+            .Should().Be("global-opus", "слот места разворачивается UserModelTierResolver.ModelFor");
+    }
+
+    [Fact]
+    public void VoiceModelFor_КонкретнаяМодель_ВозвращаетсяКакЕсть()
+    {
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, "gpt-4o");
+        _routerWithTiers.VoiceModelFor(LocalActionCatalog.ChatVoice, ownerId: null)
+            .Should().Be("gpt-4o", "конкретная модель провайдера — как есть");
+    }
+
+    [Theory]
+    [InlineData(LocalActionOverridesStore.LocalRoute)]
+    [InlineData(LocalActionOverridesStore.ClaudeRoute)]
+    [InlineData(LocalActionOverridesStore.DefaultRoute)]
+    public void VoiceModelFor_ЛокальнаяИПоУмолчанию_МодельЧата(string route)
+    {
+        // «Локальная» — свой быстрый HTTP-путь (не CLI), «по умолчанию» — модель чата:
+        // в обоих случаях override null (не подменяем модель чата)
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, route);
+        _routerWithTiers.VoiceModelFor(LocalActionCatalog.ChatVoice, ownerId: null)
+            .Should().BeNull($"{route} — голосовой ход идёт на модели чата");
+    }
+
+    [Fact]
+    public void VoiceModelFor_БезВыбораАдмина_МодельЧата()
+    {
+        _actionOverrides.Reset(LocalActionCatalog.ChatVoice);
+        _routerWithTiers.VoiceModelFor(LocalActionCatalog.ChatVoice, ownerId: null)
+            .Should().BeNull("без явного выбора — модель чата, как раньше");
+    }
+
+    // Интеграция: не-локальный голосовой ход передаёт выбранную модель в ход (turnModelOverride),
+    // а не модель чата. Проверяем через перехватывающий адаптер на месте entry.Process.
+    [Fact]
+    public async Task ГолосовойХод_КонкретнаяМодель_ПередаётсяВХод()
+    {
+        var session = await MakeVoiceChatAsync(local: false);
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, "gpt-4o");
+        // Модель чата — другая: override обязан её перебить
+        session.Model = "chat-own-model";
+
+        var entry = GetEntry(session.Id);
+        var fake = new CapturingVoiceAdapter(session);
+        entry.GetType().GetField("Process")!.SetValue(entry, fake);
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+
+        fake.SendCount.Should().Be(1, "голосовой ход пошёл в CLI-адаптер");
+        fake.LastTurnModelOverride.Should().Be("gpt-4o",
+            "выбранная модель места chat-voice сильнее модели чата");
+    }
+
+    [Fact]
+    public async Task ГолосовойХод_БезВыбора_МодельЧатаНеПодменяется()
+    {
+        var session = await MakeVoiceChatAsync(local: false);
+        // Без выбора админа (Reset) — override null, модель чата не подменяется
+        _actionOverrides.Reset(LocalActionCatalog.ChatVoice);
+        session.Model = "chat-own-model";
+
+        var entry = GetEntry(session.Id);
+        var fake = new CapturingVoiceAdapter(session);
+        entry.GetType().GetField("Process")!.SetValue(entry, fake);
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+
+        fake.LastTurnModelOverride.Should().BeNull("без выбора — штатный резолв модели чата");
+    }
+
+    // Неголосовой ход override не получает, даже если для chat-voice задана модель:
+    // место chat-voice к обычному чату не относится.
+    [Fact]
+    public async Task НеголосовойХод_МодельМестаVoice_НеПодменяетМодельЧата()
+    {
+        var session = await MakeVoiceChatAsync(local: false);
+        _sut.SetVoiceMode(session.Id, false); // выключить голосовой режим
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, "gpt-4o");
+        session.Model = "chat-own-model";
+
+        var entry = GetEntry(session.Id);
+        var fake = new CapturingVoiceAdapter(session);
+        entry.GetType().GetField("Process")!.SetValue(entry, fake);
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+
+        fake.LastTurnModelOverride.Should().BeNull("обычный ход не знает о месте chat-voice");
+    }
+
+    // Перехватывающий адаптер: фиксирует turnModelOverride последнего вызова SendMessageAsync.
+    private sealed class CapturingVoiceAdapter : ILlmSessionAdapter
+    {
+        public Session Info { get; }
+        public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
+        public int CurrentTurnAgentDepth => 0;
+        public bool CurrentTurnSuppressTasksExecute => false;
+        public bool HasLiveTurn => false;
+        public bool HasQueuedTurn => false;
+        public bool OrchestrationActive => false;
+        public bool HasPendingBg => false;
+        public bool HasTrackedBg => false;
+        public bool HasTrackedCommandBg => false;
+        public bool IsContinuationInFlight => false;
+        public long SubmittedTurnSeq => 0;
+        public int SendCount { get; private set; }
+        public string? LastTurnModelOverride { get; private set; }
+
+        public CapturingVoiceAdapter(Session info) { Info = info; }
+        public Task StartAsync() => Task.CompletedTask;
+        public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
+            int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
+        {
+            SendCount++;
+            LastTurnModelOverride = turnModelOverride;
+            return Task.CompletedTask;
+        }
+        public Task CompactAsync() => Task.CompletedTask;
+        public void RespondPermission(string requestId, string behavior) { }
+        public void AnswerQuestion(string toolUseId, string updatedInputJson) { }
+        public void RespondPlan(string requestId, bool approve, string? feedback) { }
+        public bool TrySetPermissionModeLive(ClaudeMode mode) => false;
+        public bool TrySetModelLive(string model) => false;
+        public void Interrupt() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private void ClearSent()

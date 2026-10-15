@@ -127,7 +127,7 @@ public class HandsTrayStopFallbackTests
         public long SubmittedTurnSeq { get; private set; }
 
         public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-            int agentDepth = 0, bool suppressTasksExecute = false)
+            int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
         {
             var seq = ++SubmittedTurnSeq;
             var n = Interlocked.Increment(ref Attempts);

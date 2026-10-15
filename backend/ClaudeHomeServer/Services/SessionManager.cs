@@ -4768,8 +4768,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         else
         {
+            // Голосовой ход (не-локальная ветка): модель места chat-voice по ЯВНОМУ выбору
+            // админа (слот → UserModelTierResolver.ModelFor, конкретная модель → как есть).
+            // «Локальная» (ветка выше), «по умолчанию» и отсутствие выбора → null: ход идёт
+            // на модели чата, как раньше. Неголосовой ход override не получает (место
+            // chat-voice к нему не относится), поэтому обычная модель чата не подменяется.
+            var voiceModel = entry.Info.VoiceMode
+                ? _router?.VoiceModelFor(Llm.LocalActionCatalog.ChatVoice, ResolveOwnerId(entry.Info))
+                : null;
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
-                suppressTasksExecute: suppressTasksExecute);
+                suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
         }
     }
 

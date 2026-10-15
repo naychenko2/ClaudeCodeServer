@@ -282,8 +282,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Запуск хода с фолбэк-оркестрацией. Возвращаемся сразу (как базовый адаптер):
     // цикл живёт в фоне и держит ход в своих руках до финального исхода.
     public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-        int agentDepth = 0, bool suppressTasksExecute = false)
+        int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
     {
+        // Явная модель хода (голосовой ход на модели места chat-voice): ставим на внутренний
+        // адаптер ДО чтения цепочки — RunFallbackLoopAsync снимает её (EffectiveTurnChain)
+        // уже на старте, а RunTurnAsync перепишет то же значение и сбросит в finally.
+        (_inner as Claude.ClaudeSession)?.SetTurnModelOverride(turnModelOverride);
         lock (_gate)
         {
             // Оркестрация уже идёт (нештатно: SessionManager считает чат свободным — результат
@@ -306,14 +310,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return _enqueueBypass(Info.Id, text, attachedPaths, agentDepth, suppressTasksExecute);
                 }
                 LogWarn($"Доставка при активной оркестрации — байпас в _inner (session {Info.Id}, «{Truncate(text, 60)}»): колбэк requeue не настроен (тесты).");
-                return _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
+                return _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute, turnModelOverride);
             }
             _turn = new FallbackTurn();
         }
         _userInterrupted = false;
         _snapshotMessageCount = Info.MessageCount;
         var turn = _turn;
-        _ = Task.Run(() => RunFallbackLoopAsync(turn, text, attachedPaths ?? [], agentDepth, suppressTasksExecute));
+        _ = Task.Run(() => RunFallbackLoopAsync(turn, text, attachedPaths ?? [], agentDepth, suppressTasksExecute, turnModelOverride));
         return Task.CompletedTask;
     }
 
@@ -502,7 +506,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     // Основной цикл: попытка → исход → классификация → ротация → повтор.
     private async Task RunFallbackLoopAsync(FallbackTurn turn, string text,
-        IReadOnlyList<string> attachedPaths, int agentDepth, bool suppressTasksExecute)
+        IReadOnlyList<string> attachedPaths, int agentDepth, bool suppressTasksExecute,
+        string? turnModelOverride = null)
     {
         // Учёт попыток «модель × подписка»: пара не пробуется дважды за ход (ADR §4)
         var attempted = new HashSet<(string Model, string Key)>();
@@ -759,7 +764,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     attemptTcs = turn.AttemptTcs;
                 }
 
-                await _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
+                await _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute, turnModelOverride);
 
                 // Ждём терминал попытки через ЛИНКОВАННЫЙ токен: иначе «Стоп» будит только паузу
                 // egress-ретрая (turn.Interrupted.Cancel), а ожидание attemptTcs живёт до DisposeAsync —

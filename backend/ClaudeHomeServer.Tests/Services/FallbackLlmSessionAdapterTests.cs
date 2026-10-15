@@ -45,7 +45,7 @@ public class FallbackLlmSessionAdapterTests
         public long SubmittedTurnSeq { get; private set; }
 
         public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-            int agentDepth = 0, bool suppressTasksExecute = false)
+            int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
         {
             SubmittedTurnSeq++;
             Attempts.Add((Info.Provider ?? "", Info.Model));

@@ -93,8 +93,10 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // адаптер урезает инструменты делегирования на этот ход, чтобы не допустить рекурсию агентов.
     // suppressTasksExecute — реакционный авто-ход постановщика на доклад делегированной задачи:
     // действия, учитывающие этот признак, недоступны даже при agentDepth=0 (см. TaskExecutionService.ReportToDelegatorAsync)
+    // turnModelOverride — явная модель ЭТОГО хода (голосовой ход на модели места chat-voice):
+    // сильнее Info.Model и места, действует ровно на ход (сброс в finally). null — штатный резолв.
     Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0,
-        bool suppressTasksExecute = false);
+        bool suppressTasksExecute = false, string? turnModelOverride = null);
 
     // Сворачивание контекста; при !Capabilities.SupportsCompact — no-op
     Task CompactAsync();

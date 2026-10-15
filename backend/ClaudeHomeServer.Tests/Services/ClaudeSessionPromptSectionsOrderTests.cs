@@ -254,7 +254,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             ["LlmProviders:test-local:RecallInTurnText"] = enabled ? "true" : "false",
             ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
             ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
-        }).Build();
+        }).AddInMemoryCollection(IsolatedProfiles()).Build();
 
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -688,7 +688,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             ["LlmProviders:test-local:RecallInTurnText"] = recallInTurnText ? "true" : "false",
             ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
             ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
-        }).AddInMemoryCollection(providerConfig ?? []).Build();
+        }).AddInMemoryCollection(IsolatedProfiles()).AddInMemoryCollection(providerConfig ?? []).Build();
 
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -707,12 +707,12 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             await using var _ = session;
             await session.SendMessageAsync("привет", agentDepth: agentDepth);
 
-            // Потолок ожидания события с запасом: под параллельной сборкой старт fake-CLI
-            // не укладывался в 15 с, а зелёный прогон дольше от этого не становится
-            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(60));
+            // Потолок — лишь страховка от зависания: старт задерживал синк настоящего ~/.claude,
+            // с изолированным профилем (IsolatedProfiles) он укладывается в доли секунды
+            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(15));
             var idx = args.ToList().IndexOf("--append-system-prompt");
             idx.Should().BeGreaterThanOrEqualTo(0, "стабильная секция непустая — аргумент обязан присутствовать");
-            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(60)));
+            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(15)));
             done.Should().Be(snapshot.Task, "снимок промпта хода обязан быть опубликован");
             return (args[idx + 1], await snapshot.Task);
         }
@@ -725,6 +725,17 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             }
         }
     }
+
+    // Профили CLI — в папке теста, пользовательский ~/.claude — несуществующий каталог.
+    // Без этого каждый новый LlmProviderRegistry на первом ходе синхронно синкал НАСТОЯЩИЙ
+    // ~/.claude (десятки тысяч файлов plugins/) в общий профиль bin/data/claude-profiles и
+    // переписывал его манифест в несколько МБ — секунды до старта fake-CLI на каждый тест,
+    // а под параллельными классами (тот же профиль) старт не укладывался в потолок ожидания
+    private Dictionary<string, string?> IsolatedProfiles() => new()
+    {
+        ["DataPath"] = Path.Combine(_root, "data", "projects.json"),
+        ["ClaudeUserProfileDir"] = Path.Combine(_root, "no-user-claude"),
+    };
 
     private static async Task<IReadOnlyList<string>> WhenAnyAsync(
         Task<IReadOnlyList<string>> task, TimeSpan timeout)

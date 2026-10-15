@@ -168,4 +168,26 @@ public class OcrWindowEnumerationTests
         Assert.False(denied.Allowed);
         Assert.Contains("area overlaps a window that is not allowed", denied.Reason);
     }
+
+    // ---------- область целиком вне экрана ----------
+
+    /// <summary>
+    /// Область ЦЕЛИКОМ вне виртуального экрана (замечание по ocr-окнам): ни одно видимое окно
+    /// (все — на экране) с ней не пересекается, поэтому ни запрещённое, ни неизвестное не
+    /// «найдётся» — гейт разрешает (Allow). Зафиксировано текущее поведение: область за краем
+    /// экрана предсказуема, а не fail-closed.
+    /// </summary>
+    [Fact]
+    public void Region_entirely_outside_the_virtual_screen_is_allowed()
+    {
+        var windows = new FakeWindows()
+            .Process(3, Machine.Notepad).Window(300, 3)
+            .Bounds(new HandsScreenBounds(0, 0, 1920, 1080))
+            .Visible(300, 0, 0, 1920, 1080, Machine.Notepad, true);   // блокнот на весь экран
+        var policy = new HandsPolicy(windows);
+
+        // Область [5000,5100)×[5000,5100): далеко за правым/нижним краем экрана.
+        var decision = policy.CheckOcr("region", null, 5000, 5000, 100, 100);
+        Assert.True(decision.Allowed, $"ожидается Allow, получено: {decision.Reason}");
+    }
 }

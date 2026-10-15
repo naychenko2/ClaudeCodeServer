@@ -1316,7 +1316,18 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         return HandsDecision.Allow;
     }
 
-    /// <summary>Строковый аргумент из <c>args</c> шага (обрезанный от пробелов); null — аргумента нет.</summary>
+    /// <summary>
+    /// Строковый аргумент из <c>args</c> шага (обрезанный от пробелов); null — аргумента нет.
+    /// </summary>
+    /// <remarks>
+    /// ЧИТАЕТ <c>args</c> РЕФЛЕКСИЕЙ (<c>GetType().GetProperties()</c>): для POCO-объекта находит
+    /// строковое свойство, но для <see cref="JsonElement"/> (что даёт биндинг MCP) вернёт null —
+    /// свойства самого <c>JsonElement</c> не совпадают с полями JSON-объекта. Пока <c>window_management</c>
+    /// в пакете мостом не поддерживается (мост отказывает раньше гейта), это безопасно: проверка
+    /// «<c>window_management(action='close')</c> запрещён» молча не срабатывает, но шаг всё равно
+    /// не доходит до окна. Когда <c>window_management</c> разрешат в пакете — переписать под
+    /// <c>JsonElement</c> (как <c>HandsBatchStepArgs.Str</c> в мосту), иначе «close» проскочит гейт.
+    /// </remarks>
     private static string? GetStringArg(object? args, string name)
     {
         if (args is null)

@@ -205,6 +205,22 @@ public sealed class HandsBatchToolTests : IDisposable
         Assert.Equal(0, _releases);
     }
 
+    /// <summary>
+    /// Страж (замечание Глеба (b)): гейт <c>HandsPolicy.CheckBatch</c> ДОПУСКАЕТ <c>window_management</c>
+    /// (кроме <c>close</c>), но мост первой версии его ещё не исполняет — <c>IsSupported</c> его не
+    /// знает. Пока это так, пакет с <c>window_management</c> обязан умирать ОТКАЗОМ МОСТА, а не
+    /// проскальзывать в окно. Когда <c>window_management</c> разрешат в пакете (и починят
+    /// <c>GetStringArg</c> под <c>JsonElement</c>) — этот страж красит: мост его уже исполняет.
+    /// </summary>
+    [Fact]
+    public async Task Window_management_in_a_batch_is_denied_by_the_bridge_until_the_lock()
+    {
+        var result = await Run([Step("wait", 5), Step("window_management", args: new { action = "activate" })]);
+
+        AssertDenied(result, "not supported in a batch");
+        Assert.Equal(0, _releases);
+    }
+
     // ---------- хелперы ----------
 
     private static void AssertDenied(BatchResult result, string reason)

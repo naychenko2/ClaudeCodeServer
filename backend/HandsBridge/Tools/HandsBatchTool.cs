@@ -242,7 +242,7 @@ public static partial class HandsBatchTool
         {
             case HandsTools.KeyboardControl:
             {
-                if (!TryKeyboardAction(Str(args, "action"), out var keyboardAction))
+                if (!TryKeyboardAction(HandsBatchStepArgs.Str(args, "action"), out var keyboardAction))
                 {
                     return new StepOutcome(index, tool, "failed",
                         "keyboard_control needs action: type, press, key_down, key_up or sequence.");
@@ -250,20 +250,20 @@ public static partial class HandsBatchTool
 
                 result = await KeyboardControlTool.ExecuteAsync(
                     keyboardAction,
-                    Str(args, "text"),
-                    Str(args, "key"),
-                    Str(args, "modifiers"),
-                    Int(args, "repeat") ?? 1,
-                    SequenceArg(args),
-                    Int(args, "interKeyDelayMs"),
-                    Str(args, "windowHandle"),
+                    HandsBatchStepArgs.Str(args, "text"),
+                    HandsBatchStepArgs.Str(args, "key"),
+                    HandsBatchStepArgs.Str(args, "modifiers"),
+                    HandsBatchStepArgs.Int(args, "repeat") ?? 1,
+                    HandsBatchStepArgs.Sequence(args),
+                    HandsBatchStepArgs.Int(args, "interKeyDelayMs"),
+                    HandsBatchStepArgs.Str(args, "windowHandle"),
                     cancellationToken);
                 break;
             }
 
             case HandsTools.MouseControl:
             {
-                if (!TryMouseAction(Str(args, "action"), out var mouseAction))
+                if (!TryMouseAction(HandsBatchStepArgs.Str(args, "action"), out var mouseAction))
                 {
                     return new StepOutcome(index, tool, "failed",
                         "mouse_control needs action: move, click, double_click, right_click, middle_click, drag, scroll or get_position.");
@@ -271,14 +271,14 @@ public static partial class HandsBatchTool
 
                 result = await MouseControlTool.ExecuteAsync(
                     mouseAction,
-                    Int(args, "x"),
-                    Int(args, "y"),
-                    Int(args, "toX"),
-                    Int(args, "toY"),
-                    Str(args, "button"),
-                    Str(args, "direction"),
-                    Int(args, "amount"),
-                    Str(args, "windowHandle"),
+                    HandsBatchStepArgs.Int(args, "x"),
+                    HandsBatchStepArgs.Int(args, "y"),
+                    HandsBatchStepArgs.Int(args, "toX"),
+                    HandsBatchStepArgs.Int(args, "toY"),
+                    HandsBatchStepArgs.Str(args, "button"),
+                    HandsBatchStepArgs.Str(args, "direction"),
+                    HandsBatchStepArgs.Int(args, "amount"),
+                    HandsBatchStepArgs.Str(args, "windowHandle"),
                     cancellationToken);
                 break;
             }
@@ -310,31 +310,6 @@ public static partial class HandsBatchTool
             ? element
             : throw new JsonException("The step args are not an object.");
     }
-
-    private static bool TryGet(JsonElement args, string name, out JsonElement value)
-    {
-        foreach (var property in args.EnumerateObject())
-        {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-            {
-                value = property.Value;
-                return value.ValueKind != JsonValueKind.Null;
-            }
-        }
-
-        value = default;
-        return false;
-    }
-
-    private static string? Str(JsonElement args, string name) =>
-        TryGet(args, name, out var v) ? (v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText()) : null;
-
-    private static int? Int(JsonElement args, string name) =>
-        TryGet(args, name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : null;
-
-    /// <summary>sequence клавиатуры — строка с JSON-массивом; в пакете допускается и сам массив.</summary>
-    private static string? SequenceArg(JsonElement args) =>
-        TryGet(args, "sequence", out var v) ? (v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText()) : null;
 
     private static bool TryKeyboardAction(string? name, out KeyboardControlTool.KeyboardControlAction action)
     {

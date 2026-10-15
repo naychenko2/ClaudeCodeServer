@@ -13,19 +13,45 @@
 решений владельца 2026-09-27, ADR-016 §7): любое окно и снимок экрана разрешены, `--turn-job`
 снят; в окна `HandsForbiddenApps` руки не вводят.
 
+## Возвращённые файлы upstream
+
+Из `v1.3.24` (коммит `b90485c3…`) оставлены и дошли до модели инструменты: `app`, `ui_snapshot`,
+`ui_find`, `ui_click`, `ui_type`, `ui_read`, `window_management`, `screenshot_control` и браузерные
+`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_tabs`, `browser_wait`,
+`browser_screenshot`, `browser_query`, `browser_evaluate`. Их точный список держит сторож
+`HandsBridgeSourceGuardTests.Bridge_exposes_exactly_the_hands_tools`.
+
 ## Что удалено из upstream
 
-Классы инструментов вне набора `app`, `ui_snapshot`, `ui_find`, `ui_click`, `ui_type`, `ui_read`,
-`window_management`, `screenshot_control` — удалены из сборки, а не выключены флагом:
+Классы инструментов вне набора выше — удалены из сборки, а не выключены флагом:
 
-- `Tools/KeyboardControlTool.cs`, `Tools/MouseControlTool.cs`;
 - `Automation/Tools/{UIBatch,UIFile,UIOpenFile,UIReadTable,UISelect,UIWait}Tool.cs`;
 - `Clipboard/Tools`, `Macros/Tools`, `Processes/Tools`.
+
+Upstream-версии `Tools/KeyboardControlTool.cs` и `Tools/MouseControlTool.cs` сначала удалены вместе
+с остальными, а затем **возвращены как собственные инструменты рук** (этапы D2a/D2b, раздел
+«Новые инструменты» ниже) — не в исходном upstream-виде, а с гейтом `HandsPolicy` и швами.
 
 Сервисы этих подсистем (`KeyboardInputService`, `MouseInputService`, `ClipboardService`,
 `MacroService`, `ProcessService`) оставлены: их создаёт `WindowsToolsBase`, а автоматизация
 пользуется вводом изнутри. Модели до них дотянуться нечем — сторож
 `HandsBridgeSourceGuardTests.Bridge_exposes_exactly_the_hands_tools`.
+
+## Новые инструменты (руки без UIA)
+
+Не из upstream — собственные инструменты форка, каждый до действия зовёт гейт `HandsPolicy`:
+
+| Инструмент | Этап | Назначение | Файл |
+|---|---|---|---|
+| `keyboard_control` | D2a | клавиши и печать в окнах без UI Automation | `Tools/KeyboardControlTool.cs` |
+| `mouse_control` | D2b | мышь: move/click/double/right/middle/drag/scroll/get_position | `Tools/MouseControlTool.cs` |
+| `ocr` | A4 | распознавание текста на экране/мониторе/окне/области через сервер (`--ocr-endpoint`) | `Tools/OcrTool.cs` |
+| `scan_document` | A5 | чтение многостраничного документа: PageDown, снимок, распознавание, склейка в один PNG | `Tools/ScanDocumentTool.cs` |
+| `hands_batch` | D2e | пакет keyboard/mouse/wait-шагов одним вызовом; отпускание всех удержанных клавиш в конце | `Tools/HandsBatchTool.cs` (разбор аргументов шага — `Tools/HandsBatchStepArgs.cs`) |
+
+`clipboard_text` (D2c) и `scan_canvas` (C1-2) пока **вне** сборки: в VDI нет буфера обмена,
+полотно — позже. Их имена зарезервированы в `HandsTools`, но сторож «ровно эти инструменты»
+их из ожидаемого списка вычитает (`notYetInBridge`).
 
 Мост едет в каталоге версии агента и делит его рантайм (2026-09-27), поэтому из сборки убраны
 WinForms и проекция Windows SDK — они добавляли к архиву агента 21 МБ:

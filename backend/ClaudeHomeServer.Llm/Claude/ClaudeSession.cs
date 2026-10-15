@@ -420,6 +420,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // toolUseId вызовов Agent/Task c run_in_background и Workflow — ждём их tool_result,
         // чтобы достать id фоновой задачи
         public readonly HashSet<string> BgLaunchCandidates = [];
+        // toolUseId вызовов основного агента, которые вообще умеют запустить фоновую задачу
+        // (Agent/Task/SendMessage/Workflow). Текстовые маркеры запуска ищем только в ИХ
+        // tool_result: в выводе Bash/PowerShell/Read те же строки бывают просто текстом
+        // (дамп чужого транскрипта) и давали ложный pending на весь прогон (бой, 15.10).
+        // Доступ под lock (PendingBg)
+        public readonly HashSet<string> BgCapableToolUses = [];
         // toolUseId фоновых задач, которые и правда АГЕНТЫ: сюда пишет запуск Agent/Task с
         // run_in_background и Workflow (HandleAssistantToolsAsync), распознанный маркер запуска
         // в tool_result (TrackBgLaunch) и task_started с непустым subagent_type. Только по этому
@@ -6562,18 +6568,29 @@ public class ClaudeSession : ILlmSessionAdapter
     // workflow — «runId: wf_…». Структурный кандидат (run_in_background/Workflow из
     // HandleAssistantToolsAsync) без распарсенного id → PendingBgUnknown: точный учёт
     // потерян, доживание прогона ограничится только потолком BgLingerTimeout.
+    internal static bool IsBgCapableTool(string toolName) =>
+        toolName is "Agent" or "Task" or "SendMessage" or "Workflow";
+
+    internal static bool HasBgLaunchMarker(string content) =>
+        content.Contains("Async agent launched", StringComparison.Ordinal)
+        || content.Contains("resumed from transcript in the background", StringComparison.Ordinal)
+        || content.Contains("Transcript dir:", StringComparison.Ordinal);
+
     private void TrackBgLaunch(CliRun run, string toolUseId, string content, bool isError)
     {
-        bool candidate;
-        lock (run.PendingBg) candidate = run.BgLaunchCandidates.Remove(toolUseId);
+        bool candidate, bgCapable;
+        lock (run.PendingBg)
+        {
+            candidate = run.BgLaunchCandidates.Remove(toolUseId);
+            bgCapable = run.BgCapableToolUses.Remove(toolUseId);
+        }
         if (isError) return;
 
         // Гейт по маркерам запуска: без него агентский id пришлось бы искать в любом
-        // tool_result (Bash с логами нашего же продукта дал бы ложный pending навсегда)
-        var launchLike = candidate
-            || content.Contains("Async agent launched", StringComparison.Ordinal)
-            || content.Contains("resumed from transcript in the background", StringComparison.Ordinal)
-            || content.Contains("Transcript dir:", StringComparison.Ordinal);
+        // tool_result (Bash с логами нашего же продукта дал бы ложный pending навсегда).
+        // Маркеры — только в результате инструмента, умеющего запускать фон: дамп чужого
+        // транскрипта PowerShell'ом несёт ту же строку «Async agent launched … agentId:»
+        var launchLike = candidate || (bgCapable && HasBgLaunchMarker(content));
         if (!launchLike) return;
 
         var m = BgAgentIdRe.Match(content);
@@ -7007,6 +7024,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     run.BgLaunchCandidates.Add(toolId);
                     run.AgenticBgToolUses.Add(toolId);
                 }
+            // Agent без run_in_background CLI тоже может увести в фон — кандидатом его не
+            // назвать, но маркер запуска в его результате искать обязаны
+            if (parentId is null && toolId.Length > 0 && IsBgCapableTool(toolName))
+                lock (run.PendingBg) run.BgCapableToolUses.Add(toolId);
 
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }

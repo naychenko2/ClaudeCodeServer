@@ -71,7 +71,9 @@ public class CoreContractsTests
     {
         var msg = new LocalModelTurnStatsMessage(
             GenTps: 42.5, PrefillTps: null, TtftMs: 300,
-            QueueMsApprox: 1500, CacheHitPerc: 0.8, OutTokens: 128)
+            QueueMsApprox: 1500, CacheHitPerc: 0.8, OutTokens: 128,
+            MainRequests: 1, SubagentRequests: 2, CompactionRequests: 1, AuxiliaryRequests: 0,
+            AgentTypes: ["Explore"], CompactionKind: "auto")
         { SessionId = "sess-77" };
 
         var json = JsonSerializer.Serialize(msg, Web);

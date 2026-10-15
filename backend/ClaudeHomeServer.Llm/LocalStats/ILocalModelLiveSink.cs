@@ -22,6 +22,29 @@ public sealed record LocalModelTurnSummary
 
     // CacheHitPerc по сумме токенов хода (cache_read / (input + cache_read + cache_creation)).
     public double? CacheHitPerc { get; init; }
+
+    // ── Атрибуция по подсказочным заголовкам CLI (ADR-029, GatewayHintHeaders) ──────────
+    // Разрез «основной ход / субагенты / компакция»: сколько запросов хода в каждом классе.
+    // Числа 0 — класс не встречался (не null: 0 — честное «не было»).
+
+    // Запросы основного хода (request-class=main).
+    public int MainRequests { get; init; }
+
+    // Запросы сабагентов (request-class=subagent) и workflow-агентов (request-class=workflow).
+    public int SubagentRequests { get; init; }
+
+    // Запросы-суммаризации (request-class=compaction).
+    public int CompactionRequests { get; init; }
+
+    // Боковые запросы (request-class=auxiliary: заголовки сессии, классификаторы, саммари).
+    public int AuxiliaryRequests { get; init; }
+
+    // Типы сабагентов, встреченные в ходе (agent-type): distinct, порядок первый-встреченный.
+    // Пусто/null — сабагентов не было.
+    public string[]? AgentTypes { get; init; }
+
+    // Вид компакции (auto | manual | reactive), если ход её содержал; null — не было.
+    public string? CompactionKind { get; init; }
 }
 
 // Шов живых событий локальной модели: счётчик хода (LocalModelTurnMeter) отдаёт сюда

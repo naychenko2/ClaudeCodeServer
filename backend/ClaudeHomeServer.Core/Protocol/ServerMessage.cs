@@ -676,9 +676,12 @@ public record LocalModelLiveMessage(string Phase, double? GenTps, int? WaitingTo
 // LocalModelTurnStatsMessage — итоговые метрики завершённого хода на локальной модели:
 // GenTps/PrefillTps — скорость генерации и префилла, TtftMs — time-to-first-token,
 // QueueMsApprox — оценка времени в очереди, CacheHitPerc — доля prefix cache, OutTokens —
-// число выданных токенов.
+// число выданных токенов. Атрибуция (ADR-029): разрез по классам запросов
+// (Main/Subagent/Compaction/Auxiliary), типы сабагентов (AgentTypes) и вид компакции.
 public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
-    int? TtftMs, int? QueueMsApprox, double? CacheHitPerc, int? OutTokens)
+    int? TtftMs, int? QueueMsApprox, double? CacheHitPerc, int? OutTokens,
+    int MainRequests, int SubagentRequests, int CompactionRequests, int AuxiliaryRequests,
+    string[]? AgentTypes, string? CompactionKind)
     : ServerMessage("local_model_turn_stats");
 
 // Сообщения от клиента к серверу

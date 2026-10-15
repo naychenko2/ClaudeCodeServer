@@ -37,7 +37,13 @@ public sealed class LocalModelLiveSink(
                 summary.TtftMs,
                 summary.QueueMsApprox,
                 summary.CacheHitPerc,
-                summary.OutTokens)
+                summary.OutTokens,
+                summary.MainRequests,
+                summary.SubagentRequests,
+                summary.CompactionRequests,
+                summary.AuxiliaryRequests,
+                summary.AgentTypes,
+                summary.CompactionKind)
             { SessionId = sessionId });
     }
 }

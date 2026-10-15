@@ -127,6 +127,9 @@ export function useLocalModelLive(sessionId: string | null): LocalModelLiveState
         dispatch({ type: 'turn', stats: {
           genTps: msg.genTps ?? null, prefillTps: msg.prefillTps ?? null, ttftMs: msg.ttftMs ?? null,
           queueMsApprox: msg.queueMsApprox ?? null, cacheHitPerc: msg.cacheHitPerc ?? null, outTokens: msg.outTokens ?? null,
+          mainRequests: msg.mainRequests ?? 0, subagentRequests: msg.subagentRequests ?? 0,
+          compactionRequests: msg.compactionRequests ?? 0, auxiliaryRequests: msg.auxiliaryRequests ?? 0,
+          agentTypes: msg.agentTypes ?? null, compactionKind: msg.compactionKind ?? null,
         }, now: Date.now() });
       }
     });

@@ -30,6 +30,8 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         public int Completed;
         public RequestUsage? LastUsage;
         public int TokenCountCalls;
+        // Подсказочные заголовки (ADR-029): последний полученный набор (null — не было).
+        public GatewayHintHeaders? LastHints;
 
         public void OnRequestStarted(string requestId, string turnId) => Interlocked.Increment(ref Started);
         public void OnFirstToken(string requestId, string turnId) => Interlocked.Increment(ref FirstToken);
@@ -40,6 +42,8 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         }
         public void OnTokenCount(string requestId, string turnId, int cumulativeTokens)
             => Interlocked.Increment(ref TokenCountCalls);
+        public void OnRequestHints(string requestId, string turnId, GatewayHintHeaders hints)
+            => LastHints = hints;
     }
 
     // Приёмник, бросающий из OnFirstToken: шов для теста «наблюдатель упал» — тот же
@@ -208,6 +212,42 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         _sink.FirstToken.Should().Be(1, "наблюдатель увидел первый токен");
         _sink.Completed.Should().Be(1, "наблюдатель завершён: итог доставлен");
         _sink.LastUsage!.OutputTokens.Should().Be(4, "итог наблюдателя — из фикстуры");
+    }
+
+    // (д) Подсказочные заголовки (ADR-029): шлюз читает x-claude-code-* и отдаёт приёмнику
+    //     (OnRequestHints) валидированными; upstream их не получает (consumed).
+    //     Мутация: не читать заголовки в шлюзе → LastHints null → тест краснеет.
+    [Fact]
+    public async Task ПодсказочныеЗаголовки_ШлюзОтдалПриёмнику_ИНеПереслалUpstream()
+    {
+        var t = StartLocal(LocalModel);
+        // SseUpstream настраивает upstream-ответ на pipe; сам send() не зовём — шлём свой
+        // запрос с подсказочными заголовками (как CLI с CLAUDE_CODE_GATEWAY_HINT_HEADERS=1).
+        var (pipe, _) = SseUpstream(t);
+        var req = _device.Sign(new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/llm/v1/messages"));
+        req.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
+        req.Headers.TryAddWithoutValidation(GatewayHintHeaders.RequestClassHeader, "subagent");
+        req.Headers.TryAddWithoutValidation(GatewayHintHeaders.AgentTypeHeader, "Explore");
+        req.Headers.TryAddWithoutValidation(GatewayHintHeaders.CompactionHeader, "auto");
+        req.Content = new StringContent($"{{\"model\":\"{LocalModel}\"}}", Encoding.UTF8, "application/json");
+        var raw = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        // Поток дописываем и дочитываем (наблюдатель создан, итог доставлен).
+        await pipe.Writer.WriteAsync(Encoding.UTF8.GetBytes(ReadFixture()));
+        await pipe.Writer.CompleteAsync();
+        await new StreamReader(await raw.Content.ReadAsStreamAsync()).ReadToEndAsync();
+
+        // (1) Приёмник получил валидированные подсказки.
+        _sink.LastHints.Should().NotBeNull("шлюз отдал подсказочные заголовки приёмнику");
+        _sink.LastHints!.RequestClass.Should().Be("subagent");
+        _sink.LastHints.AgentType.Should().Be("Explore");
+        _sink.LastHints.Compaction.Should().Be("auto");
+
+        // (2) Upstream НЕ получил подсказочные заголовки (consumed шлюзом).
+        var upstreamReq = _upstream.Calls.Last().Request;
+        upstreamReq.Headers.TryGetValues(GatewayHintHeaders.RequestClassHeader, out var rc)
+            .Should().BeFalse("request-class не переслан upstream");
+        upstreamReq.Headers.TryGetValues(GatewayHintHeaders.AgentTypeHeader, out var at)
+            .Should().BeFalse("agent-type не переслан upstream");
     }
 
     // (б) Исключение наблюдателя/приёмника: клиент получил ВСЕ байты (поток не искажён),

@@ -483,6 +483,7 @@ public class LlmProviderRegistry
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
         "MAX_THINKING_TOKENS", // лимит токенов на блок thinking (см. BuildCliEnv)
         "ANTHROPIC_CUSTOM_HEADERS", // заголовки к запросам API, ставим сами (id сессии для прокси)
+        "CLAUDE_CODE_GATEWAY_HINT_HEADERS", // подсказочные заголовки шлюзу (ADR-029), ставим на запусках через шлюз
         // Потолки внутренних повторов CLI (429/529): ставим сами на каждом запуске (RetryCeilings),
         // глобально заданное значение на машине вычищаем, чтобы маршрут/повторы определяли мы.
         EnvOverloadedRetryBaseDelayMs,

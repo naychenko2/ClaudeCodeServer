@@ -43,6 +43,14 @@ public class SessionLocalModelController(SessionManager sessions, IServiceProvid
                 QueueMsApprox = last.QueueMsApprox,
                 CacheHitPerc = last.CacheHitPerc,
                 OutTokens = last.OutTokens,
+                // Атрибуция по подсказочным заголовкам (ADR-029): разрез по классам запросов,
+                // типы сабагентов, вид компакции.
+                MainRequests = last.MainRequests,
+                SubagentRequests = last.SubagentRequests,
+                CompactionRequests = last.CompactionRequests,
+                AuxiliaryRequests = last.AuxiliaryRequests,
+                AgentTypes = last.AgentTypes,
+                CompactionKind = last.CompactionKind,
             },
         });
     }
@@ -63,5 +71,14 @@ public class SessionLocalModelController(SessionManager sessions, IServiceProvid
         public int? QueueMsApprox { get; init; }
         public double? CacheHitPerc { get; init; }
         public int? OutTokens { get; init; }
+        // Атрибуция по подсказочным заголовкам (ADR-029): разрез по классам запросов хода.
+        public int MainRequests { get; init; }
+        public int SubagentRequests { get; init; }
+        public int CompactionRequests { get; init; }
+        public int AuxiliaryRequests { get; init; }
+        // Типы сабагентов хода (distinct); null — сабагентов не было.
+        public string[]? AgentTypes { get; init; }
+        // Вид компакции (auto | manual | reactive); null — не было.
+        public string? CompactionKind { get; init; }
     }
 }

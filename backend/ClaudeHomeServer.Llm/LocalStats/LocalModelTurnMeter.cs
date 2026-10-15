@@ -202,6 +202,35 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
             EmitLive(sessionId, "generating", ComputeLiveGenTps(sessionId), CurrentWaiting());
     }
 
+    // Подсказочные заголовки (GatewayHintHeaders, ADR-029): классифицируем запрос хода
+    // (основной / сабагент / компакция / боковой) и запоминаем типы сабагентов + вид
+    // компакции. Вызывается шлюзом сразу после OnRequestStarted, только когда наблюдатель
+    // создан (локальный маршрут + метрики включены). Сессия без токена хода — бесхозная,
+    // подсказки в чат не идут (тот же приём, что у остальных колбэков).
+    public void OnRequestHints(string requestId, string turnId, GatewayHintHeaders hints)
+    {
+        var (sessionId, ownerId) = ResolveSession(turnId);
+        if (sessionId is null) return;
+        lock (_gate)
+        {
+            var s = GetOrAdd(sessionId, ownerId);
+            var acc = s.Acc;
+            switch (hints.RequestClass)
+            {
+                case "main": acc.MainRequests++; break;
+                case "subagent":
+                case "workflow": acc.SubagentRequests++; break;
+                case "compaction": acc.CompactionRequests++; break;
+                case "auxiliary": acc.AuxiliaryRequests++; break;
+            }
+            if (hints.AgentType is { } at && !acc.AgentTypes.Contains(at))
+                acc.AgentTypes.Add(at);
+            // Вид компакции: сам запрос-суммаризация, иначе первый основной запрос после неё.
+            if (hints.Compaction is { } c) acc.CompactionKind = c;
+            else if (hints.ContextCompacted is { } cc) acc.CompactionKind ??= cc;
+        }
+    }
+
     // M5: живая скорость из скользящего окна: Δтокены / Δвремя. null — нет приращения
     // (окно пусто или одна точка). Не 0: нулевая скорость = «нет данных», не «0 ток/с».
     private double? ComputeLiveGenTps(string sessionId)
@@ -360,6 +389,10 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         if (total > 0)
             cacheHit = (double)acc.CacheRead / total;
 
+        // Атрибуция: разрез по классам запросов + типы сабагентов (distinct, порядок) + вид
+        // компакции. AgentTypes — null, если сабагентов не было (не пустой массив: «не было»).
+        var agentTypes = acc.AgentTypes.Count > 0 ? acc.AgentTypes.ToArray() : null;
+
         return new LocalModelTurnSummary
         {
             OutTokens = acc.OutTokens,
@@ -369,6 +402,12 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
             // Миллисекунды, округлённые вверх до целой секунды (контракт ServerMessage/фронт).
             QueueMsApprox = acc.QueueMs is { } q ? (int)(Math.Ceiling(q.TotalMilliseconds / 1000) * 1000) : null,
             CacheHitPerc = cacheHit,
+            MainRequests = acc.MainRequests,
+            SubagentRequests = acc.SubagentRequests,
+            CompactionRequests = acc.CompactionRequests,
+            AuxiliaryRequests = acc.AuxiliaryRequests,
+            AgentTypes = agentTypes,
+            CompactionKind = acc.CompactionKind,
         };
     }
 
@@ -420,5 +459,16 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         public DateTimeOffset? TtftStartedAt;
         public TimeSpan? GenDuration;
         public TimeSpan? QueueMs;
+
+        // Атрибуция по подсказочным заголовкам (GatewayHintHeaders): класс запроса и компакция.
+        // Считаем по запросам хода (не только завершённым): подсказка приходит на старте запроса.
+        public int MainRequests;
+        public int SubagentRequests;   // subagent + workflow
+        public int CompactionRequests;
+        public int AuxiliaryRequests;
+        // Типы сабагентов: distinct, порядок первый-встреченный (List, не HashSet — порядок).
+        public readonly List<string> AgentTypes = new();
+        // Вид компакции (auto | manual | reactive): первый встреченный (compaction, иначе context-compacted).
+        public string? CompactionKind;
     }
 }

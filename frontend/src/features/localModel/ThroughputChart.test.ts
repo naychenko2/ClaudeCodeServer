@@ -4,9 +4,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  avgThroughputOf, breakRuns, buildIntervals, buildThroughputSegments, cacheHitAvg,
-  chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
-  kvChartAriaLabel, maxThroughputOf, niceAxisMax, peakThroughputOf, preemptionTotal,
+  avgPerStreamOf, avgThroughputOf, breakRuns, buildIntervals, buildPerStreamSegments,
+  buildThroughputSegments, cacheHitAvg, chartAriaLabel, chartNow, evChartAriaLabel,
+  formatAxisTps, intervalCountFor, intervalGrid, kvChartAriaLabel, maxSeriesOf,
+  maxThroughputOf, niceAxisMax, peakThroughputOf, perStreamBreakRuns, preemptionTotal,
   shouldShowNoDataLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type ThroughputSample,
 } from './ThroughputChart';
@@ -222,6 +223,8 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     ramHits: p.ramHits ?? null,
     ramQueries: p.ramQueries ?? null,
     preemptions: p.preemptions ?? null,
+    genTokens: p.genTokens ?? null,
+    itlSeconds: p.itlSeconds ?? null,
   };
 }
 
@@ -343,7 +346,7 @@ describe('intervalCountFor: число интервалов окна', () => {
 
 describe('breakRuns: непрерывные прогоны разрыва (throughput == null)', () => {
   const mk = (tStart: number, tEnd: number, tp: number | null): Interval =>
-    ({ tStart, tEnd, throughput: tp, kvUsage: null, prefix: null, ram: null, preemptions: null,
+    ({ tStart, tEnd, throughput: tp, perStream: null, kvUsage: null, prefix: null, ram: null, preemptions: null,
       hasData: { prefix: false, ram: false } });
 
   it('один прогон: серия null → пара [start, end]', () => {
@@ -579,5 +582,108 @@ describe('buildIntervals: кэш — несение при «не спрашив
     expect(intervals[0].prefix).toBeCloseTo(0.9, 6);
     expect(intervals[1].prefix).toBeNull();
     expect(intervals[2].prefix).toBeCloseTo(0.1, 6);
+  });
+});
+
+// === Вторая линия «на агента, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
+// Мутации: «суммы → среднее долей» красит тест на расчёт; «null → 0» — на разрыв;
+// «max одной серии → max обеих» — на ось.
+
+// Минимальный Interval для тестов построения/разрывов второй линии.
+function mkIt(tStart: number, tEnd: number, perStream: number | null): Interval {
+  return { tStart, tEnd, throughput: null, perStream, kvUsage: null, prefix: null, ram: null,
+    preemptions: null, hasData: { prefix: false, ram: false } };
+}
+
+describe('buildIntervals: скорость на агента из СУММ приращений', () => {
+  const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
+
+  it('ΣgenTokens/ΣitlSeconds по точкам интервала (не среднее долей точек)', () => {
+    const samples = [
+      sample({ t: 5_000, genTokens: 100, itlSeconds: 10 }),
+      sample({ t: 10_000, genTokens: 200, itlSeconds: 20 }),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    // (100 + 200) / (10 + 20) = 300 / 30 = 10
+    expect(intervals[0].perStream).toBeCloseTo(10, 6);
+  });
+
+  it('разрыв: точка без пары genTokens/itlSeconds не входит → perStream null', () => {
+    const samples = [
+      sample({ t: 5_000, genTokens: 100, itlSeconds: 10 }),   // интервал 0: 10
+      sample({ t: 35_000, genTokens: 50, itlSeconds: null }),  // интервал 1: нет itl → null
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].perStream).toBeCloseTo(10, 6);
+    expect(intervals[1].perStream).toBeNull();
+  });
+
+  it('ΣitlSeconds = 0 → perStream null (не делим на ноль)', () => {
+    const samples = [sample({ t: 5_000, genTokens: 100, itlSeconds: 0 })];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].perStream).toBeNull();
+  });
+});
+
+describe('buildPerStreamSegments: разрыв линии на null', () => {
+  it('null в середине — два отдельных сегмента', () => {
+    const intervals = [
+      mkIt(0, 30_000, 10),
+      mkIt(30_000, 60_000, null),
+      mkIt(60_000, 90_000, 20),
+    ];
+    const segs = buildPerStreamSegments(intervals, 0, 90_000, 20, GEOM);
+    expect(segs).toHaveLength(2);
+    expect(segs[0]).toHaveLength(1);
+    expect(segs[1]).toHaveLength(1);
+  });
+
+  it('без null — один непрерывный сегмент на все интервалы', () => {
+    const intervals = [mkIt(0, 30_000, 10), mkIt(30_000, 60_000, 12), mkIt(60_000, 90_000, 14)];
+    const segs = buildPerStreamSegments(intervals, 0, 90_000, 20, GEOM);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]).toHaveLength(3);
+  });
+});
+
+describe('perStreamBreakRuns: прогоны разрыва второй линии', () => {
+  it('серия null → пара [start, end]; ноль (не null) — не разрыв', () => {
+    const intervals = [
+      mkIt(0, 1, 10), mkIt(1, 2, null), mkIt(2, 3, null), mkIt(3, 4, 0),
+    ];
+    expect(perStreamBreakRuns(intervals)).toEqual([[1, 2]]);
+  });
+  it('без разрывов → пусто', () => {
+    expect(perStreamBreakRuns([mkIt(0, 1, 10), mkIt(1, 2, 12)])).toEqual([]);
+  });
+});
+
+describe('maxSeriesOf: верх общей оси по максимуму ОБЕИХ серий', () => {
+  it('максимум из выработки (точки) и на агента (интервалы)', () => {
+    const samples = [sample({ t: 1, throughput: 100 })];
+    const intervals = [mkIt(0, 1, 300)];
+    expect(maxSeriesOf(samples, intervals)).toBe(300);
+  });
+  it('выработка выше — берётся она', () => {
+    const samples = [sample({ t: 1, throughput: 500 })];
+    const intervals = [mkIt(0, 1, 300)];
+    expect(maxSeriesOf(samples, intervals)).toBe(500);
+  });
+  it('без данных — 0', () => {
+    expect(maxSeriesOf([], [])).toBe(0);
+  });
+});
+
+describe('avgPerStreamOf: средняя на агента за окно', () => {
+  it('ΣgenTokens/ΣitlSeconds по всем точкам окна', () => {
+    const samples = [
+      sample({ t: 1, genTokens: 100, itlSeconds: 10 }),
+      sample({ t: 2, genTokens: 200, itlSeconds: 20 }),
+    ];
+    expect(avgPerStreamOf(samples)).toBeCloseTo(10, 6); // 300/30
+  });
+  it('нет данных → null; Σitl = 0 → null', () => {
+    expect(avgPerStreamOf([sample({ t: 1 })])).toBeNull();
+    expect(avgPerStreamOf([sample({ t: 1, genTokens: 100, itlSeconds: 0 })])).toBeNull();
   });
 });

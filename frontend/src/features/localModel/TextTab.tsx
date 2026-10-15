@@ -135,13 +135,14 @@ function DownBanner({ data, onCheck }: { data: LocalModelStats; onCheck: () => v
 
 // === «Сейчас»: идут / ждут ===
 // Крупные числа — FONT.mono FS.xl 700; «ждут» — warning, только когда > 0.
-function Kpi({ value, unit, label, warn }: { value: string; unit?: string; label: string; warn?: boolean }) {
+function Kpi({ value, unit, label, note, warn }: { value: string; unit?: string; label: string; note?: string; warn?: boolean }) {
   return (
     <div>
       <div style={{ fontFamily: FONT.mono, fontSize: FS.xl, fontWeight: 700, lineHeight: 1.2, color: warn ? C.warningText : C.textHeading }}>
         {value}{unit && <small style={{ fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}> {unit}</small>}
       </div>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xxs }}>{label}</div>
+      {note && <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>{note}</div>}
     </div>
   );
 }
@@ -175,7 +176,11 @@ function SpeedCard({ data, peakGenTps }: {
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
-        <Kpi value={formatTps(data.speed.genPerStream)} label="генерация на поток, ср. за минуту" />
+        <Kpi
+          value={formatTps(data.speed.genPerStream)}
+          label="генерация, на одного агента, в среднем за минуту"
+          note={data.running != null ? `сейчас агентов: ${data.running}` : undefined}
+        />
         <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, на запрос" />
       </div>
       <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>

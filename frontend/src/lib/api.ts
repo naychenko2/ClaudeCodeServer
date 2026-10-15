@@ -64,6 +64,12 @@ export interface LocalModelStats {
     ramHits?: number | null;
     ramQueries?: number | null;
     preemptions?: number | null;
+    // скорость на поток (вторая линия графика, ADR-029): genTokens — приращение
+    // vllm:generation_tokens_total, itlSeconds — приращение
+    // vllm:inter_token_latency_seconds_sum (сек); фронт: ΣgenTokens/ΣitlSeconds =
+    // средняя скорость на агента (ток/с). null — нет прошлой точки/рестарт (см. api.md)
+    genTokens?: number | null;
+    itlSeconds?: number | null;
   }[];
   // tensorParallel — необязательное: число GPU в tensor-parallel (Денис добавляет
   // следующим); нет поля — TP = число карт (gpus.length)

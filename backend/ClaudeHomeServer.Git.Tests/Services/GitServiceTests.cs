@@ -262,6 +262,18 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "[ab].txt")).Should().Be(1);
     }
 
+    // GET /dossiers?file=. отвечал 500: ValidateRel бросал UnauthorizedAccessException
+    // мимо обещания «любой сбой — 0»
+    [Theory]
+    [InlineData(".")]
+    [InlineData("./")]
+    [InlineData("/")]
+    [InlineData("..")]
+    public async Task CountRecentCommits_ПутьКореньИлиВыше_Ноль_БезИсключения(string relPath)
+    {
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, relPath)).Should().Be(0);
+    }
+
     // Отдельное репо с монотонной историей: корень датирован в прошлое, tip — сейчас.
     // --since у git — traversal-эвристика по датам, рассчитанная ровно на такой порядок
     // (старое ниже свежего); инвертированные даты она не обязана считать честно.

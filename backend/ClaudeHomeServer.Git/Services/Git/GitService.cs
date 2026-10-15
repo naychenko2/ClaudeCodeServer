@@ -385,23 +385,32 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // одного файла через log --follow (переживает переименования, как FileLogAsync);
     // путь буквальный (LiteralSpec), «[ab].txt» не считает коммиты a.txt.
     // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
-    // листинг паспортов не должен падать из-за метрики.
+    // листинг паспортов не должен падать из-за метрики. Сюда же — путь, который
+    // ValidateRel отвергает («.», «/», «..»): это не повод для 500 на GET /dossiers.
     public async Task<int> CountRecentCommitsAsync(
         string? ownerId, string root, int days, string? relPath = null, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return 0;
         var since = "--since=" + DateTimeOffset.UtcNow.AddDays(-days)
             .ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
-        if (string.IsNullOrWhiteSpace(relPath))
+        try
         {
-            var r = await RunReadAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
-            return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+            if (string.IsNullOrWhiteSpace(relPath))
+            {
+                var r = await RunReadAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
+                return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+            }
+            var log = await RunReadAsync(ownerId, root,
+                ["log", "--follow", since, "--format=%H", "--", LiteralSpec(ValidateRel(root, relPath))], ct: ct);
+            return log.Ok
+                ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
+                : 0;
         }
-        var log = await RunReadAsync(ownerId, root,
-            ["log", "--follow", since, "--format=%H", "--", LiteralSpec(ValidateRel(root, relPath))], ct: ct);
-        return log.Ok
-            ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
-            : 0;
+        catch (Exception ex) when (ex is UnauthorizedAccessException or GitCommandException)
+        {
+            logger?.LogDebug(ex, "CountRecentCommits: путь {Path} не посчитан", relPath);
+            return 0;
+        }
     }
 
     private static List<GitLogEntry> ParseLog(string stdout)

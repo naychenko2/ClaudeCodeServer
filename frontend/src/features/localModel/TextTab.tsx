@@ -258,7 +258,8 @@ function GpusCard({ data }: { data: LocalModelStats }) {
   if (data.gpus == null || data.gpus.length === 0) return null;
   return (
     <Card title="Видеокарты">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: SP.sm }}>
+      {/* auto-fit, а не auto-fill: одна карта тянется на всю ширину, несколько делят её поровну */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: SP.sm }}>
         {data.gpus.map(g => (
           <GpuCard key={g.index} gpu={g} total={data.gpus!.length} kind="text" />
         ))}

@@ -55,6 +55,7 @@ function TabSwitch({ value, onChange, isMobile }: { value: Tab; onChange: (t: Ta
     <InlineSegmented<Tab>
       value={value}
       isMobile={isMobile}
+      size="sm"
       options={[
         { value: 'text', label: 'LLM', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
         { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },

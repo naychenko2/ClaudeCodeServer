@@ -3120,6 +3120,85 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return new ChatBranchResult(branchSession, draft);
     }
 
+    // Имя чата-продолжения: «<имя> · продолжение»; если имя уже кончается на «· продолжение»
+    // или «· продолжение N» — счётчик растёт («· продолжение 2», «· продолжение 3»…).
+    internal static string ContinuationName(string? name)
+    {
+        const string Suffix = " · продолжение";
+        var baseName = string.IsNullOrWhiteSpace(name) ? "Чат" : name.Trim();
+        var m = System.Text.RegularExpressions.Regex.Match(baseName, @"^(?<head>.*) · продолжение(?: (?<n>\d+))?$",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!m.Success) return baseName + Suffix;
+        var next = m.Groups["n"].Success && int.TryParse(m.Groups["n"].Value, out var n) ? n + 1 : 2;
+        return $"{m.Groups["head"].Value}{Suffix} {next}";
+    }
+
+    // «Продолжить в новом чате»: новый чат той же персоны с теми же настройками, но БЕЗ истории
+    // и транскрипта — только смысл (записку сервис шлёт первым сообщением). В отличие от
+    // BranchAsync не копирует транскрипт CLI, поэтому годится и локальному проекту. Групповой чат и
+    // режим «Командная реализация» не поддерживаются: их состояние живёт в Session, а не в записке.
+    // Старый чат НЕ архивируется и UpdatedAt не двигается; ссылки ставятся в обе стороны.
+    // Занятость чата проверяет вызывающий (ChatContinueService): ход передачи уже завершён.
+    public async Task<Session> CreateContinuationAsync(string sessionId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } source
+            || !_sessions.TryGetValue(sessionId, out _))
+            throw new KeyNotFoundException("Чат не найден");
+
+        if (source.Participants is { Count: > 0 })
+            throw new ChatContinueNotSupportedException(
+                "Групповой чат нельзя продолжить в новом: состав спикеров живёт в чате");
+        if (source.TeamImplement is not null)
+            throw new ChatContinueNotSupportedException(
+                "Чат в режиме «Командная реализация» нельзя продолжить в новом: состояние волн живёт в чате");
+
+        var newName = ContinuationName(source.Name);
+        var created = !string.IsNullOrWhiteSpace(source.PersonaId)
+            ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
+                name: newName, contextProjectId: source.ProjectId)
+            : source.ProjectId is not null
+                ? await CreateAsync(source.ProjectId, source.Mode, name: newName,
+                    model: source.Model, effort: source.Effort)
+                : await CreateChatAsync(ownerId, source.Mode, name: newName,
+                    model: source.Model, effort: source.Effort);
+
+        if (!_sessions.TryGetValue(created.Id, out var newEntry)) return created;
+        var n = newEntry.Info;
+        // Те же настройки, что у источника: персональная фабрика подставляет модель персоны, а не
+        // выбранную человеком в этом чате, поэтому модель/провайдер/effort переписываются ПОСЛЕ
+        n.Model = source.Model;
+        n.Provider = source.Provider;
+        n.Effort = source.Effort;
+        n.Mode = source.Mode;
+        n.AgentName = source.AgentName;
+        // Разрешённые «всегда» инструменты едут с работой: смысл передачи — не заставлять
+        // человека заново проходить карточки разрешений (в отличие от ветки, где это эскалация прав)
+        n.AutoAllowTools = [.. source.AutoAllowTools];
+        n.Context = [.. source.Context.Select(c => new SessionContextEntry
+            { Type = c.Type, Id = c.Id, Title = c.Title })];
+        n.VoiceMode = source.VoiceMode;
+        n.VoiceStyle = source.VoiceStyle;
+        n.NotificationsMuted = source.NotificationsMuted;
+        n.ExcludeFromDossiers = source.ExcludeFromDossiers;
+        // Рабочее дерево тот же путь, но владеет им по-прежнему источник (WorktreeOwned=false):
+        // удаление продолжения не снесёт дерево под старым чатом. Дерево есть только у проектного
+        // чата и до первого хода — как в AttachWorktreeAsync; следующий ход пересоздаст адаптер с cwd
+        if (source.WorktreePath is not null && n.ProjectId is not null)
+        {
+            n.WorktreePath = source.WorktreePath;
+            n.WorktreeBranch = source.WorktreeBranch;
+            n.WorktreeOwned = false;
+            newEntry.AdapterStale = true;
+        }
+        n.ContinuedFromSessionId = sessionId;
+        source.ContinuedInSessionId = n.Id;
+        SaveSessions();
+
+        await TurnEvents.PublishAsync(new SessionContinued(
+            new TurnContext(n.Id, ownerId, 0, 0, n.ProjectId), sessionId));
+        return n;
+    }
+
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
@@ -5034,7 +5113,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // результат через историю (chats_history).
     public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
         TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null,
-        string? senderOrigin = null, string? senderChatName = null, bool preempt = true)
+        string? senderOrigin = null, string? senderChatName = null, bool preempt = true,
+        bool systemDirective = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -5108,7 +5188,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
-        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin);
+        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId,
+            systemDirective: systemDirective, senderOrigin: senderOrigin);
         entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
         entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)

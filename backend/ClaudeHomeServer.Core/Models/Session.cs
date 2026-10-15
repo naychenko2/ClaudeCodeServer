@@ -541,6 +541,14 @@ public class Session
     // Аддитивное nullable-поле с дефолтом: старые записи sessions.json читаются штатно,
     // BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths/Context).
     public string? BranchedFromSessionId { get; set; }
+    // «Продолжить в новом чате»: ContinuedFromSessionId — чат, записку-передачу которого получил этот
+    // чат; ContinuedInSessionId — чат, в который перенесена работа ЭТОГО чата. Ссылки в обе стороны
+    // ставит ChatContinueService; сам старый чат не архивируется и не блокируется. Не путать с
+    // BranchedFromSessionId: ветка копирует историю, продолжение переносит только смысл (записку).
+    // Аддитивные nullable-поля: старые записи sessions.json читаются штатно, BackupSchema.Version
+    // не двигается.
+    public string? ContinuedFromSessionId { get; set; }
+    public string? ContinuedInSessionId { get; set; }
     // Последний накопленный снимок cost-state CLI (по моделям + total_cost_usd) для расчёта
     // дельты хода: расход хода = текущий снимок − этот (по каждой модели отдельно; при
     // уменьшении — сам текущий снимок). Персистентно: процесс CLI перезапускается между ходами,

@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hands;
@@ -278,6 +279,83 @@ public class HandsTurnExecutorTests : IDisposable
         await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait);
         sink.Reports.Should().NotContain(r => r.State == HandsChatStates.Active);
     }
+
+    [SkippableFact]
+    public async Task Оба_аргумента_моста_переданы_OCR_содержит_ключ_а_не_токен()
+    {
+        _fx.WithBridge();
+        var hands = _fx.Runtime();
+        await using var h = NewHarness(hands);
+
+        await h.StartAsync(HandsSpawn(h), turnId: "turn-args");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+
+        // Конфиг, который увидел CLI: узел рук с --project-root (реальный корень) и --ocr-endpoint (ключ хода)
+        var argv = File.ReadAllLines(Path.Combine(h.WorkDir, "cli-argv.txt"));
+        var mcpPath = argv[Array.IndexOf(argv, "--mcp-config") + 1];
+        var config = File.ReadAllText(Path.Combine(h.WorkDir, "cli-file-" + Path.GetFileName(mcpPath)));
+        var bridgeArgs = BridgeArgsOf(JsonNode.Parse(config)!);
+
+        // Корень записи — реальный каталог хода, а не произвольный путь из spec
+        bridgeArgs.Should().ContainInConsecutiveOrder(HandsBridgeArgs.ProjectRoot, h.WorkDir);
+
+        // OCR: адрес хода в сайдкаре с ключом (32 hex); токен хода и подписки в нём не содержатся
+        var ocr = bridgeArgs[bridgeArgs.IndexOf(HandsBridgeArgs.OcrEndpoint) + 1];
+        ocr.Should().MatchRegex("^" + Regex.Escape(TurnHarness.SidecarUrl) + @"/t/[0-9a-f]{32}/ocr$",
+            "OCR — адрес хода в сайдкаре: ключ хода, не id сервера");
+        foreach (var secret in new[] { TurnHarness.TurnToken }.Concat(TurnHarness.AgentSecrets.Values))
+            ocr.Should().NotContain(secret, "токен хода и подписки в адрес OCR не попадают");
+    }
+
+    [Fact]
+    public void Корень_проекта_не_существует_аргумента_нет()
+    {
+        _fx.WithBridge();
+        var missing = Path.Combine(_fx.AgentDirectory, "no-such-dir");
+        var spawn = HandsSpawnWith(HandsFixture.McpFile(HandsFixture.McpConfig()));
+
+        using var lease = HandsAttach.Prepare(spawn, "t1", _fx.Runtime(), projectRoot: missing)!;
+
+        BridgeArgsOf(lease).Should().NotContain(HandsBridgeArgs.ProjectRoot,
+            "корня нет — saveTo моста отказывает, аргумент не передаём");
+    }
+
+    [Fact]
+    public void Сервер_не_подменяет_корень_проекта()
+    {
+        _fx.WithBridge();
+        var real = Directory.CreateDirectory(Path.Combine(_fx.AgentDirectory, "real-project")).FullName;
+        // Сервер кладёт в узел рук свой --project-root: агент его не должен брать
+        var config = new JsonObject
+        {
+            ["mcpServers"] = new JsonObject
+            {
+                [DeviceExecPlaceholders.HandsServerName] = new JsonObject
+                {
+                    ["type"] = DeviceExecPlaceholders.Hands,
+                    ["args"] = new JsonArray { HandsBridgeArgs.ProjectRoot, "/evil/server-path" },
+                },
+            },
+        }.ToJsonString();
+
+        using var lease = HandsAttach.Prepare(HandsSpawnWith(HandsFixture.McpFile(config)), "t1", _fx.Runtime(),
+            projectRoot: real)!;
+
+        BridgeArgsOf(lease).Should().ContainInConsecutiveOrder(new[] { HandsBridgeArgs.ProjectRoot, real },
+            "корень — реальный каталог хода, а не тот, что в аргументах, присланных сервером");
+    }
+
+    /// <summary>Аргументы узла моста из материализованного MCP-конфига.</summary>
+    private static List<string> BridgeArgsOf(JsonNode config) =>
+        (config!["mcpServers"]![DeviceExecPlaceholders.HandsServerName]!["args"]!.AsArray())
+            .Select(a => (string?)a!).ToList();
+
+    /// <summary>Аргументы узла моста из аренды рук.</summary>
+    private static List<string> BridgeArgsOf(HandsTurnLease lease) =>
+        BridgeArgsOf(JsonNode.Parse(lease.Files.Single().Content)!);
+
+    private static DeviceExecSpawn HandsSpawnWith(DeviceExecFile file) =>
+        new("claude", HandsFixture.HandsArgs, "/work", new Dictionary<string, string>(), [file], RedirectStdin: true);
 
     /// <summary>Агент поднимет «ход окончен» для хода с этим событием «подействовал».</summary>
     private Task TurnEnded(string name)

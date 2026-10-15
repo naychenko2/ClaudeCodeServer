@@ -2279,6 +2279,11 @@ const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[]
     blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
     prefillSeconds: 21,
   },
+  {
+    kind: 'context_pruned', pruneKind: 'loop_guard',
+    tokensBefore: 0, tokensAfter: 0,
+    blocks: 1, resultBlocks: 1, inputBlocks: 0, thinkingBlocks: 0,
+  },
 ];
 
 // Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там

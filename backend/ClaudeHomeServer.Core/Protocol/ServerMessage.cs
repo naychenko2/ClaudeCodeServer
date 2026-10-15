@@ -276,7 +276,8 @@ public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTo
     : ServerMessage("compact_boundary");
 
 // Обрезка контекста прокси локальной модели: сдвиг границы прунинга (Kind = "prune") либо уход
-// автосжатия в облако (Kind = "compact_cloud"). И то, и другое стоит человеку десятков секунд
+// автосжатия в облако (Kind = "compact_cloud"), либо перехват петли модели в потоке
+// (Kind = "loop_guard": Blocks — сколько петель, ResultBlocks — был ли повтор). Всё это стоит человеку десятков секунд
 // тишины в чате, неотличимых от зависания, — карточка рассказывает, чем они заняты.
 // PrefillSeconds — время до первого байта ответа модели у ЭТОГО запроса, то есть ровно
 // «сколько ждали»; CacheReadTokens / PromptTokens — доля промпта, взятая из prefix cache.

@@ -15,7 +15,7 @@ import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useSpheres } from '../../lib/useSpheres';
 import { isZoneRefusal, OPEN_COMPANION_PICKER_EVENT } from '../../lib/personaZone';
-import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
+import { prunedHeadline, prunedDetails, prunedIcon } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useModelLabel } from '../../lib/models';
@@ -923,7 +923,7 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
 }
 
 // Строка «контекст обрезан» — прокси локальной модели сдвинул контекст: обрезал историю
-// хода либо увёл сжатие в облако. Тон и вид — как у карточки сжатия (compact_boundary):
+// хода либо увёл сжатие в облако; тот же вид у перехвата петли модели (↻). Тон и вид — как у карточки сжатия (compact_boundary):
 // служебная строка-разделитель, а не сообщение ассистента. Пауза в полторы минуты, которую
 // человек уже отсидел, объяснена задним числом; внимания строка не требует.
 // Подробности идут ВТОРОЙ строкой под разделителем: в линию с ✂ они не влезают на мобиле,
@@ -936,7 +936,7 @@ export function ContextPrunedRow({ item }: { item: Extract<ChatItem, { kind: 'co
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.textMuted, fontSize: FS.xs }}>
         <div style={{ flex: 1, height: 1, background: C.border }} />
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
-          <span style={{ color: C.textMuted }}>✂</span>
+          <span style={{ color: C.textMuted }}>{prunedIcon(item)}</span>
           {prunedHeadline(item)}
         </span>
         <div style={{ flex: 1, height: 1, background: C.border }} />

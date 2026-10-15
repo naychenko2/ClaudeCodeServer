@@ -30,8 +30,9 @@ public class LlmProxyEventsController(
     public const string SecretHeader = "X-Proxy-Secret";
     public const string SecretKey = "LlmProxy:EventSecret";
 
-    // Тело запроса от прокси. Kind — "prune" (сдвиг границы) или "compact_cloud" (автосжатие
-    // ушло в облако). Числа приходят по мерке прокси: точного счётчика токенов у него нет,
+    // Тело запроса от прокси. Kind — "prune" (сдвиг границы), "compact_cloud" (автосжатие
+    // ушло в облако) или "loop_guard" (прокси перехватил петлю модели в потоке; Blocks — сколько
+    // петель поймали, ResultBlocks — был ли повтор запроса, ThinkingBlocks — петля в размышлениях). Числа приходят по мерке прокси: точного счётчика токенов у него нет,
     // и карточка честно показывает оценку.
     public record ProxyEvent(
         string? SessionId,
@@ -46,7 +47,7 @@ public class LlmProxyEventsController(
         int? CacheReadTokens,
         int? PromptTokens);
 
-    private static readonly string[] KnownKinds = ["prune", "compact_cloud"];
+    private static readonly string[] KnownKinds = ["prune", "compact_cloud", "loop_guard"];
 
     [HttpPost("events")]
     public async Task<IActionResult> PostEvent([FromBody] ProxyEvent body)

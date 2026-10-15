@@ -10,8 +10,18 @@ export function fmtPrunedTokens(n: number): string {
   return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
 }
 
+// Значок строки: ножницы — контекст двигали, круговая стрелка — прокси оборвал петлю модели
+export function prunedIcon(item: PrunedItem): string {
+  return item.pruneKind === 'loop_guard' ? '↻' : '✂';
+}
+
 // Заголовок строки: что именно случилось и с каким объёмом
 export function prunedHeadline(item: PrunedItem): string {
+  if (item.pruneKind === 'loop_guard') {
+    // blocks — сколько петель поймали: вторая — повтор тоже петлял, ответ усечён
+    if (item.blocks >= 2) return 'петля перехвачена дважды · ответ усечён';
+    return item.resultBlocks > 0 ? 'петля перехвачена · запрос повторён' : 'петля перехвачена · ответ усечён';
+  }
   if (item.pruneKind === 'compact_cloud') {
     // Сжатие ушло в облако: объём истории тут не главное — важна цена паузы
     const s = roundSeconds(item.prefillSeconds);
@@ -28,6 +38,9 @@ export function prunedHeadline(item: PrunedItem): string {
 // нет — всё сказано в заголовке.
 export function prunedDetails(item: PrunedItem): string | null {
   if (item.pruneKind === 'compact_cloud') return null;
+  if (item.pruneKind === 'loop_guard') {
+    return item.thinkingBlocks > 0 ? 'модель повторялась в размышлениях' : 'модель повторялась в ответе';
+  }
 
   const parts: string[] = [];
   if (item.blocks > 0) {
@@ -83,7 +96,8 @@ export interface PrunedSummary {
 export function summarizePruned(items: ChatItem[]): PrunedSummary | undefined {
   let count = 0, savedTokens = 0;
   for (const it of items) {
-    if (it.kind !== 'context_pruned') continue;
+    // Перехват петли контекст не двигает — в сводку сдвигов не входит
+    if (it.kind !== 'context_pruned' || it.pruneKind === 'loop_guard') continue;
     count++;
     const saved = it.tokensBefore - it.tokensAfter;
     if (saved > 0) savedTokens += saved;

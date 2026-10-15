@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage } from '../../types';
 import {
-  prunedHeadline, prunedDetails, cachePct, summarizePruned, prunedSummaryText,
+  prunedHeadline, prunedDetails, prunedIcon, cachePct, summarizePruned, prunedSummaryText,
   type PrunedItem,
 } from '../contextPruned';
 import { applyServerMessage, initialChatState } from '../chatReducer';
@@ -41,6 +41,35 @@ describe('prunedHeadline', () => {
   it('тысячи ниже 10k — с десятой долей', () => {
     expect(prunedHeadline(prune({ tokensBefore: 9500, tokensAfter: 940 })))
       .toBe('контекст обрезан · 9.5k → 940');
+  });
+});
+
+describe('перехват петли (loop_guard)', () => {
+  const loop = (over: Partial<PrunedItem> = {}) => prune({
+    pruneKind: 'loop_guard', tokensBefore: 0, tokensAfter: 0,
+    blocks: 1, resultBlocks: 1, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: undefined, cacheReadTokens: undefined, promptTokens: undefined, ...over,
+  });
+
+  it('повтор прошёл — «запрос повторён»', () => {
+    expect(prunedHeadline(loop())).toBe('петля перехвачена · запрос повторён');
+    expect(prunedIcon(loop())).toBe('↻');
+    expect(prunedIcon(prune())).toBe('✂');
+  });
+
+  it('вторая петля или повтор выключен — ответ усечён', () => {
+    expect(prunedHeadline(loop({ blocks: 2 }))).toBe('петля перехвачена дважды · ответ усечён');
+    expect(prunedHeadline(loop({ resultBlocks: 0 }))).toBe('петля перехвачена · ответ усечён');
+  });
+
+  it('подзаголовок — где петляла модель', () => {
+    expect(prunedDetails(loop())).toBe('модель повторялась в ответе');
+    expect(prunedDetails(loop({ thinkingBlocks: 1 }))).toBe('модель повторялась в размышлениях');
+  });
+
+  it('в сводку сдвигов контекста не входит', () => {
+    expect(summarizePruned([loop()])).toBeUndefined();
+    expect(summarizePruned([loop(), prune()])).toEqual({ count: 1, savedTokens: 58_000 });
   });
 });
 

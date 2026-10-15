@@ -1236,8 +1236,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'error'; text: string; details?: string; action?: string | null }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
-  // Прокси локальной модели обрезал историю хода (kind='prune') либо увёл сжатие в облако
-  // (kind='compact_cloud'). Приходит ПОСЛЕ первого байта ответа — до него лента молчит, и
+  // Прокси локальной модели обрезал историю хода (kind='prune'), увёл сжатие в облако
+  // (kind='compact_cloud') либо перехватил петлю модели в потоке (kind='loop_guard': blocks —
+  // сколько петель, resultBlocks — был ли повтор запроса, thinkingBlocks — петля в размышлениях). Приходит ПОСЛЕ первого байта ответа — до него лента молчит, и
   // это нормально: своего «ожидания» у прунинга нет.
   // blocks — сколько блоков выкинуто всего, дальше разбивка по видам (вывод инструмента,
   // вход инструмента, размышление). prefillSeconds — сколько ждали пересчёт префикса после
@@ -1246,7 +1247,7 @@ export type ServerMessage = { sessionId: string } & (
   // вкладка открытого чата состоит в обеих, то есть получает одно событие дважды. По eventId
   // редьюсер отличает вторую доставку от второго сдвига (карточки до появления поля — без него)
   | {
-      type: 'context_pruned'; kind: 'prune' | 'compact_cloud'; eventId?: string;
+      type: 'context_pruned'; kind: 'prune' | 'compact_cloud' | 'loop_guard'; eventId?: string;
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
@@ -2199,7 +2200,7 @@ export type ChatItem =
   // по ней дедупится повторная доставка одного события. Необязательно: у карточек,
   // записанных до её появления, поля нет
   | {
-      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud'; eventId?: string;
+      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud' | 'loop_guard'; eventId?: string;
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;

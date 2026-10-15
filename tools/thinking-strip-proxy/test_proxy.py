@@ -1743,5 +1743,443 @@ class DiffMissОтчётTests(unittest.TestCase):
         self.assertIn("99%", текст)
 
 
+# --- Предохранитель от петли ---------------------------------------------------------------
+
+# План из петли 15.10.2026 (чат спайка «хуки Claude Mods»): 50 слов, повторялся дословно.
+ПЛАН = ("The web search is the highest-value action here. Let me do it. Actually, let me "
+        "reconsider the approach and check the hooks documentation first. The hooks API changed "
+        "in the latest release, so I should verify the event names. Then I will write the spike "
+        "summary and commit the notes. ")
+ВСТУПЛЕНИЕ = ("I looked at the repository layout and the settings file to see how the mods are "
+              "wired into the harness today, and what the spike still has to answer. ")
+
+
+def по_кусочкам(текст, шаг=7):
+    """Режет текст как поток дельт: куски по `шаг` символов, слова рвутся где попало."""
+    return [текст[i:i + шаг] for i in range(0, len(текст), шаг)]
+
+
+def прогнать(текст, детектор=None, шаг=7):
+    """Сколько слов детектор успел увидеть до срабатывания; None — не сработал."""
+    д = детектор or proxy.ДетекторПетли()
+    for кусок in по_кусочкам(текст, шаг):
+        if д.усвоить(кусок):
+            return д.всего
+    д.новый_блок()
+    return None if д.петля is None else д.всего
+
+
+class ДетекторПетлиTests(unittest.TestCase):
+    def test_петля_плана_ловится_быстро_после_начала_повтора(self):
+        слов = прогнать(ВСТУПЛЕНИЕ + ПЛАН * 12)
+        self.assertIsNotNone(слов)
+        начало_повтора = len(ВСТУПЛЕНИЕ.split()) + len(ПЛАН.split())
+        self.assertLessEqual(слов - начало_повтора, 400, "перехват обязан уложиться в окно")
+        self.assertLess(слов, len((ВСТУПЛЕНИЕ + ПЛАН * 12).split()))
+
+    def test_петля_из_инцидента_с_перефразом(self):
+        """Текст сбоя 15.10 (чат 1428f5e9): повторы не дословны — «Actually, let me
+        reconsider» / «Let me also reconsider», «the changelog file» / «the changelog»."""
+        виток = ("The web search is the highest-value action here. Let me do it.\n"
+                 "{a}, let me reconsider whether to use web{b} at all. The task says the hooks "
+                 "came \"Из CLI 2.1.287\". The changelog file in the repo is the source. But it "
+                 "doesn't contain {c}2.1.287 section with mod hooks. Maybe the changelog{d} is a "
+                 "rolling window. Let me check the top of the changelog to see what version range "
+                 "it covers.\n\nLet me be efficient and do a batch:\n1. Read top of changelog "
+                 "(what version range)\n2. Check \"Из чатов\" folder\n3. Web search for {e}format "
+                 "(web)\n4. claude --help for plugin subcommands\n{f}\n")
+        варианты = [dict(a="Actually", b=" search", c="", d=" file", e="the ",
+                         f="Let me do the web search since it's most likely to give the concrete "
+                           "format, plus local checks."),
+                    dict(a="Let me also", b="", c="the ", d="", e="mod hook ", f="Let me batch."),
+                    dict(a="Actually", b="", c="the ", d="", e="mod hook ", f="Let me batch.")]
+        начало = ("- Let me also reconsider: maybe I should look at whether the CLI has a `claude "
+                  "plugin` subcommand that documents hooks, e.g. `claude plugin validate` or a "
+                  "schema. Let me check `claude --help` and any mod-related subcommands.\n")
+        текст = начало + "".join(виток.format(**варианты[i % 3]) for i in range(12))
+        слов = прогнать(текст)
+        self.assertIsNotNone(слов)
+        self.assertLessEqual(слов - len((начало + виток.format(**варианты[0])).split()), 400)
+
+    def test_короткая_петля_тоже_петля(self):
+        self.assertIsNotNone(прогнать(ВСТУПЛЕНИЕ * 3 + "I will check the config and then run the tests now. " * 40))
+
+    def test_два_повтора_это_ещё_не_петля(self):
+        """Модель вправе пересказать план дважды (вывод → итог); петля — от третьего раза."""
+        self.assertIsNone(прогнать(ВСТУПЛЕНИЕ * 3 + ПЛАН * 2 + "Done, the summary is committed."))
+
+    def test_повтор_в_начале_ответа_не_раньше_минимальной_длины(self):
+        д = proxy.ДетекторПетли(min_words=10_000)
+        self.assertIsNone(прогнать(ПЛАН * 8, д))
+
+    def test_цепочка_чтений_с_разными_файлами_не_петля(self):
+        текст = " ".join(f"Let me read the file src/m{i}.py to understand how it works."
+                         for i in range(80))
+        self.assertIsNone(прогнать(текст))
+
+    def test_нумерованный_список_однотипных_пунктов_не_петля(self):
+        текст = "\n".join(f"{i}. Добавить тест для модуля Module{i} в файл test_module{i}.py и "
+                          f"прогнать его локально перед коммитом в ветку feature/m{i}"
+                          for i in range(1, 60))
+        self.assertIsNone(прогнать(текст))
+
+    def test_таблица_с_одинаковыми_ячейками_не_петля(self):
+        шапка = "| Шаг | Статус | Сборка | Тесты | Линт | Ревью |\n|---|---|---|---|---|---|\n"
+        строки = "".join(f"| {i} | готово | да | да | да | да |\n" for i in range(1, 80))
+        таблица_одинаковых = "| готово | готово | готово | готово | готово |\n" * 80
+        self.assertIsNone(прогнать(шапка + строки))
+        self.assertIsNone(прогнать(таблица_одинаковых))
+
+    def test_код_в_заборе_не_считается(self):
+        код = ("Вот тест:\n```python\n" + "        self.assertEqual(proxy.stats['loops_detected'], "
+               "proxy.stats['loops_retried'] + 0)  # проверяем счётчик петли и повтора\n" * 60
+               + "```\nГотово.")
+        self.assertIsNone(прогнать(код))
+        # Забор, разорванный между дельтами, всё равно распознаётся
+        self.assertIsNone(прогнать(код, шаг=2))
+
+    def test_код_вне_забора_с_повтором_это_петля(self):
+        """Обратная сторона: та же строка ВНЕ забора — дословный повтор, предохранитель обязан."""
+        строка = ("self.assertEqual(proxy.stats loops detected, proxy.stats loops retried) "
+                  "проверяем счётчик петли и повтора в одном месте\n")
+        self.assertIsNotNone(прогнать(ВСТУПЛЕНИЕ * 2 + строка * 40))
+
+    def test_живой_документ_без_срабатываний(self):
+        """Длинная живая проза с кодом, списками и таблицами: README прокси целиком."""
+        with open(os.path.join(os.path.dirname(__file__), "README.md"), encoding="utf-8") as f:
+            self.assertIsNone(прогнать(f.read()))
+
+    def test_слова_без_букв_и_разметка_не_слова(self):
+        д = proxy.ДетекторПетли()
+        д.усвоить("| --- | ✅ | - * ## |\n")
+        self.assertEqual(д.всего, 0)
+
+
+def sse(тип, данные):
+    return f"event: {тип}\ndata: {json.dumps(данные, ensure_ascii=False)}\n\n".encode()
+
+
+def поток_ответа(блоки, stop_reason="end_turn", output_tokens=100, шаг=40):
+    """SSE-поток ответа vLLM: блоки — [(вид, текст)], вид thinking | text | tool_use."""
+    out = [sse("message_start", {"type": "message_start", "message": {
+        "id": "chatcmpl-x", "type": "message", "role": "assistant", "content": [],
+        "usage": {"input_tokens": 50, "output_tokens": 0}}})]
+    for i, (вид, текст) in enumerate(блоки):
+        if вид == "tool_use":
+            out.append(sse("content_block_start", {"type": "content_block_start", "index": i,
+                           "content_block": {"type": "tool_use", "id": "t1", "name": "Bash",
+                                             "input": {}}}))
+            for кусок in по_кусочкам(текст, шаг):
+                out.append(sse("content_block_delta", {"type": "content_block_delta", "index": i,
+                               "delta": {"type": "input_json_delta", "partial_json": кусок}}))
+        else:
+            out.append(sse("content_block_start", {"type": "content_block_start", "index": i,
+                           "content_block": {"type": вид, вид: ""}}))
+            поле, дельта = ("thinking", "thinking_delta") if вид == "thinking" else ("text", "text_delta")
+            for кусок in по_кусочкам(текст, шаг):
+                out.append(sse("content_block_delta", {"type": "content_block_delta", "index": i,
+                               "delta": {"type": дельта, поле: кусок}}))
+            if вид == "thinking":
+                out.append(sse("content_block_delta", {"type": "content_block_delta", "index": i,
+                               "delta": {"type": "signature_delta", "signature": "abc"}}))
+        out.append(sse("content_block_stop", {"type": "content_block_stop", "index": i}))
+    out.append(sse("message_delta", {"type": "message_delta",
+                   "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                   "usage": {"output_tokens": output_tokens}}))
+    out.append(sse("message_stop", {"type": "message_stop"}))
+    return b"".join(out)
+
+
+def события(сырое):
+    """Разбор SSE-потока клиента в список (тип, данные)."""
+    итог = []
+    for событие in сырое.decode().split("\n\n"):
+        if not событие.strip():
+            continue
+        тип = данные = None
+        for строка in событие.split("\n"):
+            if строка.startswith("event:"):
+                тип = строка[6:].strip()
+            elif строка.startswith("data:"):
+                данные = json.loads(строка[5:])
+        итог.append((тип, данные))
+    return итог
+
+
+def проверить_целостность(тест, список):
+    """Поток, который примет CLI: одно начало, блоки открыты-закрыты по порядку, конец в конце."""
+    типы = [т for т, _ in список]
+    тест.assertEqual(типы.count("message_start"), 1)
+    тест.assertEqual(типы[0], "message_start")
+    тест.assertEqual(типы[-1], "message_stop")
+    тест.assertEqual(типы.count("message_stop"), 1)
+    тест.assertEqual(типы.count("message_delta"), 1)
+    тест.assertEqual(типы[-2], "message_delta")
+    открыт, прежний = None, -1
+    for т, д in список:
+        if т == "content_block_start":
+            тест.assertIsNone(открыт, "блок открыт, не закрыв прежний")
+            тест.assertGreater(д["index"], прежний, "индексы блоков обязаны расти")
+            открыт = прежний = д["index"]
+        elif т == "content_block_delta":
+            тест.assertEqual(д["index"], открыт)
+        elif т == "content_block_stop":
+            тест.assertEqual(д["index"], открыт)
+            открыт = None
+    тест.assertIsNone(открыт)
+
+
+class РелеПотокаTests(unittest.TestCase):
+    def прогнать(self, сырое, шаг=97, **kw):
+        отдано = []
+        реле = proxy.РелеПотока(отдано.append, **kw)
+        петля = False
+        for i in range(0, len(сырое), шаг):
+            if реле.усвоить(сырое[i:i + шаг]):
+                петля = True
+                break
+        if not петля:
+            реле.дослать()
+        return реле, b"".join(отдано)
+
+    def test_без_петли_поток_байт_в_байт(self):
+        сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ * 3), ("text", "Готово.")])
+        реле, отдано = self.прогнать(сырое)
+        self.assertFalse(реле.петля)
+        self.assertEqual(отдано, сырое)
+
+    def test_json_вызова_инструмента_не_смотрим(self):
+        команда = json.dumps({"command": "echo " + "same same same same same " * 200})
+        сырое = поток_ответа([("text", "Запускаю."), ("tool_use", команда)], stop_reason="tool_use")
+        реле, отдано = self.прогнать(сырое)
+        self.assertFalse(реле.петля)
+        self.assertEqual(отдано, сырое)
+
+    def test_петля_в_размышлениях_обрывает_поток_и_закрывает_блок(self):
+        сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ + ПЛАН * 20), ("text", "Ответ")])
+        реле, отдано = self.прогнать(сырое)
+        self.assertTrue(реле.петля)
+        self.assertEqual(реле.петля_в, "thinking")
+        список = события(отдано)
+        self.assertNotIn("text", [д["content_block"]["type"] for т, д in список
+                                  if т == "content_block_start"], "после петли ничего не отдано")
+        self.assertLess(отдано.decode().count("highest-value"), 4)
+
+    def test_сдвиг_индексов_и_начало_повтора_не_пересылается(self):
+        сырое = поток_ответа([("thinking", "short"), ("text", "Ответ")])
+        _, отдано = self.прогнать(сырое, сдвиг=3, повтор=True)
+        список = события(отдано)
+        self.assertNotIn("message_start", [т for т, _ in список])
+        self.assertEqual(sorted({д["index"] for т, д in список if т.startswith("content_block")}), [3, 4])
+
+    def test_чужой_формат_уходит_насквозь(self):
+        сырое = b"data: not json\n\n" + поток_ответа([("text", ПЛАН * 20)])
+        реле, отдано = self.прогнать(сырое)
+        self.assertTrue(реле.петля, "непонятное событие не выключает детектор на следующих")
+        сырое = b"data: x" * 200_000  # без разделителя: сдаёмся и отдаём как есть
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
+            реле, отдано = self.прогнать(сырое, шаг=65536)
+        self.assertTrue(реле.сквозной)
+        self.assertEqual(отдано, сырое)
+
+    def test_ошибка_детектора_не_ломает_ход(self):
+        class Сломанный(proxy.ДетекторПетли):
+            def усвоить(self, текст):
+                raise RuntimeError("баг детектора")
+
+        сырое = поток_ответа([("text", ПЛАН * 3)])
+        with contextlib.redirect_stderr(io.StringIO()):
+            реле, отдано = self.прогнать(сырое, детектор=Сломанный())
+        self.assertTrue(реле.сквозной)
+        self.assertEqual(отдано, сырое)
+
+    def test_тело_повтора_сдвигает_сэмплинг(self):
+        тело = json.dumps({"model": "m", "temperature": 0.7, "presence_penalty": 1.0,
+                           "messages": []}).encode()
+        doc = json.loads(proxy.retry_body(тело))
+        self.assertEqual((doc["temperature"], doc["presence_penalty"]), (0.8, 1.5))
+        doc = json.loads(proxy.retry_body(json.dumps({"presence_penalty": 1.8}).encode()))
+        self.assertEqual(doc["presence_penalty"], 2.0, "потолок vLLM")
+        self.assertEqual(doc["temperature"], 1.1, "без поля — от дефолта vLLM")
+        self.assertIsNone(proxy.retry_body(b"not json"))
+
+
+class ПетляЗаглушка(BaseHTTPRequestHandler):
+    """vLLM-заглушка: отдаёт по очереди заготовленные потоки (петля, нормальный ответ...)."""
+    протокол_версия = "HTTP/1.1"
+    ответы = []
+    принятые = []
+    оборваны = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        type(self).принятые.append(json.loads(self.rfile.read(n)))
+        номер = len(type(self).принятые)
+        поток = type(self).ответы.pop(0)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            for i in range(0, len(поток), 4096):
+                self.wfile.write(поток[i:i + 4096])
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            type(self).оборваны.append(номер)
+        self.close_connection = True
+
+
+class ПетляСквознаяTests(unittest.TestCase):
+    """CLI → прокси → vLLM-заглушка с петлёй → повтор → валидный ответ клиенту и карточка."""
+
+    def setUp(self):
+        class Модель(ПетляЗаглушка):
+            ответы, принятые, оборваны = [], [], []
+
+        class Бэкенд(БэкендЗаглушка):
+            принятые = []
+
+        self.Модель, self.Бэкенд = Модель, Бэкенд
+        self.модель, self.бэкенд = поднять(Модель), поднять(Бэкенд)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
+                          proxy.BACKEND_EVENTS_URL, proxy._event_secret, dict(proxy.stats),
+                          proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.SAMPLING)
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.модель.server_address[1]
+        proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM = "off", ""
+        proxy.BACKEND_EVENTS_URL = (f"http://127.0.0.1:{self.бэкенд.server_address[1]}"
+                                    "/api/internal/llm-proxy/events")
+        proxy._event_secret = "secret-from-config"
+        proxy.LOOP_GUARD, proxy.LOOP_RETRY = "on", "on"
+        proxy.SAMPLING = {"temperature": 0.7, "presence_penalty": 1.0}
+        for к in ("loops_detected", "loops_retried", "loops_truncated", "loop_guard_errors"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
+         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат,
+         proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.SAMPLING) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.модель, self.бэкенд, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, сессия="sess-loop", ждать_карточку=True):
+        прежний = proxy._last_event_thread
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True,
+                           "messages": [{"role": "user", "content": "найди хуки"}]}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело, headers={
+            "Content-Type": "application/json", "Content-Length": str(len(тело)),
+            proxy.EVENT_SESSION_HEADER: сессия})
+        ответ = c.getresponse().read()
+        c.close()
+        срок = time.monotonic() + (5 if ждать_карточку else 0.3)
+        while time.monotonic() < срок and proxy._last_event_thread is прежний:
+            time.sleep(0.005)
+        if proxy._last_event_thread is not прежний and proxy._last_event_thread is not None:
+            proxy._last_event_thread.join(timeout=10)
+        return события(ответ)
+
+    def test_петля_в_тексте_перехвачена_и_повтор_приклеен(self):
+        self.Модель.ответы = [
+            # Петля длиннее буферов сокета: иначе заглушка успела бы дописать её до обрыва
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("thinking", "Search first."), ("text", "Нашёл хуки."),
+                          ("tool_use", '{"command": "ls"}')], stop_reason="tool_use",
+                         output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
+                         ["tool_use"], "конец ответа — от повтора")
+        виды = [д["content_block"]["type"] for т, д in список if т == "content_block_start"]
+        self.assertEqual(виды, ["thinking", "text", "thinking", "text", "tool_use"])
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertLess(текст.count("highest-value action"), 4, "петля оборвана рано")
+        self.assertIn("Нашёл хуки.", текст)
+        self.assertEqual(len(self.Модель.принятые), 2)
+        повтор = self.Модель.принятые[1]
+        self.assertEqual((повтор["temperature"], повтор["presence_penalty"]), (0.8, 1.5))
+        self.assertEqual(self.Модель.оборваны, [1], "первая генерация остановлена обрывом")
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["loops_retried"],
+                          proxy.stats["loops_truncated"]), (1, 1, 0))
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual((событие["kind"], событие["sessionId"], событие["blocks"],
+                          событие["resultBlocks"], событие["thinkingBlocks"]),
+                         ("loop_guard", "sess-loop", 1, 1, 0))
+
+    def test_петля_в_размышлениях_закрыта_с_подписью(self):
+        self.Модель.ответы = [поток_ответа([("thinking", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", "Ответ.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        подписи = [д for т, д in список if т == "content_block_delta"
+                   and д["delta"]["type"] == "signature_delta" and д["index"] == 0]
+        self.assertEqual(len(подписи), 1, "оборванное размышление закрыто с подписью")
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual(событие["thinkingBlocks"], 1)
+
+    def test_петля_и_в_повторе_ответ_усечён_с_пометкой(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
+                         ["end_turn"])
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("модель зациклилась, повтор запроса тоже", текст)
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["loops_retried"],
+                          proxy.stats["loops_truncated"]), (2, 1, 1))
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual((событие["blocks"], событие["resultBlocks"]), (2, 1))
+
+    def test_без_повтора_усечение_сразу(self):
+        proxy.LOOP_RETRY = "off"
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        self.assertEqual(len(self.Модель.принятые), 1)
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("модель зациклилась]", текст)
+        self.assertEqual(proxy.stats["loops_truncated"], 1)
+
+    def test_выключатель_отдаёт_поток_как_есть(self):
+        proxy.LOOP_GUARD = "off"
+        сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
+        self.Модель.ответы = [сырое]
+        список = self.спросить(ждать_карточку=False)
+        self.assertEqual(список, события(сырое))
+        self.assertEqual(proxy.stats["loops_detected"], 0)
+        self.assertEqual(self.Бэкенд.принятые, [])
+
+    def test_обычный_ответ_без_изменений_и_карточки(self):
+        сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ * 2), ("text", "Сделано.")])
+        self.Модель.ответы = [сырое]
+        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(len(self.Модель.принятые), 1)
+        self.assertEqual(self.Бэкенд.принятые, [])
+
+    def test_счётчики_видны_в_stats(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", "Ок.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual((отдано["loops_detected"], отдано["loops_retried"]), (1, 1))
+        self.assertTrue(отдано["loop_guard"].startswith("on"))
+
+
 if __name__ == "__main__":
     unittest.main()

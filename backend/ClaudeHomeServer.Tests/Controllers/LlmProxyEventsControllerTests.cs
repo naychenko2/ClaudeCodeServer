@@ -131,6 +131,27 @@ public class LlmProxyEventsControllerTests
         card.GetProperty("cacheReadTokens").GetInt32().Should().Be(18_000);
     }
 
+    // Перехват петли модели (2026-10-15) — третий вид карточки той же ручки: прокси шлёт его,
+    // и отказ 400 молча терял бы событие в ленте.
+    [Fact]
+    public async Task ПерехватПетли_КарточкаЛожитсяВИсторию()
+    {
+        using var factory = WithSecret(Secret);
+        var owner = factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+
+        var client = Anonymous(factory);
+        client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
+        var response = await client.PostAsJsonAsync(Url, Body(sessionId, kind: "loop_guard"));
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await owner.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history");
+        var card = history.EnumerateArray()
+            .Single(m => m.GetProperty("kind").GetString() == "context_pruned");
+        card.GetProperty("pruneKind").GetString().Should().Be("loop_guard");
+    }
+
     // МЕХАНИЗМ ЗАДВОЕНИЯ (диагностика 2026-09-23): одно принятое событие уезжает в ДВЕ группы
     // одним и тем же сообщением — в session-группу чата и в project-группу проекта
     // (SessionManager.BroadcastSessionMessageAsync). Вкладка открытого чата состоит в обеих

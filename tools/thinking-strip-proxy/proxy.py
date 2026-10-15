@@ -13,6 +13,7 @@
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
 import gzip, hashlib, http.client, json, os, re, sys, threading, time
+from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -288,10 +289,35 @@ EVENT_TIMEOUT = float(os.environ.get("EVENT_TIMEOUT", "5"))
 # проверено на стенде 2026-09-23: CLI дописывает его к каждому запросу к API.
 EVENT_SESSION_HEADER = os.environ.get("EVENT_SESSION_HEADER", "X-CCS-Session")
 
+# --- Предохранитель от петли в потоке ответа ---------------------------------------------------
+#
+# 2026-10-15: срез бюджета размышлений посреди плана → vLLM закрывает </think> → модель
+# продолжает план текстом и повторяет его по кругу, пока человек не нажмёт «Стоп». Детектора
+# повторов нет ни в роутере vLLM, ни в CLI. presence_penalty снижает повтор токенов, но не
+# стратегии. Поэтому прокси сам следит за дельтами thinking/text: n-грамма слов повторилась
+# LOOP_REPEATS раз в последних LOOP_WINDOW словах — петля. Тогда upstream закрывается, клиенту
+# закрывается открытый блок, и запрос один раз повторяется с иным сэмплингом; его поток
+# приклеивается к тому же ответу (без второго message_start, индексы блоков сдвинуты). Вторая
+# петля — ответ усекается с пометкой и штатным хвостом message_delta/message_stop.
+#
+# Дефолт off: служба запускается из рабочего дерева, и код на ветке не должен менять поведение
+# живого стенда до отмашки — включает mode.conf. Откат: LOOP_GUARD=off и рестарт.
+LOOP_GUARD = os.environ.get("LOOP_GUARD", "off")
+LOOP_WINDOW = int(os.environ.get("LOOP_WINDOW", "400"))        # слов в скользящем окне
+LOOP_NGRAM = int(os.environ.get("LOOP_NGRAM", "10"))           # длина n-граммы, слов
+LOOP_REPEATS = int(os.environ.get("LOOP_REPEATS", "3"))        # сколько повторов — петля
+LOOP_MIN_WORDS = int(os.environ.get("LOOP_MIN_WORDS", "120"))  # раньше не срабатывать
+LOOP_SPAN = int(os.environ.get("LOOP_SPAN", "30"))             # столько слов обязаны совпасть
+# Повтор запроса после петли: добавки к сэмплингу (presence_penalty потолком 2.0 — граница vLLM).
+LOOP_RETRY = os.environ.get("LOOP_RETRY", "on")
+LOOP_RETRY_SAMPLING = _parse_kv(os.environ.get("LOOP_RETRY_SAMPLING",
+                                               "presence_penalty=0.5,temperature=0.1"))
+
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
-         "prefix_snapshots": 0}
+         "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
+         "loops_truncated": 0, "loop_guard_errors": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -1070,6 +1096,264 @@ def send_event(payload):
     _last_event_thread = поток
 
 
+# --- Предохранитель от петли: детектор и реле потока ----------------------------------------
+
+# Края слова, которые не делают его другим: пунктуация, разметка, маркеры списков, ячейки таблиц.
+_LOOP_TRIM = "\"'`*_.,;:!?()[]{}<>«»“”‘’—–-|#>~"
+
+
+class ДетекторПетли:
+    """Скользящее окно слов из дельт thinking/text; петля — повтор длинного куска `repeats` раз.
+
+    Кандидат — n-грамма (LOOP_NGRAM слов), встретившаяся `repeats` раз в окне. Подтверждение —
+    последние LOOP_SPAN слов дословно совпадают с тем же куском на каждом шаге повтора. Без
+    подтверждения ловилась бы цепочка «Let me read the file A to understand how it works. Let
+    me read the file B …»: 10 слов без имени файла повторяются каждое предложение, хотя мысль
+    идёт вперёд. Настоящая петля повторяет весь кусок, имя файла меняется — нет.
+
+    Слово, а не токен: токенизатора у прокси нет, а для повтора фраз разницы нет. Код внутри
+    ```-заборов не считается (повтор строк в коде — норма), как и «слова» без букв и цифр —
+    разделители таблиц, маркеры списков, эмодзи. Кусок с малым числом разных слов
+    (`да | да | да`) петлёй не считается: это ячейки таблицы, а не повтор мысли.
+    """
+
+    def __init__(self, window=None, ngram=None, repeats=None, min_words=None, span=None):
+        self.window = window or LOOP_WINDOW
+        self.ngram = ngram or LOOP_NGRAM
+        self.repeats = repeats or LOOP_REPEATS
+        self.min_words = LOOP_MIN_WORDS if min_words is None else min_words
+        self.span = max(self.ngram, span or LOOP_SPAN)
+        self.слова = deque(maxlen=self.window + self.span)  # хвост потока, абсолютные номера
+        self.окно = deque()  # (n-грамма, номер её последнего слова) по порядку
+        self.позиции = {}  # n-грамма -> номера последних слов её вхождений в окне
+        self.всего = 0
+        self.хвост = ""  # незаконченное слово: дельты режут слова где угодно
+        self.в_коде = False
+        self.петля = None  # n-грамма, на которой сработали
+
+    def новый_блок(self):
+        """Начало блока: недописанное слово закончилось, забор кода не переходит в другой блок."""
+        if self.хвост:
+            self._слово(self.хвост)
+            self.хвост = ""
+        self.в_коде = False
+
+    def усвоить(self, текст):
+        """True — петля. Повторный вызов после срабатывания тоже True."""
+        if self.петля is not None:
+            return True
+        if not текст:
+            return False
+        текст = self.хвост + текст
+        слова = текст.split()
+        self.хвост = слова.pop() if слова and not текст[-1].isspace() else ""
+        return any(self._слово(w) for w in слова)
+
+    def _слово_по_номеру(self, i):
+        return self.слова[i - (self.всего - len(self.слова))]
+
+    def _слово(self, w):
+        if "```" in w:
+            if w.count("```") % 2:
+                self.в_коде = not self.в_коде
+            return False
+        if self.в_коде:
+            return False
+        норм = w.strip(_LOOP_TRIM).lower()
+        if not норм or not any(ch.isalnum() for ch in норм):
+            return False
+        self.слова.append(норм)
+        self.всего += 1
+        if self.всего < self.ngram:
+            return False
+        конец = self.всего - 1
+        g = tuple(self.слова[i] for i in range(len(self.слова) - self.ngram, len(self.слова)))
+        self.окно.append((g, конец))
+        self.позиции.setdefault(g, deque()).append(конец)
+        while self.окно and self.окно[0][1] <= конец - self.window + self.ngram - 1:
+            старая, _ = self.окно.popleft()
+            вхождения = self.позиции[старая]
+            вхождения.popleft()
+            if not вхождения:
+                del self.позиции[старая]
+        вхождения = self.позиции[g]
+        if (len(вхождения) < self.repeats or self.всего < self.min_words
+                or len({x for x in g if any(ch.isalpha() for ch in x)}) < max(3, self.ngram // 3)):
+            return False
+        прежние = list(вхождения)[-self.repeats:-1]
+        начало = конец - self.span + 1
+        if начало - (конец - прежние[0]) < self.всего - len(self.слова):
+            return False  # кусок для сверки уже выпал из памяти
+        for p in прежние:
+            шаг = конец - p
+            if any(self._слово_по_номеру(i) != self._слово_по_номеру(i - шаг)
+                   for i in range(начало, конец - self.ngram + 1)):
+                return False
+        self.петля = g
+        return True
+
+
+def _sse(тип, данные):
+    return (f"event: {тип}\ndata: " + json.dumps(данные, ensure_ascii=False) + "\n\n").encode()
+
+
+class РелеПотока:
+    """Пересылает SSE клиенту целыми событиями и прогоняет дельты через детектор.
+
+    Поток повтора (`повтор=True`) клеится к уже начатому ответу: его `message_start` клиенту
+    не отдаётся (второго начала сообщения у Anthropic-потока не бывает), а индексы блоков
+    сдвигаются на `сдвиг` — за последний блок первой попытки.
+
+    Fail-open, как у дампа: любое исключение разбора переводит реле в сквозной режим — дальше
+    байты идут клиенту как есть, без детектора. Ход ломать предохранитель не вправе.
+    """
+
+    БУФЕР_МАКС = 1 << 20  # событие без разделителя длиннее мегабайта — чужой формат, сдаёмся
+
+    def __init__(self, отдать, сдвиг=0, повтор=False, детектор=None):
+        self.отдать = отдать
+        self.сдвиг = сдвиг
+        self.повтор = повтор
+        self.детектор = детектор or ДетекторПетли()
+        self.буфер = b""
+        self.открыт = None  # [индекс у клиента, вид блока, пришла ли подпись]
+        self.следующий = сдвиг  # индекс клиента для следующего блока
+        self.выход = 0  # output_tokens из usage потока
+        self.петля = False
+        self.петля_в = None  # вид блока, где поймали петлю
+        self.сквозной = False
+        self.завершён = False  # message_stop клиенту отдан
+
+    def усвоить(self, chunk):
+        """Пересылает целые события из куска; True — поймана петля (хвост куска отброшен)."""
+        if self.петля:
+            return True
+        if self.сквозной:
+            self.отдать(chunk)
+            return False
+        self.буфер += chunk
+        событие = b""
+        try:
+            while True:
+                i = self.буфер.find(b"\n\n")
+                if i < 0:
+                    if len(self.буфер) > self.БУФЕР_МАКС:
+                        raise ValueError("нет разделителя событий SSE")
+                    return False
+                событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+                if self._событие(событие):
+                    self.буфер = b""
+                    return True
+                событие = b""
+        except Exception as e:
+            with lock:
+                stats["loop_guard_errors"] += 1
+            print(f"предохранитель петли выключен до конца ответа ({e!r})", file=sys.stderr, flush=True)
+            self.сквозной = True
+            остаток, self.буфер = событие + self.буфер, b""
+            if остаток:
+                self.отдать(остаток)
+            return False
+
+    def дослать(self):
+        """Конец потока: недописанный хвост буфера уходит клиенту как есть."""
+        if self.буфер and not self.петля:
+            self.отдать(self.буфер)
+        self.буфер = b""
+
+    def _событие(self, сырое):
+        данные = None
+        for строка in сырое.split(b"\n"):
+            if строка.startswith(b"data:"):
+                try:
+                    данные = json.loads(строка[5:].strip())
+                except ValueError:
+                    данные = None
+        тип = данные.get("type") if isinstance(данные, dict) else None
+        if тип == "message_start" and self.повтор:
+            return False
+        if тип in ("content_block_start", "content_block_delta", "content_block_stop") \
+                and isinstance(данные.get("index"), int):
+            if self.сдвиг:
+                данные["index"] += self.сдвиг
+                сырое = _sse(тип, данные)
+            индекс = данные["index"]
+            if тип == "content_block_start":
+                вид = (данные.get("content_block") or {}).get("type")
+                self.открыт = [индекс, вид, False]
+                self.следующий = max(self.следующий, индекс + 1)
+                self.детектор.новый_блок()
+            elif тип == "content_block_delta":
+                дельта = данные.get("delta") or {}
+                вид = дельта.get("type")
+                if вид == "signature_delta" and self.открыт is not None:
+                    self.открыт[2] = True
+                текст = (дельта.get("thinking") if вид == "thinking_delta"
+                         else дельта.get("text") if вид == "text_delta" else None)
+                if isinstance(текст, str) and self.детектор.усвоить(текст):
+                    self.петля = True
+                    self.петля_в = self.открыт[1] if self.открыт else None
+                    return True
+            else:
+                self.открыт = None
+        elif тип == "message_delta":
+            usage = данные.get("usage") or {}
+            if isinstance(usage.get("output_tokens"), int):
+                self.выход = usage["output_tokens"]
+        elif тип == "message_stop":
+            self.завершён = True
+        self.отдать(сырое)
+        return False
+
+    def закрыть_блок(self):
+        """Закрывает открытый у клиента блок; размышлению без подписи — подпись, как у vLLM."""
+        if self.открыт is None:
+            return
+        индекс, вид, подписан = self.открыт
+        if вид == "thinking" and not подписан:
+            self.отдать(_sse("content_block_delta", {"type": "content_block_delta", "index": индекс,
+                             "delta": {"type": "signature_delta", "signature": os.urandom(16).hex()}}))
+        self.отдать(_sse("content_block_stop", {"type": "content_block_stop", "index": индекс}))
+        self.открыт = None
+
+    def пометка(self, текст):
+        """Отдельный текстовый блок с пометкой прокси — следом за последним блоком ответа."""
+        индекс = self.следующий
+        self.следующий += 1
+        self.отдать(_sse("content_block_start", {"type": "content_block_start", "index": индекс,
+                         "content_block": {"type": "text", "text": ""}}))
+        self.отдать(_sse("content_block_delta", {"type": "content_block_delta", "index": индекс,
+                         "delta": {"type": "text_delta", "text": текст}}))
+        self.отдать(_sse("content_block_stop", {"type": "content_block_stop", "index": индекс}))
+
+    def хвост(self, выход=None):
+        """Штатный конец сообщения: stop_reason=end_turn и message_stop."""
+        self.отдать(_sse("message_delta", {"type": "message_delta",
+                         "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                         "usage": {"output_tokens": выход if выход is not None else self.выход}}))
+        self.отдать(_sse("message_stop", {"type": "message_stop"}))
+        self.завершён = True
+
+
+def retry_body(body):
+    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать."""
+    try:
+        doc = json.loads(body)
+        if not isinstance(doc, dict):
+            return None
+        for ключ, добавка in LOOP_RETRY_SAMPLING.items():
+            было = doc.get(ключ)
+            if not isinstance(было, (int, float)) or isinstance(было, bool):
+                было = 1.0 if ключ == "temperature" else 0.0  # дефолты vLLM
+            стало = round(было + добавка, 3)
+            if ключ == "presence_penalty":
+                стало = min(стало, 2.0)
+            doc[ключ] = стало
+        return json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        return None
+
+
 # --- Дамп тел на диск ------------------------------------------------------------------------
 
 _dump_dir = None  # None — ещё не готовили; "" — дамп выключен (или каталог не годится)
@@ -1244,7 +1528,9 @@ class Handler(BaseHTTPRequestHandler):
                                   compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off",
                                   sampling=SAMPLING or "off",
                                   sampling_fast=SAMPLING_FAST or "off",
-                                  effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET)).encode()
+                                  effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET,
+                                  loop_guard=(f"{LOOP_GUARD}: {LOOP_NGRAM}-грамма x{LOOP_REPEATS} "
+                                              f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"))).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(msg)))
@@ -1438,12 +1724,24 @@ class Handler(BaseHTTPRequestHandler):
         # разбирательства, а карточка работает всегда, и делить одно состояние на две ручки с
         # разным сроком жизни значит потерять цифры кэша, как только дамп выключат.
         usage_карточки, prefill = {}, None
+
+        def отдать(кусок):
+            if кусок:  # пустой кусок в chunked-кодировке — это конец ответа, его шлём отдельно
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(кусок), кусок))
+                self.wfile.flush()
+
+        # Предохранитель — только на потоке локальной модели: облако (автосжатие) не петляет,
+        # а ответы-ошибки и не-SSE идут как раньше, байт в байт.
+        реле = None
+        if (LOOP_GUARD == "on" and первый is None and resp.status == 200
+                and "text/event-stream" in (resp.getheader("Content-Type") or "")):
+            реле = РелеПотока(отдать)
+        итог_петли = {"петли": 0, "повторён": False, "conn": None}
         try:
             if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
                 prefill = time.monotonic() - начало
                 merge_usage(usage_карточки, первый)
-                self.wfile.write(b"%x\r\n%s\r\n" % (len(первый), первый))
-                self.wfile.flush()
+                отдать(первый)
             while True:
                 chunk = resp.read1(65536)
                 if not chunk:
@@ -1454,13 +1752,30 @@ class Handler(BaseHTTPRequestHandler):
                 if prefill is None:  # первый байт ответа: замер того, что человек ждал
                     prefill = time.monotonic() - начало
                 merge_usage(usage_карточки, chunk)
-                self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                self.wfile.flush()
+                if реле is None:
+                    отдать(chunk)
+                elif реле.усвоить(chunk):
+                    break
+            if реле is not None and реле.петля:
+                self._после_петли(реле, conn, body, headers, итог_петли)
+            elif реле is not None:
+                реле.дослать()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass  # клиент ушёл (прерывание хода) — upstream закроется вместе с conn
         finally:
+            if итог_петли["conn"] is not None:
+                итог_петли["conn"].close()
+            # Карточка «петля перехвачена»: blocks — сколько петель поймали (2 — и повтор
+            # петлял, ответ усечён), resultBlocks — был ли повтор, thinkingBlocks — петля в
+            # размышлениях. Поля общие с карточкой обрезки: ручка бэкенда одна.
+            if итог_петли["петли"] and сессия:
+                send_event({"sessionId": сессия, "kind": "loop_guard",
+                            "tokensBefore": 0, "tokensAfter": 0,
+                            "blocks": итог_петли["петли"], "resultBlocks": int(итог_петли["повторён"]),
+                            "inputBlocks": 0, "thinkingBlocks": int(реле.петля_в == "thinking"),
+                            "prefillSeconds": None, "cacheReadTokens": None, "promptTokens": None})
             if дамп is not None:
                 дамп.записать()  # оборванный ход: мета без usage, зато тело в дампе осталось
             # Карточка уходит ПО КОНЦУ ответа, а не по первому байту: цифры кэша роутер vLLM
@@ -1475,6 +1790,64 @@ class Handler(BaseHTTPRequestHandler):
                 self._отправить_событие(событие, prefill, usage_карточки)
                 событие = None
             conn.close()
+
+    def _после_петли(self, реле, conn, body, headers, итог):
+        """Петля поймана: гасим генерацию, закрываем блок и один раз повторяем запрос.
+
+        Закрытие соединения — и есть остановка: vLLM снимает запрос по обрыву клиента, расход
+        GPU прекращается сразу. Поток повтора приклеивается к тому же ответу клиенту. Петля и
+        в повторе (или повтор не удался) — пометка отдельным текстовым блоком и штатный хвост.
+        """
+        conn.close()
+        итог["петли"] = 1
+        with lock:
+            stats["loops_detected"] += 1
+        print(f"петля в потоке ({реле.петля_в}, {реле.детектор.всего} слов): "
+              f"{' '.join(реле.детектор.петля or ())!r}", file=sys.stderr, flush=True)
+        реле.закрыть_блок()
+        тело = retry_body(body) if LOOP_RETRY == "on" and body else None
+        причина = "повтор выключен" if тело is None else None
+        if тело is not None:
+            заголовки = dict(headers, **{"Content-Length": str(len(тело))})
+            c2 = итог["conn"] = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
+            try:
+                c2.request(self.command, self.path, body=тело, headers=заголовки)
+                r2 = c2.getresponse()
+            except OSError as e:
+                r2, причина = None, f"upstream недоступен: {e!r}"
+            if r2 is not None and r2.status != 200:
+                причина = f"повтор ответил HTTP {r2.status}"
+            elif r2 is not None:
+                итог["повторён"] = True
+                with lock:
+                    stats["loops_retried"] += 1
+                реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
+                while True:
+                    chunk = r2.read1(65536)
+                    if not chunk or реле2.усвоить(chunk):
+                        break
+                if not реле2.петля:
+                    реле2.дослать()
+                    if not реле2.завершён and not реле2.сквозной:
+                        # Повтор оборвался без message_stop — клиенту всё равно целое сообщение.
+                        реле2.закрыть_блок()
+                        реле2.хвост()
+                    return
+                c2.close()
+                итог["петли"] = 2
+                with lock:
+                    stats["loops_detected"] += 1
+                print(f"петля и в повторе ({реле2.детектор.всего} слов) — ответ усечён",
+                      file=sys.stderr, flush=True)
+                реле2.закрыть_блок()
+                реле = реле2
+        if причина:
+            print(f"петля: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
+        with lock:
+            stats["loops_truncated"] += 1
+        реле.пометка("\n\n[прокси: ответ усечён — модель зациклилась"
+                     + (", повтор запроса тоже" if итог["повторён"] else "") + "]")
+        реле.хвост()
 
     def handle_one_request(self):
         try:
@@ -1507,6 +1880,9 @@ if __name__ == "__main__":
              f"{COMPACT_MIN_CONTEXT_TOKENS // 1000}k ток)" if COMPACT_UPSTREAM
              else ", автосжатие в облако выкл")
           + (f", карточка сдвига границы -> {BACKEND_EVENTS_URL}" if BACKEND_EVENTS_URL
-             else ", карточка сдвига границы выкл"), flush=True)
+             else ", карточка сдвига границы выкл")
+          + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "
+             f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл"),
+          flush=True)
     prepare_dump_dir()  # сообщит в журнал, включён дамп или каталог не годится
     srv.serve_forever()

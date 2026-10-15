@@ -183,6 +183,65 @@ export interface MediaDone {
   finishedAt: number;
 }
 
+// === История медиа-генераций (ADR-030): GET /api/local-model/history ===
+//
+// 7 дней на диске, переживает рестарты. Запись — один прогон ComfyUI по prompt_id;
+// события журнала (enqueued/started/finished) бэкенд склеивает. В отличие от прочих
+// ручек фичи: времена — ISO-8601 UTC (не unix-мс), и обе ручки проверяют и роль
+// admin (403), и серверный флаг local-model-stats (без него — 404).
+// owner — логин владельца; название чата/проекта и sessionId/projectId НЕ отдаются
+// ни у чужих, ни у своих записей (строка и карточка одинаковы для всех).
+export interface MediaHistoryRecord {
+  // prompt_id
+  id: string;
+  // image | video | audio | train | other
+  kind?: string | null;
+  // операция: generate_image, text_to_video, …
+  op?: string | null;
+  model?: string | null;
+  // промпт, ≤ 4 КБ; null — не записан
+  prompt?: string | null;
+  // параметры (белый список: width, height, durationSec, frames, steps, seed,
+  // count, engine, fast, lora); null — не записаны
+  params?: Record<string, unknown> | null;
+  // логин владельца; null — пользователь не найден
+  owner?: string | null;
+  // completed | failed | cancelled | interrupted | running | queued | unknown
+  status: string;
+  // исход; null, пока запись не завершена
+  outcome?: string | null;
+  // недоверенный текст ComfyUI, ≤ 500 символов
+  error?: string | null;
+  runSeconds?: number | null;
+  enqueuedAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  // local-media | image-editor | audio-editor | video-editor | lora
+  source?: string | null;
+}
+
+// Страница истории: записи newest-first, курсор следующей страницы (null — конец
+// ленты), счётчики для меню фильтров (с учётом остальных активных фильтров).
+export interface MediaHistoryPage {
+  records: MediaHistoryRecord[];
+  nextCursor: string | null;
+  counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
+}
+
+// Запрос к истории. Все фильтры необязательны; from — ISO-дата начала периода
+// (24 ч / 7 дней / сегодня), to бэкенд не требует. cursor — непрозрачная строка
+// предыдущей страницы; limit 1..50 (по умолчанию 50).
+export interface MediaHistoryQuery {
+  kind?: string | null;
+  model?: string | null;
+  outcome?: string | null;
+  login?: string | null;
+  from?: string | null;
+  to?: string | null;
+  cursor?: string | null;
+  limit?: number;
+}
+
 // Итог завершённого хода на локальной модели: суммы по запросам хода. Числа
 // nullable — движок не отдал поле (на экране «—»). Тот же состав — у hub-события
 // local_model_turn_stats (types/index.ts).
@@ -606,6 +665,23 @@ export const api = {
       if (since != null) qs.set('since', String(since));
       const suffix = qs.toString() ? `?${qs.toString()}` : '';
       return request<LocalModelMedia>(`/local-model/stats/media${suffix}`);
+    },
+    // GET /api/local-model/history: история медиа-генераций за 7 дней (ADR-030).
+    // Пустые фильтры не передаются; без query — вся история за 7 дней, страница 50.
+    history: (q?: MediaHistoryQuery) => {
+      const qs = new URLSearchParams();
+      if (q) {
+        if (q.kind) qs.set('kind', q.kind);
+        if (q.model) qs.set('model', q.model);
+        if (q.outcome) qs.set('outcome', q.outcome);
+        if (q.login) qs.set('login', q.login);
+        if (q.from) qs.set('from', q.from);
+        if (q.to) qs.set('to', q.to);
+        if (q.cursor) qs.set('cursor', q.cursor);
+        if (q.limit != null) qs.set('limit', String(q.limit));
+      }
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return request<MediaHistoryPage>(`/local-model/history${suffix}`);
     },
   },
 

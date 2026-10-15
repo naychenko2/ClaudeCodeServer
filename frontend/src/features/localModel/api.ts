@@ -11,6 +11,9 @@ import {
   type LocalModelStats,
   type MediaDone,
   type MediaGpu,
+  type MediaHistoryPage,
+  type MediaHistoryQuery,
+  type MediaHistoryRecord,
   type MediaQueue,
   type MediaRunning,
   type MediaSteps,
@@ -41,3 +44,12 @@ export function fetchLocalModelStats(window: '5m' | '15m' | '1h' = '5m', since?:
 export function fetchLocalModelMedia(since?: number): Promise<LocalModelMedia> {
   return api.localModel.media(since);
 }
+
+// История медиа-генераций (ADR-030): страница 7-дневного журнала. Пустой q —
+// вся история за 7 дней. Ошибки — как у request: status 403/404/410 на поле
+// ошибки, body 410 — { reason }.
+export function fetchMediaHistory(q?: MediaHistoryQuery): Promise<MediaHistoryPage> {
+  return api.localModel.history(q);
+}
+
+export type { MediaHistoryRecord, MediaHistoryPage, MediaHistoryQuery };

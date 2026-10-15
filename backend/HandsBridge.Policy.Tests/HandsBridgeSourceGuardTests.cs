@@ -190,9 +190,11 @@ public class HandsBridgeSourceGuardTests
             ["DoubleClickAsync"] = 5,
             ["RightClickAsync"] = 5,
             ["MiddleClickAsync"] = 4,
+            ["DragAsync"] = 7,   // startX, startY, endX, endY, button, окно, токен
+            ["ScrollAsync"] = 6, // direction, amount, x, y, окно, токен
         };
-        // Публичные перегрузки без окна — ещё не в схеме (D2b-2)
-        var forbidden = new[] { "DragAsync", "StrokeAsync", "ScrollAsync" };
+        // Polyline не в схеме: StrokeAsync инструмент не зовёт
+        var forbidden = new[] { "StrokeAsync" };
 
         var calls = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
             .Where(IsMouseInputServiceCall)
@@ -233,9 +235,13 @@ public class HandsBridgeSourceGuardTests
         var root = ParseTree(Read("Input/MouseInputService.cs"));
 
         // Методы, которые использует инструмент: обязаны иметь проверку точки перед SendInput
-        var checkedMethods = new[] { "MoveCoreAsync", "ClickCoreAsync", "DoubleClickCoreAsync", "RightClickCoreAsync", "MiddleClickCoreAsync" };
-        // Методы с SendInput, ещё не в инструменте (D2b-2: drag/scroll/polyline)
-        var excludedMethods = new[] { "StrokeCoreAsync", "ScrollCoreAsync" };
+        var checkedMethods = new[]
+        {
+            "MoveCoreAsync", "ClickCoreAsync", "DoubleClickCoreAsync", "RightClickCoreAsync", "MiddleClickCoreAsync",
+            "StrokeCoreAsync", "ScrollCoreAsync", // drag (через StrokeCore) и scroll — D2b-2
+        };
+        // Методы с SendInput вне инструмента — явные исключения (сейчас таких нет)
+        var excludedMethods = Array.Empty<string>();
 
         var allMethodsWithSendInput = new List<string>();
 
@@ -269,17 +275,24 @@ public class HandsBridgeSourceGuardTests
                 .ToList();
             Assert.NotEmpty(sendInputs);
 
-            // Проверка точки стоит ДО первого SendInput
+            // Первая проверка точки стоит ДО первого SendInput. Проверок может быть несколько:
+            // перетаскивание проверяет и начало (перед нажатием), и конец (перед отпусканием)
             var firstSendInput = sendInputs.MinBy(inv => inv.SpanStart)!;
-            var lastPointCheck = pointChecks.MaxBy(inv => inv.SpanStart)!;
-            Assert.True(lastPointCheck.SpanStart < firstSendInput.SpanStart,
-                $"{method.Identifier.Text}: проверка точки (span {lastPointCheck.SpanStart}) после первого SendInput (span {firstSendInput.SpanStart})");
+            var firstPointCheck = pointChecks.MinBy(inv => inv.SpanStart)!;
+            Assert.True(firstPointCheck.SpanStart < firstSendInput.SpanStart,
+                $"{method.Identifier.Text}: проверка точки (span {firstPointCheck.SpanStart}) после первого SendInput (span {firstSendInput.SpanStart})");
 
-            // Каждый вызов проверки точки вложен в if с ранним return
+            // Каждый вызов проверки точки вложен в if с ранним выходом (return или goto)
             foreach (var check in pointChecks)
             {
                 var ifStmt = FindEnclosingIfWithReturn(check);
                 Assert.NotNull(ifStmt);
+
+                // Условие — ровно «!CursorPointAcceptsInput(...)»: ни «false && …», ни «|| …» проверку не отключают
+                Assert.True(
+                    ifStmt!.Condition is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } not
+                    && not.Operand == check,
+                    $"{method.Identifier.Text}: условие проверки точки «{ifStmt.Condition}» не равно «!CursorPointAcceptsInput(...)»");
             }
         }
 
@@ -287,6 +300,53 @@ public class HandsBridgeSourceGuardTests
         var expected = checkedMethods.Concat(excludedMethods).ToHashSet(StringComparer.Ordinal);
         var actual = allMethodsWithSendInput.ToHashSet(StringComparer.Ordinal);
         Assert.Equal(expected, actual);
+    }
+
+    /// <summary>
+    /// Перетаскивание (D2b-2): кнопка мыши обязана отпускаться в <c>finally</c>, а конец перетаскивания —
+    /// проверяться ПОСЛЕ движения к нему и до отпускания (иначе drop упадёт в терминал). Разбор Roslyn:
+    /// в <c>StrokeCoreAsync</c> есть <c>try</c> с <c>finally</c>, где стоит <c>SendInput</c> (кнопка вверх),
+    /// и есть проверка точки, лежащая после цикла движения по точкам.
+    /// </summary>
+    [Fact]
+    public void Drag_releases_the_button_in_finally_and_rechecks_the_end_point()
+    {
+        var root = ParseTree(Read("Input/MouseInputService.cs"));
+        var stroke = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(m => m.Identifier.Text == "StrokeCoreAsync");
+
+        var finallyBlock = stroke.DescendantNodes().OfType<TryStatementSyntax>()
+            .Select(t => t.Finally?.Block)
+            .FirstOrDefault(b => b is not null && b.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSendInputCall));
+        Assert.NotNull(finallyBlock);
+
+        // Цикл движения по точкам при зажатой кнопке — тот, что зовёт MoveForStrokeAsync (первый for только проверяет границы)
+        var loop = stroke.DescendantNodes().OfType<ForStatementSyntax>()
+            .Single(f => f.DescendantNodes().OfType<IdentifierNameSyntax>().Any(i => i.Identifier.Text == "MoveForStrokeAsync"));
+        var checks = stroke.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(IsPointCheckCall).ToList();
+        Assert.True(checks.Count(c => c.SpanStart > loop.Span.End) >= 1,
+            "StrokeCoreAsync: нет проверки конечной точки после цикла движения (перед отпусканием кнопки)");
+        Assert.True(checks.Count(c => c.SpanStart < loop.SpanStart) >= 1,
+            "StrokeCoreAsync: нет проверки начальной точки до цикла движения");
+    }
+
+    /// <summary>
+    /// Инструмент кладёт в гейт ОБЕ точки перетаскивания: конец drag тоже проверяется на запрещённое окно.
+    /// </summary>
+    [Fact]
+    public void Mouse_tool_passes_the_drag_end_point_to_the_gate()
+    {
+        var root = ParseTree(Read("Tools/MouseControlTool.cs"));
+        var calls = root.DescendantNodes().OfType<InvocationExpressionSyntax>().ToList();
+
+        // Разбор Roslyn, а не текста: закомментированная строка вызовом не считается
+        Assert.Contains(calls, c =>
+            c.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Add", Expression: IdentifierNameSyntax { Identifier.Text: "pointList" } }
+            && c.ArgumentList.ToString().Contains("toX") && c.ArgumentList.ToString().Contains("toY"));
+
+        var gateCall = calls.Single(c => c.Expression.ToString() == "HandsGate.Policy.CheckPointer");
+        Assert.Equal("pointList", gateCall.ArgumentList.Arguments[1].ToString());
+        Assert.Equal("wheelAmount", gateCall.ArgumentList.Arguments[3].ToString());
     }
 
     [Fact]
@@ -403,7 +463,8 @@ public class HandsBridgeSourceGuardTests
 
     /// <summary>
     /// Ближайший предок-<c>IfStatement</c>, чьё условие содержит <paramref name="node"/>
-    /// и чьё тело содержит <c>return</c>.
+    /// и чьё тело содержит ранний выход: <c>return</c> или <c>goto</c> (перетаскивание уходит на метку
+    /// <c>Finish</c>, чтобы finally отпустил кнопку и результат не потерялся).
     /// </summary>
     private static IfStatementSyntax? FindEnclosingIfWithReturn(SyntaxNode node)
     {
@@ -411,7 +472,7 @@ public class HandsBridgeSourceGuardTests
         {
             if (current is not IfStatementSyntax ifStmt) continue;
             if (!ifStmt.Condition.DescendantNodesAndSelf().Contains(node)) continue;
-            if (ifStmt.Statement.DescendantNodes().OfType<ReturnStatementSyntax>().Any())
+            if (ifStmt.Statement.DescendantNodes().Any(n => n is ReturnStatementSyntax or GotoStatementSyntax))
                 return ifStmt;
         }
         return null;

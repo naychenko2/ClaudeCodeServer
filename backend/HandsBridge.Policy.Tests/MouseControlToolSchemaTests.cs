@@ -5,10 +5,10 @@ using Xunit;
 namespace HandsBridge.Policy.Tests;
 
 /// <summary>
-/// Схема <c>mouse_control</c> (D2b-1): MCP-SDK строит <c>enum</c> списка действий из C#-enum
-/// <c>MouseControlAction</c>. В этой сборке моста — ровно шесть действий (move, click, double_click,
-/// right_click, middle_click, get_position); <c>drag</c>, <c>polyline</c> и <c>scroll</c> ещё не в
-/// схеме — их добавит D2b-2. Тест держит границу: лишнее действие не просочится в схему, а
+/// Схема <c>mouse_control</c> (D2b-2): MCP-SDK строит <c>enum</c> списка действий из C#-enum
+/// <c>MouseControlAction</c>. В этой сборке моста — ровно восемь действий (move, click, double_click,
+/// right_click, middle_click, drag, scroll, get_position); <c>polyline</c> в схеме нет.
+/// Тест держит границу: лишнее действие не просочится в схему, а
 /// <c>get_position</c> остаётся единственным, кто не трогает машину (см. <see cref="HandsActivityTests"/>).
 /// </summary>
 public class MouseControlToolSchemaTests
@@ -18,11 +18,11 @@ public class MouseControlToolSchemaTests
     /// <summary>JSON-имена, которые обязан дать enum — порядок не важен, проверяется множество.</summary>
     private static readonly string[] ExpectedActions =
     [
-        "move", "click", "double_click", "right_click", "middle_click", "get_position",
+        "move", "click", "double_click", "right_click", "middle_click", "drag", "scroll", "get_position",
     ];
 
     [Fact]
-    public void Schema_enum_has_exactly_the_six_supported_actions()
+    public void Schema_enum_has_exactly_the_eight_supported_actions()
     {
         var names = EnumJsonNames();
 
@@ -30,13 +30,13 @@ public class MouseControlToolSchemaTests
     }
 
     [Fact]
-    public void Drag_polyline_and_scroll_are_not_in_the_schema_yet()
+    public void Drag_and_scroll_are_in_the_schema_but_polyline_is_not()
     {
         var names = EnumJsonNames();
 
-        Assert.DoesNotContain("drag", names);
+        Assert.Contains("drag", names);
+        Assert.Contains("scroll", names);
         Assert.DoesNotContain("polyline", names);
-        Assert.DoesNotContain("scroll", names);
     }
 
     /// <summary>JSON-имена enum: значения <c>JsonStringEnumMemberName</c>, по одному на каждый член.</summary>

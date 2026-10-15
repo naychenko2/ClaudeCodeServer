@@ -136,6 +136,53 @@ public class HandsBridgeGateRuntimeTests
         AssertGateDenied(result, "mouse_control", "No window at");
     }
 
+    /// <summary>
+    /// Сквозной тест drag и scroll (D2b-2): вызов с точкой над окном, которого гейт не знает, возвращает
+    /// отказ гейта до любого ввода; колесо выше потолка отказывает по форме, а не доходит до SendInput.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("Drag", "No window at")]
+    [InlineData("Scroll", "No window at")]
+    public async Task Mouse_control_drag_and_scroll_are_denied_by_gate(string actionName, string reason)
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "mouse_control: WinAPI (GetForegroundWindow) — только Windows");
+
+        var type = Bridge.Value.GetType("Sbroenne.WindowsMcp.Tools.MouseControlTool", throwOnError: true)!;
+        var action = Enum.Parse(type.GetNestedType("MouseControlAction")!, actionName);
+
+        var result = await Call("Sbroenne.WindowsMcp.Tools.MouseControlTool", new()
+        {
+            ["action"] = action,
+            ["x"] = 100,
+            ["y"] = 200,
+            ["toX"] = 300,
+            ["toY"] = 400,
+            ["direction"] = "down",
+        });
+
+        AssertGateDenied(result, "mouse_control", reason);
+    }
+
+    [SkippableFact]
+    public async Task Mouse_control_scroll_above_the_wheel_cap_is_denied_by_gate()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "mouse_control: WinAPI (GetForegroundWindow) — только Windows");
+
+        var type = Bridge.Value.GetType("Sbroenne.WindowsMcp.Tools.MouseControlTool", throwOnError: true)!;
+        var scroll = Enum.Parse(type.GetNestedType("MouseControlAction")!, "Scroll");
+
+        var result = await Call("Sbroenne.WindowsMcp.Tools.MouseControlTool", new()
+        {
+            ["action"] = scroll,
+            ["x"] = 100,
+            ["y"] = 200,
+            ["direction"] = "down",
+            ["amount"] = 21,
+        });
+
+        AssertGateDenied(result, "mouse_control", "between 1 and 20");
+    }
+
     private static void AssertGateDenied((bool IsError, string Text) result, string tool, string reason)
     {
         Assert.True(result.IsError, result.Text);

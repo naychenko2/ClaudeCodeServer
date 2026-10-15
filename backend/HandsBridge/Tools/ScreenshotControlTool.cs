@@ -21,8 +21,11 @@ public static partial class ScreenshotControlTool
     /// annotate, monitors, displays, list monitors, region capture, window capture.
     /// </summary>
     /// <remarks>
-    /// **COORDINATE SYSTEM**: Screenshot pixel coordinates = mouse coordinates. No conversion needed!
-    /// If you see a button at pixel (450, 300) in the screenshot, use mouse_control(x=450, y=300, monitorIndex=N).
+    /// **COORDINATE SYSTEM**: mouse_control takes SCREEN coordinates. The response carries screenOriginX/screenOriginY
+    /// (screen position of the image's top-left corner), scaleX/scaleY (screen pixels per image pixel; 1.0 when the
+    /// image was not downscaled) and imageWidth/imageHeight. Convert an image point before clicking:
+    /// Screen X = screenOriginX + imageX × scaleX; Screen Y = screenOriginY + imageY × scaleY.
+    /// For a window capture the origin is the window's top-left corner, not (0, 0).
     ///
     /// Returns base64-encoded image data (JPEG by default, configurable via imageFormat parameter).
     /// Default: JPEG format at quality 60 (LLM-optimized), at logical resolution (matching mouse coordinate space).
@@ -356,16 +359,23 @@ public static partial class ScreenshotControlTool
         // By default, don't include image to save tokens (element metadata is sufficient for LLM)
         var returnImageInline = includeImage && outputMode != OutputMode.File && savedFilePath == null;
 
-        return ToCallToolResult(
-            ScreenshotControlResult.AnnotatedSuccess(
-                returnImageInline ? result.ImageData : null,
-                result.Width ?? 0,
-                result.Height ?? 0,
-                result.ImageFormat ?? "jpeg",
-                result.Elements ?? [],
-                savedFilePath,
-                result.OriginalWidth,
-                result.OriginalHeight));
+        var annotated = ScreenshotControlResult.AnnotatedSuccess(
+            returnImageInline ? result.ImageData : null,
+            result.Width ?? 0,
+            result.Height ?? 0,
+            result.ImageFormat ?? "jpeg",
+            result.Elements ?? [],
+            savedFilePath,
+            result.OriginalWidth,
+            result.OriginalHeight);
+
+        // Привязка кадра к экрану: по ней модель переводит пиксель картинки в экранную точку
+        if (result.OriginX is { } originX && result.OriginY is { } originY)
+        {
+            annotated = annotated.WithFrame(originX, originY);
+        }
+
+        return ToCallToolResult(annotated);
     }
 
     /// <summary>

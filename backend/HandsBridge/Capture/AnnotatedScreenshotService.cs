@@ -138,7 +138,9 @@ public sealed class AnnotatedScreenshotService
                 height,
                 annotatedElements,
                 originalWidth,
-                originalHeight);
+                originalHeight,
+                windowRect.Value.Left,
+                windowRect.Value.Top);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -15,10 +15,12 @@ namespace Sbroenne.WindowsMcp.Tools;
 [SupportedOSPlatform("windows")]
 public static partial class MouseControlTool
 {
+    /// <summary>Wheel clicks when scroll is called without amount.</summary>
+    private const int DefaultWheelAmount = 3;
+
     /// <summary>
-    /// Mouse actions exposed by this bridge build (D2b-1). The full upstream set
-    /// (<c>drag</c>, <c>polyline</c>, <c>scroll</c>) is not in the schema yet; it is widened in
-    /// D2b-2. The schema is static and does not depend on the turn.
+    /// Mouse actions exposed by this bridge build (D2b-2). Upstream <c>polyline</c> is not in the
+    /// schema. The schema is static and does not depend on the turn.
     /// </summary>
     public enum MouseControlAction
     {
@@ -37,6 +39,12 @@ public static partial class MouseControlTool
         /// <summary>Middle mouse button click at (x, y).</summary>
         [JsonStringEnumMemberName("middle_click")] MiddleClick,
 
+        /// <summary>Press at (x, y), move, release at (toX, toY).</summary>
+        [JsonStringEnumMemberName("drag")] Drag,
+
+        /// <summary>Wheel at (x, y): up/down use the vertical wheel, left/right the horizontal one.</summary>
+        [JsonStringEnumMemberName("scroll")] Scroll,
+
         /// <summary>Read the current cursor position; takes no point and does not lock the hands.</summary>
         [JsonStringEnumMemberName("get_position")] GetPosition,
     }
@@ -44,11 +52,20 @@ public static partial class MouseControlTool
     /// <summary>
     /// Click and move the mouse by screen coordinates in windows that expose no UI Automation elements
     /// (remote desktops, canvases). Use ui_click when ui_snapshot shows elements. Take a fresh screenshot
-    /// before every click; coordinates in the screenshot are not screen coordinates if it was scaled.
+    /// before every click. Coordinates are SCREEN pixels; a screenshot point must be converted with the frame
+    /// fields of the screenshot_control response: Screen X = screenOriginX + imageX × scaleX,
+    /// Screen Y = screenOriginY + imageY × scaleY.
+    /// drag: press at (x,y), move, release at (toX,toY); useful to pan canvases (holding Space via keyboard is a separate step).
+    /// scroll: positive amount scrolls the content toward the direction; left/right use the horizontal wheel.
     /// </summary>
-    /// <param name="action">The mouse action: move, click, double_click, right_click, middle_click, or get_position.</param>
-    /// <param name="x">X coordinate in screen pixels (required for move and the click actions; ignored by get_position).</param>
-    /// <param name="y">Y coordinate in screen pixels (required for move and the click actions; ignored by get_position).</param>
+    /// <param name="action">The mouse action: move, click, double_click, right_click, middle_click, drag, scroll, or get_position.</param>
+    /// <param name="x">X coordinate in screen pixels (required for move, the click actions, drag start and scroll; ignored by get_position).</param>
+    /// <param name="y">Y coordinate in screen pixels (required for move, the click actions, drag start and scroll; ignored by get_position).</param>
+    /// <param name="toX">End X in screen pixels (required for drag).</param>
+    /// <param name="toY">End Y in screen pixels (required for drag).</param>
+    /// <param name="button">Mouse button held during drag: left (default) or middle.</param>
+    /// <param name="direction">Scroll direction: up, down, left, or right (required for scroll).</param>
+    /// <param name="amount">Wheel clicks for scroll, 1-20 (default 3). Not allowed for other actions.</param>
     /// <param name="windowHandle">Optional window handle (decimal string from window_management). When set, the root window under the point must be this one; input is also aborted if it loses the foreground.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A call result with the cursor position and, for click actions, the window that received the input. <c>IsError</c> reflects success.</returns>
@@ -57,10 +74,37 @@ public static partial class MouseControlTool
         MouseControlAction action,
         [DefaultValue(null)] int? x,
         [DefaultValue(null)] int? y,
+        [DefaultValue(null)] int? toX,
+        [DefaultValue(null)] int? toY,
+        [DefaultValue(null)] string? button,
+        [DefaultValue(null)] string? direction,
+        [DefaultValue(null)] int? amount,
         [DefaultValue(null)] string? windowHandle,
         CancellationToken cancellationToken)
     {
         var actionName = JsonNamingPolicy.SnakeCaseLower.ConvertName(action.ToString());
+
+        // Parameters of drag/scroll are parsed before the gate, so a malformed call never lights the activity signal.
+        var mouseButton = MouseButton.Left;
+        if (action == MouseControlAction.Drag && !TryParseDragButton(button, out mouseButton))
+        {
+            return ToCallToolResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.InvalidAction,
+                $"Invalid button for drag: '{button}'. Valid values: left, middle."));
+        }
+
+        ScrollDirection scrollDirection = default;
+        if (action == MouseControlAction.Scroll && !TryParseScrollDirection(direction, out scrollDirection))
+        {
+            return ToCallToolResult(MouseControlResult.CreateFailure(
+                string.IsNullOrWhiteSpace(direction)
+                    ? MouseControlErrorCode.MissingRequiredParameter
+                    : MouseControlErrorCode.InvalidScrollDirection,
+                $"Scroll requires direction: up, down, left, or right (got '{direction}')."));
+        }
+
+        // The wheel count belongs to scroll only (default 3); the gate refuses it for every other action
+        var wheelAmount = action == MouseControlAction.Scroll ? amount ?? DefaultWheelAmount : amount ?? 0;
 
         // Gate: the point must be inside the virtual desktop and over a window that accepts input
         // (and, when windowHandle is set, that window must be the one under the point).
@@ -77,13 +121,22 @@ public static partial class MouseControlTool
             expectedRoot = parsedHandle.ToInt64();
         }
 
-        var points = action == MouseControlAction.GetPosition
-            ? Array.Empty<(int X, int Y)>()
-            : (x.HasValue && y.HasValue)
-                ? new[] { (x.Value, y.Value) }
-                : Array.Empty<(int X, int Y)>();
+        var pointList = new List<(int X, int Y)>(2);
+        if (action != MouseControlAction.GetPosition)
+        {
+            if (x.HasValue && y.HasValue)
+            {
+                pointList.Add((x.Value, y.Value));
+            }
 
-        var gate = HandsGate.Policy.CheckPointer(actionName, points, expectedRoot, amount: 0);
+            // Drag carries the end point too: the gate checks both (the drop must not land in a forbidden window)
+            if (action == MouseControlAction.Drag && toX.HasValue && toY.HasValue)
+            {
+                pointList.Add((toX.Value, toY.Value));
+            }
+        }
+
+        var gate = HandsGate.Policy.CheckPointer(actionName, pointList, expectedRoot, wheelAmount);
         if (!gate.Allowed)
         {
             return HandsGate.Deny(HandsTools.MouseControl, gate);
@@ -109,6 +162,8 @@ public static partial class MouseControlTool
                 MouseControlAction.DoubleClick => await HandleDoubleClickAsync(x, y, target, cancellationToken),
                 MouseControlAction.RightClick => await HandleRightClickAsync(x, y, target, cancellationToken),
                 MouseControlAction.MiddleClick => await HandleMiddleClickAsync(x, y, target, cancellationToken),
+                MouseControlAction.Drag => await HandleDragAsync(x, y, toX, toY, mouseButton, target, cancellationToken),
+                MouseControlAction.Scroll => await HandleScrollAsync(x, y, scrollDirection, wheelAmount, target, cancellationToken),
                 MouseControlAction.GetPosition => GetCurrentPosition(),
                 _ => MouseControlResult.CreateFailure(
                     MouseControlErrorCode.InvalidAction,
@@ -163,6 +218,67 @@ public static partial class MouseControlTool
 
     private static Task<MouseControlResult> HandleMiddleClickAsync(int? x, int? y, nint window, CancellationToken cancellationToken) =>
         WindowsToolsBase.MouseInputService.MiddleClickAsync(x, y, window, cancellationToken);
+
+    private static Task<MouseControlResult> HandleDragAsync(
+        int? x, int? y, int? toX, int? toY, MouseButton button, nint window, CancellationToken cancellationToken)
+    {
+        // The gate already demands exactly two points; this is the secondary guard if its contract changes
+        if (!x.HasValue || !y.HasValue || !toX.HasValue || !toY.HasValue)
+        {
+            return Task.FromResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.MissingRequiredParameter,
+                "Drag requires x and y (start) and toX and toY (end)."));
+        }
+
+        return WindowsToolsBase.MouseInputService.DragAsync(x.Value, y.Value, toX.Value, toY.Value, button, window, cancellationToken);
+    }
+
+    private static Task<MouseControlResult> HandleScrollAsync(
+        int? x, int? y, ScrollDirection direction, int amount, nint window, CancellationToken cancellationToken)
+    {
+        if (!x.HasValue || !y.HasValue)
+        {
+            return Task.FromResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.MissingRequiredParameter,
+                "Scroll requires x and y: the cursor is moved there before the wheel turns."));
+        }
+
+        return WindowsToolsBase.MouseInputService.ScrollAsync(direction, amount, x, y, window, cancellationToken);
+    }
+
+    /// <summary>Drag button: left (default) or middle; right is deliberately not offered.</summary>
+    private static bool TryParseDragButton(string? button, out MouseButton parsed)
+    {
+        parsed = MouseButton.Left;
+        if (string.IsNullOrWhiteSpace(button))
+        {
+            return true;
+        }
+
+        switch (button.Trim().ToLowerInvariant())
+        {
+            case "left":
+                return true;
+            case "middle":
+                parsed = MouseButton.Middle;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryParseScrollDirection(string? direction, out ScrollDirection parsed)
+    {
+        parsed = default;
+        switch (direction?.Trim().ToLowerInvariant())
+        {
+            case "up": parsed = ScrollDirection.Up; return true;
+            case "down": parsed = ScrollDirection.Down; return true;
+            case "left": parsed = ScrollDirection.Left; return true;
+            case "right": parsed = ScrollDirection.Right; return true;
+            default: return false;
+        }
+    }
 
     private static MouseControlResult GetCurrentPosition()
     {

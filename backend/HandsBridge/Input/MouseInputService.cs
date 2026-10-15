@@ -1084,6 +1084,16 @@ public sealed class MouseInputService
                 goto Finish;
             }
 
+            // Руки: нажимаем кнопку только если окно под курсором (он стоит в начальной точке) принимает ввод
+            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var strokeStartReason))
+            {
+                result = MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    strokeStartReason ?? "The start point no longer lands in the target window.",
+                    screenBounds);
+                goto Finish;
+            }
+
             // Step 2: Press the mouse button down
             var buttonDownInput = new INPUT[]
             {
@@ -1132,6 +1142,21 @@ public sealed class MouseInputService
                     result = moveResult;
                     goto Finish;
                 }
+            }
+
+            // Руки: курсор уже в конечной точке. Если под ней окно, куда ввод запрещён (терминал),
+            // кнопку над ним отпускать нельзя: возвращаем курсор в начало, а finally отпустит кнопку там.
+            // У drag всего две точки (начало и конец), промежуточных нет; polyline инструмент не вызывает.
+            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var strokeEndReason))
+            {
+                // Окно не передаём: курсор сейчас над запрещённым окном, обычная проверка отказала бы и в этом возврате
+                await MoveForStrokeAsync(points[0].X, points[0].Y, expectedForegroundWindow: null, cancellationToken);
+                result = MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    (strokeEndReason ?? "The end point does not land in the target window.")
+                        + " The drag was cancelled: the button was released at the start point.",
+                    screenBounds);
+                goto Finish;
             }
 
             // Get the final cursor position
@@ -1323,6 +1348,15 @@ public sealed class MouseInputService
             return Task.FromResult(MouseControlResult.CreateFailure(
                 MouseControlErrorCode.WrongTargetWindow,
                 "The foreground window changed before scrolling was sent.",
+                screenBounds));
+        }
+
+        // Руки: колесо уходит в окно ПОД КУРСОРОМ, а курсор только что переведён в точку — проверяем её после перевода
+        if (!CursorPointAcceptsInput(expectedForegroundWindow, out var scrollPointReason))
+        {
+            return Task.FromResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.WrongTargetWindow,
+                scrollPointReason ?? "The point no longer lands in the target window.",
                 screenBounds));
         }
 

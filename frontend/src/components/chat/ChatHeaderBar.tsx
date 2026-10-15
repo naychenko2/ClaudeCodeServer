@@ -1155,8 +1155,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
-  // Лента для индикатора кэша — замороженная на время хода (см. usePromptCacheItems)
-  const cacheItems = usePromptCacheItems(items, isWaiting);
+  // Лента для индикатора кэша — замороженная до нового result или смены чата (см. usePromptCacheItems)
+  const cacheItems = usePromptCacheItems(items, session.id);
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /

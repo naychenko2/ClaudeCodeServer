@@ -3711,7 +3711,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         apiUrl, tokenFactory, p.Id, projectId, useHttp))
                     .ToList();
                 var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
-                return new PersonaAgentsContext(addDirs, servers, handles);
+                // Определения для per-run --agents JSON: omitClaudeMd ClaudeSession дополнит
+                // по факту BareMode (свойство прогона, известное только там)
+                var agents = _agentSync.GetAgentsDefs(subagents, omitClaudeMd: false);
+                return new PersonaAgentsContext(addDirs, servers, handles, agents);
             }
             catch (Exception ex)
             {

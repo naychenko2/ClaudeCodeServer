@@ -243,12 +243,30 @@ public sealed record ExternalMcpContext(IReadOnlyList<ExternalMcpServer> Servers
 public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, Func<string> TokenFactory,
     string PersonaId, string? ProjectId = null, bool UseHttp = false);
 
+// Определение персоны-сабагента для per-run файла --agents (CLI ≥ 2.1.281): тот же
+// контент, что в .md-файле (description/промпт/tools/model/mcpServers/maxTurns/effort),
+// но в JSON-форме определения агента. omitClaudeMd — аналог BareMode для сабагента:
+// сессия без полной CLAUDE.md проекта (локальные модели) не должна тянуть её и в
+// контекст консультанта.
+public sealed record PersonaAgentDef(
+    string Name,
+    string Description,
+    string Prompt,
+    IReadOnlyList<string> Tools,
+    string? Model,
+    IReadOnlyList<string>? McpServers,
+    int MaxTurns,
+    string? Effort,
+    bool OmitClaudeMd = false);
+
 // Файловые сабагенты-персоны: папки для --add-dir хода
 // (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон
-// + список имён (handle) для подсказки в системный промпт.
+// + список имён (handle) для подсказки в системный промпт + определения для
+// per-run JSON-файла --agents (CLI ≥ 2.1.281).
 public sealed record PersonaAgentsContext(IReadOnlyList<string> AddDirs,
     IReadOnlyList<ConsultantMemoryServer> MemoryServers,
-    IReadOnlyList<string> AgentHandles);
+    IReadOnlyList<string> AgentHandles,
+    IReadOnlyList<PersonaAgentDef> Agents);
 
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости

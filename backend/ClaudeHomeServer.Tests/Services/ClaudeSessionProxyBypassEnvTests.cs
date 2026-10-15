@@ -272,7 +272,7 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
         [
             new ConsultantMemoryServer("pmem_test", "http://ccs-pmem-host:5998", () => "tok",
                 "p-1", null, UseHttp: true),
-        ], ["test"]);
+        ], ["test"], []);
 
         var env = await RunTurnAsync(sandboxed: false, useHttp: false, widgets: null, personaAgents: pmem);
 

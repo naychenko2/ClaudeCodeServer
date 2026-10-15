@@ -415,7 +415,7 @@ public class McpHttpTransportConfigTests : IDisposable
         [
             new ConsultantMemoryServer("pmem_alex", "http://localhost:5000", () => "tok", "p-alex", "proj-1", UseHttp: true),
             new ConsultantMemoryServer("pmem_kira", "http://localhost:5000", () => "tok", "p-kira", "proj-1", UseHttp: true),
-        ], ["alex", "kira"]);
+        ], ["alex", "kira"], []);
         var (servers, keys) = BuildConfig(
             memory: new MemoryMcpContext("http://localhost:5000", () => "tok", "p-chat", "proj-1", UseHttp: true),
             personaAgents: consultants);
@@ -448,7 +448,7 @@ public class McpHttpTransportConfigTests : IDisposable
         [
             new ConsultantMemoryServer("pmem_http", "http://localhost:5000", () => "tok", "p-1", null, UseHttp: true),
             new ConsultantMemoryServer("pmem_stdio", "http://localhost:5000", () => "tok", "p-2", null, UseHttp: false),
-        ], ["http", "stdio"]);
+        ], ["http", "stdio"], []);
         var (servers, keys) = BuildConfig(personaAgents: consultants);
 
         servers["pmem_http"]!.AsObject().ContainsKey("command").Should().BeFalse();

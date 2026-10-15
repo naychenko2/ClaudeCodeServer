@@ -193,12 +193,14 @@ public class LocalModelStatsHistoryTests
         body.GetProperty("reason").GetString().Should().Be("expired");
     }
 
-    // 410 source_disabled: запись от источника, у которого нет реализации (lora). Мутация: 500 — краснеет
+    // 410 source_disabled: запись от источника, у которого нет реализации. Мутация: 500 — краснеет.
+    // lora здесь не годится: с ADR-030/026 у него есть реализация (LoraHistorySource), поэтому
+    // берём вымышленный источник, которого в DI нет
     [Fact]
     public async Task SourceDisabled_410()
     {
         using var h = new Harness("test-source", null);
-        h.WriteRecord("p1", "lora");
+        h.WriteRecord("p1", "no-such-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file");
         resp.StatusCode.Should().Be(HttpStatusCode.Gone);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();

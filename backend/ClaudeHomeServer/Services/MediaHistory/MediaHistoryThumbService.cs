@@ -43,7 +43,16 @@ public sealed class MediaHistoryThumbService
         // Звук миниатюры не имеет: фронт его не запрашивает, рисует плитку
         if (contentType.StartsWith("audio/", StringComparison.Ordinal)) return null;
 
-        await _gate.WaitAsync(ct);
+        // Отмена (закрытая вкладка, медленная сеть) — не 500: миниатюра не готова, фронт рисует
+        // плитку. Gate ещё не занят, Release не нужен
+        try
+        {
+            await _gate.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
         try
         {
             if (File.Exists(thumb)) return thumb; // соседний запрос успел

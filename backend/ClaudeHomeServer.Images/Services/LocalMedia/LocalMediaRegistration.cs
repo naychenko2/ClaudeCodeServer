@@ -51,6 +51,9 @@ public static class LocalMediaRegistration
         // Источник результата для истории (ADR-030 §3): файлы локальной генерации в проекте.
         // Шов необязательный: подсистема images выключена — реализации нет → 410 source_disabled
         services.AddSingleton<IMediaHistoryResultSource, LocalMediaHistorySource>();
+        // Источник для прогонов обучения LoRA (ADR-030 §3, ADR-026 §14): обучающие фото в
+        // data/lora-training/. Тот же шов и та же вертикаль: images выключена — source_disabled
+        services.AddSingleton<IMediaHistoryResultSource, LoraHistorySource>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         services.AddGatedHostedService<ComfyProgressListener>(config, "images");
         // Монитор очереди ComfyUI (шаг 24): снимок running/queue/lastHour/slots/status для IComfyStats (шаг 26).

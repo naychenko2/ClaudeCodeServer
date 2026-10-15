@@ -148,4 +148,26 @@ public class LocalMediaHistorySourceTests : IDisposable
         res.Should().NotBeNull();
         res!.Reason.Should().Be(MediaHistoryGoneReason.Missing);
     }
+
+    // Обход пути через Outputs[].Path: «../secret.png» уходит за корень проекта. SafePath.Join
+    // бросает UnauthorizedAccessException → 410 missing. Мутация «убрать SafePath» (Path.Combine)
+    // найдёт приманку secret.png (PNG) и отдаст её — тест покраснеет
+    [Fact]
+    public async Task ОбходПутиЧерезOutputs_Missing()
+    {
+        var root = Path.Combine(_tempDir, "project");
+        Directory.CreateDirectory(root);
+        // Приманка за корнем: без SafePath.Join путь «../secret.png» её нашёл бы и отдал
+        File.WriteAllBytes(Path.Combine(_tempDir, "secret.png"), LocalMediaTestImages.Png(64, 64));
+
+        var store = NewStore();
+        var job = JobWithOneOutput();
+        job.Outputs = [new LocalMediaOutput { Path = "../secret.png" }];
+        store.Add(job);
+        var src = new LocalMediaHistorySource(store,
+            new ProbeAccess(new MediaHistoryProjectProbe(MediaHistoryProjectState.OnServer, root)), new ManualTime());
+        var res = await src.ResolveAsync(Ref(), 0, CancellationToken.None);
+        res.Should().NotBeNull();
+        res!.Reason.Should().Be(MediaHistoryGoneReason.Missing);
+    }
 }

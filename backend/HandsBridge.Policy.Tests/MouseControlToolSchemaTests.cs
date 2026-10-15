@@ -56,4 +56,33 @@ public class MouseControlToolSchemaTests
 
         return names;
     }
+
+    /// <summary>
+    /// Табличная проверка чистой функции решения о завершении drag (D2b-2.1): все ветки, включая
+    /// «возврат упал + курсор над запрещённым окном» (abort) и «возврат удался + курсор снова над
+    /// принимающим окном» (безопасная отмена). Функция чистая (без SendInput/GetCursorPos), поэтому
+    /// исполняется на Linux через рефлексию по сборке моста.
+    /// </summary>
+    [Theory]
+    [InlineData(true,  true,  true, "end over terminal", null,             false)]
+    [InlineData(true,  false, true, "end over terminal", null,             true)]
+    [InlineData(false, true,  true, "end over terminal", "SendInput failed", false)]
+    [InlineData(false, false, true, "end over terminal", "SendInput failed", true)]
+    [InlineData(true,  true,  false, "end over terminal", null,             false)]
+    public void Finish_drag_after_end_rejected_decides_the_release(
+        bool returnSucceeded, bool cursorAcceptsInput, bool buttonWasPressed,
+        string? strokeEndReason, string? returnError, bool expectedAborted)
+    {
+        var type = HandsBridgeGateRuntimeTests.Bridge.Value
+            .GetType("Sbroenne.WindowsMcp.Input.MouseInputService", throwOnError: true)
+            ?? throw new InvalidOperationException("MouseInputService не найден в мосту");
+        var method = type.GetMethod("FinishDragAfterEndRejected", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("FinishDragAfterEndRejected не найден");
+
+        var tuple = (ValueTuple<bool, string>)method.Invoke(null,
+            [returnSucceeded, cursorAcceptsInput, buttonWasPressed, strokeEndReason, returnError])!;
+
+        Assert.Equal(expectedAborted, tuple.Item1);
+        Assert.False(string.IsNullOrWhiteSpace(tuple.Item2));
+    }
 }

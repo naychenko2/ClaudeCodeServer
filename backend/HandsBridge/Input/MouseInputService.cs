@@ -1150,7 +1150,33 @@ public sealed class MouseInputService
             if (!CursorPointAcceptsInput(expectedForegroundWindow, out var strokeEndReason))
             {
                 // Окно не передаём: курсор сейчас над запрещённым окном, обычная проверка отказала бы и в этом возврате
-                await MoveForStrokeAsync(points[0].X, points[0].Y, expectedForegroundWindow: null, cancellationToken);
+                var returnToStart = await MoveForStrokeAsync(points[0].X, points[0].Y, expectedForegroundWindow: null, cancellationToken);
+
+                // ПЕРЕД отпусканием кнопки (finally) сверяем ТЕКУЩУЮ позицию курсора: если возврат упал
+                // (SendInput) или курсор всё ещё над окном, не принимающим ввод, кнопка отпустится над ним —
+                // drop над запрещённым окном. finally отпустит кнопку там, где курсор, без перемещения.
+                if (!CursorPointAcceptsInput(expectedForegroundWindow, out var afterReturnReason))
+                {
+                    var (aborted, message) = FinishDragAfterEndRejected(
+                        returnToStart.Success,
+                        cursorAcceptsInput: false,
+                        buttonWasPressed: buttonDownSucceeded,
+                        afterReturnReason,
+                        returnToStart.Error);
+                    if (aborted)
+                    {
+                        Debug.WriteLine($"StrokeCoreAsync: drag aborted — {message}");
+                    }
+
+                    result = MouseControlResult.CreateFailure(
+                        MouseControlErrorCode.WrongTargetWindow,
+                        message,
+                        screenBounds);
+                    goto Finish;
+                }
+
+                // Возврат в начало удался и курсор снова над окном, принимающим ввод: кнопка отпустится
+                // в начальной точке — безопасная отмена, drop не над запрещённым окном.
                 result = MouseControlResult.CreateFailure(
                     MouseControlErrorCode.WrongTargetWindow,
                     (strokeEndReason ?? "The end point does not land in the target window.")
@@ -1210,6 +1236,45 @@ public sealed class MouseInputService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Решение о завершении drag, когда конец оказался над запрещённым окном и курсор возвращён
+    /// в начало. Чистая функция (без SendInput/GetCursorPos), чтобы ветки проверялись таблично на Linux:
+    /// <paramref name="cursorAcceptsInput"/> — повторная проверка ТЕКУЩЕЙ позиции курсора; если она не
+    /// принимает ввод, кнопка отпустится над запрещённым окном (drop) — это abort, а не безопасная отмена.
+    /// <paramref name="returnSucceeded"/> — результат возврата; <paramref name="buttonWasPressed"/> — была
+    /// ли кнопка нажата (и будет ли отпущена в finally).
+    /// </summary>
+    internal static (bool Aborted, string Message) FinishDragAfterEndRejected(
+        bool returnSucceeded,
+        bool cursorAcceptsInput,
+        bool buttonWasPressed,
+        string? pointReason,
+        string? returnError)
+    {
+        // Кнопка не нажималась — отпустить нечего; в StrokeCoreAsync сюда не попадаем, защита от порядка.
+        if (!buttonWasPressed)
+        {
+            return (false, pointReason ?? "The end point does not land in the target window.");
+        }
+
+        // Курсор снова над окном, принимающим ввод (возврат в начало удался): кнопка отпустится
+        // в начальной точке — безопасная отмена, drop не над запрещённым окном.
+        if (cursorAcceptsInput)
+        {
+            return (false,
+                (pointReason ?? "The end point does not land in the target window.")
+                    + " The drag was cancelled: the button was released at the start point.");
+        }
+
+        // Курсор всё ещё над окном, не принимающим ввод (возврат упал или окно сместилось): кнопка
+        // отпустится над ним — drop над запрещённым окном. Явная пометка, что drop мог состояться.
+        var where = returnError
+            ?? pointReason
+            ?? "a window that does not accept input";
+        return (true,
+            $"drag aborted: the end/cursor is over a window that does not accept input; the button may have been released over {where}.");
     }
 
     /// <inheritdoc />

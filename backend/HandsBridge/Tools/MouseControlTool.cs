@@ -15,7 +15,11 @@ namespace Sbroenne.WindowsMcp.Tools;
 [SupportedOSPlatform("windows")]
 public static partial class MouseControlTool
 {
-    /// <summary>Wheel clicks when scroll is called without amount.</summary>
+    /// <summary>
+    /// Wheel clicks when scroll is called without amount. Upstream defaults to 1; three clicks scroll
+    /// roughly a screen of lines, giving a visible effect in a single call so the agent does not repeat
+    /// the action just to see movement.
+    /// </summary>
     private const int DefaultWheelAmount = 3;
 
     /// <summary>
@@ -103,8 +107,24 @@ public static partial class MouseControlTool
                 $"Scroll requires direction: up, down, left, or right (got '{direction}')."));
         }
 
-        // The wheel count belongs to scroll only (default 3); the gate refuses it for every other action
-        var wheelAmount = action == MouseControlAction.Scroll ? amount ?? DefaultWheelAmount : amount ?? 0;
+        // The wheel count belongs to scroll only (default 3). A non-scroll action that still carries
+        // amount is a model error: reject it here, before the gate, with a clear message (the gate would
+        // also refuse it, but only after the point checks).
+        int wheelAmount;
+        if (action == MouseControlAction.Scroll)
+        {
+            wheelAmount = amount ?? DefaultWheelAmount;
+        }
+        else if (amount is not null)
+        {
+            return ToCallToolResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.InvalidAction,
+                $"The amount is only for the scroll action; for '{actionName}' it must be left unset."));
+        }
+        else
+        {
+            wheelAmount = 0;
+        }
 
         // Gate: the point must be inside the virtual desktop and over a window that accepts input
         // (and, when windowHandle is set, that window must be the one under the point).

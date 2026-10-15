@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { migrateRingPillHidden } from '../lib/chatActions';
+import { migrateCardSubjectHidden, migrateRingPillHidden } from '../lib/chatActions';
 
 // Видимость элементов в рядах действий (шапка чата, губа композера, плитка чата).
 // Кнопка «⋯» стоит в ряду ВСЕГДА, а пользователь сам решает, что показывать
@@ -39,6 +39,7 @@ type HiddenStore = Pick<Storage, 'getItem' | 'setItem'>;
 // (после него ["cost"] уже значит «спрятать пилюлю»), повторный прогон его бы сломал
 const MIGRATIONS: Partial<Record<ActionSurface, { marker: string; run: (hidden: string[]) => string[] }>> = {
   'chat-header': { marker: 'cc_chat_header_hidden_ring_v1', run: migrateRingPillHidden },
+  'chat-card': { marker: 'cc_chat_card_hidden_subject_v1', run: migrateCardSubjectHidden },
 };
 
 // Битое значение (не массив / не строки) — тихо считаем «ничего не скрыто»:

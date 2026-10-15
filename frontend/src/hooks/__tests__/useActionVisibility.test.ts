@@ -91,7 +91,31 @@ describe('readHidden — одноразовый перевод при чтени
   });
 
   it('другие поверхности не переводятся', () => {
-    const s = memStore({ cc_chat_card_hidden: '["cost"]' });
-    expect(readHidden('chat-card', s)).toEqual(['cost']);
+    const s = memStore({ cc_composer_hidden: '["cost"]' });
+    expect(readHidden('composer', s)).toEqual(['cost']);
+  });
+});
+
+describe('readHidden — одноразовое скрытие кнопки «Тема» в плитке', () => {
+  const CARD = 'cc_chat_card_hidden';
+  const CARD_MARKER = 'cc_chat_card_hidden_subject_v1';
+
+  it('старый набор без subject — тема уходит в меню и записывается', () => {
+    const s = memStore({ [CARD]: '["rename"]' });
+    expect(readHidden('chat-card', s)).toEqual(['rename', 'subject']);
+    expect(s.raw.get(CARD)).toBe('["rename","subject"]');
+  });
+
+  it('перевод одноразовый: показанная глазиком тема остаётся в ряду', () => {
+    const s = memStore({ [CARD]: '[]' });
+    readHidden('chat-card', s);
+    s.setItem(CARD, '[]');                          // человек вернул тему глазиком
+    expect(readHidden('chat-card', s)).toEqual([]);
+  });
+
+  it('без сохранённого набора — дефолт, маркер ставится', () => {
+    const s = memStore();
+    expect(readHidden('chat-card', s)).toBeNull();
+    expect(s.raw.get(CARD_MARKER)).toBe('1');
   });
 });

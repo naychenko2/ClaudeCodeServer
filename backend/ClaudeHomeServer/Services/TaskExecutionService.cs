@@ -565,8 +565,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         string? rulesTemplate = null)
     {
         if (persona is not null)
-            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
-                rulesTemplate);
+            return ToLf(BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
+                rulesTemplate));
 
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -602,8 +602,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
-        return sb.ToString();
+        return ToLf(sb.ToString());
     }
+
+    // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
+    // Environment.NewLine, и на Windows обвязка шла с CRLF, а тело шаблона — с LF.
+    // На Linux NewLine уже "\n", и замена ничего не меняет.
+    private static string ToLf(string text) => text.Replace(Environment.NewLine, "\n");
 
     // 6-секционный контракт постановки для персоны-исполнителя. Характер персоны
     // инжектится системным промптом сессии (персона-слой) — здесь только постановка.
@@ -840,7 +845,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             sb.AppendLine($"### {h.Title} ({h.SourceLabel})");
             sb.AppendLine(h.Snippet.Trim());
         }
-        return sb.ToString();
+        return ToLf(sb.ToString());
     }
 
     // Наблюдатель сообщений всех сессий: реагируем только на сессии, привязанные к задачам.

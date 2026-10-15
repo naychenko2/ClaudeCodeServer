@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import gzip, hashlib, http.client, json, os, re, sys, threading, time
+import base64, gzip, hashlib, http.client, json, os, re, sys, threading, time
 from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -313,7 +313,30 @@ LOOP_RETRY = os.environ.get("LOOP_RETRY", "on")
 LOOP_RETRY_SAMPLING = _parse_kv(os.environ.get("LOOP_RETRY_SAMPLING",
                                                "presence_penalty=0.5,temperature=0.1"))
 
+# --- Прунинг картинок -----------------------------------------------------------------------
+#
+# Картинки (скриншоты через Read, вложения человека) живут в истории вечно: CLI шлёт её целиком
+# на каждом ходу. Сверх `--limit-mm-per-prompt` движок отвечает 400 «At most N image(s) may be
+# provided in one prompt» на КАЖДЫЙ следующий ход — чат мёртв и изнутри не чинится (инцидент
+# 14.09.2026). И каждый забытый скриншот 1920×1080 — это ~2K токенов контекста и KV навсегда.
+#
+# Правило детерминировано по позиции: оставляем картинки последнего сообщения человека и
+# IMAGE_KEEP самых свежих, остальные — текстовой заглушкой; сверх IMAGE_MAX режем старейшие
+# даже из оставленных. Картинки только дописываются в хвост, поэтому вырезанная однажды остаётся
+# вырезанной во всех следующих запросах: промах префикс-кэша — один, в момент вырезания.
+#
+# Дефолт off по той же причине, что у предохранителя петли: включает mode.conf.
+# Откат: IMAGE_PRUNE=off и рестарт.
+IMAGE_PRUNE = os.environ.get("IMAGE_PRUNE", "off")
+IMAGE_KEEP = int(os.environ.get("IMAGE_KEEP", "4"))
+IMAGE_MAX = int(os.environ.get("IMAGE_MAX", "12"))
+# Бюджет энкодера Qwen: патч 32×32 пикселя на токен, крупнее ~2K токенов картинку ужимают
+# (замер 15.10: 512×512 — 258, 1024×768 — 770, 1920×1080 — 2042).
+IMAGE_PATCH = 32
+IMAGE_TOKENS_CAP = 2048
+
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
+         "images_pruned": 0, "images_kept": 0, "image_tokens_saved": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
@@ -382,7 +405,7 @@ PRUNE_THINKING_PLACEHOLDER = "[Old thinking cleared]"
 
 
 def _prunable_size(content):
-    """Длина вывода в символах или None, если форму не разбираем (картинки и прочее — не трогаем)."""
+    """Длина вывода в символах или None, если форму не разбираем (картинки режет prune_images)."""
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list) and all(
@@ -652,6 +675,166 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
         m["content"] = content
         out[mi] = m
     return out, freed, len(victims)
+
+
+def image_size(data):
+    """(ширина, высота) по заголовку PNG/JPEG/WebP/GIF или None. Картинку не декодирует."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 10:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24 and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP" and len(data) >= 30:
+        вид = data[12:16]
+        if вид == b"VP8 ":
+            return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                    int.from_bytes(data[28:30], "little") & 0x3FFF)
+        if вид == b"VP8L":
+            биты = int.from_bytes(data[21:25], "little")
+            return 1 + (биты & 0x3FFF), 1 + ((биты >> 14) & 0x3FFF)
+        if вид == b"VP8X":
+            return 1 + int.from_bytes(data[24:27], "little"), 1 + int.from_bytes(data[27:30], "little")
+        return None
+    if data[:2] == b"\xff\xd8":
+        # Маркеры по порядку до SOFn; EXIF и прочие APPn пропускаем по их длине.
+        i = 2
+        while i + 4 <= len(data):
+            if data[i] != 0xFF:
+                return None
+            маркер = data[i + 1]
+            if маркер == 0xFF:  # заполнитель
+                i += 1
+                continue
+            if маркер in (0xD8, 0x01) or 0xD0 <= маркер <= 0xD7:
+                i += 2
+                continue
+            длина = int.from_bytes(data[i + 2:i + 4], "big")
+            if 0xC0 <= маркер <= 0xCF and маркер not in (0xC4, 0xC8, 0xCC):
+                if i + 9 > len(data):
+                    return None
+                return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+            i += 2 + длина
+    return None
+
+
+def _image_dims(block):
+    """Размер картинки из base64 блока. Декодируем начало; заголовок JPEG с крупным EXIF —
+    дальше 96 КБ, тогда весь файл (бывает редко, а на каждом ходу картинок не больше IMAGE_MAX)."""
+    src = block.get("source")
+    if not isinstance(src, dict) or src.get("type") != "base64" or not isinstance(src.get("data"), str):
+        return None
+    сырьё = src["data"]
+    try:
+        начало = сырьё[:131072]
+        размер = image_size(base64.b64decode(начало[:len(начало) // 4 * 4]))
+        if размер is None and len(сырьё) > len(начало):
+            размер = image_size(base64.b64decode(сырьё))
+    except (ValueError, TypeError):
+        return None
+    return размер
+
+
+def image_tokens(dims):
+    """Оценка токенов картинки: патч 32×32 на токен, потолок — бюджет энкодера."""
+    if not dims:
+        return IMAGE_TOKENS_CAP
+    w, h = dims
+    return min(IMAGE_TOKENS_CAP, -(-w // IMAGE_PATCH) * -(-h // IMAGE_PATCH))
+
+
+def image_placeholder(dims, tokens):
+    if dims:
+        return (f"[картинка {dims[0]}×{dims[1]}, ~{tokens} токенов, вырезана прокси — "
+                "открой заново, если нужна]")
+    return f"[картинка, ~{tokens} токенов, вырезана прокси — открой заново, если нужна]"
+
+
+def _last_human_index(msgs):
+    """Номер последнего сообщения человека: user-сообщение без tool_result. Ход агента
+    (вызовы инструментов) идёт user-сообщениями с tool_result — их мы человеком не считаем."""
+    for mi in range(len(msgs) - 1, -1, -1):
+        m = msgs[mi]
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            return mi
+        if isinstance(c, list) and not any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            return mi
+    return None
+
+
+def prune_images(msgs, keep=None, max_images=None):
+    """Вырезает старые картинки. Возвращает (сообщения, сводка). Вход не мутирует.
+
+    Сводка: {"pruned", "kept", "tokens"} — вырезано, оставлено, сколько токенов сэкономлено.
+    Картинок нет или резать нечего — те же самые `msgs` (тело уйдёт байт в байт).
+    """
+    keep = IMAGE_KEEP if keep is None else max(0, keep)
+    max_images = IMAGE_MAX if max_images is None else max(0, max_images)
+
+    # (номер сообщения, номер блока, номер внутри tool_result или None) в порядке появления
+    found = []
+    for mi, m in enumerate(msgs):
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            continue
+        for bi, b in enumerate(m["content"]):
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "image":
+                found.append((mi, bi, None))
+            elif b.get("type") == "tool_result" and isinstance(b.get("content"), list):
+                for ci, x in enumerate(b["content"]):
+                    if isinstance(x, dict) and x.get("type") == "image":
+                        found.append((mi, bi, ci))
+    сводка = {"pruned": 0, "kept": len(found), "tokens": 0}
+    if not found:
+        return msgs, сводка
+
+    человек = _last_human_index(msgs)
+    оставить = set(range(max(0, len(found) - keep), len(found)))
+    оставить |= {i for i, (mi, _, ci) in enumerate(found) if mi == человек and ci is None}
+    # Жёсткий потолок: сверх него движок отвечает 400 на каждый ход — режем старейшие
+    # даже из того, что хотели оставить.
+    if len(оставить) > max_images:
+        оставить = set(sorted(оставить)[len(оставить) - max_images:])
+    жертвы = [f for i, f in enumerate(found) if i not in оставить]
+    if not жертвы:
+        return msgs, сводка
+
+    out = list(msgs)
+    копии = {}  # копируем только задетые сообщения и блоки
+
+    def сообщение(mi):
+        if mi not in копии:
+            m = dict(out[mi])
+            m["content"] = list(m["content"])
+            out[mi] = копии[mi] = m
+        return копии[mi]
+
+    for mi, bi, ci in жертвы:
+        content = сообщение(mi)["content"]
+        if ci is None:
+            исходный = content[bi]
+        else:
+            if content[bi] is msgs[mi]["content"][bi]:
+                b = dict(content[bi])
+                b["content"] = list(b["content"])
+                content[bi] = b
+            исходный = content[bi]["content"][ci]
+        dims = _image_dims(исходный)
+        токенов = image_tokens(dims)
+        заглушка = {"type": "text", "text": image_placeholder(dims, токенов)}
+        if ci is None:
+            content[bi] = заглушка
+        else:
+            content[bi]["content"][ci] = заглушка
+        сводка["tokens"] += токенов
+    сводка["pruned"] = len(жертвы)
+    сводка["kept"] = len(found) - len(жертвы)
+    return out, сводка
 
 
 def _tail_text(msgs, role=None):
@@ -979,6 +1162,21 @@ def boundary_shifted(session_id, blocks):
         if прежняя == blocks:
             return False
         _boundaries[session_id] = blocks
+        return True
+
+
+# Сколько картинок вырезано в прошлый раз, по сессиям. Тот же смысл, что у границы: число
+# не изменилось — префикс тот же, карточке взяться неоткуда.
+_image_cuts = {}
+
+
+def images_shifted(session_id, pruned):
+    if not session_id or pruned <= 0:
+        return False
+    with _boundaries_lock:
+        if _image_cuts.get(session_id) == pruned:
+            return False
+        _image_cuts[session_id] = pruned
         return True
 
 
@@ -1530,7 +1728,9 @@ class Handler(BaseHTTPRequestHandler):
                                   sampling_fast=SAMPLING_FAST or "off",
                                   effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET,
                                   loop_guard=(f"{LOOP_GUARD}: {LOOP_NGRAM}-грамма x{LOOP_REPEATS} "
-                                              f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"))).encode()
+                                              f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"),
+                                  image_prune=(f"{IMAGE_PRUNE}: свежих {IMAGE_KEEP}, "
+                                               f"потолок {IMAGE_MAX}"))).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(msg)))
@@ -1615,9 +1815,23 @@ class Handler(BaseHTTPRequestHandler):
                             stripped = True
                         if PRUNE_DEBUG == "on":
                             _debug_dump(doc, kept, len(body))
+                        # Картинки — раньше прунинга выводов: тот видит уже окончательную
+                        # форму tool_result (с картинкой вывод он не трогает вовсе).
+                        картинки = None
+                        if IMAGE_PRUNE == "on":
+                            без_картинок, картинки = prune_images(kept)
+                            if картинки["pruned"]:
+                                kept = без_картинок
+                                doc["messages"] = kept
+                                stripped = True
+                            with lock:
+                                stats["images_pruned"] += картинки["pruned"]
+                                stats["images_kept"] += картинки["kept"]
+                                stats["image_tokens_saved"] += картинки["tokens"]
+                        blocks = freed = 0
+                        виды = {}
+                        системная = _system_chars(doc)
                         if PRUNE_MODE == "on":
-                            виды = {}
-                            системная = _system_chars(doc)
                             pruned_msgs, freed, blocks = prune_tool_results(
                                 kept, extra_chars=системная, kinds_out=виды)
                             if blocks:
@@ -1627,27 +1841,32 @@ class Handler(BaseHTTPRequestHandler):
                                 with lock:
                                     stats["pruned_blocks"] += blocks
                                     stats["pruned_chars"] += freed
-                                # Карточка — только на СДВИГЕ границы. Решение принимаем здесь,
-                                # до запроса, а отправляем по первому байту ответа: замер
-                                # prefill — это и есть «сколько человек ждал».
-                                #
-                                # Запрос, уезжающий в облако, пропускаем целиком, вместе с
-                                # запоминанием границы: обрезанное тело туда не идёт (сводку
-                                # облако пишет по оригиналам), и замер получился бы облачный
-                                # при рассказе о локальном пересчёте. Границу не запоминаем
-                                # намеренно — ход с фолбэком на локаль покажет карточку
-                                # следующим шагом, с честным замером.
-                                if compact is None and boundary_shifted(сессия, blocks):
-                                    до = estimate_tokens(_context_chars(kept), системная,
-                                                         _signature_chars(kept))
-                                    событие = {
-                                        "sessionId": сессия, "kind": "prune",
-                                        "tokensBefore": до,
-                                        "tokensAfter": max(0, до - estimate_tokens(freed)),
-                                        "blocks": blocks,
-                                        "resultBlocks": виды.get("result", 0),
-                                        "inputBlocks": виды.get("input", 0),
-                                        "thinkingBlocks": виды.get("thinking", 0)}
+                        # Карточка — только на СДВИГЕ границы (или нового вырезания картинок:
+                        # это тот же промах кэша). Решение принимаем здесь, до запроса, а
+                        # отправляем по концу ответа: замер prefill — это и есть «сколько
+                        # человек ждал».
+                        #
+                        # Запрос, уезжающий в облако, пропускаем целиком, вместе с
+                        # запоминанием границы: обрезанное тело туда не идёт (сводку облако
+                        # пишет по оригиналам), и замер получился бы облачный при рассказе о
+                        # локальном пересчёте. Границу не запоминаем намеренно — ход с
+                        # фолбэком на локаль покажет карточку следующим шагом, с честным замером.
+                        сдвиг = compact is None and blocks > 0 and boundary_shifted(сессия, blocks)
+                        сдвиг_картинок = (compact is None and картинки is not None
+                                          and images_shifted(сессия, картинки["pruned"]))
+                        if сдвиг or сдвиг_картинок:
+                            до = (estimate_tokens(_context_chars(kept), системная,
+                                                  _signature_chars(kept)) if сдвиг else 0)
+                            событие = {
+                                "sessionId": сессия, "kind": "prune",
+                                "tokensBefore": до,
+                                "tokensAfter": max(0, до - estimate_tokens(freed)) if сдвиг else 0,
+                                "blocks": blocks if сдвиг else 0,
+                                "resultBlocks": виды.get("result", 0) if сдвиг else 0,
+                                "inputBlocks": виды.get("input", 0) if сдвиг else 0,
+                                "thinkingBlocks": виды.get("thinking", 0) if сдвиг else 0,
+                                "imageBlocks": картинки["pruned"] if картинки else 0,
+                                "imageTokens": картинки["tokens"] if картинки else 0}
                     if stripped:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
             except Exception as e:
@@ -1882,7 +2101,9 @@ if __name__ == "__main__":
           + (f", карточка сдвига границы -> {BACKEND_EVENTS_URL}" if BACKEND_EVENTS_URL
              else ", карточка сдвига границы выкл")
           + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "
-             f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл"),
+             f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл")
+          + (f", прунинг картинок вкл (свежих {IMAGE_KEEP}, потолок {IMAGE_MAX})"
+             if IMAGE_PRUNE == "on" else ", прунинг картинок выкл"),
           flush=True)
     prepare_dump_dir()  # сообщит в журнал, включён дамп или каталог не годится
     srv.serve_forever()

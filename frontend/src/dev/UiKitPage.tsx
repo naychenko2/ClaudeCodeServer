@@ -2259,7 +2259,7 @@ const DEMO_PROVIDER_LIMIT_ITEMS: Extract<ChatItem, { kind: 'provider_limit' }>[]
 ];
 
 // Демо строк «контекст обрезан» (событие context_pruned прокси локальной модели):
-// обрезка с полной статистикой, обрезка без замеров и сжатие, ушедшее в облако.
+// обрезка с полной статистикой, обрезка без замеров, вырезанные картинки, сжатие в облаке и петля.
 const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[] = [
   {
     kind: 'context_pruned', pruneKind: 'prune',
@@ -2278,6 +2278,13 @@ const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[]
     tokensBefore: 0, tokensAfter: 0,
     blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
     prefillSeconds: 21,
+  },
+  {
+    kind: 'context_pruned', pruneKind: 'prune',
+    tokensBefore: 0, tokensAfter: 0,
+    blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: 12, cacheReadTokens: 40_000, promptTokens: 96_000,
+    imageBlocks: 7, imageTokens: 14_280,
   },
   {
     kind: 'context_pruned', pruneKind: 'loop_guard',

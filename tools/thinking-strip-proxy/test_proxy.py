@@ -2181,5 +2181,258 @@ class ПетляСквознаяTests(unittest.TestCase):
         self.assertTrue(отдано["loop_guard"].startswith("on"))
 
 
+# --- Прунинг картинок ---------------------------------------------------------------------
+
+import base64
+import struct
+
+
+def png(w, h):
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h) + b"\x08\x02\x00\x00\x00" + b"\x00" * 64
+
+
+def jpeg(w, h, exif=0, сегментов=1):
+    app1 = (b"\xff\xe1" + struct.pack(">H", exif + 2) + b"\x00" * exif) * сегментов
+    sof = b"\xff\xc0" + struct.pack(">HBHHB", 17, 8, h, w, 3) + b"\x00" * 9
+    return b"\xff\xd8" + app1 + b"\xff\xdb\x00\x04\x00\x00" + sof + b"\xff\xda"
+
+
+def webp_vp8(w, h):
+    return (b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8 " + b"\x00" * 4 + b"\x00" * 3
+            + b"\x9d\x01\x2a" + struct.pack("<HH", w, h) + b"\x00" * 16)
+
+
+def webp_vp8l(w, h):
+    биты = (w - 1) | ((h - 1) << 14)
+    return b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8L" + b"\x00" * 4 + b"\x2f" + struct.pack("<I", биты) + b"\x00" * 16
+
+
+def webp_vp8x(w, h):
+    return (b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8X" + b"\x00" * 8
+            + (w - 1).to_bytes(3, "little") + (h - 1).to_bytes(3, "little") + b"\x00" * 16)
+
+
+def картинка(w=1920, h=1080, сырьё=None):
+    данные = base64.b64encode(сырьё if сырьё is not None else png(w, h)).decode()
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": данные}}
+
+
+def скриншот(i, w=1920, h=1080):
+    """Пара «Read скриншота → вывод с картинкой», как её шлёт CLI."""
+    return [{"role": "assistant", "content": [
+                {"type": "tool_use", "id": f"r{i}", "name": "Read", "input": {"file_path": f"/s{i}.png"}}]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": f"r{i}", "content": [картинка(w, h)]}]}]
+
+
+def чат_со_скриншотами(n, человек=None):
+    msgs = [{"role": "user", "content": [{"type": "text", "text": "проверь страницу"}]
+             + ([картинка(800, 600)] * человек if человек else [])}]
+    for i in range(n):
+        msgs += скриншот(i)
+    return msgs
+
+
+def картинок(msgs):
+    n = 0
+    for m in msgs:
+        for b in m["content"] if isinstance(m["content"], list) else []:
+            if b.get("type") == "image":
+                n += 1
+            elif b.get("type") == "tool_result" and isinstance(b.get("content"), list):
+                n += sum(1 for x in b["content"] if x.get("type") == "image")
+    return n
+
+
+class РазмерКартинкиTests(unittest.TestCase):
+    def test_png(self):
+        self.assertEqual(proxy.image_size(png(1920, 1080)), (1920, 1080))
+
+    def test_jpeg_с_exif(self):
+        self.assertEqual(proxy.image_size(jpeg(1024, 768, exif=500)), (1024, 768))
+
+    def test_jpeg_с_крупным_exif_за_пределами_префикса(self):
+        блок = картинка(сырьё=jpeg(640, 480, exif=65000, сегментов=2) + b"\x00" * 200000)
+        self.assertEqual(proxy._image_dims(блок), (640, 480))
+
+    def test_webp_все_три_вида(self):
+        self.assertEqual(proxy.image_size(webp_vp8(800, 600)), (800, 600))
+        self.assertEqual(proxy.image_size(webp_vp8l(1000, 700)), (1000, 700))
+        self.assertEqual(proxy.image_size(webp_vp8x(3000, 2000)), (3000, 2000))
+
+    def test_мусор_и_ссылка(self):
+        self.assertIsNone(proxy.image_size(b"not an image at all"))
+        self.assertIsNone(proxy._image_dims({"type": "image", "source": {"type": "url", "url": "x"}}))
+        self.assertIsNone(proxy._image_dims(картинка(сырьё=b"\x00" * 40)))
+
+    def test_оценка_токенов_по_замерам(self):
+        self.assertEqual(proxy.image_tokens((512, 512)), 256)    # замер 258
+        self.assertEqual(proxy.image_tokens((1024, 768)), 768)   # замер 770
+        self.assertEqual(proxy.image_tokens((1920, 1080)), 2040)  # замер 2042
+        self.assertEqual(proxy.image_tokens((4000, 3000)), proxy.IMAGE_TOKENS_CAP)
+        self.assertEqual(proxy.image_tokens(None), proxy.IMAGE_TOKENS_CAP)
+
+
+class ПрунингКартинокTests(unittest.TestCase):
+    def test_без_картинок_ничего_не_меняется(self):
+        msgs = history(30)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertIs(out, msgs)
+        self.assertEqual(сводка, {"pruned": 0, "kept": 0, "tokens": 0})
+
+    def test_картинок_не_больше_keep_ничего_не_меняется(self):
+        msgs = чат_со_скриншотами(4)
+        снимок = json.dumps(msgs)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertIs(out, msgs)
+        self.assertEqual(json.dumps(out), снимок)
+        self.assertEqual(сводка["kept"], 4)
+
+    def test_старые_вырезаются_свежие_остаются(self):
+        msgs = чат_со_скриншотами(10)
+        снимок = json.dumps(msgs)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(json.dumps(msgs), снимок, "вход не мутирован")
+        self.assertEqual((сводка["pruned"], сводка["kept"]), (6, 4))
+        self.assertEqual(сводка["tokens"], 6 * 2040)
+        self.assertEqual(картинок(out), 4)
+        # старейшие — заглушки той же формы (текстовый блок внутри tool_result)
+        первый = out[2]["content"][0]
+        self.assertEqual(первый["type"], "tool_result")
+        self.assertEqual(первый["tool_use_id"], "r0")
+        self.assertEqual(первый["content"],
+                         [{"type": "text", "text": "[картинка 1920×1080, ~2040 токенов, вырезана "
+                                                   "прокси — открой заново, если нужна]"}])
+        # свежие — те же объекты, байт в байт
+        for i in range(6, 10):
+            self.assertIs(out[2 + 2 * i], msgs[2 + 2 * i])
+
+    def test_картинки_последнего_сообщения_человека_не_трогаются(self):
+        msgs = чат_со_скриншотами(10)
+        msgs.append({"role": "user", "content": [{"type": "text", "text": "а вот так?"},
+                                                  картинка(800, 600), картинка(800, 600)]})
+        out, сводка = proxy.prune_images(msgs, keep=1, max_images=12)
+        self.assertIs(out[-1], msgs[-1])
+        self.assertEqual(сводка["kept"], 2, "две картинки человека, свежайшая из них же")
+        self.assertEqual(сводка["pruned"], 10)
+
+    def test_человек_защищён_весь_ход_агента(self):
+        """Человек приложил картинку, дальше агент сделал шаги — она всё ещё «его»."""
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "вот макет"}, картинка(800, 600)]}]
+        for i in range(8):
+            msgs += скриншот(i)
+        out, сводка = proxy.prune_images(msgs, keep=2, max_images=12)
+        self.assertIs(out[0], msgs[0])
+        self.assertEqual((сводка["pruned"], сводка["kept"]), (6, 3))
+
+    def test_прошлое_сообщение_человека_не_защищено(self):
+        msgs = чат_со_скриншотами(0, человек=1)
+        for i in range(6):
+            msgs += скриншот(i)
+        msgs.append({"role": "user", "content": "дальше"})
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(out[0]["content"][1]["type"], "text")
+        self.assertEqual(сводка["pruned"], 3)
+
+    def test_потолок_режет_даже_картинки_человека(self):
+        msgs = чат_со_скриншотами(0, человек=20)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(картинок(out), 12)
+        self.assertEqual((сводка["pruned"], сводка["kept"]), (8, 12))
+        # режутся старейшие: первые 8 картинок сообщения
+        блоки = out[0]["content"]
+        self.assertTrue(all(b["type"] == "text" for b in блоки[1:9]))
+        self.assertTrue(all(b["type"] == "image" for b in блоки[9:]))
+
+    def test_потолок_при_большом_keep(self):
+        out, сводка = proxy.prune_images(чат_со_скриншотами(40), keep=100, max_images=12)
+        self.assertEqual(картинок(out), 12)
+
+    def test_детерминизм_между_запросами(self):
+        """Вырезанное остаётся вырезанным: общий префикс двух соседних ходов совпадает байт в
+        байт до позиции, где вырезана новая картинка, — промах кэша один раз, а не каждый ход."""
+        прошлый, _ = proxy.prune_images(чат_со_скриншотами(10), keep=4, max_images=12)
+        текущий, _ = proxy.prune_images(чат_со_скриншотами(10), keep=4, max_images=12)
+        self.assertEqual(json.dumps(прошлый), json.dumps(текущий))
+        следующий, _ = proxy.prune_images(чат_со_скриншотами(11), keep=4, max_images=12)
+        # первые 6 скриншотов были вырезаны и остались вырезанными бит в бит
+        for i in range(1 + 2 * 6):
+            self.assertEqual(json.dumps(прошлый[i]), json.dumps(следующий[i]))
+        # уже вырезанная история не режется повторно и не меняется
+        ещё, сводка = proxy.prune_images(следующий, keep=4, max_images=12)
+        self.assertIs(ещё, следующий)
+        self.assertEqual(сводка["pruned"], 0)
+
+    def test_вывод_с_текстом_и_картинкой(self):
+        msgs = чат_со_скриншотами(5)
+        msgs[2]["content"][0]["content"].insert(0, {"type": "text", "text": "подпись"})
+        out, _ = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(out[2]["content"][0]["content"][0], {"type": "text", "text": "подпись"})
+        self.assertEqual(out[2]["content"][0]["content"][1]["type"], "text")
+        self.assertEqual(msgs[2]["content"][0]["content"][1]["type"], "image", "вход не мутирован")
+
+
+class КартинкиСквозныеTests(unittest.TestCase):
+    """Тот же стенд, что у карточки: CLI → прокси → заглушка модели, событие на бэкенд."""
+    setUp_базовый = СобытиеСквозноеTests.setUp
+    tearDown_базовый = СобытиеСквозноеTests.tearDown
+    спросить = СобытиеСквозноеTests.спросить
+
+    def setUp(self):
+        self.setUp_базовый()
+        self.картинки_было = (proxy.IMAGE_PRUNE, proxy.IMAGE_KEEP, proxy.IMAGE_MAX, dict(proxy._image_cuts))
+        proxy.IMAGE_PRUNE, proxy.IMAGE_KEEP, proxy.IMAGE_MAX = "on", 4, 12
+        proxy._image_cuts.clear()
+        proxy.stats.update(images_pruned=0, images_kept=0, image_tokens_saved=0)
+
+    def tearDown(self):
+        proxy.IMAGE_PRUNE, proxy.IMAGE_KEEP, proxy.IMAGE_MAX, разрезы = self.картинки_было
+        proxy._image_cuts.clear()
+        proxy._image_cuts.update(разрезы)
+        self.tearDown_базовый()
+
+    def test_тело_без_картинок_уходит_байт_в_байт(self):
+        proxy.PRUNE_MODE = "off"
+        msgs = history(5)
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192, "messages": msgs}).encode()
+        self.спросить(msgs, ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[-1][1], тело)
+
+    def test_чат_с_двадцатью_скриншотами(self):
+        self.спросить(чат_со_скриншотами(25))
+        _, тело, _ = self.Модель.принятые[-1]
+        self.assertEqual(картинок(json.loads(тело)["messages"]), 4)
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual((событие["kind"], событие["imageBlocks"], событие["imageTokens"]),
+                         ("prune", 21, 21 * 2040))
+        self.assertEqual(событие["blocks"], 0)
+        self.assertEqual(proxy.stats["images_pruned"], 21)
+
+    def test_карточка_только_на_новом_вырезании(self):
+        self.спросить(чат_со_скриншотами(10))
+        self.спросить(чат_со_скриншотами(10), ждать_карточку=False)
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        self.спросить(чат_со_скриншотами(11))
+        self.assertEqual(len(self.Бэкенд.принятые), 2)
+        self.assertEqual(self.Бэкенд.принятые[1][1]["imageBlocks"], 7)
+
+    def test_выключено_картинки_едут_как_есть(self):
+        proxy.IMAGE_PRUNE = "off"
+        self.спросить(чат_со_скриншотами(20), ждать_карточку=False)
+        _, тело, _ = self.Модель.принятые[-1]
+        self.assertEqual(картинок(json.loads(тело)["messages"]), 20)
+
+    def test_счётчики_в_stats(self):
+        self.спросить(чат_со_скриншотами(6))
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=10)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual((отдано["images_pruned"], отдано["images_kept"], отдано["image_tokens_saved"]),
+                         (2, 4, 2 * 2040))
+        self.assertTrue(отдано["image_prune"].startswith("on"))
+
+
 if __name__ == "__main__":
     unittest.main()

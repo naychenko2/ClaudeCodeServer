@@ -38,6 +38,13 @@ describe('prunedHeadline', () => {
       .toBe('сжатие в облаке');
   });
 
+  it('вырезаны только картинки — их число и цена', () => {
+    expect(prunedHeadline(prune({ tokensBefore: 0, tokensAfter: 0, blocks: 0, imageBlocks: 7, imageTokens: 14_280 })))
+      .toBe('вырезано 7 картинок (~14k ток)');
+    expect(prunedHeadline(prune({ tokensBefore: 0, tokensAfter: 0, blocks: 0, imageBlocks: 1, imageTokens: 2040 })))
+      .toBe('вырезано 1 картинка (~2.0k ток)');
+  });
+
   it('тысячи ниже 10k — с десятой долей', () => {
     expect(prunedHeadline(prune({ tokensBefore: 9500, tokensAfter: 940 })))
       .toBe('контекст обрезан · 9.5k → 940');
@@ -227,6 +234,18 @@ describe('applyServerMessage: context_pruned', () => {
       s = applyServerMessage(s, wire({ tokensBefore: 200_000 }));
       expect(s.items.filter(i => i.kind === 'context_pruned')).toHaveLength(2);
     });
+  });
+
+  it('картинки доезжают до элемента и попадают в подробности', () => {
+    const next = applyServerMessage(initialChatState(), wire({ imageBlocks: 3, imageTokens: 6120 }));
+    const item = next.items[0] as PrunedItem;
+    expect(item).toMatchObject({ imageBlocks: 3, imageTokens: 6120 });
+    expect(prunedDetails(item)).toBe('25 блоков (выводов 20, входов 3, размышлений 2) · 3 картинки (~6.1k ток) · пересчёт 87 с · из кэша 0%');
+  });
+
+  it('ноль картинок с бэкенда — полей в элементе нет', () => {
+    const next = applyServerMessage(initialChatState(), wire({ imageBlocks: 0, imageTokens: 0 }));
+    expect(next.items[0]).not.toHaveProperty('imageBlocks');
   });
 
   it('необязательных полей нет — в элементе их тоже нет', () => {

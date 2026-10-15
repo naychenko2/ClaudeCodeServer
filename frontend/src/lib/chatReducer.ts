@@ -837,6 +837,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.prefillSeconds !== undefined ? { prefillSeconds: msg.prefillSeconds } : {}),
         ...(msg.cacheReadTokens !== undefined ? { cacheReadTokens: msg.cacheReadTokens } : {}),
         ...(msg.promptTokens !== undefined ? { promptTokens: msg.promptTokens } : {}),
+        // Картинки — только когда их вырезали: у прочих карточек полей нет вовсе
+        ...(msg.imageBlocks ? { imageBlocks: msg.imageBlocks, imageTokens: msg.imageTokens ?? 0 } : {}),
       }]);
 
     case 'image_launch': {

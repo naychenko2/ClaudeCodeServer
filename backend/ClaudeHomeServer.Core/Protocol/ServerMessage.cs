@@ -277,7 +277,8 @@ public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTo
 
 // Обрезка контекста прокси локальной модели: сдвиг границы прунинга (Kind = "prune") либо уход
 // автосжатия в облако (Kind = "compact_cloud"), либо перехват петли модели в потоке
-// (Kind = "loop_guard": Blocks — сколько петель, ResultBlocks — был ли повтор). Всё это стоит человеку десятков секунд
+// (Kind = "loop_guard": Blocks — сколько петель, ResultBlocks — был ли повтор). ImageBlocks /
+// ImageTokens — вырезанные прокси старые картинки и их оценка в токенах. Всё это стоит человеку десятков секунд
 // тишины в чате, неотличимых от зависания, — карточка рассказывает, чем они заняты.
 // PrefillSeconds — время до первого байта ответа модели у ЭТОГО запроса, то есть ровно
 // «сколько ждали»; CacheReadTokens / PromptTokens — доля промпта, взятая из prefix cache.
@@ -298,7 +299,9 @@ public record ContextPrunedMessage(
     double? PrefillSeconds,
     int? CacheReadTokens,
     int? PromptTokens,
-    string? EventId = null)
+    string? EventId = null,
+    int ImageBlocks = 0,
+    int ImageTokens = 0)
     : ServerMessage("context_pruned");
 
 // Ход компакции (system/status): Status == "compacting" — началась;

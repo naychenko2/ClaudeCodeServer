@@ -32,7 +32,9 @@ public class LlmProxyEventsController(
 
     // Тело запроса от прокси. Kind — "prune" (сдвиг границы), "compact_cloud" (автосжатие
     // ушло в облако) или "loop_guard" (прокси перехватил петлю модели в потоке; Blocks — сколько
-    // петель поймали, ResultBlocks — был ли повтор запроса, ThinkingBlocks — петля в размышлениях). Числа приходят по мерке прокси: точного счётчика токенов у него нет,
+    // петель поймали, ResultBlocks — был ли повтор запроса, ThinkingBlocks — петля в размышлениях). ImageBlocks/ImageTokens —
+    // сколько картинок прокси вырезал из истории и их оценка в токенах (у "prune"; у прокси без
+    // прунинга картинок полей нет — 0). Числа приходят по мерке прокси: точного счётчика токенов у него нет,
     // и карточка честно показывает оценку.
     public record ProxyEvent(
         string? SessionId,
@@ -45,7 +47,9 @@ public class LlmProxyEventsController(
         int ThinkingBlocks,
         double? PrefillSeconds,
         int? CacheReadTokens,
-        int? PromptTokens);
+        int? PromptTokens,
+        int ImageBlocks = 0,
+        int ImageTokens = 0);
 
     private static readonly string[] KnownKinds = ["prune", "compact_cloud", "loop_guard"];
 
@@ -74,10 +78,12 @@ public class LlmProxyEventsController(
         var eventId = Guid.NewGuid().ToString("N");
         var stored = new StoredContextPrunedMessage(kind, body.TokensBefore, body.TokensAfter,
             body.Blocks, body.ResultBlocks, body.InputBlocks, body.ThinkingBlocks,
-            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens, eventId);
+            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens, eventId,
+            body.ImageBlocks, body.ImageTokens);
         var broadcast = new ContextPrunedMessage(kind, body.TokensBefore, body.TokensAfter,
             body.Blocks, body.ResultBlocks, body.InputBlocks, body.ThinkingBlocks,
-            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens, eventId);
+            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens, eventId,
+            body.ImageBlocks, body.ImageTokens);
 
         // Ход в этот момент ИДЁТ: AppendStoredAsync кладёт запись в аккумулятор текущего хода
         // (или прямо в историю, если чат не активен) и рассылает сообщение клиентам сессии.

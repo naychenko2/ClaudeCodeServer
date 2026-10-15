@@ -221,7 +221,8 @@ public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? p
 // одинаковым null схлопнулись бы в одну).
 public class StoredContextPrunedMessage(string kind, int tokensBefore, int tokensAfter, int blocks,
     int resultBlocks, int inputBlocks, int thinkingBlocks, double? prefillSeconds = null,
-    int? cacheReadTokens = null, int? promptTokens = null, string? eventId = null) : StoredMessage
+    int? cacheReadTokens = null, int? promptTokens = null, string? eventId = null,
+    int imageBlocks = 0, int imageTokens = 0) : StoredMessage
 {
     [JsonPropertyName("pruneKind")]
     public string Kind { get; init; } = kind;
@@ -235,6 +236,8 @@ public class StoredContextPrunedMessage(string kind, int tokensBefore, int token
     public double? PrefillSeconds { get; init; } = prefillSeconds;
     public int? CacheReadTokens { get; init; } = cacheReadTokens;
     public int? PromptTokens { get; init; } = promptTokens;
+    public int ImageBlocks { get; init; } = imageBlocks;
+    public int ImageTokens { get; init; } = imageTokens;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

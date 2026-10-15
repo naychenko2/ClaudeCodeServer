@@ -28,6 +28,8 @@ export function prunedHeadline(item: PrunedItem): string {
     return s === null ? 'сжатие в облаке' : `сжатие в облаке · ${s} с`;
   }
   const { tokensBefore: before, tokensAfter: after } = item;
+  // Сдвинулись только картинки: прокси вырезал старые, граница выводов стоит на месте
+  if (item.blocks === 0 && before === 0 && (item.imageBlocks ?? 0) > 0) return `вырезано ${imagesText(item)}`;
   if (before > 0 && after > 0) return `контекст обрезан · ${fmtPrunedTokens(before)} → ${fmtPrunedTokens(after)}`;
   if (before > 0) return `контекст обрезан · было ${fmtPrunedTokens(before)}`;
   return 'контекст обрезан';
@@ -51,6 +53,7 @@ export function prunedDetails(item: PrunedItem): string | null {
     parts.push(kinds.length > 0
       ? `${item.blocks} ${blocksPlural(item.blocks)} (${kinds.join(', ')})`
       : `${item.blocks} ${blocksPlural(item.blocks)}`);
+    if ((item.imageBlocks ?? 0) > 0) parts.push(imagesText(item));
   }
 
   const s = roundSeconds(item.prefillSeconds);
@@ -76,6 +79,16 @@ function roundSeconds(sec: number | undefined): number | null {
   if (typeof sec !== 'number' || !isFinite(sec)) return null;
   const rounded = Math.round(sec);
   return rounded > 0 ? rounded : null;
+}
+
+// «7 картинок (~14k ток)» — сколько старых картинок прокси вырезал из истории за чат
+function imagesText(item: PrunedItem): string {
+  const n = item.imageBlocks ?? 0;
+  const tokens = item.imageTokens ?? 0;
+  const mod10 = n % 10, mod100 = n % 100;
+  const word = mod10 === 1 && mod100 !== 11 ? 'картинка'
+    : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'картинки' : 'картинок';
+  return tokens > 0 ? `${n} ${word} (~${fmtPrunedTokens(tokens)} ток)` : `${n} ${word}`;
 }
 
 function blocksPlural(n: number): string {

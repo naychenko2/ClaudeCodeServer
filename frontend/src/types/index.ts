@@ -1251,6 +1251,8 @@ export type ServerMessage = { sessionId: string } & (
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+      // Сколько старых картинок прокси вырезал из истории (всего за чат) и их оценка в токенах
+      imageBlocks?: number; imageTokens?: number;
     }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
   // Записи ленты чата картинки (ADR-018 §1, §2): живые копии StoredImageLaunchMessage и
@@ -2204,6 +2206,7 @@ export type ChatItem =
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+      imageBlocks?: number; imageTokens?: number;
     }
   // Тихие строки чата картинки: «Вы запустили: …» и «Сохранено как …» (ADR-018 §1, §2)
   | ({ kind: 'image_launch' } & ImageLaunchFields)

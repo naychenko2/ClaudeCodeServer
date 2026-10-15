@@ -152,6 +152,35 @@ public class LlmProxyEventsControllerTests
         card.GetProperty("pruneKind").GetString().Should().Be("loop_guard");
     }
 
+    // Вырезанные картинки едут в той же карточке обрезки; старый прокси полей не шлёт — нули.
+    [Fact]
+    public async Task ВырезанныеКартинки_ДоезжаютДоИстории()
+    {
+        using var factory = WithSecret(Secret);
+        var owner = factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+
+        var client = Anonymous(factory);
+        client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
+        var body = new
+        {
+            sessionId, kind = "prune", tokensBefore = 0, tokensAfter = 0, blocks = 0,
+            resultBlocks = 0, inputBlocks = 0, thinkingBlocks = 0,
+            imageBlocks = 21, imageTokens = 42_840,
+        };
+        (await client.PostAsJsonAsync(Url, body)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsJsonAsync(Url, Body(sessionId))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await owner.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history");
+        var cards = history.EnumerateArray()
+            .Where(m => m.GetProperty("kind").GetString() == "context_pruned").ToList();
+        cards.Should().HaveCount(2);
+        cards[0].GetProperty("imageBlocks").GetInt32().Should().Be(21);
+        cards[0].GetProperty("imageTokens").GetInt32().Should().Be(42_840);
+        cards[1].GetProperty("imageBlocks").GetInt32().Should().Be(0);
+    }
+
     // МЕХАНИЗМ ЗАДВОЕНИЯ (диагностика 2026-09-23): одно принятое событие уезжает в ДВЕ группы
     // одним и тем же сообщением — в session-группу чата и в project-группу проекта
     // (SessionManager.BroadcastSessionMessageAsync). Вкладка открытого чата состоит в обеих

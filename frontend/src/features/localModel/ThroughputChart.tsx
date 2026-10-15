@@ -24,6 +24,8 @@ import type { LocalModelStats } from './api';
 // Точка истории: t — unix-мс; throughput/running — как раньше; серии кэша v2.1
 // (kvUsage — доля 0..1, остальные — приращения счётчиков с прошлой точки).
 // genTokens/itlSeconds — приращения для скорости на поток (вторая линия, ADR-029).
+// busySeconds — занятое время генерации стенда (сек) с прошлой точки: сколько секунд
+// за интервал хотя бы один запрос генерировал (wall-clock, не сумма по потокам).
 // null — нет данных (разрыв), 0 — настоящее значение.
 export interface ThroughputSample {
   t: number;
@@ -37,6 +39,7 @@ export interface ThroughputSample {
   preemptions: number | null;
   genTokens: number | null;
   itlSeconds: number | null;
+  busySeconds: number | null;
 }
 
 // Геометрия области построения в единицах SVG.
@@ -55,6 +58,12 @@ export interface Interval {
   tEnd: number;
   throughput: number | null;   // среднее genThroughput (!= null)
   perStream: number | null;    // Σ genTokens / Σ itlSeconds (скорость на агента); null — разрыв
+  // standTotal — «всего по стенду» БЕЗ пауз: Σ genTokens / Σ busySeconds (ток/с).
+  // busySeconds = занятое время стенда (wall-clock, не сумма по потокам), поэтому
+  // параллельные агенты не «размывают» значение, а простой (busySeconds = 0) даёт 0,
+  // не null: провал остаётся виден. null — разрыв (движок молчал/рестарт, busySeconds
+  // не пришёл). Старый бэкенд (без busySeconds) — деление на длину интервала.
+  standTotal: number | null;
   kvUsage: number | null;      // максимум kvUsage (!= null)
   prefix: number | null;       // Σ prefixHits / Σ prefixQueries; null — движок молчал (разрыв)
   ram: number | null;          // Σ ramHits / Σ ramQueries; null — движок молчал (разрыв)
@@ -144,6 +153,42 @@ export function buildPerStreamSegments(
   return segs;
 }
 
+// Линия «всего по стенду» (основная, без пауз): одна точка на центр каждого интервала
+// (ΣgenTokens/ΣbusySeconds), null — обрыв. Методика — как у линии «на агента»
+// (buildPerStreamSegments): центр интервала, y на общей оси выработки.
+export function buildStandTotalSegments(
+  intervals: Interval[],
+  tMin: number,
+  tMax: number,
+  maxSeries: number,
+  geom: ChartGeom,
+): { x: number; y: number }[][] {
+  const segs: { x: number; y: number }[][] = [];
+  let cur: { x: number; y: number }[] = [];
+  for (const it of intervals) {
+    const v = it.standTotal;
+    if (v == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+    const cx = geom.left + (geom.width - geom.left - geom.right) * ((it.tStart + (it.tEnd - it.tStart) / 2 - tMin) / (tMax - tMin));
+    cur.push({ x: cx, y: yForThroughput(v, maxSeries, geom) });
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+
+// Прогоны разрыва «всего по стенду» (standTotal == null): фон-«разрыв» для основной
+// линии — отдельно от фона «на агента», чтобы линии не смешивались.
+export function standTotalBreakRuns(intervals: Interval[]): [number, number][] {
+  const runs: [number, number][] = [];
+  let start = -1;
+  for (let i = 0; i < intervals.length; i++) {
+    const isBreak = intervals[i].standTotal == null;
+    if (isBreak && start === -1) start = i;
+    if (!isBreak && start !== -1) { runs.push([start, i - 1]); start = -1; }
+  }
+  if (start !== -1) runs.push([start, intervals.length - 1]);
+  return runs;
+}
+
 // Замкнутая область под линией: по каждому сегменту — вниз к дну, через точки, обратно.
 export function segmentsToArea(segments: { x: number; y: number }[][], geom: ChartGeom): string[] {
   const floor = geom.height - geom.bottom;
@@ -170,11 +215,11 @@ export function maxThroughputOf(samples: ThroughputSample[]): number {
 }
 
 // Верх ОБЩЕЙ оси выработки: максимум ОБЕИХ серий (всего по стенду + на агента).
-// 0 — если данных нет. Выработка остаётся основной, но вторая линия не должна
-// уходить за верх поля.
-export function maxSeriesOf(samples: ThroughputSample[], intervals: Interval[]): number {
-  let max = maxThroughputOf(samples);
+// 0 — если данных нет. Обе серии — на интервалах, ни одна не уходит за верх поля.
+export function maxSeriesOf(intervals: Interval[]): number {
+  let max = 0;
   for (const it of intervals) {
+    if (it.standTotal != null && it.standTotal > max) max = it.standTotal;
     if (it.perStream != null && it.perStream > max) max = it.perStream;
   }
   return max;
@@ -192,6 +237,39 @@ export function avgPerStreamOf(samples: ThroughputSample[]): number | null {
     }
   }
   return any && sumItl > 0 ? sumGen / sumItl : null;
+}
+
+// «Всего по стенду» за окно (строка-итог «в среднем»): ΣgenTokens/ΣbusySeconds по всем
+// точкам окна, где ОБА приращения на месте — без пауз. busySeconds нет (старый бэкенд)
+// → деление на длину окна (старая формула). null — genTokens вовсе нет (молчание/рестарт).
+// 0 — метрика есть, но генерации в окне не было (busySeconds = 0).
+export function avgStandTotalOf(samples: ThroughputSample[], windowMs: number): number | null {
+  let sumGenBusy = 0, sumBusy = 0, hasBusy = false;
+  let sumGen = 0, hasGen = false;
+  for (const s of samples) {
+    if (s.genTokens != null && s.busySeconds != null) {
+      sumGenBusy += s.genTokens;
+      sumBusy += s.busySeconds;
+      hasBusy = true;
+    }
+    if (s.genTokens != null) {
+      sumGen += s.genTokens;
+      hasGen = true;
+    }
+  }
+  if (hasBusy) return sumBusy > 0 ? sumGenBusy / sumBusy : 0;
+  if (hasGen) return sumGen / (windowMs / 1000);
+  return null;
+}
+
+// Пик «всего по стенду» за окно: максимум standTotal по интервалам (без пауз).
+// 0 — если данных нет.
+export function peakStandTotalOf(intervals: Interval[]): number {
+  let max = 0;
+  for (const it of intervals) {
+    if (it.standTotal != null && it.standTotal > max) max = it.standTotal;
+  }
+  return max;
 }
 
 // «Круглая» шкала (только график выработки): верх = ближайшее сверху число из ряда
@@ -248,6 +326,7 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
       preemptions: h.preemptions ?? null,
       genTokens: h.genTokens ?? null,
       itlSeconds: h.itlSeconds ?? null,
+      busySeconds: h.busySeconds ?? null,
     });
   }
   return out;
@@ -306,6 +385,9 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     let sumRH = 0, sumRQ = 0, hasRH = false;
     let sumPre = 0, hasPre = false;
     let sumGen = 0, sumItl = 0, hasStream = false;
+    // «всего по стенду» без пауз: ΣgenTokens/ΣbusySeconds. busySeconds — занятое время
+    // стенда (wall-clock): параллельные агенты дают одну занятую секунду, простой — 0.
+    let sumGenBusy = 0, sumBusy = 0, hasBusy = false;
     for (const s of samples) {
       if (s.t < tStart || s.t >= tEnd) continue;
       if (s.throughput != null) { sumTp += s.throughput; nTp++; }
@@ -315,6 +397,8 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       if (s.preemptions != null) { sumPre += s.preemptions; hasPre = true; }
       // скорость на поток: только когда ОБА приращения точки на месте (иначе дробь не честная)
       if (s.genTokens != null && s.itlSeconds != null) { sumGen += s.genTokens; sumItl += s.itlSeconds; hasStream = true; }
+      // занятое время стенда: только когда ОБА приращения точки на месте
+      if (s.genTokens != null && s.busySeconds != null) { sumGenBusy += s.genTokens; sumBusy += s.busySeconds; hasBusy = true; }
     }
     let prefix: number | null;
     if (hasPH && sumPQ > 0) prefix = sumPH / sumPQ;
@@ -329,11 +413,24 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     // скорость на агента: ΣgenTokens/ΣitlSeconds; null — разрыв (молчание/рестарт)
     // или Σitl = 0 (токены не делим на ноль).
     const perStream = hasStream && sumItl > 0 ? sumGen / sumItl : null;
+    // «всего по стенду» без пауз: ΣgenTokens/ΣbusySeconds. busySeconds есть (hasBusy):
+    // Σbusy > 0 → дробь; Σbusy = 0 → 0 (простой, не null — провал виден). busySeconds
+    // нет (старый бэкенд) → деление на длину интервала (старая формула, размывает паузами).
+    const intervalSec = (tEnd - tStart) / 1000;
+    let standTotal: number | null;
+    if (hasBusy) {
+      standTotal = sumBusy > 0 ? sumGenBusy / sumBusy : 0;
+    } else if (hasStream) {
+      standTotal = sumGen / intervalSec;
+    } else {
+      standTotal = null;
+    }
     out.push({
       tStart,
       tEnd,
       throughput: nTp > 0 ? sumTp / nTp : null,
       perStream,
+      standTotal,
       kvUsage: maxKv,
       prefix,
       ram,
@@ -414,20 +511,21 @@ export function chartAriaLabel(window: Window, avg: number | null, hit: number |
 
 // aria-label SVG «Выработка, ток/с»: базовая сводка; при hover — время
 // интервала и значения ОБЕИХ серий (всего по стенду + на агента) или
-// «движок не отвечал» на разрыве.
+// «движок не отвечал» на разрыве. Плюс одна фраза-пояснение про простой.
 export function tpChartAriaLabel(
   window: Window, avg: number | null, hit: number | null,
-  hoverTime: string | null, hoverThroughput: number | null, hoverPerStream?: number | null,
+  hoverTime: string | null, hoverStandTotal: number | null, hoverPerStream?: number | null,
 ): string {
   const parts = [`Выработка, ток/с за ${WINDOW_LABEL[window]}`];
   if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
   if (hit != null) parts.push(`кэш ${formatPerc(hit)}`);
   if (hoverTime != null) {
-    if (hoverThroughput == null) {
+    if (hoverStandTotal == null) {
       parts.push(`интервал ${hoverTime}: движок не отвечал`);
     } else {
-      parts.push(`интервал ${hoverTime}: всего ${formatTps(hoverThroughput)}`);
+      parts.push(`интервал ${hoverTime}: стенд ${formatTps(hoverStandTotal)}`);
       if (hoverPerStream != null) parts.push(`на агента ${formatTps(hoverPerStream)}`);
+      parts.push('простой не учитывается: в паузах линия на нуле');
     }
   }
   return parts.join(', ');
@@ -549,10 +647,12 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
 }) {
   const tMin = grid.from;
   const tMax = grid.to;
-  // Верх ОБЩЕЙ оси — по максимуму ОБЕИХ серий: выработка остаётся основной, но
-  // линия «на агента» не должна уходить за верх поля.
-  const maxT = niceAxisMax(maxSeriesOf(samples, intervals));
-  const avg = avgThroughputOf(samples);
+  // Верх ОБЩЕЙ оси — по максимуму ОБЕИХ серий (обе на интервалах): ни одна не
+  // уходит за верх поля.
+  const maxT = niceAxisMax(maxSeriesOf(intervals));
+  // «в среднем» — «всего по стенду» без пауз: ΣgenTokens/ΣbusySeconds за окно
+  // (старый бэкенд — деление на длину окна).
+  const avg = avgStandTotalOf(samples, WINDOW_MS[window]);
   const avgPerStream = avgPerStreamOf(samples);
   const hitAvg = cacheHitAvg(samples);
   const preTotal = preemptionTotal(samples);
@@ -567,10 +667,11 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const evNotReported = samples.every(s => s.preemptions == null);
   const hasRam = intervals.some(it => it.ram != null);
 
+  // Основная линия «всего по стенду» (без пауз): из интервалов (ΣgenTokens/ΣbusySeconds).
   const tpSegments = useMemo(
-    () => buildThroughputSegments(samples, tMin, tMax, maxT, geomTp),
+    () => buildStandTotalSegments(intervals, tMin, tMax, maxT, geomTp),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [samples, tMin, tMax, maxT, width],
+    [intervals, tMin, tMax, maxT, width],
   );
   const tpPoints = segmentsToPoints(tpSegments);
   const tpAreas = segmentsToArea(tpSegments, geomTp);
@@ -627,18 +728,20 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
     const mm = String(d.getMinutes()).padStart(2, '0');
     const time = window === '5m' ? `${hh}:${mm}:${String(d.getSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
     hoverTime = time;
-    if (hover.throughput == null) {
+    if (hover.standTotal == null) {
       summary = `${time} · движок не отвечал`;
     } else {
-      // Обе серии: «всего по стенду» + «на агента, в среднем» (— если второй нет).
-      summary = hover.perStream != null
-        ? `${time} · всего ${formatTps(hover.throughput)} · на агента ${formatTps(hover.perStream)}`
-        : `${time} · ${formatTps(hover.throughput)}`;
+      // Обе серии: «всего по стенду» (без пауз) + «на агента, в среднем».
+      // Фраза-пояснение: простой не учитывается — в паузах линия на нуле.
+      const base = hover.perStream != null
+        ? `${time} · стенд ${formatTps(hover.standTotal)} · на агента ${formatTps(hover.perStream)}`
+        : `${time} · стенд ${formatTps(hover.standTotal)}`;
+      summary = `${base} · простой не учитывается: в паузах линия на нуле`;
     }
   } else {
     const parts: string[] = [];
     if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
-    const peak = maxThroughputOf(samples);
+    const peak = peakStandTotalOf(intervals);
     if (avg != null && peak > 0) parts.push(`пик ${formatTps(peak)}`);
     if (hitAvg != null) parts.push(`кэш ${formatPerc(hitAvg)}`);
     summary = parts.length ? parts.join(' · ') : 'за период генерации не было';
@@ -653,9 +756,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const firstT = samples.length ? samples[0].t : null;
   const noDataX = firstT != null ? xForTime(firstT, tMin, tMax, geomTp) : null;
 
-  // Разрывы (throughput == null): один прямоугольник на непрерывный прогон +
-  // пунктирная вертикаль на левой границе. X общий для всех полей (left/right равны).
-  const breaks = breakRuns(intervals).map(([a, b]) => ({
+  // Разрывы «всего по стенду» (standTotal == null): один прямоугольник на непрерывный
+  // прогон + пунктирная вертикаль на левой границе. X общий для всех полей (left/right равны).
+  const breaks = standTotalBreakRuns(intervals).map(([a, b]) => ({
     x0: xForTime(intervals[a].tStart, tMin, tMax, geomTp),
     x1: xForTime(intervals[b].tEnd, tMin, tMax, geomTp),
   }));
@@ -711,7 +814,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
 
   // Легенда графика 1 (выработка): значения ОБЕИХ серий — интервала (считывание)
   // или за окно. formatTps(null) = '—' (серия в интервале/окне не была).
-  const legendTotal = hover ? formatTps(hover.throughput) : formatTps(avg);
+  const legendTotal = hover ? formatTps(hover.standTotal) : formatTps(avg);
   const legendPerStream = hover ? formatTps(hover.perStream) : formatTps(avgPerStream);
 
   // Ось времени (общая, под последным полем)
@@ -755,9 +858,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
           ? <NotReported engine={engine} />
           : (
             <>
-              <FieldLabel>Выработка, ток/с · всего по стенду, все агенты вместе</FieldLabel>
+              <FieldLabel>Выработка, ток/с · стенд выдаёт, когда работает</FieldLabel>
               <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}
-                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.throughput ?? null, hover?.perStream ?? null)}>
+                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.standTotal ?? null, hover?.perStream ?? null)}>
                 {[0, 0.5, 1].map(f => {
                   const y = yForThroughput(maxT * f, maxT, geomTp);
                   return (
@@ -804,8 +907,8 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                 {perStreamPoints.map((pts, i) => (
                   <polyline key={`psl${i}`} points={pts} fill="none" stroke={C.info} strokeWidth={1.25} strokeDasharray="5 3" strokeLinejoin="round" strokeLinecap="round" />
                 ))}
-                {hoverX != null && hover && hover.throughput != null && (() => {
-                  const hy = yForThroughput(hover.throughput, maxT, geomTp);
+                {hoverX != null && hover && hover.standTotal != null && (() => {
+                  const hy = yForThroughput(hover.standTotal, maxT, geomTp);
                   const psY = hover.perStream != null ? yForThroughput(hover.perStream, maxT, geomTp) : null;
                   return (
                     <g>
@@ -824,7 +927,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
               }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.accent}` }} />
-                  всего по стенду <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendTotal}</b>
+                  стенд выдаёт, когда работает <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendTotal}</b>
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 10, height: 0, borderTop: `2px dashed ${C.info}` }} />

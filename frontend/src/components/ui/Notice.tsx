@@ -9,6 +9,7 @@ import type { HTMLAttributes, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './icons';
+import { useIsMobile } from '../../lib/breakpoints';
 
 export type NoticeTone = 'warning' | 'danger' | 'info';
 
@@ -29,12 +30,18 @@ interface Props extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
   title?: ReactNode;
   children?: ReactNode;
   // Действие справа от текста (кнопка «Вернуть»); текст тогда занимает остаток строки,
-  // а когда ему остаётся меньше 220px — действие переносится под текст, к правому краю
+  // а когда ему остаётся меньше 220px — действие переносится под текст, к правому краю.
+  // На мобиле действие всегда под текстом, по левому краю текста (ревью c63c0038, п.1)
   action?: ReactNode;
 }
 
 export function Notice({ tone = 'warning', icon: Icon, title, children, action, style, ...rest }: Props) {
   const t = TONE[tone];
+  const isMobile = useIsMobile();
+  // Отступ строки действия на мобиле: под текстом, а не под иконкой
+  const actionStyle = isMobile
+    ? { flexBasis: '100%', paddingLeft: ICON_SIZE.xs + SP.sm }
+    : { marginLeft: 'auto', flexShrink: 0 };
   return (
     <div
       role="status"
@@ -54,7 +61,7 @@ export function Notice({ tone = 'warning', icon: Icon, title, children, action, 
         {title && <div style={{ fontWeight: 600 }}>{title}</div>}
         {children}
       </div>
-      {action && <div style={{ marginLeft: 'auto', flexShrink: 0 }}>{action}</div>}
+      {action && <div style={actionStyle}>{action}</div>}
     </div>
   );
 }

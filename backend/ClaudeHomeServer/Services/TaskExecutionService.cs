@@ -607,8 +607,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
     // Environment.NewLine, и на Windows обвязка шла с CRLF, а тело шаблона — с LF.
-    // На Linux NewLine уже "\n", и замена ничего не меняет.
-    private static string ToLf(string text) => text.Replace(Environment.NewLine, "\n");
+    // Меняем именно "\r\n", а не Environment.NewLine: CRLF приходит и из пользовательского
+    // текста (описание, repro, заметки), и на Linux он иначе остался бы как есть.
+    private static string ToLf(string text) => text.Replace("\r\n", "\n");
 
     // 6-секционный контракт постановки для персоны-исполнителя. Характер персоны
     // инжектится системным промптом сессии (персона-слой) — здесь только постановка.

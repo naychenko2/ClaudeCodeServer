@@ -243,6 +243,20 @@ public class TaskExecutionServiceTests
     }
 
     [Fact]
+    public void BuildPrompt_CrlfИзТекстаЗадачи_СхлопываетсяВLfНаЛюбойОс()
+    {
+        // CRLF из описания задачи — пользовательский текст, не Environment.NewLine:
+        // на Linux замена по NewLine его не трогала
+        var task = new TaskItem { Title = "t", Description = "первая\r\nвторая" };
+
+        var plain = TaskExecutionService.BuildPrompt(task);
+        var withPersona = TaskExecutionService.BuildPrompt(task, new Persona());
+
+        plain.Should().NotContain("\r").And.Contain("первая\nвторая");
+        withPersona.Should().NotContain("\r").And.Contain("первая\nвторая");
+    }
+
+    [Fact]
     public void BuildPrompt_БезПерсоны_ПрежнийФормат()
     {
         var prompt = TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" });

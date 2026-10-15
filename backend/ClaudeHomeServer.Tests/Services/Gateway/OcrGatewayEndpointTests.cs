@@ -74,10 +74,13 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
     }
 
     // Блокирует до отмены ct (pageCts) — для PageTimeout и BusyTimeout.
-    private sealed class SlowVllm : HttpMessageHandler
+    // entered сигналит, когда запрос добрался до vLLM (= слот OCR занят): тест BusyTimeout
+    // шлёт второй запрос только после этого, чтобы гонка за слотом была детерминированной.
+    private sealed class SlowVllm(TaskCompletionSource entered) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            entered.TrySetResult();
             await Task.Delay(Timeout.Infinite, ct);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
         }
@@ -314,14 +317,19 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
     [Fact]
     public async Task BusyTimeout_503()
     {
-        // Первый запрос блокируется (SlowVllm), второй ждёт слот 1 с → BusyTimeout.
-        // Пересобираем app с блокирующим handler'ом.
-        await RebuildWithHandlerAsync(new SlowVllm(), busyWaitSec: 1);
+        // Первый запрос блокируется (SlowVllm) и занимает слот OCR; второй ждёт слот 1 с → BusyTimeout.
+        // entered сигналит, когда первый добрался до vLLM (слот занят) — только тогда шлём второй.
+        var entered = new TaskCompletionSource();
+        await RebuildWithHandlerAsync(new SlowVllm(entered), busyWaitSec: 1);
 
         var t1 = StartTurn();
         var t2 = StartTurn();
 
         var first = _client.SendAsync(Req(t1));
+
+        // Первый гарантированно дошёл до SlowVllm, слот точно занят. 5 с — страховка от дедлока.
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
         var second = await _client.SendAsync(Req(t2));
         second.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         (await second.Content.ReadAsStringAsync()).Should().Contain("\"busy_timeout\"");
@@ -330,8 +338,8 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
     [Fact]
     public async Task PageTimeout_503()
     {
-        // Handler блокируется, PageTimeoutSec = 1 → таймаут.
-        await RebuildWithHandlerAsync(new SlowVllm(), pageTimeoutSec: 1);
+        // Handler блокируется, PageTimeoutSec = 1 → таймаут. Один запрос — гонки нет, TCS одноразовый.
+        await RebuildWithHandlerAsync(new SlowVllm(new TaskCompletionSource()), pageTimeoutSec: 1);
 
         var t = StartTurn();
         var resp = await _client.SendAsync(Req(t));

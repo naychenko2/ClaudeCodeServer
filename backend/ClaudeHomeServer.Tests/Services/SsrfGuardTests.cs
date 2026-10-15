@@ -28,6 +28,7 @@ public class SsrfGuardTests
     [InlineData("2002:808:808::1")]        // 6to4 с публичным 8.8.8.8
     [InlineData("2001:1::1")]              // сосед Teredo 2001::/32
     [InlineData("2001:db9::1")]            // сразу за документационным 2001:db8::/32
+    [InlineData("3fff:1000::1")]           // сразу за документационным 3fff::/20
     [InlineData("::ffff:1:808:808")]       // рядом с SIIT ::ffff:0:0:0/96
     [InlineData("2001:4860:4860::8888")]   // Google DNS
     [InlineData("64:ff9b::808:808")]       // NAT64 well-known с публичным IPv4
@@ -115,6 +116,8 @@ public class SsrfGuardTests
     [InlineData("203.0.113.255")]  // TEST-NET-3
     [InlineData("192.88.99.1")]    // бывший 6to4-relay anycast
     [InlineData("2001:db8::1")]    // документационный v6
+    [InlineData("3fff::1")]        // документационный 3fff::/20 (RFC 9637)
+    [InlineData("3fff:fff:ffff::1")] // последний блок 3fff::/20
     [InlineData("::ffff:0:808:808")] // SIIT ::ffff:0:0:0/96, даже с публичным IPv4
     public void IsPublic_ДопДиапазоны_False(string ip)
     {

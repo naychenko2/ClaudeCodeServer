@@ -80,7 +80,10 @@ public class HandsBridgeLaunchWindowsTests
             gate.Enter(null);
             var turnJob = @"Local\AiHome.Turn.test." + Guid.NewGuid().ToString("N");
             gate.Enter(turnJob);
-            GateType.GetMethod("Configure", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, []);
+            // Все параметры Configure необязательные: Type.Missing берёт их умолчания, и
+            // новый необязательный параметр рефлексию больше не ломает (TargetParameterCountException)
+            var configure = GateType.GetMethod("Configure", BindingFlags.Public | BindingFlags.Static)!;
+            configure.Invoke(null, configure.GetParameters().Select(_ => Type.Missing).ToArray());
             return gate;
         }
 

@@ -1850,6 +1850,11 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.OutputRingBuffer",
         "ClaudeHomeServer.Services.JsonFileStore",
         "ClaudeHomeServer.Services.SsrfGuard",
+        // Единственный транспорт к адресам извне (ADR-025, «Фаза 3», S2): ридер, загрузчик медиа и
+        // http.* процессов — своя копия ConnectCallback в вертикали разошлась бы с правилом «все адреса»
+        "ClaudeHomeServer.Services.SsrfSafeHandler",
+        "ClaudeHomeServer.Services.SsrfSafeHandlerOptions",
+        "ClaudeHomeServer.Services.SsrfBlockedException",
         // Скачивание результата генерации по ссылке поставщика поверх SsrfGuard: им пользуются
         // и Images, и ImageEditor — вторая копия в вертикали снова открыла бы SSRF
         "ClaudeHomeServer.Services.SafeMediaDownloader",

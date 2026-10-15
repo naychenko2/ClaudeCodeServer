@@ -1,9 +1,7 @@
-using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Llm.Gateway;
@@ -31,14 +29,15 @@ public static class OcrGatewayEndpoints
             .AllowAnonymous()
             .WithName("OcrGateway");
 
-    private static async Task HandleAsync(
+    // internal (не private): тесты ClaudeHomeServer.Tests вызывают хэндлер напрямую
+    // через DefaultHttpContext, чтобы замерить «обращение к телу» отдельно от статуса.
+    internal static async Task HandleAsync(
         HttpContext http,
         ISessionDirectory sessions,
         IProjectManager projects,
         IDeviceExecChannel? deviceChannel,
         LocalOcrService ocr,
-        IOptionsMonitor<LlmGatewayOptions> options,
-        ILoggerFactory loggers)
+        IOptionsMonitor<LlmGatewayOptions> options)
     {
         var grant = (TurnTokenGrant)http.Items[typeof(TurnTokenGrant)]!;
 
@@ -67,11 +66,22 @@ public static class OcrGatewayEndpoints
             return;
         }
 
-        // Читаем тело: raw PNG.
+        // Читаем тело: raw PNG. Второй рубеж — лимит накопленного: при chunked (без
+        // Content-Length) тело не льётся целиком в память, а на превышении 8 МБ — 413.
         byte[] png;
         await using (var ms = new MemoryStream())
         {
-            await http.Request.Body.CopyToAsync(ms, http.RequestAborted);
+            var buffer = new byte[8192];
+            int read;
+            while ((read = await http.Request.Body.ReadAsync(buffer, 0, buffer.Length, http.RequestAborted)) > 0)
+            {
+                ms.Write(buffer, 0, read);
+                if (ms.Length > LocalOcrService.MaxImageBytes)
+                {
+                    await WriteJsonAsync(http, StatusCodes.Status413PayloadTooLarge, new { reason = "too_large" });
+                    return;
+                }
+            }
             png = ms.ToArray();
         }
 

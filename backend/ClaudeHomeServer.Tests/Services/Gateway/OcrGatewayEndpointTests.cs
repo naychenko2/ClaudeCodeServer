@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -10,6 +11,7 @@ using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -86,6 +88,37 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
         public T CurrentValue { get; set; } = value;
         public T Get(string? name) => CurrentValue;
         public IDisposable? OnChange(Action<T, string?> listener) => null;
+    }
+
+    // Тело-поток со счётчиком прочитанных байт: ReadBytes = 0 — тело не тронули
+    // (413 до чтения), > 0 — читали. Для тестов «413 до чтения тела» и chunked-лимита.
+    private sealed class CountingStream(byte[] data) : Stream
+    {
+        private long _pos;
+        public long ReadBytes { get; private set; }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var n = (int)Math.Min(buffer.Length, data.Length - _pos);
+            if (n <= 0) return ValueTask.FromResult(0);
+            data.AsSpan((int)_pos, n).CopyTo(buffer.Span);
+            _pos += n;
+            ReadBytes += n;
+            return ValueTask.FromResult(n);
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+        public override long Position { get => _pos; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     // --- сборка ---
@@ -313,6 +346,56 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
         var bigBody = new byte[LocalOcrService.MaxImageBytes + 1];
         var resp = await _client.SendAsync(Req(t, bigBody));
         resp.StatusCode.Should().Be((HttpStatusCode)413);
+    }
+
+    // MAJOR: 413 ДО чтения тела. Content-Length = 8 МБ+1, тело — счётчик байт.
+    // Если проверку Content-Length убрать, тело прочитается (счётчик > 0) → тест краснеет.
+    [Fact]
+    public async Task TooLarge_413_ДоЧтенияТела()
+    {
+        var t = StartTurn();
+        var body = new CountingStream(new byte[LocalOcrService.MaxImageBytes + 1]);
+
+        var ctx = new DefaultHttpContext { RequestServices = _app.Services };
+        ctx.Items[typeof(TurnTokenGrant)] = t.Grant;
+        ctx.Request.Body = body;
+        ctx.Request.ContentLength = LocalOcrService.MaxImageBytes + 1;
+
+        var ocr = _app.Services.GetRequiredService<LocalOcrService>();
+        await OcrGatewayEndpoints.HandleAsync(ctx, _sessions, _projects, _deviceChannel, ocr, _options);
+
+        ctx.Response.StatusCode.Should().Be(413);
+        body.ReadBytes.Should().Be(0, "тело не читают, пока Content-Length не превышен");
+    }
+
+    // MINOR-3: chunked (без Content-Length), тело > 8 МБ. Второй рубеж — лимит накопленного:
+    // 413 на превышении, тело не льётся целиком в память (счётчик < всего тела).
+    [Fact]
+    public async Task Chunked_БезContentLength_БольшеПотолка_413_БезЧтенияЛишнего()
+    {
+        var t = StartTurn();
+        var body = new CountingStream(new byte[16 * 1024 * 1024]); // 16 МБ
+
+        var ctx = new DefaultHttpContext { RequestServices = _app.Services };
+        ctx.Items[typeof(TurnTokenGrant)] = t.Grant;
+        ctx.Request.Body = body;
+        ctx.Request.ContentLength = null; // chunked
+
+        var ocr = _app.Services.GetRequiredService<LocalOcrService>();
+        await OcrGatewayEndpoints.HandleAsync(ctx, _sessions, _projects, _deviceChannel, ocr, _options);
+
+        ctx.Response.StatusCode.Should().Be(413);
+        // Прочитано не всё тело (16 МБ), а только до потолка + один буфер.
+        body.ReadBytes.Should().BeGreaterOrEqualTo(LocalOcrService.MaxImageBytes, "читали до превышения");
+        body.ReadBytes.Should().BeLessThan(16 * 1024 * 1024, "тело не льётся целиком в память");
+    }
+
+    // MINOR (ревью A3): сайдкар (устройство) и серверный OCR держат один потолок тела.
+    // Живёт в ClaudeHomeServer.Tests: только он видит обе сборки (DeviceAgent + Llm).
+    [Fact]
+    public void ПотолокСайдкара_СовпадаетСПотолкомOcr()
+    {
+        SidecarProxy.MaxOcrBodyBytes.Should().Be(LocalOcrService.MaxImageBytes);
     }
 
     // Пересборка app с заданным handler'ом (для BusyTimeout / PageTimeout).

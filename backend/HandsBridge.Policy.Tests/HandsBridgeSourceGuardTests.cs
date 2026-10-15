@@ -331,6 +331,53 @@ public class HandsBridgeSourceGuardTests
     }
 
     /// <summary>
+    /// Drag (D2b-2.1): конец перетаскивания над запрещённым окном → курсор возвращён в начало, и
+    /// результат возврата проверяется вызовом <c>FinishDragAfterEndRejected</c>. Он обязан стоять ПОСЛЕ
+    /// возврата <c>MoveForStrokeAsync(points[0].…)</c> и ДО <c>finally</c>, где отпускается кнопка, —
+    /// иначе кнопка отпустится над запрещённым окном (drop). Условие перед вызовом — повторная проверка
+    /// текущей позиции курсора (<c>CursorPointAcceptsInput</c>). Разбор Roslyn: порядок по позиции в исходнике.
+    /// </summary>
+    [Fact]
+    public void StrokeCoreAsync_finishes_the_drag_after_returning_to_start()
+    {
+        var root = ParseTree(Read("Input/MouseInputService.cs"));
+        var stroke = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(m => m.Identifier.Text == "StrokeCoreAsync");
+
+        // Возврат курсора в начальную точку: MoveForStrokeAsync(points[0].X, points[0].Y, …)
+        var returnToStart = stroke.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(IsMoveForStrokeCall)
+            .Where(c => c.ArgumentList.Arguments.Count >= 1
+                && c.ArgumentList.Arguments[0].ToString().Contains("points[0]"))
+            .Single();
+
+        // Вызов FinishDragAfterEndRejected — решение о завершении drag после возврата
+        var finishCalls = stroke.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(c => c.Expression is IdentifierNameSyntax { Identifier.Text: "FinishDragAfterEndRejected" })
+            .ToList();
+        Assert.True(finishCalls.Count > 0, "StrokeCoreAsync: нет вызова FinishDragAfterEndRejected после возврата курсора");
+        var finish = finishCalls.Single();
+
+        // finally, где отпускается кнопка (SendInput)
+        var finallyBlock = stroke.DescendantNodes().OfType<TryStatementSyntax>()
+            .Select(t => t.Finally?.Block)
+            .FirstOrDefault(b => b is not null && b.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSendInputCall));
+        Assert.True(finallyBlock is not null, "StrokeCoreAsync: нет finally с отпусканием кнопки (SendInput)");
+
+        // Порядок: возврат в начало → FinishDragAfterEndRejected → finally
+        Assert.True(finish.SpanStart > returnToStart.Span.End,
+            "FinishDragAfterEndRejected стоит до возврата курсора в начальную точку");
+        Assert.True(finish.SpanStart < finallyBlock!.SpanStart,
+            "FinishDragAfterEndRejected стоит после finally — кнопка уже отпущена");
+
+        // Условие перед вызовом — повторная проверка текущей позиции курсора
+        var guard = finish.Ancestors().OfType<IfStatementSyntax>().FirstOrDefault();
+        Assert.True(guard is not null, "FinishDragAfterEndRejected не вложен в if с проверкой");
+        Assert.True(guard!.Condition.ToString().Contains("CursorPointAcceptsInput"),
+            "условие перед FinishDragAfterEndRejected не проверяет позицию курсора");
+    }
+
+    /// <summary>
     /// Инструмент кладёт в гейт ОБЕ точки перетаскивания: конец drag тоже проверяется на запрещённое окно.
     /// </summary>
     [Fact]
@@ -435,6 +482,10 @@ public class HandsBridgeSourceGuardTests
     /// <summary>Вызов <c>NativeMethods.SendInput(...)</c> — любой метод с именем SendInput через MemberAccess.</summary>
     private static bool IsSendInputCall(InvocationExpressionSyntax inv) =>
         inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "SendInput" };
+
+    /// <summary>Вызов <c>MoveForStrokeAsync(...)</c> — движение/возврат курсора в рамках stroke, без квалификатора.</summary>
+    private static bool IsMoveForStrokeCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is IdentifierNameSyntax { Identifier.Text: "MoveForStrokeAsync" };
 
     /// <summary>Вызов <c>CursorPointAcceptsInput(...)</c> — метод того же класса, без квалификатора.</summary>
     private static bool IsPointCheckCall(InvocationExpressionSyntax inv) =>

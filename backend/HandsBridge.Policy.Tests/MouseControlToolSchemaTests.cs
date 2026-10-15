@@ -64,13 +64,13 @@ public class MouseControlToolSchemaTests
     /// исполняется на Linux через рефлексию по сборке моста.
     /// </summary>
     [Theory]
-    [InlineData(true,  true,  true, "end over terminal", null,             false)]
-    [InlineData(true,  false, true, "end over terminal", null,             true)]
-    [InlineData(false, true,  true, "end over terminal", "SendInput failed", false)]
-    [InlineData(false, false, true, "end over terminal", "SendInput failed", true)]
-    [InlineData(true,  true,  false, "end over terminal", null,             false)]
+    [InlineData(true,  true, "end over terminal", null,             false)]
+    [InlineData(false, true, "end over terminal", null,             true)]
+    [InlineData(true,  true, "end over terminal", "SendInput failed", false)]
+    [InlineData(false, true, "end over terminal", "SendInput failed", true)]
+    [InlineData(true,  false, "end over terminal", null,             false)]
     public void Finish_drag_after_end_rejected_decides_the_release(
-        bool returnSucceeded, bool cursorAcceptsInput, bool buttonWasPressed,
+        bool cursorAcceptsInput, bool buttonWasPressed,
         string? strokeEndReason, string? returnError, bool expectedAborted)
     {
         var type = HandsBridgeGateRuntimeTests.Bridge.Value
@@ -80,7 +80,7 @@ public class MouseControlToolSchemaTests
             ?? throw new InvalidOperationException("FinishDragAfterEndRejected не найден");
 
         var tuple = (ValueTuple<bool, string>)method.Invoke(null,
-            [returnSucceeded, cursorAcceptsInput, buttonWasPressed, strokeEndReason, returnError])!;
+            [cursorAcceptsInput, buttonWasPressed, strokeEndReason, returnError])!;
 
         Assert.Equal(expectedAborted, tuple.Item1);
         Assert.False(string.IsNullOrWhiteSpace(tuple.Item2));

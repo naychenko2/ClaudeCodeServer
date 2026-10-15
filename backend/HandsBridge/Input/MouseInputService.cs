@@ -1158,11 +1158,10 @@ public sealed class MouseInputService
                 if (!CursorPointAcceptsInput(expectedForegroundWindow, out var afterReturnReason))
                 {
                     var (aborted, message) = FinishDragAfterEndRejected(
-                        returnToStart.Success,
                         cursorAcceptsInput: false,
                         buttonWasPressed: buttonDownSucceeded,
-                        afterReturnReason,
-                        returnToStart.Error);
+                        pointReason: afterReturnReason,
+                        returnError: returnToStart.Error);
                     if (aborted)
                     {
                         Debug.WriteLine($"StrokeCoreAsync: drag aborted — {message}");
@@ -1243,11 +1242,9 @@ public sealed class MouseInputService
     /// в начало. Чистая функция (без SendInput/GetCursorPos), чтобы ветки проверялись таблично на Linux:
     /// <paramref name="cursorAcceptsInput"/> — повторная проверка ТЕКУЩЕЙ позиции курсора; если она не
     /// принимает ввод, кнопка отпустится над запрещённым окном (drop) — это abort, а не безопасная отмена.
-    /// <paramref name="returnSucceeded"/> — результат возврата; <paramref name="buttonWasPressed"/> — была
-    /// ли кнопка нажата (и будет ли отпущена в finally).
+    /// <paramref name="buttonWasPressed"/> — была ли кнопка нажата (и будет ли отпущена в finally).
     /// </summary>
     internal static (bool Aborted, string Message) FinishDragAfterEndRejected(
-        bool returnSucceeded,
         bool cursorAcceptsInput,
         bool buttonWasPressed,
         string? pointReason,

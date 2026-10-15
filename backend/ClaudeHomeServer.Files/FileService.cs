@@ -586,7 +586,8 @@ public class FileService(
                 UseShellExecute = false,
                 RedirectStandardError = true
             };
-            foreach (var a in new[] { "checkout", "HEAD", "--", relativePath }) psi.ArgumentList.Add(a);
+            // «:(literal)» — путь, а не маска: «[ab]», «*» в имени не откатят соседей
+            foreach (var a in new[] { "checkout", "HEAD", "--", ":(literal)" + relativePath }) psi.ArgumentList.Add(a);
             using var proc = System.Diagnostics.Process.Start(psi)!;
             proc.BeginErrorReadLine();
             if (!proc.WaitForExit(3000))

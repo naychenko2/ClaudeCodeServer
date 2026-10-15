@@ -368,7 +368,8 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
     // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
     // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история
-    // одного файла через log --follow (переживает переименования, как FileLogAsync).
+    // одного файла через log --follow (переживает переименования, как FileLogAsync);
+    // --literal-pathspecs — путь буквальный, «[ab].txt» не считает коммиты a.txt.
     // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
     // листинг паспортов не должен падать из-за метрики.
     public async Task<int> CountRecentCommitsAsync(
@@ -383,7 +384,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
         }
         var log = await RunReadAsync(ownerId, root,
-            ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
+            ["--literal-pathspecs", "log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
         return log.Ok
             ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
             : 0;

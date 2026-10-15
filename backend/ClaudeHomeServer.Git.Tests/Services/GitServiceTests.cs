@@ -248,6 +248,20 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
             .Should().Be(3, "история c.txt включает и коммиты a.txt до переименования");
     }
 
+    [Fact]
+    public async Task CountRecentCommits_СкобкиВИмени_ПутьБуквальный_ЧужиеКоммитыНеСчитаются()
+    {
+        // «[ab].txt» маской совпадает с a.txt и b.txt: без --literal-pathspecs в счёт вошли бы их коммиты
+        await File.WriteAllTextAsync(Path.Combine(_repo, "[ab].txt"), "скобки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "файл со скобками");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "правка a");
+
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "[ab].txt")).Should().Be(1);
+    }
+
     // Отдельное репо с монотонной историей: корень датирован в прошлое, tip — сейчас.
     // --since у git — traversal-эвристика по датам, рассчитанная ровно на такой порядок
     // (старое ниже свежего); инвертированные даты она не обязана считать честно.

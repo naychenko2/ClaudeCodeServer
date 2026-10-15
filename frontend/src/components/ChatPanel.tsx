@@ -36,7 +36,7 @@ import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries, type TurnTree } from '../lib/turnWorktree';
-import { retryableInterruptedIndex } from '../lib/chatReducer';
+import { retryableInterruptedIndex, turnAlreadyEnded } from '../lib/chatReducer';
 import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
 import { BUILD_TOOL, RUN_TESTS_TOOL, operationOf } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
@@ -57,7 +57,7 @@ import { chatContextApi } from '../lib/chatContext/api';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
-import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks } from '../lib/chatContinue';
+import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
 import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
@@ -1319,10 +1319,33 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         ? { screen: 'project', project, chatId: result.newSessionId, view: 'chat', file: null }
         : { screen: 'chats', chatId: result.newSessionId });
     } catch (err) {
-      showToast('Продолжение чата', err instanceof Error ? err.message : 'Не удалось продолжить в новом чате');
+      const msg = err instanceof Error ? err.message : 'Не удалось продолжить в новом чате';
+      // 409 «уже продолжен»: тост с текстом и ссылкой на новый чат, если ссылка пришла
+      const link = continuedLinkFromError(err);
+      if (link) {
+        showToast('Продолжение чата', msg, 'info', {
+          label: 'Открыть новый чат',
+          onClick: () => { void openChatById(link); },
+        });
+        throw err;
+      }
+      // Долгий запрос оборвался (таймаут/сеть): не показываем ошибку сразу, а перечитываем
+      // сессию — если продолжение состоялось на сервере, уводим в новый чат
+      try {
+        const fresh = await api.chats.get(session.id);
+        if (fresh.continuedInSessionId) {
+          onSessionUpdated?.(fresh);
+          setContinueOpen(false);
+          navPush(project
+            ? { screen: 'project', project, chatId: fresh.continuedInSessionId, view: 'chat', file: null }
+            : { screen: 'chats', chatId: fresh.continuedInSessionId });
+          return;
+        }
+      } catch { /* не перечитали — показываем ошибку */ }
+      showToast('Продолжение чата', msg);
       throw err;
     }
-  }, [session.id, project]);
+  }, [session.id, project, onSessionUpdated]);
   const openContinue = useCallback(() => setContinueOpen(true), []);
   // Пункт меню шапки (ChatHeaderBar) сообщает через событие — как cc-ai-run
   useEffect(() => {
@@ -1351,6 +1374,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return () => { cancelled = true; };
   }, [continuedFromId]);
   const lastAssistantIdx = useMemo(() => lastAssistantTextIndex(items), [items]);
+  // Кнопка «Продолжить в новом чате» под последним ответом: прячем, пока ход ещё идёт
+  // (последний элемент ленты не result/error — ответ стримится) и если чат уже продолжен
+  // (кнопка дублировала бы плашку-связь). isWaiting — отдельный признак занятости редьюсера
+  const continueGate = continueButtonGate({
+    online,
+    isWaiting,
+    turnRunning: !turnAlreadyEnded(items),
+    continuedInto: !!continuedIntoId,
+  });
 
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
@@ -2062,7 +2094,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
       onBranch={onBranchForItem}
-      onContinue={i === lastAssistantIdx && online && !isWaiting ? openContinue : undefined}
+      onContinue={continueGate && i === lastAssistantIdx ? openContinue : undefined}
       availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
@@ -2106,7 +2138,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, openContinue, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,

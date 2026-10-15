@@ -72,12 +72,14 @@ export function ContinueHint({ tokens, onOpen, onSnooze }: {
   return (
     <Notice tone="info" icon={Gauge} data-testid="continue-hint"
       action={
-        <div style={{ display: 'flex', gap: SP.xs, flexShrink: 0 }}>
+        // Кнопки в столбик: на узкой ширине (390px) горизонтальная пара сжимала бы
+        // текст до двух-трёх слов; вертикальная колонка узкая, тексту остаётся место
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: SP.xs, flexShrink: 0 }}>
           <Button size="sm" onClick={onOpen}>Продолжить</Button>
           <Button size="sm" variant="ghost" onClick={onSnooze}>Не сейчас</Button>
         </div>
       }>
-      Контекст {formatContextK(tokens)}. Продолжить в новом чате? Это дешевле, и агент меньше путается.
+      Контекст {formatContextK(tokens)}. Продолжить в новом чате? Дешевле, и агент меньше путается.
     </Notice>
   );
 }

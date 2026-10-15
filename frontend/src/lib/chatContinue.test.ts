@@ -3,6 +3,7 @@ import type { ChatItem } from '../types';
 import {
   lastAssistantTextIndex, continueHintThreshold, shouldShowContinueHint,
   continuationLinks, submitContinue, formatContextK,
+  continueButtonGate, continuedLinkFromError,
 } from './chatContinue';
 
 const user = (text: string): ChatItem => ({ kind: 'user_message', text } as ChatItem);
@@ -67,5 +68,48 @@ describe('submitContinue — обработка отказа 409', () => {
   it('отказ (чат занят): false — диалог снимет блокировку и останется открытым', async () => {
     const busy = async () => { throw new Error('Чат занят'); };
     expect(await submitContinue(busy, '')).toBe(false);
+  });
+});
+
+describe('continueButtonGate — кнопка под последним ответом', () => {
+  const base = { online: true, isWaiting: false, turnRunning: false, continuedInto: false };
+  it('показывает, когда ход завершён, сеть есть и чат не продолжен', () => {
+    expect(continueButtonGate(base)).toBe(true);
+  });
+  it('прячет, пока ход идёт (turnRunning) — ответ ещё стримится', () => {
+    expect(continueButtonGate({ ...base, turnRunning: true })).toBe(false);
+  });
+  it('прячет, пока ход занят (isWaiting)', () => {
+    expect(continueButtonGate({ ...base, isWaiting: true })).toBe(false);
+  });
+  it('прячет, если чат уже продолжен (continuedInto)', () => {
+    expect(continueButtonGate({ ...base, continuedInto: true })).toBe(false);
+  });
+  it('прячет офлайн', () => {
+    expect(continueButtonGate({ ...base, online: false })).toBe(false);
+  });
+});
+
+describe('continuedLinkFromError — ссылка на новый чат в отказе 409', () => {
+  it('id в тексте ошибки → ссылка', () => {
+    const err = new Error('Чат уже продолжен: 1b2c3d4e-5f60-7182-93a4-b5c6d7e8f900') as Error & { status?: number };
+    err.status = 409;
+    expect(continuedLinkFromError(err)).toBe('1b2c3d4e-5f60-7182-93a4-b5c6d7e8f900');
+  });
+  it('id в поле тела (newSessionId) → ссылка', () => {
+    const err = new Error('Чат уже продолжен') as Error & { status?: number; body?: unknown };
+    err.status = 409;
+    err.body = { error: 'Чат уже продолжен', newSessionId: 'aaaa1111-bbbb-cccc-dddd-eeee11112222' };
+    expect(continuedLinkFromError(err)).toBe('aaaa1111-bbbb-cccc-dddd-eeee11112222');
+  });
+  it('не 409 → ссылки нет', () => {
+    const err = new Error('1b2c3d4e-5f60-7182-93a4-b5c6d7e8f900') as Error & { status?: number };
+    err.status = 400;
+    expect(continuedLinkFromError(err)).toBeNull();
+  });
+  it('409 без ссылки в тексте → null (тост без действия)', () => {
+    const err = new Error('Чат уже продолжен') as Error & { status?: number };
+    err.status = 409;
+    expect(continuedLinkFromError(err)).toBeNull();
   });
 });

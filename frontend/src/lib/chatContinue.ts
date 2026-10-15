@@ -66,3 +66,33 @@ export async function submitContinue(
     return false;
   }
 }
+
+// Кнопка «Продолжить в новом чате» под последним ответом: показываем, только когда ход
+// завершён (ответ не стримится), сеть есть и чат ещё не продолжен. Привязка к конкретному
+// элементу ленты (последний текст агента) считает ChatPanel отдельно.
+//   online — сеть; isWaiting — ход занят (редьюсер); turnRunning — ход ещё идёт
+//   (последний элемент ленты не result/error); continuedInto — чат уже продолжен.
+export function continueButtonGate(opts: {
+  online: boolean;
+  isWaiting: boolean;
+  turnRunning: boolean;
+  continuedInto: boolean;
+}): boolean {
+  return opts.online && !opts.isWaiting && !opts.turnRunning && !opts.continuedInto;
+}
+
+// Отказ 409 «уже продолжен»: бэкенд кладёт ссылку на новый чат (id) в текст ошибки либо
+// в отдельное поле тела. Если ссылка нашлась — верни её, иначе null (тост без действия).
+export function continuedLinkFromError(err: unknown): string | null {
+  const e = err as (Error & { status?: number; body?: unknown }) | null;
+  if (!e || e.status !== 409) return null;
+  const body = e.body as Record<string, unknown> | null;
+  if (body) {
+    for (const key of ['newSessionId', 'continuedInSessionId', 'sessionId', 'chatId']) {
+      const v = body[key];
+      if (typeof v === 'string' && v) return v;
+    }
+  }
+  const m = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(e.message ?? '');
+  return m ? m[0] : null;
+}

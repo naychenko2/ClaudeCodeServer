@@ -14,8 +14,9 @@ public class HandsClipboardTests
 
     private sealed class FakeClipboard : IHandsClipboardState
     {
-        public int SequenceNumber { get; set; }
-        public int SequenceNumberAtLastOwnInput { get; set; }
+        public uint SequenceNumber { get; set; }
+        public uint SequenceNumberAtLastOwnInput { get; set; }
+        public bool HadOwnInput { get; set; }
         public IReadOnlyCollection<string> FormatNames { get; set; } = Array.Empty<string>();
     }
 
@@ -24,7 +25,7 @@ public class HandsClipboardTests
     [Fact]
     public void Read_without_a_change_since_own_input_is_denied()
     {
-        var clip = new FakeClipboard { SequenceNumber = 5, SequenceNumberAtLastOwnInput = 5 };
+        var clip = new FakeClipboard { SequenceNumber = 5, SequenceNumberAtLastOwnInput = 5, HadOwnInput = true };
         var decision = Policy().CheckClipboard("read", 100, clip);
         Assert.False(decision.Allowed);
         Assert.Contains("has not changed", decision.Reason);
@@ -33,8 +34,32 @@ public class HandsClipboardTests
     [Fact]
     public void Read_after_a_change_is_allowed()
     {
-        var clip = new FakeClipboard { SequenceNumber = 6, SequenceNumberAtLastOwnInput = 5 };
+        var clip = new FakeClipboard { SequenceNumber = 6, SequenceNumberAtLastOwnInput = 5, HadOwnInput = true };
         Assert.True(Policy().CheckClipboard("read", 100, clip).Allowed);
+    }
+
+    // Переполнение uint: максимум → 0. Нуль — ДРУГОЙ номер, а не «не изменилось»: сравнение
+    // «отличается от», а не «больше».
+    [Fact]
+    public void Read_after_uint_overflow_is_allowed()
+    {
+        var clip = new FakeClipboard
+        {
+            SequenceNumber = 0,
+            SequenceNumberAtLastOwnInput = uint.MaxValue,
+            HadOwnInput = true,
+        };
+        Assert.True(Policy().CheckClipboard("read", 100, clip).Allowed);
+    }
+
+    // Собственного ввода не было — читать нечего, даже если номер «свежий».
+    [Fact]
+    public void Read_without_any_own_input_is_denied()
+    {
+        var clip = new FakeClipboard { SequenceNumber = 7, SequenceNumberAtLastOwnInput = 0, HadOwnInput = false };
+        var decision = Policy().CheckClipboard("read", 100, clip);
+        Assert.False(decision.Allowed);
+        Assert.Contains("has not changed", decision.Reason);
     }
 
     [Theory]
@@ -46,6 +71,7 @@ public class HandsClipboardTests
         {
             SequenceNumber = 6,
             SequenceNumberAtLastOwnInput = 5,
+            HadOwnInput = true,
             FormatNames = new[] { format },
         };
         var decision = Policy().CheckClipboard("read", 100, clip);

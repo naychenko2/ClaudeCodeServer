@@ -104,6 +104,36 @@ public class HandsBatchTests
         Assert.Contains("Unknown hands_batch tool", decision.Reason);
     }
 
+    // ---------- регистр имён инструментов и action ----------
+
+    // Модель может прислать «Close», «CLOSE», « close » — сравнение регистронезависимо и с обрезкой.
+    [Theory]
+    [InlineData("Close")]
+    [InlineData("CLOSE")]
+    [InlineData(" close ")]
+    public void Window_management_close_is_case_and_whitespace_insensitive(string action)
+    {
+        var decision = Policy().CheckBatch([Step(HandsTools.WindowManagement, args: new WindowArgs { Action = action })], 0, false);
+        Assert.False(decision.Allowed);
+        Assert.Contains("does not close windows", decision.Reason);
+    }
+
+    [Fact]
+    public void App_in_batch_is_case_insensitive()
+    {
+        var decision = Policy().CheckBatch([Step("APP")], 0, false);
+        Assert.False(decision.Allowed);
+        Assert.Contains("does not start programs", decision.Reason);
+    }
+
+    [Fact]
+    public void Browser_in_batch_is_case_insensitive()
+    {
+        var decision = Policy().CheckBatch([Step("Browser_Click")], 0, false);
+        Assert.False(decision.Allowed);
+        Assert.Contains("does not browse", decision.Reason);
+    }
+
     // ---------- задержки ----------
 
     [Fact]
@@ -132,6 +162,17 @@ public class HandsBatchTests
         var policy = Policy();
         Assert.True(policy.CheckBatch([Step("wait", 5000)], 60_000, false).Allowed);
         var decision = policy.CheckBatch([Step("wait", 5000)], 60_001, false);
+        Assert.False(decision.Allowed);
+        Assert.Contains("at most 60000 ms", decision.Reason);
+    }
+
+    // Мост считает totalWaitMs сам и может занизить; гейт пересчитывает сумму wait-шагов сам и
+    // берёт большее: 13 ожиданий по 5 с = 65 с > 60 с, хотя мост передал 5000.
+    [Fact]
+    public void Wait_sum_is_recomputed_even_when_the_bridge_underreports()
+    {
+        var steps = Enumerable.Range(0, 13).Select(_ => Step("wait", 5000)).ToList();
+        var decision = Policy().CheckBatch(steps, 5000, false);
         Assert.False(decision.Allowed);
         Assert.Contains("at most 60000 ms", decision.Reason);
     }

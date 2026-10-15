@@ -50,26 +50,43 @@ public class HandsOutputPathTests
 
     // ---------- служебные каталоги ----------
 
+    // Каждый служебный путь — с РАЗРЕШЁННЫМ для данного инструмента расширением: при снятом
+    // запрете .claude/ файл прошёл бы, а не упёрся в чужое расширение (тест краснеет по причине,
+    // а не по совпадению).
     [Theory]
-    [InlineData(".git/config")]
-    [InlineData(".claude/agents/x.md")]
-    [InlineData(".claude/commands/y.md")]
-    [InlineData(".mcp.json")]
-    [InlineData(".cc-cache/x.png")]
-    [InlineData(".cc-foo")]
-    public void Service_paths_are_denied(string path)
+    [InlineData(HandsTools.ScreenshotControl, ".git/x.png")]
+    [InlineData(HandsTools.ScreenshotControl, ".claude/agents/x.png")]
+    [InlineData(HandsTools.ScanCanvas, ".claude/agents/x.png")]
+    [InlineData(HandsTools.ScanDocument, ".claude/agents/x.md")]
+    [InlineData(HandsTools.ScanDocument, ".git/x.md")]
+    [InlineData(HandsTools.ScanDocument, ".mcp.json")]
+    [InlineData(HandsTools.ScreenshotControl, ".cc-cache/x.png")]
+    public void Service_paths_are_denied(string tool, string path)
     {
-        var decision = Check(HandsTools.ScreenshotControl, path);
+        var decision = Check(tool, path);
         Assert.False(decision.Allowed);
         Assert.Contains("service path", decision.Reason);
     }
 
     [Theory]
-    [InlineData(".GIT/x.png")]
-    [InlineData(".Claude/agents/x.md")]
-    public void Service_paths_are_case_insensitive(string path)
+    [InlineData(HandsTools.ScreenshotControl, ".GIT/x.png")]
+    [InlineData(HandsTools.ScreenshotControl, ".Claude/agents/x.png")]
+    [InlineData(HandsTools.ScreenshotControl, ".CC-cache/x.png")]
+    public void Service_paths_are_case_insensitive(string tool, string path)
     {
-        var decision = Check(HandsTools.ScreenshotControl, path);
+        var decision = Check(tool, path);
+        Assert.False(decision.Allowed);
+        Assert.Contains("service path", decision.Reason);
+    }
+
+    // Порядок проверок: служебный каталог с ЧУЖИМ расширением всё равно отказывает «по служебному
+    // пути», а не «по расширению». Иначе снятый запрет .claude/ с чужим расширением маскировался бы
+    // отказом по расширению, и тест Service_paths_are_denied его не словил бы.
+    [Fact]
+    public void Service_path_reason_wins_over_extension_check()
+    {
+        // .md не в whitelist ScreenshotControl, но путь в .claude/ — причина «service path».
+        var decision = Check(HandsTools.ScreenshotControl, ".claude/agents/x.md");
         Assert.False(decision.Allowed);
         Assert.Contains("service path", decision.Reason);
     }
@@ -117,6 +134,78 @@ public class HandsOutputPathTests
     public void Empty_whitespace_or_control_path_is_denied(string path)
     {
         Assert.False(Check(HandsTools.ScreenshotControl, path).Allowed);
+    }
+
+    // ---------- содержимое сегмента (NormalizeRelativePath) ----------
+
+    // У каждого вида отказа — своя причина, не общий «не относительный путь».
+    [Theory]
+    [InlineData("\u202E.png", "invisible Unicode")]
+    [InlineData("\u200B.png", "invisible Unicode")]
+    [InlineData("\uFEFF.png", "invisible Unicode")]
+    [InlineData("~/x.png", "'~'")]
+    [InlineData("~user/x.png", "'~'")]
+    [InlineData("x.png:stream", "':'")]
+    [InlineData("C:x.png", "':'")]
+    [InlineData("a<b.png", "< > \" | ? *")]
+    [InlineData("a>b.png", "< > \" | ? *")]
+    [InlineData("a\"b.png", "< > \" | ? *")]
+    [InlineData("a|b.png", "< > \" | ? *")]
+    [InlineData("a?b.png", "< > \" | ? *")]
+    [InlineData("a*b.png", "< > \" | ? *")]
+    [InlineData("NUL.png", "reserved Windows device name")]
+    [InlineData("con.png", "reserved Windows device name")]
+    [InlineData("COM1.png", "reserved Windows device name")]
+    [InlineData("lpt9.png", "reserved Windows device name")]
+    [InlineData(".git./x.png", "dot or a space")]
+    [InlineData("docs /x.png", "dot or a space")]
+    public void Segment_content_rejections_have_a_clear_reason(string path, string reasonFragment)
+    {
+        var decision = Check(HandsTools.ScreenshotControl, path);
+        Assert.False(decision.Allowed);
+        Assert.Contains(reasonFragment, decision.Reason);
+    }
+
+    // ---------- дописывание: ownFiles в нормализованной, регистронезависимой форме ----------
+
+    [Fact]
+    public void Append_own_matches_normalized_case_insensitively()
+    {
+        // docs\x.png в списке (обратные слеша) совпадает с docs/x.png в запросе.
+        var backslashOwn = new[] { "docs\\x.png" };
+        Assert.True(Check(HandsTools.ScreenshotControl, "docs/x.png", appendOwn: true, own: backslashOwn).Allowed);
+
+        // Разный регистр — тоже совпадает.
+        var upperOwn = new[] { "DOCS/X.PNG" };
+        Assert.True(Check(HandsTools.ScreenshotControl, "docs/x.png", appendOwn: true, own: upperOwn).Allowed);
+
+        // Чужой файл — отказ.
+        var otherOwn = new[] { "docs/y.png" };
+        Assert.False(Check(HandsTools.ScreenshotControl, "docs/x.png", appendOwn: true, own: otherOwn).Allowed);
+    }
+
+    // ---------- коллизия имени: без расширения, только расширение, несколько точек ----------
+
+    [Fact]
+    public void Next_free_name_without_an_extension_bumps_to_v2()
+    {
+        var taken = new HashSet<string> { "a" };
+        Assert.Equal("a.v2", HandsPolicy.NextFreeName("a", taken.Contains));
+    }
+
+    [Fact]
+    public void Next_free_name_with_multiple_dots_keeps_the_last_extension()
+    {
+        var taken = new HashSet<string> { "a.b.png" };
+        Assert.Equal("a.b.v2.png", HandsPolicy.NextFreeName("a.b.png", taken.Contains));
+    }
+
+    [Fact]
+    public void Name_that_is_only_an_extension_is_denied_in_the_path()
+    {
+        // «.png» — имя без стема: расширение есть, имени нет.
+        var decision = Check(HandsTools.ScreenshotControl, ".png");
+        Assert.False(decision.Allowed);
     }
 
     // ---------- потолки ----------

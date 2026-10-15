@@ -686,7 +686,11 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// <param name="bytes">Размер файла в байтах.</param>
     /// <param name="filesWrittenThisTurn">Сколько новых файлов ход уже создал (потолок <see cref="MaxFilesPerTurn"/>).</param>
     /// <param name="appendOwn">Дописывание в файл, а не создание: разрешено только для файла, созданного тем же ходом.</param>
-    /// <param name="ownFiles">Файлы, созданные этим ходом (нормализованные относительные пути); для <paramref name="appendOwn"/>.</param>
+    /// <param name="ownFiles">
+    /// Файлы, созданные этим ходом, в НОРМАЛИЗОВАННОЙ форме (оба разделителя → «/», как
+    /// <paramref name="relativePath"/>); для <paramref name="appendOwn"/>. Сравнение
+    /// регистронезависимое, поэтому <c>docs\x.png</c> в списке совпадает с <c>docs/x.png</c> в запросе.
+    /// </param>
     public HandsOutputPathDecision CheckOutputPath(
         string tool, string? projectRoot, string? relativePath, long bytes,
         int filesWrittenThisTurn, bool appendOwn, IReadOnlyCollection<string>? ownFiles)
@@ -697,12 +701,17 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         if (relativePath.Any(char.IsControl))
             return HandsOutputPathDecision.Deny("outputPath must not contain control characters.");
 
-        var normalized = NormalizeRelativePath(relativePath);
+        var (normalized, normalizeReason) = NormalizeRelativePath(relativePath);
         if (normalized is null)
             return HandsOutputPathDecision.Deny(
-                "outputPath must be relative to the project root: no drive letter, no absolute or UNC path, " +
-                "and no '..' above the root.");
+                normalizeReason
+                ?? "outputPath must be relative to the project root: no drive letter, no absolute or UNC path, "
+                   + "and no '..' above the root.");
 
+        // ПОРЯДОК ЗНАЧИМ: служебный каталог проверяется ДО расширения. Иначе путь в .claude/ с
+        // разрешённым расширением (x.png) при снятом запрете .claude/ прошёл бы, а путь с чужим
+        // расширением (x.md) отказал бы «по расширению», а не «по служебному пути» — тест
+        // Service_paths_are_denied держит именно причину.
         if (IsForbiddenServicePath(normalized))
             return HandsOutputPathDecision.Deny(
                 $"'{normalized}' is a service path hands must not write: use .cc-attachments/ for its own files.");
@@ -721,29 +730,52 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
             return HandsOutputPathDecision.Deny(
                 $"This turn already created {MaxFilesPerTurn} files; {tool} does not create more.");
 
-        if (appendOwn && (ownFiles is null || !ownFiles.Contains(normalized)))
-            return HandsOutputPathDecision.Deny(
-                "Appending is only allowed to a file this turn created itself; this one was not.");
+        if (appendOwn)
+        {
+            if (ownFiles is null)
+                return HandsOutputPathDecision.Deny(
+                    "Appending is only allowed to a file this turn created itself; this one was not.");
+
+            // ownFiles — в той же нормализованной форме (оба разделителя → «/»); сравниваем
+            // регистронезависимо, чтобы docs\x.png в списке совпал с docs/x.png в запросе.
+            var own = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in ownFiles)
+            {
+                var (ownNorm, _) = NormalizeRelativePath(file);
+                if (ownNorm is not null)
+                    own.Add(ownNorm);
+            }
+
+            if (!own.Contains(normalized))
+                return HandsOutputPathDecision.Deny(
+                    "Appending is only allowed to a file this turn created itself; this one was not.");
+        }
 
         return HandsOutputPathDecision.Allow(normalized);
     }
 
     /// <summary>
     /// Нормализация относительного пути: оба разделителя → «/», пустые и «.» сегменты убраны.
-    /// null — путь не относительный: диск (<c>C:/</c>), Unix-корень (<c>/</c>), UNC (<c>//</c>),
-    /// «..» выше корня, пустой сегмент или «.»/«..» как весь путь.
+    /// Возвращает (Path, Reason): Path — нормализованный путь, Reason — почему путь не годится
+    /// (null, если годен). Path null — путь не годится; Reason объясняет, что именно: структура
+    /// (диск <c>C:/</c>, Unix-корень <c>/</c>, UNC <c>//</c>, «..» выше корня, пустой путь) или
+    /// содержимое сегмента (см. <see cref="SegmentIssue"/>).
     /// </summary>
-    private static string? NormalizeRelativePath(string path)
+    private static (string? Path, string? Reason) NormalizeRelativePath(string path)
     {
+        const string structural =
+            "outputPath must be relative to the project root: no drive letter, no absolute or UNC path, " +
+            "and no '..' above the root.";
+
         var p = path.Replace('\\', '/');
 
         // Диск (C:/), Unix-корень (/) и UNC (//) — абсолютные, не под корнем проекта.
         if (p.StartsWith("//", StringComparison.Ordinal))
-            return null;
+            return (null, structural);
         if (p.Length >= 3 && char.IsAsciiLetter(p[0]) && p[1] == ':' && p[2] == '/')
-            return null;
+            return (null, structural);
         if (p.StartsWith("/", StringComparison.Ordinal))
-            return null;
+            return (null, structural);
 
         var segments = new List<string>();
         foreach (var raw in p.Split('/'))
@@ -751,12 +783,71 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
             if (raw.Length == 0 || raw == ".")
                 continue;
             if (raw == "..")
-                return null;
+                return (null, structural);
+
+            var issue = SegmentIssue(raw, isFirst: segments.Count == 0);
+            if (issue is not null)
+                return (null, issue);
+
             segments.Add(raw);
         }
 
-        return segments.Count == 0 ? null : string.Join('/', segments);
+        return segments.Count == 0 ? (null, structural) : (string.Join('/', segments), null);
     }
+
+    /// <summary>
+    /// Проблема в содержимом одного сегмента пути; null — сегмент годен. <paramref name="isFirst"/>
+    /// — первый ли это сегмент (для <c>~</c>, который раскрывается в home только в начале пути).
+    /// </summary>
+    private static string? SegmentIssue(string segment, bool isFirst)
+    {
+        // Форматные (Cf) и суррогатные (Co/Cs) невидимые символы: U+202E RTL override, U+200E/F,
+        // U+200B..U+200D, U+2060, U+FEFF и одиночные суррогаты — спуфинг имени в логах и на вебе.
+        foreach (var ch in segment)
+        {
+            var category = CharUnicodeInfo.GetUnicodeCategory(ch);
+            if (category is UnicodeCategory.Format or UnicodeCategory.OtherSymbol or UnicodeCategory.Surrogate)
+                return $"'{segment}' carries an invisible Unicode character (format or surrogate); use a plain name.";
+        }
+
+        // ~ раскрывается в home только в первом сегменте: ~/x.png, ~user/x.png.
+        if (isFirst && segment.StartsWith("~", StringComparison.Ordinal))
+            return $"'{segment}' starts with '~' (a home directory); use a path relative to the project root.";
+
+        // : — диск (C:) или альтернативный поток (x.png:stream); недопустим в любом сегменте.
+        if (segment.Contains(':'))
+            return $"'{segment}' contains ':' (a drive letter or an alternate data stream); use a plain name.";
+
+        // < > " | ? * — недопустимы в именах файлов Windows.
+        if (segment.Any(ch => ch is '<' or '>' or '"' or '|' or '?' or '*'))
+            return $"'{segment}' contains a character Windows file names do not allow (< > \" | ? *).";
+
+        // Зарезервированные имена устройств Windows (CON, PRN, AUX, NUL, COM1..9, LPT1..9),
+        // с расширением и без, регистронезависимо: NUL.png — это NUL.
+        var stem = segment[..(segment.LastIndexOf('.') > 0 ? segment.LastIndexOf('.') : segment.Length)];
+        if (IsReservedDeviceName(stem))
+            return $"'{segment}' is a reserved Windows device name ({stem}); use another name.";
+
+        // Сегмент, оканчивающийся точкой или пробелом: Windows обрезает их, путь молча меняется.
+        if (segment.EndsWith(".") || segment.EndsWith(" "))
+            return $"'{segment}' ends with a dot or a space; Windows trims it, so the path would change.";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Зарезервированные имена устройств Windows (без расширения): <c>CON</c>, <c>PRN</c>, <c>AUX</c>,
+    /// <c>NUL</c> и <c>COM1..9</c> / <c>LPT1..9</c>; регистр не важен.
+    /// </summary>
+    private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
+    /// <summary>Зарезервированное имя устройства Windows (без расширения), регистронезависимо.</summary>
+    private static bool IsReservedDeviceName(string stem) => ReservedDeviceNames.Contains(stem);
 
     /// <summary>
     /// Служебный путь, который модель не должна писать: <c>.git/</c>, <c>.claude/</c>, <c>.mcp.json</c>
@@ -848,7 +939,9 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         switch (action)
         {
             case "read":
-                if (state.SequenceNumber <= state.SequenceNumberAtLastOwnInput)
+                // «Изменился» = номер отличается от зафиксированного после собственного ввода; «>»
+                // ломалось на переполнении uint (максимум → 0). Без собственного ввода читать нечего.
+                if (!state.HadOwnInput || state.SequenceNumber == state.SequenceNumberAtLastOwnInput)
                     return HandsDecision.Deny(
                         "The clipboard has not changed since the last write of this turn: reading it returns the text you wrote yourself.");
                 if (state.FormatNames.Any(f => ClipboardSensitiveFormats.Contains(f)))
@@ -881,8 +974,9 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// <summary>
     /// Инструменты, допущенные в пакет <c>hands_batch</c>: только ввод и пауза. Всё, что открывает
     /// программу, управляет окном, ходит в браузер или пишет файл, — в пакет не входит.
+    /// Сравнение регистронезависимое: модель может прислать <c>APP</c>.
     /// </summary>
-    private static readonly HashSet<string> BatchTools = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> BatchTools = new(StringComparer.OrdinalIgnoreCase)
     {
         HandsTools.KeyboardControl, HandsTools.MouseControl, HandsTools.UiClick, HandsTools.UiType,
         HandsTools.ClipboardText, "wait",
@@ -894,6 +988,14 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// ожидание до <see cref="MaxWaitMs"/> мс, сумма ожиданий до <see cref="MaxBatchTotalMs"/> мс.
     /// В пакет не входит <c>app</c>, <c>window_management</c> с <c>close</c>, любой <c>browser_*</c>,
     /// снимки, вложенный пакет и неизвестный инструмент; финальный снимок — отдельное поле, не шаг.
+    /// Имена инструментов и <c>action</c> сравниваются регистронезависимо (модель может прислать
+    /// <c>APP</c>, <c>Close</c>).
+    /// <para>
+    /// <paramref name="totalWaitMs"/> — общая длительность ожиданий, которую считает МОСТ; гейт ей
+    /// доверяет, но на всякий случай сам суммирует <c>wait</c>-шаги и межшаговые паузы
+    /// (сумма <c>wait</c> + <c>delayMs</c> × (n−1)) и берёт БОЛЬШЕЕ из двух — оба числа обязаны
+    /// укладываться в <see cref="MaxBatchTotalMs"/>.
+    /// </para>
     /// </summary>
     public HandsDecision CheckBatch(IReadOnlyList<HandsBatchStep> steps, int totalWaitMs, bool hasFinalCapture)
     {
@@ -903,45 +1005,63 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         if (steps.Count > MaxBatchSteps)
             return HandsDecision.Deny($"hands_batch has {steps.Count} steps; at most {MaxBatchSteps}.");
 
+        var waitTotalMs = 0;
+        var interStepDelays = new List<int>();
         foreach (var step in steps)
         {
             if (step is null)
                 return HandsDecision.Deny("hands_batch has an empty step.");
 
+            // Имя сравниваем регистронезависимо (модель может прислать APP, Browser_Click).
+            var tool = step.Tool.Trim();
+
             // window_management допущен, кроме close (окно, в которое вводишь, закрывать не надо).
-            if (!BatchTools.Contains(step.Tool) && step.Tool != HandsTools.WindowManagement)
+            if (!BatchTools.Contains(tool) && !string.Equals(tool, HandsTools.WindowManagement, StringComparison.OrdinalIgnoreCase))
             {
-                if (step.Tool == HandsTools.HandsBatch)
+                if (string.Equals(tool, HandsTools.HandsBatch, StringComparison.OrdinalIgnoreCase))
                     return HandsDecision.Deny("hands_batch does not nest: a batch inside a batch is not allowed.");
-                if (step.Tool == HandsTools.App)
+                if (string.Equals(tool, HandsTools.App, StringComparison.OrdinalIgnoreCase))
                     return HandsDecision.Deny("hands_batch does not start programs: use app as a separate step.");
-                if (step.Tool.StartsWith("browser_", StringComparison.Ordinal))
+                if (tool.StartsWith("browser_", StringComparison.OrdinalIgnoreCase))
                     return HandsDecision.Deny($"hands_batch does not browse: use {step.Tool} as a separate step.");
-                if (step.Tool == HandsTools.ScreenshotControl)
+                if (string.Equals(tool, HandsTools.ScreenshotControl, StringComparison.OrdinalIgnoreCase))
                     return HandsDecision.Deny("hands_batch does not take screenshots mid-batch: use the final capture field.");
                 return HandsDecision.Deny($"Unknown hands_batch tool '{step.Tool}'.");
             }
 
-            if (step.Tool == HandsTools.WindowManagement && GetStringArg(step.Args, "action") == "close")
+            if (string.Equals(tool, HandsTools.WindowManagement, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(GetStringArg(step.Args, "action"), "close", StringComparison.OrdinalIgnoreCase))
                 return HandsDecision.Deny("hands_batch does not close windows: use window_management(action='close') as a separate step.");
 
-            if (step.Tool == "wait")
+            if (string.Equals(tool, "wait", StringComparison.OrdinalIgnoreCase))
             {
                 // У wait-шага DelayMs — длительность ожидания, не межшаговая пауза.
                 if (step.DelayMs is not { } wait || wait < 0 || wait > MaxWaitMs)
                     return HandsDecision.Deny($"A wait step is {step.DelayMs} ms; at most {MaxWaitMs} ms.");
+                waitTotalMs += wait;
             }
             else if (step.DelayMs is { } delay && (delay < 0 || delay > MaxStepDelayMs))
                 return HandsDecision.Deny($"The step delay is {delay} ms; between steps it is at most {MaxStepDelayMs} ms.");
+            else if (step.DelayMs is { } gap)
+                interStepDelays.Add(gap);
         }
+
+        // Межшаговых пауз на (n−1): после последнего шага следующего нет, последнюю паузу не считаем.
+        var interStepTotalMs = interStepDelays.Count > 0
+            ? interStepDelays.Sum() - interStepDelays[^1]
+            : 0;
+        var computedWaitMs = waitTotalMs + interStepTotalMs;
 
         if (totalWaitMs < 0 || totalWaitMs > MaxBatchTotalMs)
             return HandsDecision.Deny($"The waits total {totalWaitMs} ms; a batch waits at most {MaxBatchTotalMs} ms.");
+        // Мост считает totalWaitMs сам; гейт доверяет, но берёт большее из двух сумм.
+        if (computedWaitMs > MaxBatchTotalMs)
+            return HandsDecision.Deny($"The waits total {computedWaitMs} ms; a batch waits at most {MaxBatchTotalMs} ms.");
 
         return HandsDecision.Allow;
     }
 
-    /// <summary>Строковый аргумент из <c>args</c> шага; null — аргумента нет.</summary>
+    /// <summary>Строковый аргумент из <c>args</c> шага (обрезанный от пробелов); null — аргумента нет.</summary>
     private static string? GetStringArg(object? args, string name)
     {
         if (args is null)
@@ -951,7 +1071,7 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         {
             if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) &&
                 property.GetValue(args) is string value)
-                return value;
+                return value.Trim();
         }
 
         return null;

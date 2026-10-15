@@ -18,8 +18,9 @@ public interface IHandsActivitySignal
 /// Граница «трогает машину»: <c>app</c>, <c>ui_click</c>, <c>ui_type</c>, <c>screenshot_control</c>
 /// (кроме <c>list_monitors</c> — это не снимок), любой <c>browser_*</c> и <c>window_management</c>,
 /// кроме чисто читающих действий (<see cref="ReadOnlyWindowActions"/>), а также руки без UIA:
-/// <c>keyboard_control</c>, <c>mouse_control</c> (все действия, включая move) и <c>hands_batch</c>
-/// — всегда, <c>clipboard_text</c> — только <c>write</c> (<c>read</c> — это чтение). Чтение дерева окна
+/// <c>keyboard_control</c>, <c>mouse_control</c> (кроме <c>get_position</c> — это только чтение позиции
+/// курсора) и <c>hands_batch</c> — всегда, <c>clipboard_text</c> — только <c>write</c> (<c>read</c> — это чтение).
+/// Чтение дерева окна
 /// (<c>ui_snapshot</c>, <c>ui_find</c>, <c>ui_read</c>) машину не трогает.
 /// </para>
 /// Зовётся только после разрешения гейта; отказ сигнал не поднимает.
@@ -41,11 +42,12 @@ public sealed class HandsActivity(IHandsActivitySignal signal)
     /// <param name="action">Действие в snake_case, как в схеме инструмента; у прочих инструментов — null.</param>
     public static bool TouchesMachine(string tool, string? action = null) => tool switch
     {
-        // Руки без UIA: клавиатура, мышь (все действия, включая move), пакет и сканеры
-        // (пишут файл) — всегда трогают машину.
+        // Руки без UIA: клавиатура, мышь, пакет и сканеры (пишут файл) — трогают машину.
         HandsTools.App or HandsTools.UiClick or HandsTools.UiType
-            or HandsTools.KeyboardControl or HandsTools.MouseControl or HandsTools.HandsBatch
+            or HandsTools.KeyboardControl or HandsTools.HandsBatch
             or HandsTools.ScanDocument or HandsTools.ScanCanvas => true,
+        // Мышь: get_position только читает позицию курсора — машину не трогает; остальные действия — да.
+        HandsTools.MouseControl => !string.Equals(action, "get_position", StringComparison.OrdinalIgnoreCase),
         // Буфер: write трогает (запись), read — только чтение.
         HandsTools.ClipboardText => !string.Equals(action, "read", StringComparison.OrdinalIgnoreCase),
         HandsTools.WindowManagement => action is null || !ReadOnlyWindowActions.Contains(action),

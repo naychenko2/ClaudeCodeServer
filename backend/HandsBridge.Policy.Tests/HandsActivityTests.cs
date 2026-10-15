@@ -44,10 +44,14 @@ public class HandsActivityTests
         // Первый browser_* поднимает на столе владельца окно Chrome, даже если он только читает DOM
         { HandsTools.BrowserQuery, null },
         { HandsTools.BrowserEvaluate, null },
-        // Руки без UIA: клавиатура, мышь (все действия, включая move), пакет и сканеры (пишут файл)
+        // Руки без UIA: клавиатура, мышь (кроме get_position), пакет и сканеры (пишут файл)
         { HandsTools.KeyboardControl, null },
         { HandsTools.MouseControl, null },
         { HandsTools.MouseControl, "move" },
+        { HandsTools.MouseControl, "click" },
+        { HandsTools.MouseControl, "right_click" },
+        { HandsTools.MouseControl, "double_click" },
+        { HandsTools.MouseControl, "middle_click" },
         { HandsTools.HandsBatch, null },
         { HandsTools.ScanDocument, null },
         { HandsTools.ScanCanvas, null },
@@ -67,6 +71,8 @@ public class HandsActivityTests
         { HandsTools.WindowManagement, "get_state" },
         { HandsTools.WindowManagement, "wait_for_state" },
         { HandsTools.ScreenshotControl, "list_monitors" },
+        // Мышь: get_position — только чтение позиции курсора, машину не трогает
+        { HandsTools.MouseControl, "get_position" },
         // Буфер: read — только чтение, машину не трогает
         { HandsTools.ClipboardText, "read" },
     };

@@ -95,6 +95,14 @@ public sealed class MouseInputService
                 screenBounds));
         }
 
+        if (!CursorPointAcceptsInput(expectedForegroundWindow, out var movePointReason))
+        {
+            return Task.FromResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.WrongTargetWindow,
+                movePointReason ?? "The point no longer lands in the target window.",
+                screenBounds));
+        }
+
         // Send the input
         var inputSpan = new INPUT[] { input };
         var result = NativeMethods.SendInput(1, inputSpan, INPUT.Size);
@@ -250,6 +258,14 @@ public sealed class MouseInputService
                 },
             };
 
+            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var clickPointReason))
+            {
+                return Task.FromResult(MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    clickPointReason ?? "The point no longer lands in the target window.",
+                    screenBounds));
+            }
+
             // Send the input
             var result = NativeMethods.SendInput(2, inputs, INPUT.Size);
 
@@ -297,6 +313,32 @@ public sealed class MouseInputService
                 ? expectedRoot
                 : expectedForegroundWindow.Value) ==
             (foregroundRoot != IntPtr.Zero ? foregroundRoot : foreground);
+    }
+
+    /// <summary>
+    /// Руки: перед <c>SendInput</c> повторно сверяем, что окно ПОД ТЕКУЩЕЙ ПОЗИЦИЕЙ КУРСОРА
+    /// принимает ввод и совпадает с целевым <paramref name="expectedForegroundWindow"/> (гейт
+    /// <see cref="HandsGate.Policy"/>). Закрывает гонку между проверкой гейта в инструменте и вводом:
+    /// между ними окно под точкой могло смениться (тост, «Пуск», терминал). <c>null</c> — публичная
+    /// перегрузка, проверку не делаем.
+    /// </summary>
+    private static bool CursorPointAcceptsInput(nint? expectedForegroundWindow, out string? reason)
+    {
+        reason = null;
+        if (expectedForegroundWindow is not { } window)
+        {
+            return true;
+        }
+
+        NativeMethods.GetCursorPos(out var pos);
+        var at = HandsGate.Policy.AcceptsInputAt(pos.X, pos.Y, window.ToInt64());
+        if (!at.Allowed)
+        {
+            reason = at.Reason;
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -557,6 +599,14 @@ public sealed class MouseInputService
                 },
             };
 
+            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var doublePointReason))
+            {
+                return MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    doublePointReason ?? "The point no longer lands in the target window.",
+                    screenBounds);
+            }
+
             var result = NativeMethods.SendInput(4, inputs, INPUT.Size);
 
             if (result != 4)
@@ -713,6 +763,14 @@ public sealed class MouseInputService
                 },
             };
 
+            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var rightPointReason))
+            {
+                return Task.FromResult(MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    rightPointReason ?? "The point no longer lands in the target window.",
+                    screenBounds));
+            }
+
             // Send the input
             var result = NativeMethods.SendInput(2, inputs, INPUT.Size);
 
@@ -846,6 +904,14 @@ public sealed class MouseInputService
             return Task.FromResult(MouseControlResult.CreateFailure(
                 MouseControlErrorCode.WrongTargetWindow,
                 "The foreground window changed before the middle-click was sent.",
+                screenBounds));
+        }
+
+        if (!CursorPointAcceptsInput(expectedForegroundWindow, out var middlePointReason))
+        {
+            return Task.FromResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.WrongTargetWindow,
+                middlePointReason ?? "The point no longer lands in the target window.",
                 screenBounds));
         }
 

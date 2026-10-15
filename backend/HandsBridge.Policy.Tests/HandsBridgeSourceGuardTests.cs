@@ -34,6 +34,8 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.BrowserScreenshot, "Tools/BrowserScreenshotTool.cs", "HandsPolicy.CheckBrowserScreenshot(" },
         { HandsTools.BrowserQuery, "Tools/BrowserQueryTool.cs", "HandsPolicy.CheckBrowserQuery(" },
         { HandsTools.BrowserEvaluate, "Tools/BrowserEvaluateTool.cs", "HandsPolicy.CheckBrowserEvaluate(" },
+        // Руки без UIA: мышь — гейт по точке (форма + границы + окно под точкой) до первого действия
+        { HandsTools.MouseControl, "Tools/MouseControlTool.cs", "HandsGate.Policy.CheckPointer(" },
     };
 
     [Fact]
@@ -48,7 +50,7 @@ public class HandsBridgeSourceGuardTests
         // Инструменты уже в HandsTools.All, но в мосту появятся в D2a–D2e — до того их отсутствие норма.
         var notYetInBridge = new[]
         {
-            HandsTools.KeyboardControl, HandsTools.MouseControl, HandsTools.ClipboardText, HandsTools.HandsBatch,
+            HandsTools.KeyboardControl, HandsTools.ClipboardText, HandsTools.HandsBatch,
             HandsTools.ScanDocument, HandsTools.ScanCanvas,
         };
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
@@ -164,6 +166,38 @@ public class HandsBridgeSourceGuardTests
         Assert.Contains("HandsPolicy.CheckKeyDown(", source);
     }
 
+    /// <summary>
+    /// Руки без UIA — мышь (D2b-1): инструмент зовёт только ВНУТРЕННИЕ перегрузки
+    /// <c>MouseInputService</c>, которые принимают целевое окно (<c>nint</c>) — иначе повторная
+    /// проверка точки перед <c>SendInput</c> (гонка «гейт → ввод») не сработает. Публичные
+    /// перегрузки окна не принимают и проверки не делают.
+    /// </summary>
+    [Fact]
+    public void Mouse_tool_calls_only_the_guarded_overloads()
+    {
+        var source = Read("Tools/MouseControlTool.cs");
+        foreach (var action in new[] { "Move", "Click", "DoubleClick", "RightClick", "MiddleClick" })
+        {
+            var pattern = $@"MouseInputService\.{action}Async\([^)]*window, cancellationToken\)";
+            Assert.Matches(pattern, source);
+        }
+    }
+
+    /// <summary>
+    /// Перед каждым <c>SendInput</c> в перегрузках, которые использует инструмент, стоит повторная
+    /// проверка точки: окно ПОД ТЕКУЩЕЙ ПОЗИЦИЕЙ КУРСОРА принимает ввод и совпадает с целевым.
+    /// Закрывает гонку между проверкой гейта в инструменте и самим вводом.
+    /// </summary>
+    [Fact]
+    public void Mouse_input_rechecks_the_point_before_every_send_input()
+    {
+        var source = Read("Input/MouseInputService.cs");
+        foreach (var reason in new[] { "movePointReason", "clickPointReason", "doublePointReason", "rightPointReason", "middlePointReason" })
+        {
+            Assert.Contains($"CursorPointAcceptsInput(expectedForegroundWindow, out var {reason})", source);
+        }
+    }
+
     [Fact]
     public void Screen_pixels_are_never_copied_for_a_window()
     {
@@ -178,7 +212,7 @@ public class HandsBridgeSourceGuardTests
     {
         string[] removed =
         [
-            "Tools/KeyboardControlTool.cs", "Tools/MouseControlTool.cs", "Automation/Tools/UIBatchTool.cs",
+            "Tools/KeyboardControlTool.cs", "Automation/Tools/UIBatchTool.cs",
             "Automation/Tools/UIFileTool.cs", "Automation/Tools/UIOpenFileTool.cs", "Automation/Tools/UIReadTableTool.cs",
             "Automation/Tools/UISelectTool.cs", "Automation/Tools/UIWaitTool.cs", "Clipboard/Tools", "Macros/Tools", "Processes/Tools",
         ];

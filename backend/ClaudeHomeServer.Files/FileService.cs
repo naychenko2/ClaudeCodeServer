@@ -505,9 +505,11 @@ public class FileService(
 
     private static string? TryLocalDiff(string rootPath, string relativePath)
     {
-        var head = GitRun(rootPath, "diff", "HEAD", "--", relativePath);
+        // «:(literal)» — путь, а не маска: «[ab]», «*» в имени не подтянут соседей
+        var spec = ":(literal)" + relativePath;
+        var head = GitRun(rootPath, "diff", "HEAD", "--", spec);
         if (!string.IsNullOrWhiteSpace(head)) return head;
-        var cached = GitRun(rootPath, "diff", "--cached", "--", relativePath);
+        var cached = GitRun(rootPath, "diff", "--cached", "--", spec);
         return string.IsNullOrWhiteSpace(cached) ? null : cached;
     }
 

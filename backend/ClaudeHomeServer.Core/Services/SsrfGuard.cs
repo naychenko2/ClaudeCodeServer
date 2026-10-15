@@ -76,14 +76,24 @@ public static class SsrfGuard
         // Unique local fc00::/7
         var v6 = ip.GetAddressBytes();
         if ((v6[0] & 0xFE) == 0xFC) return false;
-        // NAT64 64:ff9b::/96 — встраивает IPv4 в последние 32 бита (64:ff9b::7f00:1 = 127.0.0.1)
-        if (v6[0] == 0x00 && v6[1] == 0x64 && v6[2] == 0xFF && v6[3] == 0x9B &&
-            v6[4] == 0 && v6[5] == 0 && v6[6] == 0 && v6[7] == 0 &&
-            v6[8] == 0 && v6[9] == 0 && v6[10] == 0 && v6[11] == 0)
+        // IPv4-compatible ::/96 (устаревшая форма, ::a.b.c.d) — роутеры и стеки трактуют по-разному
+        if (Zero(v6, 0, 12)) return false;
+        // Discard-only 100::/64
+        if (v6[0] == 0x01 && v6[1] == 0x00 && Zero(v6, 2, 6)) return false;
+        // Teredo 2001::/32 — туннель, адрес сервера и клиента зашит в адрес, цель не проверить
+        if (v6[0] == 0x20 && v6[1] == 0x01 && v6[2] == 0x00 && v6[3] == 0x00) return false;
+        // 6to4 2002::/16 — встраивает IPv4 в байты 2–5 (2002:7f00:1:: = 127.0.0.1)
+        if (v6[0] == 0x20 && v6[1] == 0x02 && !IsPublic(new IPAddress([v6[2], v6[3], v6[4], v6[5]]))) return false;
+        if (v6[0] == 0x00 && v6[1] == 0x64 && v6[2] == 0xFF && v6[3] == 0x9B)
         {
-            var embedded = new IPAddress([v6[12], v6[13], v6[14], v6[15]]);
-            if (!IsPublic(embedded)) return false;
+            // NAT64 local-use 64:ff9b:1::/48 — префикс внутренней сети оператора
+            if (v6[4] == 0x00 && v6[5] == 0x01) return false;
+            // NAT64 64:ff9b::/96 — встраивает IPv4 в последние 32 бита (64:ff9b::7f00:1 = 127.0.0.1)
+            if (Zero(v6, 4, 8) && !IsPublic(new IPAddress([v6[12], v6[13], v6[14], v6[15]]))) return false;
         }
         return true;
     }
+
+    private static bool Zero(byte[] bytes, int start, int count) =>
+        bytes.AsSpan(start, count).IndexOfAnyExcept((byte)0) < 0;
 }

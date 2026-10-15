@@ -6,6 +6,35 @@ namespace ClaudeHomeServer.Tests.Services;
 
 public class SsrfGuardTests
 {
+    // Дыры v6, закрытые в F3-3 (ADR-025, «Фаза 3»)
+    [Theory]
+    [InlineData("2002:7f00:1::")]          // 6to4 с вложенным 127.0.0.1
+    [InlineData("2002:a00:1::1")]          // 6to4 с вложенным 10.0.0.1
+    [InlineData("2002:a9fe:a9fe::")]       // 6to4 с вложенным 169.254.169.254
+    [InlineData("2001::1")]                // Teredo 2001::/32
+    [InlineData("2001:0:4136:e378::1")]    // Teredo с адресом сервера
+    [InlineData("::7f00:1")]               // IPv4-compatible ::127.0.0.1
+    [InlineData("::808:808")]              // IPv4-compatible ::/96 — целиком, даже с публичным IPv4
+    [InlineData("64:ff9b:1::1")]           // NAT64 local-use 64:ff9b:1::/48
+    [InlineData("64:ff9b:1:ffff::808:808")]
+    [InlineData("100::1")]                 // discard 100::/64
+    [InlineData("100::ffff:ffff:ffff:ffff")]
+    public void IsPublic_НовыеДиапазоныV6_False(string ip)
+    {
+        SsrfGuard.IsPublic(IPAddress.Parse(ip)).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("2002:808:808::1")]        // 6to4 с публичным 8.8.8.8
+    [InlineData("2001:db8::1")]            // соседний 2001:db8::/32 — не Teredo
+    [InlineData("2001:4860:4860::8888")]   // Google DNS
+    [InlineData("64:ff9b::808:808")]       // NAT64 well-known с публичным IPv4
+    [InlineData("100:0:0:1::1")]           // за пределами 100::/64
+    public void IsPublic_СоседиНовыхДиапазоновV6_True(string ip)
+    {
+        SsrfGuard.IsPublic(IPAddress.Parse(ip)).Should().BeTrue();
+    }
+
     [Theory]
     [InlineData("127.0.0.1")]      // loopback
     [InlineData("127.5.6.7")]      // 127/8

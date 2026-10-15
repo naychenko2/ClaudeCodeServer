@@ -204,7 +204,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task LastCommit_СкобкиВИмени_ПутьБуквальный_ЧужойФайлНеПодсовывается()
     {
-        // «[ab].txt» маской совпадает и с a.txt: без --literal-pathspecs последним стал бы коммит a.txt
+        // «[ab].txt» маской совпадает и с a.txt: без «:(literal)» последним стал бы коммит a.txt
         await File.WriteAllTextAsync(Path.Combine(_repo, "[ab].txt"), "скобки\n");
         await _git.StageAllAsync(null, _repo);
         await _git.CommitAsync(null, _repo, "файл со скобками");
@@ -251,7 +251,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task CountRecentCommits_СкобкиВИмени_ПутьБуквальный_ЧужиеКоммитыНеСчитаются()
     {
-        // «[ab].txt» маской совпадает с a.txt и b.txt: без --literal-pathspecs в счёт вошли бы их коммиты
+        // «[ab].txt» маской совпадает с a.txt и b.txt: без «:(literal)» в счёт вошли бы их коммиты
         await File.WriteAllTextAsync(Path.Combine(_repo, "[ab].txt"), "скобки\n");
         await _git.StageAllAsync(null, _repo);
         await _git.CommitAsync(null, _repo, "файл со скобками");
@@ -396,7 +396,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         Norm(await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).Should().Be(before);
     }
 
-    // ---------- Путь — не маска: запись (--literal-pathspecs в RunAsync) ----------
+    // ---------- Путь — не маска: запись (LiteralSpec, «:(literal)» к пути) ----------
     // «n[ab].txt» маской pathspec совпадает и с «na.txt». Без флага откат нового файла
     // шёл через clean -fd по маске и безвозвратно сносил соседний неотслеживаемый файл.
 
@@ -444,6 +444,45 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         var st = await _git.StatusAsync(null, _repo);
         st.Staged.Select(f => f.Path).Should().BeEquivalentTo(["na.txt"]);
         st.Unstaged.Should().ContainSingle(f => f.Path == "n[ab].txt");
+    }
+
+    // Ветка отслеживаемого файла: «n[ab].txt» в индексе, но его нет в HEAD. Совпади путь
+    // буквально с файлом HEAD, git сам не раскрыл бы маску. Здесь совпадения нет, и
+    // checkout HEAD -- по маске молча (код 0) откатывал правку соседа «na.txt».
+    // С «:(literal)» git честно отказывает: в HEAD такого файла нет.
+    [Fact]
+    public async Task Discard_СкобкиВИмени_ВИндексеНоНеВHead_ПравкаСоседаЦела()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "сосед");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки\n");
+        await _git.StageAsync(null, _repo, "n[ab].txt");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед 2\n");
+
+        try { await _git.DiscardAsync(null, _repo, "n[ab].txt"); }
+        catch (GitCommandException) { /* «pathspec did not match» — честный отказ */ }
+
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "na.txt"))).ReplaceLineEndings("\n").Should().Be("сосед 2\n");
+    }
+
+    // Буквальность путей не утекает в хуки: глобальный --literal-pathspecs выставлял
+    // GIT_LITERAL_PATHSPECS=1, хук наследовал его, и маска «*.cs» молча давала пустой список
+    [Fact]
+    public async Task Commit_ХукСМаской_ВидитФайл()
+    {
+        var hook = Path.Combine(_repo, ".git", "hooks", "pre-commit");
+        Directory.CreateDirectory(Path.GetDirectoryName(hook)!);
+        await File.WriteAllTextAsync(hook,
+            "#!/bin/sh\ngit diff --cached --name-only -- \"*.cs\" > .git/hook-seen.txt\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.cs"), "class A {}\n");
+        await _git.StageAsync(null, _repo, "a.cs");
+
+        await _git.CommitAsync(null, _repo, "файл для хука");
+
+        (await File.ReadAllTextAsync(Path.Combine(_repo, ".git", "hook-seen.txt"))).ReplaceLineEndings("\n").Should().Be("a.cs\n");
     }
 
     // Без origin «неопубликовано» = вся история ветки: иначе кнопка публикации не появилась

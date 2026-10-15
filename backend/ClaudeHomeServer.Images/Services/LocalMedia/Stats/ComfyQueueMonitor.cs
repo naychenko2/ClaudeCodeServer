@@ -257,7 +257,9 @@ public sealed class ComfyQueueMonitor(
                     var ticks = _nullTicks.TryGetValue(id, out var prev) ? prev + 1 : 1;
                     if (ticks >= MaxNullHistoryTicks)
                     {
-                        ledger.Complete(id, "failed", null);
+                        // prompt_id пропал из истории ComfyUI (рестарт стенда или бэкенда): не сбой
+                        // графа, а прерванный прогон — исход interrupted, не failed
+                        ledger.Complete(id, "interrupted", null, error: null);
                         _nullTicks.Remove(id);
                     }
                     else
@@ -268,7 +270,9 @@ public sealed class ComfyQueueMonitor(
                 }
                 _nullTicks.Remove(id);
                 int? runSeconds = history.RunSeconds is { } s ? (int)s : null;
-                ledger.Complete(id, history.Failed ? "failed" : (history.Completed ? "completed" : "failed"), runSeconds);
+                // Ошибка графа (history.Error) — в журнал; completed — null
+                ledger.Complete(id, history.Failed ? "failed" : (history.Completed ? "completed" : "failed"), runSeconds,
+                    error: history.Error);
             }
             catch (ComfyException)
             {

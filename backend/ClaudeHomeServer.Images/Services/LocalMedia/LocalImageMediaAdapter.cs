@@ -368,8 +368,11 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             var queued = await comfy.QueuePromptAsync(graph, ct);
             promptId = queued.PromptId;
             var eta = EtaSeconds(request.Op, count, names.Count, request.Model);
-            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
-            ledger?.Register(queued.PromptId, request.Origin, eta);
+            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое.
+            // Детали: модель (вариант Qwen-Image), промпт, параметры (размер, число, сид)
+            var details = new LocalRunDetails(request.Model ?? LocalImageModels.Quality, request.Prompt,
+                new LocalRunParams(Width: request.Width, Height: request.Height, Count: count, Seed: seed));
+            ledger?.Register(queued.PromptId, request.Origin, eta, details);
             return new LocalImageSubmitted(queued.PromptId, queue.Length, eta, null);
         }
         catch (ComfyException ex)

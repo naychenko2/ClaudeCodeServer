@@ -198,8 +198,12 @@ public sealed class LocalVideoMediaAdapter(
                 ComfyWorkflows.FramesFor(plan.Seconds), seed, plan.Fast, $"{ComfyWorkflows.OutputFolder}/{id}",
                 $"{ComfyWorkflows.OutputFolder}/latents/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
-            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
-            ledger?.Register(queued.PromptId, request.Origin, LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast));
+            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое.
+            // Детали: модель — операция, промпт и параметры (размер, длительность, сид, fast)
+            var details = new LocalRunDetails("image_to_video", request.Prompt, new LocalRunParams(
+                Width: plan.Size.Width, Height: plan.Size.Height, DurationSec: plan.Seconds,
+                Seed: seed, Fast: plan.Fast));
+            ledger?.Register(queued.PromptId, request.Origin, LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast), details);
             Sweep();
             _shots[queued.PromptId] = new Shot(id, plan.Prompt, firstName, lastName, plan.Size, plan.Seconds, seed, Now, request.Origin);
             return new LocalVideoSubmitted(queued.PromptId, queue,
@@ -240,7 +244,7 @@ public sealed class LocalVideoMediaAdapter(
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
             if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null,
                 Percent: PercentOf(ticket), Gpu: _gpuBuilder.Build(ticket, 0));
-            ledger?.Complete(ticket, "completed", null);
+            ledger?.Complete(ticket, "completed", null, error: null);
             ForgetPercent(ticket);
             var upscale = _upscales.TryGetValue(ticket, out var upInputs) ? upInputs : null;
             ReleaseUpscale(ticket);
@@ -281,7 +285,7 @@ public sealed class LocalVideoMediaAdapter(
 
         LocalVideoPoll Failed(string error)
         {
-            ledger?.Complete(ticket, "failed", null);
+            ledger?.Complete(ticket, "failed", null, error: error);
             ForgetPercent(ticket);
             ReleaseUpscale(ticket);
             // Съёмка не удалась — латента нет и увеличивать нечего: контекст и входы убираем сразу
@@ -363,8 +367,12 @@ public sealed class LocalVideoMediaAdapter(
             var queued = await comfy.QueuePromptAsync(graph, ct);
             // Метка происхождения (шаг 2): апскейл — вторая стадия того же прогона, метка съёмки;
             // раньше origin = null (дыра). null — съёмка поставлена без метки (тесты/старые)
+            // Детали: модель — операция апскейла, промпт и параметры съёмки (размер, длительность, сид)
+            var details = new LocalRunDetails("video_upscale", shot.Prompt, new LocalRunParams(
+                Width: shot.Size.Width, Height: shot.Size.Height, DurationSec: shot.Seconds,
+                Seed: shot.Seed));
             ledger?.Register(queued.PromptId, shot.Origin,
-                LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled));
+                LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled), details);
             _upscales[queued.PromptId] = inputs;
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled), null);
@@ -398,12 +406,12 @@ public sealed class LocalVideoMediaAdapter(
                 // Идёт — прерываем адресно: иначе граф доигрывает и держит GPU
                 case 0:
                     await comfy.InterruptAsync(ticket, ct);
-                    ledger?.Complete(ticket, "cancelled", null);
+                    ledger?.Complete(ticket, "cancelled", null, error: null);
                     ForgetPercent(ticket);
                     return true;
                 default:
                     await comfy.DeletePendingAsync(ticket, ct);
-                    ledger?.Complete(ticket, "cancelled", null);
+                    ledger?.Complete(ticket, "cancelled", null, error: null);
                     ForgetPercent(ticket);
                     return true;
             }

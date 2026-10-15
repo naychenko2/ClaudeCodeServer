@@ -77,7 +77,7 @@ public class ComfyPromptLedgerTests
         ledger.Register(Prompt, Origin(), 42);
         ledger.MarkStarted(Prompt);
 
-        ledger.Complete(Prompt, "completed", runSeconds: 30);
+        ledger.Complete(Prompt, "completed", runSeconds: 30, error: null);
 
         ledger.Contains(Prompt).Should().BeFalse("завершённый прогон не активен");
         ledger.TryGet(Prompt, out var record).Should().BeTrue("запись живёт в кольце завершённых");
@@ -91,12 +91,13 @@ public class ComfyPromptLedgerTests
     [InlineData("completed")]
     [InlineData("failed")]
     [InlineData("cancelled")]
+    [InlineData("interrupted")]
     public void Complete_ВсеИсходы_ХранятсяВКольце(string outcome)
     {
         var ledger = new ComfyPromptLedger(new ManualTime());
         ledger.Register(Prompt, Origin(), null);
 
-        ledger.Complete(Prompt, outcome, null);
+        ledger.Complete(Prompt, outcome, null, error: null);
 
         ledger.TryGet(Prompt, out var record).Should().BeTrue();
         record!.Outcome.Should().Be(outcome);
@@ -108,7 +109,7 @@ public class ComfyPromptLedgerTests
         var ledger = new ComfyPromptLedger(new ManualTime());
         ledger.Register(Prompt, Origin(), 42);
 
-        ledger.Complete("prompt-unknown", "failed", 10);
+        ledger.Complete("prompt-unknown", "failed", 10, error: null);
 
         ledger.Contains(Prompt).Should().BeTrue("чужой prompt_id наш не трогает");
     }
@@ -124,7 +125,7 @@ public class ComfyPromptLedgerTests
         ledger.Register(Prompt, Origin(), 42);
         ledger.HasActive().Should().BeTrue("поставленный прогон активен");
 
-        ledger.Complete(Prompt, "completed", 30);
+        ledger.Complete(Prompt, "completed", 30, error: null);
         ledger.HasActive().Should().BeFalse("завершённый переехал в кольцо, активных нет");
     }
 
@@ -136,7 +137,7 @@ public class ComfyPromptLedgerTests
         var time = new ManualTime();
         var ledger = new ComfyPromptLedger(time);
         ledger.Register(Prompt, Origin(), 42);
-        ledger.Complete(Prompt, "completed", 30);
+        ledger.Complete(Prompt, "completed", 30, error: null);
 
         time.Advance(ComfyPromptLedger.RecentWindow - TimeSpan.FromSeconds(1));
         ledger.Recent().Should().ContainSingle("на границе окна ещё держим");
@@ -151,11 +152,11 @@ public class ComfyPromptLedgerTests
         var time = new ManualTime();
         var ledger = new ComfyPromptLedger(time);
         ledger.Register(Prompt, Origin(), 42);
-        ledger.Complete(Prompt, "completed", 30);
+        ledger.Complete(Prompt, "completed", 30, error: null);
 
         time.Advance(ComfyPromptLedger.RecentWindow + TimeSpan.FromSeconds(1));
         ledger.Register(Other, Origin(), 10);
-        ledger.Complete(Other, "failed", 5);
+        ledger.Complete(Other, "failed", 5, error: null);
 
         ledger.Prune();
 

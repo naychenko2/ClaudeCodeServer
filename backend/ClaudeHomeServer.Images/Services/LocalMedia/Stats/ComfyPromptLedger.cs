@@ -86,8 +86,9 @@ public sealed class ComfyPromptLedger(TimeProvider? time = null, ComfyRunHistory
     }
 
     // Перенос в кольцо завершённых; кольцо хранит записи не старше RecentWindow.
-    // error — текст сбоя ComfyUI (недоверенный, обрезанный журналом); null — не failed
-    public void Complete(string promptId, string outcome, int? runSeconds, string? error = null)
+    // error — текст сбоя ComfyUI (недоверенный, обрезанный журналом); null — не failed.
+    // Обязателен (без дефолта), чтобы компилятор поймал точку, забывшую передать ошибку
+    public void Complete(string promptId, string outcome, int? runSeconds, string? error)
     {
         if (_active.TryRemove(promptId, out var record))
         {
@@ -100,9 +101,10 @@ public sealed class ComfyPromptLedger(TimeProvider? time = null, ComfyRunHistory
         }
     }
 
-    // Исход прогона: только completed | failed | cancelled, иначе failed (защита от мусора)
+    // Исход прогона: completed | failed | cancelled | interrupted, иначе failed (защита от мусора).
+    // interrupted — был enqueued, finished нет, после рестарта prompt_id не найден (MaxNullHistoryTicks)
     private static string NormalizeOutcome(string? outcome) =>
-        outcome is "completed" or "failed" or "cancelled" ? outcome : "failed";
+        outcome is "completed" or "failed" or "cancelled" or "interrupted" ? outcome : "failed";
 
     // Активна и известна: трекер копит шаги только для таких prompt_id
     public bool Contains(string promptId) => _active.ContainsKey(promptId);

@@ -197,15 +197,28 @@ public class ComfyRunHistoryTests : IDisposable
     {
         var history = Build();
         history.Enqueued(Prompt, Origin(), null);
-        // «Рестарт»: новый инстанс, prompt_id не в очереди (нет started/finished)
-        var restarted = Build();
+        // «Рестарт»: prompt_id не найден после MaxNullHistoryTicks — монитор пишет interrupted
+        history.Finished(Prompt, Origin(), "interrupted", runSeconds: null, error: null);
 
         var lines = ReadLines();
         var enqueued = FindEvent(lines, Prompt, "enqueued")!;
-        var finished = FindEvent(lines, Prompt, "finished");
+        var finished = FindEvent(lines, Prompt, "finished")!;
         enqueued.Should().NotBeNull("постановка записана");
-        finished.Should().BeNull("завершения нет — прогон прерван рестартом");
-        // Читатель (шаг 3) по этому признаку отметит interrupted; здесь проверяем сырые события
+        finished.Should().NotBeNull("завершение записано");
+        finished!["outcome"]?.ToString().Should().Be("interrupted", "прервано рестартом, не сбой графа");
+    }
+
+    // Сбой графа (история есть, Failed=true) — исход failed, не interrupted; ошибка в журнал
+    [Fact]
+    public void СбойГрафа_ОстаётсяFailed_НеInterrupted()
+    {
+        var history = Build();
+        history.Enqueued(Prompt, Origin(), null);
+        history.Finished(Prompt, Origin(), "failed", runSeconds: 10, error: "OOM");
+
+        var finished = FindEvent(ReadLines(), Prompt, "finished")!;
+        finished!["outcome"]?.ToString().Should().Be("failed", "сбой графа — failed, не interrupted");
+        finished!["error"]?.ToString().Should().Be("OOM", "текст ошибки в журнале");
     }
 
     // ─── Исключение не выходит: сбой записи не роняет ───────────────────────────

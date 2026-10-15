@@ -1,0 +1,55 @@
+{
+  "alert": "Кэш промпта рвётся при живом TTL",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Больше 5 ходов за сутки, у которых первый вызов модели не прочитал prompt cache из-за смены системного блока (ccs.prompt_cache.turns, reason=system_changed). Сторож регресса CLI: на 2.1.259 (17–23.09.2026) CLI ключевал кэш по --append-system-prompt при контексте больше 200 тыс. токенов, и смена нестабильных секций (recall-memory, code-graph, persona-bindings) переписывала префикс целиком — 209 холодных перезаписей и 71,6 M токенов записи за неделю, около 50 ходов system_changed в сутки. С 2.1.281 дыры нет: 5 ходов system_changed из 4159 за три недели (≈0,1 %, 0–1 в сутки), на всех причинах вместе фон ≈0,8 % (замер Киры, .cc-attachments/cache-study). Целевая доля из плана — 3 % начал ходов за сутки; при обычных ~200 ходах в сутки это 6, поэтому порог задан ЧИСЛОМ (больше 5), а не долей: SigNoz при in_total суммирует значения формулы по шагам, и A/B по минутным точкам дал бы сумму отношений, а не отношение сумм. Число заодно даёт нижнюю планку выборки — три холодных хода из двадцати в тихий день не зажгут правило. Запас: в 5–10 раз выше нынешнего фона и в 10 раз ниже режима 2.1.259. Другие причины (model_changed, tools_changed — действие человека; previous_message_not_found — истёк TTL, это цель индикатора, а не регресс) правило не считает. Сработало — включить рубильник «нестабильные секции хвостом» (шаг 5 плана) и проверить версию CLI. matchType in_total — нужна сумма за окно.",
+  "evalWindow": "24h",
+  "frequency": "1h",
+  "labels": {
+    "severity": "warning"
+  },
+  "annotations": {
+    "description": "За сутки больше 5 ходов начали с холодной перезаписи кэша из-за смены системного блока (system_changed). Похоже на регресс CLI, как на 2.1.259: каждая смена recall-секций переписывает весь префикс. Проверь версию CLI и паспорта ходов (CacheMissReason, CacheMissedTokens).",
+    "summary": "Prompt cache рвётся при смене системного блока"
+  },
+  "preferredChannels": [
+    "ccs-alerts-email"
+  ],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "in_total",
+    "target": 5,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.prompt_cache.turns",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": "reason = 'system_changed'"
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment",
+                "fieldDataType": "string"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

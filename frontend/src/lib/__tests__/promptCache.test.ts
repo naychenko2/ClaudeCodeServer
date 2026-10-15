@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, PromptCacheInfo } from '../../types';
-import { promptCacheState } from '../promptCache';
+import { promptCacheState, rewriteCostUsd } from '../promptCache';
 
 const MIN = 60_000;
 const T0 = 1_700_000_000_000;
@@ -69,5 +69,32 @@ describe('promptCacheState', () => {
     ];
     const s = promptCacheState(items, T0 + 2 * MIN);
     expect(s.lastMiss).toEqual({ reason: 'model_changed', tokens: 90_000, label: 'смена модели' });
+  });
+});
+
+describe('rewriteCostUsd', () => {
+  // База $5 за миллион входа: 1000 вход + 1000×5 выход + 100k×0,1 чтение + 10k×2 запись (1h) = 36k единиц
+  const paid = (ttl: '1h' | '5m' | null): ChatItem => ({
+    kind: 'result', subtype: 'success', durationMs: 100, numTurns: 1, contextTokens: 100_000,
+    totalCostUsd: 36_000 * 5e-6,
+    usage: { inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 100_000, cacheCreationTokens: 10_000 },
+    promptCache: pc({ ttl, anchorAtMs: T0 }),
+  });
+
+  it('базу берёт из стоимости хода, запись часового кэша — ×2', () => {
+    expect(rewriteCostUsd([paid('1h')], '1h', 100_000)).toBeCloseTo(1.0, 6);
+  });
+
+  it('5-минутный кэш перезаписывается по ×1,25', () => {
+    expect(rewriteCostUsd([paid('1h')], '5m', 100_000)).toBeCloseTo(0.625, 6);
+  });
+
+  it('ход без TTL считает запись по TTL кэша', () => {
+    expect(rewriteCostUsd([paid(null)], '1h', 100_000)).toBeCloseTo(1.0, 6);
+  });
+
+  it('без хода со стоимостью — оценки нет', () => {
+    expect(rewriteCostUsd([result(pc({ ttl: '1h', anchorAtMs: T0 }), 100_000)], '1h', 100_000)).toBeUndefined();
+    expect(rewriteCostUsd([paid('1h')], '1h', 0)).toBeUndefined();
   });
 });

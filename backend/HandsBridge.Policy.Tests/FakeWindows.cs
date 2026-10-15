@@ -2,11 +2,14 @@ using ClaudeHomeServer.HandsBridge.Policy;
 
 namespace HandsBridge.Policy.Tests;
 
-/// <summary>Подделка WinAPI: окна, их процессы и образы.</summary>
+/// <summary>Подделка WinAPI: окна, их процессы и образы, окно под точкой, передний план и границы экрана.</summary>
 internal sealed class FakeWindows : IHandsWindowSystem
 {
     private readonly Dictionary<long, int> _windowProcess = [];
     private readonly Dictionary<int, string?> _images = [];
+    private readonly Dictionary<(int, int), long> _pointWindow = [];
+    private long _foreground;
+    private HandsScreenBounds? _bounds = new(0, 0, 1920, 1080);
 
     public FakeWindows Process(int pid, string? image)
     {
@@ -20,9 +23,39 @@ internal sealed class FakeWindows : IHandsWindowSystem
         return this;
     }
 
+    /// <summary>Корень окна, который окажется под экранной точкой (x, y).</summary>
+    public FakeWindows At(int x, int y, long root)
+    {
+        _pointWindow[(x, y)] = root;
+        return this;
+    }
+
+    /// <summary>Корень окна переднего плана.</summary>
+    public FakeWindows Foreground(long root)
+    {
+        _foreground = root;
+        return this;
+    }
+
+    /// <summary>Границы виртуального рабочего стола; null — неизвестны.</summary>
+    public FakeWindows Bounds(HandsScreenBounds? bounds)
+    {
+        _bounds = bounds;
+        return this;
+    }
+
     public int? GetWindowProcessId(long hwnd) => _windowProcess.TryGetValue(hwnd, out var pid) ? pid : null;
 
     public string? GetProcessImagePath(int processId) => _images.TryGetValue(processId, out var image) ? image : null;
+
+    public long GetRootWindowAt(int x, int y) => _pointWindow.TryGetValue((x, y), out var root) ? root : 0;
+
+    /// <summary>В подделке каждое окно — топовое: его корень — оно само; 0 — окна нет.</summary>
+    public long GetRootWindow(long hwnd) => _windowProcess.ContainsKey(hwnd) ? hwnd : 0;
+
+    public long GetForegroundWindow() => _foreground;
+
+    public HandsScreenBounds? GetVirtualScreenBounds() => _bounds;
 }
 
 /// <summary>Типовая машина теста: блокнот запущен ходом, остальное открыл человек.</summary>

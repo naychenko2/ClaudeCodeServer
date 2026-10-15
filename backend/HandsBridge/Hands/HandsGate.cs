@@ -123,5 +123,9 @@ internal static class HandsGate
     {
         public int? GetWindowProcessId(long hwnd) => null;
         public string? GetProcessImagePath(int processId) => null;
+        public long GetRootWindowAt(int x, int y) => 0;
+        public long GetRootWindow(long hwnd) => 0;
+        public long GetForegroundWindow() => 0;
+        public HandsScreenBounds? GetVirtualScreenBounds() => null;
     }
 }

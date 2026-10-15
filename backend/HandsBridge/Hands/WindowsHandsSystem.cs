@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using ClaudeHomeServer.HandsBridge.Policy;
+using Sbroenne.WindowsMcp.Native;
 
 namespace ClaudeHomeServer.HandsBridge;
 
@@ -110,6 +111,39 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
         {
             CloseHandle(handle);
         }
+    }
+
+    /// <summary>Корень окна под экранной точкой: <c>WindowFromPoint</c> → <c>GetAncestor(GA_ROOT)</c>.</summary>
+    public long GetRootWindowAt(int x, int y)
+    {
+        var hwnd = NativeMethods.WindowFromPoint(new POINT(x, y));
+        return hwnd == 0 ? 0 : (long)NativeMethods.GetAncestor(hwnd, NativeConstants.GA_ROOT);
+    }
+
+    /// <summary>Корень окна по hwnd: <c>GetAncestor(GA_ROOT)</c>; 0 — окна нет.</summary>
+    public long GetRootWindow(long hwnd)
+    {
+        var root = NativeMethods.GetAncestor((nint)hwnd, NativeConstants.GA_ROOT);
+        return root == 0 ? 0 : (long)root;
+    }
+
+    /// <summary>Корень окна переднего плана: Win32 <c>GetForegroundWindow</c> → <c>GetAncestor(GA_ROOT)</c>.</summary>
+    public long GetForegroundWindow()
+    {
+        var foreground = NativeMethods.GetForegroundWindow();
+        return foreground == 0 ? 0 : (long)NativeMethods.GetAncestor(foreground, NativeConstants.GA_ROOT);
+    }
+
+    /// <summary>Границы виртуального рабочего стола (все мониторы); null — узнать не удалось.</summary>
+    public HandsScreenBounds? GetVirtualScreenBounds()
+    {
+        var left = NativeMethods.GetSystemMetrics(NativeConstants.SM_XVIRTUALSCREEN);
+        var top = NativeMethods.GetSystemMetrics(NativeConstants.SM_YVIRTUALSCREEN);
+        var width = NativeMethods.GetSystemMetrics(NativeConstants.SM_CXVIRTUALSCREEN);
+        var height = NativeMethods.GetSystemMetrics(NativeConstants.SM_CYVIRTUALSCREEN);
+        if (width <= 0 || height <= 0)
+            return null;
+        return new HandsScreenBounds(left, top, left + width, top + height);
     }
 
     public void Dispose()

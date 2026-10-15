@@ -88,6 +88,38 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         HandsTools.UiClick, HandsTools.UiType,
     };
 
+    /// <summary>
+    /// Действия <c>mouse_control</c> из схемы инструмента (upstream <c>MouseAction</c>); прочие —
+    /// отказ. <c>drag</c> и <c>polyline</c> несут две и более точки, <c>get_position</c> — ни одной,
+    /// <c>scroll</c> — колесо (потолок <see cref="MaxWheelAmount"/>), остальные — одну точку.
+    /// </summary>
+    private static readonly HashSet<string> PointerActions = new(StringComparer.Ordinal)
+    {
+        "move", "click", "double_click", "right_click", "middle_click", "drag", "polyline", "scroll", "get_position",
+    };
+
+    /// <summary>Потолок колеса <c>mouse_control(action='scroll')</c>: больше модель ход не крутит.</summary>
+    public const int MaxWheelAmount = 20;
+
+    /// <summary>
+    /// Действия <c>keyboard_control</c> из схемы инструмента (upstream <c>KeyboardAction</c>);
+    /// прочие — отказ.
+    /// </summary>
+    private static readonly HashSet<string> KeyboardActions = new(StringComparer.Ordinal)
+    {
+        "type", "press", "key_down", "key_up", "sequence", "release_all", "get_keyboard_layout", "wait_for_idle",
+    };
+
+    /// <summary>
+    /// Действия <c>keyboard_control</c>, которые вводят в окно и поэтому требуют <c>windowHandle</c>:
+    /// <c>type</c>, <c>press</c>, <c>key_down</c>, <c>key_up</c>, <c>sequence</c>. Служебные
+    /// (<c>release_all</c>, <c>get_keyboard_layout</c>, <c>wait_for_idle</c>) окно не требуют.
+    /// </summary>
+    private static readonly HashSet<string> KeyboardInputActions = new(StringComparer.Ordinal)
+    {
+        "type", "press", "key_down", "key_up", "sequence",
+    };
+
     // ---------- app ----------
 
     /// <summary>
@@ -185,6 +217,108 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
 
         var image = HandsAppPaths.TryNormalize(windows.GetProcessImagePath(pid));
         return image is not null && !HandsAppPaths.IsForbidden(image);
+    }
+
+    /// <summary>
+    /// Окно ПОД ЭКРАННОЙ ТОЧКОЙ принимает ввод: его процесс не из <see cref="HandsForbiddenApps"/>
+    /// (через <see cref="AcceptsInput"/>) и, если задан <paramref name="expectedRoot"/>, корень окна
+    /// под точкой — именно он. Главная ошибка мыши: клик по устаревшим координатам попадает в
+    /// другое окно (тост, панель задач, «Пуск», терминал), поэтому гейт проверяет окно под точкой,
+    /// а не только переданное <c>windowHandle</c>.
+    /// </summary>
+    public HandsDecision AcceptsInputAt(int x, int y, long? expectedRoot = null)
+    {
+        var root = windows.GetRootWindowAt(x, y);
+        if (root == 0)
+            return HandsDecision.Deny(
+                $"No window at ({x}, {y}): the point is off the desktop or the window closed. " +
+                "Take a fresh screenshot to see what is there now.");
+
+        if (!AcceptsInput(root))
+            return HandsDecision.Deny(NoInput($"The window under ({x}, {y})"));
+
+        if (expectedRoot is { } expected && root != windows.GetRootWindow(expected))
+            return HandsDecision.Deny(
+                $"The window under ({x}, {y}) is not the window the action targets: the point landed in " +
+                "another window. Take a fresh screenshot and use its coordinates.");
+
+        return HandsDecision.Allow;
+    }
+
+    /// <summary>
+    /// <c>mouse_control</c>: форма и потолки. Действие — из схемы (upstream <c>MouseAction</c>);
+    /// <c>drag</c> — ровно две точки (старт и конец), <c>polyline</c> — две и более,
+    /// <c>get_position</c> — ни одной, остальные — одну. Колесо <c>scroll</c>: <c>amount</c> от 1 до
+    /// <see cref="MaxWheelAmount"/>. Все точки — внутри виртуального рабочего стола и над окном,
+    /// принимающим ввод (<see cref="AcceptsInputAt"/>, в том числе конец перетаскивания).
+    /// </summary>
+    public HandsDecision CheckPointer(string action, IReadOnlyList<(int X, int Y)> points, long? windowHandle, int amount)
+    {
+        if (!PointerActions.Contains(action))
+            return HandsDecision.Deny($"Unknown mouse_control action '{action}'.");
+
+        if (action == "drag" && points.Count != 2)
+            return HandsDecision.Deny("mouse_control(action='drag') needs exactly two points: the start and the end of the drag.");
+        if (action == "polyline" && points.Count < 2)
+            return HandsDecision.Deny("mouse_control(action='polyline') needs at least two points to trace a stroke.");
+        if (action == "get_position" && points.Count != 0)
+            return HandsDecision.Deny("mouse_control(action='get_position') takes no points: it reads the current cursor position.");
+        if (action is not ("drag" or "polyline" or "get_position") && points.Count != 1)
+            return HandsDecision.Deny($"mouse_control(action='{action}') needs exactly one point.");
+
+        if (action == "scroll" && (amount < 1 || amount > MaxWheelAmount))
+            return HandsDecision.Deny($"The scroll amount must be between 1 and {MaxWheelAmount}.");
+
+        if (points.Count == 0)
+            return HandsDecision.Allow;
+
+        var area = windows.GetVirtualScreenBounds();
+        if (area is not { } bounds)
+            return HandsDecision.Deny("The virtual desktop bounds are unknown, so the point cannot be verified against the screen.");
+
+        foreach (var (x, y) in points)
+        {
+            if (!bounds.Contains(x, y))
+                return HandsDecision.Deny(
+                    $"Point ({x}, {y}) is outside the virtual desktop " +
+                    $"({bounds.Left}, {bounds.Top})-({bounds.Right}, {bounds.Bottom}). Take a fresh screenshot for current coordinates.");
+
+            var at = AcceptsInputAt(x, y, windowHandle);
+            if (!at.Allowed)
+                return at;
+        }
+
+        return HandsDecision.Allow;
+    }
+
+    /// <summary>
+    /// <c>keyboard_control</c>: действия ввода (<c>type</c>, <c>press</c>, <c>key_down</c>, <c>key_up</c>,
+    /// <c>sequence</c>) требуют <c>windowHandle</c> — окно обязано принимать ввод (<see cref="AcceptsInput"/>)
+    /// и быть окном переднего плана, иначе клавиши улетят в чужое окно. Служебные действия
+    /// (<c>release_all</c>, <c>get_keyboard_layout</c>, <c>wait_for_idle</c>) окно не требуют.
+    /// </summary>
+    public HandsDecision CheckKeyboard(long? windowHandle, string action)
+    {
+        if (!KeyboardActions.Contains(action))
+            return HandsDecision.Deny($"Unknown keyboard_control action '{action}'.");
+
+        if (!KeyboardInputActions.Contains(action))
+            return HandsDecision.Allow;
+
+        if (windowHandle is not { } hwnd || hwnd == 0)
+            return HandsDecision.Deny(
+                $"keyboard_control(action='{action}') requires windowHandle: without it the keys go to whatever window is active. {ListWindows}");
+
+        if (!AcceptsInput(hwnd))
+            return HandsDecision.Deny(NoInput($"Window '{windowHandle}'"));
+
+        var foreground = windows.GetForegroundWindow();
+        if (foreground == 0 || windows.GetRootWindow(hwnd) != foreground)
+            return HandsDecision.Deny(
+                $"Window '{windowHandle}' is not the foreground window: the keys would land in another window. " +
+                "Call window_management(action='activate') on it first.");
+
+        return HandsDecision.Allow;
     }
 
     /// <summary>

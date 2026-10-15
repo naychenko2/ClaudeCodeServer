@@ -260,6 +260,9 @@ public class SubsystemBoundaryCoverageTests
             "ClaudeHomeServer.Services.ChatContext",  // ADR-023: стор и контракты контекста чата
             "ClaudeHomeServer.Services.Spheres",      // ISphereDirectory: справочник членства для зон персон
             "ClaudeHomeServer.Services.ChatSubjects", // темы чатов: чистая часть в Core, склейка — ядро сессий Main
+            // ADR-030: индекс 7 дней истории медиа-генераций и кэш миниатюр — спина Main
+            // (без IAppSubsystem), шов IMediaHistoryResultSource живёт в Core
+            "ClaudeHomeServer.Services.MediaHistory",
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

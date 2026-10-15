@@ -4776,6 +4776,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var voiceModel = entry.Info.VoiceMode
                 ? _router?.VoiceModelFor(Llm.LocalActionCatalog.ChatVoice, ResolveOwnerId(entry.Info))
                 : null;
+            // Блокер: override на модели ДРУГОГО провайдера ломает транскрипт — CLI стартует
+            // в чужом профиле (CLAUDE_CONFIG_DIR) с --resume на транскрипт, которого там нет
+            // («No conversation found» / ход без контекста). Штатный переезд провайдера идёт
+            // только через MigrateProviderAsync с guard'ом, а override его обходит. Поэтому
+            // override применяем, только если провайдер модели override совпадает с провайдером
+            // модели чата (резолв — LlmProviderRegistry, тот же, что у guard'а; профиль
+            // локального CLI-провайдера тоже считается другим). Миграцию на каждый ход НЕ
+            // делаем: ход идёт на модели чата, как раньше.
+            if (voiceModel is not null
+                && !string.Equals(_llmProviders.ProviderKey(voiceModel), _llmProviders.ProviderKey(entry.Info.Model),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogWarning(
+                    "Голосовой ход чата {SessionId}: модель места chat-voice «{VoiceModel}» (провайдер {VoiceKey}) " +
+                    "не совпадает с провайдером модели чата {ChatKey} — ход идёт на модели чата, транскрипт не мигрируем",
+                    sessionId, voiceModel, _llmProviders.ProviderKey(voiceModel), _llmProviders.ProviderKey(entry.Info.Model));
+                voiceModel = null;
+            }
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
                 suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
         }

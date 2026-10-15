@@ -63,6 +63,15 @@ public class VoiceLocalTurnTests : IDisposable
                 // Локаль включена — иначе UsesLocal(chat-voice) всегда false
                 ["Ollama:Model"] = "qwen-test",
                 ["Ollama:BaseUrl"] = "http://localhost:11434",
+                // Сторонний провайдер «other» — для теста блокера «голос на чужом
+                // провайдере»: override применяем, только если его провайдер совпадает
+                // с провайдером модели чата (резолв LlmProviderRegistry, тот же, что у
+                // MigrateProviderAsync). Модели «chat-own-model»/«gpt-4o» в нём НЕТ —
+                // они родной Claude, прежние тесты не задеты.
+                ["LlmProviders:other:ApiKey"] = "sk-test",
+                ["LlmProviders:other:AnthropicBaseUrl"] = "https://other.example.com",
+                ["LlmProviders:other:Models:0:Id"] = "voice-other-provider",
+                ["LlmProviders:other:Models:1:Id"] = "chat-other-provider",
                 ["Delivery:AwaitProcessExitSeconds"] = "0",
             })
             .Build();
@@ -536,6 +545,46 @@ public class VoiceLocalTurnTests : IDisposable
         await _sut.SendMessageAsync(session.Id, "привет", []);
 
         fake.LastTurnModelOverride.Should().BeNull("обычный ход не знает о месте chat-voice");
+    }
+
+    // Блокер: override на модели ДРУГОГО провайдера ломает транскрипт — CLI стартует в
+    // чужом профиле (CLAUDE_CONFIG_DIR) с --resume на транскрипт, которого там нет.
+    // Guard: override применяем, только если провайдер модели override совпадает с
+    // провайдером модели чата (резолв LlmProviderRegistry, тот же, что у MigrateProviderAsync).
+    [Fact]
+    public async Task ГолосовойХод_ЧужойПровайдер_OverrideNull()
+    {
+        var session = await MakeVoiceChatAsync(local: false);
+        // Модель места — в стороннем провайдере «other»; модель чата — родной Claude
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, "voice-other-provider");
+        session.Model = "chat-own-model";
+
+        var entry = GetEntry(session.Id);
+        var fake = new CapturingVoiceAdapter(session);
+        entry.GetType().GetField("Process")!.SetValue(entry, fake);
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+
+        fake.LastTurnModelOverride.Should().BeNull(
+            "модель места другого провайдера → override null: ход на модели чата, транскрипт не мигрируем");
+    }
+
+    [Fact]
+    public async Task ГолосовойХод_ТотЖеПровайдер_OverrideПрименяется()
+    {
+        var session = await MakeVoiceChatAsync(local: false);
+        // Модель места и модель чата — в ОДНОМ провайдере «other» → override применяется
+        _actionOverrides.Set(LocalActionCatalog.ChatVoice, "voice-other-provider");
+        session.Model = "chat-other-provider";
+
+        var entry = GetEntry(session.Id);
+        var fake = new CapturingVoiceAdapter(session);
+        entry.GetType().GetField("Process")!.SetValue(entry, fake);
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+
+        fake.LastTurnModelOverride.Should().Be("voice-other-provider",
+            "тот же провайдер → override применяется, ход на модели места");
     }
 
     // Перехватывающий адаптер: фиксирует turnModelOverride последнего вызова SendMessageAsync.

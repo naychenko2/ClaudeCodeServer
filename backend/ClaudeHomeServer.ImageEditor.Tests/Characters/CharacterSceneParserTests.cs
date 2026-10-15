@@ -15,17 +15,18 @@ public class CharacterSceneParserTests
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
-        // CharacterSceneParser теперь зовёт штатный RunAsync (уважает выбор исполнителя)
-        public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+        // CharacterSceneParser зовёт RunLocalOrChosenAsync: локаль по умолчанию → без
+        // облачного шага (бесплатный фоновый разбор), явный выбор → полная цепочка.
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public async Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
         {
             Calls++;
             LastActionKey = actionKey;
-            return (await run(prompt, ct)) ?? string.Empty;
+            return await run(prompt, ct);
         }
-        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
-            object? jsonFormat = null, CancellationToken ct = default)
-            => throw new NotSupportedException();
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
             object? jsonFormat = null, CancellationToken ct = default)

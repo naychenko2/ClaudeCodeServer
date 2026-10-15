@@ -52,7 +52,9 @@ public sealed class CharacterSceneParser
             // WaitAsync не оставляет у нас ссылки на брошенный вызов после таймаута
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(_timeout);
-            var raw = await _runner.RunAsync(LocalActionCatalog.CharacterSceneParse,
+            // Локаль по умолчанию → без облачного шага (бесплатный фоновый разбор сюжета);
+            // явный выбор админом слота/модели → полная цепочка.
+            var raw = await _runner.RunLocalOrChosenAsync(LocalActionCatalog.CharacterSceneParse,
                 $"{Instruction}\n\nТЕКСТ ЗАПРОСА:\n{prompt}", jsonFormat: "json", ct: cts.Token)
                 .WaitAsync(_timeout, ct);
             return ParseModelAnswer(raw);

@@ -378,6 +378,81 @@ public class LocalActionRoutingTests
         Assert.Equal(["deepseek-chat"], claude.Calls);
     }
 
+    // --- Блокер «молча платный фолбэк»: места action-rank и character-scene-parse на
+    //     маршруте local. Локаль вернула пусто (или занята ходом) → облачного claude-шага
+    //     нет: фоновое украшение не молчит и не платит. Раньше оба звали RunAsync, и сбой/
+    //     пустой ответ/занятость уводили вызов в финальный claude-шаг за деньги. ---
+
+    // Фейк локального движка: Enabled=true, текстовые/JSON-вызовы возвращают заданное
+    // (null — «локаль вернула пусто»). busy — занятость движка ходом (LocalBlockedByTurn).
+    private sealed class FakeLocalEngine : ILocalLlmClient
+    {
+        private readonly string? _answer;
+        private readonly LocalEngineBusyTracker _tracker = new();
+        private readonly IDisposable? _slot;
+        public FakeLocalEngine(string? answer, bool busy)
+        {
+            _answer = answer;
+            _slot = busy ? _tracker.Enter() : null;
+        }
+        public LocalEngineBusyTracker Tracker => _tracker;
+        public bool Enabled => true;
+        public string BaseUrl => "http://localhost:11434";
+        public string Model => "qwen-test";
+        public string TextModel => "qwen-test";
+        public string ProviderKey => "ollama";
+        public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
+            CancellationToken ct = default, string? model = null, int? timeoutMs = null, int? numPredict = null,
+            int? numCtx = null, string? ownerId = null, string? label = null) => Task.FromResult(_answer);
+        public Task<string?> GenerateTextAsync(string prompt, string? model, TimeSpan timeout, int numPredict,
+            int numCtx, string? ownerId = null, string? label = null, CancellationToken ct = default)
+            => Task.FromResult(_answer);
+        public Task<ChatTurnResult> ChatTurnAsync(IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
+            int numPredict, int numCtx, string? ownerId, Func<string, Task>? onDelta = null, CancellationToken ct = default)
+            => Task.FromResult(new ChatTurnResult(_answer, null));
+        public Task WarmUpAsync(string? model, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    // Маршрут local + локаль вернула пусто → RunLocalOrChosenAsync не доходит до claude.
+    private static async Task<(string? Result, FakeOneShot Claude)> RunLocalOrChosenNoCloud(
+        string actionKey, string? localAnswer, bool busy)
+    {
+        var engine = new FakeLocalEngine(localAnswer, busy);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance,
+            busy: engine.Tracker);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, engine, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunLocalOrChosenAsync(actionKey, "prompt-text");
+        return (result, claude);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПусто_БезОблака(string actionKey)
+    {
+        // Маршрут local + локаль вернула пусто → null, облачного claude-шага нет
+        var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: null, busy: false);
+
+        Assert.Null(result);
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальЗанятаХодом_БезОблака(string actionKey)
+    {
+        // Движок занят ходом исполнителя (LocalBlockedByTurn) → шаг локали пропускается,
+        // и на маршруте local облачного шага всё равно нет.
+        var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: "ответ", busy: true);
+
+        Assert.Null(result);
+        Assert.Empty(claude.Calls);
+    }
+
     [Fact]
     public async Task ВыбраннаяМодельВернулаПустое_УходитНаClaude()
     {

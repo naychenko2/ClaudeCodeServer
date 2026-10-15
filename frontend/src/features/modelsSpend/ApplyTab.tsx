@@ -267,6 +267,14 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
         </div>
         {/* «Сейчас пойдёт» — серверный резолв места */}
         <EffectiveLine ctx={{ kind: 'action', actionKey: a.key }} />
+        {/* Голосовой чат: override на модели другого поставщика ломает транскрипт (CLI
+            стартует в чужом профиле с --resume), поэтому бэкенд применяет её, только к
+            чатам того же поставщика — подсказка, чтобы админ не ждал чуда. */}
+        {a.key === 'chat-voice' && (
+          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+            Модель другого поставщика применяется только к чатам того же поставщика.
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>

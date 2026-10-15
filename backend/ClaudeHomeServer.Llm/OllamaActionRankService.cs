@@ -83,10 +83,11 @@ public sealed class OllamaActionRankService
             $"МАКСИМУМ: {maxK}\n\n" +
             $"ДОСТУПНЫЕ ДЕЙСТВИЯ:\n{JsonSerializer.Serialize(menu)}";
 
-        // Бесплатная цепочка: direct-модель агрегатора → локальная Ollama.
+        // Цепочка: локаль по умолчанию → без облачного шага (фоновое украшение не
+        // молчит и не платит); явный выбор админом слота/модели → полная цепочка.
         // Профиль (num_ctx/num_predict/timeout) применяет сам раннер — раньше это
         // приходилось тащить сюда и молча терялось.
-        var raw = await _runner.RunAsync(LocalActionCatalog.ActionRank, userPrompt,
+        var raw = await _runner.RunLocalOrChosenAsync(LocalActionCatalog.ActionRank, userPrompt,
             jsonFormat: FormatSchema, ct: ct);
         if (string.IsNullOrWhiteSpace(raw)) return [];
 

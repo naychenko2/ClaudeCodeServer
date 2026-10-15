@@ -91,6 +91,38 @@ public class LocalModelStatsHistoryTests
             File.AppendAllText(Path.Combine(dir, day + ".jsonl"), line.ToJsonString() + "\n" + finished.ToJsonString() + "\n");
         }
 
+        // Запись «до правки» шага 2 (задача 5ee71dd7): enqueued БЕЗ model/prompt/params (null)
+        // и finished с отдельным исходом interrupted + error (≤500). Читатель обязан показать
+        // null без падения и принять новый исход
+        public void WriteBareInterrupted(string promptId, string source)
+        {
+            var dir = Path.Combine(Factory.TempDir, "local-media-history");
+            Directory.CreateDirectory(dir);
+            var day = DateTime.UtcNow.ToString("yyyy-MM-dd");
+            var origin = new LocalJobOrigin(
+                OwnerId: AdminId, SessionId: "chat-1", Kind: "image", Op: "generate_image",
+                Heavy: false, ProjectId: "proj-1", Source: source, SourceJobId: "job-1");
+            var wire = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+            // Один JsonNode — один родитель: для каждого события свой экземпляр origin
+            var originNode = (JsonNode)JsonSerializer.SerializeToNode(origin, wire)!;
+            var originNode2 = (JsonNode)JsonSerializer.SerializeToNode(origin, wire)!;
+            var enqueued = new JsonObject
+            {
+                ["v"] = 1, ["t"] = "enqueued", ["ts"] = "2026-10-15T10:00:00.0000000Z",
+                ["id"] = promptId, ["origin"] = originNode,
+                ["model"] = null, ["prompt"] = null, ["params"] = null, ["card"] = null,
+                ["outcome"] = null, ["runSeconds"] = null, ["error"] = null,
+            };
+            var finished = new JsonObject
+            {
+                ["v"] = 1, ["t"] = "finished", ["ts"] = "2026-10-15T10:00:47.0000000Z",
+                ["id"] = promptId, ["origin"] = originNode2,
+                ["model"] = null, ["prompt"] = null, ["params"] = null, ["card"] = null,
+                ["outcome"] = "interrupted", ["runSeconds"] = null, ["error"] = "GPU OOM",
+            };
+            File.AppendAllText(Path.Combine(dir, day + ".jsonl"), enqueued.ToJsonString() + "\n" + finished.ToJsonString() + "\n");
+        }
+
         public void Dispose() => Factory.Dispose();
     }
 
@@ -206,5 +238,40 @@ public class LocalModelStatsHistoryTests
         body.GetProperty("records").GetArrayLength().Should().Be(1);
         // Счётчики: по виду и по исходу
         body.GetProperty("counters").GetProperty("kinds").GetProperty("image").GetInt32().Should().Be(1);
+    }
+
+    // Правка шага 2 (5ee71dd7): interrupted — отдельный исход. Статус, фильтр по нему и error из
+    // finished. Мутация: свести interrupted к failed/игнорировать — тест краснеет
+    [Fact]
+    public async Task Interrupted_ОтдельныйИсход()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteBareInterrupted("p1", "test-source");
+        var resp = await h.Admin.GetAsync("/api/local-model/history?outcome=interrupted");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("records").GetArrayLength().Should().Be(1);
+        var record = body.GetProperty("records")[0];
+        record.GetProperty("status").GetString().Should().Be("interrupted");
+        record.GetProperty("outcome").GetString().Should().Be("interrupted");
+        // error из finished (≤500) виден
+        record.GetProperty("error").GetString().Should().Be("GPU OOM");
+    }
+
+    // Правка шага 2 (5ee71dd7): enqueued «до правки» без model/prompt/params → null, без падения.
+    // Мутация: падение на null-полях enqueued — тест краснеет
+    [Fact]
+    public async Task ГолыйEnqueued_ПоляNull()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteBareInterrupted("p1", "test-source");
+        var resp = await h.Admin.GetAsync("/api/local-model/history");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var record = body.GetProperty("records")[0];
+        // Запись «до правки»: model/prompt/params не записаны → null (фронт покажет «параметры не записаны»)
+        record.GetProperty("model").ValueKind.Should().Be(JsonValueKind.Null);
+        record.GetProperty("prompt").ValueKind.Should().Be(JsonValueKind.Null);
+        record.GetProperty("params").ValueKind.Should().Be(JsonValueKind.Null);
     }
 }

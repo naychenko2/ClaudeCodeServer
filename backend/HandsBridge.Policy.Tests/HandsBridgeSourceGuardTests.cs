@@ -39,6 +39,8 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.BrowserEvaluate, "Tools/BrowserEvaluateTool.cs", "HandsPolicy.CheckBrowserEvaluate(" },
         // Руки без UIA: мышь — гейт по точке (форма + границы + окно под точкой) до первого действия
         { HandsTools.MouseControl, "Tools/MouseControlTool.cs", "HandsGate.Policy.CheckPointer(" },
+        // Руки без UIA: клавиатура — окно обязано принимать ввод и быть передним планом
+        { HandsTools.KeyboardControl, "Tools/KeyboardControlTool.cs", "HandsGate.Policy.CheckKeyboard(" },
         // OCR (A4): цель как у снимка, окно — не запрещённое приложение; гейт до первого действия
         { HandsTools.Ocr, "Tools/OcrTool.cs", "HandsGate.Policy.CheckOcr(" },
     };
@@ -51,11 +53,11 @@ public class HandsBridgeSourceGuardTests
             .Order()
             .ToList();
 
-        // TODO(D2a–D2e): убрать при добавлении инструмента в мост.
-        // Инструменты уже в HandsTools.All, но в мосту появятся в D2a–D2e — до того их отсутствие норма.
+        // TODO(D2c–D2e): убрать при добавлении инструмента в мост.
+        // Инструменты уже в HandsTools.All, но в мосту появятся в D2c–D2e — до того их отсутствие норма.
         var notYetInBridge = new[]
         {
-            HandsTools.KeyboardControl, HandsTools.ClipboardText, HandsTools.HandsBatch,
+            HandsTools.ClipboardText, HandsTools.HandsBatch,
             HandsTools.ScanDocument, HandsTools.ScanCanvas,
         };
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
@@ -400,6 +402,145 @@ public class HandsBridgeSourceGuardTests
         Assert.Equal("wheelAmount", gateCall.ArgumentList.Arguments[3].ToString());
     }
 
+    /// <summary>
+    /// Руки без UIA — клавиатура (D2a): инструмент зовёт только ВНУТРЕННИЕ перегрузки
+    /// <c>KeyboardInputService</c>, которые принимают целевое окно (<c>nint</c>) — иначе
+    /// повторная проверка окна перед <c>SendInput</c> (гонка «гейт → ввод») не сработает.
+    /// Публичные перегрузки окна не принимают и проверки не делают. Разбор синтаксический
+    /// (Roslyn): каждый вызов члена <c>KeyboardInputService</c> обязан передавать окно
+    /// (не null/default/IntPtr.Zero) и иметь достаточно аргументов для внутренней перегрузки.
+    /// </summary>
+    [Fact]
+    public void Keyboard_tool_calls_only_the_guarded_overloads()
+    {
+        var root = ParseTree(Read("Tools/KeyboardControlTool.cs"));
+
+        // Внутренние перегрузки, которые инструмент вправе вызывать (мин. число аргументов)
+        var internalMinArgs = new Dictionary<string, int>
+        {
+            ["TypeTextAsync"] = 3,         // text, окно, токен
+            ["PressKeyAsync"] = 5,         // key, modifiers, repeat, окно, токен
+            ["KeyDownAsync"] = 3,          // key, окно, токен
+            ["KeyUpAsync"] = 3,            // key, окно, токен
+            ["ExecuteSequenceAsync"] = 4,  // sequence, delay, окно, токен
+        };
+        // Публичные перегрузки без окна: в схеме моста их нет, инструмент звать не должен
+        var forbidden = new[] { "ReleaseAllKeysAsync", "GetKeyboardLayoutAsync", "WaitForIdleAsync", "GetHeldKeyNames" };
+
+        var calls = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(IsKeyboardInputServiceCall)
+            .ToList();
+
+        Assert.NotEmpty(calls);
+
+        foreach (var call in calls)
+        {
+            var member = (MemberAccessExpressionSyntax)call.Expression;
+            var name = member.Name.Identifier.Text;
+
+            Assert.Contains(name, internalMinArgs);
+            Assert.DoesNotContain(name, forbidden);
+
+            var argCount = call.ArgumentList.Arguments.Count;
+            Assert.True(argCount >= internalMinArgs[name],
+                $"{name}: {argCount} аргументов — меньше {internalMinArgs[name]} внутренней перегрузки (публичная без окна?)");
+
+            // Аргумент перед CancellationToken — окно: не null/default/IntPtr.Zero
+            var windowArg = call.ArgumentList.Arguments[^2].Expression;
+            Assert.False(IsNullOrDefault(windowArg),
+                $"{name}: аргумент окна = «{windowArg}» (должен быть не null/default/IntPtr.Zero)");
+        }
+    }
+
+    /// <summary>
+    /// Перед каждым <c>SendInput</c> в перегрузках, которые использует инструмент, стоит повторная
+    /// проверка окна: окно переднего плана совпадает с целевым. Закрывает гонку между проверкой
+    /// гейта в инструменте и самим вводом. Разбор синтаксический (Roslyn): в каждом проверяемом
+    /// методе вызов <c>IsExpectedForegroundWindow</c> стоит ДО первого <c>SendInput</c>.
+    /// Любой НОВЫЙ метод с <c>SendInput</c> обязан попасть в список проверяемых или в явные исключения.
+    /// </summary>
+    [Fact]
+    public void Keyboard_input_rechecks_the_window_before_every_send_input()
+    {
+        var root = ParseTree(Read("Input/KeyboardInputService.cs"));
+
+        // Методы с проверкой окна перед SendInput (путь, который использует инструмент)
+        var checkedMethods = new[]
+        {
+            "TypeChunk", "PressKeyGuarded", "KeyDownCoreAsync", "KeyUpCoreAsync",
+        };
+        // Методы с SendInput без ожидаемого окна — явные исключения:
+        // PressKeyCoreAsync (неограниченный путь) и ReleaseAllKeysAsync (публичная, без окна)
+        var excludedMethods = new[] { "PressKeyCoreAsync", "ReleaseAllKeysAsync" };
+
+        var allMethodsWithSendInput = new List<string>();
+
+        foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+        {
+            var body = method.Body;
+            if (body is null) continue;
+
+            if (!body.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSendInputCall))
+                continue;
+
+            allMethodsWithSendInput.Add(method.Identifier.Text);
+
+            if (!checkedMethods.Contains(method.Identifier.Text) && !excludedMethods.Contains(method.Identifier.Text))
+            {
+                Assert.Fail($"Метод {method.Identifier.Text} содержит SendInput, но не в списке проверяемых и не в исключениях");
+            }
+
+            if (!checkedMethods.Contains(method.Identifier.Text))
+                continue;
+
+            // Вызовы IsExpectedForegroundWindow в теле метода
+            var windowChecks = body.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Where(IsWindowCheckCall)
+                .ToList();
+            Assert.NotEmpty(windowChecks);
+
+            // Вызовы SendInput в теле метода
+            var sendInputs = body.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Where(IsSendInputCall)
+                .ToList();
+            Assert.NotEmpty(sendInputs);
+
+            // Первая проверка окна стоит ДО первого SendInput
+            var firstSendInput = sendInputs.MinBy(inv => inv.SpanStart)!;
+            var firstWindowCheck = windowChecks.MinBy(inv => inv.SpanStart)!;
+            Assert.True(firstWindowCheck.SpanStart < firstSendInput.SpanStart,
+                $"{method.Identifier.Text}: проверка окна (span {firstWindowCheck.SpanStart}) после первого SendInput (span {firstSendInput.SpanStart})");
+        }
+
+        // Множество методов с SendInput == проверяемые + исключения
+        var expected = checkedMethods.Concat(excludedMethods).ToHashSet(StringComparer.Ordinal);
+        var actual = allMethodsWithSendInput.ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(expected, actual);
+    }
+
+    /// <summary>
+    /// key_down без key_up (D2a): в <c>finally</c> инструмента клавиша отпускается, если
+    /// вызов не завершился успехом, а в конце хода — по <c>TurnEndEvent</c> (HandsGate).
+    /// Разбор Roslyn: в <c>KeyboardControlTool</c> есть <c>finally</c> с вызовом
+    /// <c>KeyUpAsync</c>, а в <c>HandsGate.Configure</c> — <c>ReleaseAllKeysAsync</c>.
+    /// </summary>
+    [Fact]
+    public void Keyboard_tool_releases_held_keys_in_finally_and_on_turn_end()
+    {
+        var tool = ParseTree(Read("Tools/KeyboardControlTool.cs"));
+
+        // finally с отпусканием клавиши (KeyUpAsync)
+        var finallyWithKeyUp = tool.DescendantNodes().OfType<TryStatementSyntax>()
+            .Select(t => t.Finally?.Block)
+            .FirstOrDefault(b => b is not null && b.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Any(c => c.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "KeyUpAsync" }));
+        Assert.NotNull(finallyWithKeyUp);
+
+        // Конец хода: HandsGate отпускает все удержанные клавиши
+        var gate = Read("Hands/HandsGate.cs");
+        Assert.Contains("ReleaseAllKeysAsync", gate);
+    }
+
     [Fact]
     public void Screen_pixels_are_never_copied_for_a_window()
     {
@@ -414,7 +555,7 @@ public class HandsBridgeSourceGuardTests
     {
         string[] removed =
         [
-            "Tools/KeyboardControlTool.cs", "Automation/Tools/UIBatchTool.cs",
+            "Automation/Tools/UIBatchTool.cs",
             "Automation/Tools/UIFileTool.cs", "Automation/Tools/UIOpenFileTool.cs", "Automation/Tools/UIReadTableTool.cs",
             "Automation/Tools/UISelectTool.cs", "Automation/Tools/UIWaitTool.cs", "Clipboard/Tools", "Macros/Tools", "Processes/Tools",
         ];
@@ -660,6 +801,18 @@ public class HandsBridgeSourceGuardTests
         inv.Expression is MemberAccessExpressionSyntax member
         && member.Expression is MemberAccessExpressionSyntax outer
         && outer.Name is IdentifierNameSyntax { Identifier.Text: "MouseInputService" };
+
+    /// <summary>
+    /// Вызов члена <c>KeyboardInputService</c>: <c>WindowsToolsBase.KeyboardInputService.Xxx(...)</c>.
+    /// </summary>
+    private static bool IsKeyboardInputServiceCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is MemberAccessExpressionSyntax member
+        && member.Expression is MemberAccessExpressionSyntax outer
+        && outer.Name is IdentifierNameSyntax { Identifier.Text: "KeyboardInputService" };
+
+    /// <summary>Вызов <c>IsExpectedForegroundWindow(...)</c> — проверка окна перед SendInput, без квалификатора.</summary>
+    private static bool IsWindowCheckCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is IdentifierNameSyntax { Identifier.Text: "IsExpectedForegroundWindow" };
 
     /// <summary>
     /// Выражение-«пустота»: <c>null</c>, <c>default</c>, <c>IntPtr.Zero</c>, <c>nint.Zero</c>.

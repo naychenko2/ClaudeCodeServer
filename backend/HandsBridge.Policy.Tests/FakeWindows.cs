@@ -8,6 +8,7 @@ internal sealed class FakeWindows : IHandsWindowSystem
     private readonly Dictionary<long, int> _windowProcess = [];
     private readonly Dictionary<int, string?> _images = [];
     private readonly Dictionary<(int, int), long> _pointWindow = [];
+    private readonly List<(int Left, int Top, int Right, int Bottom, long Root)> _rectWindows = [];
     private long _foreground;
     private HandsScreenBounds? _bounds = new(0, 0, 1920, 1080);
 
@@ -30,6 +31,16 @@ internal sealed class FakeWindows : IHandsWindowSystem
         return this;
     }
 
+    /// <summary>
+    /// Окно, которое окажется под ЛЮБОЙ точкой в прямоугольнике [left, right)×[top, bottom).
+    /// Точечная <see cref="At"/> имеет приоритет: точка, заданная явно, перекрывает прямоугольник.
+    /// </summary>
+    public FakeWindows Cover(int left, int top, int right, int bottom, long root)
+    {
+        _rectWindows.Add((left, top, right, bottom, root));
+        return this;
+    }
+
     /// <summary>Корень окна переднего плана.</summary>
     public FakeWindows Foreground(long root)
     {
@@ -48,7 +59,15 @@ internal sealed class FakeWindows : IHandsWindowSystem
 
     public string? GetProcessImagePath(int processId) => _images.TryGetValue(processId, out var image) ? image : null;
 
-    public long GetRootWindowAt(int x, int y) => _pointWindow.TryGetValue((x, y), out var root) ? root : 0;
+    public long GetRootWindowAt(int x, int y)
+    {
+        if (_pointWindow.TryGetValue((x, y), out var exact))
+            return exact;
+        foreach (var (left, top, right, bottom, root) in _rectWindows)
+            if (x >= left && x < right && y >= top && y < bottom)
+                return root;
+        return 0;
+    }
 
     /// <summary>В подделке каждое окно — топовое: его корень — оно само; 0 — окна нет.</summary>
     public long GetRootWindow(long hwnd) => _windowProcess.ContainsKey(hwnd) ? hwnd : 0;

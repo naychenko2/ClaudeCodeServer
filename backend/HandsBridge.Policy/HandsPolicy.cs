@@ -403,12 +403,14 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
 
     /// <summary>
     /// <c>ocr</c> (A4 «руки без UIA»): цель — та же, что у <c>screenshot_control</c> (экран,
-    /// монитор, окно, область, все мониторы). Окно НЕ должно быть запрещённым приложением
-    /// (<see cref="HandsForbiddenApps"/>): чтение терминала — чтение его команд, а снимок
-    /// (<c>screenshot_control</c>) такое окно разрешает. Экран и область окном не проверяются:
-    /// модель знает, что снимает.
+    /// монитор, окно, область, все мониторы). Запрет идёт через <see cref="AcceptsInput"/>: окно
+    /// процесса из <see cref="HandsForbiddenApps"/> (терминал, интерпретатор, Проводник) — чтение
+    /// его экрана равно чтению команд, а снимок (<c>screenshot_control</c>) такое окно разрешает.
+    /// Для <c>window</c> проверяется переданное окно; для <c>region</c> и экранных целей — сетка
+    /// точек по снимаемой области: любое ВИДИМОЕ окно под ней, которое не принимает ввод,
+    /// отказывает ДО снимка (маленький терминал в углу области не проскочит).
     /// </summary>
-    public HandsDecision CheckOcr(string? target, string? windowHandle, int? regionWidth, int? regionHeight)
+    public HandsDecision CheckOcr(string? target, string? windowHandle, int? regionX, int? regionY, int? regionWidth, int? regionHeight)
     {
         var t = string.IsNullOrWhiteSpace(target) ? "primary" : target.Trim().ToLowerInvariant();
 
@@ -424,12 +426,83 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
                 || !TryParseHandle(windowHandle, out var hwnd)
                 || !AcceptsInput(hwnd))
                 return HandsDecision.Deny(NoOcr($"Window '{windowHandle}'"));
+            return HandsDecision.Allow;
         }
 
-        if (t is "region" && (regionWidth is not > 0 || regionHeight is not > 0))
-            return HandsDecision.Deny("ocr target 'region' requires positive regionWidth and regionHeight.");
+        if (t is "region")
+        {
+            if (regionWidth is not > 0 || regionHeight is not > 0)
+                return HandsDecision.Deny("ocr target 'region' requires positive regionWidth and regionHeight.");
+            return CheckOcrArea(regionX ?? 0, regionY ?? 0, regionWidth.Value, regionHeight.Value);
+        }
 
+        // Экран, монитор, все мониторы: снимается часть или весь рабочий стол — проверяем весь
+        // виртуальный экран (окно на неснятом мониторе — ложный отказ, но безопасный).
+        return CheckOcrScreen();
+    }
+
+    /// <summary>
+    /// Снимаемая область (region или весь виртуальный экран): сетка точек (шаг 200 px, четыре
+    /// угла и центр). По каждой точке — верхнее окно; окно, которое не принимает ввод
+    /// (<see cref="AcceptsInput"/>: запрещённое приложение или неизвестный процесс), — отказ ДО
+    /// снимка. Фон рабочего стола (окна под точкой нет) запретом не считается.
+    /// </summary>
+    private HandsDecision CheckOcrArea(int left, int top, int width, int height)
+    {
+        foreach (var (x, y) in OcrGridPoints(left, top, width, height))
+        {
+            var root = windows.GetRootWindowAt(x, y);
+            if (root != 0 && !AcceptsInput(root))
+                return HandsDecision.Deny(NoOcrArea(ProcessName(root)));
+        }
         return HandsDecision.Allow;
+    }
+
+    /// <summary>
+    /// Экранная цель: какой монитор снимается, по отдельности неизвестно, поэтому проверяем весь
+    /// виртуальный рабочий стол. Границы неизвестны (сбой WinAPI) — проверять нечего.
+    /// </summary>
+    private HandsDecision CheckOcrScreen()
+    {
+        var bounds = windows.GetVirtualScreenBounds();
+        if (bounds is not { } b)
+            return HandsDecision.Allow;
+        return CheckOcrArea(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top);
+    }
+
+    /// <summary>
+    /// Точки сетки по области: шаг 200 px, плюс четыре угла и центр. Шаг 200 px сам по себе
+    /// пропускает окно меньше 200 px, прижатое между узлами; явные углы и центр закрывают этот
+    /// зазор — окно, прижатое к краю области, не проскочит.
+    /// </summary>
+    private static IEnumerable<(int X, int Y)> OcrGridPoints(int left, int top, int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+            yield break;
+
+        const int step = 200;
+        var right = left + width;
+        var bottom = top + height;
+
+        for (var x = left; x < right; x += step)
+            for (var y = top; y < bottom; y += step)
+                yield return (x, y);
+
+        yield return (left, top);
+        yield return (right - 1, top);
+        yield return (left, bottom - 1);
+        yield return (right - 1, bottom - 1);
+        yield return (left + width / 2, top + height / 2);
+    }
+
+    /// <summary>Имя процесса окна (из образа); «unknown process» — образ не прочитался.</summary>
+    private string ProcessName(long root)
+    {
+        var pid = windows.GetWindowProcessId(root);
+        if (pid is not { } id)
+            return "unknown process";
+        var image = HandsAppPaths.TryNormalize(windows.GetProcessImagePath(id));
+        return image is null ? "unknown process" : HandsAppPaths.FileName(image);
     }
 
     /// <summary>
@@ -439,6 +512,10 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     private static string NoOcr(string what) =>
         $"{what} belongs to an interpreter, a terminal or Explorer (or its program is unknown): " +
         "ocr would read its screen — the commands and their output — so hands do not ocr it.";
+
+    /// <summary>Отказ по области: под снимаемой областью (или на экране) есть окно, которое не принимает ввод.</summary>
+    private static string NoOcrArea(string process) =>
+        $"ocr refused: area overlaps a window that is not allowed ({process}); choose another area.";
 
     // ---------- браузер ----------
 

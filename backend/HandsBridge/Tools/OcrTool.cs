@@ -94,8 +94,9 @@ public static partial class OcrTool
         CancellationToken cancellationToken)
     {
         // Gate before the first action: the target is the same as screenshot_control, and the
-        // window must not be a forbidden app (reading a terminal is reading its commands).
-        var gate = HandsGate.Policy.CheckOcr(target, windowHandle, regionWidth, regionHeight);
+        // window must not be a forbidden app (reading a terminal is reading its commands). For
+        // region and screen targets the gate also scans the captured area for a forbidden window.
+        var gate = HandsGate.Policy.CheckOcr(target, windowHandle, regionX, regionY, regionWidth, regionHeight);
         if (gate is { Allowed: false })
             return HandsGate.Deny(HandsTools.Ocr, gate);
 

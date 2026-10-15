@@ -209,11 +209,118 @@ public class OcrToolTests
             .Process(3, Machine.Notepad).Window(65553, 3);
         var policy = new HandsPolicy(windows);
 
-        var denied = policy.CheckOcr("window", "65552", null, null);
+        var denied = policy.CheckOcr("window", "65552", null, null, null, null);
         Assert.False(denied.Allowed);
         Assert.Contains("interpreter, a terminal or Explorer", denied.Reason);
 
-        Assert.True(policy.CheckOcr("window", "65553", null, null).Allowed);
+        Assert.True(policy.CheckOcr("window", "65553", null, null, null, null).Allowed);
+    }
+
+    /// <summary>
+    /// Region целиком над разрешённым окном (блокнот): сетка точек не находит запрещённого окна —
+    /// снимок разрешён.
+    /// </summary>
+    [Fact]
+    public void Region_over_allowed_window_is_allowed()
+    {
+        var windows = new FakeWindows()
+            .Process(3, Machine.Notepad).Window(300, 3)
+            .Cover(0, 0, 1000, 1000, 300);
+        var policy = new HandsPolicy(windows);
+
+        Assert.True(policy.CheckOcr("region", null, 0, 0, 1000, 1000).Allowed);
+    }
+
+    /// <summary>
+    /// Region поверх запрещённого процесса (терминал в центре области): сетка ловит его в центре и
+    /// отказывает ДО снимка.
+    /// </summary>
+    [Fact]
+    public void Region_over_forbidden_process_in_center_is_denied_before_capture()
+    {
+        var windows = new FakeWindows()
+            .Process(4, Machine.Cmd).Window(400, 4)
+            .Process(3, Machine.Notepad).Window(300, 3)
+            .Cover(0, 0, 1000, 1000, 300)
+            .At(500, 500, 400);
+        var policy = new HandsPolicy(windows);
+
+        var denied = policy.CheckOcr("region", null, 0, 0, 1000, 1000);
+        Assert.False(denied.Allowed);
+        Assert.Contains("area overlaps a window that is not allowed", denied.Reason);
+        Assert.Contains("cmd.exe", denied.Reason);
+    }
+
+    /// <summary>
+    /// Запрещённое окно (терминал) прижато к УГЛУ области: шаг сетки его не задевает, ловит
+    /// отдельная проверка углов.
+    /// </summary>
+    [Fact]
+    public void Region_with_forbidden_window_in_corner_is_denied()
+    {
+        var windows = new FakeWindows()
+            .Process(4, Machine.Cmd).Window(400, 4)
+            .Process(3, Machine.Notepad).Window(300, 3)
+            .Cover(0, 0, 1000, 1000, 300)
+            .At(999, 0, 400);
+        var policy = new HandsPolicy(windows);
+
+        var denied = policy.CheckOcr("region", null, 0, 0, 1000, 1000);
+        Assert.False(denied.Allowed);
+        Assert.Contains("area overlaps a window that is not allowed", denied.Reason);
+    }
+
+    /// <summary>
+    /// Запрещённое окно ПОЛНОСТЬЮ перекрыто разрешённым сверху: под каждой точкой области верхнее
+    /// окно — блокнот, терминал под ним не виден — снимок разрешён.
+    /// </summary>
+    [Fact]
+    public void Region_with_forbidden_window_covered_by_allowed_is_allowed()
+    {
+        var windows = new FakeWindows()
+            .Process(4, Machine.Cmd).Window(400, 4)
+            .Process(3, Machine.Notepad).Window(300, 3)
+            .Cover(0, 0, 1000, 1000, 300);
+        var policy = new HandsPolicy(windows);
+
+        Assert.True(policy.CheckOcr("region", null, 0, 0, 1000, 1000).Allowed);
+    }
+
+    /// <summary>
+    /// Экранная цель (primary_screen) при наличии ВИДИМОГО запрещённого окна на экране: сетка по
+    /// всему виртуальному экрану его ловит и отказывает ДО снимка.
+    /// </summary>
+    [Fact]
+    public void Screen_with_forbidden_visible_window_is_denied()
+    {
+        var windows = new FakeWindows()
+            .Process(4, Machine.Cmd).Window(400, 4)
+            .Process(3, Machine.Notepad).Window(300, 3)
+            .Bounds(new HandsScreenBounds(0, 0, 1920, 1080))
+            .Cover(0, 0, 1920, 1080, 300)
+            .At(960, 540, 400);
+        var policy = new HandsPolicy(windows);
+
+        var denied = policy.CheckOcr("primary_screen", null, null, null, null, null);
+        Assert.False(denied.Allowed);
+        Assert.Contains("area overlaps a window that is not allowed", denied.Reason);
+    }
+
+    /// <summary>
+    /// Неизвестный процесс под точкой области (образ не прочитался) — как у target=window:
+    /// закрыто по умолчанию, отказ ДО снимка.
+    /// </summary>
+    [Fact]
+    public void Region_with_unknown_process_under_point_is_denied()
+    {
+        var windows = new FakeWindows()
+            .Process(6, null).Window(600, 6)
+            .Cover(0, 0, 1000, 1000, 600);
+        var policy = new HandsPolicy(windows);
+
+        var denied = policy.CheckOcr("region", null, 0, 0, 1000, 1000);
+        Assert.False(denied.Allowed);
+        Assert.Contains("area overlaps a window that is not allowed", denied.Reason);
     }
 
     /// <summary>

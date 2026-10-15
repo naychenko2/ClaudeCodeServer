@@ -751,6 +751,90 @@ public class LocalModelStatsPollerTests
         h.Poller.Current.Status.Should().Be("down", "сбой источника → down, а не исключение из BackgroundService");
     }
 
+    // ─── Скорость на поток: приращения для второй линии графика «Нагрузка и кэш» ─────────
+    //
+    // Точка кольца несёт два приращения с прошлой ТОЧКИ: genTokens (generation_tokens_total)
+    // и itlSeconds (inter_token_latency_seconds_sum). Фронт сводит точки в интервалы
+    // (15/60 с) и считает среднюю скорость на поток: ΣgenTokens/ΣitlSeconds (ток/с) —
+    // та же формула «генерации на поток» (ADR-029). Правило null то же, что у серий кэша:
+    // нет прошлой точки, метрика не на прошлой/текущей точке, либо счётчик упал (рестарт) →
+    // null; отрицательных значений нет.
+
+    // (26) Обычный интервал: genTokens/itlSeconds — приращения с прошлой ТОЧКИ.
+    // Мутация: считать приращение с предыдущего ОПРОСА (а не точки) → при частом опросе
+    // тест краснеет; здесь базовый случай (опрос = точка, шаг 5 с).
+    [Fact]
+    public async Task PerStreamSpeed_NormalInterval_Increments()
+    {
+        var h = new Harness();
+        // t=0: старт счётчиков (первая точка — приращения null, нет прошлой точки).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            GenerationTokens = 100,
+            InterTokenLatencySum = 2,
+            Running = 1,
+        });
+        await h.Poller.PollOnceAsync();
+
+        // t=5: счётчики выросли.
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            GenerationTokens = 700,
+            InterTokenLatencySum = 12,
+            Running = 1,
+        });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+
+        // Первая точка: прошлой точки нет → оба приращения null.
+        history[0].GenTokens.Should().BeNull("нет прошлой точки → null, не 0");
+        history[0].ItlSeconds.Should().BeNull();
+
+        // Вторая точка: приращения с прошлой точки: 700−100=600, 12−2=10.
+        history[1].GenTokens.Should().Be(600, "700 − 100 = 600");
+        history[1].ItlSeconds.Should().Be(10.0, "12 − 2 = 10");
+    }
+
+    // (27) Рестарт счётчика: счётчики упали (1000→100, 10→1) → приращения null, не отрицательные.
+    // Мутация: не резать по разрыву (отрицательное приращение) → тест краснеет.
+    [Fact]
+    public async Task PerStreamSpeed_CounterRestart_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 1000, InterTokenLatencySum = 10, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // Рестарт: счётчики упали (1000→100, 10→1) → отрицательная дельта.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, InterTokenLatencySum = 1, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].GenTokens.Should().BeNull("рестарт (счётчик упал) → null, не −900");
+        history[1].ItlSeconds.Should().BeNull("рестарт → null, не −9");
+    }
+
+    // (28) Метрики нет (движок не отдал счётчик) → приращение null, не 0.
+    // Мутация: вернуть 0 вместо null → тест краснеет.
+    [Fact]
+    public async Task PerStreamSpeed_MetricAbsent_IsNull()
+    {
+        var h = new Harness();
+        // t=0: generation_tokens задан, inter_token_latency не задан (null).
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        // t=5: generation_tokens вырос, inter_token_latency по-прежнему null.
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 400, Running = 1 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].GenTokens.Should().Be(300, "счётчик есть → приращение 400 − 100 = 300");
+        history[1].ItlSeconds.Should().BeNull("метрики нет (null на обеих точках) → null, не 0");
+    }
+
     // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).
     private sealed class ThrowingSource : IEngineMetricsSource
     {

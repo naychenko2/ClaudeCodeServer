@@ -76,10 +76,19 @@ public sealed class SseUsageObserver
     private long? _cacheCreation;
 
     // Время дельт: TTFT (старт → первая дельта) и GenDuration (последняя − первая).
+    // requestStart — момент создания наблюдателя (= момент получения заголовков ответа: шлюз
+    // создаёт наблюдатель сразу после SendAsync с ResponseHeadersRead). НЕ время события
+    // message_start: vLLM шлёт message_start вместе с первым токеном (после prefill, в том же
+    // TCP-батче), и ttft = firstDelta − message_start ≈ 0. Зафиксировано замером: заголовки
+    // 0.01с, message_start+первый дельта 0.45с.
     private DateTimeOffset? _requestStart;
     private DateTimeOffset? _firstDelta;
     private DateTimeOffset? _lastDelta;
-    private int _deltaCount;
+    // Оценка накопленных токенов запроса: на каждую content_block_delta прибавляем оценку
+    // числа токенов в тексте дельты (1 токен ≈ 4 символа, минимум 1). НЕ число дельт: при
+    // DFlash одна дельта несёт 2–8 токенов, и счётчик дельт × глобальный коэффициент
+    // (TokensPerStep) систематически ошибался. Оценка по тексту — per-request, не глобальная.
+    private int _tokenEstimate;
 
     // M5: колбэк на каждую content_block_delta с текущим _deltaCount (≈ число токенов
     // запроса). Шлюз подписывает его на метод счётчика хода (OnTokenCount). Все сбои
@@ -89,6 +98,9 @@ public sealed class SseUsageObserver
     public SseUsageObserver(TimeProvider time)
     {
         _time = time ?? throw new ArgumentNullException(nameof(time));
+        // TTFT-база = момент создания наблюдателя (заголовки получены). message_start не
+        // перекрывает: ??= в OnMessageStart видит уже установленное значение.
+        _requestStart = _time.GetUtcNow();
     }
 
     // true — пришла хотя бы одна content_block_delta (первый токен). Шлюз по этому флагу
@@ -152,10 +164,14 @@ public sealed class SseUsageObserver
         var input = _inputFromDelta ?? _inputFromStart;
         var cacheRead = _cacheRead;
 
-        // GenDuration: последняя дельта − первая; одна дельта → 0 (GenTps = null).
+        // GenDuration: от старта запроса (заголовки) до последней дельты — включает prefill.
+        // НЕ «последняя − первая дельта»: при DFlash дельты приходят пачками (несколько токенов
+        // за дельту), и окно «первый→последний дельта» короче реального времени генерации,
+        // завышая genTps. С requestStart (момент заголовков, см. конструктор) genTps =
+        // output_tokens / (prefill + decode) — та же «воспринимаемая» скорость, что живая.
         TimeSpan? genDuration = null;
-        if (_firstDelta is not null && _lastDelta is not null)
-            genDuration = _lastDelta - _firstDelta;
+        if (_requestStart is not null && _lastDelta is not null)
+            genDuration = _lastDelta - _requestStart;
 
         double? genTps = null;
         if (genDuration is { } gd && gd > TimeSpan.Zero && _output is { } outTok && outTok > 0)
@@ -273,7 +289,8 @@ public sealed class SseUsageObserver
         }
     }
 
-    // message_start: фиксируем старт запроса (TTFT-база) и input_tokens.
+    // message_start: input_tokens. TTFT-база (_requestStart) уже зафиксирована в
+    // конструкторе (момент заголовков); ??= — страховка, если наблюдатель создан иначе.
     private void OnMessageStart(JsonElement e)
     {
         _requestStart ??= _time.GetUtcNow();
@@ -287,16 +304,32 @@ public sealed class SseUsageObserver
     }
 
     // content_block_delta: фиксируем время дельты (TTFT — первая, GenDuration — первая/последняя).
-    // M5: колбэк OnTokenCount — счётчик токенов запроса (≈1 на дельту) для живой скорости.
+    // M5: колбэк OnTokenCount — оценка накопленных токенов запроса (по тексту дельты) для
+    // живой скорости. 1 токен ≈ 4 символа (эвристика для латиницы/кириллицы); минимум 1 на
+    // дельту (пустая дельта всё равно несёт ≥1 токен). Per-request, не глобальный TokensPerStep.
     private void OnContentBlockDelta(JsonElement e)
     {
         var now = _time.GetUtcNow();
         if (_firstDelta is null)
             _firstDelta = now;
         _lastDelta = now;
-        _deltaCount++;
-        try { OnTokenCount?.Invoke(_deltaCount); }
+        _tokenEstimate += EstimateTokens(e);
+        try { OnTokenCount?.Invoke(_tokenEstimate); }
         catch { /* сбой колбэка не рвёт поток: клиент уже получил байты */ }
+    }
+
+    // Оценка числа токенов в дельте по длине текста: 1 токен ≈ 4 символа, минимум 1.
+    // text_delta/thinking_delta → delta.text; без текста (например, tool_use) → 1.
+    private static int EstimateTokens(JsonElement e)
+    {
+        if (e.TryGetProperty("delta", out var delta)
+            && delta.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String)
+        {
+            var len = text.GetString()?.Length ?? 0;
+            return Math.Max(1, len / 4);
+        }
+        return 1;
     }
 
     // message_delta: usage ПЕРЕКРЫВАЕТ message_start (input), плюс output/cache_read/cache_creation.

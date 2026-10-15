@@ -309,6 +309,10 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 RamHits = CounterDelta(_lastPointSnap, snap, s => s.RamTierHits),
                 RamQueries = CounterDelta(_lastPointSnap, snap, s => s.RamTierQueries),
                 Preemptions = CounterDelta(_lastPointSnap, snap, s => s.Preemptions),
+                // Скорость на поток (вторая линия графика): приращения с прошлой ТОЧКИ,
+                // фронт сводит в интервалы и делит ΣgenTokens/ΣitlSeconds (ток/с).
+                GenTokens = CounterDelta(_lastPointSnap, snap, s => s.GenerationTokens),
+                ItlSeconds = DoubleCounterDelta(_lastPointSnap, snap, s => s.InterTokenLatencySum),
             };
 
             lock (_gate)
@@ -438,6 +442,18 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // null — прошлой точки нет, метрика не на прошлой или текущей точке, или счётчик упал (рестарт).
     // Отрицательных значений наружу не идёт (тот же приём, что DeltaLong/DeltaDouble).
     private static long? CounterDelta(EngineSnapshot? prevPoint, EngineSnapshot cur, Func<EngineSnapshot, long?> sel)
+    {
+        if (prevPoint is null) return null;
+        var a = sel(prevPoint);
+        var b = sel(cur);
+        if (a is null || b is null) return null;
+        var d = b - a;
+        return d < 0 ? null : d;
+    }
+
+    // Приращение double-счётчика с прошлой ТОЧКИ кольца (скорость на поток): cur − prevPoint.
+    // null и правило «без отрицательных» — те же, что CounterDelta (long-вариант).
+    private static double? DoubleCounterDelta(EngineSnapshot? prevPoint, EngineSnapshot cur, Func<EngineSnapshot, double?> sel)
     {
         if (prevPoint is null) return null;
         var a = sel(prevPoint);

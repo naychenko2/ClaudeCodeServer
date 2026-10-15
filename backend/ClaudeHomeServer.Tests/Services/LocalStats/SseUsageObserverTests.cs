@@ -18,6 +18,14 @@ public class SseUsageObserverTests
         public override DateTimeOffset GetUtcNow() => _now += TimeSpan.FromSeconds(1);
     }
 
+    // Ручные часы: время двигается только через Advance() (симуляция prefill-паузы).
+    private sealed class ManualTime : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 10, 13, 12, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan t) => _now += t;
+    }
+
     private static string ReadFixture(string name) =>
         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "LocalStats", name));
 
@@ -120,11 +128,13 @@ public class SseUsageObserverTests
     }
 
     // (6) Поля времени: Ttft и GenDuration — конкретные числа (AdvancingTime: +1 с на вызов).
-    //     Последовательность: message_start (1×GetUtcNow) → 3×content_block_delta (3×GetUtcNow)
-    //     → message_delta (0×GetUtcNow). Итого 4 вызова GetUtcNow:
-    //       requestStart = t+1, firstDelta = t+2, lastDelta = t+4.
-    //     Ttft = 1 с, GenDuration = 2 с, GenTps = 10/2 = 5.0.
-    //     Мутация: убрать один content_block_delta → GenDuration = 1 с, тест краснеет.
+    //     requestStart фиксируется в КОНСТРУКТОРЕ (t+1, момент заголовков) — НЕ в message_start
+    //     (vLLM шлёт его вместе с первым токеном, и ttft было бы 0). 3×content_block_delta:
+    //     firstDelta = t+2, lastDelta = t+4.
+    //     Ttft = firstDelta − requestStart = 1 с. GenDuration = lastDelta − requestStart = 3 с
+    //     (включает prefill 1 с + decode 2 с). GenTps = 10/3 ≈ 3.33.
+    //     Мутация: вернуть GenDuration = lastDelta − firstDelta (без prefill) → 2 с, GenTps = 5.0,
+    //     тест краснеет.
     [Fact]
     public void RequestUsage_TimeFields_AreMeaningful()
     {
@@ -142,9 +152,9 @@ public class SseUsageObserverTests
             "data: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10}}\n\n");
         var r = obs.Complete();
 
-        r.Ttft.Should().Be(TimeSpan.FromSeconds(1), "TTFT: старт → первая дельта = 1 с");
-        r.GenDuration.Should().Be(TimeSpan.FromSeconds(2), "GenDuration: последняя − первая дельта = 2 с");
-        r.GenTps.Should().Be(5.0, "GenTps = 10 токенов / 2 с = 5.0");
+        r.Ttft.Should().Be(TimeSpan.FromSeconds(1), "TTFT: requestStart (заголовки) → первая дельта = 1 с");
+        r.GenDuration.Should().Be(TimeSpan.FromSeconds(3), "GenDuration: requestStart → последняя дельта = 3 с (prefill + decode)");
+        r.GenTps.Should().BeApproximately(10.0 / 3.0, 1e-9, "GenTps = 10 токенов / 3 с ≈ 3.33 (включая prefill)");
         r.OutputTokens.Should().Be(10);
     }
 
@@ -245,5 +255,24 @@ public class SseUsageObserverTests
         r.OutputTokens.Should().BeNull();
         r.Ttft.Should().BeNull();
         r.GenDuration.Should().BeNull();
+    }
+
+    // (11) TTFT: requestStart фиксируется в КОНСТРУКТОРЕ (момент заголовков), НЕ в
+    //      OnMessageStart (vLLM шлёт message_start вместе с первым токеном, после prefill).
+    //      Симуляция: конструктор t=0, prefill 2 с, message_start+первая дельта t=2.
+    //      Мутация: вернуть requestStart в OnMessageStart → ttft = 0 (тест краснеет).
+    [Fact]
+    public void Ttft_RequestStartInConstructor_NotInMessageStart()
+    {
+        var time = new ManualTime();
+        var obs = new SseUsageObserver(time); // t=0: requestStart = 0
+        time.Advance(TimeSpan.FromSeconds(2)); // prefill: 2 с
+        obs.Feed(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100}}}\n\n" +
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\n");
+        var r = obs.Complete();
+
+        r.Ttft.Should().Be(TimeSpan.FromSeconds(2),
+            "TTFT = firstDelta(2с) − requestStart(0с, конструктор) = 2с (prefill)");
     }
 }

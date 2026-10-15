@@ -23,6 +23,7 @@ import type { LocalModelStats } from './api';
 
 // Точка истории: t — unix-мс; throughput/running — как раньше; серии кэша v2.1
 // (kvUsage — доля 0..1, остальные — приращения счётчиков с прошлой точки).
+// genTokens/itlSeconds — приращения для скорости на поток (вторая линия, ADR-029).
 // null — нет данных (разрыв), 0 — настоящее значение.
 export interface ThroughputSample {
   t: number;
@@ -34,6 +35,8 @@ export interface ThroughputSample {
   ramHits: number | null;
   ramQueries: number | null;
   preemptions: number | null;
+  genTokens: number | null;
+  itlSeconds: number | null;
 }
 
 // Геометрия области построения в единицах SVG.
@@ -51,6 +54,7 @@ export interface Interval {
   tStart: number;
   tEnd: number;
   throughput: number | null;   // среднее genThroughput (!= null)
+  perStream: number | null;    // Σ genTokens / Σ itlSeconds (скорость на агента); null — разрыв
   kvUsage: number | null;      // максимум kvUsage (!= null)
   prefix: number | null;       // Σ prefixHits / Σ prefixQueries; null — движок молчал (разрыв)
   ram: number | null;          // Σ ramHits / Σ ramQueries; null — движок молчал (разрыв)
@@ -118,6 +122,28 @@ export function segmentsToPoints(segments: { x: number; y: number }[][]): string
   return segments.map(seg => seg.map(p => `${round1(p.x)},${round1(p.y)}`).join(' '));
 }
 
+// Линия «скорость на агента» (вторая линия): одна точка на центр каждого интервала
+// (ΣgenTokens/ΣitlSeconds), null — обрыв. Методика построения — как у линий кэша
+// (buildLine): центр интервала, y на общей оси выработки.
+export function buildPerStreamSegments(
+  intervals: Interval[],
+  tMin: number,
+  tMax: number,
+  maxSeries: number,
+  geom: ChartGeom,
+): { x: number; y: number }[][] {
+  const segs: { x: number; y: number }[][] = [];
+  let cur: { x: number; y: number }[] = [];
+  for (const it of intervals) {
+    const v = it.perStream;
+    if (v == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+    const cx = geom.left + (geom.width - geom.left - geom.right) * ((it.tStart + (it.tEnd - it.tStart) / 2 - tMin) / (tMax - tMin));
+    cur.push({ x: cx, y: yForThroughput(v, maxSeries, geom) });
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+
 // Замкнутая область под линией: по каждому сегменту — вниз к дну, через точки, обратно.
 export function segmentsToArea(segments: { x: number; y: number }[][], geom: ChartGeom): string[] {
   const floor = geom.height - geom.bottom;
@@ -141,6 +167,31 @@ export function maxThroughputOf(samples: ThroughputSample[]): number {
     if (s.throughput != null && s.throughput > max) max = s.throughput;
   }
   return max;
+}
+
+// Верх ОБЩЕЙ оси выработки: максимум ОБЕИХ серий (всего по стенду + на агента).
+// 0 — если данных нет. Выработка остаётся основной, но вторая линия не должна
+// уходить за верх поля.
+export function maxSeriesOf(samples: ThroughputSample[], intervals: Interval[]): number {
+  let max = maxThroughputOf(samples);
+  for (const it of intervals) {
+    if (it.perStream != null && it.perStream > max) max = it.perStream;
+  }
+  return max;
+}
+
+// Средняя скорость на агента за окно: ΣgenTokens/ΣitlSeconds по всем точкам окна,
+// где ОБА приращения на месте. null — нет данных (молчание/рестарт) или Σitl = 0.
+export function avgPerStreamOf(samples: ThroughputSample[]): number | null {
+  let sumGen = 0, sumItl = 0, any = false;
+  for (const s of samples) {
+    if (s.genTokens != null && s.itlSeconds != null) {
+      sumGen += s.genTokens;
+      sumItl += s.itlSeconds;
+      any = true;
+    }
+  }
+  return any && sumItl > 0 ? sumGen / sumItl : null;
 }
 
 // «Круглая» шкала (только график выработки): верх = ближайшее сверху число из ряда
@@ -195,6 +246,8 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
       ramHits: h.ramHits ?? null,
       ramQueries: h.ramQueries ?? null,
       preemptions: h.preemptions ?? null,
+      genTokens: h.genTokens ?? null,
+      itlSeconds: h.itlSeconds ?? null,
     });
   }
   return out;
@@ -252,6 +305,7 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     let sumPH = 0, sumPQ = 0, hasPH = false;
     let sumRH = 0, sumRQ = 0, hasRH = false;
     let sumPre = 0, hasPre = false;
+    let sumGen = 0, sumItl = 0, hasStream = false;
     for (const s of samples) {
       if (s.t < tStart || s.t >= tEnd) continue;
       if (s.throughput != null) { sumTp += s.throughput; nTp++; }
@@ -259,6 +313,8 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       if (s.prefixHits != null && s.prefixQueries != null) { sumPH += s.prefixHits; sumPQ += s.prefixQueries; hasPH = true; }
       if (s.ramHits != null && s.ramQueries != null) { sumRH += s.ramHits; sumRQ += s.ramQueries; hasRH = true; }
       if (s.preemptions != null) { sumPre += s.preemptions; hasPre = true; }
+      // скорость на поток: только когда ОБА приращения точки на месте (иначе дробь не честная)
+      if (s.genTokens != null && s.itlSeconds != null) { sumGen += s.genTokens; sumItl += s.itlSeconds; hasStream = true; }
     }
     let prefix: number | null;
     if (hasPH && sumPQ > 0) prefix = sumPH / sumPQ;
@@ -270,10 +326,14 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     else ram = null;
     if (prefix != null) prevPrefix = prefix;
     if (ram != null) prevRam = ram;
+    // скорость на агента: ΣgenTokens/ΣitlSeconds; null — разрыв (молчание/рестарт)
+    // или Σitl = 0 (токены не делим на ноль).
+    const perStream = hasStream && sumItl > 0 ? sumGen / sumItl : null;
     out.push({
       tStart,
       tEnd,
       throughput: nTp > 0 ? sumTp / nTp : null,
+      perStream,
       kvUsage: maxKv,
       prefix,
       ram,
@@ -320,6 +380,20 @@ export function breakRuns(intervals: Interval[]): [number, number][] {
   return runs;
 }
 
+// Прогоны разрыва ВТОРОЙ линии (perStream == null): фон-«разрыв» для линии
+// «на агента» — отдельно от фона выработки, чтобы линии не смешивались.
+export function perStreamBreakRuns(intervals: Interval[]): [number, number][] {
+  const runs: [number, number][] = [];
+  let start = -1;
+  for (let i = 0; i < intervals.length; i++) {
+    const isBreak = intervals[i].perStream == null;
+    if (isBreak && start === -1) start = i;
+    if (!isBreak && start !== -1) { runs.push([start, i - 1]); start = -1; }
+  }
+  if (start !== -1) runs.push([start, intervals.length - 1]);
+  return runs;
+}
+
 // === aria-label областей графика (динамический: обновляется при наведении) ===
 // Базовая часть: окно + сводка (avg/кэш). При hover — добавляется интервал с
 // деталью того поля, к которому относится SVG. Скринридер слышит смену при
@@ -339,18 +413,22 @@ export function chartAriaLabel(window: Window, avg: number | null, hit: number |
 }
 
 // aria-label SVG «Выработка, ток/с»: базовая сводка; при hover — время
-// интервала и значение выработки (или «движок не отвечал» на разрыве).
+// интервала и значения ОБЕИХ серий (всего по стенду + на агента) или
+// «движок не отвечал» на разрыве.
 export function tpChartAriaLabel(
   window: Window, avg: number | null, hit: number | null,
-  hoverTime: string | null, hoverThroughput: number | null,
+  hoverTime: string | null, hoverThroughput: number | null, hoverPerStream?: number | null,
 ): string {
   const parts = [`Выработка, ток/с за ${WINDOW_LABEL[window]}`];
   if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
   if (hit != null) parts.push(`кэш ${formatPerc(hit)}`);
   if (hoverTime != null) {
-    parts.push(hoverThroughput == null
-      ? `интервал ${hoverTime}: движок не отвечал`
-      : `интервал ${hoverTime}: ${formatTps(hoverThroughput)}`);
+    if (hoverThroughput == null) {
+      parts.push(`интервал ${hoverTime}: движок не отвечал`);
+    } else {
+      parts.push(`интервал ${hoverTime}: всего ${formatTps(hoverThroughput)}`);
+      if (hoverPerStream != null) parts.push(`на агента ${formatTps(hoverPerStream)}`);
+    }
   }
   return parts.join(', ');
 }
@@ -471,8 +549,11 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
 }) {
   const tMin = grid.from;
   const tMax = grid.to;
-  const maxT = niceAxisMax(maxThroughputOf(samples));
+  // Верх ОБЩЕЙ оси — по максимуму ОБЕИХ серий: выработка остаётся основной, но
+  // линия «на агента» не должна уходить за верх поля.
+  const maxT = niceAxisMax(maxSeriesOf(samples, intervals));
   const avg = avgThroughputOf(samples);
+  const avgPerStream = avgPerStreamOf(samples);
   const hitAvg = cacheHitAvg(samples);
   const preTotal = preemptionTotal(samples);
 
@@ -493,6 +574,8 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   );
   const tpPoints = segmentsToPoints(tpSegments);
   const tpAreas = segmentsToArea(tpSegments, geomTp);
+  // Вторая линия «на агента»: из интервалов (ΣgenTokens/ΣitlSeconds), общая ось.
+  const perStreamPoints = segmentsToPoints(buildPerStreamSegments(intervals, tMin, tMax, maxT, geomTp));
 
   // Считывание: индекс интервала (0..n-1) под курсором/пальцем; null — нет.
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -544,9 +627,14 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
     const mm = String(d.getMinutes()).padStart(2, '0');
     const time = window === '5m' ? `${hh}:${mm}:${String(d.getSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
     hoverTime = time;
-    summary = hover.throughput == null
-      ? `${time} · движок не отвечал`
-      : `${time} · ${formatTps(hover.throughput)}`;
+    if (hover.throughput == null) {
+      summary = `${time} · движок не отвечал`;
+    } else {
+      // Обе серии: «всего по стенду» + «на агента, в среднем» (— если второй нет).
+      summary = hover.perStream != null
+        ? `${time} · всего ${formatTps(hover.throughput)} · на агента ${formatTps(hover.perStream)}`
+        : `${time} · ${formatTps(hover.throughput)}`;
+    }
   } else {
     const parts: string[] = [];
     if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
@@ -621,6 +709,11 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const legendRam = hover ? formatPerc(hover.ram) : (hasRam ? '—' : null);
   const legendKv = hover ? formatPerc(hover.kvUsage) : '—';
 
+  // Легенда графика 1 (выработка): значения ОБЕИХ серий — интервала (считывание)
+  // или за окно. formatTps(null) = '—' (серия в интервале/окне не была).
+  const legendTotal = hover ? formatTps(hover.throughput) : formatTps(avg);
+  const legendPerStream = hover ? formatTps(hover.perStream) : formatTps(avgPerStream);
+
   // Ось времени (общая, под последным полем)
   const ticks = timeTicks(window);
 
@@ -662,9 +755,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
           ? <NotReported engine={engine} />
           : (
             <>
-              <FieldLabel>Выработка, ток/с</FieldLabel>
+              <FieldLabel>Выработка, ток/с · всего по стенду, все агенты вместе</FieldLabel>
               <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}
-                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.throughput ?? null)}>
+                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.throughput ?? null, hover?.perStream ?? null)}>
                 {[0, 0.5, 1].map(f => {
                   const y = yForThroughput(maxT * f, maxT, geomTp);
                   return (
@@ -706,16 +799,38 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                 {tpPoints.map((pts, i) => (
                   <polyline key={`tpl${i}`} points={pts} fill="none" stroke={C.accent} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
                 ))}
+                {/* Вторая линия «на агента, в среднем»: тоньше и ПУНКТИР (отличие по виду,
+                    не только цветом); C.info — токен, читается в обеих темах. */}
+                {perStreamPoints.map((pts, i) => (
+                  <polyline key={`psl${i}`} points={pts} fill="none" stroke={C.info} strokeWidth={1.25} strokeDasharray="5 3" strokeLinejoin="round" strokeLinecap="round" />
+                ))}
                 {hoverX != null && hover && hover.throughput != null && (() => {
                   const hy = yForThroughput(hover.throughput, maxT, geomTp);
+                  const psY = hover.perStream != null ? yForThroughput(hover.perStream, maxT, geomTp) : null;
                   return (
                     <g>
                       <line x1={hoverX} x2={hoverX} y1={geomTp.top} y2={GEOM_TP.height - geomTp.bottom} stroke={C.textMuted} strokeWidth={1} />
                       <circle cx={hoverX} cy={hy} r={3} fill={C.accent} stroke={C.bgCard} strokeWidth={2} />
+                      {psY != null && <circle cx={hoverX} cy={psY} r={3} fill={C.info} stroke={C.bgCard} strokeWidth={2} />}
                     </g>
                   );
                 })()}
               </svg>
+              {/* Легенда: обе серии выработки. Значение — интервала (считывание) или за
+                  окно; формат линий совпадает с графиком (сплошная / пунктир). */}
+              <div aria-live="polite" style={{
+                marginTop: SP.xxs, height: FS.xs * 1.45, display: 'flex', alignItems: 'center', gap: SP.md,
+                fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+              }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.accent}` }} />
+                  всего по стенду <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendTotal}</b>
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 10, height: 0, borderTop: `2px dashed ${C.info}` }} />
+                  на агента, в среднем <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendPerStream}</b>
+                </span>
+              </div>
             </>
           )}
 

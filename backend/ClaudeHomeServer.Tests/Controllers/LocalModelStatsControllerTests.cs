@@ -199,6 +199,40 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         p.GetProperty("preemptions").GetInt64().Should().Be(3);
     }
 
+    // history: скорость на поток (вторая линия графика) — genTokens/itlSeconds сериализуются
+    // camelCase. Мутация: не маппить поле из LocalModelStatsPoint в HistoryPointDto → null в JSON,
+    // тест краснеет.
+    [Fact]
+    public async Task History_СкоростьНаПоток_Сериализуются()
+    {
+        var t0 = DateTimeOffset.UtcNow;
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
+            Points =
+            [
+                new LocalModelStatsPoint
+                {
+                    Timestamp = t0,
+                    GenThroughput = 42.0,
+                    Running = 1,
+                    GenTokens = 600,
+                    ItlSeconds = 10.5,
+                },
+            ],
+        };
+        var factory = BuildFactoryWithFakes(reader);
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var p = body.GetProperty("history")[0];
+
+        p.GetProperty("genTokens").GetInt64().Should().Be(600);
+        p.GetProperty("itlSeconds").GetDouble().Should().Be(10.5);
+    }
+
     // ─── speed: средняя скорость на поток за окно графика (avgGenTps/avgPromptTps) ─────
 
     // speed.avgGenTps/avgPromptTps — средняя скорость на поток за окно графика (15m/1h):

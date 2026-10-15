@@ -194,6 +194,14 @@
   не меняет) | `custom` (свой список `DisallowedTools`); в disallowed-инструменты сессии их
   превращает [PersonaAccessPolicy.cs](../../backend/ClaudeHomeServer/Services/PersonaAccessPolicy.cs)
   (`BuildExtraDisallowed`, поверх ограничений `Tools`).
+- **CLI-флаги по сессии (2.1.300)**: `--restricted` (CLI ≥ 2.1.248) для персон `readOnly` —
+  fail-closed на стороне CLI: убирает встроенные инструменты запуска команд и `WebFetch`,
+  держит файловые инструменты внутри рабочего каталога, отказывает `bypassPermissions`
+  (встроенный `WebSearch` и ридер ссылок `web_read` не затронуты); `--permission-prompts none`
+  (CLI ≥ 2.1.259) для ходов без человека (исполнитель задачи трекера, периодическая автоматика) —
+  всё, что просило бы подтверждения, отказывается автоматически, иначе ход виснет на
+  stdio-запросе прав до истечения TTL. Оба флага входят в сигнатуру запуска (решение по
+  сессии, не по ходу) и ставятся в `ClaudeSession.RunTurnAsync`.
 - **Персона-исполнитель задач**: `TaskItem.PersonaId` — задача выполняется силами Claude «от лица»
   персоны (её характер/модель/память). Инвариант `PersonaId != null ⇒ Assignee = Claude`
   (`TaskManager.NormalizePersonaAssignee` в Create/Update); `SpawnNextOccurrence` переносит

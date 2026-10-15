@@ -21,8 +21,13 @@ public static class LocalMediaRegistration
 
         services.AddSingleton<ComfyClient>();
         services.AddSingleton<LocalMediaJobStore>();
-        // Реестр prompt_id ComfyUI → происхождение/ETA/исход (шаг 7): «чей этот прогон»
-        services.AddSingleton<ComfyPromptLedger>();
+        // Журнал истории медиа-генераций (шаг 2): единственный писатель data/local-media-history/
+        services.AddSingleton<ComfyRunHistory>();
+        // Реестр prompt_id ComfyUI → происхождение/ETA/исход (шаг 7): «чей этот прогон».
+        // Вызывает журнал: Register → enqueued, MarkStarted → started, Complete → finished
+        services.AddSingleton(sp => new ComfyPromptLedger(
+            time: sp.GetService<TimeProvider>(),
+            history: sp.GetService<ComfyRunHistory>()));
         // Настоящие шаги семплера по WebSocket ComfyUI; без связи — оценка по ETA.
         // isOurs = активные задачи local_*/LoRA (стор) + прогоны из реестра (редакторы)
         services.AddSingleton(sp => new ComfyProgressTracker(

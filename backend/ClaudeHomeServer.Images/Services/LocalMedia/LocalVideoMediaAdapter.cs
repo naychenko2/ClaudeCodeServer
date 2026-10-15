@@ -53,7 +53,7 @@ public sealed class LocalVideoMediaAdapter(
     private static string UpscaleLatentName(string id, string kind) => $"{ComfyClient.InputFolder}-{id}-{kind}.latent";
 
     private sealed class Shot(string id, string prompt, string firstName, string? lastName, (int Width, int Height) size,
-        int seconds, long seed, DateTime at)
+        int seconds, long seed, DateTime at, LocalJobOrigin? origin = null)
     {
         public string Id { get; } = id;
         public string Prompt { get; } = prompt;
@@ -63,6 +63,8 @@ public sealed class LocalVideoMediaAdapter(
         public int Seconds { get; } = seconds;
         public long Seed { get; } = seed;
         public DateTime At { get; } = at;
+        // Метка происхождения съёмки (шаг 2): апскейл — вторая стадия того же прогона, метка та же
+        public LocalJobOrigin? Origin { get; } = origin;
         public volatile string? LatentVideo;
         public volatile string? LatentAudio;
 
@@ -199,7 +201,7 @@ public sealed class LocalVideoMediaAdapter(
             // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
             ledger?.Register(queued.PromptId, request.Origin, LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast));
             Sweep();
-            _shots[queued.PromptId] = new Shot(id, plan.Prompt, firstName, lastName, plan.Size, plan.Seconds, seed, Now);
+            _shots[queued.PromptId] = new Shot(id, plan.Prompt, firstName, lastName, plan.Size, plan.Seconds, seed, Now, request.Origin);
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast), null);
         }
@@ -359,8 +361,10 @@ public sealed class LocalVideoMediaAdapter(
             var graph = ComfyWorkflows.UpscaleVideo(latentVideo, latentAudio, shot.FirstName, shot.Prompt, size.Width, size.Height,
                 frames, shot.Seed, options.Upscale1440Tiled, $"{ComfyWorkflows.OutputFolder}/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
-            // Реестр прогонов (шаг 7): метка происхождения придёт в шаге 23, сейчас origin = null
-            ledger?.Register(queued.PromptId, null, LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled));
+            // Метка происхождения (шаг 2): апскейл — вторая стадия того же прогона, метка съёмки;
+            // раньше origin = null (дыра). null — съёмка поставлена без метки (тесты/старые)
+            ledger?.Register(queued.PromptId, shot.Origin,
+                LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled));
             _upscales[queued.PromptId] = inputs;
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled), null);

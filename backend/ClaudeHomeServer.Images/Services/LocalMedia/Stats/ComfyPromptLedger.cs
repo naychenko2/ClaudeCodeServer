@@ -4,14 +4,16 @@ using ClaudeHomeServer.Services.Media;
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
 // Запись реестра прогонов ComfyUI: кто поставил (Origin — шаг 6), оценка времени (EtaSeconds),
-// когда встал в очередь (EnqueuedAt), когда начался (StartedAt) и чем закончился (Outcome,
-// RunSeconds, CompletedAt). Потокобезопасность — ConcurrentDictionary; поля после EnqueuedAt
-// ставит один поток (MarkStarted/Complete), гонки на них не критичны
+// детали (Details — модель/промпт/параметры, шаг 2), когда встал в очередь (EnqueuedAt), когда
+// начался (StartedAt) и чем закончился (Outcome, RunSeconds, CompletedAt). Потокобезопасность —
+// ConcurrentDictionary; поля после EnqueuedAt ставит один поток (MarkStarted/Complete), гонки
+// на них не критичны
 public sealed class ComfyPromptRecord
 {
     public string PromptId { get; }
     public LocalJobOrigin? Origin { get; }
     public int? EtaSeconds { get; }
+    public LocalRunDetails? Details { get; }
     public DateTimeOffset EnqueuedAt { get; }
     public DateTimeOffset? StartedAt { get; internal set; }
     // completed | failed | cancelled
@@ -19,11 +21,13 @@ public sealed class ComfyPromptRecord
     public int? RunSeconds { get; internal set; }
     public DateTimeOffset? CompletedAt { get; internal set; }
 
-    internal ComfyPromptRecord(string promptId, LocalJobOrigin? origin, int? etaSeconds, DateTimeOffset enqueuedAt)
+    internal ComfyPromptRecord(string promptId, LocalJobOrigin? origin, int? etaSeconds, LocalRunDetails? details,
+        DateTimeOffset enqueuedAt)
     {
         PromptId = promptId;
         Origin = origin;
         EtaSeconds = etaSeconds;
+        Details = details;
         EnqueuedAt = enqueuedAt;
     }
 }
@@ -32,8 +36,9 @@ public sealed class ComfyPromptRecord
 // Покрывает и прямые local_* (они ещё и в LocalMediaJobStore), и прогоны редакторов (картинки/
 // звук/видео), которых в сторе нет. ComfyProgressTracker берёт из него «наш ли это prompt_id».
 // Кольцо завершённых (Recent) хранит записи не старше RecentWindow: статистика смотрит свежее,
-// а память не растёт без конца
-public sealed class ComfyPromptLedger(TimeProvider? time = null)
+// а память не растёт без конца. Журнал истории (ComfyRunHistory, шаг 2) — единственный, кого
+// реестр вызывает: Register → enqueued, MarkStarted → started, Complete → finished
+public sealed class ComfyPromptLedger(TimeProvider? time = null, ComfyRunHistory? history = null)
 {
     // Кольцо завершённых: не старше этого
     public static readonly TimeSpan RecentWindow = TimeSpan.FromHours(1);
@@ -41,25 +46,29 @@ public sealed class ComfyPromptLedger(TimeProvider? time = null)
     private readonly ConcurrentDictionary<string, ComfyPromptRecord> _active = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ComfyPromptRecord> _recent = new(StringComparer.Ordinal);
     private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly ComfyRunHistory? _history = history;
 
     // Постановка прогона: запись с EnqueuedAt. Повторная регистрация того же prompt_id
     // идемпотентна (существующая запись не затирается); повторная постановка после завершения
-    // (запись уже в _recent) не теряет Origin: новый null при старом заданном — держим старый
-    public void Register(string promptId, LocalJobOrigin? origin, int? etaSeconds)
+    // (запись уже в _recent) не теряет Origin: новый null при старом заданном — держим старый.
+    // details — детали для журнала (модель/промпт/параметры); null — не знаем
+    public void Register(string promptId, LocalJobOrigin? origin, int? etaSeconds, LocalRunDetails? details = null)
     {
         if (string.IsNullOrEmpty(promptId)) return;
         if (origin is null && _recent.TryGetValue(promptId, out var recent) && recent.Origin is { } oldOrigin)
             origin = oldOrigin;
         _active.AddOrUpdate(promptId,
-            _ => new ComfyPromptRecord(promptId, origin, etaSeconds, _time.GetUtcNow()),
+            _ => new ComfyPromptRecord(promptId, origin, etaSeconds, details, _time.GetUtcNow()),
             (_, existing) => existing);
         // Новый прогон того же prompt_id — старое завершение не в счёт
         _recent.TryRemove(promptId, out _);
+        _history?.Enqueued(promptId, origin, details);
     }
 
     // Прогон начался (первое наблюдение running). AddOrUpdate: запись времени начала идёт через
     // фабрику словара (атомарна), а не «TryGetValue и запись» (гонка двух наблюдателей);
-    // повторный вызов не двигает время начала (StartedAt уже задан). Неизвестный id — no-op, как раньше
+    // повторный вызов не двигает время начала (StartedAt уже задан). Неизвестный id — no-op, как раньше.
+    // Журнал: started пишется один раз (при первом старте) — карта из снимка /ccs/stats монитора
     public void MarkStarted(string promptId)
     {
         if (!_active.ContainsKey(promptId)) return;
@@ -67,13 +76,18 @@ public sealed class ComfyPromptLedger(TimeProvider? time = null)
             _ => throw new InvalidOperationException("MarkStarted: запись исчезла между проверкой и записью"),
             (_, record) =>
             {
-                if (record.StartedAt is null) record.StartedAt = _time.GetUtcNow();
+                if (record.StartedAt is null)
+                {
+                    record.StartedAt = _time.GetUtcNow();
+                    _history?.Started(promptId, record.Origin);
+                }
                 return record;
             });
     }
 
-    // Перенос в кольцо завершённых; кольцо хранит записи не старше RecentWindow
-    public void Complete(string promptId, string outcome, int? runSeconds)
+    // Перенос в кольцо завершённых; кольцо хранит записи не старше RecentWindow.
+    // error — текст сбоя ComfyUI (недоверенный, обрезанный журналом); null — не failed
+    public void Complete(string promptId, string outcome, int? runSeconds, string? error = null)
     {
         if (_active.TryRemove(promptId, out var record))
         {
@@ -82,6 +96,7 @@ public sealed class ComfyPromptLedger(TimeProvider? time = null)
             record.CompletedAt = _time.GetUtcNow();
             _recent[promptId] = record;
             Prune();
+            _history?.Finished(promptId, record.Origin, record.Outcome, runSeconds, error);
         }
     }
 

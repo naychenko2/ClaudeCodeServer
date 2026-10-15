@@ -433,10 +433,12 @@ public sealed class VideoEditJobService : IDisposable
             prompt, initiator, chosen, ct, framesCropped);
 
         // Метка происхождения прогона (шаг 30): владелец, чат/сцена и тяжёлый ли — из задачи;
-        // вид=видео и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут
+        // вид=видео и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут.
+        // Связь с источником (шаг 2): проект (из области) и job_id задачи — для LocalJobOrigin
         var request = new VideoRequest(quote.Model.Id, scope, prompt, frameA.Bytes, frameB.Bytes, quote.DurationSec,
             quote.Aspect, quote.Sound, parameters, input.Seed, quote.Format,
-            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: IsLocalHeavy(job.Quote));
+            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: IsLocalHeavy(job.Quote),
+            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id);
         job.Completion = Task.Run(() => RunAsync(job, engine, (variant, progress, token) =>
             engine.RunAsync(request.Seed is { } seed ? request with { Seed = seed + variant - 1 } : request, progress, token)));
 

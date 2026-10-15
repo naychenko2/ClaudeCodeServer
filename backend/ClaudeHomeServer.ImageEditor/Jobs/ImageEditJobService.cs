@@ -356,9 +356,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         IReadOnlyList<FacePass>? facePasses)
     {
         // Метка происхождения прогона (шаг 28): владелец, чат и тяжёлый ли — из задачи;
-        // вид=картинка и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут
+        // вид=картинка и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут.
+        // Связь с источником (шаг 2): проект и job_id задачи — для LocalJobOrigin
         requests = requests
-            .Select(r => r with { OwnerId = job.OwnerId, SessionId = job.ChatSessionId, Heavy = HeavyOf(job) })
+            .Select(r => r with { OwnerId = job.OwnerId, SessionId = job.ChatSessionId, Heavy = HeavyOf(job),
+                ProjectId = job.ProjectId, SourceJobId = job.Id })
             .ToList();
         var request = requests[0];
         ImageEditResult result;

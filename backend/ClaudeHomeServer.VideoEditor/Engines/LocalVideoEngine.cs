@@ -318,9 +318,11 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         var run = new LocalVideoRequest(req.Text, first.Bytes, req.FrameB?.Bytes, req.DurationSec, size, fast, req.Seed);
         // Метка происхождения прогона (шаг 30): владелец, чат/сцена, вид=видео, операция, тяжёлый ли.
         // «видео 1440p» — из операции и ступени задачи (PostStep=upscale), размер не пересчитываем;
-        // данные у движка есть из задачи (VideoEditJobService кладёт их в запрос); без задачи (тесты) — null
+        // данные у движка есть из задачи (VideoEditJobService кладёт их в запрос); без задачи (тесты) — null.
+        // Связь с источником (шаг 2): источник=video-editor, проект и job_id задачи
         if (req.OwnerId is { } owner)
-            run = run with { Origin = new LocalJobOrigin(owner, req.SessionId, "video", OpName(req), req.Heavy) };
+            run = run with { Origin = new LocalJobOrigin(owner, req.SessionId, "video", OpName(req), req.Heavy,
+                ProjectId: req.ProjectId, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: req.SourceJobId) };
         return (run, null);
     }
 

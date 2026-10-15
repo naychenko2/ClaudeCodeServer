@@ -103,9 +103,13 @@ public sealed partial class LocalMediaService(
         return true;
     }
 
-    // Метка происхождения (шаг 6) из задачи: кто, из какой сессии, вид, операция, тяжёлая ли
+    // Метка происхождения (шаг 6) из задачи: кто, из какой сессии, вид, операция, тяжёлая ли.
+    // Связь с источником (шаг 2): проект, источник (local-media | lora) и job_id задачи
     private static LocalJobOrigin OriginOf(LocalMediaJob job) =>
-        new(job.OwnerId, job.SessionId, JobKind(job.Op), job.Op, job.Heavy);
+        new(job.OwnerId, job.SessionId, JobKind(job.Op), job.Op, job.Heavy,
+            ProjectId: job.ProjectId,
+            Source: job.Op == LocalMediaOps.LoraTrain ? LocalJobOrigin.SourceLora : LocalJobOrigin.SourceLocalMedia,
+            SourceJobId: job.Id);
 
     // Вид прогона по операции: image | video | audio | train | other
     private static string JobKind(string op) => op switch

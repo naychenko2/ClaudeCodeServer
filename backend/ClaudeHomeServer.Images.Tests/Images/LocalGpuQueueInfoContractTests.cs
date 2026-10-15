@@ -135,4 +135,51 @@ public class LocalGpuQueueInfoContractTests
         root.TryGetProperty("running", out var running).Should().BeTrue("camelCase-имя running");
         running.ValueKind.Should().Be(JsonValueKind.True, "running=true пишется как true");
     }
+
+    // Новые поля LocalJobOrigin (шаг 2): Source и SourceJobId не в ComfyJobRow/ComfyOwnerSnapshot —
+    // наружу REST не утекают. ProjectId — существующее поле ComfyJobRow, не «новое»
+    [Fact]
+    public void ComfyJobRow_НовыеПоляLocalJobOrigin_НеУтекают()
+    {
+        var origin = new LocalJobOrigin("owner-1", "sess-1", "image", "generate", Heavy: false,
+            ProjectId: "proj-1", Source: LocalJobOrigin.SourceLocalMedia, SourceJobId: "lm_1");
+
+        var row = new ComfyJobRow(
+            Kind: origin.Kind, Op: origin.Op, Heavy: origin.Heavy,
+            OwnerId: origin.OwnerId, SessionId: origin.SessionId, ProjectId: origin.ProjectId,
+            Foreign: null, Steps: null, Percent: null, PercentExact: false,
+            EtaSeconds: null, RemainingSeconds: null, StartInSeconds: null, StartedAt: null);
+
+        var json = JsonSerializer.Serialize(row, Wire);
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.TryGetProperty("source", out _).Should().BeFalse("Source — новый, в ComfyJobRow его нет");
+        doc.RootElement.TryGetProperty("sourceJobId", out _).Should().BeFalse("SourceJobId — новый, в ComfyJobRow его нет");
+    }
+
+    [Fact]
+    public void ComfyOwnerSnapshot_НовыеПоляLocalJobOrigin_НеУтекают()
+    {
+        var origin = new LocalJobOrigin("owner-1", "sess-1", "image", "generate", Heavy: false,
+            ProjectId: "proj-1", Source: LocalJobOrigin.SourceImageEditor, SourceJobId: "ie_1");
+
+        var own = new ComfyJobRow(
+            Kind: origin.Kind, Op: origin.Op, Heavy: origin.Heavy,
+            OwnerId: origin.OwnerId, SessionId: origin.SessionId, ProjectId: origin.ProjectId,
+            Foreign: null, Steps: null, Percent: null, PercentExact: false,
+            EtaSeconds: null, RemainingSeconds: null, StartInSeconds: null, StartedAt: null);
+
+        var snapshot = new ClaudeHomeServer.Services.Images.LocalMedia.ComfyOwnerSnapshot(
+            Configured: true, Status: "working", DownSince: null,
+            SlotsUsed: 1, SlotsLimit: 4, Own: [own], Foreign: []);
+
+        var json = JsonSerializer.Serialize(snapshot, Wire);
+        using var doc = JsonDocument.Parse(json);
+
+        foreach (var row in doc.RootElement.GetProperty("own").EnumerateArray())
+        {
+            row.TryGetProperty("source", out _).Should().BeFalse();
+            row.TryGetProperty("sourceJobId", out _).Should().BeFalse();
+        }
+    }
 }

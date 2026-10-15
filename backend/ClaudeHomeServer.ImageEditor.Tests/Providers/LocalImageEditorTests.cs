@@ -405,11 +405,13 @@ public class LocalImageEditorTests : IDisposable
         var result = await Editor(media).RunAsync(request, new SyncProgress(reports.Add), default);
 
         result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
-        // Метка происхождения: владелец, чат, вид=картинка, операция (camelCase), тяжёлый ли
+        // Метка происхождения: владелец, чат, вид=картинка, операция (camelCase), тяжёлый ли.
+        // Связь с источником (шаг 2): источник=image-editor; проект/job_id — null (тест без задачи)
         var origin = media.Submitted.Should().ContainSingle().Subject.Origin;
         origin.Should().NotBeNull("запрос из задачи несёт владельца — метка заполняется");
         origin!.Should().Be(new ClaudeHomeServer.Services.Media.LocalJobOrigin(
-            "user-a", "chat-1", "image", "generate", false));
+            "user-a", "chat-1", "image", "generate", false,
+            ProjectId: null, Source: ClaudeHomeServer.Services.Media.LocalJobOrigin.SourceImageEditor, SourceJobId: null));
         // Снимок очереди GPU из опроса прокинут в отчёт прогресса (не в статус/трату)
         reports.Should().Contain(p => p.Gpu != null && p.Gpu == gpu, "отчёт несёт живой снимок очереди GPU");
     }

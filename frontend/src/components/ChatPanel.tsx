@@ -35,6 +35,7 @@ import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationSt
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
+import { missReasonLabel, type TurnCacheInfo } from '../lib/promptCache';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
@@ -224,14 +225,18 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 // создаётся единожды и переживает любой пересчёт turnMeta. Иначе новая ссылка
 // {read,creation} на каждую дельту пробивала React.memo у всех карточек хода.
 function memoizedCacheEntry(
-  map: WeakMap<ChatItem, { read: number; creation: number }>,
+  map: WeakMap<ChatItem, TurnCacheInfo>,
   result: ChatItem,
   read: number,
   creation: number,
-): { read: number; creation: number } {
+): TurnCacheInfo {
   const cached = map.get(result);
   if (cached) return cached;
-  const entry = { read, creation };
+  // Причина промаха первого вызова хода (diagnostics.cache_miss_reason) — строкой в подвале
+  const pc = result.kind === 'result' ? result.promptCache : undefined;
+  const entry: TurnCacheInfo = pc?.missReason
+    ? { read, creation, miss: { label: missReasonLabel(pc.missReason), tokens: pc.missedTokens ?? undefined } }
+    : { read, creation };
   map.set(result, entry);
   return entry;
 }
@@ -1669,7 +1674,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // не видит, поэтому считаем здесь и отдаём пропами.
   // ref-хранилище кеш-объектов хода по ссылке result-элемента — переживает пересчёт
   // turnMeta на каждой стрим-дельте, сохраняя стабильные ссылки для React.memo
-  const cacheByResultRef = useRef<WeakMap<ChatItem, { read: number; creation: number }>>(new WeakMap());
+  const cacheByResultRef = useRef<WeakMap<ChatItem, TurnCacheInfo>>(new WeakMap());
 
   const turnMeta = useMemo(() => {
     const snapshots: (string | undefined)[] = new Array(items.length);
@@ -1685,9 +1690,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // Объект берём из WeakMap по ссылке result: он не пересоздаётся на дельту,
     // иначе React.memo на ChatItemView пробивался бы у всех карточек хода.
     const cacheByResult = cacheByResultRef.current;
-    const cache: ({ read: number; creation: number } | undefined)[] = new Array(items.length);
+    const cache: (TurnCacheInfo | undefined)[] = new Array(items.length);
     let currentTokens: number | undefined;
-    let currentCache: { read: number; creation: number } | undefined;
+    let currentCache: TurnCacheInfo | undefined;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       if (it.kind === 'result') {
@@ -2601,6 +2606,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       lastMechanic={lastMechanic}
       onOpenSidebar={onOpenSidebar}
       ctxEstimate={ctxEstimate}
+      items={items}
       isWaiting={isWaiting}
       isCompacting={isCompacting}
       canCompact={canCompact}

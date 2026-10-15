@@ -1,5 +1,6 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone, DatabaseZap } from 'lucide-react';
+import type { TurnCacheInfo } from '../../lib/promptCache';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -289,7 +290,7 @@ function PostActionBar({ align = 'left', children }: {
 function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
   model?: string; ts?: number; promptSnapshotId?: string;
   turnContextTokens?: number | null;
-  turnCache?: { read: number; creation: number } | null;
+  turnCache?: TurnCacheInfo | null;
 }) {
   const label = useModelLabel(model);
   const time = formatPostTime(ts);
@@ -298,7 +299,7 @@ function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }:
   const project = useContext(ChatProjectContext);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const canOpen = !!(promptSnapshotId && sessionId);
-  if (!model && !time && !canOpen) return null;
+  if (!model && !time && !canOpen && !turnCache?.miss) return null;
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
@@ -341,6 +342,15 @@ function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }:
           title={timeFull ?? undefined}>
           <Clock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
           {time}
+        </span>
+      )}
+      {/* Ход начался с промаха кэша — причину назвал сам API (diagnostics.cache_miss_reason) */}
+      {turnCache?.miss && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0 }}
+          title={`Кэш промпта переписан: ${turnCache.miss.label}`
+            + (turnCache.miss.tokens ? ` · ${turnCache.miss.tokens.toLocaleString('ru')} токенов` : '')}>
+          <DatabaseZap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>кэш переписан: {turnCache.miss.label}</span>
         </span>
       )}
     </span>
@@ -461,7 +471,7 @@ function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts
   text: string; online: boolean; onRetry: () => void; onBranch?: () => Promise<unknown>;
   streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
-  turnCache?: { read: number; creation: number } | null;
+  turnCache?: TurnCacheInfo | null;
   // Плавающий элемент над текстом (аватар автора в персон-чате): первые строки ответа
   // обтекают его справа, дальше текст идёт полной шириной — под аватаром не копится
   // пустая полоса на всю высоту длинного сообщения
@@ -656,7 +666,7 @@ interface ItemProps {
   // undefined — история до появления снимков либо пост сабагента: кнопки не будет
   promptSnapshotId?: string;
   turnContextTokens?: number | null;
-  turnCache?: { read: number; creation: number } | null;
+  turnCache?: TurnCacheInfo | null;
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
   // рендерится секцией внутри карточки консультации (передаёт ChatPanel только для
   // персона-вызовов Task)
@@ -1278,7 +1288,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           <TextMessageView text={bodyText} online={online} onRetry={onRetry} onBranch={onBranch} streaming={streaming}
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
-            turnContextTokens={turnContextTokens} turnCache={turnCache}
+            turnContextTokens={turnContextTokens} turnCache={item.parentToolUseId ? undefined : turnCache}
             lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined}
             // Выжимка для озвучки — она же краткое содержание ответа для глаз. Внутри
             // пузыря: это хвост ЭТОГО ответа, а не отдельная карточка ленты

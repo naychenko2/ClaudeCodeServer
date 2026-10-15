@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
-import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
+import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
+import { promptCacheState, rewriteCostUsd, cacheLeftText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { usePromptCache } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
@@ -143,11 +145,13 @@ function RateRow({ w, pip }: { w: RateWindow; pip?: ReactNode }) {
 // wide — более широкий поповер на узких раскладках (мобил/планшет: для объединённого
 // чипа с несколькими секциями — шире → меньше переносов → ниже по высоте, помещается на экран).
 // isCompact — планшет (использует мобильную механику поповера wide).
-function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact, tone, ring, wide, pulse, resetKey, children }: {
+function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact, tone, ring, wide, pulse, dot, resetKey, children }: {
   label?: string; amount: React.ReactNode; title: string; ariaLabel?: string; isMobile?: boolean; isCompact?: boolean;
   // Оформленная подсказка вместо нативного title (тот тогда не ставится — иначе две подсказки)
   tip?: React.ReactNode;
   tone?: 'warn' | 'danger'; ring?: boolean; wide?: boolean; pulse?: boolean;
+  // Точка-статус в нижнем правом углу (кэш промпта на мобильной пилюле)
+  dot?: React.ReactNode;
   // Попап показывает данные конкретного чата — при смене чата закрываем
   resetKey?: string;
   children: React.ReactNode;
@@ -192,6 +196,7 @@ function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact,
       {tip ? <Tooltip content={tip} align="end" disabled={open}>{button}</Tooltip> : button}
       {/* Пульс-индикатор «на бегу» — сигнал активного workflow без отдельного чипа в ряду */}
       {pulse && <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: `2px solid ${C.bgPanel}`, animation: 'pulsedot 1.2s ease-in-out infinite', pointerEvents: 'none' }} />}
+      {dot}
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -678,6 +683,96 @@ export function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenSt
   );
 }
 
+// === Индикатор TTL prompt cache ===
+// Данные — lib/promptCache.ts, таймер — usePromptCache: тикает только сам индикатор.
+// unknown (сторонний провайдер, локальный движок, история до поля) — индикатора нет вовсе.
+type KnownCacheStatus = Exclude<PromptCacheStatus, 'unknown'>;
+const CACHE_STATUS_TEXT: Record<KnownCacheStatus, string> = { warm: 'тёплый', expiring: 'скоро остынет', cold: 'остыл' };
+// Тёплый — приглушённо, остывающий — тоном предупреждения, остывший — нейтрально
+const CACHE_FACE_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, expiring: RATE_COLORS.warn.text, cold: C.textSecondary };
+const CACHE_DOT_COLOR: Record<KnownCacheStatus, string> = { warm: C.success, expiring: C.warning, cold: C.textMuted };
+
+// Есть ли в чате что показывать: сравнение со временем тут не нужно, только факт якоря
+function hasPromptCacheInfo(items: ChatItem[]): boolean {
+  return promptCacheState(items, 0).status !== 'unknown';
+}
+
+// Подпись чипа: во время хода якорь вот-вот сдвинется — остаток не показываем
+function cacheFaceText(state: PromptCacheState, isWaiting: boolean): string {
+  if (isWaiting) return 'в работе';
+  if (state.status === 'cold') return 'остыл';
+  return cacheLeftText(state.remainingMs ?? 0);
+}
+
+// Тело попапа: срок, остаток, префикс, последний промах и цена перезаписи остывшего кэша
+function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling }) {
+  const { status, ttl, prefixTokens, lastMiss, remainingMs } = state;
+  const cold = status === 'cold';
+  const rewrite = useMemo(
+    () => (cold && ttl && prefixTokens ? rewriteCostUsd(items, ttl, prefixTokens) : undefined),
+    [items, cold, ttl, prefixTokens]);
+  if (status === 'unknown') return null;
+  return (
+    <>
+      <div style={badgeTitleStyle}>Кэш промпта</div>
+      <BadgeRow k="Состояние" v={CACHE_STATUS_TEXT[status]} />
+      {!cold && remainingMs !== undefined && <BadgeRow k="Осталось" v={cacheLeftText(remainingMs)} />}
+      {ttl && <BadgeRow k="Срок кэша" v={ttl === '1h' ? '1 час' : '5 минут'} />}
+      {prefixTokens !== undefined && <BadgeRow k="Префикс" v={`${fmtTokens(prefixTokens)} токенов`} />}
+      <div style={badgeSectionStyle}>Последний промах</div>
+      <div style={{ ...meterSubStyle, color: lastMiss ? C.textSecondary : C.textMuted }}>
+        {lastMiss
+          ? <>{lastMiss.label}{lastMiss.tokens ? ` · переписано ${fmtTokens(lastMiss.tokens)} токенов` : ''}</>
+          : 'в этом чате не было'}
+      </div>
+      <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
+        {cold
+          ? <>Следующий ход перепишет кэш заново{prefixTokens !== undefined ? ` — ≈${fmtTokens(prefixTokens)} токенов` : ''}
+              {rewrite !== undefined ? `, ≈${fmtUsd(rewrite)}${billing === 'subscription' ? ' по API-тарифу' : ''}` : ''}.</>
+          : 'Ход до конца срока читает префикс из кэша — в десять раз дешевле обычного входа. Каждый ход продлевает срок.'}
+      </div>
+    </>
+  );
+}
+
+// Десктопный чип рядом с кольцевой пилюлей: «кэш 42 мин», «кэш остыл», попап по клику
+function PromptCacheBadge({ items, isWaiting, billing, resetKey }: {
+  items: ChatItem[]; isWaiting: boolean; billing: ClaudeBilling; resetKey?: string;
+}) {
+  const state = usePromptCache(items);
+  if (state.status === 'unknown') return null;
+  const face = cacheFaceText(state, isWaiting);
+  const expiring = state.status === 'expiring' && !isWaiting;
+  const title = `Кэш промпта: ${isWaiting ? 'идёт ход' : CACHE_STATUS_TEXT[state.status]}`
+    + (state.status !== 'cold' && !isWaiting ? `, осталось ${face}` : '') + ' — нажмите для деталей';
+  return (
+    <BadgeShell label="кэш" title={title} ariaLabel={title} resetKey={resetKey}
+      tone={expiring ? 'warn' : undefined}
+      amount={<span style={{ color: isWaiting ? C.textMuted : CACHE_FACE_COLOR[state.status], fontWeight: state.status === 'warm' || isWaiting ? 600 : 700 }}>{face}</span>}>
+      <PromptCacheDetails items={items} state={state} billing={billing} />
+    </BadgeShell>
+  );
+}
+
+// Мобила: отдельного чипа нет — точка-статус на кольцевой пилюле
+function PromptCacheDot({ items }: { items: ChatItem[] }) {
+  const state = usePromptCache(items);
+  if (state.status === 'unknown') return null;
+  return (
+    <span aria-hidden style={{
+      position: 'absolute', bottom: -2, right: -2, width: 8, height: 8, borderRadius: '50%',
+      background: CACHE_DOT_COLOR[state.status], border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
+    }} />
+  );
+}
+
+// Мобила: детали кэша — секцией шторки кольцевой пилюли
+function PromptCacheSection({ items, billing, style }: { items: ChatItem[]; billing: ClaudeBilling; style: React.CSSProperties }) {
+  const state = usePromptCache(items);
+  if (state.status === 'unknown') return null;
+  return <div style={style}><PromptCacheDetails items={items} state={state} billing={billing} /></div>;
+}
+
 // Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
 function worseTone(a?: 'warn' | 'danger', b?: 'warn' | 'danger'): 'warn' | 'danger' | undefined {
   if (a === 'danger' || b === 'danger') return 'danger';
@@ -708,11 +803,15 @@ export function RingPillBadge(props: {
   resetKey?: string;
   // Только витрина: показать состояние 5.2r без смены настройки ОС
   forceReducedMotion?: boolean;
+  // Лента чата для индикатора кэша промпта (только мобила/планшет: точка на пилюле и
+  // секция в шторке; на десктопе у кэша свой чип)
+  cacheItems?: ChatItem[];
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, isMobile, isCompact,
   } = props;
   const activeWorkflow = isCompact ? props.activeWorkflow : undefined;
+  const cacheItems = isCompact ? props.cacheItems : undefined;
   const wfActive = !!activeWorkflow;
 
   // Что доступно к показу в каждой секции
@@ -843,6 +942,7 @@ export function RingPillBadge(props: {
       tone={tone}
       wide={isCompact}
       pulse={wfActive}
+      dot={cacheItems && <PromptCacheDot items={cacheItems} />}
       resetKey={props.resetKey}
       title={title}
       tip={tip}
@@ -872,6 +972,7 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
+      {cacheItems && <PromptCacheSection items={cacheItems} billing={billing} style={sectionDivider} />}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />
@@ -904,6 +1005,8 @@ interface ChatHeaderBarProps {
   lastMechanic?: TeamMechanicId | null;
   onOpenSidebar?: () => void;
   ctxEstimate: ContextEstimate;
+  // Лента чата — источник индикатора кэша промпта (result.promptCache)
+  items: ChatItem[];
   isWaiting: boolean;
   isCompacting: boolean;
   canCompact: boolean;
@@ -1043,7 +1146,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, items, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1469,8 +1572,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       balance={provBalance} billing={billing} windows={limitWindows}
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
+      cacheItems={items}
     />
   );
+  // Чип кэша промпта — только на десктопе: на узких раскладках кэш живёт точкой на
+  // кольцевой пилюле и секцией её шторки. Таймер внутри чипа, шапка по нему не перерисовывается
+  const cacheBadge = <PromptCacheBadge items={items} isWaiting={isWaiting} billing={billing} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
   const spendBadge = spendBadgeSlot?.render?.({ sessionId: session.id, chatName: session.name, resultCount: cost.results, isMobile: isCompact });
@@ -1489,6 +1596,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // fal/glif/расход, каждую можно убрать глазиком
     <>
       {badgeVisible('cost') && ringPill()}
+      {badgeVisible('cache') && cacheBadge}
       {badgeVisible('fal') && <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />}
       {badgeVisible('glif') && <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />}
       {badgeVisible('spend') && spendBadge}
@@ -1675,12 +1783,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // идёт прогон, fal/glif — если были генерации), и полный каталог в списке врал
   // бы про состав шапки. Скрытая глазиком пилюля из списка не исчезает — её
   // доступность считается по данным, а не по видимости
+  // Чип кэша доступен только у родного Claude с якорем — у сторонних провайдеров его нет
+  const cacheAvailable = useMemo(() => hasPromptCacheInfo(items), [items]);
   const badgeAvailable: Record<ChatBadgeKey, boolean> = {
     mechanic: !!lastMechanic,
     workflow: !!activeWorkflow,
     // Контекст живёт в кольцевой пилюле вместе с лимитами — её ключ cost
     cost: hasContextInfo(ctxEstimate)
       || (isCliProvider ? hasProviderCostInfo(cost, provBalance) : hasClaudeCostInfo(cost, limitWindows)),
+    cache: cacheAvailable,
     fal: falCost.total > 0,
     glif: glifCost.count > 0,
     // У расхода собственный источник (SpendBadge грузит его сам), снаружи виден
@@ -1698,6 +1809,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'mechanic': return mechanicBadge;
       case 'workflow': return workflowBadge;
       case 'cost': return ringPill(true);
+      case 'cache': return cacheBadge;
       case 'fal': return <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />;
       case 'glif': return <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />;
       case 'spend': return spendBadge;

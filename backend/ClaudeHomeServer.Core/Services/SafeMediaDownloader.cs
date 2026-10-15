@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 
 namespace ClaudeHomeServer.Services;
 
@@ -18,8 +17,8 @@ public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, str
 /// Скачивание результата генерации по ссылке из ответа поставщика (fal, glif, Higgsfield)
 /// и загрузка образца по выданной поставщиком ссылке (<see cref="UploadAsync"/>).
 /// Ссылка приходит извне, поэтому сервер не должен стать прокси во внутреннюю сеть:
-/// только https, хост проверяется <see cref="SsrfGuard"/> до запроса и ещё раз в
-/// <c>ConnectCallback</c> по адресу реального соединения (DNS rebinding), редиректы
+/// только https, хост проверяется <see cref="SsrfGuard"/> до запроса и ещё раз транспортом
+/// <see cref="SsrfSafeHandler"/> по адресу реального соединения (DNS rebinding), редиректы
 /// разбираются вручную с той же проверкой на каждом шаге, тело ограничено потолком.
 /// Отказ возвращается значением; исключение летит только при отмене снаружи.
 /// </summary>
@@ -84,6 +83,10 @@ public sealed class SafeMediaDownloader
         {
             return MediaDownloadResult.Fail("timeout");
         }
+        catch (HttpRequestException ex) when (ex.InnerException is SsrfBlockedException blocked)
+        {
+            return MediaDownloadResult.Fail(Blocked(blocked));
+        }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
             return MediaDownloadResult.Fail("network");
@@ -114,6 +117,10 @@ public sealed class SafeMediaDownloader
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return "timeout";
+        }
+        catch (HttpRequestException ex) when (ex.InnerException is SsrfBlockedException blocked)
+        {
+            return Blocked(blocked);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
@@ -157,47 +164,19 @@ public sealed class SafeMediaDownloader
     }
 
     /// <summary>
-    /// Боевой транспорт: без прокси (egress-прокси релеит на приватные адреса, см. ADR-005),
-    /// без авто-редиректов и кук, адрес соединения резолвится и проверяется в момент connect.
+    /// Боевой транспорт — общий SSRF-примитив <see cref="SsrfSafeHandler"/>: без прокси, без
+    /// авто-редиректов и кук, адрес соединения резолвится и проверяется в момент connect.
+    /// <paramref name="resolve"/> — резолвер имени для тестов; null — системный DNS.
     /// </summary>
-    public static SocketsHttpHandler CreateHandler() => new()
-    {
-        AllowAutoRedirect = false,
-        UseCookies = false,
-        UseProxy = false,
-        AutomaticDecompression = DecompressionMethods.None,
-        ConnectTimeout = TimeSpan.FromSeconds(10),
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        ConnectCallback = ConnectAsync,
-    };
+    public static SocketsHttpHandler CreateHandler(Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null) =>
+        SsrfSafeHandler.Create(new SsrfSafeHandlerOptions
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            AutomaticDecompression = DecompressionMethods.None,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            Resolve = resolve,
+        });
 
-    private static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
-    {
-        var address = await ResolvePublicAsync(context.DnsEndPoint.Host, ct)
-            ?? throw new HttpRequestException($"Адрес {context.DnsEndPoint.Host} не публичный — соединение запрещено");
-        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-        try
-        {
-            await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), ct);
-            return new NetworkStream(socket, ownsSocket: true);
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
-    }
-
-    /// <summary>Адрес для соединения, если ВСЕ адреса хоста публичные; иначе null (fail-closed, как у SsrfGuard).</summary>
-    internal static async Task<IPAddress?> ResolvePublicAsync(string host, CancellationToken ct)
-    {
-        IPAddress[] addresses;
-        if (IPAddress.TryParse(host, out var literal)) addresses = [literal];
-        else
-        {
-            try { addresses = await Dns.GetHostAddressesAsync(host, ct); }
-            catch (SocketException) { return null; }
-        }
-        return addresses.Length > 0 && addresses.All(SsrfGuard.IsPublic) ? addresses[0] : null;
-    }
+    // Отказ проверки в момент connect — тот же код, что у проверки до запроса
+    private static string Blocked(SsrfBlockedException blocked) => blocked.DnsFailed ? "dns-failed" : "private-address";
 }

@@ -34,7 +34,7 @@ public sealed class ReaderSubsystem : IAppSubsystem
             client.DefaultRequestHeaders.AcceptLanguage.ParseAdd(
                 config.GetValue("Reader:AcceptLanguage", "en-US,en;q=0.9")!);
         })
-        .ConfigurePrimaryHttpMessageHandler(ReaderHttpHandlerFactory.Create);
+        .ConfigurePrimaryHttpMessageHandler(() => ReaderHttpHandlerFactory.Create());
 
         services.AddSingleton<ReaderQuotaService>();
         services.AddSingleton<ReaderService>();

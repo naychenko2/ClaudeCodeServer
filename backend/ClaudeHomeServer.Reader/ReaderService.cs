@@ -554,7 +554,7 @@ public sealed partial class ReaderService(
 
     private static ReaderErrorCode MapHttpException(HttpRequestException ex)
     {
-        if (ex.InnerException is ReaderConnectBlockedException blocked)
+        if (ex.InnerException is SsrfBlockedException blocked)
             return blocked.DnsFailed ? ReaderErrorCode.DnsFailed : ReaderErrorCode.LocalAddress;
 
         return ex.HttpRequestError switch

@@ -1223,7 +1223,7 @@ export type ServerMessage = { sessionId: string } & (
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
   // на этом событии лента клеит модель постам текущего хода
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number }
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number; promptCache?: PromptCacheInfo | null }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
@@ -1432,6 +1432,20 @@ export interface UsageInfo {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+}
+
+// Состояние prompt cache на конец хода (ResultMessage.PromptCache бэкенда). Только у родного
+// Claude; у сторонних провайдеров и локального движка поля нет — индикатор скрыт.
+// ttl — срок последней ЗАПИСИ кэша (null — запись ещё не видели, берётся из прошлых result);
+// anchorAtMs — unix-мс часов сервера: приход message_start последнего вызова с кэшем;
+// missReason/missedTokens — diagnostics.cache_miss_reason первого вызова хода;
+// prefixTokens — размер контекста последнего запроса (сколько перепишет остывший кэш).
+export interface PromptCacheInfo {
+  ttl?: '1h' | '5m' | null;
+  anchorAtMs?: number | null;
+  missReason?: string | null;
+  missedTokens?: number | null;
+  prefixTokens: number;
 }
 
 // Preview: запускаемый сервис проекта (инференс из манифеста или из .claude/launch.json)
@@ -2171,8 +2185,8 @@ export type ChatItem =
   | { kind: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   // durationApiMs — время запросов к API за ход (без инструментов и ожиданий): знаменатель
   // скорости генерации в плашке итога. Нет поля (старая история, локальный движок) — скорость
-  // считается по durationMs
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number }
+  // считается по durationMs. promptCache — состояние кэша для индикатора TTL (lib/promptCache.ts)
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number; promptCache?: PromptCacheInfo | null }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }

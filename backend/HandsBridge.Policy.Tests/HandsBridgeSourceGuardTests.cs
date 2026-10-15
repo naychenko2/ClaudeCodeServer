@@ -43,6 +43,8 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.KeyboardControl, "Tools/KeyboardControlTool.cs", "HandsGate.Policy.CheckKeyboard(" },
         // OCR (A4): цель как у снимка, окно — не запрещённое приложение; гейт до первого действия
         { HandsTools.Ocr, "Tools/OcrTool.cs", "HandsGate.Policy.CheckOcr(" },
+        // Пакет (D2e): CheckBatch до первого шага; шаги — методы инструментов, не сервисы ввода
+        { HandsTools.HandsBatch, "Tools/HandsBatchTool.cs", "HandsGate.Policy.CheckBatch(" },
     };
 
     [Fact]
@@ -57,7 +59,7 @@ public class HandsBridgeSourceGuardTests
         // Инструменты уже в HandsTools.All, но в мосту появятся в D2c–D2e — до того их отсутствие норма.
         var notYetInBridge = new[]
         {
-            HandsTools.ClipboardText, HandsTools.HandsBatch,
+            HandsTools.ClipboardText,
             // ScanDocument убран из списка: инструмент scan_document теперь в мосту (A5).
             HandsTools.ScanCanvas,
         };
@@ -719,6 +721,47 @@ public class HandsBridgeSourceGuardTests
 
         Assert.True(offenders.Count == 0,
             "Прямая запись файлов вне Hands/HandsProjectFiles.cs:\n" + string.Join("\n", offenders));
+    }
+
+    /// <summary>
+    /// Пакет <c>hands_batch</c> (D2e): шаги зовут МЕТОДЫ инструментов (<c>KeyboardControlTool</c>,
+    /// <c>MouseControlTool</c>), а не сервисы ввода — иначе шаг обошёл бы гейт и проверку окна своего
+    /// инструмента. Единственное обращение к сервису — <c>ReleaseAllKeysAsync</c> и только в сеаме
+    /// отпускания удержанных клавиш. Разбор Roslyn: любой член <c>MouseInputService</c>/<c>KeyboardInputService</c>,
+    /// кроме этого, — отказ; <c>CheckBatch</c> стоит ДО цикла шагов; отпускание вызвано в <c>finally</c>.
+    /// </summary>
+    [Fact]
+    public void Batch_calls_tool_methods_not_input_services_and_releases_in_finally()
+    {
+        var root = ParseTree(Read("Tools/HandsBatchTool.cs"));
+        var calls = root.DescendantNodes().OfType<InvocationExpressionSyntax>().ToList();
+
+        // Сервисы ввода: только отпускание клавиш
+        foreach (var call in calls.Where(c => IsMouseInputServiceCall(c) || IsKeyboardInputServiceCall(c)))
+        {
+            var member = (MemberAccessExpressionSyntax)call.Expression;
+            Assert.True(
+                IsKeyboardInputServiceCall(call) && member.Name.Identifier.Text == "ReleaseAllKeysAsync",
+                $"пакет зовёт сервис ввода напрямую: «{call.Expression}» (шаг обязан идти через метод инструмента)");
+        }
+        Assert.DoesNotContain("SendInput", Read("Tools/HandsBatchTool.cs"));
+
+        // Шаги — вызовы методов инструментов
+        Assert.Contains(calls, c => c.Expression.ToString() == "KeyboardControlTool.ExecuteAsync");
+        Assert.Contains(calls, c => c.Expression.ToString() == "MouseControlTool.ExecuteAsync");
+
+        // CheckBatch — до цикла шагов
+        var execute = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == "ExecuteAsync");
+        var gate = execute.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Single(c => c.Expression.ToString() == "HandsGate.Policy.CheckBatch");
+        var loop = execute.DescendantNodes().OfType<ForStatementSyntax>().First();
+        Assert.True(gate.SpanStart < loop.SpanStart, "CheckBatch стоит после цикла шагов");
+
+        // Отпускание клавиш — в finally
+        var finallyBlock = execute.DescendantNodes().OfType<TryStatementSyntax>()
+            .Select(t => t.Finally?.Block)
+            .FirstOrDefault(b => b is not null && b.ToString().Contains("ReleaseHeldKeysAsync"));
+        Assert.NotNull(finallyBlock);
     }
 
     // ─── Roslyn-хелперы ───────────────────────────────────────────────────────────────────────

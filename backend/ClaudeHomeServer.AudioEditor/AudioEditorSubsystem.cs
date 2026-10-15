@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.AudioEditor;
@@ -45,6 +46,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
             workspace.RetainedJobs = sp.GetRequiredService<Threads.AudioThreadStore>().ReferencedJobs;
             return workspace;
         });
+        // Источник результата для истории (ADR-030 §3): основной файл роли main в рабочей папке data/audio-editor
+        services.AddSingleton<IMediaHistoryResultSource, Jobs.AudioEditorHistorySource>();
         // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));

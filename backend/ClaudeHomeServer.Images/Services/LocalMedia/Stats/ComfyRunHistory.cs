@@ -48,6 +48,10 @@ public sealed class ComfyRunHistory
     // Карта из снимка /ccs/stats монитора; null — монитора нет или не сообщает
     private ComfyCcsStats? Card() => _services.GetService<ComfyQueueMonitor>()?.Ccs;
 
+    // Индекс в памяти (шаг 3): необязательный наблюдатель; без него журнал пишется, а индекс
+    // перечитает файл при старте
+    private IMediaHistoryEventSink? Sink() => _services.GetService<IMediaHistoryEventSink>();
+
     // Событие постановки: модель/промпт/параметры из details
     public void Enqueued(string promptId, LocalJobOrigin? origin, LocalRunDetails? details)
     {
@@ -73,18 +77,20 @@ public sealed class ComfyRunHistory
             error: error is { Length: > MaxErrorLength } e ? e[..MaxErrorLength] : error);
     }
 
-    // Запись строки v:1 в файл дня; дозапись под lock, каталог создаётся при первой записи
+    // Запись строки v:1 в файл дня; дозапись под lock, каталог создаётся при первой записи.
+    // ts считается один раз: строка и событие индекса несут одно и то же время
     private void Write(string type, string promptId, LocalJobOrigin? origin,
         string? model, string? prompt, LocalRunParams? @params,
         ComfyCcsStats? card, string? outcome, int? runSeconds, string? error)
     {
+        var ts = _time.GetUtcNow();
         try
         {
-            var line = BuildLine(type, promptId, origin, model, prompt, @params, card, outcome, runSeconds, error);
+            var line = BuildLine(ts, type, promptId, origin, model, prompt, @params, card, outcome, runSeconds, error);
             lock (_lock)
             {
                 Directory.CreateDirectory(_dir);
-                var file = Path.Combine(_dir, _time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd") + ".jsonl");
+                var file = Path.Combine(_dir, ts.UtcDateTime.ToString("yyyy-MM-dd") + ".jsonl");
                 File.AppendAllText(file, line + "\n");
             }
         }
@@ -93,10 +99,23 @@ public sealed class ComfyRunHistory
             // Сбой записи (диск, права) — Debug: запись редкая, не на каждый тик, троттлинг не нужен
             _log?.LogDebug(ex, "Журнал истории медиа-генераций: сбой записи — {Error}", ex.Message);
         }
+        // Индекс в памяти (шаг 3): новое событие дописывается без перечитывания файла. Сбой
+        // наблюдателя не роняет запись: журнал на диске уже лежит
+        try
+        {
+            Sink()?.Append(new MediaHistoryEvent(promptId, type, ts, origin, model, prompt,
+                @params is null ? null : (JsonObject)JsonSerializer.SerializeToNode(@params, Wire)!,
+                card is null ? null : (JsonObject)JsonSerializer.SerializeToNode(card, Wire)!,
+                outcome, runSeconds, error));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log?.LogDebug(ex, "Журнал истории медиа-генераций: сбой уведомления индекса — {Error}", ex.Message);
+        }
     }
 
     // Строка v:1: ts (ISO-8601 UTC), id, origin, и поля события. null-поля пишутся как null
-    private string BuildLine(string type, string promptId, LocalJobOrigin? origin,
+    private string BuildLine(DateTimeOffset ts, string type, string promptId, LocalJobOrigin? origin,
         string? model, string? prompt, LocalRunParams? @params,
         ComfyCcsStats? card, string? outcome, int? runSeconds, string? error)
     {
@@ -104,7 +123,7 @@ public sealed class ComfyRunHistory
         {
             ["v"] = 1,
             ["t"] = type,
-            ["ts"] = _time.GetUtcNow().UtcDateTime.ToString("O"),
+            ["ts"] = ts.UtcDateTime.ToString("O"),
             ["id"] = promptId,
             ["origin"] = origin is null ? null : (JsonNode)JsonSerializer.SerializeToNode(origin, Wire)!,
             ["model"] = model,

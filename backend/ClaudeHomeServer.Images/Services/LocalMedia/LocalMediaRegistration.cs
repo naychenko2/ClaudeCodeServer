@@ -48,6 +48,9 @@ public static class LocalMediaRegistration
         // слотом BuildConcurrencyGate через системный local-запуск (scope ccs-agents.slice)
         services.AddSingleton<ClaudeHomeServer.Services.Media.IVideoDsp, FfmpegVideoDsp>();
         services.AddSingleton<LocalMediaCleanup>();
+        // Источник результата для истории (ADR-030 §3): файлы локальной генерации в проекте.
+        // Шов необязательный: подсистема images выключена — реализации нет → 410 source_disabled
+        services.AddSingleton<IMediaHistoryResultSource, LocalMediaHistorySource>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         services.AddGatedHostedService<ComfyProgressListener>(config, "images");
         // Монитор очереди ComfyUI (шаг 24): снимок running/queue/lastHour/slots/status для IComfyStats (шаг 26).

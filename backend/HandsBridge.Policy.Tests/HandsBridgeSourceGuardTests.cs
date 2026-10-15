@@ -44,8 +44,8 @@ public class HandsBridgeSourceGuardTests
             .Order()
             .ToList();
 
-        // D1a: новые инструменты (keyboard_control, mouse_control, clipboard_text, hands_batch) уже
-        // в HandsTools.All, но в мосту появятся в D2a–D2e — до того их отсутствие в сборке норма.
+        // TODO(D2a–D2e): убрать при добавлении инструмента в мост.
+        // Инструменты уже в HandsTools.All, но в мосту появятся в D2a–D2e — до того их отсутствие норма.
         var notYetInBridge = new[]
         {
             HandsTools.KeyboardControl, HandsTools.MouseControl, HandsTools.ClipboardText, HandsTools.HandsBatch,
@@ -53,6 +53,9 @@ public class HandsBridgeSourceGuardTests
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
 
         Assert.Equal(expected, names);
+        // Напоминание: когда инструмент появится в мосту, тест покраснеет и заставит убрать имя из списка
+        foreach (var name in notYetInBridge)
+            Assert.DoesNotContain(name, names);
     }
 
     [Theory]

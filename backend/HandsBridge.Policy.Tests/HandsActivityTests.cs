@@ -47,6 +47,7 @@ public class HandsActivityTests
         // Руки без UIA: клавиатура, мышь (все действия, включая move) и пакет — всегда трогают машину
         { HandsTools.KeyboardControl, null },
         { HandsTools.MouseControl, null },
+        { HandsTools.MouseControl, "move" },
         { HandsTools.HandsBatch, null },
         // Буфер: write трогает машину
         { HandsTools.ClipboardText, "write" },

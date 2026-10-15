@@ -248,6 +248,30 @@ public class ComfyQueueMonitorTests
         record!.Outcome.Should().Be("failed");
     }
 
+    // Рестарт: prompt_id пропал из очереди и истории (MaxNullHistoryTicks=20 тиков null) —
+    // исход interrupted, не failed (сбой графа). Мутация «failed» в MaxNullHistoryTicks → красный
+    [Fact]
+    public async Task Рестарт_ПропалИзИстории_MaxNullTicks_Interrupted()
+    {
+        var h = Build();
+        h.Ledger.Register("p1", Origin(), 42);
+        h.Fake.Running.Add(new QueueItem("p1", "ccs-local-media-abc", "KSampler", null));
+
+        // Первый тик: p1 в очереди (идёт)
+        await h.Monitor.TickAsync(CancellationToken.None);
+
+        // p1 уходит из очереди, история не опубликована (рестарт стенда)
+        h.Fake.Running.Clear();
+
+        // 20 тиков с null-историей → финализация interrupted
+        for (var i = 0; i < 20; i++)
+            await h.Monitor.TickAsync(CancellationToken.None);
+
+        h.Ledger.Contains("p1").Should().BeFalse("прерванный не активен");
+        h.Ledger.TryGet("p1", out var record).Should().BeTrue();
+        record!.Outcome.Should().Be("interrupted", "рестарт — interrupted, не failed");
+    }
+
     // ─── down с DownSince на первом сбое ───────────────────────────────────────────────────
 
     [Fact]

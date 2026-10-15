@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Higgsfield;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -64,6 +65,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             workspace.RetainedSteps = threads.ReferencedSteps;
             return workspace;
         });
+        // Источник результата для истории (ADR-030 §3): варианты задачи в рабочей папке data/image-editor
+        services.AddSingleton<IMediaHistoryResultSource, ImageEditorHistorySource>();
         // Траты пишутся в общий учёт ISpendCollector (вертикаль Spend); выключенный Spend —
         // null, исполнитель тогда только предупреждает в лог
         services.AddSingleton<ImageEditJobService>();

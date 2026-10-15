@@ -362,7 +362,8 @@ public class LocalVideoEngineTests
 
         var composed = LocalVideoEngine.Compose(request)!;
 
-        composed.Run!.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "video", "видео", true));
+        composed.Run!.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "video", "видео", true,
+            ProjectId: null, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: null));
     }
 
     [Fact]
@@ -385,7 +386,8 @@ public class LocalVideoEngineTests
 
         var composed = LocalVideoEngine.Compose(request)!;
 
-        composed.Run!.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "video", "видео 1440p", true));
+        composed.Run!.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "video", "видео 1440p", true,
+            ProjectId: null, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: null));
     }
 
     // Шаг 30: живой снимок очереди GPU из опроса прокидывается в отчёт прогресса (не в статус/трату)

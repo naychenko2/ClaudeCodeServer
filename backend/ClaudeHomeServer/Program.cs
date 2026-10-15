@@ -347,6 +347,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+// История медиа-генераций (ADR-030, шаг 3): индекс 7 дней (читает журнал, получает события
+// от ComfyRunHistory через IMediaHistoryEventSink) и кэш миниатюр. Флаг/роль проверяет контроллер
+builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryThumbService>();
+// ComfyRunHistory (Images) резолвит наблюдателя лениво: тот же экземпляр индекса
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaHistoryEventSink>(sp => sp.GetRequiredService<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>());
 // AppSettingsService реализует ITierModelResolver (Core-шов для слота модели).
 // DI сама по себе не резолвит concrete→interface — пробрасываем вручную, тот
 // же singleton-экземпляр. Отдельного адаптера не нужно: класс уже реализует шов.

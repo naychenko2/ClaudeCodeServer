@@ -402,11 +402,13 @@ public sealed class AudioEditJobService : IDisposable
         }
 
         // Метка происхождения прогона (шаг 29): владелец, чат и тяжёлый ли — из задачи;
-        // вид=звук и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут
+        // вид=звук и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут.
+        // Связь с источником (шаг 2): проект (из области) и job_id задачи — для LocalJobOrigin
         var request = new AudioRequest(quote.Op, quote.Model.Id, scope, input.Text, input.Prompt, input.Lyrics,
             input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
             input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value,
-            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: HeavyOf(job));
+            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: HeavyOf(job),
+            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id);
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 
         _workspace.Sweep(Now());

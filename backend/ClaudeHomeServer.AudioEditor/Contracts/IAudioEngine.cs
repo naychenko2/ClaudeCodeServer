@@ -224,7 +224,10 @@ public sealed record AudioRequest(
     // заполняет исполнитель (AudioEditJobService) из задачи, драйверы без задачи (тесты) — null
     string? OwnerId = null,
     string? SessionId = null,
-    bool Heavy = false);
+    bool Heavy = false,
+    // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
+    string? ProjectId = null,
+    string? SourceJobId = null);
 
 // Role — роль файла версии (LocalAudioRoles.*); Extension — с точкой
 public sealed record AudioFile(string Role, byte[] Bytes, string ContentType, string Extension);

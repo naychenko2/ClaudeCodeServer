@@ -13,6 +13,11 @@ import {
   formatClock, formatClockTime, queueStartLine, isEtaOverdue, doneOutcomeLine,
   lastHourSummary, runningProgress, remainingLine, isOwnJob, jobOwnerLabel,
   slotsLine, queueJobLabel, LAST_HOUR_VISIBLE,
+  formatDurationHuman, formatClockFromIso, formatClockSecFromIso, formatDayTimeFromIso,
+  dayGroupLabel, historyKindLabel, historyOpLabel, historyRowTitle, goneReasonText,
+  humanErrorPhrase, historySummaryLine, historyWaitSeconds, historyWaitLine,
+  seedFormatted, historyVariantCount, historyParamsRows, historyTimeRows,
+  historyPeriodTail, historyPeriodFrom, liveCompletionMarker, historyOutcomeBadge,
 } from './mediaFormat';
 import type { LocalModelMedia, MediaDone, MediaRunning } from './api';
 
@@ -348,5 +353,244 @@ describe('slotsLine / queueJobLabel', () => {
   });
   it('«N. операция»', () => {
     expect(queueJobLabel({ position: 2, op: 'Картинка · Qwen-Image 2.1' } as never)).toBe('2. Картинка · Qwen-Image 2.1');
+  });
+});
+
+// === История (ADR-030): длительность и время ===
+
+describe('formatDurationHuman: секунды → человек', () => {
+  it('0 → «0 с», <60 → «N с»', () => {
+    expect(formatDurationHuman(0)).toBe('0 с');
+    expect(formatDurationHuman(42)).toBe('42 с');
+  });
+  it('<3600 → «N мин M с», ровно по минуте → «N мин»', () => {
+    expect(formatDurationHuman(80)).toBe('1 мин 20 с');
+    expect(formatDurationHuman(360)).toBe('6 мин');
+  });
+  it('час+ → «N ч MM мин»', () => {
+    expect(formatDurationHuman(3661)).toBe('1 ч 01 мин');
+  });
+  it('null / отрицательное → «—»', () => {
+    expect(formatDurationHuman(null)).toBe('—');
+    expect(formatDurationHuman(-1)).toBe('—');
+  });
+});
+
+describe('formatClockFromIso / formatClockSecFromIso / formatDayTimeFromIso: ISO → местное время', () => {
+  const iso = new Date(2026, 9, 15, 14, 32, 0).toISOString();
+  it('«14:32» / «14:32:00» / «15 октября, 14:32»', () => {
+    expect(formatClockFromIso(iso)).toBe('14:32');
+    expect(formatClockSecFromIso(iso)).toBe('14:32:00');
+    expect(formatDayTimeFromIso(iso)).toBe('15 октября, 14:32');
+  });
+  it('null / некорректно → пусто', () => {
+    expect(formatClockFromIso(null)).toBe('');
+    expect(formatClockFromIso('not-a-date')).toBe('');
+    expect(formatClockSecFromIso(null)).toBe('');
+    expect(formatDayTimeFromIso(null)).toBe('');
+  });
+});
+
+describe('dayGroupLabel: «Сегодня» / «Вчера» / «N месяца»', () => {
+  const now = new Date(2026, 9, 15, 14, 0, 0).getTime();
+  it('сегодня → «Сегодня»', () => {
+    expect(dayGroupLabel(new Date(2026, 9, 15, 10, 0, 0).toISOString(), now)).toBe('Сегодня');
+  });
+  it('вчера → «Вчера»', () => {
+    expect(dayGroupLabel(new Date(2026, 9, 14, 10, 0, 0).toISOString(), now)).toBe('Вчера');
+  });
+  it('раньше → «13 октября» (без года)', () => {
+    expect(dayGroupLabel(new Date(2026, 9, 13, 10, 0, 0).toISOString(), now)).toBe('13 октября');
+  });
+  it('null → пусто', () => {
+    expect(dayGroupLabel(null, now)).toBe('');
+  });
+});
+
+// === История: вид, операция, заголовок строки ===
+
+describe('historyKindLabel / historyOpLabel / historyRowTitle', () => {
+  it('вид: известные + неизвестный/отсутствующий → «Генерация»', () => {
+    expect(historyKindLabel('image')).toBe('Картинка');
+    expect(historyKindLabel('video')).toBe('Видео');
+    expect(historyKindLabel('audio')).toBe('Звук');
+    expect(historyKindLabel('train')).toBe('Обучение');
+    expect(historyKindLabel('other')).toBe('Генерация');
+    expect(historyKindLabel(null)).toBe('Генерация');
+    expect(historyKindLabel('weird')).toBe('Генерация');
+  });
+  it('операция: известные → человек, неизвестная — как есть, null → пусто', () => {
+    expect(historyOpLabel('generate_image')).toBe('по тексту');
+    expect(historyOpLabel('image_to_video')).toBe('из картинки');
+    expect(historyOpLabel('music_generate')).toBe('песня');
+    expect(historyOpLabel('lora_train')).toBe('обучение LoRA');
+    expect(historyOpLabel('weird_op')).toBe('weird_op');
+    expect(historyOpLabel(null)).toBe('');
+    expect(historyOpLabel('')).toBe('');
+  });
+  it('заголовок: «Вид · операция»; без операции — только вид', () => {
+    expect(historyRowTitle('image', 'generate_image')).toBe('Картинка · по тексту');
+    expect(historyRowTitle('video', 'image_to_video')).toBe('Видео · из картинки');
+    expect(historyRowTitle('audio', 'music_generate')).toBe('Звук · песня');
+    expect(historyRowTitle('image', null)).toBe('Картинка');
+    expect(historyRowTitle(null, null)).toBe('Генерация');
+  });
+});
+
+// === История: 410, ошибки, сводка, очередь, параметры, период, маркер, бейдж ===
+
+describe('goneReasonText: пять причин 410 + неизвестная', () => {
+  it('expired / missing / project_gone / local_project / source_disabled', () => {
+    expect(goneReasonText('expired')).toBe('Истёк срок хранения: рабочие файлы редактора живут 7 дней.');
+    expect(goneReasonText('missing')).toBe('Файл удалили.');
+    expect(goneReasonText('project_gone')).toBe('Проект удалён.');
+    expect(goneReasonText('local_project')).toBe('Проект переехал на устройство — его файлы больше не на сервере.');
+    expect(goneReasonText('source_disabled')).toBe('Редактор, в котором делали генерацию, выключен на этом сервере.');
+  });
+  it('null / пусто / неизвестный → «Файл недоступен.»', () => {
+    expect(goneReasonText(null)).toBe('Файл недоступен.');
+    expect(goneReasonText('')).toBe('Файл недоступен.');
+    expect(goneReasonText('weird')).toBe('Файл недоступен.');
+  });
+});
+
+describe('humanErrorPhrase: OOM → человеческая фраза, иначе общий текст', () => {
+  it('«out of memory» (регистр не важен) → «не хватило памяти видеокарты»', () => {
+    expect(humanErrorPhrase('CUDA out of memory')).toBe('Ошибка: не хватило памяти видеокарты.');
+    expect(humanErrorPhrase('OUT OF MEMORY')).toBe('Ошибка: не хватило памяти видеокарты.');
+  });
+  it('прочие / null → «Ошибка при расчёте.»', () => {
+    expect(humanErrorPhrase('some other error')).toBe('Ошибка при расчёте.');
+    expect(humanErrorPhrase(null)).toBe('Ошибка при расчёте.');
+  });
+});
+
+describe('historySummaryLine: «Готово N · отменено N · …», только ненулевые', () => {
+  it('все четыре → полный ряд', () => {
+    expect(historySummaryLine({ outcomes: { completed: 290, cancelled: 4, failed: 12, interrupted: 6 } }))
+      .toBe('Готово 290 · отменено 4 · ошибок 12 · прервано 6');
+  });
+  it('одно → одна часть; нули → null; null → null', () => {
+    expect(historySummaryLine({ outcomes: { completed: 5 } })).toBe('Готово 5');
+    expect(historySummaryLine({ outcomes: {} })).toBeNull();
+    expect(historySummaryLine(null)).toBeNull();
+  });
+  it('нулевые части не показываются', () => {
+    expect(historySummaryLine({ outcomes: { completed: 0, cancelled: 3 } })).toBe('отменено 3');
+  });
+});
+
+describe('historyWaitSeconds / historyWaitLine: ожидание = started − enqueued', () => {
+  const enq = '2026-10-15T14:00:00Z';
+  const start = '2026-10-15T14:01:20Z';
+  it('80 с ожидания; без started → null', () => {
+    expect(historyWaitSeconds(enq, start)).toBe(80);
+    expect(historyWaitSeconds(enq, null)).toBeNull();
+    expect(historyWaitSeconds(null, start)).toBeNull();
+  });
+  it('«очередь 1 мин 20 с · расчёт 42 с»; без старта — «очередь —»; без расчёта — только очередь', () => {
+    expect(historyWaitLine(enq, start, 42)).toBe('очередь 1 мин 20 с · расчёт 42 с');
+    expect(historyWaitLine(enq, null, null)).toBe('очередь —');
+    expect(historyWaitLine(enq, start, null)).toBe('очередь 1 мин 20 с');
+  });
+});
+
+describe('seedFormatted / historyVariantCount: seed и варианты', () => {
+  it('seed → группы по три с пробелами; null → «не задан»', () => {
+    expect(seedFormatted(2914337016)).toBe('2 914 337 016');
+    expect(seedFormatted(1234)).toBe('1 234');
+    expect(seedFormatted(null)).toBe('не задан');
+  });
+  it('варианты: count из params; не число/отсутствует → 1', () => {
+    expect(historyVariantCount({ count: 4 })).toBe(4);
+    expect(historyVariantCount({ count: 1 })).toBe(1);
+    expect(historyVariantCount({ count: 0 })).toBe(1);
+    expect(historyVariantCount({ count: 'x' as never })).toBe(1);
+    expect(historyVariantCount(null)).toBe(1);
+  });
+});
+
+describe('historyParamsRows: фиксированный порядок, пустые не выводим', () => {
+  it('полная запись: модель, операция, размер, длительность, варианты, шаги, seed, lora', () => {
+    const rows = historyParamsRows({
+      model: 'Qwen-Image 2.1', op: 'generate_image',
+      params: { width: 1024, height: 1024, durationSec: 5, count: 4, steps: 25, seed: 2914337016, lora: 'style.safetensors' },
+    });
+    expect(rows.map(r => r.key)).toEqual(['Модель', 'Операция', 'Размер', 'Длительность', 'Вариантов', 'Шаги', 'Seed', 'LoRA']);
+    expect(rows[0].value).toBe('Qwen-Image 2.1');
+    expect(rows[2].value).toBe('1024 × 1024');
+    expect(rows[3].value).toBe('5 с');
+    expect(rows[4].value).toBe('4');
+    expect(rows[5].value).toBe('25');
+    expect(rows[6].value).toBe('2 914 337 016');
+    expect(rows[7].value).toBe('style.safetensors');
+  });
+  it('без параметров: только Seed «не задан» (его отсутствие в макете показано явно)', () => {
+    const rows = historyParamsRows({ model: null, op: null, params: null });
+    expect(rows).toEqual([{ key: 'Seed', value: 'не задан', mono: false }]);
+  });
+  it('count=1 → строки «Вариантов» нет', () => {
+    const rows = historyParamsRows({ model: 'm', op: null, params: { count: 1 } });
+    expect(rows.some(r => r.key === 'Вариантов')).toBe(false);
+  });
+});
+
+describe('historyTimeRows: «Время и карта»', () => {
+  it('полная запись: поставлена, ожидание, расчёт, карта «не сообщает»', () => {
+    const rows = historyTimeRows({
+      enqueuedAt: '2026-10-15T14:00:00Z', startedAt: '2026-10-15T14:01:20Z', runSeconds: 42,
+    });
+    expect(rows.map(r => r.key)).toEqual(['Поставлена', 'Ожидание', 'Расчёт', 'Карта']);
+    expect(rows[1].value).toBe('1 мин 20 с');
+    expect(rows[2].value).toBe('42 с');
+    expect(rows[3]).toMatchObject({ value: 'не сообщает', na: true });
+  });
+  it('без старта: ожидание «неизвестно»; без расчёта: «не начинался»', () => {
+    const rows = historyTimeRows({ enqueuedAt: '2026-10-15T14:00:00Z', startedAt: null, runSeconds: null });
+    expect(rows[1]).toMatchObject({ value: 'неизвестно', na: true });
+    expect(rows[2]).toMatchObject({ value: 'не начинался', na: true });
+  });
+});
+
+describe('historyPeriodTail / historyPeriodFrom: период и хвост ленты', () => {
+  it('подписи хвоста', () => {
+    expect(historyPeriodTail('today')).toBe('Это все генерации за сегодня');
+    expect(historyPeriodTail('24h')).toBe('Это все генерации за 24 часа');
+    expect(historyPeriodTail('7d')).toBe('Это все генерации за 7 дней');
+  });
+  it('from: сегодня → местная полночь; 24h/7d → назад от now', () => {
+    const now = new Date(2026, 9, 15, 14, 0, 0).getTime();
+    expect(historyPeriodFrom('today', now)).toBe(new Date(2026, 9, 15, 0, 0, 0).toISOString());
+    expect(historyPeriodFrom('24h', now)).toBe(new Date(now - 24 * 3600 * 1000).toISOString());
+    expect(historyPeriodFrom('7d', now)).toBe(new Date(now - 7 * 24 * 3600 * 1000).toISOString());
+  });
+});
+
+describe('liveCompletionMarker: маркер живых завершений', () => {
+  it('null → пусто; строка lastHour + числа running/queue', () => {
+    expect(liveCompletionMarker(null)).toBe('');
+    const marker = liveCompletionMarker({
+      lastHour: [{ finishedAt: 1700000000000, op: 'Видео 5 с · MiniMax H3' }],
+      running: [{ heavy: false }], queue: [{}, {}],
+    });
+    expect(marker).toBe('1700000000000:Видео 5 с · MiniMax H3|1|2');
+  });
+  it('изменение finishedAt/op/чисел меняет маркер', () => {
+    const a = liveCompletionMarker({ lastHour: [{ finishedAt: 1, op: 'x' }], running: [], queue: [] });
+    const b = liveCompletionMarker({ lastHour: [{ finishedAt: 2, op: 'x' }], running: [], queue: [] });
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('historyOutcomeBadge: статус → бейдж', () => {
+  it('завершённые — по исходу; идущие/ждущие — нейтральные; unknown — без бейджа', () => {
+    expect(historyOutcomeBadge('completed')).toEqual({ label: 'готово', tone: 'ok' });
+    expect(historyOutcomeBadge('cancelled')).toEqual({ label: 'отменено', tone: 'cancel' });
+    expect(historyOutcomeBadge('failed')).toEqual({ label: 'ошибка', tone: 'fail' });
+    expect(historyOutcomeBadge('interrupted')).toEqual({ label: 'прервано', tone: 'int' });
+    expect(historyOutcomeBadge('running')).toEqual({ label: 'идёт', tone: 'neutral' });
+    expect(historyOutcomeBadge('queued')).toEqual({ label: 'ждёт', tone: 'neutral' });
+    expect(historyOutcomeBadge('unknown')).toBeNull();
+    expect(historyOutcomeBadge(null)).toBeNull();
   });
 });

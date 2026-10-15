@@ -99,13 +99,27 @@ public sealed partial class LocalMediaService(
         if (ledger is null) return false;
         foreach (var job in store.Active())
             if (!string.IsNullOrEmpty(job.PromptId))
-                ledger.Register(job.PromptId, OriginOf(job), job.EtaSeconds);
+                ledger.Register(job.PromptId, OriginOf(job), job.EtaSeconds, DetailsOf(job, job.Op));
         return true;
     }
 
-    // Метка происхождения (шаг 6) из задачи: кто, из какой сессии, вид, операция, тяжёлая ли
+    // Метка происхождения (шаг 6) из задачи: кто, из какой сессии, вид, операция, тяжёлая ли.
+    // Связь с источником (шаг 2): проект, источник (local-media | lora) и job_id задачи
     private static LocalJobOrigin OriginOf(LocalMediaJob job) =>
-        new(job.OwnerId, job.SessionId, JobKind(job.Op), job.Op, job.Heavy);
+        new(job.OwnerId, job.SessionId, JobKind(job.Op), job.Op, job.Heavy,
+            ProjectId: job.ProjectId,
+            Source: job.Op == LocalMediaOps.LoraTrain ? LocalJobOrigin.SourceLora : LocalJobOrigin.SourceLocalMedia,
+            SourceJobId: job.Id);
+
+    // Детали прогона для журнала (шаг 7): модель, промпт, параметры (белый список). Model —
+    // операция (у local-media имя модели неявно в операции); Params — только заданное (остальное
+    // null). null — промпта нет (детали не пишем, запись как до этого)
+    private static LocalRunDetails? DetailsOf(LocalMediaJob job, string? model) =>
+        string.IsNullOrEmpty(job.Prompt) ? null
+            : new LocalRunDetails(model, job.Prompt, new LocalRunParams(
+                Width: job.Width, Height: job.Height, DurationSec: job.DurationSeconds,
+                Frames: job.Frames, Steps: job.Steps, Seed: job.Seed, Engine: job.Engine, Fast: job.Fast,
+                Count: 1));
 
     // Вид прогона по операции: image | video | audio | train | other
     private static string JobKind(string op) => op switch
@@ -208,8 +222,9 @@ public sealed partial class LocalMediaService(
                 return LocalMediaCallResult.Fail(ex.Message);
             }
 
-            // Реестр (шаг 7): «чей этот prompt_id» — происхождение и оценка из задачи
-            ledger?.Register(job.PromptId, OriginOf(job), job.EtaSeconds);
+            // Реестр (шаг 7): «чей этот prompt_id» — происхождение, оценка и детали (модель,
+            // промпт, параметры) из задачи
+            ledger?.Register(job.PromptId, OriginOf(job), job.EtaSeconds, DetailsOf(job, job.Op));
             store.Add(job);
             return new LocalMediaCallResult(new LocalMediaJobView(job, queue.Length, eta), null);
         }
@@ -795,8 +810,8 @@ public sealed partial class LocalMediaService(
                 j.FinishedAt = DateTime.UtcNow;
                 ApplyRunStats(j, history);
             }) ?? current;
-            // Реестр (шаг 7): прогон завершён
-            ledger?.Complete(completed.PromptId, "completed", RunSecondsOf(completed));
+            // Реестр (шаг 7): прогон завершён; completed — ошибки нет
+            ledger?.Complete(completed.PromptId, "completed", RunSecondsOf(completed), error: null);
             return (completed, true);
         }
         catch (UnauthorizedAccessException)
@@ -890,8 +905,9 @@ public sealed partial class LocalMediaService(
                 ApplyRunStats(j, history);
             }
         }) ?? job;
-        // Реестр (шаг 7): прогон упал или отменён (отмена — Cancelled)
-        ledger?.Complete(failed.PromptId, failed.Cancelled ? "cancelled" : "failed", RunSecondsOf(failed));
+        // Реестр (шаг 7): прогон упал (текст ошибки — в журнал) или отменён (отмена — без ошибки)
+        ledger?.Complete(failed.PromptId, failed.Cancelled ? "cancelled" : "failed", RunSecondsOf(failed),
+            error: failed.Cancelled ? null : failed.Error);
         return failed;
     }
 

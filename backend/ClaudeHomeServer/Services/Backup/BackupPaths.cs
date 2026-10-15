@@ -128,6 +128,9 @@ public static class BackupPaths
         if (segments.Length > 1
             && root.Equals(VideoEditor.VideoEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
+        // Журнал истории медиа-генераций (шаг 2): кеш превью, восстанавливать нечего;
+        // включая подпапку thumbs (шаг 3). Литерал, чтобы Main не тянул сборку Images
+        if (root.Equals("local-media-history", StringComparison.OrdinalIgnoreCase)) return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
         // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.

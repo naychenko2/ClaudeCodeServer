@@ -240,6 +240,14 @@ public sealed class FakeProjectAccess : ILocalMediaProjectAccess
     public string? ResolveRoot(string ownerId, string projectId) =>
         Roots.TryGetValue((ownerId, projectId), out var root) ? root : null;
 
+    // История (ADR-030): в фейке проект либо в Roots (OnServer), либо Gone; Local не моделируем
+    public MediaHistoryProjectProbe? ProbeProject(string ownerId, string projectId) =>
+        string.IsNullOrEmpty(projectId)
+            ? null
+            : Roots.TryGetValue((ownerId, projectId), out var root)
+                ? new MediaHistoryProjectProbe(MediaHistoryProjectState.OnServer, root)
+                : new MediaHistoryProjectProbe(MediaHistoryProjectState.Gone, null);
+
     // Хук тестов: сработал на записи файла результата (например, оборвать токен запроса посреди сборки)
     public Action<string>? OnNotified { get; set; }
 

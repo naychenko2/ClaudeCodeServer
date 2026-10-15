@@ -20,6 +20,11 @@ public sealed partial class LocalMediaService
     private static LoraTrainBusy BusyOf(LocalMediaJob job, string ownerId) =>
         new(job.EtaSeconds is { } eta ? (job.StartedAt ?? job.CreatedAt).AddSeconds(eta) : null, job.OwnerId == ownerId, job.Id);
 
+    // Детали обучения LoRA для журнала (шаг 7): модель — операция, промпт — slug персонажа
+    // (у обучения нет текстового запроса), параметров белого списка нет
+    private static LocalRunDetails? LoraDetailsOf(LocalMediaJob job) =>
+        new(job.Op, job.LoraSlug ?? "", null);
+
     public async Task<LoraTrainStartResult> StartLoraTrainAsync(LoraTrainStart request, CancellationToken ct)
     {
         var options = Options;
@@ -106,8 +111,8 @@ public sealed partial class LocalMediaService
                 return LoraRefusal(LoraTrainErrorCode.Unavailable, ex.Message);
             }
 
-            // Реестр (шаг 7): «чей этот prompt_id» — обучение LoRA
-            ledger?.Register(job.PromptId, OriginOf(job), job.EtaSeconds);
+            // Реестр (шаг 7): «чей этот prompt_id» — обучение LoRA; детали: операция + slug
+            ledger?.Register(job.PromptId, OriginOf(job), job.EtaSeconds, LoraDetailsOf(job));
             store.Add(job);
             return new LoraTrainStartResult(jobId, queue.Length, eta);
         }
@@ -233,7 +238,7 @@ public sealed partial class LocalMediaService
             j.FinishedAt = DateTime.UtcNow;
         });
         // Реестр (шаг 7): отмена — прогон снят из активных (одна точка для всех путей отмены)
-        ledger?.Complete(job.PromptId, "cancelled", RunSecondsOf(job));
+        ledger?.Complete(job.PromptId, "cancelled", RunSecondsOf(job), error: null);
     }
 
     // Сторож зависшего обучения: потолок узла 240 мин + запас (LoraTrainTimeoutMinutes); иначе Running держит карту вечно
@@ -376,7 +381,7 @@ public sealed partial class LocalMediaService
             ApplyRunStats(j, history);
         }) ?? job;
         // Реестр (шаг 7): успех — прогон завершён (одна точка для успеха LoraTrain и LoraDelete)
-        ledger?.Complete(job.PromptId, "completed", RunSecondsOf(job));
+        ledger?.Complete(job.PromptId, "completed", RunSecondsOf(job), error: null);
         return done;
     }
 

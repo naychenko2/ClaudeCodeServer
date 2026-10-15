@@ -366,7 +366,7 @@ public class ComfyStatsTests
         // Завершённая задача в реестре
         h.Ledger.Register("done1", OriginA(), 30);
         h.Ledger.MarkStarted("done1");
-        h.Ledger.Complete("done1", "completed", runSeconds: 25);
+        h.Ledger.Complete("done1", "completed", runSeconds: 25, error: null);
 
         var snap = await h.Stats.GetMediaAsync(CancellationToken.None);
         snap!.LastHour.Should().ContainSingle();

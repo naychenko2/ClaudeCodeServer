@@ -24,6 +24,17 @@ public sealed class VideoEditWorkspace(string root)
 
     public string JobDir(string ownerId, string jobId) => Path.Combine(Root, Safe(ownerId), Safe(jobId));
 
+    // Числа вариантов задачи (подпапки {n}) — для истории (ADR-030): сколько клипов есть
+    public IReadOnlyList<int> VariantNumbers(string ownerId, string jobId)
+    {
+        var dir = JobDir(ownerId, jobId);
+        if (!Directory.Exists(dir)) return [];
+        var result = new List<int>();
+        foreach (var sub in Directory.EnumerateDirectories(dir))
+            if (int.TryParse(Path.GetFileName(sub), out var n)) result.Add(n);
+        return result.OrderBy(n => n).ToList();
+    }
+
     // Клип варианта: {jobId}/{variant}/clip.mp4. Расширение от драйвера — с точкой, латиница и цифры, не
     // длиннее 10; иначе .mp4. Возвращает путь файла
     public string SaveClip(string ownerId, string jobId, int variant, byte[] bytes, string? extension)

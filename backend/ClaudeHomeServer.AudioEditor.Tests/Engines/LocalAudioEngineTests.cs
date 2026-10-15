@@ -169,7 +169,9 @@ public class LocalAudioEngineTests
 
         var composed = LocalAudioEngine.Compose(request)!;
 
-        composed.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "audio", "speak", true));
+        // Связь с источником (шаг 2): источник=audio-editor; проект/job_id — null (тест без задачи)
+        composed.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "audio", "speak", true,
+            ProjectId: null, Source: LocalJobOrigin.SourceAudioEditor, SourceJobId: null));
     }
 
     [Fact]

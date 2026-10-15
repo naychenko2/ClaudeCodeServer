@@ -13,13 +13,13 @@ import { AlertTriangle, Check, Image as ImageIcon, Clapperboard, AudioLines, Wei
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { Button, EmptyState, ProgressBar } from '../../components/ui';
 import { useAllProjects } from '../projects/useAllProjects';
-import type { LocalModelMedia, MediaDone, MediaQueue, MediaRunning } from './api';
+import type { LocalModelMedia, MediaQueue, MediaRunning } from './api';
 import {
-  type ComfyTone, comfyStatusInfo, loadedModelLine, formatClockTime, formatClock,
-  queueStartLine, isEtaOverdue, doneOutcomeLine, lastHourSummary, runningProgress,
+  type ComfyTone, comfyStatusInfo, loadedModelLine, formatClockTime,
+  queueStartLine, runningProgress,
   remainingLine, isOwnJob, jobOwnerLabel, slotsLine, queueJobLabel,
-  LAST_HOUR_VISIBLE,
 } from './mediaFormat';
+import { MediaHistory } from './MediaHistory';
 import { GpuCard } from './GpuCard';
 import { gpuCountLabel } from './format';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -385,62 +385,6 @@ function QueueCard({ media, isMobile, onOpen }: { media: LocalModelMedia; isMobi
   );
 }
 
-// === «Последний час» ===
-// Строка: плитка вида, операция, «готово в HH:MM» / «упала: …»; справа факт против
-// обещанного ETA (подсветка при превышении на 20 %+). Только div, без перехода.
-function DoneRow({ d }: { d: MediaDone }) {
-  const overdue = isEtaOverdue(d.runSeconds, d.etaSeconds);
-  const failed = d.outcome === 'failed';
-  const fact = formatClock(d.runSeconds);
-  const promised = d.etaSeconds != null ? `обещали ${formatClock(d.etaSeconds)}` : 'без замера';
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: SP.sm, minHeight: 36,
-      padding: `${SP.sm}px ${SP.sm}px`, borderRadius: R.md, boxSizing: 'border-box',
-    }}>
-      <KindTile op={d.op} />
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <b style={{
-          display: 'block', fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{d.op}</b>
-        <span style={{
-          display: 'block', fontSize: FS.xs,
-          color: failed ? C.dangerText : C.textMuted,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>{doneOutcomeLine(d)}</span>
-      </span>
-      <span style={{
-        flexShrink: 0, textAlign: 'right', fontFamily: FONT.mono, fontSize: FS.xs,
-        color: overdue ? C.warningText : C.textSecondary, whiteSpace: 'nowrap', lineHeight: 1.4,
-      }}>
-        {fact}
-        <br />
-        <span style={{ color: C.textMuted }}>{promised}</span>
-      </span>
-    </div>
-  );
-}
-
-function LastHourCard({ media }: { media: LocalModelMedia }) {
-  const all = media.lastHour;
-  if (all.length === 0) return null;
-  const visible = all.slice(0, LAST_HOUR_VISIBLE);
-  const summary = lastHourSummary(all);
-  const avg = summary.avgOverPerc != null ? ` · в среднем на ${Math.round(summary.avgOverPerc * 100)} % дольше обещанного` : '';
-  const more = summary.more > 0 ? ` · и ещё ${summary.more}` : '';
-  return (
-    <Card title="Последний час">
-      <div style={{ display: 'flex', flexDirection: 'column', margin: `0 ${-SP.sm}px` }}>
-        {visible.map((d, i) => <DoneRow key={`${d.finishedAt}-${i}`} d={d} />)}
-      </div>
-      <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
-        Готово {summary.done} · упало {summary.failed}{avg}{more}
-      </div>
-    </Card>
-  );
-}
-
 // === Баннер «Локальная генерация недоступна» ===
 function DownBanner({ media, onCheck }: { media: LocalModelMedia; onCheck: () => void }) {
   const since = formatClockTime(media.comfy.downSince);
@@ -529,8 +473,9 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
               <RunningCard media={data} isMobile={isMobile} onOpen={onOpenChat} />
               <QueueCard media={data} isMobile={isMobile} onOpen={onOpenChat} />
             </>}
-        <LastHourCard media={data} />
       </div>
+      {/* «История · 7 дней» — вне stale: живёт, даже когда ComfyUI лежит (макет §2) */}
+      <MediaHistory media={data} isMobile={isMobile} />
     </>
   );
 }

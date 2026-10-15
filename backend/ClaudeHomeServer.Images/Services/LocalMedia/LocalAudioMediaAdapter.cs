@@ -76,8 +76,10 @@ public sealed class LocalAudioMediaAdapter(
                 new LocalMediaService.AudioBuildInfo(id), new BytesInputs(request, comfy), prompt, seed,
                 $"{ComfyWorkflows.OutputFolder}/{id}", options.MaxAudioInputSeconds, ct);
             var queued = await comfy.QueuePromptAsync(graph, ct);
-            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое
-            ledger?.Register(queued.PromptId, request.Origin, eta);
+            // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое.
+            // Детали: модель — операция, промпт (стиль/содержание) и сид
+            var details = new LocalRunDetails(op, request.Prompt ?? "", new LocalRunParams(Seed: seed));
+            ledger?.Register(queued.PromptId, request.Origin, eta, details);
             return new LocalAudioSubmitted(queued.PromptId, queue, eta, null);
         }
         catch (LocalMediaInputException ex)

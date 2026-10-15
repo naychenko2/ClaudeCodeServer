@@ -179,7 +179,10 @@ public record ImageEditRequest(
     // заполняет исполнитель (ImageEditJobService) из задачи, драйверы без задачи (тесты) — null
     string? OwnerId = null,
     string? SessionId = null,
-    bool Heavy = false);
+    bool Heavy = false,
+    // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
+    string? ProjectId = null,
+    string? SourceJobId = null);
 
 // Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
 public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);

@@ -14,11 +14,15 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // Работает только из LocalMediaCollector (фон); сбой удаления — Warning, сбор не роняет.
 public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMediaCleanup> log)
 {
+    // Сколько дней держать файлы журнала истории (шаг 2): 7, как и задачи
+    public const int HistoryRetentionDays = 7;
+
     private bool _reportedDisabled;
 
     public void Run(LocalMediaOptions options, DateTime now)
     {
         var expired = store.Prune(TimeSpan.FromDays(Math.Max(1, options.JobRetentionDays)), now);
+        RotateHistory(now);
         if (!options.CleanupEnabled)
         {
             if (!_reportedDisabled)
@@ -43,6 +47,28 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
             DeleteTransient(job, inputDir, outputDir, keepForUpscale: false);
             foreach (var latent in new[] { job.LatentVideo, job.LatentAudio })
                 if (latent is not null) DeleteOwn(outputDir, latent, job.Id, OutputPrefixes, '_');
+        }
+    }
+
+    // Ротация журнала истории (шаг 2): файлы дня (YYYY-MM-DD.jsonl) старше 7 дней. Каталог —
+    // data/local-media-history; сбой (диск, права) — Debug, сбор не роняет
+    private void RotateHistory(DateTime now)
+    {
+        try
+        {
+            var dir = Path.Combine(store.DataDir, ComfyRunHistory.DirName);
+            if (!Directory.Exists(dir)) return;
+            var cutoff = now.Date.AddDays(-HistoryRetentionDays);
+            foreach (var file in Directory.GetFiles(dir, "*.jsonl"))
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                if (DateTime.TryParse(name, out var day) && day < cutoff)
+                    File.Delete(file);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Ротация журнала истории медиа-генераций: сбой — {Error}", ex.Message);
         }
     }
 

@@ -196,9 +196,11 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
         foreach (var (key, value) in binding.Args) args[key] = value;
 
         // Метка происхождения прогона (шаг 29): владелец, чат, вид=звук, операция, тяжёлый ли.
-        // Данные у движка есть из задачи (AudioEditJobService кладёт их в запрос); без задачи (тесты) — null
+        // Данные у движка есть из задачи (AudioEditJobService кладёт их в запрос); без задачи (тесты) — null.
+        // Связь с источником (шаг 2): источник=audio-editor, проект и job_id задачи
         var origin = req.OwnerId is { } owner
-            ? new LocalJobOrigin(owner, req.SessionId, "audio", AudioEditJobService.OpName(req.Op), req.Heavy)
+            ? new LocalJobOrigin(owner, req.SessionId, "audio", AudioEditJobService.OpName(req.Op), req.Heavy,
+                ProjectId: req.ProjectId, Source: LocalJobOrigin.SourceAudioEditor, SourceJobId: req.SourceJobId)
             : null;
         return new LocalAudioRequest(binding.Op, req.Prompt, args,
             Audio: req.Source?.Bytes,

@@ -190,6 +190,9 @@ public sealed class LocalMediaJobStore
         Load();
     }
 
+    // Каталог данных (data/): рядом с остальными сторами; для ротации журнала истории (шаг 2)
+    public string DataDir => Path.GetDirectoryName(_storePath)!;
+
     public void Add(LocalMediaJob job)
     {
         lock (_writeLock)

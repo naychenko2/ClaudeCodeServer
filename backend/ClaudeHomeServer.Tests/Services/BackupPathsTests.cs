@@ -188,6 +188,16 @@ public class BackupPathsTests
         BackupPaths.ShouldInclude("plan-maps.json").Should().BeFalse();
     }
 
+    // Журнал истории медиа-генераций (шаг 2): кеш превью, восстанавливать нечего;
+    // включая подпапку thumbs (шаг 3)
+    [Theory]
+    [InlineData("local-media-history/2026-10-15.jsonl")]
+    [InlineData("local-media-history/thumbs/ab12.png")]
+    public void ЖурналИсторииМедиа_Исключён(string path)
+    {
+        BackupPaths.ShouldInclude(path).Should().BeFalse();
+    }
+
     [Fact]
     public void СнимокСпискаHiggsfield_Исключен()
     {

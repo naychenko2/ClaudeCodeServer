@@ -192,10 +192,12 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 return Fail(EditOutcome.Failed, "Локальные модели так не умеют");
         }
         // Метка происхождения прогона (шаг 28): владелец, чат, вид=картинка, операция, тяжёлый ли.
-        // Данные у движка есть из задачи (ImageEditJobService кладёт их в запрос); без задачи (тесты) — null
+        // Данные у движка есть из задачи (ImageEditJobService кладёт их в запрос); без задачи (тесты) — null.
+        // Связь с источником (шаг 2): источник=image-editor, проект и job_id задачи
         if (req.OwnerId is { } owner)
             run = run with { Origin = new LocalJobOrigin(owner, req.SessionId, "image",
-                ImageEditOpNames.OpName(req.Op), req.Heavy) };
+                ImageEditOpNames.OpName(req.Op), req.Heavy,
+                ProjectId: req.ProjectId, Source: LocalJobOrigin.SourceImageEditor, SourceJobId: req.SourceJobId) };
         // Обрезать нельзя: молча пропал бы персонаж или образец — честный отказ до очереди
         if (run.Images.Count > MaxImages)
             return Fail(EditOutcome.Failed,

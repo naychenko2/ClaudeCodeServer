@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Локальные модели · «История · 7 дней» на вкладке «Медиа» v1</title>
+<style>
+/* Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts */
+.light {
+  --c-bg-main:#F4F0E8; --c-bg-white:#FFFFFF; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5; --c-on-dark:#FFFFFF; --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14); --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40); --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+}
+.dark {
+  --c-bg-main:#201C18; --c-bg-white:#2E2A25; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33; --c-on-dark:#FFFFFF; --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24); --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65); --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+}
+body { margin:0; font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif; background:#888; }
+.theme { background:var(--c-bg-main); color:var(--c-text-primary); padding:24px; /* SP.xl */ }
+.theme > h2 { font-family:'PT Serif',Georgia,serif; font-size:16px; color:var(--c-text-heading); margin:0 0 4px; }
+.lead { font-size:12px; color:var(--c-text-secondary); margin:0 0 16px; max-width:720px; line-height:1.45; }
+.row { display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start; }
+.frame { display:flex; flex-direction:column; gap:8px; }
+.cap { font-size:11px; color:var(--c-text-muted); max-width:340px; line-height:1.45; }
+.cap b { color:var(--c-text-secondary); }
+.mono { font-family:'JetBrains Mono',monospace; }
+
+/* Тело вкладки: колонка карточек с зазором SP.md */
+.tab { width:340px; display:flex; flex-direction:column; gap:12px; }
+.tab.m { width:360px; }
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; box-sizing:border-box; }
+.ghostcard { background:var(--c-bg-white); border:1px dashed var(--c-border); border-radius:12px; padding:8px 12px;
+  font-size:11px; color:var(--c-text-muted); }
+.hd { display:flex; align-items:center; gap:8px; margin-bottom:4px; min-height:24px; }
+.hd h3 { margin:0; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-secondary); }
+.cnt { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--c-text-muted); flex:1; }
+.ib { width:24px; height:24px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center;
+  color:var(--c-text-secondary); border:none; background:transparent; }
+.ib.hover { background:var(--c-bg-inset); color:var(--c-text-heading); }
+.ib.focus { box-shadow:var(--shadow-focus); }
+.sum { font-size:11px; color:var(--c-text-muted); line-height:1.45; margin-bottom:8px; }
+.priv { display:flex; gap:6px; align-items:flex-start; font-size:11px; line-height:1.45; color:var(--c-text-secondary);
+  background:var(--c-bg-inset); border-radius:8px; padding:4px 8px; margin-bottom:8px; }
+.priv svg { flex:none; margin-top:1px; }
+
+/* Фильтры: IconSegmented по виду + кнопка «Фильтры» + чипы */
+.fbar { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.iseg { display:inline-flex; background:var(--c-bg-inset); border-radius:10px; padding:2px; height:24px; box-sizing:border-box; }
+.iseg span { display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:20px; border-radius:8px;
+  color:var(--c-text-secondary); font-size:11px; padding:0 6px; box-sizing:border-box; }
+.iseg .on { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+.fbtn { margin-left:auto; height:24px; display:inline-flex; align-items:center; gap:4px; padding:0 8px; border-radius:8px;
+  border:1px solid var(--c-border); font-size:12px; color:var(--c-text-secondary); background:transparent; }
+.fbtn .n { background:var(--c-accent-light); color:var(--c-text-heading); border-radius:999px; font-size:11px; font-weight:700; padding:0 5px; }
+.chips { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.chip { display:inline-flex; align-items:center; gap:4px; max-width:150px; height:22px; padding:0 4px 0 8px; border-radius:999px;
+  background:var(--c-bg-inset); color:var(--c-text-primary); font-size:11px; box-sizing:border-box; }
+.chip i { font-style:normal; color:var(--c-text-muted); }
+.chip .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chip .x { width:16px; height:16px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); }
+.reset { font-size:11px; color:var(--c-text-secondary); text-decoration:underline; text-underline-offset:2px; align-self:center; }
+
+/* Лента */
+.list { margin:0 -8px; display:flex; flex-direction:column; }
+.day { font-size:11px; font-weight:700; color:var(--c-text-muted); padding:8px 8px 2px; }
+.rec { display:flex; gap:8px; padding:8px; border-radius:8px; min-height:56px; box-sizing:border-box; align-items:flex-start; }
+.rec.m { min-height:64px; }
+.rec.hover { background:var(--c-bg-inset); }
+.rec.focus { box-shadow:var(--shadow-focus); }
+.rec.sel { background:var(--c-accent-light); }
+.th { width:40px; height:40px; flex:none; border-radius:8px; overflow:hidden; position:relative; background:var(--c-bg-inset);
+  display:flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
+.th .pl { position:absolute; right:2px; bottom:2px; width:14px; height:14px; border-radius:50%; background:var(--c-overlay);
+  display:flex; align-items:center; justify-content:center; color:var(--c-on-dark); }
+.th .many { position:absolute; left:2px; top:2px; font-size:11px; font-weight:700; line-height:13px; padding:0 3px; border-radius:6px;
+  background:var(--c-overlay); color:var(--c-on-dark); font-family:'JetBrains Mono',monospace; }
+.th.gone { color:var(--c-text-muted); }
+.bd { flex:1; min-width:0; }
+.l1 { display:flex; align-items:center; gap:6px; min-width:0; }
+.l1 b { font-size:12px; font-weight:600; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.l2, .l3 { font-size:11px; line-height:1.45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.l2 { color:var(--c-text-secondary); font-family:'JetBrains Mono',monospace; display:flex; gap:8px; }
+.l2 .mdl { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.l2 .tm { flex:none; color:var(--c-text-muted); }
+.l3 { color:var(--c-text-muted); }
+.l3 .who { color:var(--c-text-secondary); }
+.l3 .me { color:var(--c-text-heading); font-weight:600; }
+.bad { flex:none; display:inline-flex; align-items:center; gap:3px; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:700; white-space:nowrap; }
+.o-ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.o-cancel { background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.o-fail { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.o-int { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.more { display:flex; justify-content:center; padding-top:8px; }
+.btn { height:28px; padding:0 12px; border-radius:10px; border:1px solid var(--c-border); background:var(--c-bg-white);
+  color:var(--c-text-primary); font-size:12px; font-weight:600; display:inline-flex; align-items:center; gap:6px; }
+.btn.ghost { border-color:transparent; background:transparent; color:var(--c-text-secondary); }
+.end { text-align:center; font-size:11px; color:var(--c-text-muted); padding:8px 0 2px; }
+.skel { height:40px; border-radius:8px; background:var(--c-bg-inset); }
+.sk-row { display:flex; gap:8px; padding:8px; }
+.sk-row .t { flex:1; display:flex; flex-direction:column; gap:6px; padding-top:2px; }
+.sk-line { height:10px; border-radius:6px; background:var(--c-bg-inset); }
+.err { display:flex; gap:8px; align-items:flex-start; background:var(--c-danger-bg); border:1px solid var(--c-danger-border);
+  color:var(--c-danger-text); border-radius:10px; padding:8px 12px; font-size:12px; line-height:1.45; }
+.empty { text-align:center; padding:16px 8px 8px; }
+.empty .ic { width:40px; height:40px; border-radius:50%; background:var(--c-bg-inset); color:var(--c-text-muted);
+  display:inline-flex; align-items:center; justify-content:center; margin-bottom:8px; }
+.empty b { display:block; font-size:13px; color:var(--c-text-heading); margin-bottom:4px; }
+.empty span { display:block; font-size:12px; color:var(--c-text-secondary); line-height:1.45; }
+
+/* Меню фильтров (Menu / на мобиле — шторка) */
+.menu { width:280px; background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:8px; box-sizing:border-box; }
+.msec { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.06em; padding:8px 4px 4px; }
+.opt { display:flex; align-items:center; gap:8px; height:32px; padding:0 8px; border-radius:8px; font-size:13px; color:var(--c-text-primary); }
+.opt.hover { background:var(--c-bg-inset); }
+.opt .ck { width:16px; color:var(--c-accent); display:inline-flex; }
+.opt .h { margin-left:auto; font-size:11px; color:var(--c-text-muted); font-family:'JetBrains Mono',monospace; }
+.mseg { display:flex; background:var(--c-bg-inset); border-radius:10px; padding:2px; margin:0 4px; }
+.mseg span { flex:1; text-align:center; font-size:12px; padding:4px 0; border-radius:8px; color:var(--c-text-secondary); }
+.mseg .on { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; }
+.mfoot { display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--c-border-light); margin-top:8px; padding:8px 4px 0; }
+
+/* Карточка записи: Modal MODAL_W.wide на десктопе, шторка на мобиле */
+.modal { width:720px; background:var(--c-bg-white); border-radius:20px; box-shadow:var(--shadow-modal); box-sizing:border-box; padding:16px 24px 24px; }
+.sheet { width:360px; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); box-sizing:border-box; padding:8px 16px 24px; }
+.grab { width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:0 auto 12px; }
+.mh { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+.mh h4 { margin:0; font-size:16px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.msub { font-size:12px; color:var(--c-text-secondary); margin-bottom:12px; }
+.mbody { display:grid; grid-template-columns: 1fr 260px; gap:16px; }
+.sheet .mbody { display:flex; flex-direction:column; gap:12px; }
+.view { position:relative; border-radius:12px; overflow:hidden; background:var(--c-bg-inset); display:flex; align-items:center; justify-content:center; }
+.view .zoom { position:absolute; right:8px; top:8px; width:28px; height:28px; border-radius:8px; background:var(--c-overlay); color:var(--c-on-dark);
+  display:flex; align-items:center; justify-content:center; }
+.vars { display:flex; gap:4px; margin-top:8px; }
+.vars span { width:40px; height:40px; border-radius:6px; overflow:hidden; outline-offset:1px; }
+.vars .on { outline:2px solid var(--c-accent); }
+.gone { flex-direction:column; gap:6px; text-align:center; padding:24px 16px; color:var(--c-text-secondary); font-size:12px; line-height:1.45; }
+.gone b { color:var(--c-text-heading); font-size:13px; }
+.player { background:var(--c-bg-inset); border-radius:12px; padding:12px; display:flex; align-items:center; gap:12px; }
+.player .pp { width:36px; height:36px; border-radius:50%; background:var(--c-accent); color:var(--c-on-dark); display:flex; align-items:center; justify-content:center; flex:none; }
+.player .bar { flex:1; height:4px; border-radius:999px; background:var(--c-track); position:relative; }
+.player .bar i { position:absolute; left:0; top:0; bottom:0; width:38%; border-radius:999px; background:var(--c-accent); }
+.player .t { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--c-text-secondary); }
+.sec { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin:0 0 4px; display:flex; align-items:center; }
+.sec .ib { margin-left:auto; }
+.prompt { font-size:13px; line-height:1.5; color:var(--c-text-primary); background:var(--c-bg-inset); border-radius:8px; padding:8px 12px;
+  max-height:120px; overflow:auto; white-space:pre-wrap; }
+.dl { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; font-size:12px; line-height:1.45; margin:0; }
+.dl dt { color:var(--c-text-muted); }
+.dl dd { margin:0; color:var(--c-text-primary); font-family:'JetBrains Mono',monospace; overflow-wrap:anywhere; }
+.dl dd.na { font-family:inherit; color:var(--c-text-muted); font-style:italic; }
+.ebox { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); border-radius:8px; padding:8px 12px; font-size:12px; line-height:1.45; color:var(--c-danger-text); }
+.ebox code { display:block; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--c-text-secondary); margin-top:4px; overflow-wrap:anywhere; }
+.wbox { background:var(--c-warning-bg); border-radius:8px; padding:8px 12px; font-size:12px; line-height:1.45; color:var(--c-warning-text); }
+.who-pill { display:inline-flex; align-items:center; gap:4px; background:var(--c-info-bg); color:var(--c-text-heading); border-radius:999px; padding:1px 8px; font-size:11px; }
+.nav { display:flex; gap:4px; }
+.stack { display:flex; flex-direction:column; gap:12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// ---------- иконки (lucide, упрощённые пути) ----------
+const I = (d, s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ic = {
+  image: s => I('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>', s),
+  video: s => I('<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>', s),
+  audio: s => I('<path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>', s),
+  check: s => I('<path d="M20 6 9 17l-5-5"/>', s),
+  ban: s => I('<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>', s),
+  alert: s => I('<path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>', s),
+  restart: s => I('<path d="M3 12a9 9 0 1 0 9-9 9.8 9.8 0 0 0-6.7 2.7L3 8"/><path d="M3 3v5h5"/>', s),
+  refresh: s => I('<path d="M3 12a9 9 0 0 1 9-9 9.8 9.8 0 0 1 6.7 2.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.8 9.8 0 0 1-6.7-2.7L3 16"/><path d="M8 16H3v5"/>', s),
+  filter: s => I('<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>', s),
+  x: s => I('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', s),
+  play: s => I('<path d="m7 4 13 8-13 8Z" fill="currentColor"/>', s),
+  copy: s => I('<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>', s),
+  zoom: s => I('<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/>', s),
+  eye: s => I('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>', s),
+  imgoff: s => I('<path d="m2 2 20 20"/><path d="M10.4 10.4a2 2 0 0 1-2.8-2.8"/><path d="M21 15V5a2 2 0 0 0-2-2H9"/><path d="M3 5v14a2 2 0 0 0 2 2h14"/><path d="m21 21-9-9"/>', s),
+  user: s => I('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', s),
+  left: s => I('<path d="m15 18-6-6 6-6"/>', s),
+  right: s => I('<path d="m9 18 6-6-6-6"/>', s),
+  history: s => I('<path d="M3 12a9 9 0 1 0 9-9 9.8 9.8 0 0 0-6.7 2.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>', s),
+};
+
+// ---------- миниатюры: содержимое-картинка (вне тем — это пиксели результата) ----------
+const pic = (a, b, c) => `<svg width="100%" height="100%" viewBox="0 0 40 40" preserveAspectRatio="xMidYMid slice"><defs><linearGradient id="g${a.slice(1)}${b.slice(1)}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="40" height="40" fill="url(#g${a.slice(1)}${b.slice(1)})"/><circle cx="28" cy="12" r="5" fill="${c}"/><path d="M0 32 L12 22 L22 30 L30 24 L40 32 L40 40 L0 40Z" fill="${c}" opacity=".55"/></svg>`;
+const SEA = pic('#7FB3D5', '#1F4E79', '#F6E7B4'), DUSK = pic('#F2A65A', '#6B3E75', '#FFE3B3'), FOREST = pic('#A7C796', '#2F4F2F', '#E8F0D8'), PORTRAIT = pic('#E9C9B4', '#8C5A45', '#F7E3D4');
+
+// ---------- исходы ----------
+const OUT = {
+  ok:     { cls:'o-ok',     icon: ic.check,   label:'готово' },
+  cancel: { cls:'o-cancel', icon: ic.ban,     label:'отменено' },
+  fail:   { cls:'o-fail',   icon: ic.alert,   label:'ошибка' },
+  int:    { cls:'o-int',    icon: ic.restart, label:'прервано' },
+};
+const badge = o => `<span class="bad ${OUT[o].cls}">${OUT[o].icon(11)}${OUT[o].label}</span>`;
+
+// ---------- строка записи ----------
+function rec(r, st = '', mobile = false) {
+  let th;
+  if (r.gone) th = `<span class="th gone" title="Результат больше не доступен">${ic.imgoff(16)}</span>`;
+  else if (r.kind === 'audio' || !r.pic) th = `<span class="th">${(r.kind === 'audio' ? ic.audio : r.kind === 'video' ? ic.video : ic.image)(16)}</span>`;
+  else th = `<span class="th">${r.pic}${r.kind === 'video' ? `<span class="pl">${ic.play(8)}</span>` : ''}${r.n > 1 ? `<span class="many">${r.n}</span>` : ''}</span>`;
+  const who = r.me ? `<span class="me">вы</span>` : `<span class="who">${r.who}</span>`;
+  const wait = r.wait == null ? 'очередь —' : `очередь ${r.wait}`;
+  const run = r.run == null ? '' : ` · расчёт ${r.run}`;
+  return `<div class="rec ${mobile ? 'm' : ''} ${st}">${th}<span class="bd">
+    <span class="l1"><b>${r.op}</b>${badge(r.o)}</span>
+    <span class="l2"><span class="mdl">${r.model}</span><span class="tm">${r.at}</span></span>
+    <span class="l3">${who} · ${wait}${run}</span></span></div>`;
+}
+
+const ROWS = [
+  { kind:'image', pic:SEA, op:'Картинка · по тексту', model:'qwen-image-2.1', at:'14:32', who:'andrey', me:true, wait:'1 мин 20 с', run:'42 с', o:'ok', n:4 },
+  { kind:'video', pic:DUSK, op:'Видео · из картинки', model:'minimax-h3', at:'14:05', who:'masha', wait:'6 мин', run:'5 мин 31 с', o:'ok' },
+  { kind:'audio', op:'Звук · песня', model:'ace-step-1.5-xl', at:'13:40', who:'masha', wait:'12 с', run:'1 мин 28 с', o:'cancel' },
+  { kind:'image', pic:PORTRAIT, op:'Картинка · правка лица', model:'qwen-image-edit-2.1', at:'13:12', who:'ivan_petrov_long_login', wait:'3 с', run:'18 с', o:'fail' },
+  { kind:'video', op:'Видео · по тексту', model:'minimax-h3', at:'12:58', who:'andrey', me:true, wait:null, run:null, o:'int' },
+];
+const ROWS_Y = [
+  { kind:'image', gone:true, op:'Картинка · по тексту', model:'qwen-image-2.1', at:'23:47', who:'masha', wait:'0 с', run:'39 с', o:'ok' },
+  { kind:'audio', op:'Звук · озвучка', model:'qwen3-tts-1.7b', at:'22:10', who:'andrey', me:true, wait:'0 с', run:'9 с', o:'ok' },
+];
+
+// ---------- шапка блока, фильтры ----------
+const head = (n, st = '') => `<div class="hd"><h3>История · 7 дней</h3><span class="cnt">${n}</span>
+  <button class="ib ${st}" title="Обновить" aria-label="Обновить историю">${ic.refresh(16)}</button></div>`;
+const summary = `<div class="sum">Готово 290 · отменено 4 · ошибок 12 · прервано 6</div>`;
+const privacy = `<div class="priv">${ic.eye(12)}<span>Видны генерации всех пользователей AI Home — промпты и результаты. Этот раздел доступен только администраторам.</span></div>`;
+const seg = on => `<span class="iseg" role="radiogroup" aria-label="Вид">${['все','image','audio','video'].map(k =>
+  `<span class="${k === on ? 'on' : ''}" title="${{все:'Все виды',image:'Картинки',audio:'Звук',video:'Видео'}[k]}">${k === 'все' ? 'Все' : ic[k](14)}</span>`).join('')}</span>`;
+const fbar = (on = 'все', n = 0) => `<div class="fbar">${seg(on)}<button class="fbtn">${ic.filter(14)}Фильтры${n ? `<span class="n">${n}</span>` : ''}</button></div>`;
+const chips = list => `<div class="chips">${list.map(([k, v]) => `<span class="chip"><i>${k}</i><span class="t">${v}</span><span class="x">${ic.x(10)}</span></span>`).join('')}<span class="reset">Сбросить</span></div>`;
+
+function historyCard({ rows = ROWS, rowsY = ROWS_Y, states = [], mobile = false, filters = null, tail = 'more' }) {
+  const rr = (list) => list.map((r, i) => rec(r, states[i] || '', mobile)).join('');
+  const tailHtml = tail === 'more' ? `<div class="more"><button class="btn">Показать ещё</button></div>`
+    : tail === 'loading' ? `<div class="more"><span class="cap">Загружаю…</span></div>`
+    : tail === 'err' ? `<div class="more" style="gap:8px;align-items:center"><span class="cap" style="color:var(--c-danger-text)">Не удалось подгрузить.</span><button class="btn ghost">${ic.refresh(14)}Повторить</button></div>`
+    : `<div class="end">Это все генерации за 7 дней</div>`;
+  return `<section class="card">${head(filters ? '18 из 312' : '312')}${privacy}${filters ? fbar(filters.kind, filters.n) + chips(filters.chips) : fbar() + summary}
+    <div class="list"><div class="day">Сегодня</div>${rr(rows)}<div class="day">Вчера</div>${rr(rowsY)}</div>${tailHtml}</section>`;
+}
+
+const upper = `<div class="ghostcard">ComfyUI · модель в памяти · видеокарта · сейчас считается · очередь — без изменений</div>`;
+
+// ---------- состояния списка ----------
+const skeleton = `<section class="card">${head('')}${privacy}${fbar()}<div class="list">${[1,2,3].map(() =>
+  `<div class="sk-row"><span class="skel" style="width:40px"></span><span class="t"><span class="sk-line" style="width:70%"></span><span class="sk-line" style="width:45%"></span><span class="sk-line" style="width:60%"></span></span></div>`).join('')}</div></section>`;
+const emptyAll = `<section class="card">${head('0')}${privacy}<div class="empty"><span class="ic">${ic.history(20)}</span>
+  <b>Пока нет генераций</b><span>Здесь появятся картинки, звук и видео, которые считались на своей видеокарте за последние 7 дней.</span></div></section>`;
+const emptyFilt = `<section class="card">${head('0 из 312')}${privacy}${fbar('video', 2)}${chips([['Пользователь','masha'],['Исход','ошибка']])}<div class="empty"><span class="ic">${ic.filter(20)}</span>
+  <b>Ничего не нашлось</b><span>За 7 дней нет записей с такими условиями.</span><div style="margin-top:8px"><button class="btn">Сбросить фильтры</button></div></div></section>`;
+const listErr = `<section class="card">${head('')}${privacy}${fbar()}<div class="err">${ic.alert(14)}<div><b>Не удалось загрузить историю.</b> Сервер не ответил — живые данные выше от этого не зависят.
+  <div style="margin-top:8px"><button class="btn">${ic.refresh(14)}Повторить</button></div></div></div></section>`;
+
+// ---------- меню фильтров ----------
+const opt = (label, on, hint = '', st = '') => `<div class="opt ${st}"><span class="ck">${on ? ic.check(14) : ''}</span>${label}${hint ? `<span class="h">${hint}</span>` : ''}</div>`;
+const filterMenu = `<div class="menu" role="dialog" aria-label="Фильтры истории">
+  <div class="msec">Период</div><div class="mseg"><span>Сегодня</span><span>24 ч</span><span class="on">7 дней</span></div>
+  <div class="msec">Исход</div>${opt('Любой', false)}${opt('Готово', false, '290')}${opt('Отменено', false, '4')}${opt('Ошибка', true, '12', 'hover')}${opt('Прервано', false, '6')}
+  <div class="msec">Модель</div>${opt('Любая', true)}${opt('<span class="mono">qwen-image-2.1</span>', false, '201')}${opt('<span class="mono">minimax-h3</span>', false, '48')}${opt('<span class="mono">ace-step-1.5-xl</span>', false, '33')}
+  <div class="msec">Пользователь</div>${opt('Все', false)}${opt('вы (andrey)', false, '140')}${opt('masha', true, '96')}${opt('ivan_petrov_long_login', false, '76')}
+  <div class="mfoot"><span class="reset">Сбросить всё</span><button class="btn">Готово</button></div></div>`;
+
+// ---------- карточка записи ----------
+const params = (rows) => `<dl class="dl">${rows.map(([k, v, na]) => `<dt>${k}</dt><dd class="${na ? 'na' : ''}">${v}</dd>`).join('')}</dl>`;
+const PROMPT = 'Вечернее море у скалистого берега, мягкий тёплый свет, лёгкий туман над водой, кинематографичный кадр, 35 мм';
+const promptBlock = (copied) => `<div><div class="sec">Промпт<button class="ib" title="${copied ? 'Скопировано' : 'Скопировать промпт'}">${copied ? `<span style="color:var(--c-success-text)">${ic.check(16)}</span>` : ic.copy(16)}</button></div><div class="prompt">${PROMPT}</div></div>`;
+const mhead = (r, foreign) => `<div class="mh"><span class="th" style="width:28px;height:28px">${(r.kind === 'audio' ? ic.audio : r.kind === 'video' ? ic.video : ic.image)(15)}</span><h4>${r.op}</h4>${badge(r.o)}
+  <span class="nav"><button class="ib" title="Предыдущая (←)">${ic.left(16)}</button><button class="ib" title="Следующая (→)">${ic.right(16)}</button></span><button class="ib" title="Закрыть (Esc)">${ic.x(16)}</button></div>
+  <div class="msub">${foreign ? `<span class="who-pill">${ic.user(11)}Генерация пользователя <b>${r.who}</b></span> · ` : 'Ваша генерация · '}15 октября, ${r.at}</div>`;
+const timeRows = (wait, run, card = 'GPU 1 · RTX 3090', cardNa = false) => [['Поставлена','14:30:52'],['Ожидание', wait, wait === 'неизвестно'],['Расчёт', run],['Обещали','35 с'],['Карта', card, cardNa]];
+
+function cardSuccess(sheet) {
+  const r = ROWS[0];
+  const view = `<div><div class="view" style="aspect-ratio:1/1">${SEA.replace('width="100%" height="100%"', 'width="100%" height="100%"')}<span class="zoom" title="Открыть крупно">${ic.zoom(14)}</span></div>
+    <div class="vars">${[SEA, DUSK, FOREST, PORTRAIT].map((p, i) => `<span class="${i === 0 ? 'on' : ''}">${p}</span>`).join('')}</div></div>`;
+  const side = `<div class="stack">${promptBlock(true)}<div><div class="sec">Параметры</div>${params([['Модель','qwen-image-2.1'],['Операция','по тексту'],['Размер','1328 × 1328'],['Вариантов','4'],['Шаги','25'],['Seed','<span>2 914 337 016</span>']])}</div>
+    <div><div class="sec">Время и карта</div>${params(timeRows('1 мин 20 с', '42 с'))}</div></div>`;
+  return `<div class="${sheet ? 'sheet' : 'modal'}">${sheet ? '<div class="grab"></div>' : ''}${mhead({ ...r, me: false, who: 'masha' }, true)}<div class="mbody">${view}${side}</div></div>`;
+}
+function cardFail() {
+  const r = ROWS[3];
+  return `<div class="sheet">${'<div class="grab"></div>'}${mhead(r, true)}<div class="mbody">
+    <div class="ebox"><b>Ошибка: не хватило памяти видеокарты.</b> Задача остановилась на 3-м шаге из 20.<code>CUDA out of memory. Tried to allocate 2.00 GiB (GPU 1; 23.69 GiB total…)</code></div>
+    <div class="view gone">${ic.imgoff(20)}<b>Результата нет</b>Генерация завершилась ошибкой.</div>
+    ${promptBlock(false)}<div><div class="sec">Параметры</div>${params([['Модель','qwen-image-edit-2.1'],['Операция','правка лица'],['Размер','1024 × 1024'],['Шаги','20'],['Seed','118 004']])}</div>
+    <div><div class="sec">Время и карта</div>${params(timeRows('3 с', '18 с'))}</div></div></div>`;
+}
+function cardInterrupted() {
+  const r = ROWS[4];
+  return `<div class="sheet"><div class="grab"></div>${mhead({ ...r }, false)}<div class="mbody">
+    <div class="wbox"><b>Прервано рестартом.</b> Сервер AI Home перезапустился, пока задача ждала очереди. Результата нет — запустите генерацию заново.</div>
+    ${promptBlock(false)}<div><div class="sec">Параметры</div>${params([['Модель','minimax-h3'],['Операция','по тексту'],['Длительность','5 с'],['Размер','1344 × 768'],['Seed','не задан', true]])}</div>
+    <div><div class="sec">Время и карта</div>${params([['Поставлена','12:58:03'],['Ожидание','неизвестно', true],['Расчёт','не начинался', true],['Карта','не сообщает', true]])}</div></div></div>`;
+}
+const GONE = [
+  ['expired', 'Истёк срок хранения: рабочие файлы редактора живут 7 дней.'],
+  ['missing', 'Файл удалили.'],
+  ['project_gone', 'Проект удалён.'],
+  ['local_project', 'Проект переехал на устройство — его файлы больше не на сервере.'],
+  ['source_disabled', 'Редактор, в котором делали генерацию, выключен на этом сервере.'],
+];
+function cardGone() {
+  return `<div class="sheet"><div class="grab"></div>${mhead({ ...ROWS_Y[0], op:'Картинка · по тексту' }, true)}<div class="mbody">
+    <div class="view gone">${ic.imgoff(20)}<b>Результат больше не доступен</b>${GONE[3][1]}</div>
+    ${promptBlock(false)}<div><div class="sec">Время и карта</div>${params([['Поставлена','23:46:12'],['Ожидание','0 с'],['Расчёт','39 с'],['Карта','не сообщает', true]])}</div>
+    <div class="cap" style="max-width:none"><b>Причины (подпись под заголовком, одна из):</b><br>${GONE.map(([k, t]) => `<span class="mono">${k}</span> — ${t}`).join('<br>')}</div></div></div>`;
+}
+function cardAudio() {
+  const r = ROWS_Y[1];
+  return `<div class="sheet"><div class="grab"></div>${mhead(r, false)}<div class="mbody">
+    <div class="player"><span class="pp">${ic.play(14)}</span><span class="bar"><i></i></span><span class="t">0:03 / 0:09</span></div>
+    ${promptBlock(false)}<div class="cap" style="max-width:none">Видео — тот же блок просмотра: &lt;video controls&gt; с обложкой-миниатюрой, по ширине колонки, 16:9. Отменённая генерация — заглушка «Результата нет · Генерацию отменили».</div></div></div>`;
+}
+// ---------- сборка ----------
+const T = {
+  light: 'Светлая тема', dark: 'Тёмная тема',
+};
+document.getElementById('root').innerHTML = ['light', 'dark'].map(th => `
+<div class="theme ${th}">
+  <h2>${T[th]} · «История · 7 дней» на вкладке «Медиа»</h2>
+  <p class="lead">История заменяет карточку «Последний час» и встаёт последним блоком вкладки. Верхние блоки (ComfyUI, модель, карта, «Сейчас считается», очередь) не меняются. Спецификация — local-model-stats-history.md.</p>
+
+  <div class="row">
+    <div class="frame"><div class="tab">${upper}${historyCard({ states: ['', 'hover', '', 'focus'] })}</div>
+      <div class="cap"><b>1. Панель 340 px.</b> Шапка со счётчиком и «Обновить», пометка о видимости, вид — IconSegmented, остальное — за «Фильтры». Сводка исходов. Группы по дням. Строка 2 — hover, строка 4 — фокус с клавиатуры. Первая строка — своя («вы»), 4 варианта (бейдж «4»). Вчерашняя картинка — миниатюры нет (ImageOff).</div></div>
+
+    <div class="frame"><div class="tab m">${historyCard({ mobile: true, states: ['sel'], rowsY: [], tail: 'loading' })}</div>
+      <div class="cap"><b>1м. Мобильный лист 360 px.</b> Строка от 64 px, вся строка — тач-цель; касание даёт подложку C.accentLight до открытия шторки. «Обновить» и «Фильтры» — 40 px по высоте касания. Внизу — идёт подгрузка.</div></div>
+
+    <div class="frame"><div class="tab">${historyCard({ filters: { kind: 'image', n: 2, chips: [['Пользователь', 'masha'], ['Исход', 'ошибка']] }, rows: [ROWS[3]], rowsY: [], tail: 'end' })}</div>
+      <div class="cap"><b>2. Фильтры включены.</b> Счётчик «18 из 312», чипы активных условий с крестиком и «Сбросить». Сводка исходов скрыта — её роль у чипов. Внизу — конец ленты.</div>
+      <div style="margin-top:8px">${filterMenu}</div>
+      <div class="cap"><b>3. Меню «Фильтры»</b> (Menu под кнопкой; на мобиле — шторка). Период сегментом, остальное — один выбор в секции с числом записей. Строка «Ошибка» — hover.</div></div>
+
+    <div class="frame">
+      <div class="tab">${skeleton}</div><div class="cap"><b>4. Загрузка</b> первой страницы: три скелет-строки, фильтры уже кликабельны.</div>
+      <div class="tab">${emptyAll}</div><div class="cap"><b>5. Пусто</b> — за 7 дней ни одной генерации.</div>
+      <div class="tab">${emptyFilt}</div><div class="cap"><b>6. Ничего не нашлось</b> по фильтрам.</div>
+      <div class="tab">${listErr}</div><div class="cap"><b>7. Ошибка загрузки списка.</b> Для подгрузки страницы — строка «Не удалось подгрузить · Повторить» вместо «Показать ещё».</div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:24px">Карточка записи</h2>
+  <p class="lead">Десктоп — Modal MODAL_W.wide (720): просмотр слева, сведения справа 260 px. Мобила — та же модалка шторкой (Modal сам). ← → листают записи ленты, Esc закрывает.</p>
+  <div class="row">
+    <div class="frame">${cardSuccess(false)}<div class="cap" style="max-width:720px"><b>8. Десктоп, чужая картинка, 4 варианта.</b> Плашка «Генерация пользователя masha» — пометка чужого. Промпт только что скопирован (галочка 1,5 с). Лупа — ImageLightbox на весь экран.</div></div>
+  </div>
+  <div class="row" style="margin-top:24px">
+    <div class="frame">${cardSuccess(true)}<div class="cap"><b>9. Мобила, та же запись.</b> Колонка: просмотр, промпт, параметры, время.</div></div>
+    <div class="frame">${cardFail()}<div class="cap"><b>10. Ошибка с причиной:</b> человеческая фраза + сырой текст ComfyUI моно-шрифтом (обрезан сервером до 500 знаков).</div></div>
+    <div class="frame">${cardInterrupted()}<div class="cap"><b>11. Прервано рестартом</b>, ожидание неизвестно, карта не сообщает. Своя запись — «Ваша генерация».</div></div>
+    <div class="frame">${cardGone()}<div class="cap"><b>12. Результат больше не доступен</b> — данные записи остаются, вместо просмотра заглушка с причиной.</div></div>
+    <div class="frame">${cardAudio()}<div class="cap"><b>13. Звук — плеер</b> (нативный audio controls в обёртке).</div></div>
+  </div>
+</div>`).join('');
+</script>
+</body>
+</html>

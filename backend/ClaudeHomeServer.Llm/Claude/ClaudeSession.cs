@@ -5802,6 +5802,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     run.ContinuationActive = false;
                     // CLI взялся за наш ход — поставленное до него он доставит в этом же ходе
                     _transcriptTailer?.ClearQueuedDeliveries();
+                    // Вызовы модели до эха — ход-продолжение CLI, а не наш ход: его диагностика
+                    // промаха про нашу паузу ничего не говорит. Первый вызов хода — после эха
+                    // (сброс в SendMessage остаётся для прогона без эха)
+                    ResetTurnPromptCacheMiss();
                     break;
                 }
                 await HandleUserMessageAsync(run, root);

@@ -176,6 +176,36 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         pc.MissedTokens.Should().Be(80_000);
     }
 
+    // Гонка с ходом-продолжением: пользователь отправил ход, пока CLI ещё отвечал на
+    // task-notification. Вызовы до эха нашего сообщения — чужие: первый вызов хода — после эха
+    [Fact]
+    public async Task ПродолжениеДоЭха_НеСчитаетсяПервымВызовомХода()
+    {
+        const string uuid = "11111111-2222-3333-4444-555555555555";
+        var (session, sent, _) = NewSession();
+        var run = NewRun();
+        CliRunType.GetField("PendingEchoUuid")!.SetValue(run, uuid);
+
+        var reasons = await CapturePromptCacheTurns(async () =>
+        {
+            // Продолжение: холодный старт после паузы
+            await Drive(session, run, MessageStart(Usage(0, 70_000, eph1h: 70_000),
+                """{"cache_miss_reason":{"type":"previous_message_not_found","cache_missed_input_tokens":70000}}"""));
+            await Drive(session, run, ResultLine); // result продолжения до эха — пропускается
+            await Drive(session, run,
+                $$"""{"type":"user","message":{"role":"user","content":"Ну как?"},"uuid":"{{uuid}}","isReplay":true}""");
+            // Наш ход: префикс прогрет продолжением, промаха нет
+            await Drive(session, run, MessageStart(Usage(70_000, 0), "null"));
+            await Drive(session, run, ResultLine);
+        });
+
+        var pc = LastPromptCache(sent)!;
+        pc.MissReason.Should().BeNull("промах был у продолжения, а не у нашего хода");
+        pc.MissedTokens.Should().BeNull();
+        pc.Ttl.Should().Be("1h", "запись кэша продолжением настоящая — TTL от неё");
+        reasons.Should().Equal(["none"], "в сторож — только первый вызов нашего хода");
+    }
+
     [Fact]
     public async Task DiagnosticsNull_ПричиныНет()
     {

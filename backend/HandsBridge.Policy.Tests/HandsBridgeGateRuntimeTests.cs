@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 using Xunit;
+using Xunit.Sdk;
 
 namespace HandsBridge.Policy.Tests;
 
@@ -109,6 +110,30 @@ public class HandsBridgeGateRuntimeTests
         var result = await Call("Sbroenne.WindowsMcp.Tools.BrowserClickTool", new() { ["ref"] = "e1" });
 
         AssertGateDenied(result, "browser_click", "unknown or stale");
+    }
+
+    /// <summary>
+    /// Сквозной тест mouse_control (D2b-1.1): вызов инструмента с точкой над «запрещённым» окном
+    /// (NoWindows → GetRootWindowAt = 0) возвращает отказ гейта, а ввод не отправляется.
+    /// На Linux гейт отказывает до первого WinAPI, поэтому тест исполняется целиком.
+    /// </summary>
+    [SkippableFact]
+    public async Task Mouse_control_denied_by_gate_does_not_send_input()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "mouse_control: WinAPI (GetForegroundWindow) — только Windows");
+
+        var type = Bridge.Value.GetType("Sbroenne.WindowsMcp.Tools.MouseControlTool", throwOnError: true)!;
+        var actionType = type.GetNestedType("MouseControlAction")!;
+        var click = Enum.Parse(actionType, "Click");
+
+        var result = await Call("Sbroenne.WindowsMcp.Tools.MouseControlTool", new()
+        {
+            ["action"] = click,
+            ["x"] = 100,
+            ["y"] = 200,
+        });
+
+        AssertGateDenied(result, "mouse_control", "No window at");
     }
 
     private static void AssertGateDenied((bool IsError, string Text) result, string tool, string reason)

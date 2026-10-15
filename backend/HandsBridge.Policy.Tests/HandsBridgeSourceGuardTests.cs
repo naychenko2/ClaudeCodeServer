@@ -1,5 +1,8 @@
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.HandsBridge.Policy;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 namespace HandsBridge.Policy.Tests;
@@ -170,16 +173,49 @@ public class HandsBridgeSourceGuardTests
     /// Руки без UIA — мышь (D2b-1): инструмент зовёт только ВНУТРЕННИЕ перегрузки
     /// <c>MouseInputService</c>, которые принимают целевое окно (<c>nint</c>) — иначе повторная
     /// проверка точки перед <c>SendInput</c> (гонка «гейт → ввод») не сработает. Публичные
-    /// перегрузки окна не принимают и проверки не делают.
+    /// перегрузки окна не принимают и проверки не делают. Разбор синтаксический (Roslyn):
+    /// каждый вызов члена <c>MouseInputService</c> обязан передавать окно (не null/default/IntPtr.Zero)
+    /// и иметь достаточно аргументов для внутренней перегрузки.
     /// </summary>
     [Fact]
     public void Mouse_tool_calls_only_the_guarded_overloads()
     {
-        var source = Read("Tools/MouseControlTool.cs");
-        foreach (var action in new[] { "Move", "Click", "DoubleClick", "RightClick", "MiddleClick" })
+        var root = ParseTree(Read("Tools/MouseControlTool.cs"));
+
+        // Внутренние перегрузки, которые инструмент вправе вызывать (мин. число аргументов)
+        var internalMinArgs = new Dictionary<string, int>
         {
-            var pattern = $@"MouseInputService\.{action}Async\([^)]*window, cancellationToken\)";
-            Assert.Matches(pattern, source);
+            ["MoveAsync"] = 4,
+            ["ClickAsync"] = 5,
+            ["DoubleClickAsync"] = 5,
+            ["RightClickAsync"] = 5,
+            ["MiddleClickAsync"] = 4,
+        };
+        // Публичные перегрузки без окна — ещё не в схеме (D2b-2)
+        var forbidden = new[] { "DragAsync", "StrokeAsync", "ScrollAsync" };
+
+        var calls = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(IsMouseInputServiceCall)
+            .ToList();
+
+        Assert.NotEmpty(calls);
+
+        foreach (var call in calls)
+        {
+            var member = (MemberAccessExpressionSyntax)call.Expression;
+            var name = member.Name.Identifier.Text;
+
+            Assert.Contains(name, internalMinArgs);
+            Assert.DoesNotContain(name, forbidden);
+
+            var argCount = call.ArgumentList.Arguments.Count;
+            Assert.True(argCount >= internalMinArgs[name],
+                $"{name}: {argCount} аргументов — меньше {internalMinArgs[name]} внутренней перегрузки (публичная без окна?)");
+
+            // Последний аргумент перед CancellationToken — окно: не null/default/IntPtr.Zero
+            var windowArg = call.ArgumentList.Arguments[^2].Expression;
+            Assert.False(IsNullOrDefault(windowArg),
+                $"{name}: аргумент окна = «{windowArg}» (должен быть не null/default/IntPtr.Zero)");
         }
     }
 
@@ -187,15 +223,70 @@ public class HandsBridgeSourceGuardTests
     /// Перед каждым <c>SendInput</c> в перегрузках, которые использует инструмент, стоит повторная
     /// проверка точки: окно ПОД ТЕКУЩЕЙ ПОЗИЦИЕЙ КУРСОРА принимает ввод и совпадает с целевым.
     /// Закрывает гонку между проверкой гейта в инструменте и самим вводом.
+    /// Разбор синтаксический (Roslyn): в каждом проверяемом методе вызов <c>CursorPointAcceptsInput</c>
+    /// стоит ДО первого <c>SendInput</c> и вложен в <c>if</c> с ранним <c>return</c>.
+    /// Любой НОВЫЙ метод с <c>SendInput</c> обязан попасть в список проверяемых или в явные исключения.
     /// </summary>
     [Fact]
     public void Mouse_input_rechecks_the_point_before_every_send_input()
     {
-        var source = Read("Input/MouseInputService.cs");
-        foreach (var reason in new[] { "movePointReason", "clickPointReason", "doublePointReason", "rightPointReason", "middlePointReason" })
+        var root = ParseTree(Read("Input/MouseInputService.cs"));
+
+        // Методы, которые использует инструмент: обязаны иметь проверку точки перед SendInput
+        var checkedMethods = new[] { "MoveCoreAsync", "ClickCoreAsync", "DoubleClickCoreAsync", "RightClickCoreAsync", "MiddleClickCoreAsync" };
+        // Методы с SendInput, ещё не в инструменте (D2b-2: drag/scroll/polyline)
+        var excludedMethods = new[] { "StrokeCoreAsync", "ScrollCoreAsync" };
+
+        var allMethodsWithSendInput = new List<string>();
+
+        foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
         {
-            Assert.Contains($"CursorPointAcceptsInput(expectedForegroundWindow, out var {reason})", source);
+            var body = method.Body;
+            if (body is null) continue;
+
+            if (!body.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSendInputCall))
+                continue;
+
+            allMethodsWithSendInput.Add(method.Identifier.Text);
+
+            if (!checkedMethods.Contains(method.Identifier.Text) && !excludedMethods.Contains(method.Identifier.Text))
+            {
+                Assert.Fail($"Метод {method.Identifier.Text} содержит SendInput, но не в списке проверяемых и не в исключениях");
+            }
+
+            if (!checkedMethods.Contains(method.Identifier.Text))
+                continue;
+
+            // Вызовы CursorPointAcceptsInput в теле метода
+            var pointChecks = body.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Where(IsPointCheckCall)
+                .ToList();
+            Assert.NotEmpty(pointChecks);
+
+            // Вызовы SendInput в теле метода
+            var sendInputs = body.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Where(IsSendInputCall)
+                .ToList();
+            Assert.NotEmpty(sendInputs);
+
+            // Проверка точки стоит ДО первого SendInput
+            var firstSendInput = sendInputs.MinBy(inv => inv.SpanStart)!;
+            var lastPointCheck = pointChecks.MaxBy(inv => inv.SpanStart)!;
+            Assert.True(lastPointCheck.SpanStart < firstSendInput.SpanStart,
+                $"{method.Identifier.Text}: проверка точки (span {lastPointCheck.SpanStart}) после первого SendInput (span {firstSendInput.SpanStart})");
+
+            // Каждый вызов проверки точки вложен в if с ранним return
+            foreach (var check in pointChecks)
+            {
+                var ifStmt = FindEnclosingIfWithReturn(check);
+                Assert.NotNull(ifStmt);
+            }
         }
+
+        // Множество методов с SendInput == проверяемые + исключения
+        var expected = checkedMethods.Concat(excludedMethods).ToHashSet(StringComparer.Ordinal);
+        var actual = allMethodsWithSendInput.ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(expected, actual);
     }
 
     [Fact]
@@ -246,6 +337,22 @@ public class HandsBridgeSourceGuardTests
 
     private static string Read(string relative) => File.ReadAllText(Path.Combine(BridgeDir, relative));
 
+    /// <summary>
+    /// Самопроверка: <see cref="BridgeDir"/> лежит в том же дереве, что и тестовая сборка.
+    /// Без этого мутации в worktree дают ложные результаты (Глеб, D2b-1).
+    /// </summary>
+    [Fact]
+    public void Bridge_dir_is_in_the_same_tree_as_the_test_assembly()
+    {
+        var bridge = Path.GetFullPath(BridgeDir);
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (bridge.StartsWith(dir.FullName + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                return;
+        }
+        Assert.Fail($"BridgeDir «{bridge}» не в дереве сборки «{AppContext.BaseDirectory}»");
+    }
+
     private static string FindBridgeDir()
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
@@ -258,5 +365,55 @@ public class HandsBridgeSourceGuardTests
         }
 
         throw new InvalidOperationException("Не найден каталог backend/HandsBridge выше " + AppContext.BaseDirectory);
+    }
+
+    // ─── Roslyn-хелперы ───────────────────────────────────────────────────────────────────────
+
+    private static CompilationUnitSyntax ParseTree(string source) =>
+        CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
+
+    /// <summary>Вызов <c>NativeMethods.SendInput(...)</c> — любой метод с именем SendInput через MemberAccess.</summary>
+    private static bool IsSendInputCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "SendInput" };
+
+    /// <summary>Вызов <c>CursorPointAcceptsInput(...)</c> — метод того же класса, без квалификатора.</summary>
+    private static bool IsPointCheckCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is IdentifierNameSyntax { Identifier.Text: "CursorPointAcceptsInput" };
+
+    /// <summary>
+    /// Вызов члена <c>MouseInputService</c>: <c>WindowsToolsBase.MouseInputService.XxxAsync(...)</c>.
+    /// Локальные алиасы (var mouse = WindowsToolsBase.MouseInputService) пока не покрываются —
+    /// в текущем коде их нет.
+    /// </summary>
+    private static bool IsMouseInputServiceCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is MemberAccessExpressionSyntax member
+        && member.Expression is MemberAccessExpressionSyntax outer
+        && outer.Name is IdentifierNameSyntax { Identifier.Text: "MouseInputService" };
+
+    /// <summary>
+    /// Выражение-«пустота»: <c>null</c>, <c>default</c>, <c>IntPtr.Zero</c>, <c>nint.Zero</c>.
+    /// </summary>
+    private static bool IsNullOrDefault(ExpressionSyntax expr)
+    {
+        if (expr is LiteralExpressionSyntax { Token.Text: "null" }) return true;
+        if (expr is LiteralExpressionSyntax { Token.Text: "default" }) return true;
+        if (expr is MemberAccessExpressionSyntax { Name.Identifier.Text: "Zero" }) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Ближайший предок-<c>IfStatement</c>, чьё условие содержит <paramref name="node"/>
+    /// и чьё тело содержит <c>return</c>.
+    /// </summary>
+    private static IfStatementSyntax? FindEnclosingIfWithReturn(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is not IfStatementSyntax ifStmt) continue;
+            if (!ifStmt.Condition.DescendantNodesAndSelf().Contains(node)) continue;
+            if (ifStmt.Statement.DescendantNodes().OfType<ReturnStatementSyntax>().Any())
+                return ifStmt;
+        }
+        return null;
     }
 }

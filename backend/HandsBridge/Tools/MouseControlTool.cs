@@ -140,6 +140,8 @@ public static partial class MouseControlTool
 
     private static Task<MouseControlResult> HandleMoveAsync(int? x, int? y, nint window, CancellationToken cancellationToken)
     {
+        // Гейт (CheckPointer) — главный контракт: требует ровно одну точку. Эта проверка —
+        // вторичная защита на случай, если гейт когда-нибудь изменит контракт.
         if (!x.HasValue || !y.HasValue)
         {
             return Task.FromResult(MouseControlResult.CreateFailure(

@@ -19,8 +19,15 @@ internal static class HandsGate
     private static HandsActivity s_activity = new(NoHandsActivitySignal.Instance);
     private static HandsMachineHold s_hold = new(new InProcessHandsMachineMutex());
     private static IHandsActivitySignal s_busy = NoHandsActivitySignal.Instance;
+    private static HandsProjectFiles s_projectFiles = new(null);
 
     public static HandsPolicy Policy => s_policy;
+
+    /// <summary>
+    /// Единственный путь записи файлов в проект (D2d): <c>saveTo</c> снимка, нарезка скана.
+    /// Корень задаёт <c>--project-root</c>; без него любая запись отказывает.
+    /// </summary>
+    public static HandsProjectFiles ProjectFiles => s_projectFiles;
 
     /// <summary>Первое действие рук за ход — сигнал агенту для плашки.</summary>
     public static HandsActivity Activity => s_activity;
@@ -45,12 +52,17 @@ internal static class HandsGate
     /// Событие «ход окончен» (<c>--turn-end-event</c>), которое поднимает агент: мост отпускает замок
     /// машины. Нет имени — замок держится до смерти моста.
     /// </param>
+    /// <param name="projectRoot">
+    /// Корень проекта на устройстве (<c>--project-root</c>, D2d): сюда мост пишет файлы, которые
+    /// модель попросила сохранить. Нет корня — запись недоступна.
+    /// </param>
     public static void Configure(string? browserProfile = null, string? activityEvent = null,
-        string? busyEvent = null, string? turnEndEvent = null)
+        string? busyEvent = null, string? turnEndEvent = null, string? projectRoot = null)
     {
         s_system = new WindowsHandsSystem();
         var profilesRoot = BrowserProfilesRoot(browserProfile);
         s_policy = new HandsPolicy(s_system, profilesRoot);
+        s_projectFiles = new HandsProjectFiles(projectRoot);
         s_activity = new HandsActivity(string.IsNullOrWhiteSpace(activityEvent)
             ? NoHandsActivitySignal.Instance
             : new NamedEventActivitySignal(activityEvent));

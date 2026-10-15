@@ -196,6 +196,14 @@ public static class HandsBridgeArgs
     /// сервер и модель его не задают.
     /// </summary>
     public const string OcrEndpoint = "--ocr-endpoint";
+
+    /// <summary>
+    /// Путь корня проекта на устройстве (D2d «руки без UIA»): сюда мост пишет файлы, которые
+    /// модель попросила сохранить (<c>saveTo</c> снимка, нарезка скана). Задаёт только агент
+    /// (реальный каталог проекта на машине); сервер и модель его не задают. Без него любая
+    /// запись отказывает — корня, куда писать, нет.
+    /// </summary>
+    public const string ProjectRoot = "--project-root";
 }
 
 /// <summary>

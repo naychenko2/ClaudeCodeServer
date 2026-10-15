@@ -121,7 +121,8 @@ public class HandsBridgeSourceGuardTests
     [Fact]
     public void Bridge_passes_the_turn_events_to_the_gate() =>
         Assert.Contains("HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent),\n" +
-            "    GetOption(args, HandsBridgeArgs.BusyEvent), GetOption(args, HandsBridgeArgs.TurnEndEvent));",
+            "    GetOption(args, HandsBridgeArgs.BusyEvent), GetOption(args, HandsBridgeArgs.TurnEndEvent),\n" +
+            "    GetOption(args, HandsBridgeArgs.ProjectRoot));",
             Read("Program.cs").Replace("\r\n", "\n"));
 
     private static string ToolConstant(string tool) =>
@@ -474,10 +475,83 @@ public class HandsBridgeSourceGuardTests
         throw new InvalidOperationException("Не найден каталог backend/HandsBridge выше " + AppContext.BaseDirectory);
     }
 
+    /// <summary>
+    /// Запись файлов (D2d): вся запись в проект — только через <c>Hands/HandsProjectFiles.cs</c>.
+    /// Прямые <c>File.WriteAllBytes</c>/<c>WriteAllText</c>/<c>Create</c>/<c>OpenWrite</c>/<c>AppendAll*</c>
+    /// и <c>new FileStream</c> в остальных файлах моста — красный. Исключения — файлы, которые пишут
+    /// НЕ файлы проекта: лог (<c>HandsLog</c>), макросы (<c>MacroService</c>), legacy-путь
+    /// <c>outputMode=file</c> снимка (<c>ScreenshotService</c>).
+    /// </summary>
+    [Fact]
+    public void File_writes_go_through_HandsProjectFiles()
+    {
+        // Файлы, которые пишут не файлы проекта (лог, макросы, legacy outputMode=file).
+        var allowed = new HashSet<string>
+        {
+            "Hands/HandsProjectFiles.cs",
+            "Hands/HandsLog.cs",
+            "Macros/MacroService.cs",
+            "Capture/ScreenshotService.cs",
+        };
+
+        // Методы File.*, которые создают/дописывают файл.
+        var writeMethods = new HashSet<string>
+        {
+            "WriteAllBytes", "WriteAllBytesAsync", "WriteAllText", "WriteAllTextAsync",
+            "AppendAllText", "AppendAllTextAsync", "AppendAllBytes", "AppendAllBytesAsync",
+            "Create", "OpenWrite", "CreateText",
+        };
+
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(BridgeDir, "*.cs", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(BridgeDir, file).Replace('\\', '/');
+            if (rel.Contains("/obj/") || rel.Contains("/bin/"))
+                continue;
+            if (allowed.Contains(rel))
+                continue;
+
+            var root = ParseTree(File.ReadAllText(file));
+
+            foreach (var inv in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (inv.Expression is not MemberAccessExpressionSyntax member)
+                    continue;
+                var name = member.Name.Identifier.Text;
+                if (!writeMethods.Contains(name))
+                    continue;
+                // Квалификатор «File»: некавалифицированный File.X или System.IO.File.X
+                if (!IsFileQualifier(member.Expression))
+                    continue;
+                offenders.Add($"{rel}: File.{name}");
+            }
+
+            foreach (var obj in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (obj.Type is not IdentifierNameSyntax { Identifier.Text: "FileStream" })
+                    continue;
+                offenders.Add($"{rel}: new FileStream");
+            }
+        }
+
+        Assert.True(offenders.Count == 0,
+            "Прямая запись файлов вне Hands/HandsProjectFiles.cs:\n" + string.Join("\n", offenders));
+    }
+
     // ─── Roslyn-хелперы ───────────────────────────────────────────────────────────────────────
 
     private static CompilationUnitSyntax ParseTree(string source) =>
         CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
+
+    /// <summary>Квалификатор <c>File</c>: некавалифицированный <c>File</c> или <c>System.IO.File</c>.</summary>
+    private static bool IsFileQualifier(ExpressionSyntax expr)
+    {
+        if (expr is IdentifierNameSyntax { Identifier.Text: "File" })
+            return true;
+        if (expr is MemberAccessExpressionSyntax { Name.Identifier.Text: "File" })
+            return true;
+        return false;
+    }
 
     /// <summary>Вызов <c>NativeMethods.SendInput(...)</c> — любой метод с именем SendInput через MemberAccess.</summary>
     private static bool IsSendInputCall(InvocationExpressionSyntax inv) =>

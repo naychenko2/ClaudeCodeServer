@@ -2072,6 +2072,14 @@ export const api = {
         `/chats/${id}/branch`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
+    // «Продолжить в новом чате»: агент пишет записку-передачу (один ход, десятки секунд),
+    // платформа открывает новый чат той же персоны. 409 — чат занят, 400 — нет ходов агента;
+    // оба несут человеческий текст в Error.message
+    continue: (id: string, note?: string) =>
+      request<{ newSessionId: string; handoffNoteId: string | null }>(
+        `/chats/${id}/continue`,
+        { method: 'POST', body: JSON.stringify(note ? { note } : {}) },
+      ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы
     setMode: (id: string, mode: string) =>

@@ -57,6 +57,8 @@ import { chatContextApi } from '../lib/chatContext/api';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
+import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks } from '../lib/chatContinue';
+import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -1304,6 +1306,52 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [session.id, project]);
 
+  // «Продолжить в новом чате»: диалог, запрос и переход. Ошибки (409 «чат занят», 400 «нет
+  // ходов агента») несут человеческий текст — показываем его тостом и бросаем дальше, чтобы
+  // диалог снял блокировку и остался открытым. Запрос идёт десятки секунд (агент пишет
+  // записку), поэтому диалог держит состояние «выполняется» сам.
+  const [continueOpen, setContinueOpen] = useState(false);
+  const handleContinue = useCallback(async (note: string) => {
+    try {
+      const result = await api.chats.continue(session.id, note || undefined);
+      setContinueOpen(false);
+      navPush(project
+        ? { screen: 'project', project, chatId: result.newSessionId, view: 'chat', file: null }
+        : { screen: 'chats', chatId: result.newSessionId });
+    } catch (err) {
+      showToast('Продолжение чата', err instanceof Error ? err.message : 'Не удалось продолжить в новом чате');
+      throw err;
+    }
+  }, [session.id, project]);
+  const openContinue = useCallback(() => setContinueOpen(true), []);
+  // Пункт меню шапки (ChatHeaderBar) сообщает через событие — как cc-ai-run
+  useEffect(() => {
+    const onEvt = (e: Event) => {
+      if ((e as CustomEvent<{ sessionId?: string }>).detail?.sessionId === session.id) setContinueOpen(true);
+    };
+    window.addEventListener('cc-chat-continue', onEvt);
+    return () => window.removeEventListener('cc-chat-continue', onEvt);
+  }, [session.id]);
+
+  // Подсказка при большом контексте: «Не сейчас» запоминает размер контекста, новая
+  // подсказка — после роста на CONTINUE_HINT_SNOOZE_STEP. Сбрасывается при смене чата.
+  const [hintSnoozedAt, setHintSnoozedAt] = useState<number | undefined>(undefined);
+  useEffect(() => { setHintSnoozedAt(undefined); }, [session.id]);
+  const showContinueHint = !embedded && online && !isWaiting && !session.continuedInSessionId
+    && shouldShowContinueHint({ tokens: ctxEstimate.tokens, windowTokens: ctxEstimate.window, snoozedAt: hintSnoozedAt });
+
+  // Связи продолжения: имя чата-источника для плашки вверху нового чата
+  const { from: continuedFromId, into: continuedIntoId } = continuationLinks(session);
+  const [continuedFromName, setContinuedFromName] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    setContinuedFromName(undefined);
+    if (!continuedFromId) return;
+    let cancelled = false;
+    api.chats.get(continuedFromId).then(s => { if (!cancelled) setContinuedFromName(s.name ?? undefined); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [continuedFromId]);
+  const lastAssistantIdx = useMemo(() => lastAssistantTextIndex(items), [items]);
+
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
   // серверный текст под кнопкой (не молчит). request() бросает Error с прикреплёнными
@@ -2014,6 +2062,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
       onBranch={onBranchForItem}
+      onContinue={i === lastAssistantIdx && online && !isWaiting ? openContinue : undefined}
       availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
@@ -2057,7 +2106,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, branchAvailable, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, openContinue, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,
@@ -2762,6 +2811,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           )
         )}
 
+        {continuedFromId && (
+          <ContinuationBanner kind="from" name={continuedFromName} onOpen={() => { void openChatById(continuedFromId); }} />
+        )}
+
         {/* Окно рендера: якорь авто-догрузки и кнопка «Показать предыдущие» —
             видны, только пока сверху ленты остаются скрытые узлы */}
         {hidden > 0 && (
@@ -2932,6 +2985,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           );
         })()}
 
+        {continuedIntoId && (
+          <ContinuationBanner kind="into" onOpen={() => { void openChatById(continuedIntoId); }} />
+        )}
+
         <div ref={bottomRef} />
       </div></div>
       </div>
@@ -3027,6 +3084,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               onJump={jumpToEscalation}
             />
           )}
+          {showContinueHint && (
+            <div style={{ padding: `0 ${SP.md}px ${SP.xs}px`, maxWidth: CHAT_MAX_W, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+              <ContinueHint tokens={ctxEstimate.tokens!} onOpen={openContinue}
+                onSnooze={() => setHintSnoozedAt(ctxEstimate.tokens)} />
+            </div>
+          )}
+          {continueOpen && <ContinueChatDialog onConfirm={handleContinue} onClose={() => setContinueOpen(false)} />}
           <Composer
             // key по чату: Composer полностью перемонтируется при смене сессии, поэтому
             // его внутренний стейт (текст черновика, teamMech/teamOpen/teamSettings,

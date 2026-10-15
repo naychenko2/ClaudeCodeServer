@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -420,6 +420,19 @@ function BranchButton({ onClick, label }: { onClick: () => Promise<unknown>; lab
   );
 }
 
+// Кнопка «Продолжить в новом чате». Стоит только под последним ответом агента (в отличие от
+// ветвления, которое есть на любом сообщении) и не зависит от ProjectFeature.ChatBranch —
+// работает и в локальных проектах. Диалог и запрос — в ChatPanel.
+function ContinueButton({ onClick }: { onClick: () => void }) {
+  const label = 'Продолжить в новом чате';
+  return (
+    <button onClick={onClick} style={postIconBtn} title={label} aria-label={label}
+      data-testid="continue-chat-button" {...postIconHover}>
+      <MessageSquareShare size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+    </button>
+  );
+}
+
 // Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
 // (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
 // копирование и тап держат состояние, а хуки внутри case недопустимы.
@@ -456,8 +469,10 @@ function UserMessageBubble({ text, ts, onBranch, children }: {
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
+function TextMessageView({ text, online, onRetry, onBranch, onContinue, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
   text: string; online: boolean; onRetry: () => void; onBranch?: () => Promise<unknown>;
+  // Продолжение в новом чате; передаётся только последнему ответу агента
+  onContinue?: () => void;
   streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
   turnCache?: { read: number; creation: number } | null;
@@ -505,6 +520,7 @@ function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts
           {onBranch && (
             <BranchButton onClick={onBranch} label="Ветвление от этого ответа" />
           )}
+          {onContinue && <ContinueButton onClick={onContinue} />}
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
               {...postIconHover}>
@@ -637,6 +653,8 @@ interface ItemProps {
   // ответом ассистента — include='turn'. undefined — кнопки нет (нет фичи, либо выше
   // этого элемента нет user_message, на который можно опереться)
   onBranch?: () => Promise<unknown>;
+  // «Продолжить в новом чате»: ChatPanel передаёт только последнему ответу агента
+  onContinue?: () => void;
   // Множество id чатов, загруженных на фронте — для плашки «Ветка от …». Если передан
   // и id оригинала НЕ в нём — плашка деградирует в обычный текст, без ссылки и без
   // клика: иначе клик по битой ссылке меняет URL-хеш на несуществующий чат молча
@@ -1029,7 +1047,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, availableChatIds, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, onContinue, availableChatIds, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1273,7 +1291,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
-          <TextMessageView text={bodyText} online={online} onRetry={onRetry} onBranch={onBranch} streaming={streaming}
+          <TextMessageView text={bodyText} online={online} onRetry={onRetry} onBranch={onBranch}
+            onContinue={onContinue} streaming={streaming}
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
             turnContextTokens={turnContextTokens} turnCache={turnCache}

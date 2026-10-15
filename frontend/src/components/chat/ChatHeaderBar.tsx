@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
@@ -1903,6 +1903,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     const i = overflowActionItems.findIndex(x => x.key === 'expiry');
     if (i > 0) { const [e] = overflowActionItems.splice(i, 1); overflowActionItems.unshift(e); }
   }
+  // «Продолжить в новом чате»: диалог живёт в ChatPanel, шапка шлёт ему событие по id чата.
+  // Нужны ответы агента (hasMessages) и связь; чат, который уже продолжили, не предлагаем
+  const canContinue = online && hasMessages && !session.continuedInSessionId;
+  const runContinue = () => window.dispatchEvent(new CustomEvent('cc-chat-continue', { detail: { sessionId: session.id } }));
   const headerOverflow = headerActions.length > 0 ? (
     <ToolbarOverflowMenu title="Ещё" isMobile={isCompact}
       items={[
@@ -1912,6 +1916,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       ...(isMobile ? [{
         key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
+      }] : []),
+      ...(canContinue ? [{
+        key: 'continue-chat', icon: <MessageSquareShare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Продолжить в новом чате', onClick: runContinue,
       }] : []),
       ...badgeItems,
     ] as OverflowItem[]}
@@ -2033,6 +2041,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         action={visAction('expiry')}
         onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
       />
+      {canContinue && (
+        <MenuItem
+          icon={<MessageSquareShare size={15} strokeWidth={2} />}
+          label="Продолжить в новом чате"
+          onClick={() => { setCtxMenu(null); runContinue(); }}
+        />
+      )}
       {online && hasMessages && (
         <>
           <MenuSep />

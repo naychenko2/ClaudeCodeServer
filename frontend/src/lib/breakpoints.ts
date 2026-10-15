@@ -50,12 +50,21 @@ export const GEN_PANEL_INLINE_MIN = 800;
 // Широкие панели доля по-прежнему держит: COL_MAX = 560 уйдёт в поток только с 1680.
 export const PANEL_INLINE_MAX_SHARE = 1 / 3;
 
+// matchMedia или null, если его нет. Статический рендер (renderToStaticMarkup в тестах,
+// jsdom/happy-dom без полифилла) даёт window без matchMedia — хук не должен падать,
+// чтобы любой примитив с ним оставался рендерибельным вне браузера.
+function mediaQuery(query: string): MediaQueryList | null {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(query)
+    : null;
+}
+
 // Реактивный флаг «мобильная раскладка» (matchMedia, обновляется при resize/повороте).
 export function useIsMobile(): boolean {
-  const [m, setM] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia(MOBILE_QUERY).matches : false);
+  const [m, setM] = useState(() => mediaQuery(MOBILE_QUERY)?.matches ?? false);
   useEffect(() => {
-    const mq = window.matchMedia(MOBILE_QUERY);
+    const mq = mediaQuery(MOBILE_QUERY);
+    if (!mq) return;
     const h = (e: MediaQueryListEvent) => setM(e.matches);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: синхронизация начального значения
     setM(mq.matches);
@@ -71,10 +80,10 @@ export function useIsMobile(): boolean {
 // вовсе, и кнопка просто недостижима.
 export const COARSE_QUERY = '(pointer: coarse)';
 export function useIsTouch(): boolean {
-  const [t, setT] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia(COARSE_QUERY).matches : false);
+  const [t, setT] = useState(() => mediaQuery(COARSE_QUERY)?.matches ?? false);
   useEffect(() => {
-    const mq = window.matchMedia(COARSE_QUERY);
+    const mq = mediaQuery(COARSE_QUERY);
+    if (!mq) return;
     const h = (e: MediaQueryListEvent) => setT(e.matches);
     setT(mq.matches);
     mq.addEventListener('change', h);

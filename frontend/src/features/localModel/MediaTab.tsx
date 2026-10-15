@@ -92,16 +92,23 @@ function ComfySubline({ media }: { media: LocalModelMedia }) {
 
 // === «Модель в памяти» ===
 // loaded — имя модели (FONT.mono 600 C.textPrimary); empty/unknown — C.textMuted.
+// Строка на всю ширину контентной зоны: подпись слева, значение справа
+// (паттерн GpuKv/KvRow: justify-content space-between) — иначе короткий
+// текст читается как «половина» ширины панели.
 function LoadedModelLine({ media }: { media: LocalModelMedia }) {
   const line = loadedModelLine(media);
   const loaded = line.state === 'loaded';
   return (
-    <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
-      Модель в памяти:{' '}
+    <div style={{
+      display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: SP.sm,
+      fontSize: FS.sm, lineHeight: 1.45, minWidth: 0,
+    }}>
+      <span style={{ flexShrink: 0, color: C.textSecondary }}>Модель в памяти</span>
       <span style={{
         fontFamily: loaded ? FONT.mono : undefined,
         fontWeight: loaded ? 600 : 400,
         color: loaded ? C.textPrimary : C.textMuted,
+        minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{line.label}</span>
     </div>
   );

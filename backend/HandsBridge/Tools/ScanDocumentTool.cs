@@ -47,7 +47,7 @@ public static partial class ScanDocumentTool
     /// <summary>Потолок текста в ответе: 4000 символов (остальное — в файле).</summary>
     private const int MaxResponseText = 4000;
 
-    /// <summary>Повтор страницы при ошибке OCR (503 busy / page_timeout): до 2 повторов с паузой.</summary>
+    /// <summary>Повтор страницы при ошибке OCR (503 busy / page_timeout): до 2 повторов (3 попытки) с паузой.</summary>
     private const int MaxOcrRetries = 2;
 
     /// <summary>Пауза между повторами OCR, мс.</summary>
@@ -70,8 +70,10 @@ public static partial class ScanDocumentTool
     /// One call reads at most ~10 pages (~5 minutes); when more remain it answers
     /// <c>{done:false, next:{...}}</c> — call again with that <c>continueFrom</c> cursor to append
     /// to the same file. The end is detected by a repeated frame (two identical frames in a row
-    /// after <c>pageKey</c>) or by <c>maxPages</c>. The reply carries at most 4000 characters of the
-    /// most recent pages plus metadata (path, pages, characters, doubtful stitches, stop reason).
+    /// after <c>pageKey</c>) or by <c>maxPages</c>; a frozen window looks the same as the end of the
+    /// document, so if it ended earlier than expected, take a fresh screenshot of the window to
+    /// confirm. The reply carries at most 4000 characters of the most recent pages plus metadata
+    /// (path, pages, characters, doubtful stitches, stop reason).
     /// </para>
     /// </summary>
     /// <param name="windowHandle">Window handle (decimal string from window_management). Required: the document window to read; it must accept input and be the foreground window (activate it with window_management first).</param>
@@ -79,7 +81,6 @@ public static partial class ScanDocumentTool
     /// <param name="pageKey">The key that advances one page (default <c>PageDown</c>).</param>
     /// <param name="maxPages">Maximum number of pages to read (default 300, cap 300).</param>
     /// <param name="saveTo">Where to save the document: a path relative to the project root ending in .md or .txt (required — without it the document cannot be saved).</param>
-    /// <param name="keepPages">When true, each page screenshot is also written to .cc-attachments/ (default false: screenshots are not kept).</param>
     /// <param name="continueFrom">The continuation cursor from a previous <c>{done:false, next}</c> reply; when set, the same file is appended to.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A call result: the read text (capped at 4000 characters), the file path, the page count, the character count, the number of doubtful stitches, and the continuation cursor when the document is not finished.</returns>
@@ -90,7 +91,6 @@ public static partial class ScanDocumentTool
         [DefaultValue(null)] string? pageKey,
         [DefaultValue(null)] int? maxPages,
         string saveTo,
-        [DefaultValue(false)] bool keepPages,
         [DefaultValue(null)] string? continueFrom,
         CancellationToken cancellationToken)
     {
@@ -126,7 +126,6 @@ public static partial class ScanDocumentTool
             StartKey = string.IsNullOrWhiteSpace(startKey) ? "Ctrl+Home" : startKey,
             PageKey = string.IsNullOrWhiteSpace(pageKey) ? "PageDown" : pageKey,
             MaxPages = maxPages is null ? 300 : Math.Clamp(maxPages.Value, 1, MaxPagesCap),
-            KeepPages = keepPages,
             ContinueFrom = continueFrom,
             PagesPerCall = DefaultPagesPerCall,
             MaxCallMs = DefaultMaxCallMs,
@@ -205,6 +204,9 @@ public static partial class ScanDocumentTool
             var hash = d.HashFrame(frame);
 
             // 3. Конец: два кадра подряд с одинаковым хэшем после pageKey — контент не двигается.
+            // Компромисс A5: зависание окна неотличимо от конца документа (в обоих случаях кадр
+            // не меняется), поэтому причина end_of_document в ответе может означать и зависание —
+            // модель подтверждает конец снимком окна (одно предложение об этом — в описании).
             if (prevHash is { } ph && ph == hash)
             {
                 result.StopReason = "end_of_document";
@@ -248,10 +250,6 @@ public static partial class ScanDocumentTool
             totalChars = existing.Length;
             pagesThisCall++;
             totalPages++;
-
-            // keepPages: снимок страницы в .cc-attachments/ (служебный путь — WriteNew).
-            if (o.KeepPages)
-                _ = d.Files.WriteNew(HandsTools.ScanDocument, $".cc-attachments/scan-{totalPages:000}.png", frame);
 
             prevHash = hash;
 
@@ -498,7 +496,6 @@ public static partial class ScanDocumentTool
         public required string StartKey { get; init; }
         public required string PageKey { get; init; }
         public int MaxPages { get; init; } = 300;
-        public bool KeepPages { get; init; }
         public string? ContinueFrom { get; init; }
         public int PagesPerCall { get; init; } = DefaultPagesPerCall;
         public int MaxCallMs { get; init; } = DefaultMaxCallMs;

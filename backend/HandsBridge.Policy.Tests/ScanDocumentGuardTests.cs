@@ -140,7 +140,25 @@ public class ScanDocumentGuardTests
         Assert.Contains("\"scan_document\"", policySource);
     }
 
-    // ---------- 5. Runtime (Linux): запретное окно → отказ ДО первого снимка ----------
+    // ---------- 5. Схема: keepPages убран (A5.1) ----------
+
+    /// <summary>
+    /// keepPages убран из схемы (A5.1): политика <c>CheckOutputPath</c> отказывает <c>.png</c> для
+    /// tool-key <c>scan_document</c>, а результат <c>WriteNew</c> отбрасывался — параметр
+    /// «не поддерживается». Метод инструмента (и его схема) не содержит <c>keepPages</c>.
+    /// Мутация «вернуть keepPages в параметры» красит тест.
+    /// </summary>
+    [Fact]
+    public void Schema_does_not_contain_keepPages()
+    {
+        var type = HandsBridgeGateRuntimeTests.Bridge.Value.GetType(ToolType, throwOnError: true)!;
+        var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.GetCustomAttributes().Any(a => a.GetType().Name == "McpServerToolAttribute"));
+        var paramNames = method.GetParameters().Select(p => p.Name!).ToList();
+        Assert.DoesNotContain("keepPages", paramNames);
+    }
+
+    // ---------- 6. Runtime (Linux): запретное окно → отказ ДО первого снимка ----------
 
     /// <summary>
     /// На Linux (NoWindows) любое windowHandle — «процесс с неизвестным образом» → гейт отказывает

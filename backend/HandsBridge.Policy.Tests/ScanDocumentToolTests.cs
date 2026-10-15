@@ -76,7 +76,6 @@ public class ScanDocumentToolTests
         Set(o, "StartKey", "Ctrl+Home");
         Set(o, "PageKey", "PageDown");
         Set(o, "MaxPages", maxPages);
-        Set(o, "KeepPages", false);
         Set(o, "ContinueFrom", continueFrom);
         Set(o, "PagesPerCall", pagesPerCall);
         Set(o, "MaxCallMs", 300_000);
@@ -184,8 +183,11 @@ public class ScanDocumentToolTests
             Assert.Contains("alpha page one", fileText);
             Assert.Contains("beta page two", fileText);
             Assert.Contains("gamma page three", fileText);
-            Assert.Equal(3, r.Stitches >= 0 ? 3 : -1); // 2 шва между 3 страницами
-            Assert.NotEqual(-1, r.Stitches);
+            // Три страницы без перекрытия → ровно 2 шва (маркер на каждом стыке): точное число
+            // сомнительных швов и ровно 2 маркера в файле. Мутация «тривиальная склейка»
+            // (без маркера) красит обе проверки: число маркеров упадёт до 0.
+            Assert.Equal(2, r.Stitches);
+            Assert.Equal(2, CountOccurrences(fileText, "<!-- шов: проверить -->"));
         }
         finally
         {
@@ -329,6 +331,55 @@ public class ScanDocumentToolTests
     }
 
     /// <summary>
+    /// Мост перезапущен → continueFrom отказывает: первый вызов (бюджет 2) доводит до курсора;
+    /// второй вызов на СВЕЖЕМ экземпляре <c>HandsProjectFiles</c> (файл не создан этим ходом) —
+    /// <c>AppendOwn</c> отказывает «начните заново»: файл не перезаписан и <c>.v2</c> с мусором
+    /// не создан. Мутация «снять границу AppendOwn» (дописывать в любой файл) красит тест.
+    /// </summary>
+    [Fact]
+    public async Task Bridge_restarted_continuation_refuses_to_append()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files1 = NewProjectFiles(root);
+            var doc = new FakeDoc("p1", "p2", "p3", "p4");
+
+            // Первый вызов: бюджет 2 → 2 страницы, done:false, курсор.
+            var (deps1, _) = MakeFakeDeps(doc, files1);
+            var options1 = MakeOptions("multi.md", 300, 2, null);
+            var r1 = await Run(options1, deps1);
+            Assert.Equal("budget", r1.StopReason);
+            Assert.False(r1.Done);
+            Assert.Equal(2, r1.TotalPages);
+            Assert.NotNull(r1.Next);
+            Assert.Equal("multi.md", r1.Path);
+
+            // Второй вызов: СВЕЖИЙ экземпляр моста (файл не создан этим ходом) + тот же курсор.
+            var files2 = NewProjectFiles(root);
+            var (deps2, _) = MakeFakeDeps(doc, files2);
+            var options2 = MakeOptions("multi.md", 300, 10, r1.Next);
+            var r2 = await Run(options2, deps2);
+
+            // AppendOwn отказывает: файл создан другим экземпляром моста.
+            Assert.Equal("error", r2.StopReason);
+            Assert.NotNull(r2.Error);
+            Assert.Contains("appended", r2.Error);
+
+            // Файл не перезаписан (ровно 2 страницы первого вызова, без p3) и .v2 с мусором нет.
+            var fileText = File.ReadAllText(Path.Combine(root, "multi.md"), Encoding.UTF8);
+            Assert.Equal(1, CountOccurrences(fileText, "p1"));
+            Assert.Equal(1, CountOccurrences(fileText, "p2"));
+            Assert.DoesNotContain("p3", fileText);
+            Assert.False(File.Exists(Path.Combine(root, "multi.v2.md")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// Отказ без <c>saveTo</c>: пустой путь — файл некуда писать, честная ошибка (до OCR).
     /// </summary>
     [Fact]
@@ -393,6 +444,112 @@ public class ScanDocumentToolTests
             var fileText = File.ReadAllText(Path.Combine(root, "part.md"), Encoding.UTF8);
             Assert.Contains("good first page", fileText);
             Assert.DoesNotContain("second page", fileText);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Повтор OCR (503 busy) — happy-path: страница «p1» отвечает [busy, busy, success] →
+    /// прочитана после 2 повторов (3 попытки), «p2» — сразу; склейка и запись идут, продолжение
+    /// доводит до конца. Мутация «не повторять busy» (сразу стоп) красит счётчик попыток.
+    /// </summary>
+    [Fact]
+    public async Task Ocr_busy_retried_then_success_continues()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files = NewProjectFiles(root);
+            var doc = new FakeDoc("p1", "p2");
+
+            // OCR: «p1» → [busy, busy, success]; «p2» → [success]. Счётчик вызовов по тексту.
+            var calls = new Dictionary<string, int>();
+            var recognize = new Func<byte[], CancellationToken, Task<object>>((frame, _) =>
+            {
+                var text = Encoding.UTF8.GetString(frame);
+                var n = calls.TryGetValue(text, out var c) ? c : 0;
+                calls[text] = n + 1;
+                if (text == "p1" && n < 2)
+                    return Task.FromResult((object)OcrFail("busy", "the OCR server is busy; try again later"));
+                return Task.FromResult((object)OcrSuccess(text));
+            });
+
+            var deps = MakeDeps(
+                capture: _ => Task.FromResult(doc.NextFrame()),
+                recognize,
+                hash: Fnv,
+                press: (combo, _) => Task.FromResult(true),
+                waitStable: _ => Task.CompletedTask,
+                files);
+
+            var options = MakeOptions("busy.md", 300, 10, null);
+            var r = await Run(options, deps);
+
+            // «p1» прочитана после 2 повторов (3 попытки), «p2» сразу; конец по повтору кадра.
+            Assert.Equal("end_of_document", r.StopReason);
+            Assert.True(r.Done);
+            Assert.Equal(2, r.TotalPages);
+            Assert.Equal(3, calls["p1"]); // 2 busy + 1 success
+            Assert.Equal(1, calls["p2"]); // сразу успех
+            var fileText = File.ReadAllText(Path.Combine(root, "busy.md"), Encoding.UTF8);
+            Assert.Contains("p1", fileText);
+            Assert.Contains("p2", fileText);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Повтор OCR исчерпан: страница «p2» отвечает [busy, busy, busy] (все 3 попытки) → стоп
+    /// с частичным файлом (первая страница записана) и статусом error. Мутация «повторять
+    /// бесконечно» (не стопить после 2 повторов) красит: страница прочитается, а не остановит.
+    /// </summary>
+    [Fact]
+    public async Task Ocr_busy_exhausts_retries_stops_with_partial_file()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files = NewProjectFiles(root);
+            var doc = new FakeDoc("p1", "p2");
+
+            // OCR: «p1» → success; «p2» → [busy, busy, busy] (все 3 попытки — busy) → стоп.
+            var calls = new Dictionary<string, int>();
+            var recognize = new Func<byte[], CancellationToken, Task<object>>((frame, _) =>
+            {
+                var text = Encoding.UTF8.GetString(frame);
+                var n = calls.TryGetValue(text, out var c) ? c : 0;
+                calls[text] = n + 1;
+                if (text == "p2")
+                    return Task.FromResult((object)OcrFail("busy", "the OCR server is busy; try again later"));
+                return Task.FromResult((object)OcrSuccess(text));
+            });
+
+            var deps = MakeDeps(
+                capture: _ => Task.FromResult(doc.NextFrame()),
+                recognize,
+                hash: Fnv,
+                press: (combo, _) => Task.FromResult(true),
+                waitStable: _ => Task.CompletedTask,
+                files);
+
+            var options = MakeOptions("busy2.md", 300, 10, null);
+            var r = await Run(options, deps);
+
+            // «p2» не прочитана (3 busy) → стоп с частичным файлом (только «p1») и статусом error.
+            Assert.Equal("error", r.StopReason);
+            Assert.NotNull(r.Error);
+            Assert.Equal(1, r.TotalPages); // только «p1» записана
+            Assert.Equal(3, calls["p2"]); // 3 попытки, все busy
+            Assert.True(File.Exists(Path.Combine(root, "busy2.md")));
+            var fileText = File.ReadAllText(Path.Combine(root, "busy2.md"), Encoding.UTF8);
+            Assert.Contains("p1", fileText);
+            Assert.DoesNotContain("p2", fileText);
         }
         finally
         {

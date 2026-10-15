@@ -60,6 +60,11 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // Живое «сейчас»: дельта generation_tokens от предыдущего опроса (каждый опрос, не только на точке)
     private double? _liveThroughput;
 
+    // Занятое время генерации стенда (сек), накопленное с прошлой ТОЧКИ кольца: сколько секунд
+    // за интервал хотя бы один запрос генерировал (wall-clock, не сумма по потокам). Сбрасывается
+    // на точке. single-writer: читается и пишется только из UpdateRing фонового опроса.
+    private double _busySecondsSincePoint;
+
     // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования
     // (generation_tokens_total / inter_token_latency_seconds_count). DFlash отдаёт несколько
     // токенов за SSE-дельту; наблюдатель кольца Ctx масштабирует счётчик дельт этим
@@ -252,7 +257,8 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // Точка кольца: скорость = Δgeneration_tokens/Δвремя; отрицательная дельта (рестарт) → null.
     private void UpdateRing(DateTimeOffset now, EngineSnapshot snap)
     {
-        // Живое «сейчас»: дельта от предыдущего опроса (каждый опрос, не только на точке кольца)
+        // Живое «сейчас» + занятое время: дельта от предыдущего опроса (каждый опрос, не только
+        // на точке кольца). dt — время с прошлого опроса; считается только когда есть прошлый опрос.
         _liveThroughput = null;
         if (_last is { GenerationTokens: not null } prev && snap.GenerationTokens is not null)
         {
@@ -260,6 +266,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             var dTokens = snap.GenerationTokens.Value - prev.GenerationTokens.Value;
             if (dt > 0)
                 _liveThroughput = dTokens < 0 ? null : dTokens / dt;
+
+            // Занятое время генерации стенда (wall-clock, не сумма по потокам): стенд генерировал,
+            // если есть идущий запрос (running>0) и generation_tokens вырос с прошлого опроса.
+            // Два параллельных агента дают одну занятую секунду, не две.
+            if (dt > 0 && snap.Running is { } r && r > 0 && snap.GenerationTokens.Value > prev.GenerationTokens.Value)
+                _busySecondsSincePoint += dt;
         }
 
         // Коэффициент живой скорости (ADR-029): токенов на шаг декодирования.
@@ -288,11 +300,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             if (_lastPointSnap is { GenerationTokens: not null } prevPoint
                 && snap.GenerationTokens is not null)
             {
-                var dt = (now - _lastPointTime!.Value).TotalSeconds;
+                var pointDt = (now - _lastPointTime!.Value).TotalSeconds;
                 var dTokens = snap.GenerationTokens.Value - prevPoint.GenerationTokens.Value;
-                if (dt > 0)
-                    throughput = dTokens < 0 ? null : dTokens / dt;
+                if (pointDt > 0)
+                    throughput = dTokens < 0 ? null : dTokens / pointDt;
             }
+
+            // Занятое время генерации стенда (сек) с прошлой ТОЧКИ: wall-clock, не сумма по
+            // потокам. null — нет прошлой точки, метрики generation_tokens нет или рестарт (счётчик
+            // упал) — те же условия, при которых GenTokens null; 0 (не null) — метрика есть, но
+            // генерации в интервале не было.
+            double? busySeconds = null;
+            if (_lastPointSnap is not null && CounterDelta(_lastPointSnap, snap, s => s.GenerationTokens) is not null)
+                busySeconds = _busySecondsSincePoint;
 
             // Серии кэша (v2.1): kvUsage — максимум по опросам с прошлой точки; пять счётчиков —
             // приращение с прошлой ТОЧКИ (как GenThroughput через _lastPointSnap), не с прошлого
@@ -313,6 +333,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 // фронт сводит в интервалы и делит ΣgenTokens/ΣitlSeconds (ток/с).
                 GenTokens = CounterDelta(_lastPointSnap, snap, s => s.GenerationTokens),
                 ItlSeconds = DoubleCounterDelta(_lastPointSnap, snap, s => s.InterTokenLatencySum),
+                BusySeconds = busySeconds,
             };
 
             lock (_gate)
@@ -326,6 +347,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             _lastPointTime = now;
             _lastPointSnap = snap;
             _kvUsageMaxSincePoint = null; // максимум «с прошлой точки» собран: сбрасываем
+            _busySecondsSincePoint = 0; // занятое время «с прошлой точки» собрано: сбрасываем
         }
 
         // Живое «сейчас» — каждый опрос (не только на точке): ThroughputOf отдаёт свежую дельту

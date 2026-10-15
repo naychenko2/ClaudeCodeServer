@@ -595,17 +595,25 @@ class МеркаTests(unittest.TestCase):
         self.assertAlmostEqual(выгода, 80_000, delta=80_000 * 0.02)
 
     def test_гейт_оставляет_запас_до_автосжатия_CLI(self):
-        """Неравенство, которым выбран гейт: пока прунинг молчит, usage не доедет до 232k.
+        """Неравенство, которым выбран гейт: пока прунинг молчит, usage не доедет до порога
+        автосжатия CLI — порога, а не базы окна 232k: на этом гейт 190k и промахнулся 15.10
+        (лимит вывода 20000 опустил порог до 199k, за 1116 запросов ни одной обрезки).
 
-        Слагаемых три: сам гейт, недосчёт огрубления системной части (оно занижает оценку, то
-        есть включает прунинг ПОЗЖЕ) и один большой `Read` (25k), который придёт следующим
-        ходом. Поднимешь гейт или огрубление, не пересчитав второе, — тест покраснеет.
+        Гейт растягивают два недосчёта — средней оценки (до 5.3 %, «Мерка контекста») и
+        огрубления системной части, оба включают прунинг ПОЗЖЕ, — а сверху ложится один большой
+        `Read` (25k), который придёт следующим ходом. Сменишь лимит вывода, окно или огрубление,
+        не пересчитав гейт, — тест покраснеет.
         """
-        недосчёт = proxy.SYSTEM_ROUNDING_CHARS / proxy.CHARS_PER_TOKEN_SYSTEM
+        база, лимит_вывода, запас_CLI = 232_000, 20_000, 13_000
+        порог = база - min(лимит_вывода, 20_000) - запас_CLI
+        недосчёт_оценки = 1.05
+        недосчёт_огрубления = proxy.SYSTEM_ROUNDING_CHARS / proxy.CHARS_PER_TOKEN_SYSTEM
         большой_read = 25_000
-        self.assertLess(proxy.PRUNE_MIN_CONTEXT_TOKENS + недосчёт + большой_read, 232_000)
+        self.assertLess(
+            proxy.PRUNE_MIN_CONTEXT_TOKENS * недосчёт_оценки + недосчёт_огрубления + большой_read,
+            порог)
         # …и гейт всё же не занижен до бессмыслицы: чат на 133k живёт без сжатия, резать там нечего
-        self.assertGreater(proxy.PRUNE_MIN_CONTEXT_TOKENS, 150_000)
+        self.assertGreater(proxy.PRUNE_MIN_CONTEXT_TOKENS, 133_000)
 
     def test_порог_распознавания_сжатия_не_привязан_к_гейту(self):
         """Гейт прунинга двигали трижды; утащив за собой порог распознавания сжатия, он молча
@@ -1232,7 +1240,10 @@ class СобытиеСквозноеTests(unittest.TestCase):
         self.прокси = поднять(proxy.Handler)
         self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
                           proxy.BACKEND_EVENTS_URL, proxy._event_secret, dict(proxy.stats),
-                          dict(proxy._boundaries))
+                          dict(proxy._boundaries), proxy.PRUNE_MIN_CONTEXT_TOKENS)
+        # Полосы history(120/150/160/200) подобраны под гейт 190k: тест про карточки, а не про
+        # гейт, поэтому смена дефолта гейта не должна двигать его геометрию.
+        proxy.PRUNE_MIN_CONTEXT_TOKENS = 190_000
         proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.модель.server_address[1]
         proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM = "on", ""
         proxy.BACKEND_EVENTS_URL = (f"http://127.0.0.1:{self.бэкенд.server_address[1]}"
@@ -1243,7 +1254,8 @@ class СобытиеСквозноеTests(unittest.TestCase):
 
     def tearDown(self):
         (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
-         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат, границы) = self.сохранено
+         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат, границы,
+         proxy.PRUNE_MIN_CONTEXT_TOKENS) = self.сохранено
         proxy.stats.clear()
         proxy.stats.update(стат)
         proxy._boundaries.clear()

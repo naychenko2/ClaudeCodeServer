@@ -26,6 +26,15 @@ public class LocalModelStatsHistoryTests
             => Task.FromResult(Resolve?.Invoke(reference, variant));
     }
 
+    // Фиксированный «now» (UTC) — детерминированный разбор period (today/24h/7d). Локальный
+    // день «today» считается от этого UTC через TimeZoneInfo.Local машины.
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _utc;
+        public FixedTimeProvider(DateTimeOffset utc) => _utc = utc;
+        public override DateTimeOffset GetUtcNow() => _utc;
+    }
+
     private sealed class Harness : IDisposable
     {
         public TestWebApplicationFactory Factory { get; }
@@ -36,11 +45,16 @@ public class LocalModelStatsHistoryTests
         // OwnerLogin резолвил логин, а не null
         public string AdminId { get; }
 
-        public Harness(string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve)
+        public Harness(string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve,
+            TimeProvider? time = null)
         {
             Fake = new FakeHistorySource { Source = source, Resolve = resolve };
             Factory = new TestWebApplicationFactory();
-            Factory.ExtraServices = s => s.AddSingleton<IMediaHistoryResultSource>(Fake);
+            Factory.ExtraServices = s =>
+            {
+                s.AddSingleton<IMediaHistoryResultSource>(Fake);
+                if (time is not null) s.AddSingleton<TimeProvider>(time);
+            };
             // Админу (testuser) включаем флаг local-model-stats
             var users = Factory.Services.GetRequiredService<UserStore>();
             AdminId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
@@ -121,6 +135,35 @@ public class LocalModelStatsHistoryTests
                 ["outcome"] = "interrupted", ["runSeconds"] = null, ["error"] = "GPU OOM",
             };
             File.AppendAllText(Path.Combine(dir, day + ".jsonl"), enqueued.ToJsonString() + "\n" + finished.ToJsonString() + "\n");
+        }
+
+        // Запись с заданным временем ts (enqueued+finished в один момент) и датой файла fileDay.
+        // ts управляет SortTime (фильтр from/to), fileDay — попаданием в 7-дневное окно индекса.
+        public void WriteRecordAt(string promptId, string source, string ts, string fileDay)
+        {
+            var dir = Path.Combine(Factory.TempDir, "local-media-history");
+            Directory.CreateDirectory(dir);
+            var origin = new LocalJobOrigin(
+                OwnerId: AdminId, SessionId: "chat-1", Kind: "image", Op: "generate_image",
+                Heavy: false, ProjectId: "proj-1", Source: source, SourceJobId: "job-1");
+            var wire = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+            var originNode = (JsonNode)JsonSerializer.SerializeToNode(origin, wire)!;
+            var originNode2 = (JsonNode)JsonSerializer.SerializeToNode(origin, wire)!;
+            var enqueued = new JsonObject
+            {
+                ["v"] = 1, ["t"] = "enqueued", ["ts"] = ts,
+                ["id"] = promptId, ["origin"] = originNode,
+                ["model"] = "sdxl", ["prompt"] = "a cat", ["params"] = null, ["card"] = null,
+                ["outcome"] = null, ["runSeconds"] = null, ["error"] = null,
+            };
+            var finished = new JsonObject
+            {
+                ["v"] = 1, ["t"] = "finished", ["ts"] = ts,
+                ["id"] = promptId, ["origin"] = originNode2,
+                ["model"] = null, ["prompt"] = null, ["params"] = null, ["card"] = null,
+                ["outcome"] = "completed", ["runSeconds"] = 5, ["error"] = null,
+            };
+            File.AppendAllText(Path.Combine(dir, fileDay + ".jsonl"), enqueued.ToJsonString() + "\n" + finished.ToJsonString() + "\n");
         }
 
         public void Dispose() => Factory.Dispose();
@@ -276,4 +319,101 @@ public class LocalModelStatsHistoryTests
         record.GetProperty("prompt").ValueKind.Should().Be(JsonValueKind.Null);
         record.GetProperty("params").ValueKind.Should().Be(JsonValueKind.Null);
     }
+
+    // Дефект e8c43aba: запись с причиной недоступности (no_result — failed/cancelled/interrupted,
+    // missing — удалённый файл) отвечает 410 с причиной, даже при VariantCount==0 (n=0 «вне
+    // диапазона»). У доступной записи (Reason==null) неверный n остаётся 404.
+    // Мутация: вернуть проверку n ДО reason — 410 превращается в 404, тест краснеет.
+    [Fact]
+    public async Task Причина410_ПроверяетсяДоN()
+    {
+        // no_result: исход не completed, файлов нет (VariantCount==0)
+        using (var h = new Harness("test-source",
+            (r, n) => new MediaHistoryResolution(0, null, null, MediaHistoryGoneReason.NoResult)))
+        {
+            h.WriteRecord("p1", "test-source");
+            var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file?n=0");
+            resp.StatusCode.Should().Be(HttpStatusCode.Gone);
+            (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("reason").GetString()
+                .Should().Be("no_result");
+        }
+
+        // missing: файл удалён (VariantCount==0)
+        using (var h = new Harness("test-source",
+            (r, n) => new MediaHistoryResolution(0, null, null, MediaHistoryGoneReason.Missing)))
+        {
+            h.WriteRecord("p2", "test-source");
+            var resp = await h.Admin.GetAsync("/api/local-model/history/p2/file?n=0");
+            resp.StatusCode.Should().Be(HttpStatusCode.Gone);
+            (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("reason").GetString()
+                .Should().Be("missing");
+        }
+
+        // available: Reason==null, 1 вариант; неверный n=5 → 404
+        using (var h = new Harness("test-source",
+            (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null)))
+        {
+            h.WriteRecord("p3", "test-source");
+            var resp = await h.Admin.GetAsync("/api/local-model/history/p3/file?n=5");
+            resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+    }
+
+    // Дефект fd9dcfc0: незнакомое значение kind/outcome/period — 400 с понятной ошибкой
+    // (а не 200 с пустым списком). Мутация: убрать валидацию — 400 → 200, тест краснеет.
+    [Theory]
+    [InlineData("kind", "foo")]
+    [InlineData("outcome", "foo")]
+    [InlineData("period", "foo")]
+    public async Task НезнакомоеЗначениеФильтра_400(string param, string value)
+    {
+        using var h = new Harness("test-source", null);
+        var resp = await h.Admin.GetAsync($"/api/local-model/history?{param}={value}");
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()!
+            .Should().NotBeNullOrWhiteSpace();
+    }
+
+    // Валидные значения фильтров — 200 (не 400). period — новый параметр.
+    [Theory]
+    [InlineData("kind", "image")]
+    [InlineData("outcome", "completed")]
+    [InlineData("period", "today")]
+    public async Task ВалидноеЗначениеФильтра_200(string param, string value)
+    {
+        using var h = new Harness("test-source", null);
+        var resp = await h.Admin.GetAsync($"/api/local-model/history?{param}={value}");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // Дефект e9a8de3b: period=today|24h|7d разбирается в окно from (раньше молча игнорировался,
+    // фильтр шёл только через from/to). now фиксирован: today — локальный день, 24h/7d — назад от now.
+    // Мутация: убрать разбор period — r_2d снова попадёт в today/24h, тест краснеет.
+    [Fact]
+    public async Task Period_ФильтруетПоВремени()
+    {
+        var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+        using var h = new Harness("test-source", null, new FixedTimeProvider(now));
+        h.WriteRecordAt("r_today", "test-source", "2026-10-15T12:00:00Z", "2026-10-15"); // = now, сегодня
+        h.WriteRecordAt("r_2d", "test-source", "2026-10-13T12:00:00Z", "2026-10-13");    // 2 дня назад
+
+        // today: только r_today (r_2d — не сегодня)
+        var today = await h.Admin.GetAsync("/api/local-model/history?period=today");
+        today.StatusCode.Should().Be(HttpStatusCode.OK);
+        Ids(await today.Content.ReadFromJsonAsync<JsonElement>()).Should().BeEquivalentTo("r_today");
+
+        // 24h: только r_today (r_2d — вне 24 ч)
+        var h24 = await h.Admin.GetAsync("/api/local-model/history?period=24h");
+        h24.StatusCode.Should().Be(HttpStatusCode.OK);
+        Ids(await h24.Content.ReadFromJsonAsync<JsonElement>()).Should().BeEquivalentTo("r_today");
+
+        // 7d: обе записи (обе в пределах 7 дней)
+        var d7 = await h.Admin.GetAsync("/api/local-model/history?period=7d");
+        d7.StatusCode.Should().Be(HttpStatusCode.OK);
+        Ids(await d7.Content.ReadFromJsonAsync<JsonElement>()).Should().BeEquivalentTo("r_today", "r_2d");
+    }
+
+    // id записей страницы (для сравнения набора, не порядка)
+    private static List<string> Ids(JsonElement body) =>
+        body.GetProperty("records").EnumerateArray().Select(r => r.GetProperty("id").GetString()!).ToList();
 }

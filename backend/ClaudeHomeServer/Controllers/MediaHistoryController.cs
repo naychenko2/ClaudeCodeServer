@@ -20,14 +20,18 @@ public class MediaHistoryController(
     MediaHistoryIndex index,
     FeatureFlagService flags,
     IEnumerable<IMediaHistoryResultSource> sources,
-    MediaHistoryThumbService thumbs) : ControllerBase
+    MediaHistoryThumbService thumbs,
+    TimeProvider? time = null) : ControllerBase
 {
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
     // Флаг local-model-stats у текущего пользователя; без него — 404 (UI-гейта мало: наружу чужие файлы)
     private bool Enabled() => UserId is { } id && flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats);
 
-    // Список: фильтры (вид, модель, исход, логин, период) + курсорная пагинация (50 на страницу)
+    // Список: фильтры (вид, модель, исход, логин, период) + курсорная пагинация (50 на страницу).
+    // kind/outcome/period — фиксированные наборы (контракт api.md): незнакомое значение — 400.
     [HttpGet]
     public IActionResult List(
         [FromQuery] string? kind,
@@ -36,19 +40,39 @@ public class MediaHistoryController(
         [FromQuery] string? login,
         [FromQuery] string? from,
         [FromQuery] string? to,
+        [FromQuery] string? period,
         [FromQuery] string? cursor,
         [FromQuery] int? limit)
     {
         if (!Enabled()) return NotFound();
+
+        if (kind is not null && !Kinds.Contains(kind))
+            return BadRequest(new { error = $"неизвестный kind: {kind}" });
+        if (outcome is not null && !Outcomes.Contains(outcome))
+            return BadRequest(new { error = $"неизвестный outcome: {outcome}" });
+        if (period is not null && !Periods.Contains(period))
+            return BadRequest(new { error = $"неизвестный period: {period}" });
+
         index.Load();
+
+        // period задаёт окно по умолчанию; явные from/to перекрывают его (явное сильнее).
+        var qFrom = ParseDate(from);
+        var qTo = ParseDate(to);
+        if (period is not null)
+        {
+            var (pFrom, pTo) = PeriodWindow(period);
+            qFrom ??= pFrom;
+            qTo ??= pTo;
+        }
+
         var query = new MediaHistoryQuery
         {
             Kind = kind,
             Model = model,
             Outcome = outcome,
             Login = login,
-            From = ParseDate(from),
-            To = ParseDate(to),
+            From = qFrom,
+            To = qTo,
             Cursor = cursor,
             Limit = limit ?? MediaHistoryQuery.PageLimit,
         };
@@ -81,8 +105,11 @@ public class MediaHistoryController(
         var reference = new MediaHistoryRef(record.PromptId, origin.OwnerId, origin.ProjectId, origin.SourceJobId, origin.SessionId);
         var resolution = await source.ResolveAsync(reference, n, ct);
         if (resolution is null) return Gone("missing");
-        if (n < 0 || n >= resolution.VariantCount) return NotFound();
+        // Причина недоступности (failed/cancelled/interrupted, удалённый/истёкший файл) — 410,
+        // и проверяется ДО n: у такой записи VariantCount==0, и n=0 дал бы ложный 404 (ADR-030 §4).
+        // Для доступной записи (Reason==null) неверный n остаётся 404.
         if (resolution.Reason is { } reason) return Gone(ReasonWire(reason));
+        if (n < 0 || n >= resolution.VariantCount) return NotFound();
         if (resolution.HostPath is not { } path || resolution.ContentType is not { } contentType)
             return Gone("missing");
 
@@ -119,6 +146,36 @@ public class MediaHistoryController(
         MediaHistoryGoneReason.NoResult => "no_result",
         _ => "missing",
     };
+
+    // Допустимые значения фильтров (контракт api.md, раздел «Статистика локальных моделей»).
+    // Незнакомое значение — 400, а не пустой список.
+    private static readonly HashSet<string> Kinds = ["image", "audio", "video", "train"];
+    private static readonly HashSet<string> Outcomes = ["completed", "cancelled", "failed", "interrupted"];
+    private static readonly HashSet<string> Periods = ["today", "24h", "7d"];
+
+    // period → окно from/to. «today» — по серверному локальному дню: фронт группирует по дням в
+    // своём локальном поясе, который серверу неизвестен (см. api.md), поэтому берём локальный
+    // день сервера как ближайший прокси. 24h/7d — назад от now (UTC). to не задаём: в окне
+    // только прошлые записи.
+    private (DateTimeOffset? from, DateTimeOffset? to) PeriodWindow(string period)
+    {
+        var now = _time.GetUtcNow();
+        return period switch
+        {
+            "today" => (TodayStart(), null),
+            "24h" => (now - TimeSpan.FromHours(24), null),
+            "7d" => (now - TimeSpan.FromDays(7), null),
+            _ => (null, null),
+        };
+    }
+
+    // Начало «сегодня» в локальном поясе сервера (midnight с корректным смещением).
+    // TimeZoneInfo.Local — локальный пояс машины; GetLocalTimeZone/ToTime — только .NET 9+.
+    private DateTimeOffset TodayStart()
+    {
+        var midnight = _time.GetUtcNow().UtcDateTime.ToLocalTime().Date;
+        return new DateTimeOffset(midnight, TimeZoneInfo.Local.GetUtcOffset(midnight));
+    }
 
     private static DateTimeOffset? ParseDate(string? value) =>
         value is not null && DateTimeOffset.TryParse(value, out var d) ? d : null;

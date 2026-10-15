@@ -5,11 +5,12 @@
 // Блок вне stale-обёртки: история живёт, даже когда ComfyUI лежит (макет §2).
 // Записи без времени (старые, без origin) — в конец своей группы, не падают.
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { AudioLines, Clapperboard, Eye, Image as ImageIcon, ListFilter, RefreshCw } from 'lucide-react';
 import { C, FONT, FS, ICON_SIZE, ICON_STROKE, R, SP } from 'aihome_shell/kit';
 import { Button, Chip, EmptyState, IconButton, IconSegmented, WaitingIndicator } from '../../components/ui';
 import { useMe } from '../../lib/defaultPersona';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelMedia, MediaHistoryRecord } from './api';
 import { HistoryFilterMenuPopup } from './MediaHistoryFilters';
 import { MediaHistoryCard, historyFileUrl } from './MediaHistoryCard';
@@ -125,16 +126,18 @@ function HistoryRow({ record, isMobile, selected, meUsername, onOpen }: {
   );
 }
 
-// === Скелетон: три строки-заглушки ===
+// === Скелетон: три строки-заглушки (пульс; reduced-motion — статично) ===
 
 function SkeletonRow() {
+  const reduced = usePrefersReducedMotion();
+  const pulse: CSSProperties = reduced ? {} : { animation: 'ccs-lm-skeleton 1.4s ease-in-out infinite' };
   return (
     <div style={{ display: 'flex', gap: SP.sm, padding: SP.sm }}>
-      <span style={{ width: 40, height: 40, flexShrink: 0, borderRadius: R.md, background: C.bgInset, animation: 'ccs-lm-skeleton 1.4s ease-in-out infinite' }} />
+      <span style={{ width: 40, height: 40, flexShrink: 0, borderRadius: R.md, background: C.bgInset, ...pulse }} />
       <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
-        <span style={{ height: 10, width: '70%', borderRadius: 6, background: C.bgInset, animation: 'ccs-lm-skeleton 1.4s ease-in-out infinite' }} />
-        <span style={{ height: 10, width: '45%', borderRadius: 6, background: C.bgInset, animation: 'ccs-lm-skeleton 1.4s ease-in-out infinite' }} />
-        <span style={{ height: 10, width: '60%', borderRadius: 6, background: C.bgInset, animation: 'ccs-lm-skeleton 1.4s ease-in-out infinite' }} />
+        <span style={{ height: 10, width: '70%', borderRadius: 6, background: C.bgInset, ...pulse }} />
+        <span style={{ height: 10, width: '45%', borderRadius: 6, background: C.bgInset, ...pulse }} />
+        <span style={{ height: 10, width: '60%', borderRadius: 6, background: C.bgInset, ...pulse }} />
       </span>
     </div>
   );

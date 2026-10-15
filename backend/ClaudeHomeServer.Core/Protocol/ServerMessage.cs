@@ -224,8 +224,21 @@ public record FileChangedMessage(string Path, int Added, int Removed, bool Exter
 // инструментов и ожидания подтверждений. По нему считается скорость генерации в плашке итога:
 // DurationMs для этого не годится — у хода с тул-лупом он кратно больше и занижает скорость.
 // null — CLI поля не прислал (сторонний поток) либо ход шёл мимо CLI (локальный движок).
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null)
+// PromptCache — состояние prompt cache основного агента для индикатора TTL; только у родного
+// Claude (у сторонних провайдеров ephemeral_* — эхо CLI, а не правда провайдера) — иначе null.
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null, PromptCacheInfo? PromptCache = null)
     : ServerMessage("result");
+
+// Состояние prompt cache на конец хода (индикатор TTL в шапке чата).
+// Ttl — "1h" | "5m": срок последней ЗАПИСИ кэша (вызов, который только читал, наследует его);
+// null — записи за жизнь процесса ещё не видели.
+// AnchorAtMs — unix-время (мс, часы сервера) прихода message_start последнего вызова основного
+// агента, который читал или писал кэш: от него отсчитывается TTL. Сабагенты якорь не двигают.
+// MissReason/MissedTokens — diagnostics.cache_miss_reason первого вызова хода (type и
+// cache_missed_input_tokens); null — промаха не было либо API причину не назвал.
+// PrefixTokens — размер контекста последнего запроса (= ContextTokens, 0 — оценки нет):
+// сколько перепишет следующий ход, если кэш остыл.
+public record PromptCacheInfo(string? Ttl, long? AnchorAtMs, string? MissReason, int? MissedTokens, int PrefixTokens);
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:
 // сервер опрашивает fal.ai billing-events по request_id (см. FalCostService).

@@ -159,6 +159,9 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     // примерно на каждом десятом шаге. null — история до этого поля (исторические чаты
     // так и ветвятся текстовым путём), транскрипт не найден либо хвост не прочитался.
     public string? TranscriptTailUuid { get; init; }
+    // Состояние prompt cache на конец хода — см. ResultMessage.PromptCache. Живёт в истории,
+    // чтобы индикатор TTL пережил F5; null — старые истории и сторонние провайдеры.
+    public PromptCacheInfo? PromptCache { get; init; }
 }
 
 public class StoredErrorMessage(string text) : StoredMessage

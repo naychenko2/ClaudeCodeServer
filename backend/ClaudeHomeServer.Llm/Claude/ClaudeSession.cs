@@ -3042,6 +3042,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // прогона, тогда тег перезапишется на реальную модель; см. HandleStreamJson.
         _turnActivity = turnActivity;
         _turnCliModel = null;
+        ResetTurnPromptCacheMiss();
 
         // Ход на ЛОКАЛЬНОМ провайдере занимает KV-бюджет движка целиком — на это время
         // фоновые one-shot действия к локали не пускаем (LocalEngineBusyTracker, правило
@@ -5606,6 +5607,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 if (await AbortOnToolUseAfterStdinClosedAsync(run, root)) break;
                 TrackContextTokens(root);
+                if (!HasParentToolUseId(root) && root.TryGetProperty("message", out var asstMsg))
+                    TrackPromptCache(asstMsg, isCallStart: false);
                 await HandleAssistantToolsAsync(run, root);
                 break;
 
@@ -5721,7 +5724,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root), durationApiMs));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root), durationApiMs,
+                    BuildPromptCacheInfo(ctxTokens)));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик
@@ -6362,6 +6366,14 @@ public class ClaudeSession : ILlmSessionAdapter
         var eventType = et.GetString();
         var index = evt.TryGetProperty("index", out var ix) && ix.TryGetInt32(out var ixv) ? ixv : -1;
 
+        // Начало вызова API основным агентом — якорь TTL prompt cache (см. TrackPromptCache)
+        if (eventType == "message_start")
+        {
+            if (evt.TryGetProperty("message", out var startMsg) && startMsg.ValueKind == JsonValueKind.Object)
+                TrackPromptCache(startMsg, isCallStart: true);
+            return;
+        }
+
         // Начало блока tool_use — показываем карточку сразу (до прихода полного assistant-сообщения)
         if (eventType == "content_block_start")
         {
@@ -6582,6 +6594,68 @@ public class ClaudeSession : ILlmSessionAdapter
                     $"раздувает контекст локальной модели");
             }
         }
+    }
+
+    // Состояние prompt cache основного агента для индикатора TTL (уезжает в ResultMessage.PromptCache).
+    // TTL и якорь живут через ходы: вызов, который только читал кэш, наследует TTL последней
+    // записи. Причина промаха — только у ПЕРВОГО вызова хода: дальше префикс уже прогрет этим
+    // же ходом, и диагностика следующих вызовов про паузу между ходами ничего не говорит.
+    private string? _promptCacheTtl;
+    private long? _promptCacheAnchorMs;
+    private bool _turnFirstCallSeen;
+    private string? _turnCacheMissReason;
+    private int? _turnCacheMissedTokens;
+
+    // Часы якоря: сервер ставит его по СВОИМ часам (у локальных проектов — тоже), подменяются в тестах
+    internal TimeProvider PromptCacheClock { get; set; } = TimeProvider.System;
+
+    private void ResetTurnPromptCacheMiss()
+    {
+        _turnFirstCallSeen = false;
+        _turnCacheMissReason = null;
+        _turnCacheMissedTokens = null;
+    }
+
+    // message — объект message из stream_event/message_start (isCallStart) либо из assistant
+    // основного агента; сабагентов отсекает вызывающий (parent_tool_use_id): у них свой кэш.
+    // Якорь — время прихода message_start вызова, который читал или писал кэш: это ближайшая
+    // к началу запроса точка, которую видит сервер. assistant якорь не двигает — он приходит
+    // после генерации и сдвинул бы отсчёт TTL вперёд на время ответа.
+    internal void TrackPromptCache(JsonElement message, bool isCallStart)
+    {
+        if (message.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
+        {
+            if (u.TryGetProperty("cache_creation", out var cc) && cc.ValueKind == JsonValueKind.Object)
+            {
+                if (LongProp(cc, "ephemeral_1h_input_tokens") > 0) _promptCacheTtl = "1h";
+                else if (LongProp(cc, "ephemeral_5m_input_tokens") > 0) _promptCacheTtl = "5m";
+            }
+            var cached = LongProp(u, "cache_read_input_tokens") + LongProp(u, "cache_creation_input_tokens");
+            if (isCallStart && cached > 0)
+                _promptCacheAnchorMs = PromptCacheClock.GetUtcNow().ToUnixTimeMilliseconds();
+        }
+
+        if (_turnFirstCallSeen) return;
+        _turnFirstCallSeen = true;
+        if (message.TryGetProperty("diagnostics", out var d) && d.ValueKind == JsonValueKind.Object
+            && d.TryGetProperty("cache_miss_reason", out var r) && r.ValueKind == JsonValueKind.Object)
+        {
+            _turnCacheMissReason = r.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String
+                ? t.GetString() : null;
+            _turnCacheMissedTokens = IntProp(r, "cache_missed_input_tokens") is > 0 and var missed ? missed : null;
+        }
+    }
+
+    // Поле PromptCache для result хода. Только родной Claude: у сторонних провайдеров своя
+    // семантика кэша без TTL, а ephemeral_* в их потоке — эхо CLI. Локальный движок идёт мимо
+    // ClaudeSession и result без поля собирает сам.
+    private PromptCacheInfo? BuildPromptCacheInfo(int? contextTokens)
+    {
+        var providerKey = _providers?.ProviderKey(EffectiveModel) ?? "claude";
+        if (!string.Equals(providerKey, "claude", StringComparison.OrdinalIgnoreCase)) return null;
+        if (_promptCacheTtl is null && _promptCacheAnchorMs is null && _turnCacheMissReason is null) return null;
+        return new PromptCacheInfo(_promptCacheTtl, _promptCacheAnchorMs, _turnCacheMissReason,
+            _turnCacheMissedTokens, contextTokens ?? 0);
     }
 
     // Оценка токенов по объёму текста. Грубость намеренная: сторож ловит РАЗНИЦУ

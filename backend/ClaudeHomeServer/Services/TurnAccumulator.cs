@@ -586,7 +586,7 @@ internal class TurnAccumulator
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
         UsageInfo? usage, double? totalCostUsd, string? apiErrorStatus, IReadOnlyList<string>? permissionDenials, ChatHistoryService svc,
         int? contextTokens = null, string? usageModel = null, long? durationApiMs = null,
-        string? transcriptTailUuid = null)
+        string? transcriptTailUuid = null, PromptCacheInfo? promptCache = null)
     {
         lock (_lock)
         {
@@ -598,7 +598,7 @@ internal class TurnAccumulator
                 if (m is StoredTextMessage t && t.ParentToolUseId is null && t.Model is null)
                     t.Model = usageModel;
             _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens, durationApiMs)
-                { TranscriptTailUuid = transcriptTailUuid });
+                { TranscriptTailUuid = transcriptTailUuid, PromptCache = promptCache });
         }
         await FlushAsync(svc);
     }

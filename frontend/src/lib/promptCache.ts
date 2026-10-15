@@ -53,6 +53,8 @@ const MISS_LABELS: Record<string, string> = {
   system_changed: 'сменился системный промпт',
   model_changed: 'смена модели',
   tools_changed: 'сменились инструменты',
+  messages_changed: 'изменилась история сообщений',
+  unavailable: 'причина неизвестна',
 };
 
 export function missReasonLabel(reason: string): string {

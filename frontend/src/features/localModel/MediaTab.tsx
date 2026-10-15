@@ -122,7 +122,8 @@ function MediaGpuCard({ media }: { media: LocalModelMedia }) {
   }
   return (
     <Card title="Видеокарта">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: SP.sm }}>
+      {/* auto-fit, а не auto-fill: одна карта тянется на всю ширину, несколько делят её поровну */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: SP.sm }}>
         {gpus.map(g => (
           <GpuCard key={g.uuid || g.index} gpu={g} total={gpus.length} kind="media" />
         ))}

@@ -13,14 +13,22 @@ import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 // disabled группы — «занято» (курсор ожидания), disabled/muted/title опции — про
 // отдельный сегмент (см. SegmentOptionState).
 // touchWidth — на телефоне сегмент не уже тач-цели (короткие подписи «1:1», «16:9»)
-export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile, touchWidth }: {
+export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile, touchWidth, size = 'md' }: {
   value: T | null;
   options: ({ value: T; label: string; tone?: { bg: string; fg: string }; icon?: ReactNode } & SegmentOptionState)[];
   onChange: (v: T) => void;
   disabled?: boolean;
   isMobile?: boolean;
   touchWidth?: boolean;
+  // 'md' (по умолчанию) — плотный сегмент в строках списков (min-height 32/40);
+  // 'sm' — для шапки панели: итоговая высота 24, вровень с IconButton xs / IconSegmented sm / Button xs
+  size?: 'md' | 'sm';
 }) {
+  // 'sm': кнопка 20 + поля дорожки 2+2 = 24; 'md': 32 на десктопе, 40 на телефоне (тач-цель)
+  const padY = size === 'sm' ? SP.xxs : SP.xs;
+  const minH = size === 'sm'
+    ? (isMobile ? TB.iconHitMobile : 20)
+    : (isMobile ? TB.iconHitMobile : TB.iconHitDesktop);
   return (
     <div style={{
       display: 'flex', gap: SP.xxs, background: TB.pillTrack,
@@ -43,8 +51,8 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
               border: 'none', borderRadius: TB.pillRadius - 2,
               cursor: disabled ? 'wait' : 'pointer',
               fontFamily: 'inherit', fontSize: FS.xs, fontWeight: 600,
-              padding: `${SP.xs}px ${SP.sm}px`,
-              minHeight: isMobile ? TB.iconHitMobile : TB.iconHitDesktop,
+              padding: `${padY}px ${SP.sm}px`,
+              minHeight: minH,
               ...(isMobile && touchWidth ? { minWidth: TB.iconHitMobile, justifyContent: 'center' } : null),
               background: tone ? tone.bg : 'transparent',
               color: tone ? tone.fg : C.textMuted,
@@ -52,7 +60,7 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
               // Выключенный гасится прозрачностью, приглушённый — цветом обычного сегмента
               // с пунктирной рамкой (см. SEG_MUTED_BORDER); поля меньше на ширину рамки
               ...(o.disabled && !disabled ? { cursor: 'not-allowed', opacity: 0.4 }
-                : o.muted && !active ? { border: SEG_MUTED_BORDER, padding: `${SP.xs - 1}px ${SP.sm - 1}px` } : null),
+                : o.muted && !active ? { border: SEG_MUTED_BORDER, padding: `${padY - 1}px ${SP.sm - 1}px` } : null),
             }}
           >
             {o.icon}

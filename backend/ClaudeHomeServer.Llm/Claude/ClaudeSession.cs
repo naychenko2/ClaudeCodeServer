@@ -441,6 +441,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // контент после TurnDone означает, что продолжение началось. Его result не должен
         // завершать пользовательский ход (см. SkipResults)
         public volatile bool ContinuationActive;
+        // result хода отдан, но stdin оставлен открытым: в очереди CLI лежит не впитанная
+        // ходом доставка (уведомление/отчёт субагента), и CLI сейчас начнёт с неё
+        // ход-продолжение (MainTranscriptTailer.HasQueuedDeliveries). Ход при этом не ждёт
+        // смерти процесса — как при доживающих фоновых агентах
+        public volatile bool HeldForQueuedDelivery;
         // uuid user-сообщения, записанного в stdin, эхо которого (--replay-user-messages) ещё не
         // пришло. Пока оно не null, любой result — чужой: на resume CLI сначала доигрывает
         // «осиротевший» task-notification прошлой сессии и выдаёт на него result (numTurns=0),
@@ -2989,12 +2994,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // _stdinLock: между внешней проверкой и закрытием мог проскочить TrySubmitTurn
     // (TurnDone=false), и безусловное закрытие оставило бы свежий ход с мёртвым stdin
     // (permission-ответы не записать, ход умер бы по часовому IdleTimeout)
+    // Недоставленное в очереди CLI (поставлено посреди продолжения) — следующее продолжение
+    // начнётся сразу за этим result, ему тоже нужен stdin
     private void CloseStdinIfIdle(CliRun run)
     {
+        var queued = _transcriptTailer?.HasQueuedDeliveries() == true;
         _stdinLock.Wait();
         try
         {
-            if (!run.TurnDone || run.HasPendingBg || run.StdinClosed) return;
+            if (!run.TurnDone || run.HasPendingBg || queued || run.StdinClosed) return;
             run.StdinClosed = true;
             run.Process.StandardInput.Close();
         }
@@ -3038,6 +3046,7 @@ public class ClaudeSession : ILlmSessionAdapter
             Interlocked.Exchange(ref run.LastTurnSeq, turnSeq);
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
+            run.HeldForQueuedDelivery = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
             // Факт внутренних повторов CLI — per-turn: паспорт хода отражает только ЭТОТ ход,
             // а не накопленное с момента старта процесса (new-process стартует с нулями сам)
@@ -4673,7 +4682,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Без живых фоновых задач сохраняем прежнюю семантику хода: возвращаемся, когда процесс
         // умер и финализирован (ExitedMessage послан до release _turnLock). С ними — сразу:
         // прогон доживает, чат остаётся Active, ExitedMessage пошлёт финализация.
-        if (!run.HasPendingBg && run.ReaderTask is { } reader)
+        // То же при stdin, оставленном под ход-продолжение из очереди CLI (HeldForQueuedDelivery).
+        if (!run.HasPendingBg && !run.HeldForQueuedDelivery && run.ReaderTask is { } reader)
             await reader.WaitAsync(ct);
     }
 
@@ -6088,6 +6098,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     CorrTrace("continuation-start(stream_event)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                    _transcriptTailer?.ClearQueuedDeliveries();   // очередь доставлена этим ходом
                 }
                 await HandleStreamEventAsync(root);
                 break;
@@ -6098,6 +6109,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     CorrTrace("continuation-start(assistant)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                    _transcriptTailer?.ClearQueuedDeliveries();
                 }
                 if (await AbortOnToolUseAfterStdinClosedAsync(run, root)) break;
                 TrackContextTokens(root);
@@ -6269,11 +6281,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 // прогон доживает (агенты работают внутри процесса) и готов принять
                 // следующий совместимый ход. Result'ы ходов-продолжений CLI сюда не доходят —
                 // отфильтрованы корреляцией выше.
+                // Фоновая задача, завершившаяся посреди хода, уже вычеркнута из pending, но её
+                // уведомление (или отчёт субагента) могло осесть в очереди CLI не впитанным —
+                // тогда CLI доставит его ходом-продолжением сразу после этого result, и закрытый
+                // stdin уронил бы продолжение вторым контуром (инцидент 15.10.2026, SubagentHandback)
                 {
                     var doneRun = run;
                     doneRun.TurnDone = true;
-                    if (!doneRun.HasPendingBg) CloseStdin(doneRun);
-                    else
+                    if (doneRun.HasPendingBg)
                     {
                         int pendingCount;
                         lock (doneRun.PendingBg) pendingCount = doneRun.PendingBg.Count;
@@ -6281,6 +6296,14 @@ public class ClaudeSession : ILlmSessionAdapter
                             $"[ClaudeSession] Ход завершён, прогон доживает: фоновых задач {pendingCount}"
                             + (doneRun.PendingBgUnknown ? " (+неучтённые)" : ""));
                     }
+                    else if (_transcriptTailer?.HasQueuedDeliveries() == true)
+                    {
+                        // Окно старта продолжения — ContinuationStartGrace (stdin открыт); не
+                        // начнётся — ватчдог погасит процесс молча
+                        doneRun.HeldForQueuedDelivery = true;
+                        Console.WriteLine("[ClaudeSession] Ход завершён, stdin держим: в очереди CLI недоставленное уведомление");
+                    }
+                    else CloseStdin(doneRun);
                     doneRun.TurnTcs.TrySetResult();
                 }
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не
@@ -6307,6 +6330,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     run.PreEchoResultLine = null;
                     Volatile.Write(ref run.SkipResults, 0);
                     run.ContinuationActive = false;
+                    // CLI взялся за наш ход — поставленное до него он доставит в этом же ходе
+                    _transcriptTailer?.ClearQueuedDeliveries();
                     break;
                 }
                 await HandleUserMessageAsync(run, root);

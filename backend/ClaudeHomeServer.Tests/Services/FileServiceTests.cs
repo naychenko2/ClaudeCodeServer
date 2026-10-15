@@ -106,6 +106,27 @@ public class FileServiceTests : IDisposable
         File.ReadAllText(Path.Combine(_root, "a.txt")).Should().Be("правка\n");
     }
 
+    // Фолбэк без GitService: «[ab].txt» маской совпадает с a.txt — без «:(literal)» в
+    // дифф одного файла попали бы и правки соседа
+    [Fact]
+    public async Task GetDiff_БезGitService_СкобкиВИмени_СоседНеПопадает()
+    {
+        Git("init", "-q");
+        Git("config", "user.email", "t@t");
+        Git("config", "user.name", "t");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "один\n");
+        File.WriteAllText(Path.Combine(_root, "[ab].txt"), "скобки\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "init");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "правка соседа\n");
+        File.WriteAllText(Path.Combine(_root, "[ab].txt"), "правка скобок\n");
+
+        var diff = await _svc.GetDiffAsync(_root, "[ab].txt");
+
+        diff.Should().Contain("правка скобок");
+        diff.Should().NotContain("a/a.txt").And.NotContain("правка соседа");
+    }
+
     private void Git(params string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo("git")

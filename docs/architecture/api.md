@@ -374,9 +374,50 @@ GET  /api/local-model/stats/media  ?since=<unix ms>   (только admin)
      gpus/loadedModels — с маршрута узла /ccs/stats; null — узел не сообщает. foreign — instance|transcription|external.
      Чужой прогон: sessionId/projectId null, title «Чат другого пользователя»; у своего title null — фронт берёт
      название по sessionId. since фильтрует только lastHour
+     (lastHour уходит вместе с блоком «Последний час», его заменяет /history — ADR-030)
 GET  /api/sessions/{id}/local-model   (владелец чата; чужая или неизвестная — 404)
      → { lastTurn: { genTps?, prefillTps?, ttftMs?, queueMsApprox?, cacheHitPerc?, outTokens? } | null }
      null — ходов на локальной модели не было или сервер перезапущен (счётчик в памяти). prefillTps пока всегда null
+```
+
+**История медиа-генераций** ([ADR-030](../adr/ADR-030-local-media-history.md)) — журнал за 7 дней с диска.
+В отличие от ручек выше, обе проверяют **и роль admin (`403`), и серверный флаг `local-model-stats` у
+текущего пользователя (`404`)**: здесь отдаются чужие промпты и файлы. Финальная форма полей —
+**уточнить после шага 3 Дениса** (чтение и превью); ниже — контракт по разрезу и макету.
+
+```
+GET  /api/local-model/history   ?kind=image|audio|video|train&outcome=completed|cancelled|failed|interrupted
+                                &model=<имя>&owner=<логин>&period=today|24h|7d&cursor=<непрозрачная строка>&limit=50
+     → { items: [{ id, kind, op, model?, ownerLogin, own, outcome, error?,
+                   enqueuedAt, startedAt?, finishedAt?, waitSeconds?, runSeconds?, etaSeconds?,
+                   count, prompt?, params?: { width?, height?, durationSec?, frames?, steps?, seed?, engine?, fast?, lora? },
+                   card?: { index?, name? }, hasResult }],
+         nextCursor: string | null, total, totalFiltered,
+         summary: { completed, cancelled, failed, interrupted },
+         facets?: { models: string[], owners: string[] } }
+     Сортировка — по времени desc (finishedAt, у прерванных — enqueuedAt), затем по id; курсор непрозрачный,
+     кодирует (время, id) последней записи страницы; nextCursor null — конец ленты. limit 1..50, по умолчанию 50.
+     Все фильтры необязательны, незнакомое значение kind/outcome/period — 400. period по умолчанию 7d.
+     id — prompt_id записи. ownerLogin — логин владельца (у своей записи own: true); названия чата и проекта,
+     sessionId и projectId НЕ отдаются ни у чужих, ни у своих записей. interrupted — есть enqueued, нет finished
+     и prompt_id нет в живом реестре (рестарт). waitSeconds null — ожидание неизвестно (рестарт между событиями).
+     error — недоверенный текст ComfyUI, ≤ 500 символов. card null — узел карту не сообщает.
+     params.lora — имя LoRA как у владельца (ADR-026 §14). facets — уточнить после шага 3 (есть ли счётчики).
+GET  /api/local-model/history/{id}/file   ?n=0&size=thumb|full
+     → 200 файл: Content-Type по сигнатуре, Content-Disposition: inline, X-Content-Type-Options: nosniff,
+       Range для звука и видео. thumb — webp 256 px (картинка; у видео — кадр из середины), строится лениво
+       и кэшируется; у звука thumb нет — 404, фронт его не запрашивает. full — оригинал, потолок 50 МБ.
+       У train n — номер фото обучения, у остальных — номер варианта (0..count−1).
+     403 — не admin; 404 — нет флага, нет записи, неверный id (в т. ч. с «..») или n вне диапазона;
+     410 { reason } — запись есть, файла нет:
+       expired          истёк срок рабочей папки редактора или задачи стора
+       missing          файла нет на месте
+       project_gone     проект удалён
+       local_project    проект на устройстве (ProjectCapabilities.FilesOnServer = false), диск не трогается
+       source_disabled  подсистема источника выключена (нет реализации IMediaHistoryResultSource)
+       no_result        исход не completed — результата не было
+     Список причин открытый: незнакомую фронт показывает как «Файл недоступен». Путь с клиента не принимается
+     никогда — только id записи и n; путь собирает сервер (SafePath.Join для проектов и lora-training).
 ```
 
 События хаба `/hubs/session` (тип `message`, дискриминатор `type`) уходят только в группу сессии и только

@@ -336,6 +336,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // ход можно отдать живому процессу только при полном совпадении (см. BuildLaunchSignature)
         public required string Signature { get; init; }
         public string? TurnMcpPath { get; init; }
+        // Per-run файл --agents (состав сабагентов-персон): та же жизнь, что у MCP-конфига —
+        // нужен только на старте процесса, на same-process-ходах не перечитывается
+        public string? TurnAgentsPath { get; init; }
         // Ход шлюза LLM этого процесса (серверный ход провайдера, ADR-016 §2): отзывается
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
@@ -3104,6 +3107,23 @@ public class ClaudeSession : ILlmSessionAdapter
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
 
+        // --restricted (CLI ≥ 2.1.248): для персон «Только чтение» (консультанты) — убирает
+        // встроенные инструменты запуска команд и WebFetch, держит файловые инструменты внутри
+        // рабочего каталога, отказывает bypassPermissions. Fail-closed на стороне CLI в
+        // дополнение к disallowed-инструментам (PersonaAccessPolicy); гейты на бэкенде
+        // остаются. Встроенный WebSearch и ридер ссылок (MCP web_read) не затронуты:
+        // --restricted режет только встроенные инструменты, а не MCP-тулсеты.
+        var persona = _personaProvider?.Invoke();
+        if (persona is { Access: PersonaAccess.ReadOnly } && CliAtLeast(CurrentCliVersion(), 2, 1, 248))
+            args.Add("--restricted");
+
+        // --permission-prompts none (CLI ≥ 2.1.259): ход, где человека нет (исполнитель задачи
+        // трекера, периодическая автоматика) — всё, что просило бы подтверждения, отказывается
+        // автоматически, активный режим прав продолжает решать. Без флага такой ход виснет на
+        // stdio-запросе прав до истечения TTL чата исполнения.
+        if (Info.Origin != ChatOrigin.Manual && CliAtLeast(CurrentCliVersion(), 2, 1, 259))
+            args.AddRange(["--permission-prompts", "none"]);
+
         // Пустая модель сессии = «по умолчанию»: подставляем глобальную настройку, а не
         // отдаём выбор CLI (иначе «по умолчанию» значило бы в разных местах разные модели)
         if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))
@@ -3275,6 +3295,38 @@ public class ClaudeSession : ILlmSessionAdapter
                 try { args.AddRange(["--add-dir", _launcher.Paths.ToRuntime(dir)]); }
                 catch (InvalidOperationException) { }
             }
+
+        // Per-run файл --agents (CLI ≥ 2.1.281 принимает путь к JSON при -p): определения
+        // сабагентов-персон. Имя файла — хэш содержимого, а содержимое детерминировано
+        // по сессии (владелец + персоны + их настройки), поэтому путь входит в сигнатуру
+        // запуска стабильно: правка персоны → новый хэш → новый путь → штатный перезапуск
+        // процесса. omitClaudeMd — по факту BareMode ЭТОГО прогона (блок выше): сессия,
+        // где CLAUDE.md проекта не грузится целиком, не должна тянуть его и в сабагента.
+        // Локальный проект (ADR-016): файл доезжает на устройство в составе spawn
+        // (RemoteProcessRunner.FileArgFlags), как --mcp-config.
+        string? turnAgentsPath = null;
+        if (personaAgents is { Agents.Count: > 0 })
+        {
+            var defs = _lastBareModeApplied
+                ? personaAgents.Agents.Select(a => a with { OmitClaudeMd = true }).ToList()
+                : personaAgents.Agents.ToList();
+            try
+            {
+                var json = ClaudeAgentsJson.Serialize(defs);
+                var hash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json)))
+                    [..16].ToLowerInvariant();
+                var path = Path.Combine(_launcher.HostTempDir, $"claude-agents-{hash}.json");
+                if (!File.Exists(path) || File.ReadAllText(path) != json)
+                    File.WriteAllText(path, json);
+                turnAgentsPath = path;
+                args.AddRange(["--agents", _launcher.Paths.ToRuntime(path)]);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Файл --agents не собрался, ход без файловых консультантов: {ex.Message}");
+            }
+        }
 
         // pmem-серверы консультантов: сессионный allow, БЕЗ него вызов из фонового сабагента
         // упирается в permission-запрос, на который некому ответить (проверено вживую).
@@ -4232,6 +4284,14 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг same-process хода {turnMcpPath}: {ex.Message}");
                     }
+                // --agents-файл: та же логика (DiedEmpty-ветка не трогает: ретрай стартует
+                // новый процесс с теми же args, финализация нового прогона его уберёт)
+                if (turnAgentsPath != null)
+                    try { File.Delete(turnAgentsPath); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents same-process хода {turnAgentsPath}: {ex.Message}");
+                    }
                 return;
             }
             existing.DiedEmpty = false;
@@ -4321,7 +4381,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -4394,6 +4454,9 @@ public class ClaudeSession : ILlmSessionAdapter
             if (gatewayTurnId is not null) _serverGateway!.End(gatewayTurnId);
             if (turnMcpPath != null)
                 try { File.Delete(turnMcpPath); }
+                catch { /* temp-каталог приберёт ОС */ }
+            if (turnAgentsPath != null)
+                try { File.Delete(turnAgentsPath); }
                 catch { /* temp-каталог приберёт ОС */ }
             await _onMessage(new ExitedMessage(turnSeq));
             throw;
@@ -4645,6 +4708,13 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 // В temp-конфиге сервисный токен — важно знать, если он не удалился
                 Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг {run.TurnMcpPath}: {ex.Message}");
+            }
+
+        if (run.TurnAgentsPath != null)
+            try { File.Delete(run.TurnAgentsPath); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents {run.TurnAgentsPath}: {ex.Message}");
             }
 
         // Процесс мёртв, но Workflow-агенты — независимые процессы и не обязаны погибнуть
@@ -5362,6 +5432,31 @@ public class ClaudeSession : ILlmSessionAdapter
             return projectLocal;
         }
         return ResolveHostPath(configured, serverContentRoot, projectRoot);
+    }
+
+    // Версия CLI хоста: ClaudeCliVersion — одна точка на процесс (кэш с перечитыванием).
+    // Шов для тестов: по умолчанию реальный ClaudeCliVersion.TryGetKnown, тесты подменяют
+    // на фиксированную версию, чтобы гейт по версии (CliAtLeast) был детерминирован.
+    internal static Func<string?>? CliVersionProbeForTests;
+
+    private static string? CurrentCliVersion()
+    {
+        if (CliVersionProbeForTests is { } probe) return probe();
+        return ClaudeCliVersion.TryGetKnown(out var v) ? v : null;
+    }
+
+    // Версия CLI хоста поддерживает порог? ClaudeCliVersion.Parse чистит вывод до "X.Y.Z",
+    // поэтому Version.TryParse надёжен. Неизвестная/битая версия — false (fail-safe: не
+    // ставим флаг, который старый CLI не поймёт и который роняет запуск кодом 1).
+    // Третья часть версии в System.Version — это Build (Revision — четвёртая, -1 у трёхчастной):
+    // сравниваем по Build, а не по Revision.
+    internal static bool CliAtLeast(string? version, int major, int minor, int patch)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return false;
+        if (!Version.TryParse(version, out var v)) return false;
+        return v.Major > major
+            || (v.Major == major && v.Minor > minor)
+            || (v.Major == major && v.Minor == minor && v.Build >= patch);
     }
 
     private static string BuildLaunchSignature(

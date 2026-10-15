@@ -52,7 +52,9 @@ public sealed class ChatContinueService(
     private readonly ConcurrentDictionary<string, byte> _inFlight = new();
 
     // Продолжения, поставленные инструментом chats_continue ИЗ хода самого чата: стартуют, когда этот
-    // ход кончится (дождаться конца собственного хода изнутри него нельзя). sessionId → (владелец, приписка)
+    // ход кончится (дождаться конца собственного хода изнутри него нельзя). sessionId → (владелец, приписка).
+    // Живёт в памяти процесса: рестарт сервера сбрасывает очередь (сам ход тоже умирает с процессом,
+    // так что потеря допустима — но это стоит знать, см. описание MCP-инструмента chats_continue)
     private readonly ConcurrentDictionary<string, DeferredContinue> _afterTurn = new();
 
     private sealed record DeferredContinue(string OwnerId, string? Note);
@@ -60,10 +62,11 @@ public sealed class ChatContinueService(
     // Шов для тестов: настоящая отправка поднимает процесс CLI, а тестам нужен управляемый исход хода
     internal Func<string, string, TimeSpan, bool, Task<SendAndWaitResult>>? SendOverride { get; set; }
 
-    private Task<SendAndWaitResult> SendAsync(string sessionId, string text, TimeSpan timeout, bool systemDirective) =>
+    private Task<SendAndWaitResult> SendAsync(string sessionId, string text, TimeSpan timeout, bool systemDirective,
+        bool preempt = true) =>
         SendOverride is { } send
             ? send(sessionId, text, timeout, systemDirective)
-            : sessions.SendMessageAndWaitAsync(sessionId, text, timeout, systemDirective: systemDirective);
+            : sessions.SendMessageAndWaitAsync(sessionId, text, timeout, preempt: preempt, systemDirective: systemDirective);
 
     private int _subscribed;
 
@@ -94,6 +97,15 @@ public sealed class ChatContinueService(
         if (source.TeamImplement is not null)
             throw new ChatContinueNotSupportedException(
                 "Чат в режиме «Командная реализация» нельзя продолжить в новом: состояние волн живёт в чате");
+        // Повторное продолжение: ссылка уже стоит — третий чат не создаём (иначе затирали бы
+        // ContinuedInSessionId). Дешёвая проверка, до платного хода
+        if (source.ContinuedInSessionId is { } continuedId)
+        {
+            var target = sessions.GetById(continuedId);
+            var link = target is not null ? ChatLink(target) : $"#{Uri.EscapeDataString(continuedId)}";
+            throw new InvalidOperationException(
+                $"Чат уже продолжен в {link} — повторное продолжение не создаёт третий чат");
+        }
         var history = await sessions.GetHistoryAsync(sessionId);
         if (!history.Any(m => m is StoredTextMessage or StoredResultMessage))
             throw new ChatContinueNotSupportedException("В чате ещё нет ходов агента: передавать нечего");
@@ -178,24 +190,48 @@ public sealed class ChatContinueService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Фоновое продолжение чата {Session} не выполнено", sessionId);
+            // Не только лог: владелец должен узнать, что поставленное продолжение не состоялось
+            var chat = sessions.GetById(sessionId);
+            var name = chat is null || string.IsNullOrWhiteSpace(chat.Name) ? "чат" : chat.Name;
+            _ = broadcaster.ToOwner(ownerId, new NotificationMessage(
+                Title: $"Продолжение «{name}» не выполнено",
+                Body: ex.Message,
+                Url: chat is not null ? $"/chats/{Uri.EscapeDataString(chat.Id)}" : null,
+                Kind: "info"));
         }
     }
 
     // Ход передачи в старом чате: служебное сообщение с промптом, ждём конца хода, берём ответ агента
     private async Task<string> RequestHandoffAsync(string sessionId)
     {
-        var sent = await SendAsync(sessionId, HandoffPrompt, HandoffTurnTimeout, systemDirective: true);
+        // preempt: false — чужой ход, успевший занять чат между проверкой занятости и отправкой, не
+        // рубим: промпт записки встанет в очередь, а мы его вычистим и откажем (409), не дождавшись
+        // его хода
+        var sent = await SendAsync(sessionId, HandoffPrompt, HandoffTurnTimeout, systemDirective: true, preempt: false);
         switch (sent)
         {
-            case SendAndWaitResult.Completed c when !string.IsNullOrWhiteSpace(c.Result.Reply):
+            case SendAndWaitResult.Completed c when c.Result.Succeeded && !string.IsNullOrWhiteSpace(c.Result.Reply):
                 return c.Result.Reply.Trim();
+            case SendAndWaitResult.Completed c when !c.Result.Succeeded:
+                // Ошибка хода (протухший логин CLI) или «Стоп» — не записка, а отказ: заметку и
+                // новый чат не создаём, иначе туда уехал бы текст ошибки или обрубок
+                var detail = string.IsNullOrWhiteSpace(c.Result.Reply) ? "" : $": {c.Result.Reply.Trim()}";
+                throw new InvalidOperationException(
+                    $"Ход передачи завершился без штатного результата (ошибка или «Стоп»){detail} — чат не продолжен");
             case SendAndWaitResult.Completed:
                 throw new InvalidOperationException("Агент вернул пустую записку-передачу — чат не продолжен");
             case SendAndWaitResult.Running:
                 throw new InvalidOperationException(
                     "Агент не успел написать записку за отведённое время — чат не продолжен");
+            case SendAndWaitResult.Queued:
+                // Чат занялся между проверкой занятости и отправкой: промпт лёг в очередь. Вычищаем
+                // его (иначе отработает позже отдельным ходом, написав записку, которую никто не
+                // использует) и отказываем; чужой ход не прерван (preempt: false)
+                sessions.RemovePendingByText(sessionId, HandoffPrompt);
+                throw new InvalidOperationException(
+                    "В чате идёт ход — дождитесь его завершения или прервите его, затем попробуйте снова");
             default:
-                // Busy/Queued/QueueFull: чат занялся между проверкой и отправкой
+                // Busy/QueueFull: чат занят, промпт не лёг в очередь
                 throw new InvalidOperationException(
                     "В чате идёт ход — дождитесь его завершения или прервите его, затем попробуйте снова");
         }

@@ -54,7 +54,7 @@ public class ChatsControllerContinueTests(TestWebApplicationFactory factory)
     private void ReplyWith(string note) =>
         factory.Services.GetRequiredService<ChatContinueService>().SendOverride = (_, _, _, sys) =>
             Task.FromResult<SendAndWaitResult>(sys
-                ? new SendAndWaitResult.Completed(new TurnResult(note, 1, null))
+                ? new SendAndWaitResult.Completed(new TurnResult(note, 1, null, Succeeded: true))
                 : new SendAndWaitResult.Running());
 
     [Fact]

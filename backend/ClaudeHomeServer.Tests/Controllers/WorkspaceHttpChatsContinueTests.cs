@@ -67,7 +67,7 @@ public class WorkspaceHttpChatsContinueTests : IDisposable
         {
             if (!sys) firstMessageTo.TrySetResult(sid);
             return Task.FromResult<SendAndWaitResult>(sys
-                ? new SendAndWaitResult.Completed(new TurnResult("## Цель\nпродолжить", 1, null))
+                ? new SendAndWaitResult.Completed(new TurnResult("## Цель\nпродолжить", 1, null, Succeeded: true))
                 : new SendAndWaitResult.Running());
         };
         return firstMessageTo;

@@ -3188,8 +3188,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             n.WorktreePath = source.WorktreePath;
             n.WorktreeBranch = source.WorktreeBranch;
             n.WorktreeOwned = false;
-            newEntry.AdapterStale = true;
         }
+        // Model/Provider/Effort переписаны ПОСЛЕ создания адаптера (фабрика подставила модель
+        // персоны, а не выбранную человеком) — следующий ход обязан пересобрать адаптер с
+        // перенесёнными значениями, а не повторить путь персоны. Worktree-ветка тоже сюда:
+        // адаптер строится с cwd, не с дерева.
+        newEntry.AdapterStale = true;
         n.ContinuedFromSessionId = sessionId;
         source.ContinuedInSessionId = n.Id;
         SaveSessions();
@@ -5465,6 +5469,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (removedWaiting) SaveSessions();
         if (removed) await BroadcastPendingAsync(sessionId, entry);
         return removed;
+    }
+
+    // Убрать поставленное (queued) сообщение по тексту — для служебных отправок (записка-передача),
+    // которые не должны отработать отдельным ходом, если чат занялся между проверкой занятости и
+    // отправкой. true, если что-то убрано.
+    public bool RemovePendingByText(string sessionId, string text)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        lock (entry.PendingLock)
+        {
+            var idx = entry.Pending.FindIndex(p => p.Text == text);
+            if (idx < 0) return false;
+            entry.Pending.RemoveAt(idx);
+            return true;
+        }
     }
 
     // Прерывание хода («Стоп») замораживает очередь: сообщения НЕ выбрасываются (как было
@@ -9598,15 +9617,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             {
                 case ResultMessage rm:
                     waiter.TrySetResult(new TurnResult(
-                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd));
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd,
+                        Succeeded: true));
                     break;
                 case ErrorMessage em:
-                    waiter.TrySetResult(new TurnResult(em.Text, 0, null));
+                    // Ошибка хода (протухший логин CLI и пр.) — не штатная реплика
+                    waiter.TrySetResult(new TurnResult(em.Text, 0, null, Succeeded: false));
                     break;
                 case ExitedMessage:
-                    // Прерван без result — отдаём то, что ассистент успел написать
+                    // Прерван без result — отдаём то, что ассистент успел написать (обрубок,
+                    // не готовая реплика)
                     waiter.TrySetResult(new TurnResult(
-                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null));
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null, Succeeded: false));
                     break;
             }
         }
@@ -10208,8 +10230,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 }
 
 // Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
-// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал)
-public record TurnResult(string Reply, long DurationMs, double? CostUsd);
+// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).
+// Succeeded — ход завершился штатным result (true); error/«Стоп» (exited) — false: тогда Reply
+// это сообщение об ошибке или обрубок, а не готовая реплика.
+public record TurnResult(string Reply, long DurationMs, double? CostUsd, bool Succeeded);
 
 // Результат отправки с ожиданием: Queued — сессия была занята, сообщение встало в очередь
 // и уйдёт после текущего хода; QueueFull — очередь переполнена, сообщение отброшено;

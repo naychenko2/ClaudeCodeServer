@@ -146,7 +146,7 @@ public class ChatContinueServiceTests : IDisposable
         {
             log.Add(new Sent(sid, text, timeout, sys));
             return Task.FromResult(reply?.Invoke(sid) ?? (sys
-                ? new SendAndWaitResult.Completed(new TurnResult(Note, 100, null))
+                ? new SendAndWaitResult.Completed(new TurnResult(Note, 100, null, Succeeded: true))
                 : new SendAndWaitResult.Running()));
         };
         return svc;
@@ -375,5 +375,102 @@ public class ChatContinueServiceTests : IDisposable
         log.Should().BeEmpty();
         source.ContinuedInSessionId.Should().BeNull();
         svc.Schedule(TestUserId, source.Id, null, afterCurrentTurn: true).Should().BeTrue("очередь освобождена");
+    }
+
+    // Блокер (п.1): ход передачи, завершившийся ОШИБКОЙ (протухший логин CLI), — не записка.
+    // Без проверки Succeeded текст ошибки уехал бы заметкой и в новый чат
+    [Fact]
+    public async Task Продолжение_ХодПередачиСОшибка_409_БезНовогоЧатаИЗаметки()
+    {
+        var (source, _) = await SeedChatAsync("handoff-error");
+        var before = _sut.GetAll().Count();
+
+        var act = () => NewService(new List<Sent>(),
+            _ => new SendAndWaitResult.Completed(new TurnResult("OAuth session expired", 0, null, Succeeded: false)))
+            .ContinueAsync(TestUserId, source.Id, null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*без штатного результата*");
+        _sut.GetAll().Count().Should().Be(before, "новый чат не создан");
+        source.ContinuedInSessionId.Should().BeNull();
+    }
+
+    // Блокер (п.1): «Стоп» во время записки — ход прерван без result, Reply = обрубок. Не записка
+    [Fact]
+    public async Task Продолжение_ХодПередачиПрерванСтопом_409_БезНовогоЧата()
+    {
+        var (source, _) = await SeedChatAsync("handoff-stop");
+        var before = _sut.GetAll().Count();
+
+        var act = () => NewService(new List<Sent>(),
+            _ => new SendAndWaitResult.Completed(new TurnResult("обрубок записки", 0, null, Succeeded: false)))
+            .ContinueAsync(TestUserId, source.Id, null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*без штатного результата*");
+        _sut.GetAll().Count().Should().Be(before, "новый чат не создан");
+        source.ContinuedInSessionId.Should().BeNull();
+    }
+
+    // П.2: чат занялся между проверкой занятости и отправкой — промпт лёг в очередь.
+    // Вычищаем его (иначе отработает позже отдельным ходом) и отказываем; чужой ход не прерван
+    [Fact]
+    public async Task Продолжение_ГонкаЗанятыйЧат_ПромптВычищенИзОчереди_409()
+    {
+        var (source, _) = await SeedChatAsync("race");
+        var log = new List<Sent>();
+        var svc = NewService(log);
+        svc.SendOverride = (sid, text, t, sys) =>
+        {
+            log.Add(new Sent(sid, text, t, sys));
+            if (sys)
+            {
+                // Имитация реального enqueue: служебный промпт лёг в очередь занятого чата
+                EnqueueUser(GetEntry(sid), text);
+                return Task.FromResult<SendAndWaitResult>(new SendAndWaitResult.Queued(1, Duplicate: false));
+            }
+            return Task.FromResult<SendAndWaitResult>(new SendAndWaitResult.Running());
+        };
+
+        var act = () => svc.ContinueAsync(TestUserId, source.Id, null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*идёт ход*");
+        var pending = (System.Collections.IList)GetEntry(source.Id).GetType().GetField("Pending")!
+            .GetValue(GetEntry(source.Id))!;
+        pending.Cast<SessionManager.QueuedMessage>()
+            .Should().NotContain(p => p.Text == ChatContinueService.HandoffPrompt,
+                "промпт записки вычищен: не отработает отдельным ходом");
+        source.ContinuedInSessionId.Should().BeNull();
+    }
+
+    // П.5: повторное продолжение — ссылка уже стоит, третий чат не создаём
+    [Fact]
+    public async Task Продолжение_УжеПродолжен_409_СоСсылкой()
+    {
+        var (source, _) = await SeedChatAsync("re-continue");
+        var target = await _sut.CreateAsync(source.ProjectId!, ClaudeMode.Auto, name: "продолжение");
+        var before = _sut.GetAll().Count();
+        source.ContinuedInSessionId = target.Id;
+
+        var act = () => NewService(new List<Sent>()).ContinueAsync(TestUserId, source.Id, null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*уже продолжен в*");
+        _sut.GetAll().Count().Should().Be(before, "третий чат не создан");
+    }
+
+    // П.6: Model/Provider/Effort переписаны ПОСЛЕ создания адаптера — следующий ход обязан
+    // пересобрать адаптер с перенесёнными значениями (AdapterStale всегда, а не только для worktree)
+    [Fact]
+    public async Task Продолжение_НовыйЧат_АдаптерУстарел_ПересоберётсяСПеренесённымиЗначениями()
+    {
+        var (source, _) = await SeedChatAsync("adapter-stale");
+        source.Model = "opus";
+        source.Effort = "high";
+
+        var created = await _sut.CreateContinuationAsync(source.Id, TestUserId);
+
+        var entry = GetEntry(created.Id);
+        var adapterStale = (bool)entry.GetType().GetField("AdapterStale")!.GetValue(entry)!;
+        adapterStale.Should().BeTrue("первый ход обязан пересобрать адаптер с перенесёнными значениями");
+        created.Model.Should().Be("opus");
+        created.Effort.Should().Be("high");
     }
 }

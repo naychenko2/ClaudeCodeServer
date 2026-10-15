@@ -41,9 +41,11 @@ public sealed class HandsActivity(IHandsActivitySignal signal)
     /// <param name="action">Действие в snake_case, как в схеме инструмента; у прочих инструментов — null.</param>
     public static bool TouchesMachine(string tool, string? action = null) => tool switch
     {
-        // Руки без UIA: клавиатура, мышь (все действия, включая move) и пакет — всегда трогают машину.
+        // Руки без UIA: клавиатура, мышь (все действия, включая move), пакет и сканеры
+        // (пишут файл) — всегда трогают машину.
         HandsTools.App or HandsTools.UiClick or HandsTools.UiType
-            or HandsTools.KeyboardControl or HandsTools.MouseControl or HandsTools.HandsBatch => true,
+            or HandsTools.KeyboardControl or HandsTools.MouseControl or HandsTools.HandsBatch
+            or HandsTools.ScanDocument or HandsTools.ScanCanvas => true,
         // Буфер: write трогает (запись), read — только чтение.
         HandsTools.ClipboardText => !string.Equals(action, "read", StringComparison.OrdinalIgnoreCase),
         HandsTools.WindowManagement => action is null || !ReadOnlyWindowActions.Contains(action),

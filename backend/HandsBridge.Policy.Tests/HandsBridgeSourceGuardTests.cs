@@ -49,6 +49,7 @@ public class HandsBridgeSourceGuardTests
         var notYetInBridge = new[]
         {
             HandsTools.KeyboardControl, HandsTools.MouseControl, HandsTools.ClipboardText, HandsTools.HandsBatch,
+            HandsTools.ScanDocument, HandsTools.ScanCanvas,
         };
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
 

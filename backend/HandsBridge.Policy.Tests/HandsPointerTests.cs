@@ -84,6 +84,29 @@ public class HandsPointerTests
         Assert.True(Policy().AcceptsInputAt(AllowedPoint, AllowedPoint, 100).Allowed);
     }
 
+    [Fact]
+    public void Pointer_is_denied_when_the_virtual_desktop_bounds_are_unknown()
+    {
+        // Границы экрана не прочитаны (null) — точку сверить с экраном нельзя.
+        var rig = new FakeWindows()
+            .Process(1, @"c:/windows/NOTEPAD.EXE").Window(100, 1)
+            .At(AllowedPoint, AllowedPoint, 100)
+            .Foreground(100)
+            .Bounds(null);
+        var decision = new HandsPolicy(rig).CheckPointer("click", Point(AllowedPoint, AllowedPoint), 100, 0);
+        Assert.False(decision.Allowed);
+        Assert.Contains("virtual desktop bounds are unknown", decision.Reason);
+    }
+
+    [Fact]
+    public void Pointer_is_denied_when_the_expected_root_is_zero()
+    {
+        // Действие нацелено на окно 0 (окна нет), а под точкой — блокнот (100) → другое окно.
+        var decision = Policy().AcceptsInputAt(AllowedPoint, AllowedPoint, 0);
+        Assert.False(decision.Allowed);
+        Assert.Contains("not the window the action targets", decision.Reason);
+    }
+
     // ---------- форма и потолки мыши ----------
 
     [Theory]

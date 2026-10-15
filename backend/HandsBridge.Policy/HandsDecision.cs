@@ -26,3 +26,14 @@ public sealed record HandsUrlDecision(bool Allowed, string? Reason, string? Url)
 
     public static HandsUrlDecision Deny(string reason) => new(false, reason, null);
 }
+
+/// <summary>
+/// Решение по пути записи (D1c): при разрешении — НОРМАЛИЗОВАННЫЙ относительный путь от корня
+/// проекта, по которому пишущий код создаёт файл (коллизия имени — его дело, <see cref="HandsPolicy.NextFreeName"/>).
+/// </summary>
+public sealed record HandsOutputPathDecision(bool Allowed, string? Reason, string? Path)
+{
+    public static HandsOutputPathDecision Allow(string path) => new(true, null, path);
+
+    public static HandsOutputPathDecision Deny(string reason) => new(false, reason, null);
+}

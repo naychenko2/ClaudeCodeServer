@@ -30,13 +30,15 @@ public static class HandsTools
     public const string MouseControl = "mouse_control";
     public const string ClipboardText = "clipboard_text";
     public const string HandsBatch = "hands_batch";
+    public const string ScanDocument = "scan_document";
+    public const string ScanCanvas = "scan_canvas";
 
     public static readonly IReadOnlyList<string> All =
     [
         App, UiSnapshot, UiFind, UiClick, UiType, UiRead, WindowManagement, ScreenshotControl,
         BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserTabs, BrowserWait, BrowserScreenshot,
         BrowserQuery, BrowserEvaluate,
-        KeyboardControl, MouseControl, ClipboardText, HandsBatch,
+        KeyboardControl, MouseControl, ClipboardText, HandsBatch, ScanDocument, ScanCanvas,
     ];
 }
 
@@ -268,6 +270,10 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
 
         if (action == "scroll" && (amount < 1 || amount > MaxWheelAmount))
             return HandsDecision.Deny($"The scroll amount must be between 1 and {MaxWheelAmount}.");
+
+        // amount осмыслен только у колеса: у остальных действий ненулевой amount — ошибка модели.
+        if (action != "scroll" && amount != 0)
+            return HandsDecision.Deny($"The amount is only meaningful for the wheel (scroll); for '{action}' it must be 0.");
 
         if (points.Count == 0)
             return HandsDecision.Allow;
@@ -642,6 +648,314 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// </summary>
     public static HandsDecision CheckKeyDown(int virtualKey, bool ctrl = false, bool alt = false, bool shift = false, bool win = false) =>
         CheckKeys(virtualKey, ctrl, alt, shift, win);
+
+    // ---------- запись, буфер, пакет (D1c) ----------
+
+    /// <summary>Потолок записи файла: 20 МБ.</summary>
+    public const long MaxOutputBytes = 20L * 1024 * 1024;
+
+    /// <summary>Потолок записи <c>scan_canvas</c>: 50 МБ (полотно шире обычного снимка).</summary>
+    public const long MaxCanvasBytes = 50L * 1024 * 1024;
+
+    /// <summary>Потолок новых файлов за ход: 100.</summary>
+    public const int MaxFilesPerTurn = 100;
+
+    /// <summary>
+    /// Белый список расширений по инструменту записи: снимок — картинки, скан документа — текст и
+    /// разметка, скан полотна — картинка. Инструмент не из таблицы — путь не проверяем (его гейт
+    /// другой), но расширение всё равно должно совпасть с таблицей, иначе — отказ.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> AllowedOutputExtensions = new(StringComparer.Ordinal)
+    {
+        [HandsTools.ScreenshotControl] = [".png", ".jpg"],
+        [HandsTools.ScanDocument] = [".md", ".txt", ".json"],
+        [HandsTools.ScanCanvas] = [".png"],
+    };
+
+    /// <summary>
+    /// Путь записи (D1c): только НОВЫЙ файл под корнем проекта, не перезапись. Нормализует
+    /// относительный путь (оба разделителя, пустые и «.» сегменты) и отказывает, если путь
+    /// абсолютный (диск, Unix-корень), UNC, уходит выше корня через «..», несёт управляющие
+    /// символы, лежит в служебном каталоге, который модель не должна трогать, или расширение не из
+    /// белого списка инструмента. Коллизию имени (».v2«) гейт не решает — её выбирает пишущий код
+    /// через <see cref="NextFreeName"/>.
+    /// </summary>
+    /// <param name="tool">Инструмент, который пишет: определяет белый список расширений и потолок размера.</param>
+    /// <param name="projectRoot">Корень проекта; null — не задан (путь проверяется сам по себе).</param>
+    /// <param name="relativePath">Относительный путь от корня проекта, как его прислала модель.</param>
+    /// <param name="bytes">Размер файла в байтах.</param>
+    /// <param name="filesWrittenThisTurn">Сколько новых файлов ход уже создал (потолок <see cref="MaxFilesPerTurn"/>).</param>
+    /// <param name="appendOwn">Дописывание в файл, а не создание: разрешено только для файла, созданного тем же ходом.</param>
+    /// <param name="ownFiles">Файлы, созданные этим ходом (нормализованные относительные пути); для <paramref name="appendOwn"/>.</param>
+    public HandsOutputPathDecision CheckOutputPath(
+        string tool, string? projectRoot, string? relativePath, long bytes,
+        int filesWrittenThisTurn, bool appendOwn, IReadOnlyCollection<string>? ownFiles)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return HandsOutputPathDecision.Deny("outputPath is required: a path relative to the project root.");
+
+        if (relativePath.Any(char.IsControl))
+            return HandsOutputPathDecision.Deny("outputPath must not contain control characters.");
+
+        var normalized = NormalizeRelativePath(relativePath);
+        if (normalized is null)
+            return HandsOutputPathDecision.Deny(
+                "outputPath must be relative to the project root: no drive letter, no absolute or UNC path, " +
+                "and no '..' above the root.");
+
+        if (IsForbiddenServicePath(normalized))
+            return HandsOutputPathDecision.Deny(
+                $"'{normalized}' is a service path hands must not write: use .cc-attachments/ for its own files.");
+
+        var extensions = AllowedOutputExtensions.GetValueOrDefault(tool);
+        if (extensions is null || !HasExtension(normalized, extensions))
+            return HandsOutputPathDecision.Deny(
+                $"{tool} writes {string.Join(", ", extensions ?? Array.Empty<string>())} files; " +
+                $"'{PathExtension(normalized)}' is not one of them.");
+
+        var ceiling = tool == HandsTools.ScanCanvas ? MaxCanvasBytes : MaxOutputBytes;
+        if (bytes < 0 || bytes > ceiling)
+            return HandsOutputPathDecision.Deny($"The file is {bytes} bytes; {tool} writes at most {ceiling} bytes.");
+
+        if (filesWrittenThisTurn >= MaxFilesPerTurn)
+            return HandsOutputPathDecision.Deny(
+                $"This turn already created {MaxFilesPerTurn} files; {tool} does not create more.");
+
+        if (appendOwn && (ownFiles is null || !ownFiles.Contains(normalized)))
+            return HandsOutputPathDecision.Deny(
+                "Appending is only allowed to a file this turn created itself; this one was not.");
+
+        return HandsOutputPathDecision.Allow(normalized);
+    }
+
+    /// <summary>
+    /// Нормализация относительного пути: оба разделителя → «/», пустые и «.» сегменты убраны.
+    /// null — путь не относительный: диск (<c>C:/</c>), Unix-корень (<c>/</c>), UNC (<c>//</c>),
+    /// «..» выше корня, пустой сегмент или «.»/«..» как весь путь.
+    /// </summary>
+    private static string? NormalizeRelativePath(string path)
+    {
+        var p = path.Replace('\\', '/');
+
+        // Диск (C:/), Unix-корень (/) и UNC (//) — абсолютные, не под корнем проекта.
+        if (p.StartsWith("//", StringComparison.Ordinal))
+            return null;
+        if (p.Length >= 3 && char.IsAsciiLetter(p[0]) && p[1] == ':' && p[2] == '/')
+            return null;
+        if (p.StartsWith("/", StringComparison.Ordinal))
+            return null;
+
+        var segments = new List<string>();
+        foreach (var raw in p.Split('/'))
+        {
+            if (raw.Length == 0 || raw == ".")
+                continue;
+            if (raw == "..")
+                return null;
+            segments.Add(raw);
+        }
+
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
+    /// <summary>
+    /// Служебный путь, который модель не должна писать: <c>.git/</c>, <c>.claude/</c>, <c>.mcp.json</c>
+    /// и любой <c>.cc-*</c>, кроме разрешённой <c>.cc-attachments/</c>. Регистр не важен.
+    /// </summary>
+    private static bool IsForbiddenServicePath(string normalized)
+    {
+        foreach (var segment in normalized.Split('/'))
+        {
+            if (segment.Length <= 1)
+                continue;
+            if (!segment.StartsWith(".", StringComparison.Ordinal))
+                continue;
+
+            var name = segment.ToLowerInvariant();
+            if (name is ".git" or ".claude" or ".mcp.json")
+                return true;
+            if (name.StartsWith(".cc-", StringComparison.Ordinal) && name != ".cc-attachments")
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Расширение файла (с точкой, в нижнем регистре); без точки — пустая строка.</summary>
+    private static string PathExtension(string normalized)
+    {
+        var name = normalized[(normalized.LastIndexOf('/') + 1)..];
+        var dot = name.LastIndexOf('.');
+        return dot <= 0 ? string.Empty : name[dot..].ToLowerInvariant();
+    }
+
+    private static bool HasExtension(string normalized, string[] extensions)
+    {
+        var extension = PathExtension(normalized);
+        return extensions.Any(e => string.Equals(extension, e, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Свободное имя при коллизии: <c>a.png</c> занято → <c>a.v2.png</c>, потом <c>a.v3.png</c>.
+    /// Чистая функция: <paramref name="exists"/> говорит, занято ли имя, и пишущий код сам выбирает
+    /// результат — гейт коллизию не решает.
+    /// </summary>
+    public static string NextFreeName(string normalizedPath, Func<string, bool> exists)
+    {
+        if (!exists(normalizedPath))
+            return normalizedPath;
+
+        var slash = normalizedPath.LastIndexOf('/');
+        var dir = slash >= 0 ? normalizedPath[..slash] : string.Empty;
+        var name = slash >= 0 ? normalizedPath[(slash + 1)..] : normalizedPath;
+        var dot = name.LastIndexOf('.');
+        var stem = dot > 0 ? name[..dot] : name;
+        var ext = dot > 0 ? name[dot..] : string.Empty;
+
+        for (var i = 2; ; i++)
+        {
+            var candidate = $"{stem}.v{i}{ext}";
+            var full = dir.Length == 0 ? candidate : $"{dir}/{candidate}";
+            if (!exists(full))
+                return full;
+        }
+    }
+
+    /// <summary>Потолок записи в буфер: 20 000 символов.</summary>
+    public const int MaxClipboardWriteChars = 20_000;
+
+    /// <summary>Потолок ответа чтения буфера: 50 000 символов (больше — обрезка, не отказ).</summary>
+    public const int MaxClipboardReadChars = 50_000;
+
+    /// <summary>
+    /// Форматы, которые говорят «это не обычный текст»: менеджеры паролей помечают буфер так,
+    /// чтобы мониторы и история его не копировали.
+    /// </summary>
+    private static readonly HashSet<string> ClipboardSensitiveFormats = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ExcludeClipboardContentFromMonitorProcessing",
+        "CanIncludeInClipboardHistory=0",
+    };
+
+    /// <summary>
+    /// <c>clipboard_text</c> (D1c): <c>read</c> — только если буфер изменился ПОСЛЕ последнего
+    /// собственного ввода моста (иначе модель читает то, что вписала сама) и без форматов
+    /// «не копировать» (менеджеры паролей); <c>write</c> — до <see cref="MaxClipboardWriteChars"/>
+    /// символов, только текст.
+    /// </summary>
+    public HandsDecision CheckClipboard(string action, int length, IHandsClipboardState state)
+    {
+        switch (action)
+        {
+            case "read":
+                if (state.SequenceNumber <= state.SequenceNumberAtLastOwnInput)
+                    return HandsDecision.Deny(
+                        "The clipboard has not changed since the last write of this turn: reading it returns the text you wrote yourself.");
+                if (state.FormatNames.Any(f => ClipboardSensitiveFormats.Contains(f)))
+                    return HandsDecision.Deny(
+                        "The clipboard carries a do-not-copy format (a password manager): do not read it.");
+                return HandsDecision.Allow;
+
+            case "write":
+                if (length < 0 || length > MaxClipboardWriteChars)
+                    return HandsDecision.Deny($"The text is {length} characters; clipboard_text writes at most {MaxClipboardWriteChars}.");
+                return HandsDecision.Allow;
+
+            default:
+                return HandsDecision.Deny($"Unknown clipboard_text action '{action}'. Use read or write.");
+        }
+    }
+
+    /// <summary>Потолок шагов в пакете: 20.</summary>
+    public const int MaxBatchSteps = 20;
+
+    /// <summary>Потолок паузы между шагами пакета: 2000 мс.</summary>
+    public const int MaxStepDelayMs = 2000;
+
+    /// <summary>Общий потолок времени пакета: 60 000 мс.</summary>
+    public const int MaxBatchTotalMs = 60_000;
+
+    /// <summary>Потолок одного ожидания в пакете: 5000 мс.</summary>
+    public const int MaxWaitMs = 5000;
+
+    /// <summary>
+    /// Инструменты, допущенные в пакет <c>hands_batch</c>: только ввод и пауза. Всё, что открывает
+    /// программу, управляет окном, ходит в браузер или пишет файл, — в пакет не входит.
+    /// </summary>
+    private static readonly HashSet<string> BatchTools = new(StringComparer.Ordinal)
+    {
+        HandsTools.KeyboardControl, HandsTools.MouseControl, HandsTools.UiClick, HandsTools.UiType,
+        HandsTools.ClipboardText, "wait",
+    };
+
+    /// <summary>
+    /// Пакет шагов <c>hands_batch</c> (D1c): до <see cref="MaxBatchSteps"/> шагов, каждый — только
+    /// из <see cref="BatchTools"/>; пауза между шагами 0..<see cref="MaxStepDelayMs"/> мс, одно
+    /// ожидание до <see cref="MaxWaitMs"/> мс, сумма ожиданий до <see cref="MaxBatchTotalMs"/> мс.
+    /// В пакет не входит <c>app</c>, <c>window_management</c> с <c>close</c>, любой <c>browser_*</c>,
+    /// снимки, вложенный пакет и неизвестный инструмент; финальный снимок — отдельное поле, не шаг.
+    /// </summary>
+    public HandsDecision CheckBatch(IReadOnlyList<HandsBatchStep> steps, int totalWaitMs, bool hasFinalCapture)
+    {
+        if (steps.Count == 0)
+            return HandsDecision.Deny("hands_batch needs at least one step.");
+
+        if (steps.Count > MaxBatchSteps)
+            return HandsDecision.Deny($"hands_batch has {steps.Count} steps; at most {MaxBatchSteps}.");
+
+        foreach (var step in steps)
+        {
+            if (step is null)
+                return HandsDecision.Deny("hands_batch has an empty step.");
+
+            // window_management допущен, кроме close (окно, в которое вводишь, закрывать не надо).
+            if (!BatchTools.Contains(step.Tool) && step.Tool != HandsTools.WindowManagement)
+            {
+                if (step.Tool == HandsTools.HandsBatch)
+                    return HandsDecision.Deny("hands_batch does not nest: a batch inside a batch is not allowed.");
+                if (step.Tool == HandsTools.App)
+                    return HandsDecision.Deny("hands_batch does not start programs: use app as a separate step.");
+                if (step.Tool.StartsWith("browser_", StringComparison.Ordinal))
+                    return HandsDecision.Deny($"hands_batch does not browse: use {step.Tool} as a separate step.");
+                if (step.Tool == HandsTools.ScreenshotControl)
+                    return HandsDecision.Deny("hands_batch does not take screenshots mid-batch: use the final capture field.");
+                return HandsDecision.Deny($"Unknown hands_batch tool '{step.Tool}'.");
+            }
+
+            if (step.Tool == HandsTools.WindowManagement && GetStringArg(step.Args, "action") == "close")
+                return HandsDecision.Deny("hands_batch does not close windows: use window_management(action='close') as a separate step.");
+
+            if (step.Tool == "wait")
+            {
+                // У wait-шага DelayMs — длительность ожидания, не межшаговая пауза.
+                if (step.DelayMs is not { } wait || wait < 0 || wait > MaxWaitMs)
+                    return HandsDecision.Deny($"A wait step is {step.DelayMs} ms; at most {MaxWaitMs} ms.");
+            }
+            else if (step.DelayMs is { } delay && (delay < 0 || delay > MaxStepDelayMs))
+                return HandsDecision.Deny($"The step delay is {delay} ms; between steps it is at most {MaxStepDelayMs} ms.");
+        }
+
+        if (totalWaitMs < 0 || totalWaitMs > MaxBatchTotalMs)
+            return HandsDecision.Deny($"The waits total {totalWaitMs} ms; a batch waits at most {MaxBatchTotalMs} ms.");
+
+        return HandsDecision.Allow;
+    }
+
+    /// <summary>Строковый аргумент из <c>args</c> шага; null — аргумента нет.</summary>
+    private static string? GetStringArg(object? args, string name)
+    {
+        if (args is null)
+            return null;
+
+        foreach (var property in args.GetType().GetProperties())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) &&
+                property.GetValue(args) is string value)
+                return value;
+        }
+
+        return null;
+    }
 
     // ---------- разбор ----------
 

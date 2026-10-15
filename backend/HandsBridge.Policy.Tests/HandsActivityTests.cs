@@ -44,11 +44,13 @@ public class HandsActivityTests
         // Первый browser_* поднимает на столе владельца окно Chrome, даже если он только читает DOM
         { HandsTools.BrowserQuery, null },
         { HandsTools.BrowserEvaluate, null },
-        // Руки без UIA: клавиатура, мышь (все действия, включая move) и пакет — всегда трогают машину
+        // Руки без UIA: клавиатура, мышь (все действия, включая move), пакет и сканеры (пишут файл)
         { HandsTools.KeyboardControl, null },
         { HandsTools.MouseControl, null },
         { HandsTools.MouseControl, "move" },
         { HandsTools.HandsBatch, null },
+        { HandsTools.ScanDocument, null },
+        { HandsTools.ScanCanvas, null },
         // Буфер: write трогает машину
         { HandsTools.ClipboardText, "write" },
     };

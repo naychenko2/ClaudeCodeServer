@@ -52,9 +52,12 @@ export interface Interval {
   tEnd: number;
   throughput: number | null;   // среднее genThroughput (!= null)
   kvUsage: number | null;      // максимум kvUsage (!= null)
-  prefix: number | null;       // Σ prefixHits / Σ prefixQueries (null — обрыв, не разрыв)
-  ram: number | null;          // Σ ramHits / Σ ramQueries
+  prefix: number | null;       // Σ prefixHits / Σ prefixQueries; null — движок молчал (разрыв)
+  ram: number | null;          // Σ ramHits / Σ ramQueries; null — движок молчал (разрыв)
   preemptions: number | null;  // сумма (!= null); null — столбика нет
+  // Движок отдал хотя бы одну точку с этой серией (в т.ч. 0/0 — «не спрашивали»).
+  // false — серии в интервале нет вовсе: линия обрывается (рестарт / молчание).
+  hasData: { prefix: boolean; ram: boolean };
 }
 
 // === Чистая геометрия (тестируется без React/DOM) ===
@@ -217,14 +220,33 @@ export function intervalCountFor(window: Window): number {
   return 60;
 }
 
-// Точки → интервалы: выработка — среднее, занято — максимум, попадания/RAM —
-// доля из СУММ приращений, вытеснения — сумма. Пустой интервал — null (разрыв).
-export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: number, intervalMs: number): Interval[] {
+// Сетка интервалов: границы на абсолютном времени, кратном шагу, а НЕ на
+// tMin = now − window. Правый край — первый кратный шагу момент ≥ tMax
+// (ceil); сетка тянется влево ровно на n интервалов. Пока окно плывёт (now
+// живёт, см. ThroughputChart), сетка стоит: новый интервал появляется справа,
+// старые не пересчитываются. tMax кратный шагу → правый край = tMax (совпадает
+// со старым поведением, когда tMin был кратен шагу).
+export function intervalGrid(tMin: number, tMax: number, intervalMs: number): [number, number][] {
   const n = Math.max(1, Math.round((tMax - tMin) / intervalMs));
-  const out: Interval[] = [];
+  const rightEdge = Math.ceil(tMax / intervalMs) * intervalMs;
+  const grid: [number, number][] = [];
   for (let i = 0; i < n; i++) {
-    const tStart = tMin + i * intervalMs;
-    const tEnd = tStart + intervalMs;
+    const tEnd = rightEdge - (n - 1 - i) * intervalMs;
+    grid.push([tEnd - intervalMs, tEnd]);
+  }
+  return grid;
+}
+
+// Точки → интервалы: выработка — среднее, занято — максимум, попадания/RAM —
+// доля из СУММ приращений, вытеснения — сумма.
+// Серия null — только когда движок молчал (все точки интервала null) — разрыв;
+// отдал, но запросов не было (Σ queries = 0) — несётся предыдущее значение:
+// линия не рвётся и новое значение не выдумывается (решение по «рваному» кэшу).
+export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: number, intervalMs: number): Interval[] {
+  const out: Interval[] = [];
+  let prevPrefix: number | null = null;
+  let prevRam: number | null = null;
+  for (const [tStart, tEnd] of intervalGrid(tMin, tMax, intervalMs)) {
     let sumTp = 0, nTp = 0;
     let maxKv: number | null = null;
     let sumPH = 0, sumPQ = 0, hasPH = false;
@@ -238,14 +260,25 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       if (s.ramHits != null && s.ramQueries != null) { sumRH += s.ramHits; sumRQ += s.ramQueries; hasRH = true; }
       if (s.preemptions != null) { sumPre += s.preemptions; hasPre = true; }
     }
+    let prefix: number | null;
+    if (hasPH && sumPQ > 0) prefix = sumPH / sumPQ;
+    else if (hasPH) prefix = prevPrefix;   // «не спрашивали» — несётся
+    else prefix = null;                     // движок молчал — разрыв
+    let ram: number | null;
+    if (hasRH && sumRQ > 0) ram = sumRH / sumRQ;
+    else if (hasRH) ram = prevRam;
+    else ram = null;
+    if (prefix != null) prevPrefix = prefix;
+    if (ram != null) prevRam = ram;
     out.push({
       tStart,
       tEnd,
       throughput: nTp > 0 ? sumTp / nTp : null,
       kvUsage: maxKv,
-      prefix: hasPH && sumPQ > 0 ? sumPH / sumPQ : null,
-      ram: hasRH && sumRQ > 0 ? sumRH / sumRQ : null,
+      prefix,
+      ram,
       preemptions: hasPre ? sumPre : null,
+      hasData: { prefix: hasPH, ram: hasRH },
     });
   }
   return out;
@@ -358,6 +391,9 @@ export function shouldShowNoDataLabel(zoneWidth: number): boolean {
 // Окно графика: 5 минут, 15 минут или 1 час.
 export type Window = '5m' | '15m' | '1h';
 export const WINDOW_MS: Record<Window, number> = { '5m': 5 * 60_000, '15m': 15 * 60_000, '1h': 60 * 60_000 };
+// Окно по умолчанию — 5 минут (замечание Андрея): у нового пользователя 5m,
+// выбор не персистентен, так что дефолт и есть то, что видит первый раз.
+export const DEFAULT_WINDOW: Window = '5m';
 
 // Геометрия полей: выработка 96 px, кэш 64 px, вытеснения 32 px. Поле справа 28 px
 // (подписи оси Y), слева 0 (подписи «ср.»/«данных нет» рисуются внутри поля).
@@ -426,11 +462,15 @@ function NotReported({ engine }: { engine: string }) {
 // Тело карточки: строка-итог + три поля на общей оси времени + ось времени + считывание.
 // Каждое поле само решает, рисовать график или NotReported/«не было»: выработка-NotReported
 // не убирает кэш (правило спецификации).
-function CardBody({ samples, intervals, window, now, width, engine }: {
-  samples: ThroughputSample[]; intervals: Interval[]; window: Window; now: number; width: number; engine: string;
+// grid — диапазон СЕТОК интервалов (от первого tStart до последнего tEnd): все
+// x-координаты считаются от него, а не от [now − window, now] — иначе сетка
+// (кратная шагу) и поле (окно) расходились бы до шага вправо/влево.
+function CardBody({ samples, intervals, window, width, engine, grid }: {
+  samples: ThroughputSample[]; intervals: Interval[]; window: Window; width: number; engine: string;
+  grid: { from: number; to: number };
 }) {
-  const tMin = now - WINDOW_MS[window];
-  const tMax = now;
+  const tMin = grid.from;
+  const tMax = grid.to;
   const maxT = niceAxisMax(maxThroughputOf(samples));
   const avg = avgThroughputOf(samples);
   const hitAvg = cacheHitAvg(samples);
@@ -804,13 +844,27 @@ function CardBody({ samples, intervals, window, now, width, engine }: {
   );
 }
 
+// «Сейчас» графика: время последней точки истории (серверные таймштампы),
+// не Date.now() клиента. Дата клиента и часы сервера рассинхронизированы
+// (контракт: t точек — unix-мс сервера) — при живом Date.now() окно плывёт
+// мимо точек: зона «данных нет» слева растёт, а новые точки справа от client-now
+// фильтруются вовсе. Последняя точка отстаёт от настоящего «сейчас» не более
+// чем на шаг 5 с — для окна от 5 мин это незаметно.
+export function chartNow(history: LocalModelStats['history'], fallback: number): number {
+  let max = 0;
+  for (const h of history ?? []) if (h.t > max) max = h.t;
+  return max > 0 ? max : fallback;
+}
+
 // Тело карточки «Нагрузка и кэш»: график (или пустая заглушка). Окно — извне
 // (состояние держит LocalModelPanel, его же читает серверный опрос).
 // Ширина поля — ResizeObserver: SVG рисуется в реальных px, без preserveAspectRatio.
 export function ThroughputChart({ history, window, engine }: {
   history: LocalModelStats['history']; window: Window; engine?: string;
 }) {
-  const now = useMemo(() => Date.now(), []);
+  // now живёт: пересчитывается на каждом опросе (history меняется), окно
+  // плывёт вправо; сетка при этом стоит на абсолютных кратных шагу (intervalGrid).
+  const now = useMemo(() => chartNow(history, Date.now()), [history]);
   const samples = useMemo(() => toSamples(history, WINDOW_MS[window], now), [history, window, now]);
   const tMin = now - WINDOW_MS[window];
   const tMax = now;
@@ -820,6 +874,12 @@ export function ThroughputChart({ history, window, engine }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [samples, tMin, tMax, intervalMs],
   );
+  // X-маппинг — на диапазон СЕТОК (не на [tMin, tMax]): сетка начинается на
+  // кратном шагу моменте до tMin и кончается после tMax; за его пределами
+  // xForTime дал бы координаты вне поля.
+  const grid = intervals.length
+    ? { from: intervals[0].tStart, to: intervals[intervals.length - 1].tEnd }
+    : { from: tMin, to: tMax };
 
   // Реальная ширина обёртки (ResizeObserver): SVG рисуется в px, не в viewBox-долях.
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -843,7 +903,7 @@ export function ThroughputChart({ history, window, engine }: {
     <div ref={wrapRef} style={{ minWidth: 0 }}>
       {samples.length === 0
         ? <EmptyChart />
-        : <CardBody samples={samples} intervals={intervals} window={window} now={now} width={width} engine={eng} />}
+        : <CardBody samples={samples} intervals={intervals} window={window} width={width} engine={eng} grid={grid} />}
     </div>
   );
 }

@@ -31,8 +31,9 @@ export type { LocalModelMedia, MediaGpu, MediaSteps, MediaRunning, MediaQueue, M
 export const USE_MOCK = false;
 
 // Тонкая обёртка вызова: панель и значок знают только эту функцию,
-// а не транспорт.
-export function fetchLocalModelStats(window: '5m' | '15m' | '1h' = '15m', since?: number): Promise<LocalModelStats> {
+// а не транспорт. Дефолт 5m — как DEFAULT_WINDOW в ThroughputChart (дублируем
+// литералом, чтобы тонкая обёртка не тянула модуль графика).
+export function fetchLocalModelStats(window: '5m' | '15m' | '1h' = '5m', since?: number): Promise<LocalModelStats> {
   return api.localModel.stats(window, since);
 }
 

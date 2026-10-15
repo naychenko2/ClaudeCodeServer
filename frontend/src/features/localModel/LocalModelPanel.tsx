@@ -39,7 +39,7 @@ import {
 import { useLocalModelMedia } from './useLocalModelMedia';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
-import type { Window as StatsWindow } from './ThroughputChart';
+import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
 // Вкладка запоминается на устройство (localStorage): «LLM · Медиа» — выбор
 // человека, не состояние сессии
@@ -83,7 +83,8 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
   // Окно графика (5m/15m/1h): держим здесь, чтобы и тяжёлый опрос (сервер отдаёт
   // средние за это окно), и вкладка «LLM» видели один и тот же выбор.
-  const [window, setWindow] = useState<StatsWindow>('15m');
+  // Дефолт 5m (DEFAULT_WINDOW): выбор не персистентен, новый пользователь видит 5m.
+  const [window, setWindow] = useState<StatsWindow>(DEFAULT_WINDOW);
 
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
   // «LLM» — stats, «Медиа» — media; переключение — немедленный снимок.

@@ -17,7 +17,7 @@ import type { LocalModelStats } from './api';
 import { formatPerc, formatSince, formatTps, gpuCountLabel, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
 import { GpuCard } from './GpuCard';
-import { ThroughputChart, WindowToggle, WINDOW_MS, peakThroughputOf, type Window } from './ThroughputChart';
+import { ThroughputChart, WindowToggle, WINDOW_MS, chartNow, peakThroughputOf, type Window } from './ThroughputChart';
 
 // === Оболочка секции ===
 // Карточка: C.bgWhite (тот же фон, что у карточек соседних панелей и контентной
@@ -436,7 +436,9 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
   window: Window;
   onWindowChange: (w: Window) => void;
 }) {
-  const now = useMemo(() => Date.now(), []);
+  // «Сейчас» — время последней точки истории (серверные таймштампы), не Date.now()
+  // клиента: рассинхрон часов клиента/сервера устаревал бы и пик (см. chartNow).
+  const now = useMemo(() => chartNow(data?.history, Date.now()), [data]);
   // Пик выработки за окно — для «пик» в блоке «Скорость» (то же окно, что у графика)
   const peakGenTps = useMemo(
     () => (data ? peakThroughputOf(data.history, WINDOW_MS[window], now) : 0),
@@ -461,9 +463,11 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
         <SpeedCard data={data} peakGenTps={peakGenTps} />
-        <MemoryCard data={data} />
         <GpusCard data={data} />
+        {/* «Память» — под «Нагрузка и кэш» (замечание Андрея): кэш на графике и
+            занятость в таблице рядом, а не разбросенные по вкладке */}
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
+        <MemoryCard data={data} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>
     </>

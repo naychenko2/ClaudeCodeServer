@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { fetchLocalModelStats, type LocalModelStats } from './api';
-import type { Window as StatsWindow } from './ThroughputChart';
+import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
 // Захват текущего окна для fetch: poller живёт дольше выбора окна, поэтому fetch
 // читает windowRef.current на каждый вызов, а не захваченное значение. Смена
@@ -181,7 +181,7 @@ export function createStatsPoller(
 // «Проверить сейчас»); стабильная обёртка, чтобы панель не перерисовывалась.
 // window — выбранное окно графика (5m/15m/1h): сервер отдаёт средние
 // speed.avg* за это окно, поэтому fetch читает текущее окно через ref.
-export function useLocalModelStats(active: boolean, window: StatsWindow = '15m'): {
+export function useLocalModelStats(active: boolean, window: StatsWindow = DEFAULT_WINDOW): {
   data: LocalModelStats | null;
   loading: boolean;
   refetch: () => void;

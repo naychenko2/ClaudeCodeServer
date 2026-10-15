@@ -495,7 +495,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
                 var prompt = "Сократи текст ниже до сути, не длиннее " + AutoCompressTarget +
                     " символов, сохрани ключевой факт. Ответь ТОЛЬКО сокращённым текстом на русском, " +
                     "без кавычек, пояснений и вступлений.\n\nТекст:\n" + text;
-                var compressed = (await _cheap.RunFreeAsync(Llm.LocalActionCatalog.TeamMemoryCompress, prompt))
+                var compressed = (await _cheap.RunLocalOrChosenAsync(Llm.LocalActionCatalog.TeamMemoryCompress, prompt))
                     ?.Trim().Trim('"', '«', '»');
                 if (!string.IsNullOrWhiteSpace(compressed) && compressed.Length < text.Length)
                 {

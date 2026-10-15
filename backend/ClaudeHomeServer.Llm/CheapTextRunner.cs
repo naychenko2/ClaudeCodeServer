@@ -58,6 +58,19 @@ public sealed class CheapTextRunner(
         return LocalStepApplies(actionKey, route.Kind) && ollama.Enabled;
     }
 
+    // Исполнимый ли маршрут по фактическому выбору: локаль — только с настроенным движком,
+    // слот/модель/claude — всегда (исполнитель есть). FacePose — не текстовый раннер.
+    public bool HasRoute(string actionKey)
+    {
+        var route = ResolveRoute(actionKey);
+        return route.Kind switch
+        {
+            RouteKind.Local => ollama.Enabled,
+            RouteKind.FacePose => false,
+            _ => true,
+        };
+    }
+
     // Описание маршрута для лога/события: kind + конкретная модель или слот, если это
     // слот/модель. claude/local — без модели (дефолты маршрута). Пример: «model=nemotron:free»,
     // «tier=strong», «claude», «local». Используется из TeamPlanningService — там, где
@@ -128,8 +141,32 @@ public sealed class CheapTextRunner(
     // Цепочка одинакова для всех действий: выбранный исполнитель → локальная модель →
     // claude. Последний шаг умышленно без страховки: если упал и он, исключение уходит
     // наверх, и потребитель обрабатывает отказ как раньше (у каждого своя деградация).
+    // RunAsync всегда доходит до claude, поэтому null не возвращает (null → пустая строка).
     public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+    {
+        var result = await RunChainAsync(actionKey, prompt, fallbackModel, ownerId, jsonFormat, ct,
+            allowCloudFallback: true);
+        return result ?? string.Empty;
+    }
+
+    // Та же цепочка, что RunAsync, но БЕЗ финального claude-шага, когда маршрут места —
+    // локальная модель (дефолт или явный выбор админа): сбой/пустой ответ локали не уводит
+    // содержимое в облако молча. Для мест, чьи данные (реплики чатов, память) не должны
+    // уходить наружу без явного выбора облака. Явный выбор облака/слота/модели — цепочка
+    // полная, как в RunAsync. null — ни выбранное, ни локаль не дали ответа (и облака по
+    // маршруту нет).
+    public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+        object? jsonFormat = null, CancellationToken ct = default)
+        => RunChainAsync(actionKey, prompt, fallbackModel: null, ownerId, jsonFormat, ct,
+            allowCloudFallback: false);
+
+    // Общая цепочка RunAsync/RunLocalOrChosenAsync: выбранный исполнитель → локальная модель →
+    // (опционально) claude. allowCloudFallback=false — финальный claude-шаг пропускается, когда
+    // маршрут места локальный (дефолт или явный выбор): тогда сбой локали не уводит данные в
+    // облако молча. Для явного выбора облака/слота/модели allowCloudFallback=true (RunAsync).
+    private async Task<string?> RunChainAsync(string actionKey, string prompt, string? fallbackModel,
+        string? ownerId, object? jsonFormat, CancellationToken ct, bool allowCloudFallback)
     {
         if (RefuseImageAction(actionKey))
             throw new InvalidOperationException(
@@ -164,6 +201,9 @@ public sealed class CheapTextRunner(
         // модель не дала ничего, повтор дешевле потерянной работы человека сверху
         // (прод 2026-08-04: планировщик «Командной реализации»). Внешняя отмена ct —
         // не сбой, по ней не повторяем. Прочие ошибки — как раньше, наверх без страховки.
+        // Режим RunLocalOrChosenAsync (allowCloudFallback=false): шаг пропускается, когда
+        // маршрут места локальный — сбой/пусто локали не уводит данные в облако молча.
+        if (!allowCloudFallback && route.Kind == RouteKind.Local) return null;
         var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
         var cloudTimeout = CloudTimeoutFor(actionKey);
         var model = claude.NormalizeModel(effFallback);
@@ -277,45 +317,6 @@ public sealed class CheapTextRunner(
                 systemPrompt: "", userPrompt: prompt, jsonFormat: jsonFormat, ct,
                 model: ollama.TextModel, timeoutMs: spec.TimeoutMs,
                 numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey);
-    }
-
-    // Бесплатная цепочка: direct-модель агрегатора → локаль. Провайдерские модели через CLI
-    // сюда НЕ берём, даже когда они :free: бесплатность модели по её id не определить, а
-    // ошибиться здесь — значит начать молча платить за фоновое «украшение».
-    public async Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-        CancellationToken ct = default)
-    {
-        if (RefuseImageAction(actionKey)) return null;
-        var route = ResolveRoute(actionKey);
-
-        if (route.Kind == RouteKind.Model && CloudCheapClient.IsDirectRoute(route.Model))
-        {
-            var picked = await TryDirectAsync(actionKey, route.Model!, prompt, ownerId: null, ct);
-            if (!string.IsNullOrWhiteSpace(picked)) return picked;
-        }
-
-        if (LocalStepReady(actionKey, route.Kind))
-        {
-            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId: null, ct);
-            if (!string.IsNullOrWhiteSpace(local)) return local;
-        }
-
-        return null;
-    }
-
-    // Действие без облачного шага: занятый ходом движок означает «не сейчас» — вызывающий
-    // получает null и деградирует ровно как при недоступной локали (иначе единственная
-    // альтернатива — платить за бесплатное по замыслу место).
-    public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-        RunLocalOnlyAsync(actionKey, prompt, jsonFormat: null, ct);
-
-    // Маршрут сверяется на КАЖДОМ вызове: админ мог перевести место на облако посреди прохода
-    public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, object? jsonFormat,
-        CancellationToken ct)
-    {
-        if (!router.UsesLocal(actionKey) || router.LocalBlockedByTurn) return null;
-        var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId: null, ct);
-        return string.IsNullOrWhiteSpace(local) ? null : local;
     }
 
     // Та же цепочка «выбранное → локаль → claude», но с расходом. Текст локали/адаптера

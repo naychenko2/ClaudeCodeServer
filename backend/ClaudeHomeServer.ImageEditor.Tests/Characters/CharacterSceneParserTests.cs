@@ -13,18 +13,18 @@ public class CharacterSceneParserTests
         public string? LastActionKey;
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
-        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+        // CharacterSceneParser теперь зовёт штатный RunAsync (уважает выбор исполнителя)
+        public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => throw new NotSupportedException("платный путь недопустим");
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default)
         {
             Calls++;
             LastActionKey = actionKey;
-            return run(prompt, ct);
+            return (await run(prompt, ct)) ?? string.Empty;
         }
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
             => throw new NotSupportedException();
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,

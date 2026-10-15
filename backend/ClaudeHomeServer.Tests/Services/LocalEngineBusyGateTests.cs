@@ -195,7 +195,7 @@ public class LocalEngineBusyGateTests
         var (runner, local, busy) = Stand();
         using var turn = busy.Enter();
 
-        var text = await runner.RunLocalOnlyAsync(LocalActionCatalog.NotesTags, "теги");
+        var text = await runner.RunLocalOrChosenAsync(LocalActionCatalog.NotesTags, "теги");
 
         Assert.Null(text);
         Assert.Empty(local.Calls);

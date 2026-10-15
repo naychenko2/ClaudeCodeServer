@@ -897,11 +897,12 @@ public class ChatSubjectSweeperTests : IDisposable
     }
 
     // Подставной раннер. Маршрут места — две НЕЗАВИСИМЫЕ ручки, как в настоящем раннере:
-    // Local (UsesLocal: место на локали) и FreeRoute (HasFreeRoute: есть хоть какой-то бесплатный
-    // путь, в том числе прямой облачный адаптер). direct-маршрут агрегатора — FreeRoute=true при
-    // Local=false. Calls — обращения к модели через RunLocalOnlyAsync (каждое, даже отбитое
-    // маршрутом: проход не должен звать модель вовсе), FreeCalls — RunFreeAsync, его первый шаг
-    // ходит в облако, и фича не зовёт его никогда. Платные пути считаются в PaidCalls.
+    // Local (UsesLocal/HasRoute: место на локали и исполнимо) и FreeRoute (HasFreeRoute: есть
+    // хоть какой-то бесплатный путь, в том числе прямой облачный адаптер). direct-маршрут
+    // агрегатора — FreeRoute=true при Local=false. Calls — обращения к модели через
+    // RunLocalOrChosenAsync (каждое, даже отбитое маршрутом: проход не должен звать модель
+    // вовсе), FreeCalls — RunFreeAsync, его первый шаг ходит в облако, и фича не зовёт его
+    // никогда. Платные пути считаются в PaidCalls.
     private sealed class FakeRunner : ICheapTextRunner
     {
         public bool Local { get; set; } = true;
@@ -919,21 +920,12 @@ public class ChatSubjectSweeperTests : IDisposable
 
         public bool UsesLocal(string actionKey) => Local;
         public bool HasFreeRoute(string actionKey) => FreeRoute;
+        public bool HasRoute(string actionKey) => Local;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "local";
 
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default)
-        {
-            Interlocked.Increment(ref FreeCalls);
-            return Task.FromResult(Respond(prompt));
-        }
-
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-            RunLocalOnlyAsync(actionKey, prompt, null, ct);
-
-        // Как настоящий раннер: маршрут не локаль — null, модель не зовётся
-        public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, object? jsonFormat,
-            CancellationToken ct)
+        // Как настоящий раннер: маршрут не исполним — null, модель не зовётся
+        public async Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
         {
             Interlocked.Increment(ref Calls);
             lock (Prompts) { Prompts.Add(prompt); JsonFormats.Add(jsonFormat); }

@@ -441,14 +441,13 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
             => Task.FromResult(ReplyFor(prompt));
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(pickReply);
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(pickReply);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(pickReply);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -527,6 +526,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -538,10 +538,8 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
             if (!hintReached) return Task.FromResult("");
             return Task.FromResult(prompt.Contains("\"words\"") ? ModelWordsReply : ModelGlyphsReply);
         }
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(null);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)

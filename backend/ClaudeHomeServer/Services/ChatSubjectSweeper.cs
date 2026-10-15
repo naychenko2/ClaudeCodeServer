@@ -58,10 +58,11 @@ public class ChatSubjectSweeper(
 
     private int BatchCeiling => config.GetValue("ChatSubjects:BatchCeiling", DefaultBatchCeiling);
 
-    // Маршрут места = локаль и движок настроен. HasFreeRoute сюда не годится: он пускает и
-    // прямой облачный адаптер агрегатора. Это ранний выход, а не гарантия — гарантию даёт
-    // RunLocalOnlyAsync, который сверяет маршрут на каждом вызове.
-    public bool LocalRouteReady => cheap.UsesLocal(ActionKey);
+    // Маршрут места исполним по фактическому выбору: локаль — только с настроенным движком,
+    // слот/модель/claude — всегда. HasFreeRoute сюда не годится: он пускает и прямой облачный
+    // адаптер агрегатора. Это ранний выход, а не гарантия — гарантию даёт RunLocalOrChosenAsync,
+    // который сверяет маршрут на каждом вызове.
+    public bool LocalRouteReady => cheap.HasRoute(ActionKey);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -150,6 +151,13 @@ public class ChatSubjectSweeper(
                     error = "Локальная модель не настроена — чаты не разобраны. В облако реплики чатов не отправляются.";
                     return;
                 }
+                // Ручной запуск при занятом ходом движке: не начинаем проход (модель всё равно
+                // не ответила бы), сразу честный ответ — пользователь не ждёт впустую.
+                if (cheap.UsesLocal(ActionKey) && router?.LocalBlockedByTurn == true)
+                {
+                    error = "Локальная модель занята ходом чата — повторите, когда он закончится.";
+                    return;
+                }
                 if (resetAi)
                 {
                     var resets = sessions.GetByProject(projectId)
@@ -166,7 +174,9 @@ public class ChatSubjectSweeper(
                     CancellationToken.None);
                 done = pass.Done;
                 if (pass.Stalled)
-                    error = "Локальная модель не ответила или занята — часть чатов осталась без темы, повторите позже.";
+                    error = router?.LocalBlockedByTurn == true
+                        ? "Локальная модель занята ходом чата — повторите, когда он закончится."
+                        : "Локальная модель не ответила — часть чатов осталась без темы, повторите позже.";
             }
             catch (Exception ex)
             {
@@ -236,18 +246,34 @@ public class ChatSubjectSweeper(
             var prompt = SubjectPrompt.Build(regEntries, inputs, plan.SnippetChars, allowedNew);
 
             string? answer = null;
-            try { answer = await cheap.RunLocalOnlyAsync(ActionKey, prompt, jsonFormat: "json", ct); }
+            try { answer = await cheap.RunLocalOrChosenAsync(ActionKey, prompt, jsonFormat: "json", ct: ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                log.LogWarning(ex, "Темы чатов: локальная модель упала на пачке проекта {ProjectId}", project.Id);
+                log.LogWarning(ex, "Темы чатов: исполнитель упал на пачке проекта {ProjectId}", project.Id);
             }
             batches++;
 
             if (string.IsNullOrWhiteSpace(answer))
             {
-                log.LogInformation("Темы чатов: локальная модель не ответила (проект {ProjectId}), " +
-                    "пачка из {Count} чатов ждёт следующего прохода", project.Id, batch.Count);
+                // Различаем причину отказа: занятый ходом движок (отдельный текст, виден в
+                // журнале), «не настроен» (исполнитель по маршруту не готов) и «не ответила»
+                // (таймаут/пусто). Раньше всё это было одной строкой «не ответила или занята».
+                if (router?.LocalBlockedByTurn == true)
+                {
+                    log.LogWarning("Темы чатов: локальная модель занята ходом чата (проект {ProjectId}), " +
+                        "пачка из {Count} чатов ждёт следующего прохода", project.Id, batch.Count);
+                }
+                else if (!cheap.HasRoute(ActionKey))
+                {
+                    log.LogInformation("Темы чатов: исполнитель не настроен (проект {ProjectId}), " +
+                        "пачка из {Count} чатов ждёт следующего прохода", project.Id, batch.Count);
+                }
+                else
+                {
+                    log.LogInformation("Темы чатов: локальная модель не ответила (проект {ProjectId}), " +
+                        "пачка из {Count} чатов ждёт следующего прохода", project.Id, batch.Count);
+                }
                 stalled = true;
                 break;
             }

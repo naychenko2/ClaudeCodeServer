@@ -165,7 +165,7 @@ public class FacePoseRouteTests
         {
             await runner.Invoking(r => r.RunAsync(key, "p")).Should().ThrowAsync<InvalidOperationException>();
             await runner.Invoking(r => r.RunDetailedAsync(key, "p")).Should().ThrowAsync<InvalidOperationException>();
-            (await runner.RunFreeAsync(key, "p")).Should().BeNull();
+            await runner.Invoking(r => r.RunLocalOrChosenAsync(key, "p")).Should().ThrowAsync<InvalidOperationException>();
         }
 
         oneShot.LastModel.Should().BeNull();

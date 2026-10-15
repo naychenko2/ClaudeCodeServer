@@ -340,10 +340,11 @@ public class LocalActionRoutingTests
         Assert.Equal(["deepseek-chat", "haiku"], claude.Calls);
     }
 
-    // --- Бесплатная цепочка (RunFreeAsync): direct-адаптер → локаль, claude НИКОГДА ---
+    // --- Цепочка без облачного фолбэка (RunLocalOrChosenAsync): выбранное → локаль; на
+    //     маршруте-локали claude-шага нет вовсе ---
 
     [Fact]
-    public async Task RunFree_БезБесплатныхИсполнителей_ОтдаётNull()
+    public async Task RunLocalOrChosen_БезИсполнителей_ОтдаётNull()
     {
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var router = new LocalActionRouter(Ollama(config), Store(config), config,
@@ -352,17 +353,17 @@ public class LocalActionRoutingTests
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
             NullLogger<CheapTextRunner>.Instance);
 
-        var result = await runner.RunFreeAsync(LocalActionCatalog.ChatTitle, "prompt-text");
+        var result = await runner.RunLocalOrChosenAsync(LocalActionCatalog.ChatTitle, "prompt-text");
 
         Assert.Null(result);
         Assert.Empty(claude.Calls);
     }
 
     [Fact]
-    public async Task RunFree_ВыбранаПровайдерскаяМодель_НеПлатитClaude()
+    public async Task RunLocalOrChosen_ВыбранаПровайдерскаяМодель_ЯвныйВыборУважается()
     {
-        // Модель без префикса direct: идёт через claude CLI — в бесплатной цепочке ей не место,
-        // даже будучи выбранной админом. Иначе фоновое «украшение» молча стало бы платным.
+        // Модель без префикса direct: идёт через claude CLI. Явный выбор админа — согласие на
+        // цепочку целиком (в отличие от старой бесплатной цепочки, где такой модели не было места).
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var store = Store(config);
         store.Set(LocalActionCatalog.ChatTitle, "deepseek-chat");
@@ -371,10 +372,10 @@ public class LocalActionRoutingTests
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
             NullLogger<CheapTextRunner>.Instance);
 
-        var result = await runner.RunFreeAsync(LocalActionCatalog.ChatTitle, "prompt-text");
+        var result = await runner.RunLocalOrChosenAsync(LocalActionCatalog.ChatTitle, "prompt-text");
 
-        Assert.Null(result);
-        Assert.Empty(claude.Calls);
+        Assert.Equal("CLAUDE[deepseek-chat]:prompt-text", result);
+        Assert.Equal(["deepseek-chat"], claude.Calls);
     }
 
     [Fact]

@@ -1754,7 +1754,7 @@ public class SessionManagerTests : IDisposable
         string? sent = null;
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
                 It.IsAny<int>(), It.IsAny<bool>()))
-            .Callback<string, IReadOnlyList<string>?, int, bool>((t, _, _, _) => sent = t)
+            .Callback<string, IReadOnlyList<string>?, int, bool, string?>((t, _, _, _, _) => sent = t)
             .Returns(Task.CompletedTask);
 
         if (fromTray) new ClaudeHomeServer.Services.Composition.HumanTurnStop(_sut).StoppedByHuman(session.Id);
@@ -2496,7 +2496,7 @@ public class SessionManagerTests : IDisposable
         string? sent = null;
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
                 It.IsAny<int>(), It.IsAny<bool>()))
-            .Callback<string, IReadOnlyList<string>?, int, bool>((t, _, _, _) => sent = t)
+            .Callback<string, IReadOnlyList<string>?, int, bool, string?>((t, _, _, _, _) => sent = t)
             .Returns(Task.CompletedTask);
         SetProcess(entry, adapter.Object);
         return (session, entry, () => sent);
@@ -3399,7 +3399,7 @@ public class SessionManagerTests : IDisposable
         var continuationSent = 0;
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()))
-            .Callback<string, IReadOnlyList<string>, int, bool>((t, _, _, _) =>
+            .Callback<string, IReadOnlyList<string>, int, bool, string?>((t, _, _, _, _) =>
             {
                 if (!t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")) return;
                 continuationSent++;
@@ -5706,6 +5706,7 @@ public class SessionManagerTests : IDisposable
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -5717,11 +5718,8 @@ public class SessionManagerTests : IDisposable
             return answer();
         }
 
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(answer());
-
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(answer());
 
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
@@ -10583,17 +10581,15 @@ public class SessionManagerTests : IDisposable
     {
         public bool UsesLocal(string actionKey) => usesLocal;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => usesLocal;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
             Task.FromResult(response());
 
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
-
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-            Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(null);
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null, object? jsonFormat = null,

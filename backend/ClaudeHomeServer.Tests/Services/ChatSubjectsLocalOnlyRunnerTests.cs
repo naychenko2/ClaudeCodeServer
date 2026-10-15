@@ -6,9 +6,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Темы чатов (В-2 ревью): разбор зовёт RunLocalOnlyAsync с jsonFormat на НАСТОЯЩЕМ
-// CheapTextRunner. Маршрут сверяется на каждом вызове: место перевели на direct-модель
-// агрегатора посреди прохода — следующий вызов отдаёт null, не трогая ни облако, ни локаль.
+// Темы чатов (В-2 ревью): разбор зовёт RunLocalOrChosenAsync с jsonFormat на НАСТОЯЩЕМ
+// CheapTextRunner. Маршрут сверяется на каждом вызове: на маршруте-локали облачного фолбэка
+// нет, а явный выбор direct-модели — согласие на полную цепочку (адаптер → локаль-страховка).
 public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
 {
     private const string Action = LocalActionCatalog.ChatSubjects;
@@ -124,7 +124,7 @@ public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
         var ((runner, _, local, http, paid), busy) = StandWithBusy();
         using var turn = busy.Enter();
 
-        var answer = await runner.RunLocalOnlyAsync(Action, "реплики чатов", jsonFormat: "json", CancellationToken.None);
+        var answer = await runner.RunLocalOrChosenAsync(Action, "реплики чатов", jsonFormat: "json", ct: CancellationToken.None);
 
         answer.Should().BeNull();
         local.JsonCalls.Should().Be(0, "фон не лезет в занятый ходом движок");
@@ -141,7 +141,7 @@ public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
         var ((runner, _, local, _, _), busy) = StandWithBusy();
         busy.Enter().Dispose();
 
-        var answer = await runner.RunLocalOnlyAsync(Action, "реплики чатов", jsonFormat: "json", CancellationToken.None);
+        var answer = await runner.RunLocalOrChosenAsync(Action, "реплики чатов", jsonFormat: "json", ct: CancellationToken.None);
 
         answer.Should().Be("{\"assign\":[]}");
         local.JsonCalls.Should().Be(1);
@@ -157,7 +157,7 @@ public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
         var (runner, _, local, http, paid) = Stand();
         local.JsonReply = reply;
 
-        var answer = await runner.RunLocalOnlyAsync(Action, "реплики чатов", jsonFormat: "json", CancellationToken.None);
+        var answer = await runner.RunLocalOrChosenAsync(Action, "реплики чатов", jsonFormat: "json", ct: CancellationToken.None);
 
         answer.Should().BeNull();
         local.JsonCalls.Should().Be(1);
@@ -170,7 +170,7 @@ public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
     {
         var (runner, _, local, http, paid) = Stand();
 
-        var answer = await runner.RunLocalOnlyAsync(Action, "промпт", jsonFormat: "json", CancellationToken.None);
+        var answer = await runner.RunLocalOrChosenAsync(Action, "промпт", jsonFormat: "json", ct: CancellationToken.None);
 
         answer.Should().Be("{\"assign\":[]}");
         local.JsonCalls.Should().Be(1, "jsonFormat уводит локальный шаг в ChatJsonAsync");
@@ -179,19 +179,22 @@ public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
         paid.Calls.Should().Be(0);
     }
 
+    // Явный выбор direct-модели = согласие на полную цепочку: прямой адаптер первым
+    // (провайдер не настроен — клиент не создаётся, наружу не ушло), сбой адаптера —
+    // локаль-страховка отвечает, облака по маршруту всё равно нет.
     [Fact]
-    public async Task МестоПеревелиНаDirectМодель_NullБезОблакаИБезЛокали()
+    public async Task МестоПеревелиНаDirectМодель_ЦепочкаПолная_ЛокальСтраховка()
     {
         var (runner, store, local, http, paid) = Stand();
         store.Set(Action, CloudCheapClient.RoutePrefix + "some/free-model").Should().BeTrue();
 
-        var answer = await runner.RunLocalOnlyAsync(Action, "реплики чатов", jsonFormat: "json", CancellationToken.None);
+        var answer = await runner.RunLocalOrChosenAsync(Action, "реплики чатов", jsonFormat: "json", ct: CancellationToken.None);
 
-        answer.Should().BeNull();
+        answer.Should().Be("{\"assign\":[]}", "адаптер не настроен — отвечает локаль-страховка");
         runner.UsesLocal(Action).Should().BeFalse();
         runner.HasFreeRoute(Action).Should().BeTrue("ровно этот случай HasFreeRoute пропускал в облако");
-        local.JsonCalls.Should().Be(0);
-        http.Created.Should().Be(0, "реплики чатов наружу не уходят");
+        local.JsonCalls.Should().Be(1);
+        http.Created.Should().Be(0, "не настроенный адаптер клиента не создаёт — реплики наружу не ушли");
         paid.Calls.Should().Be(0);
     }
 }

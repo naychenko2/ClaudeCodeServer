@@ -38,13 +38,17 @@ public interface ICheapTextRunner
 {
     bool UsesLocal(string actionKey);
 
-    // Есть ли у места ХОТЬ КАКОЙ-ТО бесплатный маршрут в цепочке RunFreeAsync
-    // (прямой адаптер агрегатора → локальная модель). Та же логика, что в RunFreeAsync,
-    // без вызова: нужно только знать «пройдёт ли», а не вызывать. Используется
-    // потребителями, которые включают/выключают себя по наличию бесплатного пути
-    // (OllamaActionRankService: ранжир действий AI-хаба идёт только когда есть
-    // бесплатный шаг — иначе правило-based фолбэк).
+    // Есть ли у места ХОТЬ КАКОЙ-ТО бесплатный маршрут (прямой адаптер агрегатора →
+    // локальная модель). Без вызова: нужно только знать «пройдёт ли», а не вызывать.
+    // Используется потребителями, которые включают/выключают себя по наличию бесплатного
+    // пути.
     bool HasFreeRoute(string actionKey);
+
+    // Есть ли у места исполнимый маршрут по фактическому выбору (LocalActionRouter.Resolve):
+    // локаль — только когда движок настроен, слот/модель/claude — всегда (исполнитель есть).
+    // Для мест, которые показывают «не настроено»/включают себя по готовности маршрута,
+    // а не по наличию бесплатного шага (темы чатов, ранжир действий).
+    bool HasRoute(string actionKey);
 
     // Краткое описание маршрута действия для лога и события: «kind=model/tier/local/claude»,
     // конкретная модель или слот если применимо. Нужно диагностике в местах, где чейн
@@ -65,24 +69,14 @@ public interface ICheapTextRunner
     Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default);
 
-    // Только локаль, БЕЗ фолбэка на платный claude. null — локаль выключена/недоступна/пусто.
-    // Для необязательных «украшений» (суть уведомления), где платный вызов нежелателен.
-    Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default);
-
-    // То же со строгим JSON-контрактом локального шага (jsonFormat — как в RunAsync). Для мест,
-    // чьи данные в облако не уходят никогда (темы чатов): у RunFreeAsync первым шагом идёт
-    // прямой облачный адаптер. Реализация по умолчанию — без structured output: подставным
-    // раннерам тестов перегрузка не нужна, настоящий CheapTextRunner её перекрывает.
-    Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, object? jsonFormat, CancellationToken ct) =>
-        RunLocalOnlyAsync(actionKey, prompt, ct);
-
-    // Бесплатная часть цепочки: прямой адаптер агрегатора → локальная модель, БЕЗ claude.
-    // Шире RunLocalOnlyAsync (та требует именно Kind=Local и живой Ollama) и уже RunAsync
-    // (та в конце всегда платит claude). Для «украшений», которые нужны на каждом шаге
-    // сценария и потому не должны стоить денег, но и локалью не ограничены.
-    // null — бесплатного маршрута нет либо он не дал ответа; вызывающий деградирует молча.
-    Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-        CancellationToken ct = default);
+    // Та же цепочка, что RunAsync (выбранное → локаль → claude), но БЕЗ финального claude-шага,
+    // когда маршрут места — локальная модель (дефолт или явный выбор админа): сбой/пустой ответ
+    // локали не уводит содержимое в облако молча. Для мест, чьи данные (реплики чатов, память)
+    // не должны уходить наружу без явного выбора облака. Явный выбор облака/слота/модели —
+    // цепочка полная, как в RunAsync. null — ни выбранное, ни локаль не дали ответа (и облака
+    // по маршруту нет).
+    Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+        object? jsonFormat = null, CancellationToken ct = default);
 
     // То же, что RunAsync, но с расходом вызова (OneShotResult.Usage) — для действий, которым
     // важна стоимость (сводка «Что нового»). На claude-пути usage приходит как раньше; на

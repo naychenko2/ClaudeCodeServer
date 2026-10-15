@@ -42,6 +42,7 @@ public class NotesAiConsumerTests : IDisposable
         public string? LastOwnerId;
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -50,10 +51,12 @@ public class NotesAiConsumerTests : IDisposable
             LastOwnerId = ownerId;
             return Task.FromResult("[]");
         }
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-            Task.FromResult<string?>(null);
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+        {
+            LastOwnerId = ownerId;
+            return Task.FromResult<string?>(null);
+        }
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
             object? jsonFormat = null, CancellationToken ct = default)

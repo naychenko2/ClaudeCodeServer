@@ -333,5 +333,24 @@ public class FallbackEgressDownTests
         passport.Failed.Should().BeFalse();
         passport.Attempts.Should().Be(1);
         passport.LastErrorClass.Should().BeNull();
+        passport.CacheMissReason.Should().BeNull("result без PromptCache — причины нет");
+    }
+
+    // Шаг 4 плана prompt cache: причина промаха и переписанные токены едут в паспорт хода —
+    // метрика ccs.prompt_cache.turns токенов не несёт (C4), разбор «сколько стоил промах» — здесь
+    [Fact]
+    public async Task ПаспортХода_НесётПричинуПромахаКэша()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: false), out var runs);
+        inner.Scripts.Enqueue(() => inner.Emit(new ResultMessage("success", 10, 1, null, null,
+            PromptCache: new PromptCacheInfo("1h", 1_000, "system_changed", 80_000, 120_000))));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => runs!.Recent(1).Count > 0, "паспорт хода");
+
+        var passport = runs!.Recent(1)[0];
+        passport.CacheMissReason.Should().Be("system_changed");
+        passport.CacheMissedTokens.Should().Be(80_000);
     }
 }

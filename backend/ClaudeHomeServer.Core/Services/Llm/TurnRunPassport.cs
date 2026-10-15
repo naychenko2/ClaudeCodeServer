@@ -18,6 +18,13 @@ namespace ClaudeHomeServer.Services.Llm;
 /// <param name="Chain">цепочка хода — модели пресета в порядке фолбэка.</param>
 /// <param name="LastErrorClass">wire-имя класса последней ошибки (rate_limit, unreachable…).</param>
 /// <param name="LastError">сырой текст последней ошибки, усечённый — для глаз, не для разбора.</param>
+/// <param name="CacheMissReason">
+/// причина промаха prompt cache первого вызова хода (<c>diagnostics.cache_miss_reason.type</c>
+/// из result последней попытки); null — промаха не было, API причину не назвал или провайдер
+/// не родной Claude. Метрика <c>ccs.prompt_cache.turns</c> считает ходы, а сколько токенов
+/// переписано — только здесь: токены в OTel не едут (C4).
+/// </param>
+/// <param name="CacheMissedTokens">сколько входных токенов ушло мимо кэша (<c>cache_missed_input_tokens</c>).</param>
 ///
 /// Этап 5, шаг 2: record переехал в Core (разрыв цикла Llm ⇄ Turn через шину событий хода):
 /// `TurnCompleted` в Services/Turn/TurnEvents.cs держит ссылку на тип, чтобы подписчик
@@ -43,7 +50,9 @@ public sealed record TurnRunPassport(
     string? LastErrorClass,
     string? LastError,
     int ContextTokens,
-    DateTime RecordedAt)
+    DateTime RecordedAt,
+    string? CacheMissReason = null,
+    int? CacheMissedTokens = null)
 {
     /// <summary>Ход не состоялся — человек увидел ошибку вместо ответа.</summary>
     [JsonIgnore]

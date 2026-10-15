@@ -44,7 +44,8 @@ public static class ServerMetrics
         "outcome",     // success, error, timeout
         "error_type",  // rate_limit, network, auth, ...
         "status",      // событие лимитов: allowed | allowed_warning | rejected | unknown
-        "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other
+        "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other;
+                       // причина промаха prompt cache: none | system_changed | … | other
         "dataset_type",// тип датасета Dify: notes | persona | team | dossiers | project
         "healability", // healable | unhealable — сопоставим ли error-документ с записью стора
     };
@@ -95,6 +96,19 @@ public static class ServerMetrics
         "ccs.llm.rate_limit_hits",
         unit: "{hit}",
         description: "События лимитов подписки (status: allowed | allowed_warning | rejected)");
+
+    /// <summary>
+    /// Начала ходов родного Claude с разметкой причиной промаха prompt cache первого вызова
+    /// (<c>diagnostics.cache_miss_reason.type</c>): <c>none</c> — префикс прочитан без промаха.
+    /// Сумма по всем причинам — знаменатель доли холодных стартов, поэтому <c>none</c> тоже
+    /// пишется. Сторож регресса CLI: 2.1.259 рвал кэш при смене нестабильных секций
+    /// системного блока (<c>system_changed</c>), см. правило 09 и docs/observability/overview.md.
+    /// Токены промаха сюда не едут (C4) — они в паспорте хода.
+    /// </summary>
+    public static readonly Counter<long> PromptCacheTurns = _meter.CreateCounter<long>(
+        "ccs.prompt_cache.turns",
+        unit: "{turn}",
+        description: "Начала ходов Claude по причине промаха prompt cache (reason: none | system_changed | …)");
 
     public static readonly Counter<long> McpCalls = _meter.CreateCounter<long>(
         "ccs.mcp.calls",
@@ -187,6 +201,15 @@ public static class ServerMetrics
         LlmRateLimitHits.Add(1,
             new KeyValuePair<string, object?>("provider", provider),
             new KeyValuePair<string, object?>("status", status));
+    }
+
+    /// <summary>
+    /// Начало хода с причиной промаха prompt cache. <paramref name="reason"/> уже сведён к
+    /// замкнутому набору (<see cref="TurnTelemetry.ClassifyCacheMissReason"/>).
+    /// </summary>
+    public static void RecordPromptCacheTurn(string reason)
+    {
+        PromptCacheTurns.Add(1, new KeyValuePair<string, object?>("reason", reason));
     }
 
     public static void RecordMcpCall(string toolName, string outcome)

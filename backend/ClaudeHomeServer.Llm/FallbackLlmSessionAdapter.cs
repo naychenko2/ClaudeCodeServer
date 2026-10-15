@@ -1161,7 +1161,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LastErrorClass: errorClass,
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
-                        RecordedAt: endedAt);
+                        RecordedAt: endedAt,
+                        CacheMissReason: lastEnd?.Result?.PromptCache?.MissReason,
+                        CacheMissedTokens: lastEnd?.Result?.PromptCache?.MissedTokens);
                 }
                 catch (Exception ex)
                 {

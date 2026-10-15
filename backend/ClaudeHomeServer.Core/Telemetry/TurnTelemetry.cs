@@ -227,6 +227,29 @@ public static class TurnTelemetry
     };
 
     /// <summary>
+    /// Начало хода родного Claude с причиной промаха prompt cache первого вызова
+    /// (<c>diagnostics.cache_miss_reason.type</c>; null — промаха не было). Вызывающий пишет
+    /// ровно раз за ход и только если первый вызов хода реально случился: иначе знаменатель
+    /// доли холодных стартов раздуют ходы, упавшие до модели.
+    /// </summary>
+    public static void RecordPromptCacheTurn(string? missReason) =>
+        ServerMetrics.RecordPromptCacheTurn(ClassifyCacheMissReason(missReason));
+
+    /// <summary>
+    /// Значение тега <c>reason</c> для <c>ccs.prompt_cache.turns</c>. Тип промаха приходит от
+    /// API и замкнутым множеством формально не является, поэтому белый список: известные
+    /// типы (сняты с транскриптов, замер 2026-10-15) — как есть, null — <c>none</c>, прочее —
+    /// <c>other</c>. Новый тип в <c>other</c> — повод внести его сюда, а не открыть тег.
+    /// </summary>
+    internal static string ClassifyCacheMissReason(string? missReason) => missReason switch
+    {
+        null => "none",
+        "system_changed" or "tools_changed" or "model_changed" or "messages_changed"
+            or "previous_message_not_found" or "unavailable" => missReason,
+        _ => MetricTagGuard.Overflow,
+    };
+
+    /// <summary>
     /// Прямая запись ошибки — когда категория известна заранее (process_exit и т.д.).
     /// </summary>
     public static void RecordError(string provider, string errorType) =>

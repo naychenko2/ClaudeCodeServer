@@ -5724,8 +5724,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
+                var promptCache = BuildPromptCacheInfo(ctxTokens);
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root), durationApiMs,
-                    BuildPromptCacheInfo(ctxTokens)));
+                    promptCache));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик
@@ -5739,6 +5740,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     isSandboxed: _launcher.IsSandboxed);
                 // Тот же исход — на спан: иначе в трейсах отказной ход неотличим от успешного
                 TurnTelemetry.MarkTurnOutcome(_turnActivity, turnFailed, apiErr);
+                // Сторож регресса prompt cache (ccs.prompt_cache.turns): причина промаха первого
+                // вызова хода. Только родной Claude (promptCache != null) и только если первый
+                // вызов в этом ходу был: TTL и якорь живут через ходы, и без проверки ход, упавший
+                // до модели, ушёл бы в метрику «без промаха» и разбавил долю холодных стартов
+                if (promptCache is not null && _turnFirstCallSeen)
+                    TurnTelemetry.RecordPromptCacheTurn(promptCache.MissReason);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять

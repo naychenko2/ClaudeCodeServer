@@ -80,6 +80,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             RamHits = p.RamHits,
             RamQueries = p.RamQueries,
             Preemptions = p.Preemptions,
+            GenTokens = p.GenTokens,
+            ItlSeconds = p.ItlSeconds,
         }).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
@@ -387,6 +389,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
     // Серии кэша (v2.1): kvUsage — доля 0..1 (максимум по опросам с прошлой точки);
     // prefixHits/prefixQueries/ramHits/ramQueries/preemptions — приращения счётчиков
     // с прошлой точки (фронт сводит в интервалы и считает долю из сумм). null — нет данных.
+    // Скорость на поток (вторая линия графика): genTokens/itlSeconds — приращения счётчиков
+    // с прошлой точки; фронт сводит в интервалы и делит ΣgenTokens/ΣitlSeconds (ток/с).
     public sealed record HistoryPointDto
     {
         public long T { get; init; }
@@ -399,6 +403,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public long? RamHits { get; init; }
         public long? RamQueries { get; init; }
         public long? Preemptions { get; init; }
+        public long? GenTokens { get; init; }
+        public double? ItlSeconds { get; init; }
     }
 
     // Чат на стенде: живой ход на локальном движке. Own — чат текущего пользователя

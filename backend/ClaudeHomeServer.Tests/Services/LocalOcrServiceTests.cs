@@ -207,6 +207,26 @@ public class LocalOcrServiceTests
     }
 
     [Fact]
+    public async Task PageTimeout_КогдаСтраницаНеУспела()
+    {
+        // Handler наблюдает ct (pageCts.Token): CancelAfter(PageTimeoutSec) отменит его.
+        var (service, _) = Make(new PageTimeoutHandler(),
+            ocr: new OcrGatewayOptions { Enabled = true, PageTimeoutSec = 1 });
+        var result = await service.RecognizeAsync(SmallImage(), Info(), CancellationToken.None);
+        result.Reason.Should().Be(OcrFailureReason.PageTimeout);
+    }
+
+    private sealed class PageTimeoutHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            // Бесконечное ожидание: отменится по pageCts.CancelAfter.
+            await Task.Delay(Timeout.Infinite, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        }
+    }
+
+    [Fact]
     public async Task BusyTimeout_ВторойВызов_ЖдётИОтваливается()
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

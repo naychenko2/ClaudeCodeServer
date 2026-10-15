@@ -123,7 +123,14 @@ public sealed class LocalOcrService(
         }
         catch (Exception ex)
         {
-            // Таймаут страницы (pageCts) или сетевой сбой — не 2xx и не разбор, а отказ.
+            if (pageCts.IsCancellationRequested)
+            {
+                // Таймаут страницы: pageCts отменился по потолку PageTimeoutSec, внешний ct — нет.
+                log.LogWarning("local-ocr: {Label} — {Size} байт, {Ms} мс — таймаут страницы",
+                    info.Label, png.Length, sw.ElapsedMilliseconds);
+                return OcrResult.Fail(OcrFailureReason.PageTimeout, $"таймаут страницы OCR: {pageTimeoutSec} с");
+            }
+            // Сетевой сбой (не таймаут): не 2xx и не разбор, а отказ.
             log.LogWarning("local-ocr: {Label} — {Size} байт, {Ms} мс — сбой: {Message}",
                 info.Label, png.Length, sw.ElapsedMilliseconds, ex.Message);
             return OcrResult.Fail(OcrFailureReason.LocalUnavailable, $"сбой запроса: {ex.Message}");
@@ -247,6 +254,7 @@ public enum OcrFailureReason
     Disabled,
     LocalUnavailable,
     BusyTimeout,
+    PageTimeout,
     TooLarge,
     BadResponse,
 }

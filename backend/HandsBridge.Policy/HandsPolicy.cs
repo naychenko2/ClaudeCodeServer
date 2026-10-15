@@ -801,13 +801,33 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// </summary>
     private static string? SegmentIssue(string segment, bool isFirst)
     {
-        // Форматные (Cf) и суррогатные (Co/Cs) невидимые символы: U+202E RTL override, U+200E/F,
-        // U+200B..U+200D, U+2060, U+FEFF и одиночные суррогаты — спуфинг имени в логах и на вебе.
-        foreach (var ch in segment)
+        // Разбор по code point, а не по char: валидная суррогатная пара (😀 = U+D83D U+DE00) —
+        // один code point вне BMP, а не два «суррогата», и OtherSymbol (⭐, ⚓) — обычные эмодзи в
+        // BMP. Отказ только на двух случаях: Cf-форматные (U+200B..U+200D, U+200E/F, U+202A..U+202E,
+        // U+2060..U+2064, U+FEFF) — невидимый спуфинг имени, и ОДИНОЧНЫЙ суррогат (битый UTF-16).
+        for (var i = 0; i < segment.Length; i++)
         {
-            var category = CharUnicodeInfo.GetUnicodeCategory(ch);
-            if (category is UnicodeCategory.Format or UnicodeCategory.OtherSymbol or UnicodeCategory.Surrogate)
-                return $"'{segment}' carries an invisible Unicode character (format or surrogate); use a plain name.";
+            var ch = segment[i];
+
+            // High-суррогат: валидная пара (high + следующий low) разрешена — пропускаем обе половины;
+            // high без low — одиночный суррогат.
+            if (char.IsHighSurrogate(ch))
+            {
+                if (i + 1 < segment.Length && char.IsLowSurrogate(segment[i + 1]))
+                {
+                    i++;
+                    continue;
+                }
+                return $"'{segment}' carries a lone surrogate (an unpaired UTF-16 half); use a plain name.";
+            }
+
+            // Low-суррогат без high перед ним — тоже одиночный.
+            if (char.IsLowSurrogate(ch))
+                return $"'{segment}' carries a lone surrogate (an unpaired UTF-16 half); use a plain name.";
+
+            // Cf-форматные (все в BMP) — невидимый спуфинг; OtherSymbol и буквы — разрешены.
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.Format)
+                return $"'{segment}' carries an invisible Unicode format character; use a plain name.";
         }
 
         // ~ раскрывается в home только в первом сегменте: ~/x.png, ~user/x.png.

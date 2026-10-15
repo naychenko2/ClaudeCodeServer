@@ -166,6 +166,44 @@ public class HandsOutputPathTests
         Assert.Contains(reasonFragment, decision.Reason);
     }
 
+    // «Нормальные имена проходят»: кириллица, иероглифы, пробел в середине, зарезерв. имена
+    // Windows С расширением (console/com10/lpt — не CON/COM1..9/LPT1..9), .github (не .git),
+    // имя с точкой в середине (my.cc.md) и валидные эмодзи — суррогатная пара (😀) и BMP-эмодзи
+    // (⭐, ⚓). Ни одно из этих имён гейт не должен отказывать.
+    [Theory]
+    [InlineData(HandsTools.ScanDocument, "docs/конфигурация.md")]
+    [InlineData(HandsTools.ScreenshotControl, "docs/a b.png")]
+    [InlineData(HandsTools.ScanDocument, "docs/console.md")]
+    [InlineData(HandsTools.ScanDocument, "docs/com10.md")]
+    [InlineData(HandsTools.ScreenshotControl, "docs/lpt.png")]
+    [InlineData(HandsTools.ScanDocument, ".github/x.md")]
+    [InlineData(HandsTools.ScanDocument, "docs/my.cc.md")]
+    [InlineData(HandsTools.ScreenshotControl, "docs/😀.png")]
+    [InlineData(HandsTools.ScreenshotControl, "docs/⭐.png")]
+    [InlineData(HandsTools.ScreenshotControl, "docs/⚓.png")]
+    [InlineData(HandsTools.ScanDocument, "docs/日本語.md")]
+    [InlineData(HandsTools.ScanDocument, "docs/Ёё.md")]
+    public void Normal_names_pass(string tool, string path)
+    {
+        var decision = Check(tool, path);
+        Assert.True(decision.Allowed);
+    }
+
+    // Одиночные суррогаты (битый UTF-16): high без low и low без high — отказ со своей причиной,
+    // в отличие от валидной пары (😀), которая проходит (см. Normal_names_pass). [Fact], а не
+    // Theory: два суррогата дают xUnit'у одинаковый display-name и дедуплицируются в один кейс.
+    [Fact]
+    public void Lone_surrogates_are_denied()
+    {
+        var high = Check(HandsTools.ScreenshotControl, "docs/\uD83D.png");
+        Assert.False(high.Allowed);
+        Assert.Contains("lone surrogate", high.Reason);
+
+        var low = Check(HandsTools.ScreenshotControl, "docs/\uDE00.png");
+        Assert.False(low.Allowed);
+        Assert.Contains("lone surrogate", low.Reason);
+    }
+
     // ---------- дописывание: ownFiles в нормализованной, регистронезависимой форме ----------
 
     [Fact]

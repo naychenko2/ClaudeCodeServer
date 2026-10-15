@@ -94,9 +94,21 @@
   так — ADR-010 § «Контур Linux».
 - `deploy_status` отдаёт текущее состояние журнала (фазы, шаги с ms, итог);
   новый инстанс перечитывает, пока не доложит.
+- Оркестратор `deploy-linux.sh` в фазе сборки **пересобирает образ песочницы**
+  (`docker build --target sandbox --build-arg APP_UID=$(id -u) -t claude-sandbox`,
+  шаг `sandbox-image`; `skipSandbox` из заявки пропускает его), а `switch-release.sh`
+  в окне переключения **сносит контейнер песочницы** (`stop-sandbox` до снимка,
+  `sandbox-container` после swap; имя из `Sandbox:ContainerName` прод-конфига,
+  сервер поднимет его заново из свежего образа). Перед снимком `switch-release.sh`
+  делает **бэкап данных** (`data-backup`, `dotnet ClaudeHomeServer.dll --backup`,
+  таймаут `BACKUP_TIMEOUT`, провал = отказ без изменений) и **записывает снимок в
+  список `releases`** журнала.
 - `deploy_rollback` на Linux **отвечает отказом** (`Unsupported`) — автооткат
   уже встроен в `switch-release.sh`, ручной кейс через `ccs-deploy-<id>` по
   явной метке делается скриптом, а не из чата. См. ADR-010 § «Отказ отката».
+  Список `releases` теперь **заполняется** (снимки пишутся после `snapshot` и
+  чистятся при ротации), так что `deploy_status` видит цели отката; сам откат
+  из чата на Linux пока не поднят — доложить, не изобретать.
 - Ручная выкатка (Bash + `watch_start`) остаётся на случай отказа контура —
   [release-linux.md](release-linux.md) не перестаёт работать, потому что
   orchestrator и `switch-release.sh` разделены.

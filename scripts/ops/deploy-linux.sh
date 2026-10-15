@@ -25,8 +25,11 @@
 #   - Любой выход, в том числе аварийный trap EXIT, закрывает result и переносит запись
 #     в history. Нормальное завершение выставляет __deploy_done=1 и явно вызывает
 #     journal_finalize — trap после этого no-op.
-#   - skipSandbox на Linux игнорируется — sandbox-контейнер на проде не поднимается, флаг
-#     остался для совместимости с Windows-контуром и контрактом REST.
+#   - skipSandbox из заявки уважается: true — не пересобирать образ (шаг sandbox-image)
+#     и не сносить/пересоздавать контейнер (stop-sandbox/sandbox-container в switch-release.sh).
+#     На проде контейнер cc-sandbox-prod жив, поэтому по умолчанию (false) образ
+#     claude-sandbox:latest пересобирается, а контейнер сносится и поднимается заново
+#     сервером (SandboxManager.EnsureRunningAsync) из свежего образа.
 #   - setsid/nohup не используются. Процесс уже вне ccs-agents.slice (его поднял systemd-run),
 #     и смерть сервера на stop его не задевает (инцидент 2026-09-28 08:59, лог 085902).
 #
@@ -183,8 +186,15 @@ import json, os
 r = json.load(open(os.environ['STATE_PATH']))['current']['request']
 print(str(r.get('allowDirty', False)).lower())
 " <<< "$request_json")
+skipSandbox=$(STATE_PATH="$STATE_PATH" python3 -I -c "
+import json, os
+r = json.load(open(os.environ['STATE_PATH']))['current']['request']
+print(str(r.get('skipSandbox', False)).lower())
+" <<< "$request_json")
 
-log "deploy $deploy_id: ref=$ref skipFrontend=$skipFrontend allowDirty=$allowDirty"
+log "deploy $deploy_id: ref=$ref skipFrontend=$skipFrontend allowDirty=$allowDirty skipSandbox=$skipSandbox"
+# Флаг 0/1 для switch-release.sh: уважает ли заявка песочницу (stop-sandbox/sandbox-container).
+if [ "$skipSandbox" = "true" ]; then skip_sandbox_flag=1; else skip_sandbox_flag=0; fi
 
 # Грязное дерево relcheck. Сервер делал snapshot основной репы, но relcheck — отдельная
 # копия, она могла стать грязной между snapshot и стартом агента. Контракт требует
@@ -242,6 +252,29 @@ if ! env BUILD_FRONTEND="$build_frontend" BUILD_DIFY=1 PUBLISH_DIR="$STAGING" \
 fi
 journal_step build ok "$(( $(date +%s%N) / 1000000 - build_t0 ))"
 
+# Образ песочницы (шаг sandbox-image, как Windows-агент): docker build --target sandbox.
+# Контекст — relcheck ($REPO), не основное дерево. На Linux-хосте bind-mount сверяет
+# права по uid, поэтому --build-arg APP_UID=$(id -u) (инцидент 02.10). skipSandbox из
+# заявки — не пересобирать; docker отсутствует — не валить выкатку (сервер подскажет
+# при первом container-ходе, что образ не найден).
+if [ "$skipSandbox" = "true" ]; then
+  journal_step sandbox-image skipped
+elif ! command -v docker >/dev/null 2>&1; then
+  log "deploy $deploy_id: docker не найден — образ песочницы не пересобираю"
+  journal_step sandbox-image skipped
+else
+  log "deploy $deploy_id: docker build --target sandbox (APP_UID=$(id -u))"
+  sb_t0=$(( $(date +%s%N) / 1000000 ))
+  if docker build --target sandbox --build-arg APP_UID="$(id -u)" \
+        -t claude-sandbox -f "$REPO/backend/ClaudeHomeServer/Dockerfile" "$REPO" 2>&1; then
+    journal_step sandbox-image ok "$(( $(date +%s%N) / 1000000 - sb_t0 ))"
+  else
+    journal_step sandbox-image fail "$(( $(date +%s%N) / 1000000 - sb_t0 ))"
+    journal_finalize failed "docker build --target sandbox упал"
+    exit 0
+  fi
+fi
+
 # Переключение. CCS_SWITCH_DETACHED=1 — мы уже в своём юните systemd-run, повторная
 # самоотвязка не нужна и была бы петлёй. Журнал и пути передаём переменными.
 log "deploy $deploy_id: switch-release.sh"
@@ -249,6 +282,7 @@ CCS_SWITCH_DETACHED=1 \
 CCS_DEPLOY_JOURNAL="$JOURNAL_HELPER" \
 CCS_DEPLOY_STATE_PATH="$STATE_PATH" \
 APP="$APP" STAGING="$STAGING" RELEASES="$RELEASES_DIR" \
+SKIP_SANDBOX="$skip_sandbox_flag" \
 LOG="$RELEASES_DIR/deploy-$deploy_id.log" \
 "$AGENT_DIR/scripts/ops/switch-release.sh"
 switch_rc=$?

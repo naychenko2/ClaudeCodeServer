@@ -149,7 +149,7 @@ state = {
         "kind": "deploy",
         "phase": "queued",
         "ref": "$ref",
-        "request": {"ref": "$ref", "skipFrontend": True, "allowDirty": True},
+        "request": {"ref": "$ref", "skipFrontend": True, "allowDirty": True, "skipSandbox": True},
         "initiatedBy": "test",
         "startedAt": "2026-10-12T00:00:00Z"
     },
@@ -255,6 +255,22 @@ main() {
   assert_eq "$STAGE_SHA" "$RELCHECK_SHA" "sha в build-id.txt (должен быть sha relcheck)"
   if [ "$STAGE_SHA" = "$AGENT_SHA" ]; then
     fail "sha в build-id.txt совпал с sha agent — фикс B1 не сработал"
+  fi
+
+  # Шаг sandbox-image: заявка skipSandbox=True → оркестратор не зовёт docker, а
+  # записывает шаг как skipped. Проверяем, что он в итоге выкатки (history[0].steps).
+  sb_status=$(python3 -I -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+rec = (d.get("history") or [None])[0] or d.get("current") or {}
+step = next((s for s in (rec.get("steps") or []) if s.get("name") == "sandbox-image"), None)
+print(step["status"] if step else "missing")
+' "$RELEASES/deploy-state.json" 2>/dev/null)
+  if [ "$sb_status" = "skipped" ]; then
+    ok "sandbox-image: шаг записан как skipped (skipSandbox из заявки)"
+  else
+    red "FAIL: sandbox-image шаг = '$sb_status' (ждали skipped)"
+    exit 1
   fi
 
   # --- Мутация: фикс откатили, build-id.txt == sha agent, и тест краснеет ---

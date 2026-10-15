@@ -93,6 +93,25 @@ def cmd_set_rollback_target(state: dict, target: str) -> None:
     state["rollbackTarget"] = target
 
 
+def cmd_set_release(state: dict, release_id: str, sha: str, path: str) -> None:
+    """Снимок релиза, пригодный для отката. Новый — в НАЧАЛО списка (newest-first, как
+    Windows-агент: @(...) + (ConvertTo-List ...)); повторный вызов с тем же id заменяет
+    запись, а не плодит дубль. sha — из build-id.txt снимка (предыдущая сборка, на которую
+    вернётся откат), path — каталог снимка, createdAt — момент записи (ISO-8601 UTC).
+    Поле releases держит DeployState.Releases; сервер его читает (deploy_status) и
+    пересохраняет целиком, так что запись переживает его Save."""
+    releases = state.setdefault("releases", [])
+    releases[:] = [r for r in releases if r.get("id") != release_id]
+    releases.insert(0, {"id": release_id, "sha": sha, "path": path, "createdAt": _utc_now_iso()})
+
+
+def cmd_drop_release(state: dict, release_id: str) -> None:
+    """Убрать снимок из списка при ротации. Отсутствующий id — no-op: ротация может
+    догнать запись, которую уже убрал предыдущий прогон (журнал переживает выкатки)."""
+    releases = state.get("releases", [])
+    state["releases"] = [r for r in releases if r.get("id") != release_id]
+
+
 def cmd_finalize(
     state: dict,
     status: str,
@@ -143,6 +162,8 @@ def main(argv: list) -> int:
             "  set-step <name> <status> [ms]\n"
             "  set-sha <sha>\n"
             "  set-rollback-target <releaseId>    — transient для шва switch→deploy-linux\n"
+            "  set-release <releaseId> [sha] [path]   — снимок в список releases (newest-first)\n"
+            "  drop-release <releaseId>           — убрать снимок из releases (ротация)\n"
             "  finalize <status> [message] [releaseId]"
         )
 
@@ -164,6 +185,15 @@ def main(argv: list) -> int:
         cmd_set_sha(state, argv[3])
     elif command == "set-rollback-target":
         cmd_set_rollback_target(state, argv[3])
+    elif command == "set-release":
+        cmd_set_release(
+            state,
+            argv[3],
+            argv[4] if len(argv) > 4 else "",
+            argv[5] if len(argv) > 5 else "",
+        )
+    elif command == "drop-release":
+        cmd_drop_release(state, argv[3])
     elif command == "finalize":
         cmd_finalize(
             state,

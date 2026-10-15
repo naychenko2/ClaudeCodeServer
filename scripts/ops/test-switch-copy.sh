@@ -17,10 +17,14 @@ echo "CONFIG-B (устаревший)" > $T/staging/appsettings.Local.json; echo
 echo MCP-B > $T/staging/.mcp.json; echo SECRETS-B > $T/staging/backups-secrets
 echo LOG-B > $T/staging/logs/b.log; echo DATA-B > $T/staging/data/e.json; echo NEWWWW > $T/staging/wwwroot/new.js
 printf '#!/bin/sh\nexit 0\n' > $T/shim/systemctl; chmod +x $T/shim/systemctl; echo ok > $T/srv/api/health
+# Шим docker: записывает вызовы (rm -f <имя>) в $T/docker-calls, не трогая боевой/дев-контейнер.
+printf '#!/bin/sh\necho "$@" >> %s/docker-calls\nexit 0\n' "$T" > $T/shim/docker; chmod +x $T/shim/docker
+# Шим dotnet: режим --backup (бэкап данных) — ставит маркер и exit 0; иначе no-op.
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "--backup" ] && { touch %s/backup-ran; exit 0; }; done\nexit 0\n' "$T" > $T/shim/dotnet; chmod +x $T/shim/dotnet
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
 python3 -m http.server $PORT --bind 127.0.0.1 --directory $T/srv >/dev/null 2>&1 & SPID=$!
 sleep 1
-CCS_SWITCH_DETACHED=1 APP=$T/app STAGING=$T/staging RELEASES=$T/releases LOG=$T/deploy.log STAMP=20261014-999999 \
+CCS_SWITCH_DETACHED=1 PATH="$T/shim:$PATH" APP=$T/app STAGING=$T/staging RELEASES=$T/releases LOG=$T/deploy.log STAMP=20261014-999999 \
  CCS_SYSTEMCTL="$T/shim/systemctl" HEALTH_URL=http://127.0.0.1:$PORT/api/health HEALTH_TRIES=3 HEALTH_SLEEP=1 bash "$S" >/dev/null; echo "switch rc=$?"
 kill $SPID
 bad=0
@@ -48,13 +52,49 @@ if grep -q "rsync не установлен" $T/deploy2.log; then echo "OK   о�
 mkdir -p $T/app3 $T/shimfail $T/releases3; echo OLD3 > $T/app3/ClaudeHomeServer.dll
 printf '#!/bin/sh\nexit 23\n' > $T/shimfail/rsync; chmod +x $T/shimfail/rsync
 printf '#!/bin/sh\necho "$@" >> %s/calls3\n' "$T" > $T/shim/systemctl-rec; chmod +x $T/shim/systemctl-rec
-CCS_SWITCH_DETACHED=1 PATH=$T/shimfail:$PATH APP=$T/app3 STAGING=$T/staging RELEASES=$T/releases3 LOG=$T/deploy3.log STAMP=20261014-999997 \
+# PATH: shimfail (rsync exit 23) + shim (dotnet --backup, docker) — иначе data-backup
+# не находит шим dotnet и валит выкатку exit 3 до rsync.
+CCS_SWITCH_DETACHED=1 PATH=$T/shimfail:$T/shim:$PATH APP=$T/app3 STAGING=$T/staging RELEASES=$T/releases3 LOG=$T/deploy3.log STAMP=20261014-999997 \
  CCS_SYSTEMCTL="$T/shim/systemctl-rec" HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; rc=$?
 if [ $rc = 1 ]; then echo "OK   rsync упал: rc=1"; else echo "FAIL rsync упал: rc=$rc (ждали 1)"; bad=1; fi
 chk $T/app3/ClaudeHomeServer.dll OLD3
 if grep -q "ОТКАЧЕНО" $T/deploy3.log; then echo "OK   откат записан в лог"; else echo "FAIL нет записи об откате"; bad=1; fi
 # stop (выкатка), stop (откат), start (после отката): стартов до отката быть не должно
 if [ "$(grep -c '^start' $T/calls3)" = 1 ]; then echo "OK   start только после отката"; else echo "FAIL start вызван $(grep -c '^start' $T/calls3) раз(а)"; bad=1; fi
+
+# --- Кейс 4: новые шаги — бэкап данных, снос контейнера песочницы, запись снимка в releases ---
+# app4 — с НАСТОЯЩИМ JSON appsettings.Local.json (Sandbox:ContainerName=cc-sandbox-test) и
+# ClaudeHomeServer.dll (чтобы data-backup сработал, а не «первый деплой»). staging4 — минимальный
+# полный (гейт staging). Журнал активен: проверяем, что снимок попал в releases.
+mkdir -p $T/app4 $T/staging4/{wwwroot,modules/notes,modules/spend} $T/releases4
+echo '{"Sandbox":{"ContainerName":"cc-sandbox-test"}}' > $T/app4/appsettings.Local.json
+echo OLD4 > $T/app4/ClaudeHomeServer.dll; printf '20261014-888887\nsha=abcd1234\nref=main\ndirty=False\n' > $T/app4/build-id.txt
+echo NEW4 > $T/staging4/ClaudeHomeServer.dll; printf '20261014-888888\nsha=ef567890\nref=main\ndirty=False\n' > $T/staging4/build-id.txt
+cp "$(dirname "$(readlink -f "$S")")/deploy-journal.py" $T/releases4/deploy-journal.py
+printf '{"current":{"id":"case4","phase":"queued"},"history":[],"releases":[]}\n' > $T/releases4/deploy-state.json
+CCS_SWITCH_DETACHED=1 PATH="$T/shim:$PATH" APP=$T/app4 STAGING=$T/staging4 RELEASES=$T/releases4 LOG=$T/deploy4.log STAMP=20261014-888888 \
+ CCS_SYSTEMCTL="$T/shim/systemctl" CCS_DEPLOY_JOURNAL=$T/releases4/deploy-journal.py CCS_DEPLOY_STATE_PATH=$T/releases4/deploy-state.json \
+ HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; echo "case4 rc=$?"
+# Бэкап данных отработал (шим dotnet --backup поставил маркер)
+if [ -e $T/backup-ran ]; then echo "OK   data-backup: dotnet --backup вызван"; else echo "FAIL data-backup: маркера нет"; bad=1; fi
+# Контейнер песочницы снесён по имени из конфига, ДВАЖДЫ (stop-sandbox до снимка + sandbox-container после swap)
+docker_calls=$(grep -c "rm -f cc-sandbox-test" $T/docker-calls 2>/dev/null || echo 0)
+if [ "$docker_calls" = "2" ]; then echo "OK   песочница: docker rm -f cc-sandbox-test ×2 (stop-sandbox + sandbox-container)"; else echo "FAIL песочница: docker rm -f cc-sandbox-test вызван $docker_calls раз(а), ждали 2"; bad=1; fi
+# Снимок записан в список releases: id=метка, sha=из build-id.txt снимка, path=каталог снимка
+rel_check=$(python3 -I -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+r = d.get("releases", [])
+if not r:
+    print("FAIL: releases пуст"); sys.exit(0)
+x = r[0]
+ok = (x.get("id") == "20261014-888888" and x.get("sha") == "abcd1234" and x.get("path") == sys.argv[2])
+print("OK" if ok else "FAIL: %s" % x)
+' "$T/releases4/deploy-state.json" "$T/releases4/20261014-888888" 2>/dev/null)
+case "$rel_check" in
+  OK) echo "OK   releases: снимок записан (id=20261014-888888, sha=abcd1234, path=каталог снимка)";;
+  *) echo "FAIL releases: $rel_check"; bad=1;;
+esac
 
 [ $bad = 0 ] && echo "ИТОГ: ЗЕЛЁНО" || echo "ИТОГ: КРАСНО"
 rm -rf "$T"

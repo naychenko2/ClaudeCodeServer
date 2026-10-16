@@ -7,7 +7,7 @@
 Назначение — руки локального проекта (ADR-016, раздел «Руки»; план
 `docs/research/hands-plan-2026-09.md`, Ш2). Каждый инструмент до любого действия зовёт гейт
 `HandsPolicy` из проекта `HandsBridge.Policy` (чистый `net10.0`, тесты — `HandsBridge.Policy.Tests`
-на Linux). Запуск моста: `HandsBridge.exe [--exclude-tools screenshot_control]` — узел подставляет
+на Linux). Запуск моста: `HandsBridge.exe [--exclude-tools screenshot_control,browser_screenshot]` — узел подставляет
 агент (Ш3). Белого списка программ нет (решение владельца 2б, 2026-09-27): запрещены только
 интерпретаторы и терминалы `HandsForbiddenApps`. Границы «только свои окна» нет (вторая волна
 решений владельца 2026-09-27, ADR-016 §7): любое окно и снимок экрана разрешены, `--turn-job`
@@ -78,7 +78,7 @@ WinForms и проекция Windows SDK — они добавляли к арх
 | `Input/KeyboardInputService.cs` | `CheckKeys`/`CheckKeyDown` по виртуальному коду: Win, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+Alt+… не уходят никогда |
 | `Window/WindowEnumerator.cs`, `Capture/MonitorService.cs` | `Screen.AllScreens` → `Native/DisplayMonitors.cs` (EnumDisplayMonitors + MONITORINFOEX) |
 | `Capture/ScreenshotService.cs` (снимок всех мониторов) | `SystemInformation.VirtualScreen` → `ScreenBounds.GetVirtual()` |
-| `Prompts/*`, `Resources/SystemResources.cs`, `Models/UIAutomationErrorType.cs` | упоминания OCR-фолбэка |
+| `Prompts/*`, `Resources/SystemResources.cs`, `Models/UIAutomationErrorType.cs` | упоминания OCR-фолбэка; D2f переписал промпты — убраны `file_save`, `clipboard`, `ui_macro` |
 | `Program.cs` | `HandsGate.Configure` до старта хоста (профиль браузера и `--activity-event`) |
 | все инструменты, кроме `ui_snapshot`/`ui_find`/`ui_read` | `HandsGate.Acted(...)` сразу после отказа гейта: первое действие хода поднимает событие хода, и агент зажигает плашку (сторож `Tool_reports_its_action_after_the_gate`) |
 | `GlobalUsings.cs` | пространства имён гейта; `System.Drawing` вместо неявного от WinForms |

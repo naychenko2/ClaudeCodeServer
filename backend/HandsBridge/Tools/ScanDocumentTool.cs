@@ -64,8 +64,8 @@ public static partial class ScanDocumentTool
     /// <summary>
     /// Reads a multi-page document from a window that exposes no UIA tree (Citrix, Vidi, Visio):
     /// the document is scrolled with <c>pageKey</c>, each page is captured, recognized (OCR) and
-    /// stitched into a <c>.md</c>/<c>.txt</c> file in the project. Use it when the clipboard is
-    /// unavailable (remote desktops) and the document is longer than one screen.
+    /// stitched into a <c>.md</c>/<c>.txt</c> file in the project. Use it for remote desktops
+    /// (no UIA tree) when the document is longer than one screen.
     /// <para>
     /// One call reads at most ~10 pages (~5 minutes); when more remain it answers
     /// <c>{done:false, next:{...}}</c> — call again with that <c>continueFrom</c> cursor to append

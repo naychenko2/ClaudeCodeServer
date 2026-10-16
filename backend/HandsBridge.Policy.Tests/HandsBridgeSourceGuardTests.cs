@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.HandsBridge.Policy;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -50,10 +49,26 @@ public class HandsBridgeSourceGuardTests
     [Fact]
     public void Bridge_exposes_exactly_the_hands_tools()
     {
-        var names = Directory.EnumerateFiles(BridgeDir, "*.cs", SearchOption.AllDirectories)
-            .SelectMany(f => Regex.Matches(File.ReadAllText(f), @"\[McpServerTool\(Name = ""([^""]+)""").Select(m => m.Groups[1].Value))
-            .Order()
-            .ToList();
+        // Розбор Roslyn, а не регулярка: полный атрибут [ModelContextProtocol.Server.McpServerTool(…)]
+        // обходит регулярку \[McpServerTool( — имя атрибута берём как последний идентификатор.
+        var names = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(BridgeDir, "*.cs", SearchOption.AllDirectories))
+        {
+            var root = ParseTree(File.ReadAllText(file));
+            foreach (var attr in root.DescendantNodes().OfType<AttributeSyntax>())
+            {
+                if (!IsMcpServerToolAttribute(attr)) continue;
+                var nameArg = attr.ArgumentList?.Arguments
+                    .FirstOrDefault(a => a.NameEquals?.Name?.Identifier.Text == "Name");
+                if (nameArg?.Expression is LiteralExpressionSyntax lit)
+                {
+                    var text = lit.Token.Text;
+                    if (text.Length >= 2 && text[0] == '"' && text[^1] == '"')
+                        names.Add(text[1..^1]);
+                }
+            }
+        }
+        names = names.Order().ToList();
 
         // TODO(D2c–D2e): убрать при добавлении инструмента в мост.
         // Инструменты уже в HandsTools.All, но в мосту появятся в D2c–D2e — до того их отсутствие норма.
@@ -768,6 +783,16 @@ public class HandsBridgeSourceGuardTests
 
     private static CompilationUnitSyntax ParseTree(string source) =>
         CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
+
+    /// <summary>
+    /// Атрибут <c>McpServerTool</c> независимо от квалификации: <c>[McpServerTool(…)]</c> и
+    /// <c>[ModelContextProtocol.Server.McpServerTool(…)]</c> — имя берём как последний идентификатор.
+    /// </summary>
+    private static bool IsMcpServerToolAttribute(AttributeSyntax attr)
+    {
+        var lastId = attr.Name.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().LastOrDefault();
+        return lastId?.Identifier.Text == "McpServerTool";
+    }
 
     /// <summary>Квалификатор <c>File</c>: некавалифицированный <c>File</c> или <c>System.IO.File</c>.</summary>
     private static bool IsFileQualifier(ExpressionSyntax expr)

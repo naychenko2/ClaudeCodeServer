@@ -83,6 +83,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             GenTokens = p.GenTokens,
             ItlSeconds = p.ItlSeconds,
             ItlCount = p.ItlCount,
+            PrefillSeconds = p.PrefillSeconds,
+            QueueSeconds = p.QueueSeconds,
+            PromptTokens = p.PromptTokens,
         }).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
@@ -130,6 +133,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
                 PrefillPerStream = current.Kv?.PrefillPerStream,
                 AvgGenTps = avg.GenTps,
                 AvgPromptTps = avg.PromptTps,
+                SpeculativeSpeedup = current.SpeculativeSpeedup,
             },
             Kv = new KvDto
             {
@@ -361,6 +365,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public double? AvgGenTps { get; init; }
         // Средняя скорость чтения промпта (ток/с) за окно графика: Δprefill_kv_computed_tokens/Δprefill_time.
         public double? AvgPromptTps { get; init; }
+        // «Ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δinter_token_latency_count за окно
+        // ~60 с — во сколько раз спекулятивный декод ускоряет генерацию против выдачи по одному токену.
+        public double? SpeculativeSpeedup { get; init; }
     }
 
     // Блок KV-кэша: доли 0..1 и вытеснения за 15 мин.
@@ -409,6 +416,11 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public long? GenTokens { get; init; }
         public double? ItlSeconds { get; init; }
         public long? ItlCount { get; init; }
+        // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefill/очередь (сек) и
+        // прочитанный промпт (токены) — приращения с прошлой точки; null — нет данных/рестарт.
+        public double? PrefillSeconds { get; init; }
+        public double? QueueSeconds { get; init; }
+        public long? PromptTokens { get; init; }
     }
 
     // Чат на стенде: живой ход на локальном движке. Own — чат текущего пользователя

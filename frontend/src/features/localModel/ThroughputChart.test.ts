@@ -4,16 +4,15 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  agentsChartAriaLabel, avgAgentsOf, avgIssuedOf, avgPerStreamOf, avgStepMsOf, avgTokensPerStepOf,
-  avgThroughputOf, breakRuns, buildAgentsSteps, buildIntervals,
-  buildIssuedSegments, buildPerStreamSegments, buildStepMsSegments, buildTokensPerStepSegments,
+  avgIssuedOf, avgPerStreamOf, avgTimeSharesOf, avgThroughputOf, breakRuns,
+  buildIntervals, buildIssuedSegments, buildPerStreamSegments, buildTimeSharesBar,
   buildThroughputSegments, cacheHitAvg,
   chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
-  kvChartAriaLabel, maxAgentsOf, maxSeriesOf, maxStepMsOf, maxTokensPerStepOf, maxThroughputOf,
-  niceAxisMax, peakPerStreamOf,
+  kvChartAriaLabel, maxSeriesOf, maxThroughputOf,
+  niceAxisMax, peakPerStreamOf, percentile10,
   peakThroughputOf, perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
-  stepChartAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
-  type ChartGeom, type Interval, type ThroughputSample,
+  timeSharesAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
+  type ChartGeom, type Interval, type TimeShares, type ThroughputSample,
 } from './ThroughputChart';
 
 // Геометрия как в компоненте (height 96, left 0, right 28)
@@ -230,6 +229,9 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     genTokens: p.genTokens ?? null,
     itlSeconds: p.itlSeconds ?? null,
     itlCount: p.itlCount ?? null,
+    prefillSeconds: p.prefillSeconds ?? null,
+    queueSeconds: p.queueSeconds ?? null,
+    promptTokens: p.promptTokens ?? null,
   };
 }
 
@@ -387,23 +389,13 @@ describe('tpChartAriaLabel: SVG «Скорость генерации, ток/с
     expect(label).toContain('412 ток/с');
     expect(label).not.toContain('интервал');
   });
-  it('hover: интервал со скоростью и «шагом модели»', () => {
-    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250, 34, 3.9, 1.5);
+  it('hover: интервал со скоростью генерации', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
     expect(label).toContain('скорость генерации 250 ток/с');
-    expect(label).toContain('шаг 34 мс');
-    expect(label).toContain('3.9 ток/шаг');
-    expect(label).toContain('1.5 агентов');
   });
-  it('hover: генерации не было, но шаг модели есть → «генерации не было» + серия шага', () => {
-    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', null, null, 2.1, 0.8);
-    expect(label).toContain('генерации не было');
-    expect(label).toContain('2.1 ток/шаг');
-    expect(label).toContain('0.8 агентов');
-    expect(label).not.toContain('движок не отвечал');
-  });
-  it('hover на разрыве (все серии null) → «движок не отвечал»', () => {
-    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null, null, null, null);
+  it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
+    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
     expect(label).toContain('интервал 14:32');
     expect(label).toContain('движок не отвечал');
     const after = label.split('интервал')[1] ?? '';
@@ -605,9 +597,9 @@ describe('buildIntervals: кэш — несение при «не спрашив
 
 // Минимальный Interval для тестов построения/разрывов линий.
 function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput: number | null = null,
-  stepMs: number | null = null, tokensPerStep: number | null = null, agents: number | null = null): Interval {
+  timeShares: TimeShares | null = null): Interval {
   return { tStart, tEnd, throughput, perStream, kvUsage: null, prefix: null, ram: null,
-    preemptions: null, hasData: { prefix: false, ram: false }, stepMs, tokensPerStep, agents };
+    preemptions: null, hasData: { prefix: false, ram: false }, timeShares };
 }
 
 describe('buildIntervals: скорость на агента из СУММ приращений', () => {
@@ -772,176 +764,107 @@ describe('buildIssuedSegments: линия «выдано стендом» рвё
   });
 });
 
-// === «Шаг модели»: время шага, токенов за шаг, агентов в генерации (ADR-029) ===
-// Скорость генерации, разложенная на множители: скорость на поток = токенов за шаг ÷
-// время шага, × сколько потоков генерировало. Все три — из тех же приращений;
-// null = разрыв (молчание/рестарт), ΣitlCount = 0 — деление на ноль.
+// === «Куда уходит время агентов» (ADR-029, v2.3): составная полоса долей ===
+// gen = ΣitlCount × чистый шаг; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
+// гистограмм. «Чистый шаг» — перцентиль 10 времени шага по «чистым» интервалам (без
+// prefill); доли = каждая / сумма четырёх. Мутации: «wait → gen» красит тест на доли;
+// «cleanStep → среднее» — на перцентиль.
 
-describe('buildIntervals: «шаг модели» из СУММ приращений', () => {
+describe('percentile10: 10-й перцентиль', () => {
+  it('пусто → null; один элемент → он', () => {
+    expect(percentile10([])).toBeNull();
+    expect(percentile10([5])).toBe(5);
+  });
+  it('10 элементов → индекс floor(0.1×10)=1', () => {
+    expect(percentile10([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toBe(2);
+  });
+});
+
+describe('buildIntervals: «куда уходит время» — доли из сумм и чистого шага', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
 
-  it('stepMs = ΣitlSeconds/ΣitlCount×1000, tokensPerStep = ΣgenTokens/ΣitlCount', () => {
+  it('чистый шаг = перцентиль 10; wait = ΣitlSec − ΣitlCnt×чистый шаг', () => {
     const samples = [
-      sample({ t: 5_000, genTokens: 100, itlSeconds: 10, itlCount: 20 }),
-      sample({ t: 10_000, genTokens: 200, itlSeconds: 20, itlCount: 40 }),
+      // интервал 0: step = 10/20 = 0.5 (чистый), promptTokens=0
+      sample({ t: 5_000, itlSeconds: 10, itlCount: 20, promptTokens: 0 }),
+      // интервал 1: step = 40/20 = 2.0 (длинный — ждёт соседа), promptTokens=0
+      sample({ t: 35_000, itlSeconds: 40, itlCount: 20, promptTokens: 0 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // (10 + 20) / (20 + 40) × 1000 = 500 мс/шаг; (100 + 200) / (20 + 40) = 5 ток/шаг
-    expect(intervals[0].stepMs).toBeCloseTo(500, 6);
-    expect(intervals[0].tokensPerStep).toBeCloseTo(5, 6);
+    // чистый шаг = percentile10([0.5, 2.0]) = 0.5
+    // интервал 0: gen = 20×0.5 = 10, wait = 10−10 = 0 → 100 % генерации
+    expect(intervals[0].timeShares).toEqual({ gen: 1, prefill: 0, wait: 0, queue: 0 });
+    // интервал 1: gen = 20×0.5 = 10, wait = 40−10 = 30 → 25 % генерации, 75 % ждёт
+    expect(intervals[1].timeShares!.gen).toBeCloseTo(0.25, 6);
+    expect(intervals[1].timeShares!.wait).toBeCloseTo(0.75, 6);
+    expect(intervals[1].timeShares!.prefill).toBe(0);
+    expect(intervals[1].timeShares!.queue).toBe(0);
   });
 
-  it('agents = ΣitlSeconds/длина интервала (с): 30 с inter-token за 30 с = 1 агент', () => {
+  it('prefill/очередь — приращения гистограмм; доли в сумме 1', () => {
     const samples = [
-      sample({ t: 5_000, itlSeconds: 10 }),
-      sample({ t: 10_000, itlSeconds: 20 }),
+      // step = 20/20 = 1.0 = чистый шаг (единственный интервал); gen = 20×1.0 = 20, wait = 0
+      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, promptTokens: 0, prefillSeconds: 5, queueSeconds: 3 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].agents).toBeCloseTo(1, 6);
+    const s = intervals[0].timeShares!;
+    // total = 20 (gen) + 0 (wait) + 5 (prefill) + 3 (queue) = 28
+    expect(s.gen).toBeCloseTo(20 / 28, 6);
+    expect(s.wait).toBe(0);
+    expect(s.prefill).toBeCloseTo(5 / 28, 6);
+    expect(s.queue).toBeCloseTo(3 / 28, 6);
+    expect(s.gen + s.wait + s.prefill + s.queue).toBeCloseTo(1, 6);
   });
 
-  it('два параллельных агента: 60 с inter-token за 30 с = 2 агента', () => {
-    const samples = [
-      sample({ t: 5_000, itlSeconds: 30 }),
-      sample({ t: 10_000, itlSeconds: 30 }),
-    ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].agents).toBeCloseTo(2, 6);
-  });
-
-  it('разрыв: точка без itlCount → stepMs/tokensPerStep null; молчание → agents null', () => {
-    const samples = [
-      sample({ t: 5_000, genTokens: 100, itlSeconds: 10 }),  // itlCount нет
-      sample({ t: 35_000 }),                                    // движок молчит
-    ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].stepMs).toBeNull();
-    expect(intervals[0].tokensPerStep).toBeNull();
-    expect(intervals[0].agents).toBeCloseTo(10 / 30, 6);  // itlSeconds был → агенты считаются
-    expect(intervals[1].stepMs).toBeNull();
-    expect(intervals[1].tokensPerStep).toBeNull();
-    expect(intervals[1].agents).toBeNull();
-  });
-
-  it('ΣitlCount = 0 (itlSeconds есть, шагов не было) → stepMs null, не деление на ноль', () => {
-    const samples = [sample({ t: 5_000, itlSeconds: 5, itlCount: 0 })];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].stepMs).toBeNull();
+  it('молчание (без itl) → timeShares null (полоса не рисуется)', () => {
+    const intervals = buildIntervals([sample({ t: 5_000 })], T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].timeShares).toBeNull();
   });
 });
 
-describe('maxStepMsOf/maxTokensPerStepOf/maxAgentsOf: верх шкал', () => {
-  it('максимум серии; null пропускает; пусто → 0', () => {
+describe('buildTimeSharesBar: сегменты полосы на x-диапазоне интервала', () => {
+  it('4 сегмента пропорционально долям, суммарная ширина = x1−x0', () => {
+    const shares: TimeShares = { gen: 0.5, prefill: 0.25, wait: 0.15, queue: 0.1 };
+    const segs = buildTimeSharesBar(shares, 0, 100);
+    expect(segs).toHaveLength(4);
+    expect(segs[0].w).toBeCloseTo(50, 6);
+    expect(segs[1].w).toBeCloseTo(25, 6);
+    expect(segs[2].w).toBeCloseTo(15, 6);
+    expect(segs[3].w).toBeCloseTo(10, 6);
+    expect(segs.reduce((a, s) => a + s.w, 0)).toBeCloseTo(100, 6);
+  });
+  it('null → нет сегментов; нулевая доля — сегмент не рисуется', () => {
+    expect(buildTimeSharesBar(null, 0, 100)).toHaveLength(0);
+    const segs = buildTimeSharesBar({ gen: 1, prefill: 0, wait: 0, queue: 0 }, 0, 100);
+    expect(segs).toHaveLength(1);
+  });
+});
+
+describe('avgTimeSharesOf: средние доли за окно (легенда без считывания)', () => {
+  it('среднее по интервалам с долями; без долей → null', () => {
+    const base: TimeShares = { gen: 0.5, prefill: 0.25, wait: 0.15, queue: 0.1 };
     const intervals = [
-      mkIt(0, 1, 10, null, 100, 3, 1.5),
-      mkIt(1, 2, null, null, null, null, null),
-      mkIt(2, 3, 20, null, 300, 7, 2.5),
+      mkIt(0, 1, 10, null, base),
+      mkIt(1, 2, 10, null, { gen: 0.7, prefill: 0.1, wait: 0.1, queue: 0.1 }),
+      mkIt(2, 3, null, null, null),   // без долей — не входит
     ];
-    expect(maxStepMsOf(intervals)).toBe(300);
-    expect(maxTokensPerStepOf(intervals)).toBe(7);
-    expect(maxAgentsOf(intervals)).toBe(2.5);
-    expect(maxStepMsOf([])).toBe(0);
-    expect(maxTokensPerStepOf([])).toBe(0);
-    expect(maxAgentsOf([])).toBe(0);
+    const avg = avgTimeSharesOf(intervals);
+    expect(avg!.gen).toBeCloseTo(0.6, 6);
+    expect(avgTimeSharesOf([mkIt(0, 1, null, null, null)])).toBeNull();
   });
 });
 
-describe('avgStepMsOf/avgTokensPerStepOf/avgAgentsOf: средние за окно', () => {
-  it('stepMs = ΣitlSeconds/ΣitlCount×1000 по всем точкам окна', () => {
-    const samples = [
-      sample({ t: 1, itlSeconds: 10, itlCount: 20 }),
-      sample({ t: 2, itlSeconds: 20, itlCount: 40 }),
-    ];
-    expect(avgStepMsOf(samples)).toBeCloseTo(500, 6);
-  });
-
-  it('tokensPerStep = ΣgenTokens/ΣitlCount; нет данных → null; ΣitlCount = 0 → null', () => {
-    const samples = [
-      sample({ t: 1, genTokens: 100, itlCount: 20 }),
-      sample({ t: 2, genTokens: 200, itlCount: 40 }),
-    ];
-    expect(avgTokensPerStepOf(samples)).toBeCloseTo(5, 6);
-    expect(avgTokensPerStepOf([sample({ t: 1 })])).toBeNull();
-    expect(avgTokensPerStepOf([sample({ t: 1, genTokens: 100, itlCount: 0 })])).toBeNull();
-  });
-
-  it('agents = ΣitlSeconds/длина окна (с); молчание (все null) → null', () => {
-    const samples = [
-      sample({ t: 1, itlSeconds: 30 }),
-      sample({ t: 2, itlSeconds: 30 }),
-    ];
-    expect(avgAgentsOf(samples, 60_000)).toBeCloseTo(1, 6);
-    expect(avgAgentsOf([sample({ t: 1 })], 60_000)).toBeNull();
-  });
-});
-
-describe('buildStepMsSegments/buildTokensPerStepSegments: линии «шага модели» рвутся на null', () => {
-  it('null в середине — два отдельных сегмента; без null — один', () => {
-    const intervals = [
-      mkIt(0, 30_000, 10, null, 100, 3),
-      mkIt(30_000, 60_000, 10, null, null, null),
-      mkIt(60_000, 90_000, 10, null, 200, 5),
-    ];
-    const ms = buildStepMsSegments(intervals, 0, 90_000, 200, GEOM);
-    expect(ms).toHaveLength(2);
-    expect(ms[0]).toHaveLength(1);
-    expect(ms[1]).toHaveLength(1);
-    const tps = buildTokensPerStepSegments(intervals, 0, 90_000, 5, GEOM);
-    expect(tps).toHaveLength(2);
-    expect(tps[0]).toHaveLength(1);
-    expect(tps[1]).toHaveLength(1);
-    const solid = buildStepMsSegments(
-      [mkIt(0, 30_000, 10, null, 100, 3), mkIt(30_000, 60_000, 10, null, 120, 4)], 0, 60_000, 120, GEOM);
-    expect(solid).toHaveLength(1);
-    expect(solid[0]).toHaveLength(2);
-  });
-});
-
-describe('buildAgentsSteps: ступенчатая линия «агентов в генерации»', () => {
-  it('каждый интервал — горизонталь (x0..x1 на уровне y); null рвёт прогон', () => {
-    const intervals = [
-      mkIt(0, 30_000, 10, null, null, null, 1),
-      mkIt(30_000, 60_000, 10, null, null, null, 2),
-      mkIt(60_000, 90_000, 10, null, null, null, null),
-      mkIt(90_000, 120_000, 10, null, null, null, 1.5),
-    ];
-    const segs = buildAgentsSteps(intervals, 0, 120_000, 2, GEOM);
-    expect(segs).toHaveLength(2, 'null в середине рвёт: два прогона');
-    // Каждый интервал — 2 точки (x0,y),(x1,y): первый прогон (2 интервала) — 4 точки,
-    // второй (1 интервал) — 2; на границе интервалов x совпадает → вертикальный переход.
-    expect(segs[0].split(' ')).toHaveLength(4);
-    expect(segs[1].split(' ')).toHaveLength(2);
-  });
-
-  it('без null — один непрерывный прогон; пусто — нет сегментов', () => {
-    const intervals = [mkIt(0, 30_000, 10, null, null, null, 1), mkIt(30_000, 60_000, 10, null, null, null, 1)];
-    expect(buildAgentsSteps(intervals, 0, 60_000, 2, GEOM)).toHaveLength(1);
-    expect(buildAgentsSteps([], 0, 60_000, 2, GEOM)).toHaveLength(0);
-  });
-});
-
-describe('stepChartAriaLabel: SVG «Шаг модели» обновляется на hover', () => {
+describe('timeSharesAriaLabel: SVG «Куда уходит время» обновляется на hover', () => {
   it('базовый: окно; без hover — без интервала', () => {
-    const label = stepChartAriaLabel('15m', null, null, null);
-    expect(label).toBe('Шаг модели за 15 минут');
+    expect(timeSharesAriaLabel('15m', null, null)).toBe('Куда уходит время агентов за 15 минут');
   });
-  it('hover: интервал со временем шага и токенов за шаг; null — «—»', () => {
-    const label = stepChartAriaLabel('15m', '14:32', 34, 3.9);
+  it('hover: доли интервала в %; null — «движок не отвечал»', () => {
+    const label = timeSharesAriaLabel('15m', '14:32', { gen: 0.45, prefill: 0.2, wait: 0.3, queue: 0.05 });
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('шаг 34 мс');
-    expect(label).toContain('токенов за шаг 3.9');
-    const empty = stepChartAriaLabel('15m', '14:32', null, null);
-    expect(empty).toContain('шаг —');
-    expect(empty).toContain('токенов за шаг —');
-  });
-});
-
-describe('agentsChartAriaLabel: SVG «Агентов в генерации» обновляется на hover', () => {
-  it('базовый: окно; hover — значение интервала; null — «—»', () => {
-    expect(agentsChartAriaLabel('1h', null, null)).toBe('Агентов в генерации за 1 час');
-    const label = agentsChartAriaLabel('1h', '14:32', 1.5);
-    expect(label).toContain('интервал 14:32');
-    expect(label).toContain('1.5');
-    expect(agentsChartAriaLabel('1h', '14:32', null)).toContain('—');
+    expect(label).toContain('генерирует 45 %');
+    expect(label).toContain('читает промпт 20 %');
+    expect(label).toContain('ждёт соседа 30 %');
+    expect(label).toContain('в очереди 5 %');
+    expect(timeSharesAriaLabel('15m', '14:32', null)).toContain('движок не отвечал');
   });
 });

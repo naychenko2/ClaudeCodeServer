@@ -318,6 +318,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 GenTokens = CounterDelta(_lastPointSnap, snap, s => s.GenerationTokens),
                 ItlSeconds = DoubleCounterDelta(_lastPointSnap, snap, s => s.InterTokenLatencySum),
                 ItlCount = CounterDelta(_lastPointSnap, snap, s => s.InterTokenLatencyCount),
+                // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefill/очередь —
+                // приращения гистограмм (сек), promptTokens — детект «prefill не шёл»
+                // (Δprompt_tokens ≈ 0 → «чистый шаг»). Правило null то же, что у itl-приращений.
+                PrefillSeconds = DoubleCounterDelta(_lastPointSnap, snap, s => s.PrefillTimeSum),
+                QueueSeconds = DoubleCounterDelta(_lastPointSnap, snap, s => s.QueueTimeSum),
+                PromptTokens = CounterDelta(_lastPointSnap, snap, s => s.PromptTokens),
             };
 
             lock (_gate)
@@ -354,6 +360,10 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         public double? PrefillKvComputedTokens;
         public double? InterTokenLatencySum;
         public long? InterTokenLatencyCount;
+        // Полоса «Куда уходит время» (ADR-029, v2.3): время в очереди (сек) и прочитанный
+        // промпт (токены) — для детекта разрыва (рестарт) и «чистого шага» (prefill не шёл).
+        public double? QueueTimeSum;
+        public long? PromptTokens;
     }
 
     // Добавляет текущий снимок в буфер счётчиков, обрывает старые точки (за PreemptionsWindow)
@@ -375,6 +385,8 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             PrefillKvComputedTokens = snap.PrefillKvComputedTokens,
             InterTokenLatencySum = snap.InterTokenLatencySum,
             InterTokenLatencyCount = snap.InterTokenLatencyCount,
+            QueueTimeSum = snap.QueueTimeSum,
+            PromptTokens = snap.PromptTokens,
         };
 
         lock (_gate)
@@ -406,7 +418,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             || (prev.GenerationTokens is not null && cur.GenerationTokens is not null && cur.GenerationTokens < prev.GenerationTokens)
             || (prev.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens is not null && cur.PrefillKvComputedTokens < prev.PrefillKvComputedTokens)
             || (prev.InterTokenLatencySum is not null && cur.InterTokenLatencySum is not null && cur.InterTokenLatencySum < prev.InterTokenLatencySum)
-            || (prev.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount < prev.InterTokenLatencyCount);
+            || (prev.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount is not null && cur.InterTokenLatencyCount < prev.InterTokenLatencyCount)
+            || (prev.QueueTimeSum is not null && cur.QueueTimeSum is not null && cur.QueueTimeSum < prev.QueueTimeSum)
+            || (prev.PromptTokens is not null && cur.PromptTokens is not null && cur.PromptTokens < prev.PromptTokens);
     }
 
     // Самая старая точка буфера не раньше now-window; null — буфер короче окна (не хватает истории).
@@ -527,6 +541,13 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 p => p.PrefillTimeSum, s => s.PrefillTimeSum),
         };
 
+        // «Ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δinter_token_latency_count
+        // за окно ~60 с (как GenPerStream, тот же StreamWindow): во сколько раз DFlash ускоряет
+        // генерацию против выдачи по одному токену. null — нет данных/рестарт или Σitl_count = 0.
+        var speculativeSpeedup = SpeedOverWindow(base60, snap,
+            p => p.GenerationTokens, s => (double?)s.GenerationTokens,
+            p => p.InterTokenLatencyCount, s => (double?)s.InterTokenLatencyCount);
+
         SetState(new LocalModelStatsCurrent
         {
             Status = status,
@@ -534,6 +555,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             Running = snap.Running,
             Waiting = snap.Waiting,
             Speed = ThroughputOf(),
+            SpeculativeSpeedup = speculativeSpeedup,
             Kv = kv,
             Unsupported = snap.Unsupported,
             Engine = engine,

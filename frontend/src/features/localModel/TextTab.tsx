@@ -173,6 +173,7 @@ function SpeedCard({ data, peakGenTps }: {
   }
   const avgGen = data.speed.avgGenTps;
   const avgPrompt = data.speed.avgPromptTps;
+  const speedup = data.speed.speculativeSpeedup;
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
@@ -182,6 +183,13 @@ function SpeedCard({ data, peakGenTps }: {
           note={data.running != null ? `сейчас агентов: ${data.running}` : undefined}
         />
         <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, на запрос" />
+      </div>
+      <div style={{ marginTop: SP.sm }}>
+        <Kpi
+          value={speedup != null ? `×${speedup.toFixed(1)}` : '—'}
+          label="ускорение угадыванием"
+          note="во сколько раз черновая модель ускоряет генерацию. Упало — текст трудный для угадывания (числа, код)"
+        />
       </div>
       <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>
         <div>

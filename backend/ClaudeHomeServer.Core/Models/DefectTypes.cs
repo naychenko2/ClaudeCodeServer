@@ -32,4 +32,7 @@ public class TaskVerification
     public DateTime VerifiedAt { get; set; }
     public string? PersonaId { get; set; }
     public string? Notes { get; set; }
+    // Исход витка: accepted · accepted_with_remarks · returned · withdrawn; null = старая
+    // семантика «проверено». Обобщение: у дефектов вердикт уже живёт здесь, у ревью — новое.
+    public string? Verdict { get; set; }
 }

@@ -213,6 +213,57 @@ public class TaskManagerTests : IDisposable
         reloaded.ReminderMinutes.Should().Be(15);
     }
 
+    [Fact]
+    public void Персистентность_СтараяЗадачаБезПолейФичи_ЧитаетсяСNull()
+    {
+        var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("старая задача"));
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id)!;
+
+        reloaded.FeatureId.Should().BeNull();
+        reloaded.Role.Should().BeNull();
+        reloaded.StepRef.Should().BeNull();
+        reloaded.Lane.Should().BeNull();
+        reloaded.ReviewOf.Should().BeNull();
+        reloaded.AwaitingHumanSince.Should().BeNull();
+        reloaded.AwaitingHumanReason.Should().BeNull();
+        reloaded.Verification.Should().BeNull();
+    }
+
+    [Fact]
+    public void Персистентность_ЗаполненныеПоляФичи_ПереживаютСохранениеИЧтение()
+    {
+        var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("задача фичи"));
+        task.FeatureId = "epic-1";
+        task.Role = TaskRoles.Step;
+        task.StepRef = "B1";
+        task.Lane = "бэк";
+        task.ReviewOf = ["t-1", "t-2"];
+        task.AwaitingHumanSince = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc);
+        task.AwaitingHumanReason = "merge";
+        task.Verification = new TaskVerification
+        {
+            VerifiedAt = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc),
+            Verdict = TaskVerdicts.AcceptedWithRemarks,
+            Notes = "с замечаниями"
+        };
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id)!;
+
+        reloaded.FeatureId.Should().Be("epic-1");
+        reloaded.Role.Should().Be(TaskRoles.Step);
+        reloaded.StepRef.Should().Be("B1");
+        reloaded.Lane.Should().Be("бэк");
+        reloaded.ReviewOf.Should().BeEquivalentTo(["t-1", "t-2"]);
+        reloaded.AwaitingHumanSince.Should().Be(new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc));
+        reloaded.AwaitingHumanReason.Should().Be("merge");
+        reloaded.Verification.Should().NotBeNull();
+        reloaded.Verification!.Verdict.Should().Be(TaskVerdicts.AcceptedWithRemarks);
+        reloaded.Verification.Notes.Should().Be("с замечаниями");
+    }
+
     // ─── SpawnNextOccurrence ─────────────────────────────────────────────────
 
     [Fact]

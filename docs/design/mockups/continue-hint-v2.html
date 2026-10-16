@@ -152,19 +152,26 @@
   .lip.has-tier > .rowin { display: flex; align-items: center; gap: 6px; height: 32px; min-width: 0; flex: 1; }
 
   /* ── 2. Ушко: закладка на верхней кромке губы, справа ── */
-  .ear { position: relative; z-index: 1; align-self: flex-end; display: flex; align-items: center; gap: 6px; height: 23px; max-width: calc(100% - 28px);
-    margin: 0 var(--r-xxl) -1px 0; padding: 0 var(--sp-xs) 0 var(--sp-sm);
-    background: var(--c-bg-main); border: 1px solid var(--c-border-light); border-bottom: none; border-radius: var(--r-lg) var(--r-lg) 0 0;
+  .ear { --ear-bg: var(--c-bg-main); --ear-bd: var(--c-border-light);
+    position: relative; z-index: 1; align-self: flex-end; display: flex; align-items: center; gap: 6px; height: 23px; max-width: calc(100% - 40px);
+    margin: 0 calc(var(--r-xxl) + var(--sp-sm)) -1px 0; padding: 0 var(--sp-xs) 0 var(--sp-sm);
+    background: var(--ear-bg); border: 1px solid var(--ear-bd); border-bottom: none; border-radius: var(--r-lg) var(--r-lg) 0 0;
     box-shadow: var(--shadow-lift-soft); font-size: var(--fs-sm); color: var(--c-text-secondary); }
-  /* Закрыть кромку губы и тень под ушком: полоска цвета губы на стыке */
-  .ear::after { content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 5px; background: var(--c-bg-main); }
-  /* Губы нет (ни ветки, ни объекта): ушко — самостоятельная полоса, без стыка */
+  /* Закрыть кромку губы и тень под ушком: полоска цвета основания на стыке */
+  .ear::after { content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 5px; background: var(--ear-bg); }
+  /* Вогнутые переходы в основание (как у вкладок браузера): квадрат SP.sm, дуга радиуса SP.sm.
+     Внутри дуги — прозрачно, кольцо 1 px — рамка, снаружи — фон основания; рамка ушка
+     плавно переходит в верхнюю рамку губы или поля */
+  .ear .fl { position: absolute; bottom: 0; width: var(--sp-sm); height: var(--sp-sm); pointer-events: none; }
+  .ear .fl.l { left: calc(-1 * var(--sp-sm) - 1px);
+    background: radial-gradient(circle at 0 0, transparent calc(var(--sp-sm) - 1px), var(--ear-bd) calc(var(--sp-sm) - 1px), var(--ear-bd) var(--sp-sm), var(--ear-bg) var(--sp-sm)); }
+  .ear .fl.r { right: calc(-1 * var(--sp-sm) - 1px);
+    background: radial-gradient(circle at 100% 0, transparent calc(var(--sp-sm) - 1px), var(--ear-bd) calc(var(--sp-sm) - 1px), var(--ear-bd) var(--sp-sm), var(--ear-bg) var(--sp-sm)); }
   /* Губы нет: ушко растёт из кромки самого поля ввода — фон и рамка карточки, слоем выше неё */
-  .ear.solo { z-index: 3; background: var(--c-bg-white); border-color: var(--c-border); }
-  .ear.solo::after { background: var(--c-bg-white); }
+  .ear.solo { --ear-bg: var(--c-bg-white); --ear-bd: var(--c-border); z-index: 3; }
   .ear .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ear .g { display: inline-flex; color: var(--c-text-muted); }
-  .mob .ear { height: 31px; margin-right: 12px; max-width: calc(100% - 24px); }
+  .mob .ear { height: 31px; margin-right: calc(var(--r-xxl) + var(--sp-sm)); max-width: calc(100% - 40px); }
   .mob .ear .x { width: 32px; height: 28px; }
 
   /* ── 3. Счётчик в губе: правый край ряда контекста ── */
@@ -311,7 +318,7 @@ function compose(v, mob, hint) {
     pre += `<div class="rnotice hint"><span style="display:inline-flex">${I.gauge}</span><span class="t">Контекст <span class="num">${n}</span>${mob ? '' : ' · дешевле продолжить в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
   }
   if (v === 'ear' && hint) {
-    pre += `<div class="ear${inner === null ? ' solo' : ''}" role="status"><span class="g">${I.gauge}</span><span class="t"><span class="num">${n}</span>${mob ? '' : ' · дешевле в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
+    pre += `<div class="ear${inner === null ? ' solo' : ''}" role="status"><span class="fl l" aria-hidden="true"></span><span class="fl r" aria-hidden="true"></span><span class="g">${I.gauge}</span><span class="t"><span class="num">${n}</span>${mob ? '' : ' · дешевле в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
   }
   if (v === 'tier' && hint) {
     const tier = `<div class="tier" role="status"><span class="g">${I.gauge}</span><span class="t">Контекст <span class="num">${n}</span>${mob ? '' : ' · дешевле продолжить в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
@@ -334,7 +341,7 @@ function compose(v, mob, hint) {
 const VARIANTS = [
   { k: 'C', t: 'C — как в проде (для сравнения)', d: 'Отдельная полоса RowNotice над губой. Реплика живой вёрстки, нужна только чтобы сравнить высоту и силуэт.' },
   { k: 'tier', t: '1 · Ярус губы', d: 'Подсказка — верхний ряд той же губы: общий силуэт, общая рамка и тень, тёплая подложка C.accentLight под верхними углами R.xxl. Губа становится двухэтажной, а не обрастает соседом.' },
-  { k: 'ear', t: '2 · Ушко (рекомендую)', d: 'Закладка на верхней кромке губы у правого края: тот же фон C.bgMain, рамка C.borderLight и тень liftSoft, низ без рамки и сливается с губой. Это ушко, которое композер уже умеет рисовать (composerLip({ tab })). Ширина — по содержимому, глаз не идёт через весь экран.' },
+  { k: 'ear', t: '2 · Ушко (рекомендую)', d: 'Закладка на верхней кромке губы у правого края: тот же фон C.bgMain, рамка C.borderLight и тень liftSoft, низ без рамки и вогнутыми переходами вливается в губу; без губы ушко так же растёт из кромки поля ввода. Это ушко, которое композер уже умеет рисовать (composerLip({ tab })). Ширина — по содержимому, глаз не идёт через весь экран.' },
   { k: 'meter', t: '3 · Счётчик в губе', d: 'Нулевая высота: чип-счётчик (кольцо доли окна, число, «Новый чат →», ✕) у правого края строки контекста. На телефоне — в правой части строки «Где».' },
   { k: 'pill', t: '4 · Пилюля у модели', d: 'Нулевая высота: ModePill (как у цикла «до готово») в нижней губе, слева от «Модель». Совет про цену стоит рядом с выбором модели, который тоже про цену.' },
 ];

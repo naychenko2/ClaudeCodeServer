@@ -44,8 +44,10 @@
 
 | Часть | Десктоп | Мобила (`isMobile`) |
 |---|---|---|
-| Ушко | `position: relative`, `zIndex: 1`, `display: flex`, `alignItems: center`, `gap: SP.sm - 2` (6), `boxSizing: border-box`, `height: 23` (= `COMPOSER_LIP.rowMini` 20 + `edgeTab` 2 + рамка 1 сверху), `maxWidth: calc(100% - 28px)`, `margin: 0 ${R.xxl}px -1px 0`, `padding: 0 ${SP.xs}px 0 ${SP.sm}px`, `background: C.bgMain`, `border: 1px solid C.borderLight`, `borderBottom: none`, `borderRadius: ${R.lg}px ${R.lg}px 0 0`, `boxShadow: SHADOW.liftSoft`, `fontSize: FS.sm`, `color: C.textSecondary` | `height: 31`, `marginRight: SP.md` (12), `maxWidth: calc(100% - 24px)`, остальное то же |
-| Стык с губой | псевдоэлемент или вложенный `span` `aria-hidden`: `position: absolute; left: 0; right: 0; bottom: -4; height: 5; background: C.bgMain` — закрывает верхнюю рамку губы и её тень под ушком | то же |
+| Ушко | `position: relative`, `zIndex: 1`, `display: flex`, `alignItems: center`, `gap: SP.sm - 2` (6), `boxSizing: border-box`, `height: 23` (= `COMPOSER_LIP.rowMini` 20 + `edgeTab` 2 + рамка 1 сверху), `maxWidth: calc(100% - 40px)`, `margin: 0 ${R.xxl + SP.sm}px -1px 0` (22), `padding: 0 ${SP.xs}px 0 ${SP.sm}px`, `background: C.bgMain`, `border: 1px solid C.borderLight`, `borderBottom: none`, `borderRadius: ${R.lg}px ${R.lg}px 0 0`, `boxShadow: SHADOW.liftSoft`, `fontSize: FS.sm`, `color: C.textSecondary` | `height: 31`, остальное то же (отступ справа те же 22) |
+| Стык с основанием | вложенный `span` `aria-hidden`: `position: absolute; left: 0; right: 0; bottom: -4; height: 5; background: <фон основания>` — закрывает верхнюю рамку губы (или поля) и тень под ушком | то же |
+| Вогнутые переходы | два `span` `aria-hidden` у основания, как у вкладок браузера: `position: absolute; bottom: 0; width: SP.sm; height: SP.sm; pointerEvents: none`; левый `left: -(SP.sm + 1)`, `background: radial-gradient(circle at 0 0, transparent ${SP.sm - 1}px, <рамка> ${SP.sm - 1}px, <рамка> ${SP.sm}px, <фон основания> ${SP.sm}px)`; правый `right: -(SP.sm + 1)`, то же с `circle at 100% 0`. Рамка ушка плавно уходит в верхнюю рамку основания, наклейки нет | то же |
+| Основание | **есть губа**: фон `C.bgMain`, рамка `C.borderLight`, `zIndex: 1`. **Губы нет**: фон `C.bgWhite`, рамка `C.border` (как у `data-composer-card`), `zIndex: 3` | то же |
 | Иконка | `Gauge`, `ICON_SIZE.xs`, `ICON_STROKE`, цвет `C.textMuted`, `flexShrink: 0` | то же |
 | Текст | `span` с многоточием (`ellipsis` из `RowChip`), **без** `flex: 1`: ушко по ширине содержимого. Число — `<b>` `C.textHeading`, `fontWeight: 600` | только число |
 | Действие | как в `RowNotice`: без фона и рамки, `color: C.accent`, `FS.sm`, `fontWeight: 600`, `gap: SP.xs`, `ArrowRight` `ICON_SIZE.xs` справа, `borderRadius: R.sm`, `flexShrink: 0` | то же |
@@ -53,7 +55,7 @@
 
 Почему `zIndex: 1` здесь можно: ушко лежит в хосте строки, а не в нижней губе, где `zIndex` запрещён. Попапов внутри ушка нет, меню строки открываются через `Menu` и ушко их не запирает. Карточка поля (`zIndex: 2`) всё равно выше.
 
-Отступ `R.xxl` справа нужен, чтобы ушко начиналось после скругления верхнего угла губы, а не висело на дуге.
+Отступ `R.xxl + SP.sm` справа: правый вогнутый переход должен лечь на прямую часть кромки, а не на скругление угла губы или поля (оба `R.xxl`).
 
 Тексты (`formatContextK(tokens)` → `312K`, `1,2M`):
 
@@ -94,7 +96,7 @@
 
 ### Проверка готовности
 
-1. 1440 и 390, обе темы: ушко 23/31 px, низ слит с губой без видимой рамки и тени на стыке, правый край отступает от угла губы на 14/12 px.
+1. 1440 и 390, обе темы: ушко 23/31 px, низ слит с основанием без видимой рамки и тени на стыке, по бокам — вогнутые переходы, правый край отступает от угла на 22 px.
 2. Прибавка к композиции +22/+30 против C (+32/+36).
 3. Чат без git и без объекта: ушко сидит на кромке поля ввода, верхней рамки поля под ним не видно.
 4. «Продолжить» открывает диалог, ✕ прячет до +100K.
@@ -111,3 +113,4 @@
 - v1 (2026-10-16) — варианты A–D, в прод пошёл C.
 - v2 (2026-10-16) — C в проде не понравился. Четыре варианта внутри композиции, рекомендация 2 · Ушко. Ждёт выбора Андрея.
 - v2.1 (2026-10-16) — по правке Андрея: без верхней губы ушко стоит на кромке поля ввода, а не отдельной полосой.
+- v2.2 (2026-10-16) — финал, принят Андреем: вогнутые переходы у основания ушка в обоих случаях (губа и поле). Кадры `v3-*.png`, стыки крупно — `v3-zoom-*.png`.

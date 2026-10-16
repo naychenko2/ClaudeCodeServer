@@ -76,7 +76,7 @@ public class HandsBridgeSourceGuardTests
         {
             HandsTools.ClipboardText,
             // ScanDocument убран из списка: инструмент scan_document теперь в мосту (A5).
-            HandsTools.ScanCanvas,
+            // ScanCanvas убран из списка: инструмент scan_canvas теперь в мосту (C1-2).
         };
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
 

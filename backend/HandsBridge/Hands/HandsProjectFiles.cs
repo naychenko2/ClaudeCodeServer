@@ -65,6 +65,12 @@ internal sealed class HandsProjectFiles
         if (link is not null)
             return (null, link);
 
+        // 8.3: короткое имя (CLAUDE~1) раскрывается в служебный каталог (.claude) на диске —
+        // второй уровень защиты, если запрет '~' в относительном пути не сработал.
+        var serviceDir = ForbiddenServiceDirInFull(freeFull);
+        if (serviceDir is not null)
+            return (null, serviceDir);
+
         Directory.CreateDirectory(Path.GetDirectoryName(freeFull)!);
 
         // FileMode.CreateNew (шов OpenNew): файл (или ссылка) уже есть — IOException, а не тихая
@@ -136,6 +142,28 @@ internal sealed class HandsProjectFiles
                 continue;
             if (IsLink(current))
                 return $"'{segment}' is a symlink or a junction: hands do not write through links into the project.";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Служебный каталог в полном (разрешённом) пути: <c>.git</c>, <c>.claude</c>, <c>.mcp.json</c>
+    /// и любой <c>.cc-*</c>, кроме <c>.cc-attachments</c>. Ловит 8.3: <c>CLAUDE~1</c> раскрывается
+    /// в <c>.claude</c> на диске, и запись туда — путь к хукам. null — служебных каталогов нет.
+    /// </summary>
+    private string? ForbiddenServiceDirInFull(string full)
+    {
+        foreach (var segment in full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (segment.Length <= 1 || !segment.StartsWith('.'))
+                continue;
+
+            var name = segment.ToLowerInvariant();
+            if (name is ".git" or ".claude" or ".mcp.json")
+                return $"'{segment}' is a service directory hands must not write into (a short 8.3 name resolves to it on disk).";
+            if (name.StartsWith(".cc-") && name != ".cc-attachments")
+                return $"'{segment}' is a service directory hands must not write into (a short 8.3 name resolves to it on disk).";
         }
 
         return null;

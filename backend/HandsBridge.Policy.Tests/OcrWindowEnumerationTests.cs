@@ -126,6 +126,25 @@ public class OcrWindowEnumerationTests
         Assert.Contains("the window list could not be read", denied.Reason);
     }
 
+    /// <summary>
+    /// P2 (fail-closed): экранная цель (primary_screen/monitor/all_monitors) при НЕИЗВЕСТНЫХ
+    /// границах виртуального экрана (сбой WinAPI) — раньше разрешалась («проверять нечего»),
+    /// теперь отказывает: нельзя доказать, что под снимаемым экраном нет запрещённого окна.
+    /// </summary>
+    [Theory]
+    [InlineData("primary_screen")]
+    [InlineData("monitor")]
+    [InlineData("all_monitors")]
+    public void Screen_target_with_unknown_bounds_is_denied(string target)
+    {
+        var windows = new FakeWindows().Bounds(null);
+        var policy = new HandsPolicy(windows);
+
+        var denied = policy.CheckOcr(target, null, null, null, null, null);
+        Assert.False(denied.Allowed);
+        Assert.Contains("bounds are unknown", denied.Reason);
+    }
+
     // ---------- геометрия ----------
 
     /// <summary>

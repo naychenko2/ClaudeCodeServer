@@ -513,13 +513,15 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
 
     /// <summary>
     /// Экранная цель: какой монитор снимается, по отдельности неизвестно, поэтому проверяем весь
-    /// виртуальный рабочий стол. Границы неизвестны (сбой WinAPI) — проверять нечего.
+    /// виртуальный рабочий стол. Границы неизвестны (сбой WinAPI) — fail-closed: нельзя доказать,
+    /// что под снимаемым экраном нет запрещённого окна.
     /// </summary>
     private HandsDecision CheckOcrScreen()
     {
         var bounds = windows.GetVirtualScreenBounds();
         if (bounds is not { } b)
-            return HandsDecision.Allow;
+            return HandsDecision.Deny(
+                "ocr refused: the virtual screen bounds are unknown, so hands cannot prove no forbidden window is on the screen.");
         return CheckOcrArea(b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top);
     }
 
@@ -1055,7 +1057,7 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
             if (raw == "..")
                 return (null, structural);
 
-            var issue = SegmentIssue(raw, isFirst: segments.Count == 0);
+            var issue = SegmentIssue(raw);
             if (issue is not null)
                 return (null, issue);
 
@@ -1066,10 +1068,9 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     }
 
     /// <summary>
-    /// Проблема в содержимом одного сегмента пути; null — сегмент годен. <paramref name="isFirst"/>
-    /// — первый ли это сегмент (для <c>~</c>, который раскрывается в home только в начале пути).
+    /// Проблема в содержимом одного сегмента пути; null — сегмент годен.
     /// </summary>
-    private static string? SegmentIssue(string segment, bool isFirst)
+    private static string? SegmentIssue(string segment)
     {
         // Разбор по code point, а не по char: валидная суррогатная пара (😀 = U+D83D U+DE00) —
         // один code point вне BMP, а не два «суррогата», и OtherSymbol (⭐, ⚓) — обычные эмодзи в
@@ -1100,9 +1101,10 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
                 return $"'{segment}' carries an invisible Unicode format character; use a plain name.";
         }
 
-        // ~ раскрывается в home только в первом сегменте: ~/x.png, ~user/x.png.
-        if (isFirst && segment.StartsWith("~", StringComparison.Ordinal))
-            return $"'{segment}' starts with '~' (a home directory); use a path relative to the project root.";
+        // ~ — короткие имена 8.3 (CLAUDE~1 → .claude) и home (~/x): знак запрещён в каждом
+        // сегменте, а не только в первом; имена с ~ в проектах крайне редки.
+        if (segment.Contains('~'))
+            return $"'{segment}' contains '~' (a short 8.3 name or a home directory); use a plain name.";
 
         // : — диск (C:) или альтернативный поток (x.png:stream); недопустим в любом сегменте.
         if (segment.Contains(':'))

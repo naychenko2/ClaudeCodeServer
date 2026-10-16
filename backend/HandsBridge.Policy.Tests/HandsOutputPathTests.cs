@@ -166,6 +166,24 @@ public class HandsOutputPathTests
         Assert.Contains(reasonFragment, decision.Reason);
     }
 
+    // ---------- короткие имена 8.3: '~' в каждом сегменте ----------
+
+    // '~' — короткие имена 8.3 (CLAUDE~1 → .claude) и home (~/x): знак запрещён в каждом
+    // сегменте, а не только в первом. Мутация «~ только в первом сегменте» краснеет: CLAUDE~1
+    // (не в начале) пройдёт старый запрет и уйдёт в .claude/.
+    [Theory]
+    [InlineData("CLAUDE~1/x.json")]
+    [InlineData("GIT~1/x.md")]
+    [InlineData("a/CLAUDE~1/x.json")]
+    [InlineData("docs/~tmp/x.md")]
+    [InlineData("a~b.md")]
+    public void Short_83_name_with_tilde_in_any_segment_is_denied(string path)
+    {
+        var decision = Check(HandsTools.ScreenshotControl, path);
+        Assert.False(decision.Allowed);
+        Assert.Contains("'~'", decision.Reason);
+    }
+
     // «Нормальные имена проходят»: кириллица, иероглифы, пробел в середине, зарезерв. имена
     // Windows С расширением (console/com10/lpt — не CON/COM1..9/LPT1..9), .github (не .git),
     // имя с точкой в середине (my.cc.md) и валидные эмодзи — суррогатная пара (😀) и BMP-эмодзи

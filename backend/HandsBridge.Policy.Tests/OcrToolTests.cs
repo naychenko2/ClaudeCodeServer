@@ -370,13 +370,107 @@ public class OcrToolTests
     /// <summary>
     /// Гейту — known bounds: screen-цель (<c>primary_screen</c>) проходит <c>CheckOcrScreen</c>
     /// (fail-closed: неизвестные границы — отказ). По умолчанию гейт — <c>NoWindows</c> (null).
+    /// Возвращает исходную политику, чтобы тест вернул её в <c>finally</c> (статика моста общая).
     /// </summary>
-    private static void SetGatePolicyWithKnownBounds()
+    private static object SetGatePolicyWithKnownBounds()
     {
         var gateType = Bridge.GetType("ClaudeHomeServer.HandsBridge.HandsGate", throwOnError: true)!;
-        var windows = new FakeWindows().Bounds(new HandsScreenBounds(0, 0, 1920, 1080));
-        gateType.GetField("s_policy", BindingFlags.NonPublic | BindingFlags.Static)!
-            .SetValue(null, new HandsPolicy(windows));
+        var policyField = gateType.GetField("s_policy", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var original = policyField.GetValue(null)!;
+
+        // HandsPolicy — в ALC моста (тестовая копия — другой тип), и живёт в сборке Policy, а не
+        // HandsBridge: тип берём от живого экземпляра, а не строкой. Обёртываем эмитированный
+        // IHandsWindowSystem (known bounds, пустое перечисление); browserProfilesRoot — null.
+        var policyType = original.GetType();
+        policyField.SetValue(null, Activator.CreateInstance(policyType, [FakeWindowSystem(), null])!);
+        return original;
+    }
+
+    /// <summary>Возвращает исходную политику гейта (статика моста общая для коллекции).</summary>
+    private static void RestoreGatePolicy(object original)
+    {
+        var gateType = Bridge.GetType("ClaudeHomeServer.HandsBridge.HandsGate", throwOnError: true)!;
+        gateType.GetField("s_policy", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, original);
+    }
+
+    /// <summary>
+    /// Эмит <c>IHandsWindowSystem</c> в ALC моста (тестовая копия интерфейса — другой тип):
+    /// known bounds (0,0,1920,1080), пустое перечисление, 0 под точками — screen-цель проходит гейт.
+    /// Без состояния: один экземпляр на все тесты коллекции (serial).
+    /// </summary>
+    private static object? s_fakeWindowSystem;
+    private static object FakeWindowSystem() => s_fakeWindowSystem ??= EmitFakeWindowSystem(BridgeWindowSystemType());
+
+    /// <summary>
+    /// Bridge-контекстный <c>IHandsWindowSystem</c>: тип поля <c>&lt;windows&gt;P</c> живого <c>HandsPolicy</c>
+    /// (сборка Policy, а не HandsBridge — строкой из <c>Bridge</c> не резолвится; primary ctor → суффикс P).
+    /// </summary>
+    private static Type BridgeWindowSystemType()
+    {
+        var gateType = Bridge.GetType("ClaudeHomeServer.HandsBridge.HandsGate", throwOnError: true)!;
+        var policy = gateType.GetField("s_policy", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+        return policy.GetType().GetField("<windows>P", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType;
+    }
+
+    private static object EmitFakeWindowSystem(Type interfaceType)
+    {
+        // HandsScreenBounds / HandsVisibleWindow — из сигнатур методов интерфейса (сборка Policy).
+        var boundsType = interfaceType.GetMethod("GetVirtualScreenBounds")!.ReturnType.GetGenericArguments()[0];
+        var visibleType = interfaceType.GetMethod("EnumerateVisibleWindows")!.ReturnType.GetGenericArguments()[0];
+
+        var dynAssembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("OcrToolTestsWinDyn"), AssemblyBuilderAccess.Run);
+        var module = dynAssembly.DefineDynamicModule("OcrToolTestsWinDyn");
+        var tb = module.DefineType("FakeWindowSystem", TypeAttributes.Public, typeof(object), [interfaceType]);
+
+        // int? GetWindowProcessId(long) → null
+        DefineConstMethod(tb, "GetWindowProcessId", typeof(int?), [typeof(long)],
+            il => { il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Ret); });
+        // string? GetProcessImagePath(int) → null
+        DefineConstMethod(tb, "GetProcessImagePath", typeof(string), [typeof(int)],
+            il => { il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Ret); });
+        // long GetRootWindowAt(int, int) → 0
+        DefineConstMethod(tb, "GetRootWindowAt", typeof(long), [typeof(int), typeof(int)],
+            il => { il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ret); });
+        // long GetRootWindow(long) → 0
+        DefineConstMethod(tb, "GetRootWindow", typeof(long), [typeof(long)],
+            il => { il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ret); });
+        // long GetForegroundWindow() → 0
+        DefineConstMethod(tb, "GetForegroundWindow", typeof(long), [],
+            il => { il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ret); });
+
+        // HandsScreenBounds? GetVirtualScreenBounds() → new(0, 0, 1920, 1080)
+        var boundsCtor = boundsType.GetConstructor([typeof(int), typeof(int), typeof(int), typeof(int)])!;
+        var nullableCtor = typeof(Nullable<>).MakeGenericType(boundsType).GetConstructor([boundsType])!;
+        DefineConstMethod(tb, "GetVirtualScreenBounds", typeof(Nullable<>).MakeGenericType(boundsType), [],
+            il =>
+            {
+                il.Emit(OpCodes.Ldc_I4_0);
+                il.Emit(OpCodes.Ldc_I4_0);
+                il.Emit(OpCodes.Ldc_I4, 1920);
+                il.Emit(OpCodes.Ldc_I4, 1080);
+                il.Emit(OpCodes.Newobj, boundsCtor);
+                il.Emit(OpCodes.Newobj, nullableCtor);
+                il.Emit(OpCodes.Ret);
+            });
+
+        // IReadOnlyList<HandsVisibleWindow>? EnumerateVisibleWindows() → пустой список
+        var listCtor = typeof(List<>).MakeGenericType(visibleType).GetConstructor([])!;
+        DefineConstMethod(tb, "EnumerateVisibleWindows", typeof(IReadOnlyList<>).MakeGenericType(visibleType), [],
+            il => { il.Emit(OpCodes.Newobj, listCtor); il.Emit(OpCodes.Ret); });
+
+        return tb.CreateType()!.GetConstructor([])!.Invoke([]);
+    }
+
+    /// <summary>Метод с фиксированным телом: <paramref name="body"/> эмитит IL до <c>ret</c>.</summary>
+    private static void DefineConstMethod(TypeBuilder tb, string name, Type returnType, Type[] paramTypes, Action<ILGenerator> body)
+    {
+        // Virtual|NewSlot|Final: без Virtual CLR не сопоставляет метод с интерфейсным.
+        var method = tb.DefineMethod(name,
+            MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig
+            | MethodAttributes.NewSlot | MethodAttributes.Final,
+            returnType, paramTypes);
+        body(method.GetILGenerator());
     }
 
     /// <summary>
@@ -387,13 +481,19 @@ public class OcrToolTests
     public async Task Without_endpoint_the_tool_says_update_the_agent()
     {
         SetupClient(null, new FakeOcrHandler(_ => Json(200, """{"text":"x"}""")));
-        SetGatePolicyWithKnownBounds();
+        var originalPolicy = SetGatePolicyWithKnownBounds();
+        try
+        {
+            var (isError, text) = await HandsBridgeGateRuntimeTests.Call(OcrToolType,
+                new() { ["target"] = "primary_screen" });
 
-        var (isError, text) = await HandsBridgeGateRuntimeTests.Call(OcrToolType,
-            new() { ["target"] = "primary_screen" });
-
-        Assert.True(isError, text);
-        Assert.Contains("update the agent", text);
+            Assert.True(isError, text);
+            Assert.Contains("update the agent", text);
+        }
+        finally
+        {
+            RestoreGatePolicy(originalPolicy);
+        }
     }
 
     /// <summary>
@@ -407,7 +507,7 @@ public class OcrToolTests
         var fullText = new string('x', 5000);
         SetupClient("http://fake/ocr", new FakeOcrHandler(_ => Json(200,
             JsonSerializer.Serialize(new { text = fullText, model = "m", ms = 1, promptTokens = 1, completionTokens = 1 }))));
-        SetGatePolicyWithKnownBounds();
+        var originalPolicy = SetGatePolicyWithKnownBounds();
 
         // Снимок: фейк ScreenshotService (ExecuteAsync — canned PNG в памяти, на диск не пишется);
         // шов OcrTool.CaptureService — WindowsToolsBase (и его WinAPI) тест не трогает.
@@ -445,6 +545,7 @@ public class OcrToolTests
         }
         finally
         {
+            RestoreGatePolicy(originalPolicy);
             captureProp.SetValue(null, null); // шов вернуть, чтобы не влиял на другие тесты
             Directory.Delete(root, recursive: true);
         }

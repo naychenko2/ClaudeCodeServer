@@ -361,7 +361,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool allProjectsAccess = false, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null, string? sphereId = null)
+        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
     {
         var persona = new Persona
         {
@@ -389,6 +389,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             MemoryEnabled = memoryEnabled,
             // Явное false, а не null: null — «решение не принято», его подбирает разовая миграция
             LightContext = lightContext ?? false,
+            // Не задан — Unspecified: сигнал рода в промпт не подставляется
+            Gender = gender ?? PersonaGender.Unspecified,
             Tools = NormalizeTools(tools),
             Access = access,
             // Свой список запретов имеет смысл только при Custom-профиле
@@ -674,7 +676,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool? allProjectsAccess = null, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null, string? sphereId = null)
+        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -745,6 +747,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
             if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
             if (lightContext is not null) persona.LightContext = lightContext.Value;
+            // null — не менять; явный Unspecified — сбросить сигнал рода
+            if (gender is not null) persona.Gender = gender.Value;
             // null — не менять; список — установить (полный набор нормализуется в null)
             if (tools is not null) persona.Tools = NormalizeTools(tools);
             // Профиль доступа: null — не менять; свой список запретов живёт только при Custom

@@ -1683,6 +1683,8 @@ public record CreatePersonaRequest(
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
     bool? LightContext = null,
+    // Явный пол (дефолт Unspecified — сигнал рода в промпт не подставляется)
+    PersonaGender? Gender = null,
     // Сфера для Scope.Sphere: обязательна и должна быть сферой владельца; при другом scope сбрасывается
     string? SphereId = null);
 
@@ -1722,6 +1724,8 @@ public record UpdatePersonaRequest(
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
     bool? LightContext = null,
+    // Явный пол; null — не менять, "unspecified" — сбросить сигнал рода
+    PersonaGender? Gender = null,
     // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
     string? SphereId = null);
 

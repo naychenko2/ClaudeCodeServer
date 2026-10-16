@@ -258,7 +258,7 @@ public class PersonaPromptBuilderTests
     {
         var persona = new Persona { Name = "Кира", Gender = PersonaGender.Female };
 
-        Build(persona).Should().Contain("Ты — женщина: о себе говори в женском роде.");
+        Build(persona).Should().Contain("Ты отвечаешь как женщина: о себе говори в женском роде.");
     }
 
     // --- Голосовой режим (voiceMode) ---

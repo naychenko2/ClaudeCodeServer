@@ -384,6 +384,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // (мс) и последний HTTP-статус. Сбрасывается в TrySubmitTurn (per-turn), читается
         // адаптером для паспорта хода (TurnRunPassport.CliRetries/CliRetryWaitMs/CliRetryLastStatus).
         public CliRetryStats CliRetry = new(0, 0, null);
+        // Хвост stderr CLI текущего хода (последние строки): при крахе до первого события это
+        // единственный источник причины. Копится в ErrorDataReceived, сбрасывается в
+        // TrySubmitTurn (per-turn). Читается ProcessDeathMessage: если stderr несёт «file not
+        // found» (пропавший per-run файл --agents / --mcp-config), маркер LocalFileMissingMarker
+        // кладётся в Details ErrorMessage — классификатор отдаёт LocalFileMissing, не Unreachable.
+        public string? StderrTail;
         // Резолвится reader'ом на result текущего хода (или финализацией — процесс умер)
         public TaskCompletionSource TurnTcs { get; set; } = NewTcs();
         // Живые фоновые задачи прогона: agentId/runId из tool_result запуска → toolUseId
@@ -2972,6 +2978,10 @@ public class ClaudeSession : ILlmSessionAdapter
             // Факт внутренних повторов CLI — per-turn: паспорт хода отражает только ЭТОТ ход,
             // а не накопленное с момента старта процесса (new-process стартует с нулями сам)
             run.CliRetry = new CliRetryStats(0, 0, null);
+            // Хвост stderr — per-turn: ProcessDeathMessage читает только stderr ЭТОГО хода,
+            // а не накопленный с момента старта процесса (иначе маркер «file not found» из
+            // прошлого хода ложно сработал бы на новом).
+            run.StderrTail = null;
             run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
             ArmEchoWait(run, turnUuid); // result'ы до эха этого сообщения — чужие
             run.Process.StandardInput.WriteLine(userMessageJson);
@@ -4412,8 +4422,17 @@ public class ClaudeSession : ILlmSessionAdapter
             // StandardError, поэтому StderrTask убран.
             process.ErrorDataReceived += (_, e) =>
             {
-                if (!string.IsNullOrWhiteSpace(e.Data))
-                    Console.Error.WriteLine($"[ClaudeSession stderr] {e.Data.Trim()}");
+                if (string.IsNullOrWhiteSpace(e.Data)) return;
+                var line = e.Data.Trim();
+                Console.Error.WriteLine($"[ClaudeSession stderr] {line}");
+                // Копим хвост stderr (с потолком): при крахе до первого события это единственный
+                // источник причины. ProcessDeathMessage по нему распознаёт «file not found»
+                // (пропавший per-run файл) и кладёт маркер в Details для классификатора.
+                run.StderrTail = string.IsNullOrEmpty(run.StderrTail)
+                    ? line
+                    : run.StderrTail + "\n" + line;
+                if (run.StderrTail.Length > StderrTailMax)
+                    run.StderrTail = run.StderrTail[^StderrTailMax..];
             };
             process.BeginErrorReadLine();
             // Между Start и подпиской процесс мог умереть — обработаем сразу, иначе Exited уже
@@ -4847,7 +4866,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // P30: pending control_response завис бы карточкой до 60-минутного таймаута
                     if (pendingControlResponse) CancelPendingControlResponses();
-                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode, _disposing)); }
+                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode, _disposing, run.StderrTail)); }
                     catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
                 }
             }
@@ -4877,13 +4896,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // его флаг _disposing в ProcessDeathMessage (отдельный текст и маркер [Process:stopped-by-server],
     // а не [Process:killed]).
     private const int SigKillExitCode = 137;
+    // Потолок хвоста stderr (символы): достаточно для «file not found» и прочих кратких причин
+    // краха, а рост на длинном stderr ограничен. Сбрасывается per-turn в TrySubmitTurn.
+    private const int StderrTailMax = 2000;
 
     // Ошибка обрыва активного хода по смерти процесса. Гибель от сигнала несёт маркер в Details
     // (классификатор фолбэка работает с сырым текстом): фолбэк такой ход не подменяет, модель не меняется.
     // internal для тестов (InternalsVisibleTo): две ветки — свой Kill из DisposeAsync (disposing=true,
     // новый текст без маркера) и настоящий oom-kill (disposing=false, ProcessKilled + маркер) —
     // проверяются напрямую, без жизненного цикла процесса.
-    internal static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode, bool disposing)
+    internal static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode, bool disposing, string? stderrTail = null)
     {
         if (pendingControlResponse)
             return new ErrorMessage("Процесс модели завершился во время ожидания разрешения — ход прерван");
@@ -4899,6 +4921,16 @@ public class ClaudeSession : ILlmSessionAdapter
             return new ErrorMessage(TurnFailureText.ProcessKilled,
                 Details: $"{TurnErrorClassifier.ProcessKilledMarker} процесс CLI убит сигналом (exit={exitCode})");
         }
+        // Файл аргумента CLI не найден на старте (exit=1 до первого события): per-run файл --agents /
+        // --mcp-config пропал между записью и запуском. Локальная гонка, не провайдер: маркер
+        // LocalFileMissingMarker в Details → классификатор LocalFileMissing (повтор той же пары +
+        // честная ошибка), а не Unreachable (смена подписки). Сырой stderr остаётся после маркера —
+        // человек видит его в «Подробностях».
+        if (stderrTail is not null
+            && stderrTail.Contains("file not found", StringComparison.OrdinalIgnoreCase))
+            return new ErrorMessage(
+                "Процесс модели завершился во время хода — ответ не был получен",
+                Details: $"{TurnErrorClassifier.LocalFileMissingMarker} {stderrTail}");
         return new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен");
     }
 
@@ -4962,7 +4994,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // рядом с ним лжёт. Pending control при этом чистит сам Interrupt.
         if (!willRetry && !_interruptedByUser)
         {
-            var message = ProcessDeathMessage(pendingControlResponse, exitCode, _disposing);
+            var message = ProcessDeathMessage(pendingControlResponse, exitCode, _disposing, run.StderrTail);
             // Отменяем ожидающие control_response: иначе DecidePermissionAsync держит граф до
             // 60-минутного таймаута, карточка в ленте «Claude ждёт ответа» зависает навсегда (P30).
             if (pendingControlResponse) CancelPendingControlResponses();

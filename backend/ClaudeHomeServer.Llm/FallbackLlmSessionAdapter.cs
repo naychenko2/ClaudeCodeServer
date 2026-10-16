@@ -215,6 +215,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // всерьёз — и тогда честный отказ полезнее молчаливого цикла ожидания.
     internal const int MaxEgressRetries = 1;
 
+    // Повтор той же пары при пропавшем файле аргумента (--agents / --mcp-config) — один: CLI
+    // перезапускается и пересобирает файлы; повтор не помог — честная ошибка хода. Той же природы,
+    // что MaxEgressRetries: локальная причина, смена пары «модель × подписка» её не лечит.
+    internal const int MaxLocalFileRetries = 1;
+
     // Пауза перед повтором. Наблюдаемые отказы прокси длятся секунды (рестарт/исчерпание
     // соединений), поэтому ждать долго незачем, а бить сразу — бессмысленно.
     internal static readonly TimeSpan EgressRetryDelay = TimeSpan.FromSeconds(5);
@@ -477,6 +482,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             ? text[TurnErrorClassifier.ProcessKilledMarker.Length..].TrimStart()
             : text;
 
+    // Снимает маркер «файл аргумента не найден» из видимых «Подробностей» (классификатор уже
+    // отработал и выдал LocalFileMissing). Без снятия человек читал бы «[Local:file-missing]
+    // Error: --agents file not found…» в «Подробностях» — маркер технический, а вот сам stderr
+    // (после маркера) человек видеть должен: он и есть причина.
+    private static string? StripLocalFileMissingMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.LocalFileMissingMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.LocalFileMissingMarker.Length..].TrimStart()
+            : text;
+
     // Снимает маркер «остановлен сервером» из видимых «Подробностей» (классификатор уже отработал
     // и выдал None → FailClosedAsync). Без снятия человек читал бы «[Process:stopped-by-server]
     // процесс агента остановлен сервером…» в «Подробностях» — технический шум.
@@ -524,6 +538,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var startedAt = DateTime.UtcNow;
         var turnOutcome = "cancelled";
         var egressRetries = 0;
+        // Повтор той же пары при пропавшем файле аргумента (--agents / --mcp-config): один,
+        // как и egressRetries. CLI перезапускается и пересобирает файлы; повтор не помог — финал.
+        var localFileRetries = 0;
         FallbackErrorClass? lastClass = null;
 
         // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
@@ -890,6 +907,36 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     LogWarn($"Процесс CLI убит сигналом ОС ({Info.Id}, «{currentModel}» × «{currentKey}»): фолбэк не запускаем, пара не меняется");
                     turnOutcome = "failed";
                     await FailLocalCauseAsync(turn, end, TurnFailureText.ProcessKilled);
+                    return;
+                }
+
+                // Файл аргумента CLI не найден на старте (exit=1 до первого события): per-run файл
+                // --agents / --mcp-config пропал между записью и запуском. Смена пары «модель ×
+                // подписка» не лечит (тот же процесс на той же машине упрётся в тот же пропавший
+                // файл), но повтор той же пары лечит: CLI перезапускается и пересобирает файлы.
+                // Один повтор (как egressRetries), затем честная ошибка хода. ДО ветки egress/
+                // ротации: наш случай вообще не про сеть и не про провайдера (инцидент 2026-10-16:
+                // Opus → MiniMax-M3 без спроса). attempts не растёт, подмены не тратим.
+                if (cls == FallbackErrorClass.LocalFileMissing)
+                {
+                    if (localFileRetries < MaxLocalFileRetries)
+                    {
+                        localFileRetries++;
+                        LogWarn($"Файл аргумента CLI не найден ({Info.Id}, «{currentModel}» × «{currentKey}»): "
+                            + $"повтор {localFileRetries}/{MaxLocalFileRetries} той же пары — CLI пересоберёт файлы, "
+                            + "шаги цепочки и подмены не тратим, кулдаун провайдеру не ставим");
+                        using (var wait = CancellationTokenSource.CreateLinkedTokenSource(
+                                   _cts.Token, turn.Interrupted.Token))
+                        {
+                            try { await Task.Delay(_egressRetryDelay, wait.Token); }
+                            catch (OperationCanceledException) { /* решает проверка наверху цикла */ }
+                        }
+                        continue;
+                    }
+                    LogWarn($"Файл аргумента CLI не найден ({Info.Id}, «{currentModel}» × «{currentKey}»): "
+                        + $"повтор {localFileRetries} не помог, честная ошибка хода");
+                    turnOutcome = "local_file_missing";
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.LocalFileMissing);
                     return;
                 }
 
@@ -1809,12 +1856,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             turn.Settled = true;
         }
 
-        // Сырой текст ошибки — в Details, но без технического маркера "[Win32:NNN]":
-        // человек видит его в «Подробности» маркера ошибки, и ему незачем знать про Win32-код.
-        // Сам маркер НЕ теряем — ExtractWin32Code выше уже положил 206 в Win32ErrorCode
-        // для классификатора; здесь просто снимаем первые байты "[Win32:206]" из видимого
-        // текста. Осмысленная формулировка — TurnFailureText.PromptOverflow в Text.
-        var raw = StripProcessKilledMarker(StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held)));
+        // Сырой текст ошибки — в Details, но без технических маркеров "[Win32:NNN]" /
+        // "[Process:killed]" / "[Local:file-missing]": человек видит их в «Подробности» маркера
+        // ошибки, и маркеры ему незачем (они нужны только классификатору). Сам маркер НЕ
+        // теряем — классификатор уже отработал; здесь просто снимаем префикс из видимого текста.
+        // Осмысленная формулировка — humanText в Text (PromptOverflow / ProcessKilled /
+        // LocalFileMissing).
+        var raw = StripLocalFileMissingMarker(
+            StripProcessKilledMarker(StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held))));
         await _downstream(new ErrorMessage(humanText,
             ExpectResultFollows: true, Details: raw));
 

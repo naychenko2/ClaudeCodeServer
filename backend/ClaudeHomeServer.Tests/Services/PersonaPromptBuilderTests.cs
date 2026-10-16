@@ -213,6 +213,54 @@ public class PersonaPromptBuilderTests
         Build(persona).Should().StartWith("Ты — Ада.");
     }
 
+    // --- Пол персоны (Gender): сигнал рода в промпте ---
+
+    [Fact]
+    public void Build_FemalePersona_InsertsFemalePhrase()
+    {
+        var persona = new Persona { Name = "Кира", Gender = PersonaGender.Female };
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("женщина");
+        prompt.Should().Contain("женском роде");
+    }
+
+    [Fact]
+    public void Build_MalePersona_InsertsMalePhrase()
+    {
+        var persona = new Persona { Name = "Марк", Gender = PersonaGender.Male };
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("мужчина");
+        prompt.Should().Contain("мужском роде");
+    }
+
+    [Fact]
+    public void Build_UnspecifiedPersona_NoGenderSignal()
+    {
+        // Gender не задан (дефолт) и явный Unspecified — сигнал рода в промпт не попадает
+        var unspecified = new Persona { Name = "Марк" };
+        var explicitUnspecified = new Persona { Name = "Марк", Gender = PersonaGender.Unspecified };
+
+        foreach (var p in new[] { unspecified, explicitUnspecified })
+        {
+            var prompt = Build(p);
+            prompt.Should().NotContain("женщина");
+            prompt.Should().NotContain("мужчина");
+        }
+    }
+
+    // Мутационный: точная родовая фраза обязана попасть в вывод; убрать/изменить вставку — красный
+    [Fact]
+    public void Build_FemalePersona_Mutation_ExactPhrasePresent()
+    {
+        var persona = new Persona { Name = "Кира", Gender = PersonaGender.Female };
+
+        Build(persona).Should().Contain("Ты — женщина: о себе говори в женском роде.");
+    }
+
     // --- Голосовой режим (voiceMode) ---
 
     [Fact]

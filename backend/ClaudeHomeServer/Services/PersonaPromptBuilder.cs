@@ -44,6 +44,13 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
             sb.Append($", {persona.Description.Trim()}");
         sb.Append(". Отвечай и действуй от своего лица, в своём характере, оставаясь собой на протяжении всего разговора.");
 
+        // Явный пол — сигнал рода для малых моделей (иначе «Нашёл» вместо «Нашла»);
+        // Unspecified — ничего не дописываем (текущее поведение, золотые тесты не трогаем)
+        if (persona.Gender == PersonaGender.Female)
+            sb.Append(" Ты — женщина: о себе говори в женском роде.");
+        else if (persona.Gender == PersonaGender.Male)
+            sb.Append(" Ты — мужчина: о себе говори в мужском роде.");
+
         var contract = persona.Contract;
         if (contract is null || contract.IsEmpty)
         {

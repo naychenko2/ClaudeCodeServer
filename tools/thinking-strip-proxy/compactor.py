@@ -546,12 +546,29 @@ def _fmt_checks(checks):
     return lines
 
 
+# Экранируем теги <analysis>/<summary> (открывающие и закрывающие) в тексте блока:
+# CLI 2.1.301 разбирает ответ сжатия регулярками по ПЕРВОМУ вхождению (вырезает первый
+# <analysis>…</analysis>, заменяет первый <summary>(…)</summary> на «Summary:»). Блок
+# <ccs-preserved> дописывается ПОСЛЕ сводки: если модель не написала свой <analysis>/
+# <summary>, а в блоке есть такие теги (дословная реплика, якорь, вывод проверки), CLI
+# вырежет кусок блока или примет его за сводку. < → ‹ (U+2039): разбор CLI больше не
+# задевает, дословность почти не портится. Без учёта регистра, с пробелами внутри скобок;
+# сами <ccs-preserved>/</ccs-preserved> не трогает (имя тега не совпадает).
+_CLI_TAG_RE = re.compile(r"<\s*/?\s*(?:analysis|summary)\s*>", re.IGNORECASE)
+
+
+def _escape_cli_tags(text):
+    """<analysis>/<summary> (открывающие/закрывающие, регистр/пробелы) → ‹…>: < → ‹ (U+2039)."""
+    return _CLI_TAG_RE.sub(lambda m: "‹" + m.group(0)[1:], text)
+
+
 def build_preserved(doc):
     """Блок <ccs-preserved>: постановка + реплики + файлы + проверки + план + якоря.
 
     str|None (None, если ничего нет вовсе). Пустые разделы не выводим. Общий потолок
     PRESERVED_CAP: при превышении режем в порядке «якоря → проверки → файлы → старые
-    реплики»; постановка и самая свежая реплика — никогда.
+    реплики»; постановка и самая свежая реплика — никогда. Теги <analysis>/<summary> в
+    тексте экранируются (< → ‹), чтобы разбор CLI по первому вхождению их не задел.
     """
     msgs = (doc or {}).get("messages") or []
     head_text = head(msgs)
@@ -595,7 +612,9 @@ def build_preserved(doc):
                 parts.append(title)
                 parts.extend(lines)
         parts.append("</ccs-preserved>")
-        return "\n".join(parts)
+        # Экранируем <analysis>/<summary> в тексте блока (wrapper <ccs-preserved> имя не
+        # совпадает — не трогается): иначе разбор CLI по первому вхождению их задел бы.
+        return _escape_cli_tags("\n".join(parts))
 
     if len(assemble()) <= PRESERVED_CAP:
         return assemble()

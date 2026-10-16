@@ -8,6 +8,7 @@ import re
 import unittest
 
 import compactor
+import test_proxy
 
 
 # --- Вспомогательные ---------------------------------------------------------------------------
@@ -675,6 +676,100 @@ class Step4BuildPreservedTests(unittest.TestCase):
         self.assertIn("## Постановка задачи", block)
         self.assertNotIn("## Реплики человека", block,
                          "единственная реплика-постановка продублирована в «Репликах»")
+
+
+# --- Шаг 5: экранирование <analysis>/<summary> в блоке <ccs-preserved> ----------------------
+
+class Step5EscapeCliTagsTests(unittest.TestCase):
+    """CLI 2.1.301 режет первый <analysis>…</analysis> и первый <summary>(…)</summary> по
+    ПЕРВОМУ вхождению; блок <ccs-preserved> дописывается ПОСЛЕ сводки. Если модель не написала
+    свой <analysis>/<summary>, а в блоке есть такие теги (дословная реплика, якорь, вывод
+    проверки), CLI вырежет кусок блока. Экранируем их (< → ‹), чтобы разбор CLI не задел."""
+
+    def _блок_с_тегами(self):
+        # дословная реплика содержит <analysis>x</analysis> и <summary>y</summary>
+        raw = "обсуждение: <analysis>x</analysis> и <summary>y</summary> конец"
+        msgs = [_user(_marker(raw))]
+        return compactor.build_preserved({"messages": msgs})
+
+    def test_реплика_с_тегами_экранированы(self):
+        block = self._блок_с_тегами()
+        # ни одного НАСТОЯЩЕГО тега (с <) — разбор CLI по первому вхождению их не задел
+        self.assertNotIn("<analysis>", block)
+        self.assertNotIn("</analysis>", block)
+        self.assertNotIn("<summary>", block)
+        self.assertNotIn("</summary>", block)
+        # текст читаем: экранированные теги на месте, wrapper <ccs-preserved> не тронут
+        self.assertIn("‹analysis>x‹/analysis>", block)
+        self.assertIn("‹summary>y‹/summary>", block)
+        self.assertTrue(block.startswith("<ccs-preserved>"))
+        self.assertTrue(block.endswith("</ccs-preserved>"))
+
+    def test_мутация_убрать_экранирование_краснеет(self):
+        # мутация: экранирование → идентичность → в блоке настоящие теги → assertNotIn краснеет
+        orig = compactor._escape_cli_tags
+        compactor._escape_cli_tags = lambda t: t
+        try:
+            block = self._блок_с_тегами()
+        finally:
+            compactor._escape_cli_tags = orig
+        self.assertIn("<analysis>", block,
+                      "мутация (экранирование убрано) не покраснела: настоящих тегов нет")
+        self.assertIn("<summary>", block,
+                     "мутация (экранирование убрано) не покраснела: настоящих тегов нет")
+
+    def test_как_cli_блок_целиком_сохранён(self):
+        # Разбор «как CLI» (test_proxy.как_cli) на ответе модели БЕЗ <analysis>: модель
+        # написала только <summary>сводка</summary>, блок с тегами дописан после. CLI вырезает
+        # ПЕРВЫЙ <analysis>…</analysis> — если в блоке настоящие теги, вырежет кусок блока.
+        # С экранированием (< → ‹) разбор их не видит → блок целиком сохранён.
+        блок = self._блок_с_тегами()
+        # один текстовый блок: сводка модели + блок (как в реальном ответе сжатия)
+        список = [
+            ("content_block_start", {"type": "content_block_start", "index": 0,
+                                     "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                      "delta": {"type": "text_delta",
+                                                 "text": "<summary>сводка</summary>\n" + блок}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ]
+        запись = test_proxy.как_cli(список)
+        # сводка модели распознана (Summary:), блок целиком дожил: wrapper и экранированные
+        # теги на месте, кусок блока не вырезан
+        self.assertTrue(запись.startswith("Summary:\nсводка"),
+                        "сводка модели не распознана: " + repr(запись[:80]))
+        self.assertIn("<ccs-preserved>", запись)
+        self.assertIn("</ccs-preserved>", запись)
+        self.assertIn("‹analysis>x‹/analysis>", запись,
+                      "CLI вырезал <analysis> из блока: экранирование не сработало")
+        self.assertIn("‹summary>y‹/summary>", запись,
+                      "CLI вырезал <summary> из блока: экранирование не сработало")
+
+    def test_как_cli_мутация_убрать_экранирование_краснеет(self):
+        # мутация: экранирование → идентичность → в блоке настоящие <analysis>/<summary> →
+        # как_cli вырезает первый <analysis>…</analysis> (кусок блока) → экранированная форма
+        # в записи отсутствует → тест краснеет.
+        orig = compactor._escape_cli_tags
+        compactor._escape_cli_tags = lambda t: t
+        try:
+            блок = self._блок_с_тегами()
+        finally:
+            compactor._escape_cli_tags = orig
+        # sanity: без экранирования в блоке настоящие теги
+        self.assertIn("<analysis>", блок)
+        список = [
+            ("content_block_start", {"type": "content_block_start", "index": 0,
+                                     "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                      "delta": {"type": "text_delta",
+                                                 "text": "<summary>сводка</summary>\n" + блок}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ]
+        запись = test_proxy.как_cli(список)
+        # без экранирования CLI вырезает <analysis>x</analysis> из блока → экранированной
+        # (‹) формы в записи нет
+        self.assertNotIn("‹analysis>x‹/analysis>", запись,
+                         "мутация (экранирование убрано) не покраснела: CLI не вырезал тег")
 
 
 # --- Корпус Веры: реальные чаты (skipUnless, если каталога нет) ------------------------------

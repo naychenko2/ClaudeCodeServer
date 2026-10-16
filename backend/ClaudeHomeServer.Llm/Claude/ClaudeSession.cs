@@ -3316,11 +3316,14 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
         // Per-run файл --agents (CLI ≥ 2.1.281 принимает путь к JSON при -p): определения
-        // сабагентов-персон. Имя файла — хэш содержимого, а содержимое детерминировано
-        // по сессии (владелец + персоны + их настройки), поэтому путь входит в сигнатуру
-        // запуска стабильно: правка персоны → новый хэш → новый путь → штатный перезапуск
-        // процесса. omitClaudeMd — по факту BareMode ЭТОГО прогона (блок выше): сессия,
-        // где CLAUDE.md проекта не грузится целиком, не должна тянуть его и в сабагента.
+        // сабагентов-персон. Имя файла — {id сессии}-{хэш содержимого}: содержимое
+        // детерминировано по (владелец + персоны + их настройки), так что БЕЗ id все чаты
+        // одной персоны делили один файл, и выход одного чата удалял файл, которым пользуется
+        // соседний чат той же персоны (гонка, дефект ed581448). Id сессии (Info.Id) стабилен
+        // между ходами, поэтому путь входит в сигнатуру запуска стабильно: правка персоны →
+        // новый хэш → новый путь → штатный перезапуск процесса. omitClaudeMd — по факту
+        // BareMode ЭТОГО прогона (блок выше): сессия, где CLAUDE.md проекта не грузится
+        // целиком, не должна тянуть его и в сабагента.
         // Локальный проект (ADR-016): файл доезжает на устройство в составе spawn
         // (RemoteProcessRunner.FileArgFlags), как --mcp-config.
         string? turnAgentsPath = null;
@@ -3332,10 +3335,7 @@ public class ClaudeSession : ILlmSessionAdapter
             try
             {
                 var json = ClaudeAgentsJson.Serialize(defs);
-                var hash = Convert.ToHexString(
-                    System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json)))
-                    [..16].ToLowerInvariant();
-                var path = Path.Combine(_launcher.HostTempDir, $"claude-agents-{hash}.json");
+                var path = Path.Combine(_launcher.HostTempDir, BuildTurnAgentsFileName(Info.Id, json));
                 if (!File.Exists(path) || File.ReadAllText(path) != json)
                     File.WriteAllText(path, json);
                 turnAgentsPath = path;
@@ -5217,6 +5217,20 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         return result;
+    }
+
+    // Имя per-run файла --agents: {id сессии}-{хэш содержимого}. Id сессии убирает
+    // разделяемость файла между чатами одной персоны (дефект ed581448: все чаты персоны
+    // делили один файл, и выход одного удалял файл, которым пользуется соседний чат).
+    // Хэш содержимого держит путь стабильным в пределах сессии (сигнатура запуска не
+    // дрожит) и меняет его при правке персоны (штатный перезапуск процесса). Чистая
+    // функция для теста.
+    internal static string BuildTurnAgentsFileName(string sessionId, string agentsJson)
+    {
+        var hash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(agentsJson)))
+            [..16].ToLowerInvariant();
+        return $"claude-agents-{sessionId}-{hash}.json";
     }
 
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего

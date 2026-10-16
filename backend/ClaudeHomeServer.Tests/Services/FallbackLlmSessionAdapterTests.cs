@@ -3447,4 +3447,66 @@ public class FallbackLlmSessionAdapterTests
         CallStripProcessStoppedByServerMarker(null).Should().BeNull("null на входе — null на выходе");
         CallStripProcessStoppedByServerMarker("").Should().Be(string.Empty);
     }
+
+    // ===== Файл аргумента CLI не найден (инцидент 2026-10-16: Opus → MiniMax-M3 без спроса) =====
+    // Per-run файл --agents / --mcp-config пропал: CLI упал с exit=1 до первого события, stderr
+    // несёт «file not found». Локальная гонка, не мёртвый эндпоинт: смена пары «модель × подписка»
+    // не лечит (тот же процесс на той же машине), а повтор той же пары (CLI пересоберёт файлы) —
+    // лечит. Адаптер: один повтор той же пары, затем честная ошибка хода. Провайдер НЕ меняется.
+
+    [Fact]
+    public async Task FileNotFound_НеМеняетПровайдера_ОдинПовторТойЖеПары()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+        // Per-run файл --agents не найден: маркер [Local:file-missing] в Details → LocalFileMissing.
+        var fileNotFound = new ErrorMessage(
+            "Процесс модели завершился во время хода — ответ не был получен",
+            Details: $"{TurnErrorClassifier.LocalFileMissingMarker} Error: --agents file not found: /tmp/claude-agents-abc123.json");
+        // Первый прогон: файл не найден.
+        inner.Scripts.Enqueue(() => inner.Emit(fileNotFound));
+        // Повтор той же пары: файл снова не найден (гонка не устранилась) → честная ошибка хода.
+        inner.Scripts.Enqueue(() => inner.Emit(fileNotFound));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Две попытки, обе на той же паре (acc-a): подмены на acc-b не было.
+        inner.Attempts.Should().HaveCount(2, "один повтор той же пары, не смена подписки");
+        inner.Attempts[0].Provider.Should().Be("acc-a");
+        inner.Attempts[1].Provider.Should().Be("acc-a", "повтор той же пары, не смена подписки");
+        // Маркер подмены (смена типа поставщика) в ленту не идёт: пара не менялась.
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty(
+            "файл аргумента не найден — локальная гонка, смена провайдера не лечит");
+        // Человек читает понятный текст про локальный сбой, а не «сервис не отвечает».
+        Downstream().OfType<ErrorMessage>().Should().Contain(e =>
+            e.Text == TurnFailureText.LocalFileMissing,
+            "финал — честная ошибка хода с понятным текстом, а не «сервис не отвечает»");
+    }
+
+    // Повтор той же пары (не смена): маркер подмены в ленту не идёт, но сырой stderr остаётся
+    // в «Подробностях» финальной ошибки — человек видит, какой файл не найден.
+    [Fact]
+    public async Task FileNotFound_СыройStderr_ОстаётсяВПодробностях()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool);
+        var fileNotFound = new ErrorMessage(
+            "Процесс модели завершился во время хода — ответ не был получен",
+            Details: $"{TurnErrorClassifier.LocalFileMissingMarker} Error: --agents file not found: /tmp/claude-agents-abc123.json");
+        inner.Scripts.Enqueue(() => inner.Emit(fileNotFound));
+        inner.Scripts.Enqueue(() => inner.Emit(fileNotFound));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Маркер [Local:file-missing] снят из видимого текста, но сырой stderr после него остался.
+        // Expression tree (Contain) не принимает «is not null» — используем «!= null».
+        var details = Downstream().OfType<ErrorMessage>().Select(e => e.Details).ToList();
+        details.Should().Contain(d =>
+            d != null
+            && d.Contains("file not found")
+            && !d.StartsWith(TurnErrorClassifier.LocalFileMissingMarker),
+            "маркер снят, сырой stderr «file not found» человек видит в «Подробностях»");
+    }
 }

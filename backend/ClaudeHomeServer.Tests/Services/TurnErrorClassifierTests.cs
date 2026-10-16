@@ -572,4 +572,69 @@ public class TurnErrorClassifierTests
         TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.Unreachable,
             "без маркера — обычный обрыв без result, Unreachable");
     }
+
+    // ===== Файл аргумента CLI не найден (инцидент 2026-10-16: Opus → MiniMax-M3 без спроса) =====
+    // Per-run файл --agents / --mcp-config пропал между записью и запуском: CLI падает с exit=1
+    // до первого события, stderr несёт «file not found». Локальная гонка, не мёртвый эндпоинт:
+    // смена пары «модель × подписка» не лечит (тот же процесс на той же машине), а повтор той же
+    // пары (CLI пересоберёт файлы) — лечит. ДО ветки "!HasResult → Unreachable", иначе пропавший
+    // файл маскировался бы под мёртвый эндпоинт и фолбэк жёл подписки.
+
+    // Маркер [Local:file-missing] (ставит ClaudeSession в Details) — основной канал.
+    [Fact]
+    public void FileNotFound_БезResult_Маркер_КлассLocalFileMissing()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = $"{TurnErrorClassifier.LocalFileMissingMarker} Error: --agents file not found: /tmp/claude-agents-abc123.json",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.LocalFileMissing,
+            "маркер [Local:file-missing] — локальная гонка per-run файла, не Unreachable");
+    }
+
+    // Сырой «file not found» без маркера (маркер не дошёл) — запасной канал.
+    [Theory]
+    [InlineData("Error: --agents file not found: /tmp/claude-agents-abc123.json")]
+    [InlineData("Invalid MCP configuration: config file not found")]
+    [InlineData("--mcp-config /tmp/claude-mcp-xyz.json: file not found")]
+    public void FileNotFound_БезResult_СыройТекст_КлассLocalFileMissing(string text)
+    {
+        var outcome = new TurnAttemptOutcome { HasResult = false, ErrorText = text };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.LocalFileMissing,
+            "«file not found» в stderr запуска — локальная гонка per-run файла, не Unreachable");
+    }
+
+    // Обрыв сети без result по-прежнему Unreachable: новая ветка не перехватывает чужое.
+    // «file not found» в тексте НЕ должно ложно сработать на сетевом обрыве.
+    [Fact]
+    public void СетевойОбрыв_БезFileNotFound_ОстаётсяUnreachable()
+    {
+        var outcome = new TurnAttemptOutcome { HasResult = false, ErrorText = "fetch failed: ECONNRESET" };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.Unreachable,
+            "обрыв сети без «file not found» — по-прежнему Unreachable");
+    }
+
+    // Ответ провайдера (result есть) с HTML 5xx, содержащим «file not found»: это ProviderError
+    // (5xx), а не локальная гонка per-run файла. Сырая ветка LooksLocalFileMissing по ErrorText
+    // ограничена случаем !HasResult: маркер (ставит ClaudeSession, только когда ход не стартовал)
+    // остаётся основным каналом. Мутация «убрать !HasResult из сырой ветки» обязана покрасить тест:
+    // цитата «file not found» в теле ответа провайдера ложно дала бы LocalFileMissing.
+    [Fact]
+    public void ОтветПровайдера_5xxHtmlСFileNotFound_ОстаётсяProviderError()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = true,
+            Subtype = "error",
+            ApiErrorStatus = "500",
+            ErrorText = "<html><head><title>500 Internal Server Error</title></head><body>file not found</body></html>",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.ProviderError,
+            "ответ провайдера (result есть) с 5xx — ProviderError; «file not found» в HTML — цитата, не локальная гонка");
+    }
+
+    [Fact]
+    public void LocalFileMissing_WireName()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.LocalFileMissing).Should().Be("local_file_missing");
 }

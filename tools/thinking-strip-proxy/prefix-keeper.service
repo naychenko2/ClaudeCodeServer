@@ -3,4 +3,4 @@ Description=Хранитель префикса prefix cache локальной 
 [Service]
 Type=oneshot
 Environment=PREFIX_SNAPSHOT_DIR=/var/lib/thinking-strip-proxy/prefix
-ExecStart=/usr/bin/python3 /home/an/Sources/ClaudeCodeServer/tools/thinking-strip-proxy/prefix_keeper.py
+ExecStart=/usr/bin/python3 /opt/ccs/proxy/current/prefix_keeper.py

@@ -16,6 +16,12 @@ public sealed record LocalModelStatsCurrent
     // Ток/с суммарно по стенду (последняя точка кольца).
     public double? Speed { get; init; }
 
+    // «Ускорение угадыванием» (ADR-029, v2.3): во сколько раз спекулятивный декод (DFlash)
+    // ускоряет генерацию против выдачи по одному токену = Δgeneration_tokens/Δinter_token_latency_count
+    // за окно ~60 с (как чувствует чат). Живой замер ≈ 3,3. null — нет данных за окно
+    // (молчание/рестарт) или Σitl_count = 0 (шагов не было).
+    public double? SpeculativeSpeedup { get; init; }
+
     public LocalModelStatsKv? Kv { get; init; }
 
     // Метрики, которых движок не сообщил (отсутствуют в /metrics).
@@ -122,18 +128,26 @@ public sealed record LocalModelStatsPoint
     // (мс), ΣgenTokens/ΣitlCount = токенов за шаг, ΣitlSeconds/длина интервала = агентов в
     // генерации (график «Шаг модели», ADR-029).
     public long? ItlCount { get; init; }
-}
 
-// Средняя скорость на поток за окно (5m/15m/1h, те же окна, что у графика «Нагрузка»):
-// ток/с, считаем только время, когда генерация реально шла (знаменатель — суммарное
-// время движка, простой не входит). null — нет данных за окно или рестарт счётчика.
-public sealed record LocalModelStatsAverage
-{
-    // Средняя скорость генерации на поток (ток/с) за окно: Δgeneration_tokens/Δdecode_time.
-    public double? GenTps { get; init; }
+    // ─── Полоса «Куда уходит время агентов» (ADR-029, v2.3) ─────────────────────────────
+    //
+    // Три приращения с прошлой ТОЧКИ (сек / токены). Правило null то же, что у серий кэша:
+    // нет прошлой точки, метрика не на прошлой/текущей точке, либо счётчик упал (рестарт) →
+    // null; отрицательных значений нет. Фронт сводит точки в интервалы и строит составную
+    // полосу долей (генерирует / читает промпт / ждёт соседа / в очереди).
+    // «Ждёт соседа» и «чистый шаг» фронт выводит из itlSeconds/itlCount (уже выше).
 
-    // Средняя скорость чтения промпта (ток/с) за окно: Δprefill_kv_computed_tokens/Δprefill_time.
-    public double? PromptTps { get; init; }
+    // Приращение vllm:request_prefill_time_seconds_sum (сек) с прошлой точки: время, пока
+    // стенд читал чужой/свой промпт (prefill). Гистограмма пишется при завершении запроса.
+    public double? PrefillSeconds { get; init; }
+
+    // Приращение vllm:request_queue_time_seconds_sum (сек) с прошлой точки: время, пока
+    // запрос ждал принятия стендом (очередь). Гистограмма пишется при завершении запроса.
+    public double? QueueSeconds { get; init; }
+
+    // Приращение vllm:prompt_tokens_total (токены) с прошлой точки: сколько промпта
+    // прочитано. Фронт: Δprompt_tokens ≈ 0 — prefill в интервале не шёл (детект «чистого шага»).
+    public long? PromptTokens { get; init; }
 }
 
 // Публичный API поллера (для контроллера шага 11). Чтение без блокировки фоновых циклов:
@@ -152,9 +166,4 @@ public interface ILocalModelStatsReader
     // Точки кольца за окно `window` (от настоящего момента назад); sinceUnixMs — фильтр
     // «только новее этого момента» (unix-мс). Пусто — окно пустое или движок не ходил.
     IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null);
-
-    // Средняя скорость на поток за окно `window` (5m/15m/1h, те же окна, что у графика):
-    // Δсчётчика/Δсуммы времени движка. Простой (движок молчит) в среднее не входит;
-    // нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
-    LocalModelStatsAverage GetAverageSpeed(TimeSpan window);
 }

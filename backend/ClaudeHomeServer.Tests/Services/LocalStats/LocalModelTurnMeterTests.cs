@@ -30,7 +30,6 @@ public sealed class LocalModelTurnMeterTests
         public double? TokensPerStep { get; set; }
         public LocalModelStatsCurrent Current => new() { Waiting = Waiting };
         public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null) => [];
-        public LocalModelStatsAverage GetAverageSpeed(TimeSpan window) => new();
     }
 
     // Фейковый sink: ловим OnLive (фаза, tps, waiting) и OnTurn (итог).

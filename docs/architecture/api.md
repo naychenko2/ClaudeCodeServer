@@ -335,10 +335,10 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 ```
 GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (только admin; иначе 403)
      → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
-         othersCount?, speed: { genPerStream?, prefillPerStream?, avgGenTps?, avgPromptTps? },
+         othersCount?, speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
-         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount? }],
+         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, prefillSeconds?, queueSeconds?, promptTokens? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
      window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
@@ -347,20 +347,24 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      счётчика с прошлой точки (не с предыдущего опроса). null — нет прошлой точки, метрика не отдана или
      счётчик упал (рестарт); отрицательных значений нет. Долю за интервал фронт считает из сумм.
      history скорость генерации на поток (главная линия графика): genTokens (vllm:generation_tokens_total),
-     itlSeconds (vllm:inter_token_latency_seconds_sum, сек) и itlCount (vllm:inter_token_latency_seconds_count,
-     число шагов декодирования) — ПРИРАЩЕНИЕ счётчиков с прошлой точки, правило null то же, что у серий кэша.
-     Фронт сводит точки в интервалы и считает скорость генерации на поток: ΣgenTokens/ΣitlSeconds (ток/с) —
-     измерение vLLM, та же формула «генерации на поток» (ADR-029). Поле «Шаг модели» графика: время шага
-     ΣitlSeconds/ΣitlCount×1000 (мс) и токенов за шаг ΣgenTokens/ΣitlCount; ступенька «Агентов в генерации»
-     ΣitlSeconds/длина интервала (ADR-029, v2.2). genThroughput с графика убран (v2.2), но в API остался:
-     пик «выдачи» читает карточка «Скорость». Поля busySeconds больше нет.
+     itlSeconds (vllm:inter_token_latency_seconds_sum, сек), itlCount (vllm:inter_token_latency_seconds_count,
+     число шагов декодирования), prefillSeconds (vllm:request_prefill_time_seconds_sum, сек), queueSeconds
+     (vllm:request_queue_time_seconds_sum, сек) и promptTokens (vllm:prompt_tokens_total, токены) — ПРИРАЩЕНИЕ
+     счётчиков с прошлой точки, правило null то же, что у серий кэша. Фронт сводит точки в интервалы и считает
+     скорость генерации на поток: ΣgenTokens/ΣitlSeconds (ток/с) — измерение vLLM, та же формула «генерации на
+     поток» (ADR-029). Поле «Куда уходит время агентов» графика (v2.3, вместо «Шаг модели» и «Агентов в
+     генерации»): составная полоса 100 % — генерирует (ΣitlCount×чистый шаг), читает промпт (ΔprefillSeconds),
+     ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); «чистый шаг» — 10-й перцентиль
+     времени шага по «чистым» интервалам (ADR-029, v2.3). genThroughput с графика убран (v2.2), но в истории
+     остался (вторая линия «выдано стендом» и детект разрыва); «пик» в графике — по главной линии (скорость на
+     поток), не по genThroughput. Поля busySeconds больше нет.
      speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
      genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
      в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).
-     avgGenTps/avgPromptTps — СРЕДНЯЯ скорость на поток (ток/с) за окно графика (window, 5m/15m/1h):
-     Δgeneration_tokens/Δinter_token_latency (генерация) и Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта).
-     Простой (движок молчит) в среднее не входит;
-     нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
+     speculativeSpeedup (v2.3) — «ускорение угадыванием ×N»: Δgeneration_tokens/ΔitlCount за окно ~60 с (во сколько
+     раз черновая модель DFlash/MTP ускоряет генерацию; null — шагов не было).
+     (2026-10-16: avgGenTps/avgPromptTps — средняя на поток за окно графика — убраны из DTO и GetAverageSpeed:
+     дубль «среднее/пик за окно» под KPI карточки «Скорость» удалён, среднее и пик теперь только в графике; ADR-029 п.11.)
      chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
      othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi;
      иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).

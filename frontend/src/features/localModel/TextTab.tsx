@@ -7,17 +7,17 @@
 // pointer-events: none); загрузка — скелетоны; поле в `unsupported` — строка
 // «Движок {имя} это не сообщает» вместо блока (нули не рисуем).
 
-import { useMemo, type CSSProperties } from 'react';
+import { type CSSProperties } from 'react';
 import { AlertTriangle, Plug, FolderOpen } from 'lucide-react';
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { Button, EmptyState } from '../../components/ui';
 import { requestOpenModelsSpend } from '../../lib/modelProvidersNav';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelStats } from './api';
-import { formatPerc, formatSince, formatTps, gpuCountLabel, whoRows, type WhoRow } from './format';
+import { formatPerc, formatSince, formatTps, formatUpdatedAt, gpuCountLabel, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
 import { GpuCard } from './GpuCard';
-import { ThroughputChart, WindowToggle, WINDOW_MS, chartNow, peakThroughputOf, type Window } from './ThroughputChart';
+import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
 
 // === Оболочка секции ===
 // Карточка: C.bgWhite (тот же фон, что у карточек соседних панелей и контентной
@@ -87,7 +87,7 @@ function StatusRow({ data }: { data: LocalModelStats }) {
   );
 }
 
-// Подстрока под статусом: движок · N карт, TP=N · обновлено/данные на HH:MM
+// Подстрока под статусом: движок · N карт, TP=N · обновлено HH:MM:SS / данные на HH:MM
 function StatusSubline({ data }: { data: LocalModelStats }) {
   const parts: string[] = [];
   if (data.engine) parts.push(data.engine);
@@ -97,8 +97,15 @@ function StatusSubline({ data }: { data: LocalModelStats }) {
     const tp = data.tensorParallel ?? n;
     parts.push(`${gpuCountLabel(n)}, TP=${tp}`);
   }
-  const since = formatSince(data.downSince);
-  parts.push(data.status === 'down' && since ? `данные на ${since}` : 'обновлено 2 с назад');
+  if (data.status === 'down') {
+    const since = formatSince(data.downSince);
+    parts.push(since ? `данные на ${since}` : 'данные на —');
+  } else {
+    // Честное «обновлено»: время последней точки истории (серверные таймштампы).
+    // Точек нет — честного источника времени нет → фразу не показываем.
+    const updated = formatUpdatedAt(data.history);
+    if (updated) parts.push(updated);
+  }
   return (
     <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: -SP.xs }}>
       {parts.join(' · ')}
@@ -161,34 +168,31 @@ function NowCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Скорость»: генерация и чтение промпта, ток/с на поток ===
-// Под KPI — средняя за окно графика (window, то же, что у графика): «в среднем … · пик …».
-// avgGenTps/avgPromptTps — ток/с, null — нет данных за окно (рестарт счётчика) → «—»;
-// пик — максимум genThroughput по истории окна (вычисляется в ThroughputChart, передаётся сюда).
-function SpeedCard({ data, peakGenTps }: {
-  data: LocalModelStats; peakGenTps: number;
-}) {
+// === «Скорость»: генерация и чтение промпта, ток/с на поток, «сейчас» (окно ~60 с) ===
+// Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат) +
+// «ускорение угадыванием ×N». Среднее и пик за окно графика — ТОЛЬКО у графика
+// (дубль под KPI убран: пик там был из чужой величины — genThroughput суммарно, а
+// среднее — на поток).
+function SpeedCard({ data }: { data: LocalModelStats }) {
   if (data.speed == null) {
     return <Card title="Скорость"><NotReported data={data} /></Card>;
   }
-  const avgGen = data.speed.avgGenTps;
-  const avgPrompt = data.speed.avgPromptTps;
+  const speedup = data.speed.speculativeSpeedup;
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
         <Kpi
           value={formatTps(data.speed.genPerStream)}
-          label="генерация, на одного агента, в среднем за минуту"
-          note={data.running != null ? `сейчас агентов: ${data.running}` : undefined}
+          label="генерация, ток/с на агента, за последнюю минуту"
         />
-        <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, на запрос" />
+        <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, ток/с, за последнюю минуту" />
       </div>
-      <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>
-        <div>
-          генерация: в среднем {formatTps(avgGen)}
-          {avgGen != null && peakGenTps > 0 && <> · пик {formatTps(peakGenTps)}</>}
-        </div>
-        <div>чтение промпта: в среднем {formatTps(avgPrompt)}</div>
+      <div style={{ marginTop: SP.sm }}>
+        <Kpi
+          value={speedup != null ? `×${speedup.toFixed(1)}` : '—'}
+          label="ускорение угадыванием"
+          note="во сколько раз черновая модель ускоряет генерацию. Упало — текст трудный для угадывания (числа, код)"
+        />
       </div>
     </Card>
   );
@@ -215,37 +219,31 @@ function KvRow({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
 }
 
 // === «Память» ===
-// «Занято блоками KV-кэша» (НЕ «память заполнена») + пояснение; занятость тира
-// в RAM; попадания в кэш и в RAM-тир (если движок отдал); вытеснения — красным
-// и ТОЛЬКО если > 0. Все доли 0..1 (контракт бэкенда) — проценты считает formatPerc.
+// Только то, чего НЕТ на графике «Кэш, %»: занятость тира в RAM (метр) и
+// «Вытеснения за 15 мин» (красным, только > 0). «Занято KV-кэша» / «попадания в
+// кэш» / «из RAM» — уже серии графика (но с окном графика, а не 60 с), поэтому
+// из карточки убраны, чтобы не дублировать под тем же именем. Пояснение «это не
+// заполненность памяти» перенесено в подсказку серии «занято» на графике.
+// Карточка выродилась (ни тира, ни вытеснений) — не рисуется вовсе.
 function MemoryCard({ data }: { data: LocalModelStats }) {
   if (data.kv == null) {
     return <Card title="Память"><NotReported data={data} /></Card>;
   }
   const kv = data.kv;
   const preemptions = kv.preemptions15m ?? 0;
+  const hasRamTier = kv.ramTierPerc != null;
+  if (!hasRamTier && preemptions <= 0) return null;
   return (
     <Card title="Память">
-      <KvRow k="Занято блоками KV-кэша" v={formatPerc(kv.usagePerc)} />
-      <Meter perc={(kv.usagePerc ?? 0) * 100} color={(kv.usagePerc ?? 0) >= 0.9 ? C.warning : C.accent} />
-      <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
-        Это не заполненность памяти: блоки освобождаются и переиспользуются следующими запросами.
-      </div>
-      {kv.ramTierPerc != null && (
+      {hasRamTier && (
         <>
-          <div style={{ height: SP.sm }} />
           <KvRow k="Тир в RAM" v={formatPerc(kv.ramTierPerc)} />
-          <Meter perc={kv.ramTierPerc * 100} color={C.info} />
+          <Meter perc={(kv.ramTierPerc ?? 0) * 100} color={C.info} />
         </>
-      )}
-      <div style={{ height: SP.xs }} />
-      <KvRow k="Попадания в кэш" v={formatPerc(kv.prefixHitPerc)} />
-      {kv.ramTierHitPerc != null && (
-        <KvRow k="Попадания в RAM-тир" v={formatPerc(kv.ramTierHitPerc)} />
       )}
       {preemptions > 0 && (
         <>
-          <div style={{ height: SP.xs }} />
+          {hasRamTier && <div style={{ height: SP.xs }} />}
           <KvRow k="Вытеснения за 15 мин" v={String(preemptions)} danger />
           <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, marginTop: SP.xxs }}>
             Запросы выбивают друг друга из кэша и читают промпт заново — отсюда медленные ответы.
@@ -368,10 +366,13 @@ function WhoCard({ data, isMobile, onOpen }: { data: LocalModelStats; isMobile: 
       </Card>
     );
   }
+  // Честный счётчик: число чатов + «прочие запросы» (строка «Прочие: N» — один элемент
+  // списка, но N запросов). Не rows.length: он считал бы «прочие» за 1.
+  const total = (data.chats?.length ?? 0) + (data.othersCount ?? 0);
   return (
     <Card
       title="Кто сейчас на модели"
-      right={<span style={{ fontSize: FS.xs, color: C.textMuted, fontWeight: 400 }}>{rows.length}</span>}
+      right={<span style={{ fontSize: FS.xs, color: C.textMuted, fontWeight: 400 }}>{total}</span>}
     >
       <div style={{ display: 'flex', flexDirection: 'column', margin: `0 ${-SP.sm}px` }}>
         {rows.map(r => <WhoRowView key={r.key} row={r} isMobile={isMobile} onOpen={onOpen} />)}
@@ -441,14 +442,6 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
   window: Window;
   onWindowChange: (w: Window) => void;
 }) {
-  // «Сейчас» — время последней точки истории (серверные таймштампы), не Date.now()
-  // клиента: рассинхрон часов клиента/сервера устаревал бы и пик (см. chartNow).
-  const now = useMemo(() => chartNow(data?.history, Date.now()), [data]);
-  // Пик выработки за окно — для «пик» в блоке «Скорость» (то же окно, что у графика)
-  const peakGenTps = useMemo(
-    () => (data ? peakThroughputOf(data.history, WINDOW_MS[window], now) : 0),
-    [data, window, now],
-  );
   // Первое открытие до первого ответа — скелетоны
   if (loading && !data) return <TextTabSkeleton />;
   if (!data) return null;
@@ -467,7 +460,7 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
       <StatusSubline data={data} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
-        <SpeedCard data={data} peakGenTps={peakGenTps} />
+        <SpeedCard data={data} />
         <GpusCard data={data} />
         {/* «Память» — под «Нагрузка и кэш» (замечание Андрея): кэш на графике и
             занятость в таблице рядом, а не разбросенные по вкладке */}

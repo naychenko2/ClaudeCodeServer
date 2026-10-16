@@ -83,6 +83,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             GenTokens = p.GenTokens,
             ItlSeconds = p.ItlSeconds,
             ItlCount = p.ItlCount,
+            PrefillSeconds = p.PrefillSeconds,
+            QueueSeconds = p.QueueSeconds,
+            PromptTokens = p.PromptTokens,
         }).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
@@ -108,11 +111,6 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         // только ходы, прошедшие через шлюз): max(0, running + waiting − живых чатов).
         var othersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0) - active.Count);
 
-        // Средняя скорость на поток за окно графика (15m/1h): Δсчётчика/Δсуммы времени.
-        // Считается по окну запроса (не в Current, который считается один раз на опрос):
-        // простой (движок молчит) в среднее не входит, нет данных/рестарт → null.
-        var avg = _reader.GetAverageSpeed(windowSpan);
-
         return Ok(new LocalModelStatsResponse
         {
             Configured = current.Configured,
@@ -128,8 +126,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             {
                 GenPerStream = current.Kv?.GenPerStream,
                 PrefillPerStream = current.Kv?.PrefillPerStream,
-                AvgGenTps = avg.GenTps,
-                AvgPromptTps = avg.PromptTps,
+                SpeculativeSpeedup = current.SpeculativeSpeedup,
             },
             Kv = new KvDto
             {
@@ -350,17 +347,16 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public IReadOnlyList<string> Unsupported { get; init; } = [];
     }
 
-    // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени.
-    // GenPerStream/PrefillPerStream — за окно ~60 с (как чувствует чат);
-    // AvgGenTps/AvgPromptTps — за окно графика (5m/15m/1h), только время активной генерации.
+    // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени. GenPerStream/PrefillPerStream —
+    // за окно ~60 с (как чувствует отдельный чат). Среднее/пик за окно графика — у графика,
+    // не в DTO (дубль убран: пик был из чужой величины — genThroughput суммарно, а среднее — на поток).
     public sealed record SpeedDto
     {
         public double? GenPerStream { get; init; }
         public double? PrefillPerStream { get; init; }
-        // Средняя скорость генерации на поток (ток/с) за окно графика: Δgeneration_tokens/Δdecode_time.
-        public double? AvgGenTps { get; init; }
-        // Средняя скорость чтения промпта (ток/с) за окно графика: Δprefill_kv_computed_tokens/Δprefill_time.
-        public double? AvgPromptTps { get; init; }
+        // «Ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δinter_token_latency_count за окно
+        // ~60 с — во сколько раз спекулятивный декод ускоряет генерацию против выдачи по одному токену.
+        public double? SpeculativeSpeedup { get; init; }
     }
 
     // Блок KV-кэша: доли 0..1 и вытеснения за 15 мин.
@@ -409,6 +405,11 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public long? GenTokens { get; init; }
         public double? ItlSeconds { get; init; }
         public long? ItlCount { get; init; }
+        // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefill/очередь (сек) и
+        // прочитанный промпт (токены) — приращения с прошлой точки; null — нет данных/рестарт.
+        public double? PrefillSeconds { get; init; }
+        public double? QueueSeconds { get; init; }
+        public long? PromptTokens { get; init; }
     }
 
     // Чат на стенде: живой ход на локальном движке. Own — чат текущего пользователя

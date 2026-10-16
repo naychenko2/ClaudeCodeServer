@@ -43,6 +43,11 @@ public sealed record EngineSnapshot
     // токенов на шаг (DFlash отдаёт несколько токенов за SSE-дельту).
     public long? InterTokenLatencyCount { get; init; }
 
+    // Сумма гистограммы времени в очереди (vllm:request_queue_time_seconds_sum, сек): время,
+    // пока запрос ждал принятия стендом. Пишется при завершении запроса (ADR-029, v2.3):
+    // на коротких точках приходит «рывком».
+    public double? QueueTimeSum { get; init; }
+
     // Сумма гистограммы: новые KV-токены, вычисленные в prefill (без кэша).
     public double? PrefillKvComputedTokens { get; init; }
 

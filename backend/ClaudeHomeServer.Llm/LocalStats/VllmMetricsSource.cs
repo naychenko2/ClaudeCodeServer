@@ -68,6 +68,7 @@ public sealed class VllmMetricsSource : IEngineMetricsSource
         "vllm:kv_offload_tiering_chunk_queries_total",
         "vllm:inter_token_latency_seconds_sum",
         "vllm:inter_token_latency_seconds_count",
+        "vllm:request_queue_time_seconds_sum",
     ];
 
     private static EngineSnapshot BuildSnapshot(PrometheusSeries series)
@@ -120,6 +121,7 @@ public sealed class VllmMetricsSource : IEngineMetricsSource
             RamTierQueries = ToLong(Multi(AllMetrics[13])),
             InterTokenLatencySum = Single(AllMetrics[14]),
             InterTokenLatencyCount = ToLong(Single(AllMetrics[15])),
+            QueueTimeSum = Single(AllMetrics[16]),
             Unsupported = unsupported,
         };
     }

@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Подсказка «Продолжить в новом чате» v2 — часть композера</title>
+<style>
+  /* Шрифты — тем же запросом, что frontend/src/index.css */
+  @import url('https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  /* Токены — копия frontend/src/lib/theme.css (обе темы). Имена = C.* (bg-main → C.bgMain);
+     размеры — шкалы FS / SP / R из lib/design.ts, геометрия губы — COMPOSER_LIP / composerLip(). */
+  .t-light {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5; --c-accent-soft: #E8A990;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4;
+    --c-diff-add: #3F7A4A; --c-diff-rem: #B5523B;
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-lift-soft: 0 -1px 2px rgba(60, 50, 35, 0.06), 0 -3px 10px rgba(60, 50, 35, 0.08);
+    --shadow-focus: 0 0 0 2px #F4F0E8, 0 0 0 4px #D97757;
+    --stage: #F4F0E8;
+  }
+  .t-dark {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C; --c-accent-soft: #9A5E48;
+    --c-border: #3D3830; --c-border-light: #34302A;
+    --c-diff-add: #7FBF8A; --c-diff-rem: #E08C76;
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-lift-soft: 0 -1px 2px rgba(0,0,0,.35), 0 -3px 10px rgba(0,0,0,.40);
+    --shadow-focus: 0 0 0 2px #201C18, 0 0 0 4px #E38A6A;
+    --stage: #201C18;
+  }
+  :root {
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-max: 999px;
+    --sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: #E9E4DA; color: #39332B; font-family: var(--sans); font-size: 13px; }
+  button { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1440px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: #2A251F; margin: 0 0 6px; }
+  h2.doc { font-family: 'PT Serif', Georgia, serif; font-size: 20px; color: #2A251F; margin: 36px 0 4px; }
+  p.lead, ul.lead { color: #756B5E; margin: 0 0 10px; max-width: 1060px; line-height: 1.55; }
+  ul.lead { padding-left: 20px; }
+  code { font-family: var(--mono); font-size: 11.5px; background: #E0D7C8; border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: #E9E4DA; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .lbl { font-size: 11px; color: #9A8F7E; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid #D0C6B4; background: #FBF8F2; border-radius: 10px; padding: 5px 10px; color: #39332B; }
+  .tbtn[aria-pressed="true"] { background: #D97757; color: #FBF8F2; border-color: transparent; }
+
+  /* Сетка кадров варианта */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+  .frame { border-radius: 12px; overflow: hidden; border: 1px solid #D0C6B4; }
+  .frame .cap { font-size: 11px; padding: 6px 10px; background: #FBF8F2; color: #756B5E; border-bottom: 1px solid #E0D7C8; display: flex; gap: 8px; }
+  .frame .cap b { color: #2A251F; }
+  .frame .cap .h { margin-left: auto; font-family: var(--mono); color: #D97757; font-weight: 600; }
+  .stage { background: var(--stage); padding: 64px 16px 14px; font-family: var(--sans); color: var(--c-text-primary); }
+  .stage.desk { padding: 64px 24px 18px; }
+  .stage .col { max-width: 940px; margin: 0 auto; }
+  .stage .msg { margin: 0 0 0 auto; width: fit-content; padding: 10px 16px; border-radius: 14px; background: var(--c-bg-white); color: var(--c-text-primary); font-size: 14px; box-shadow: var(--shadow-island); }
+
+
+  /* ── Общие куски композиции (повторяют живую вёрстку) ── */
+  .cmp { display: flow-root; }
+  .host { position: relative; margin-top: 10px; display: flex; flex-direction: column; }
+  .mob .host { margin-top: 4px; }
+
+  /* RowNotice — «Выбор снят · Вернуть» */
+  .rnotice { display: flex; align-items: center; gap: var(--sp-sm); height: 28px; margin: 0 0 var(--sp-xs); padding: 0 var(--sp-sm);
+    border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-bg-panel); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .mob .rnotice { height: 32px; }
+  .rnotice .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rnotice .sec { color: var(--c-text-muted); }
+  .rnotice .link { color: var(--c-accent); font-weight: 600; display: inline-flex; align-items: center; gap: var(--sp-xs); }
+
+  /* Верхняя губа — composerLip('top', { row: 32 }) */
+  .lip { position: relative; display: flex; align-items: center; gap: 6px; height: 53px; padding: 4px 8px 15px;
+    background: var(--c-bg-main); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl) var(--r-xxl) 0 0;
+    box-shadow: var(--shadow-lift-soft); margin-bottom: -12px; }
+  .mob .lip { flex-direction: column; align-items: stretch; height: auto; gap: var(--sp-xs); padding: 4px 6px 15px; }
+  .line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--c-text-secondary); white-space: nowrap; min-width: 0; }
+  .mob .chip { height: 28px; }
+  .chip.mono { font-family: var(--mono); font-size: 12px; }
+  .chip .up { color: var(--c-accent); font-weight: 600; }
+  .chip .name { color: var(--c-text-heading); font-weight: 600; }
+  .chip .mut { color: var(--c-text-muted); }
+  .thumb { width: 18px; height: 18px; border-radius: var(--r-sm); background: var(--c-bg-inset); color: var(--c-accent); display: inline-grid; place-items: center; flex-shrink: 0; }
+  .vsep { width: 1px; height: 16px; background: var(--c-border); flex-shrink: 0; }
+
+  /* Карточка поля ввода — data-composer-card, слоем выше губ */
+  .card { position: relative; z-index: 2; display: flex; align-items: center; gap: 6px; height: 50px; padding: 0 8px 0 14px;
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-xxl); box-shadow: var(--shadow-island); }
+  .card .ph { flex: 1; min-width: 0; font-size: var(--fs-md); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; }
+  .card .ib { width: 32px; height: 32px; display: inline-grid; place-items: center; color: var(--c-text-secondary); border-radius: var(--r-md); flex-shrink: 0; }
+  .card .ib.v { background: var(--c-bg-selected); }
+
+  /* Нижняя губа — composerLip('bottom'); на телефоне губ нет */
+  .blip { position: relative; display: flex; align-items: center; gap: 4px; height: 53px; padding: 15px 8px 4px; margin-top: -12px;
+    background: var(--c-bg-main); border: 1px solid var(--c-border-light); border-radius: 0 0 var(--r-xxl) var(--r-xxl); box-shadow: var(--shadow-island); }
+  .mob .blip { height: auto; margin-top: 7px; padding: 0 2px; background: transparent; border: none; box-shadow: none; gap: 6px; }
+  .bbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md); font-size: var(--fs-base); color: var(--c-text-secondary); white-space: nowrap; flex-shrink: 0; }
+  .bbtn.ico { width: 28px; padding: 0; justify-content: center; }
+  .mob .bbtn { height: 30px; }
+  .mob .bbtn.ico { width: 32px; }
+  .bbtn b { color: var(--c-text-heading); font-weight: 600; }
+  .push { margin-left: auto; }
+
+  svg.i { width: 14px; height: 14px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  svg.i.s { width: 11px; height: 11px; }
+
+  /* Общие кнопки подсказки: ссылка-действие и ✕ */
+  .act { display: inline-flex; align-items: center; gap: var(--sp-xs); flex-shrink: 0; border: none; background: transparent; padding: 0 2px;
+    color: var(--c-accent); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; border-radius: var(--r-sm); text-underline-offset: 2px; white-space: nowrap; }
+  .act:hover, .act.is-hover { text-decoration: underline; }
+  .x { display: inline-grid; place-items: center; flex-shrink: 0; width: 20px; height: 20px; border: none; background: transparent; padding: 0;
+    color: var(--c-text-muted); cursor: pointer; border-radius: var(--r-sm); }
+  .x:hover, .x.is-hover { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .act:focus-visible, .act.is-focus, .x:focus-visible, .x.is-focus,
+  .pillseg:focus-visible, .pillseg.is-focus, .cbtn:focus-visible, .cbtn.is-focus { outline: none; box-shadow: var(--shadow-focus); }
+  .mob .act:hover, .mob .x:hover { text-decoration: none; background: transparent; }
+  .mob .act:active, .mob .act.is-hover { text-decoration: none; background: var(--c-bg-selected); }
+  .mob .x:active, .mob .x.is-hover { background: var(--c-bg-selected); }
+  .num { color: var(--c-text-heading); font-weight: 600; }
+
+  /* ── C (как в проде) — для сравнения ── */
+  .vC .rnotice.hint { padding-right: 4px; }
+
+  /* ── 1. Ярус губы: верхний ряд той же губы, тёплая подложка ── */
+  .tier { display: flex; align-items: center; gap: var(--sp-sm); height: 24px; padding: 0 var(--sp-xs) 0 var(--sp-sm);
+    margin: -4px -8px 4px; border-radius: 13px 13px 0 0; background: var(--c-accent-light);
+    border-bottom: 1px solid var(--c-border-light); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .tier .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tier .g { color: var(--c-accent); display: inline-flex; }
+  .mob .tier { height: 30px; margin: -4px -6px 0; }
+  .mob .tier .x { width: 32px; height: 28px; }
+  .lip.has-tier { height: 78px; flex-wrap: wrap; align-content: flex-start; padding-top: 4px; }
+  .lip.has-tier > .tier { flex: 0 0 calc(100% + 16px); }
+  .lip.has-tier > .rowin { display: flex; align-items: center; gap: 6px; height: 32px; min-width: 0; flex: 1; }
+
+  /* ── 2. Ушко: закладка на верхней кромке губы, справа ── */
+  .ear { position: relative; z-index: 1; align-self: flex-end; display: flex; align-items: center; gap: 6px; height: 23px; max-width: calc(100% - 28px);
+    margin: 0 var(--r-xxl) -1px 0; padding: 0 var(--sp-xs) 0 var(--sp-sm);
+    background: var(--c-bg-main); border: 1px solid var(--c-border-light); border-bottom: none; border-radius: var(--r-lg) var(--r-lg) 0 0;
+    box-shadow: var(--shadow-lift-soft); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  /* Закрыть кромку губы и тень под ушком: полоска цвета губы на стыке */
+  .ear::after { content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 5px; background: var(--c-bg-main); }
+  /* Губы нет (ни ветки, ни объекта): ушко — самостоятельная полоса, без стыка */
+  .ear.solo { border-bottom: 1px solid var(--c-border-light); border-radius: var(--r-lg); margin-bottom: 0; }
+  .ear.solo::after { display: none; }
+  .ear .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ear .g { display: inline-flex; color: var(--c-text-muted); }
+  .mob .ear { height: 31px; margin-right: 12px; max-width: calc(100% - 24px); }
+  .mob .ear .x { width: 32px; height: 28px; }
+
+  /* ── 3. Счётчик в губе: правый край ряда контекста ── */
+  .meter { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; height: 24px; padding: 0 2px 0 6px; border-radius: var(--r-md);
+    background: var(--c-accent-light); color: var(--c-accent); font-size: var(--fs-sm); }
+  .mob .meter { height: 28px; }
+  .meter .ring { width: 14px; height: 14px; flex-shrink: 0; margin-right: 4px; }
+  .meter .k { font-weight: 600; font-family: var(--mono); font-size: 12px; margin-right: 4px; }
+  .cbtn { display: inline-flex; align-items: center; gap: var(--sp-xs); height: 20px; padding: 0 6px; border: none; border-radius: var(--r-sm); background: transparent;
+    color: var(--c-accent); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .cbtn:hover, .cbtn.is-hover { background: var(--c-accent-muted); }
+  .meter .x { width: 18px; height: 18px; color: var(--c-accent); opacity: .7; }
+  .meter .x:hover, .meter .x.is-hover { background: var(--c-accent-muted); color: var(--c-accent); opacity: 1; }
+  .mob .cbtn { height: 24px; }
+  .mob .meter .x { width: 28px; height: 24px; }
+  .mob .cbtn:hover { background: transparent; }
+  .mob .cbtn:active, .mob .cbtn.is-hover { background: var(--c-accent-muted); }
+
+  /* ── 4. Пилюля у модели: ModePill в нижней губе ── */
+  .mpill { display: inline-flex; align-items: stretch; height: 28px; border-radius: var(--r-max); background: var(--c-accent-light); color: var(--c-accent); flex-shrink: 0; overflow: hidden; }
+  .mob .mpill { height: 30px; }
+  .pillseg { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: inherit; padding: 0 10px; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap; border-radius: var(--r-max); }
+  .pillseg .k { font-family: var(--mono); font-size: 12px; }
+  .pillseg .w { font-weight: 500; }
+  .pillseg.xseg { width: 26px; padding: 0; justify-content: center; border-left: 1px solid var(--c-accent-muted); border-radius: 0 var(--r-max) var(--r-max) 0; }
+  .mob .pillseg.xseg { width: 32px; }
+  .pillseg:hover, .pillseg.is-hover { background: var(--c-accent-muted); }
+  .mob .pillseg:hover { background: transparent; }
+  .mob .pillseg:active, .mob .pillseg.is-hover { background: var(--c-accent-muted); }
+
+  table.sum { border-collapse: collapse; width: 100%; max-width: 1240px; font-size: 12.5px; background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; overflow: hidden; margin-top: 8px; }
+  table.sum th, table.sum td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #E8E1D4; vertical-align: top; }
+  table.sum th { background: #EDE7DC; color: #2A251F; font-weight: 600; }
+  table.sum td.m { font-family: var(--mono); white-space: nowrap; color: #D97757; font-weight: 600; }
+  .rec { border: 2px solid #D97757; border-radius: 12px; background: #FBF8F2; padding: 12px 16px; max-width: 1060px; line-height: 1.55; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Подсказка «Продолжить в новом чате» v2 — часть композера</h1>
+  <p class="lead">Андрей посмотрел C в проде: не нравится. Здесь четыре новых варианта, в которых подсказка — часть связки «губа + поле ввода», а не ещё одна плашка над ней. Каждый вариант показан целиком: «Выбор снят · Вернуть», губа со строкой контекста (ветка, объект), поле ввода, нижняя губа. Слева колонка чата десктопа 1440 (940 px), справа телефон 390. Высоту подсказки макет меряет по живой вёрстке: строит ту же композицию без подсказки и пишет разницу в подпись кадра. Спецификация, плюсы и минусы, рекомендация — в <code>continue-hint-v2.md</code>.</p>
+
+  <div class="demo" id="demo">
+    <span class="lbl">Тема</span>
+    <button class="tbtn" data-k="theme" data-v="light" aria-pressed="true">светлая</button>
+    <button class="tbtn" data-k="theme" data-v="dark" aria-pressed="false">тёмная</button>
+    <span class="lbl">Состояние действия</span>
+    <button class="tbtn" data-k="st" data-v="" aria-pressed="true">обычное</button>
+    <button class="tbtn" data-k="st" data-v="is-hover" aria-pressed="false">hover / tap</button>
+    <button class="tbtn" data-k="st" data-v="is-focus" aria-pressed="false">фокус</button>
+    <span class="lbl">Рядом</span>
+    <button class="tbtn" data-k="undo" data-v="1" aria-pressed="true">«Выбор снят · Вернуть»</button>
+    <span class="lbl">Число</span>
+    <button class="tbtn" data-k="num" data-v="312K" aria-pressed="true">312K</button>
+    <button class="tbtn" data-k="num" data-v="1,2M" aria-pressed="false">1,2M</button>
+    <span class="lbl">Ряд</span>
+    <button class="tbtn" data-k="row" data-v="full" aria-pressed="true">ветка + объект</button>
+    <button class="tbtn" data-k="row" data-v="none" aria-pressed="false">нет ни ветки, ни объекта</button>
+  </div>
+
+  <h2 class="doc">Что ломает гармонию у C</h2>
+  <ul class="lead">
+    <li><b>Три формы стопкой.</b> Полоса (радиус <code>R.lg</code> 10, фон <code>C.bgPanel</code>, рамка <code>C.border</code>), губа (верхние углы <code>R.xxl</code> 14, фон <code>C.bgMain</code>, рамка <code>C.borderLight</code>, тень <code>liftSoft</code>), поле. У каждой свой радиус, фон и рамка. Между полосой и губой зазор 4 px: глаз читает «уведомление прилипло к композеру», а не «композер что-то говорит».</li>
+    <li><b>Полоса шире смысла.</b> На всю ширину колонки (940 px) — короткая фраза слева и ссылка у правого края. Взгляд проходит весь экран, чтобы дойти до действия, а середина пустая.</li>
+    <li><b>Тень губы ложится на полосу.</b> <code>liftSoft</code> поднимается вверх и пачкает её нижнюю кромку. Полоса будто подложена под губу.</li>
+    <li><b>Чужой голос.</b> «Выбор снят · Вернуть» — это эхо действия человека. Совет про цену контекста получил ту же одежду, и два разных по смыслу сообщения выглядят одинаково.</li>
+    <li><b>На 390 px</b> выходит три скруглённых прямоугольника подряд (полоса, губа, поле) плюс отдельный ряд кнопок. Низ экрана становится слоёным.</li>
+  </ul>
+  <p class="lead">Живые кадры C — <code>.cc-attachments/continue-hint-v2/c-live-*.png</code>, ниже его реплика для сравнения высоты.</p>
+
+  <div id="variants"></div>
+
+  <h2 class="doc">Сводка</h2>
+  <table class="sum">
+    <tr><th>Вариант</th><th>+ к композиции, десктоп / 390</th><th>Идея</th><th>Сложность</th></tr>
+    <tr><td>C (прод)</td><td class="m" data-sum="C">—</td><td>отдельная полоса над губой</td><td>—</td></tr>
+    <tr><td>1 · Ярус губы</td><td class="m" data-sum="tier">—</td><td>верхний тёплый ряд той же губы</td><td>средняя</td></tr>
+    <tr><td><b>2 · Ушко</b></td><td class="m" data-sum="ear">—</td><td>закладка на кромке губы справа, язык <code>composerLip({ tab })</code></td><td>низкая</td></tr>
+    <tr><td>3 · Счётчик в губе</td><td class="m" data-sum="meter">—</td><td>чип-счётчик у правого края строки контекста</td><td>высокая (лестница)</td></tr>
+    <tr><td>4 · Пилюля у модели</td><td class="m" data-sum="pill">—</td><td><code>ModePill</code> в нижней губе рядом с «Модель»</td><td>средняя (бюджет ряда)</td></tr>
+  </table>
+  <div class="rec"><b>Рекомендую 2 · Ушко.</b> Это не новая форма. Ушко у губы уже есть в дизайн-системе (<code>composerLip({ tab: true })</code>, <code>COMPOSER_LIP.rowMini</code>), поэтому подсказка вырастает из силуэта композера, а не ложится на него. Она стоит у поля ввода, где человек пишет, и прибавляет 22 px — меньше, чем C. Лестницу строки и бюджет нижней губы не трогает. Если Андрей хочет нулевую высоту, второй выбор — 4 · Пилюля у модели: совет про цену стоит рядом с выбором модели, тоже про цену.</div>
+</div>
+
+<script>
+// ── Иконки (lucide, тот же рисунок) ──
+const I = {
+  gauge: '<svg class="i" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>',
+  arrow: '<svg class="i s" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
+  x: '<svg class="i s" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  info: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
+  undo: '<svg class="i s" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>',
+  branch: '<svg class="i" viewBox="0 0 24 24"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
+  down: '<svg class="i s" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+  file: '<svg class="i s" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>',
+  msg: '<svg class="i" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  mic: '<svg class="i" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
+  wave: '<svg class="i" viewBox="0 0 24 24"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>',
+  help: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
+  plus: '<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg>',
+  users: '<svg class="i" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  dots: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
+  spark: '<svg class="i" viewBox="0 0 24 24"><path d="M9.94 14.06 4 20"/><path d="m14 4 1.5 3.5L19 9l-3.5 1.5L14 14l-1.5-3.5L9 9l3.5-1.5z"/></svg>',
+};
+// Кольцо-шкала: доля окна контекста (75% как у «Ctx 75%» в шапке)
+const ring = p => `<svg class="ring" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke="var(--c-accent-muted)" stroke-width="2.2" fill="none"/><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-dasharray="${(37.7*p).toFixed(1)} 40" transform="rotate(-90 8 8)"/></svg>`;
+
+const S = { theme: 'light', st: '', undo: '1', num: '312K', row: 'full' };
+
+function undoBand() {
+  return `<div class="rnotice"><span style="display:inline-flex">${I.info}</span><span class="t">Выбор снят — поле снова «Чат»</span><span class="sec">4 с</span><span class="link">${I.undo}Вернуть</span></div>`;
+}
+function rowChips(mob) {
+  if (S.row === 'none') return null;
+  const git = mob
+    ? `<span class="chip mono">${I.branch}<b style="color:var(--c-text-heading)">3</b></span>`
+    : `<span class="chip mono">${I.branch}feat/video-editor <span class="mut">·</span> 3 изменения <span class="mut">·</span> <span class="up">↑1</span><span class="mut" style="display:inline-flex">${I.down}</span></span>`;
+  const obj = `<span class="chip"><span class="thumb">${I.file}</span><span class="name">hero.png</span><span class="mut">· v2</span><span class="mut" style="display:inline-flex">${I.x}</span></span>`;
+  return { git, obj };
+}
+function lipInner(mob, extraRight = '', extraWhere = '') {
+  const r = rowChips(mob);
+  if (!r) return null;
+  if (mob) return `<div class="line">${r.git}${extraWhere ? `<span class="push"></span>${extraWhere}` : ''}</div><div class="line">${r.obj}</div>`;
+  return `${r.git}<span class="vsep"></span>${r.obj}${extraRight ? `<span class="push"></span>${extraRight}` : ''}`;
+}
+function card(mob) {
+  return `<div class="card"><span class="ph">Написать Claude…</span>${mob ? '' : `<span class="ib">${I.msg}</span>`}<span class="ib">${I.mic}</span><span class="ib v">${I.wave}</span></div>`;
+}
+function bottom(mob, pill = '') {
+  return `<div class="blip"><span class="bbtn">${I.help}${mob ? '' : '<b>Спросить</b>'}<span style="display:inline-flex;color:var(--c-text-muted)">${I.down}</span></span><span class="bbtn ico">${I.plus}</span><span class="bbtn ico">${I.users}</span><span class="bbtn ico">${I.dots}</span><span class="push"></span>${pill}<span class="bbtn">${I.spark}${mob ? '' : '<b>Модель</b>'}<span style="display:inline-flex;color:var(--c-text-muted)">${I.down}</span></span></div>`;
+}
+const st = () => S.st;
+const xBtn = (title = 'Не сейчас — напомню, когда вырастет ещё на 100K') => `<button type="button" class="x ${st()}" title="${title}" aria-label="Не сейчас">${I.x}</button>`;
+
+// ── Сборка композиции: v — вариант, hint — показывать ли подсказку ──
+function compose(v, mob, hint) {
+  const n = S.num;
+  let pre = S.undo === '1' ? undoBand() : '';
+  let lip = '', bottomPill = '';
+  const inner = lipInner(mob);
+
+  if (v === 'C' && hint) {
+    pre += `<div class="rnotice hint"><span style="display:inline-flex">${I.gauge}</span><span class="t">Контекст <span class="num">${n}</span>${mob ? '' : ' · дешевле продолжить в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
+  }
+  if (v === 'ear' && hint) {
+    pre += `<div class="ear${inner === null ? ' solo' : ''}" role="status"><span class="g">${I.gauge}</span><span class="t"><span class="num">${n}</span>${mob ? '' : ' · дешевле в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
+  }
+  if (v === 'tier' && hint) {
+    const tier = `<div class="tier" role="status"><span class="g">${I.gauge}</span><span class="t">Контекст <span class="num">${n}</span>${mob ? '' : ' · дешевле продолжить в новом чате'}</span><button type="button" class="act ${st()}">${mob ? 'В новый чат' : 'Продолжить'}${I.arrow}</button>${xBtn()}</div>`;
+    if (inner === null) lip = `<div class="lip${mob ? '' : ' has-tier'}" style="${mob ? '' : 'height:43px'}">${tier}</div>`;
+    else lip = mob ? `<div class="lip">${tier}${inner}</div>` : `<div class="lip has-tier">${tier}<div class="rowin">${inner}</div></div>`;
+  }
+  if (v === 'meter' && hint) {
+    const m = `<span class="meter" role="status" title="Контекст ${n} — дешевле продолжить в новом чате">${ring(0.75)}<span class="k">${n}</span><button type="button" class="cbtn ${st()}">${mob ? 'Новый чат' : 'Новый чат'}${I.arrow}</button>${xBtn()}</span>`;
+    if (inner === null) lip = `<div class="lip" style="${mob ? 'flex-direction:row;justify-content:flex-end' : 'justify-content:flex-end;width:fit-content;margin-left:auto'}">${m}</div>`;
+    else lip = `<div class="lip">${mob ? lipInner(mob, '', m) : lipInner(mob, m)}</div>`;
+  }
+  if (v === 'pill' && hint) {
+    bottomPill = `<span class="mpill" role="status"><button type="button" class="pillseg ${st()}" title="Контекст ${n} — дешевле продолжить в новом чате">${I.gauge}<span class="k">${n}</span>${mob ? '' : '<span class="w">· в новый чат</span>'}</button><button type="button" class="pillseg xseg" title="Не сейчас — напомню, когда вырастет ещё на 100K" aria-label="Не сейчас">${I.x}</button></span>`;
+  }
+  if (!lip && inner !== null) lip = `<div class="lip">${inner}</div>`;
+  const host = (pre || lip) ? `<div class="host">${pre}${lip}</div>` : '';
+  return `${host}${card(mob)}${bottom(mob, bottomPill)}`;
+}
+
+const VARIANTS = [
+  { k: 'C', t: 'C — как в проде (для сравнения)', d: 'Отдельная полоса RowNotice над губой. Реплика живой вёрстки, нужна только чтобы сравнить высоту и силуэт.' },
+  { k: 'tier', t: '1 · Ярус губы', d: 'Подсказка — верхний ряд той же губы: общий силуэт, общая рамка и тень, тёплая подложка C.accentLight под верхними углами R.xxl. Губа становится двухэтажной, а не обрастает соседом.' },
+  { k: 'ear', t: '2 · Ушко (рекомендую)', d: 'Закладка на верхней кромке губы у правого края: тот же фон C.bgMain, рамка C.borderLight и тень liftSoft, низ без рамки и сливается с губой. Это ушко, которое композер уже умеет рисовать (composerLip({ tab })). Ширина — по содержимому, глаз не идёт через весь экран.' },
+  { k: 'meter', t: '3 · Счётчик в губе', d: 'Нулевая высота: чип-счётчик (кольцо доли окна, число, «Новый чат →», ✕) у правого края строки контекста. На телефоне — в правой части строки «Где».' },
+  { k: 'pill', t: '4 · Пилюля у модели', d: 'Нулевая высота: ModePill (как у цикла «до готово») в нижней губе, слева от «Модель». Совет про цену стоит рядом с выбором модели, который тоже про цену.' },
+];
+
+function frame(v, mob, theme) {
+  const f = document.createElement('div');
+  f.className = 'frame';
+  f.innerHTML = `<div class="cap"><b>${mob ? '390 px' : '1440 · колонка 940'}</b><span>${theme === 'dark' ? 'тёмная' : 'светлая'}</span><span class="h" data-h></span></div>
+    <div class="stage t-${theme} ${mob ? 'mob' : 'desk'}" data-v="${v}"><div class="col"><div class="msg">Поправь hero</div><div style="height:${mob ? 120 : 90}px"></div><div class="cmp">${compose(v, mob, true)}</div></div></div>`;
+  return f;
+}
+// Высота подсказки = высота композиции с подсказкой − без неё, в той же ширине
+function measure(f, v, mob) {
+  const cmp = f.querySelector('.cmp');
+  const ghost = cmp.cloneNode(false);
+  ghost.innerHTML = compose(v, mob, false);
+  ghost.style.cssText = 'position:absolute;visibility:hidden;left:0;right:0;top:0';
+  cmp.parentElement.style.position = 'relative';
+  cmp.parentElement.appendChild(ghost);
+  const d = Math.round(cmp.getBoundingClientRect().height - ghost.getBoundingClientRect().height);
+  ghost.remove();
+  f.querySelector('[data-h]').textContent = `+${d} px`;
+  return d;
+}
+
+function render() {
+  const root = document.getElementById('variants');
+  root.innerHTML = '';
+  const sums = {};
+  for (const V of VARIANTS) {
+    const sec = document.createElement('section');
+    sec.className = 'v' + V.k;
+    sec.innerHTML = `<h2 class="doc" id="v-${V.k}">${V.t}</h2><p class="lead">${V.d}</p>`;
+    const g = document.createElement('div'); g.className = 'grid';
+    const desk = frame(V.k, false, S.theme), mob = frame(V.k, true, S.theme);
+    g.append(desk, mob); sec.append(g);
+    root.append(sec);
+    const dh = measure(desk, V.k, false), mh = measure(mob, V.k, true);
+    sums[V.k] = `+${dh} / +${mh}`;
+  }
+  document.querySelectorAll('[data-sum]').forEach(td => { td.textContent = sums[td.dataset.sum] ?? '—'; });
+}
+
+document.getElementById('demo').addEventListener('click', e => {
+  const b = e.target.closest('.tbtn'); if (!b) return;
+  const k = b.dataset.k;
+  if (k === 'undo') { S.undo = S.undo === '1' ? '0' : '1'; b.setAttribute('aria-pressed', S.undo === '1'); }
+  else { S[k] = b.dataset.v; document.querySelectorAll(`.tbtn[data-k="${k}"]`).forEach(x => x.setAttribute('aria-pressed', x === b)); }
+  render();
+});
+// Параметры из адреса — для скриншотов: ?theme=dark&st=is-hover&undo=0&num=1,2M&row=none
+for (const [k, v] of new URLSearchParams(location.search)) if (k in S) S[k] = v;
+document.querySelectorAll('.tbtn').forEach(b => {
+  const k = b.dataset.k;
+  b.setAttribute('aria-pressed', k === 'undo' ? S.undo === '1' : S[k] === b.dataset.v);
+});
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(render);
+render();
+</script>
+</body>
+</html>

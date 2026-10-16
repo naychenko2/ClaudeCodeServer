@@ -1,6 +1,9 @@
 using System.Reflection;
 using System.Text.Json;
 using ClaudeHomeServer.HandsBridge.Policy;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 namespace HandsBridge.Policy.Tests;
@@ -50,6 +53,19 @@ public class ScanCanvasGuardTests
                 return candidate;
         }
         throw new System.InvalidOperationException("не найден backend/HandsBridge");
+    }
+
+    private static CompilationUnitSyntax ParseTree(string source) =>
+        CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
+
+    /// <summary>
+    /// Атрибут <c>McpServerTool</c> независимо от квалификации: <c>[McpServerTool(…)]</c> и
+    /// <c>[ModelContextProtocol.Server.McpServerTool(…)]</c> — имя берём как последний идентификатор.
+    /// </summary>
+    private static bool IsMcpServerToolAttribute(AttributeSyntax attr)
+    {
+        var lastId = attr.Name.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().LastOrDefault();
+        return lastId?.Identifier.Text == "McpServerTool";
     }
 
     // ---------- 1. Гейт — ДО первого действия ----------
@@ -131,8 +147,22 @@ public class ScanCanvasGuardTests
     [Fact]
     public void Scan_canvas_not_published_in_the_first_release()
     {
-        var source = Read("Tools/ScanCanvasTool.cs");
-        Assert.DoesNotContain("[McpServerTool(Name = \"scan_canvas\"", source);
+        // Roslyn, а не литерал: вариант форматирования Name="scan_canvas" (без пробела) не обходит.
+        var root = ParseTree(Read("Tools/ScanCanvasTool.cs"));
+        var names = new List<string>();
+        foreach (var attr in root.DescendantNodes().OfType<AttributeSyntax>())
+        {
+            if (!IsMcpServerToolAttribute(attr)) continue;
+            var nameArg = attr.ArgumentList?.Arguments
+                .FirstOrDefault(a => a.NameEquals?.Name?.Identifier.Text == "Name");
+            if (nameArg?.Expression is LiteralExpressionSyntax lit)
+            {
+                var text = lit.Token.Text;
+                if (text.Length >= 2 && text[0] == '"' && text[^1] == '"')
+                    names.Add(text[1..^1]);
+            }
+        }
+        Assert.DoesNotContain("scan_canvas", names);
 
         var policySource = System.IO.File.ReadAllText(System.IO.Path.Combine(BridgeDir, "..", "HandsBridge.Policy", "HandsPolicy.cs"));
         Assert.Contains("\"scan_canvas\"", policySource);

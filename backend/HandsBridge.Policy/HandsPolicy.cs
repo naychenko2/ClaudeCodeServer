@@ -251,13 +251,16 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     }
 
     /// <summary>
-    /// M-E: решение о проверке точки в <c>MouseInputService.MoveCoreAsync</c>. Чистая функция (без
+    /// M-E: ЕДИНЫЙ источник решения о точке в <c>MouseInputService</c> — <c>MoveCoreAsync</c> и все
+    /// проверки позиции перед <c>SendInput</c> зовут именно его (позицию курсора даёт
+    /// <c>GetCursorPos</c>, окно — <see cref="HandsGate.Policy"/>). Чистая функция (без
     /// <c>SendInput</c>/<c>GetCursorPos</c>), чтобы ветки проверялись таблично на Linux:
     /// <paramref name="checkCurrentPosition"/> — чистое перемещение (без кнопок) проверяет ЦЕЛЬ
     /// <c>(x, y)</c>, а не текущую позицию курсора (курсор сейчас вне разрешённого окна — обычный
     /// случай, и перемещение В разрешённое окно не должно отказывать); кнопки/колесо проверяют
-    /// ТЕКУЩУЮ позицию. <paramref name="policy"/> — гейт «окно под точкой принимает ввод и
-    /// совпадает с целевым» (<see cref="AcceptsInputAt"/>).
+    /// ТЕКУЩУЮ позицию. <paramref name="expectedRoot"/> — целевое окно (корень); <c>null</c> —
+    /// публичная перегрузка без окна, точку не проверяем. <paramref name="policy"/> — гейт «окно
+    /// под точкой принимает ввод и совпадает с целевым» (<see cref="AcceptsInputAt"/>).
     /// </summary>
     public static (bool Allowed, string? Reason) DecideMovePoint(
         int x, int y,
@@ -266,6 +269,12 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
         bool checkCurrentPosition,
         HandsPolicy policy)
     {
+        // Публичная перегрузка (окно не задано): точку не проверяем — как и до выноса в эту функцию.
+        if (expectedRoot is null)
+        {
+            return (true, null);
+        }
+
         var (px, py) = checkCurrentPosition ? (cursorX, cursorY) : (x, y);
         var at = policy.AcceptsInputAt(px, py, expectedRoot);
         if (!at.Allowed)

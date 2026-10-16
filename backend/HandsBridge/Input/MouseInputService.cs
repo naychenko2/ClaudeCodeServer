@@ -99,30 +99,26 @@ public sealed class MouseInputService
                 screenBounds));
         }
 
-        if (checkCurrentPosition)
+        // M-E: ЕДИНЫЙ источник решения о точке — HandsPolicy.DecideMovePoint (та же функция, что
+        //    бьют табличные тесты, а не её копия). Чистое перемещение (checkCurrentPosition: false)
+        //    проверяет ЦЕЛЬ (x, y): курсор сейчас вне разрешённого окна (обычный случай), и
+        //    перемещение В разрешённое окно не должно отказывать — перемещение курсора не ввод в
+        //    окно. Кнопки/колесо (true) проверяют ТЕКУЩУЮ позицию курсора. Позицию курсора читает
+        //    GetCursorPos, окно — HandsGate.Policy.
+        NativeMethods.GetCursorPos(out var cursorPos);
+        var (moveAllowed, moveReason) = HandsPolicy.DecideMovePoint(
+            x, y, cursorPos.X, cursorPos.Y,
+            expectedForegroundWindow?.ToInt64(),
+            checkCurrentPosition,
+            HandsGate.Policy);
+        if (!moveAllowed)
         {
-            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var movePointReason))
-            {
-                return Task.FromResult(MouseControlResult.CreateFailure(
-                    MouseControlErrorCode.WrongTargetWindow,
-                    movePointReason ?? "The point no longer lands in the target window.",
-                    screenBounds));
-            }
-        }
-        else
-        {
-            // M-E: чистое перемещение (без кнопок) — проверяем ЦЕЛЬ (x, y), а не текущую позицию
-            //    курсора: курсор сейчас вне разрешённого окна (обычный случай), и перемещение В
-            //    разрешённое окно не должно отказывать. Перемещение курсора — не ввод в окно.
-            //    Чистая функция HandsPolicy.DecideMovePoint дублирует эту логику для табличных
-            //    тестов на Linux (без SendInput/GetCursorPos).
-            if (!TargetPointAcceptsInput(x, y, expectedForegroundWindow, out var targetReason))
-            {
-                return Task.FromResult(MouseControlResult.CreateFailure(
-                    MouseControlErrorCode.WrongTargetWindow,
-                    targetReason ?? "The target point is not over the allowed window.",
-                    screenBounds));
-            }
+            return Task.FromResult(MouseControlResult.CreateFailure(
+                MouseControlErrorCode.WrongTargetWindow,
+                moveReason ?? (checkCurrentPosition
+                    ? "The point no longer lands in the target window."
+                    : "The target point is not over the allowed window."),
+                screenBounds));
         }
 
         // Send the input
@@ -342,8 +338,9 @@ public sealed class MouseInputService
     /// Руки: перед <c>SendInput</c> повторно сверяем, что окно ПОД ТЕКУЩЕЙ ПОЗИЦИЕЙ КУРСОРА
     /// принимает ввод и совпадает с целевым <paramref name="expectedForegroundWindow"/> (гейт
     /// <see cref="HandsGate.Policy"/>). Закрывает гонку между проверкой гейта в инструменте и вводом:
-    /// между ними окно под точкой могло смениться (тост, «Пуск», терминал). <c>null</c> — публичная
-    /// перегрузка, проверку не делаем.
+    /// между ними окно под точкой могло смениться (тост, «Пуск», терминал). Тонкая обёртка над
+    /// <see cref="HandsPolicy.DecideMovePoint"/> (единый источник решения о точке): позицию курсора
+    /// читает <c>GetCursorPos</c>. <c>null</c> — публичная перегрузка, проверку не делаем.
     /// </summary>
     private static bool CursorPointAcceptsInput(nint? expectedForegroundWindow, out string? reason)
     {
@@ -354,34 +351,11 @@ public sealed class MouseInputService
         }
 
         NativeMethods.GetCursorPos(out var pos);
-        var at = HandsGate.Policy.AcceptsInputAt(pos.X, pos.Y, window.ToInt64());
-        if (!at.Allowed)
+        var (allowed, r) = HandsPolicy.DecideMovePoint(
+            0, 0, pos.X, pos.Y, window.ToInt64(), checkCurrentPosition: true, HandsGate.Policy);
+        if (!allowed)
         {
-            reason = at.Reason;
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// M-E: для ЧИСТОГО перемещения (без кнопок) проверяем ЦЕЛЬ <c>(x, y)</c>, а не текущую позицию
-    /// курсора: курсор сейчас вне разрешённого окна (обычный случай), и перемещение В разрешённое
-    /// окно не должно отказывать. Перемещение курсора — не ввод в окно. <c>null</c> — публичная
-    /// перегрузка, проверку не делаем.
-    /// </summary>
-    private static bool TargetPointAcceptsInput(int x, int y, nint? expectedForegroundWindow, out string? reason)
-    {
-        reason = null;
-        if (expectedForegroundWindow is not { } window)
-        {
-            return true;
-        }
-
-        var at = HandsGate.Policy.AcceptsInputAt(x, y, window.ToInt64());
-        if (!at.Allowed)
-        {
-            reason = at.Reason;
+            reason = r;
             return false;
         }
 

@@ -251,9 +251,12 @@ public class HandsBridgeSourceGuardTests
     /// Перед каждым <c>SendInput</c> в перегрузках, которые использует инструмент, стоит повторная
     /// проверка точки: окно ПОД ТЕКУЩЕЙ ПОЗИЦИЕЙ КУРСОРА принимает ввод и совпадает с целевым.
     /// Закрывает гонку между проверкой гейта в инструменте и самим вводом.
-    /// Разбор синтаксический (Roslyn): в каждом проверяемом методе вызов <c>CursorPointAcceptsInput</c>
-    /// стоит ДО первого <c>SendInput</c> и вложен в <c>if</c> с ранним <c>return</c>.
-    /// Любой НОВЫЙ метод с <c>SendInput</c> обязан попасть в список проверяемых или в явные исключения.
+    /// Разбор синтаксический (Roslyn): в каждом проверяемом методе проверка точки стоит ДО первого
+    /// <c>SendInput</c> и вложена в <c>if</c> с ранним <c>return</c>. Единый источник решения о
+    /// точке — <c>HandsPolicy.DecideMovePoint</c>: <c>MoveCoreAsync</c> зовёт его напрямую (та же
+    /// функция, что бьют табличные тесты), остальные методы — через тонкую обёртку
+    /// <c>CursorPointAcceptsInput</c>. Любой НОВЫЙ метод с <c>SendInput</c> обязан попасть в список
+    /// проверяемых или в явные исключения.
     /// </summary>
     [Fact]
     public void Mouse_input_rechecks_the_point_before_every_send_input()
@@ -289,9 +292,10 @@ public class HandsBridgeSourceGuardTests
             if (!checkedMethods.Contains(method.Identifier.Text))
                 continue;
 
-            // Вызовы CursorPointAcceptsInput в теле метода
+            // Проверка точки: MoveCoreAsync — DecideMovePoint (единый источник решения, напрямую);
+            // остальные методы — CursorPointAcceptsInput (тонкая обёртка над DecideMovePoint).
             var pointChecks = body.DescendantNodes().OfType<InvocationExpressionSyntax>()
-                .Where(IsPointCheckCall)
+                .Where(inv => IsPointCheckFor(method, inv))
                 .ToList();
             Assert.NotEmpty(pointChecks);
 
@@ -308,17 +312,22 @@ public class HandsBridgeSourceGuardTests
             Assert.True(firstPointCheck.SpanStart < firstSendInput.SpanStart,
                 $"{method.Identifier.Text}: проверка точки (span {firstPointCheck.SpanStart}) после первого SendInput (span {firstSendInput.SpanStart})");
 
-            // Каждый вызов проверки точки вложен в if с ранним выходом (return или goto)
-            foreach (var check in pointChecks)
+            // У CursorPointAcceptsInput вызов — условие if с ранним выходом: «!CursorPointAcceptsInput(...)».
+            // У MoveCoreAsync решение — деструктуризация + if (!moveAllowed), а мутации ловят табличные
+            // тесты DecideMovePoint, поэтому строгую форму условия там не сверяем.
+            if (method.Identifier.Text != "MoveCoreAsync")
             {
-                var ifStmt = FindEnclosingIfWithReturn(check);
-                Assert.NotNull(ifStmt);
+                foreach (var check in pointChecks)
+                {
+                    var ifStmt = FindEnclosingIfWithReturn(check);
+                    Assert.NotNull(ifStmt);
 
-                // Условие — ровно «!CursorPointAcceptsInput(...)»: ни «false && …», ни «|| …» проверку не отключают
-                Assert.True(
-                    ifStmt!.Condition is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } not
-                    && not.Operand == check,
-                    $"{method.Identifier.Text}: условие проверки точки «{ifStmt.Condition}» не равно «!CursorPointAcceptsInput(...)»");
+                    // Условие — ровно «!CursorPointAcceptsInput(...)»: ни «false && …», ни «|| …» проверку не отключают
+                    Assert.True(
+                        ifStmt!.Condition is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } not
+                        && not.Operand == check,
+                        $"{method.Identifier.Text}: условие проверки точки «{ifStmt.Condition}» не равно «!CursorPointAcceptsInput(...)»");
+                }
             }
         }
 
@@ -327,29 +336,26 @@ public class HandsBridgeSourceGuardTests
         var actual = allMethodsWithSendInput.ToHashSet(StringComparer.Ordinal);
         Assert.Equal(expected, actual);
 
-        // M-E (MAJOR-5a): ветка else (checkCurrentPosition: false) в MoveCoreAsync обязана
-        // проверять ЦЕЛЬ (TargetPointAcceptsInput) перед SendInput — иначе чистый move в
-        // запрещённое окно проходил бы.
+        // M-E (MAJOR-5a): MoveCoreAsync обязан звать DecideMovePoint (единый источник решения,
+        // та же функция, что бьют табличные тесты) ПЕРЕД SendInput — иначе чистый move в
+        // запрещённое окно (или кнопка над ним) проходил бы. Вызов один (не if/else): ветка
+        // (checkCurrentPosition) живёт внутри DecideMovePoint.
         var moveCore = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
             .Single(m => m.Identifier.Text == "MoveCoreAsync");
         var moveBody = moveCore.Body!;
-        var ifCheckCurrent = moveBody.DescendantNodes().OfType<IfStatementSyntax>()
-            .Single(i => i.Condition.ToString().Contains("checkCurrentPosition"));
-        var elseClause = ifCheckCurrent.Else;
-        Assert.True(elseClause is not null, "MoveCoreAsync: нет ветки else (checkCurrentPosition: false)");
 
-        var targetChecks = elseClause!.DescendantNodes().OfType<InvocationExpressionSyntax>()
-            .Where(IsTargetPointCheckCall)
+        var moveDecideCalls = moveBody.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(IsDecideMovePointCall)
             .ToList();
-        Assert.True(targetChecks.Count > 0, "MoveCoreAsync: в else нет TargetPointAcceptsInput");
+        Assert.True(moveDecideCalls.Count > 0, "MoveCoreAsync: нет вызова DecideMovePoint (единый источник решения о точке)");
 
         var moveSendInputs = moveBody.DescendantNodes().OfType<InvocationExpressionSyntax>()
             .Where(IsSendInputCall)
             .ToList();
         var firstMoveSendInput = moveSendInputs.MinBy(inv => inv.SpanStart)!;
-        var firstTargetCheck = targetChecks.MinBy(inv => inv.SpanStart)!;
-        Assert.True(firstTargetCheck.SpanStart < firstMoveSendInput.SpanStart,
-            $"MoveCoreAsync: TargetPointAcceptsInput (span {firstTargetCheck.SpanStart}) после SendInput (span {firstMoveSendInput.SpanStart})");
+        var firstDecide = moveDecideCalls.MinBy(inv => inv.SpanStart)!;
+        Assert.True(firstDecide.SpanStart < firstMoveSendInput.SpanStart,
+            $"MoveCoreAsync: DecideMovePoint (span {firstDecide.SpanStart}) после SendInput (span {firstMoveSendInput.SpanStart})");
 
         // M-E (MAJOR-5b): MoveCoreAsync с checkCurrentPosition: false вызывают ТОЛЬКО два
         // чистых MoveAsync; все остальные (кнопки, колесо, stroke) — true.
@@ -1002,9 +1008,17 @@ public class HandsBridgeSourceGuardTests
     private static bool IsPointCheckCall(InvocationExpressionSyntax inv) =>
         inv.Expression is IdentifierNameSyntax { Identifier.Text: "CursorPointAcceptsInput" };
 
-    /// <summary>Вызов <c>TargetPointAcceptsInput(...)</c> — проверка ЦЕЛИ (x, y), без квалификатора.</summary>
-    private static bool IsTargetPointCheckCall(InvocationExpressionSyntax inv) =>
-        inv.Expression is IdentifierNameSyntax { Identifier.Text: "TargetPointAcceptsInput" };
+    /// <summary>
+    /// Проверка точки в данном методе: <c>MoveCoreAsync</c> зовёт <c>DecideMovePoint</c> (единый
+    /// источник решения) напрямую, остальные методы — <c>CursorPointAcceptsInput</c> (тонкая
+    /// обёртка над DecideMovePoint).
+    /// </summary>
+    private static bool IsPointCheckFor(MethodDeclarationSyntax method, InvocationExpressionSyntax inv) =>
+        method.Identifier.Text == "MoveCoreAsync" ? IsDecideMovePointCall(inv) : IsPointCheckCall(inv);
+
+    /// <summary>Вызов <c>HandsGate.Policy.DecideMovePoint(...)</c> — единый источник решения о точке.</summary>
+    private static bool IsDecideMovePointCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "DecideMovePoint" };
 
     /// <summary>
     /// Вызов члена <c>MouseInputService</c>: <c>WindowsToolsBase.MouseInputService.XxxAsync(...)</c>.

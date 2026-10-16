@@ -122,4 +122,52 @@ public class ClaudeSessionHumanTextMarkerTests
         Assert.Equal(text, ClaudeSession.BuildTurnTextForCli(null, text));
         Assert.Equal(text, ClaudeSession.BuildTurnTextForCli("", text));
     }
+
+    // --- Решение ShouldMarkHumanText: маркер только на прозу человека (доработка 2) ---
+    // Маркер ставится, только если ход — реплика человека (не auto/директива/персона) И сырой
+    // текст не слэш-команда/скилл. Ниже — таблица условий; мутация «маркер всегда» краснит
+    // все False-ветки.
+
+    // Проза человека (не auto, не директива, без персоны, не начинается с '/') → маркер.
+    [Fact]
+    public void ShouldMark_ПрозаЧеловека_True()
+    {
+        Assert.True(ClaudeSession.ShouldMarkHumanText("сделай задачу", auto: false, systemDirective: false, senderPersonaId: null));
+    }
+
+    // Слэш-команда/скилл (сырой текст начинается с '/') → без маркера: разворот скилла
+    // (TryExpandSkill) важнее, а маркер первой строкой его ломал (message[0] != '/').
+    [Fact]
+    public void ShouldMark_СлэшКоманда_False()
+    {
+        Assert.False(ClaudeSession.ShouldMarkHumanText("/review src/Foo.cs", auto: false, systemDirective: false, senderPersonaId: null));
+    }
+
+    // Ведущие пробелы перед '/' — та же команда: TrimStart() снимает их → без маркера.
+    [Fact]
+    public void ShouldMark_ВедущиеПробелыПередСлэш_False()
+    {
+        Assert.False(ClaudeSession.ShouldMarkHumanText("   /review src/Foo.cs", auto: false, systemDirective: false, senderPersonaId: null));
+    }
+
+    // auto (автоматика: «Обсудить с командой», автоматизация) → без маркера.
+    [Fact]
+    public void ShouldMark_Auto_False()
+    {
+        Assert.False(ClaudeSession.ShouldMarkHumanText("сделай задачу", auto: true, systemDirective: false, senderPersonaId: null));
+    }
+
+    // systemDirective (цикл «до готово», доклады) → без маркера: «human-text» не накрывает директивы.
+    [Fact]
+    public void ShouldMark_SystemDirective_False()
+    {
+        Assert.False(ClaudeSession.ShouldMarkHumanText("сделай задачу", auto: false, systemDirective: true, senderPersonaId: null));
+    }
+
+    // Реплика персоны (групповой чат) → без маркера.
+    [Fact]
+    public void ShouldMark_SenderPersonaId_False()
+    {
+        Assert.False(ClaudeSession.ShouldMarkHumanText("сделай задачу", auto: false, systemDirective: false, senderPersonaId: "p-1"));
+    }
 }

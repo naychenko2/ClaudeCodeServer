@@ -3027,6 +3027,21 @@ public class ClaudeSession : ILlmSessionAdapter
         return string.Format(CultureInfo.InvariantCulture, HumanTextMarkerFormat, chars, sha) + "\n" + rawText;
     }
 
+    // Маркер реплики человека (WithHumanTextMarker) ставится только на прозу человека — там,
+    // где его защита имеет смысл. Не ставим:
+    //  • на слэш-команды/скиллы (сырой текст после TrimStart() начинается с '/'): команда —
+    //    не поправка и не ограничение, её дословная защита не нужна, а разворот скилла
+    //    (SkillsService.TryExpandSkill) важнее — маркер первой строкой ломал бы его, потому
+    //    что TryExpandSkill выходит по message[0] != '/';
+    //  • на не-человеческие ходы: auto (автоматика), systemDirective (цикл «до готово»,
+    //    доклады), ходы с senderPersonaId (реплики персон в групповом чате).
+    // public static: SessionManager (Main) вызывает; Main → Llm разрешено.
+    public static bool ShouldMarkHumanText(string rawText, bool auto, bool systemDirective, string? senderPersonaId)
+    {
+        if (auto || systemDirective || senderPersonaId is not null) return false;
+        return !rawText.TrimStart().StartsWith('/');
+    }
+
     // Склейка хвоста хода: recall + text. Маркер реплики (WithHumanTextMarker) уже стоит
     // в text (вставлен в SessionManager до обвязки). Без recall (joinedRecall null/пусто)
     // возвращаем text как есть. internal static: юнит-тест проверяет склейку без процесса CLI.

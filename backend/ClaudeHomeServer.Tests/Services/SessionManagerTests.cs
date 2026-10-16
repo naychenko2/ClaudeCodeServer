@@ -3071,7 +3071,8 @@ public class SessionManagerTests : IDisposable
             new ResultMessage("success", 10, 1, null, null), TestRunId);
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
         _sut.GetPending(session.Id).Should().BeEmpty();
-        adapter.Verify(a => a.SendMessageAsync(ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.WithHumanTextMarker("доклад без прерывания"), It.IsAny<IReadOnlyList<string>>(),
+        // «Доклад» — агентское (chats_send): drain доставляет как auto: true — не-человеческий ход, маркера не получает (ShouldMarkHumanText: auto → false).
+        adapter.Verify(a => a.SendMessageAsync("доклад без прерывания", It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
     }
 

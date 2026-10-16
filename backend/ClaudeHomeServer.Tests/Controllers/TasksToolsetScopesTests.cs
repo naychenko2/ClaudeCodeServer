@@ -223,6 +223,34 @@ public class TasksToolsetScopesTests : IDisposable
     }
 
     /// <summary>
+    /// Разметка фичи: пустая строка stepRef/lane в tasks_update — ОЧИСТИТЬ (UpdateTaskRequest:
+    /// "" = сбросить), null = не менять. featureId/role при этом не трогаем — та же семантика,
+    /// что и у dueDate/worktreePath (ось 5).
+    /// </summary>
+    [Fact]
+    public async Task ФичаПоля_ПустоеЗначение_Очищает()
+    {
+        var project = await CreateProjectAsync(Client, "clear-feature");
+        var sessionId = await CreateSessionAsync(Client, project);
+
+        var epic = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "Эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "Шаг", featureId = epicId, role = "step", stepRef = "D1c", lane = "бэк" });
+        var stepId = step.GetProperty("id").GetString()!;
+
+        var cleared = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
+            new { id = stepId, stepRef = "", lane = "" });
+        cleared.GetProperty("stepRef").ValueKind.Should().Be(JsonValueKind.Null,
+            "пустая строка stepRef обязана очистить поле, а не «не менять»");
+        cleared.GetProperty("lane").ValueKind.Should().Be(JsonValueKind.Null,
+            "пустая строка lane обязана очистить поле");
+        cleared.GetProperty("featureId").GetString().Should().Be(epicId, "featureId не тронут");
+        cleared.GetProperty("role").GetString().Should().Be("step", "role не тронут");
+    }
+
+    /// <summary>
     /// Ось 6: гейт mentions на ВЫЗОВЕ, а не только в составе. При выключенном
     /// tool:consultants инструмент пропадает из tools/list, но вызов обязан отказывать
     /// текстом — без проверки он запускал ПЛАТНЫЙ one-shot ход другой персоны

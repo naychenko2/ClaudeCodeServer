@@ -1211,4 +1211,33 @@ public class McpToolsetStabilityTests
         second.Signature.Should().Be(first.Signature,
             "руки — свойство чата, а не хода: сигнатура запуска между ходами не мерцает");
     }
+
+    /// <summary>
+    /// Разметка фичи (режим «Исполнение фичи»): схема MCP tasks меняется БЕЗУСЛОВНО —
+    /// новые параметры (featureId/role/stepRef/lane/reviewOf в tasks_create/update, verdict в
+    /// verification) есть в tools/list всегда, не по флагу/персоне/ходу. Иначе сигнатура
+    /// запуска мерцала бы между ходами. Сторож: (1) состав (имена) стабилен — новых
+    /// инструментов нет, разметка — параметры существующих; (2) суммарная длина
+    /// tool-level description укладывается в лимит стека MCP (~1950, CLI режет на ~2 КБ).
+    /// </summary>
+    [Fact]
+    public void Фича_СхемаToolsList_СтабильнаИВПределахЛимита()
+    {
+        var project = ClaudeHomeServer.Services.Mcp.Http.TasksToolset.ProjectChatTools;
+        var personal = ClaudeHomeServer.Services.Mcp.Http.TasksToolset.PersonalTools;
+
+        // 13 инструментов, те же имена в проектном и личном контексте — новых нет
+        project.Should().HaveCount(13, "состав tools/list tasks стабилен: 13 инструментов");
+        personal.Should().HaveCount(13);
+        project.Select(t => t.Name).Should().BeEquivalentTo(personal.Select(t => t.Name),
+            "состав (имена) не зависит от контекста чата: проект/личные — один набор");
+
+        // Лимит стека MCP: суммарные tool-level description ≤ 1950 (CLI усекает на ~2 КБ)
+        foreach (var (label, tools) in new[] { ("project", project), ("personal", personal) })
+        {
+            var total = tools.Sum(t => t.Description.Length);
+            total.Should().BeLessOrEqualTo(1950,
+                $"{label}: суммарные tool-level description ушли за лимит стека MCP");
+        }
+    }
 }

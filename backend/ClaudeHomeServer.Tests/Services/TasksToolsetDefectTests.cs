@@ -102,6 +102,221 @@ public class TasksToolsetDefectTests : IClassFixture<TestWebApplicationFactory>
         complete.TryGetProperty("outcome", out _).Should().BeTrue("outcome в tasks_complete");
     }
 
+    // ─── Схема: tools/list отдаёт поля фичи (featureId/role/stepRef/lane/reviewOf) и verdict ──
+
+    [Fact]
+    public async Task ToolsList_СодержитПоляФичиИВердикт()
+    {
+        var (_, sessionId) = await CreateProjectWithSessionAsync();
+        var resp = await _client.PostAsync($"/mcp/tasks/{sessionId}",
+            new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/list",
+            }), System.Text.Encoding.UTF8, "application/json"));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("result").GetProperty("tools");
+        var byName = body.EnumerateArray()
+            .ToDictionary(t => t.GetProperty("name").GetString()!);
+
+        var create = byName["tasks_create"].GetProperty("inputSchema").GetProperty("properties");
+        foreach (var field in new[] { "featureId", "role", "stepRef", "lane", "reviewOf" })
+            create.TryGetProperty(field, out _).Should().BeTrue($"{field} в tasks_create");
+
+        var update = byName["tasks_update"].GetProperty("inputSchema").GetProperty("properties");
+        foreach (var field in new[] { "featureId", "role", "stepRef", "lane", "reviewOf" })
+            update.TryGetProperty(field, out _).Should().BeTrue($"{field} в tasks_update");
+
+        // verdict — в схеме verification и у update, и у complete
+        foreach (var tool in new[] { "tasks_update", "tasks_complete" })
+        {
+            var verification = byName[tool].GetProperty("inputSchema").GetProperty("properties")
+                .GetProperty("verification").GetProperty("properties");
+            verification.TryGetProperty("verdict", out _).Should().BeTrue($"verdict в {tool}.verification");
+        }
+
+        // role/verdict — enum: значения ровно из TaskRoles.All / TaskVerdicts.All
+        var roleEnum = create.GetProperty("role").GetProperty("enum").EnumerateArray()
+            .Select(x => x.GetString()).ToList();
+        roleEnum.Should().BeEquivalentTo(ClaudeHomeServer.Models.TaskRoles.All);
+        var verdictEnum = byName["tasks_complete"].GetProperty("inputSchema").GetProperty("properties")
+            .GetProperty("verification").GetProperty("properties").GetProperty("verdict")
+            .GetProperty("enum").EnumerateArray().Select(x => x.GetString()).ToList();
+        verdictEnum.Should().BeEquivalentTo(ClaudeHomeServer.Models.TaskVerdicts.All);
+    }
+
+    // ─── Разметка фичи: tasks_create с featureId/role/stepRef/lane/reviewOf ─────
+
+    [Fact]
+    public async Task Create_ФичаПоля_Создаётся()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+
+        // Эпик фичи: role=feature, без personaId (иначе NormalizePersonaAssignee)
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Эпик фичи",
+            projectId,
+            role = "feature",
+        });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+
+        // Два шага той же фичи: featureId + role=step + stepRef + lane
+        var (step1Text, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Шаг D1c",
+            projectId,
+            featureId = epicId,
+            role = "step",
+            stepRef = "D1c",
+            lane = "бэк",
+        });
+        var step1Id = JsonSerializer.Deserialize<JsonElement>(step1Text).GetProperty("id").GetString()!;
+        var (step2Text, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Шаг D2c",
+            projectId,
+            featureId = epicId,
+            role = "step",
+            stepRef = "D2c",
+            lane = "фронт",
+        });
+        var step2Id = JsonSerializer.Deserialize<JsonElement>(step2Text).GetProperty("id").GetString()!;
+
+        // Ревью, оценивающее оба шага: reviewOf — список id задач той же фичи
+        var (reviewText, isError) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Ревью шагов",
+            projectId,
+            featureId = epicId,
+            role = "review",
+            reviewOf = new[] { step1Id, step2Id },
+        });
+        isError.Should().BeFalse();
+        var review = JsonSerializer.Deserialize<JsonElement>(reviewText);
+        review.GetProperty("featureId").GetString().Should().Be(epicId);
+        review.GetProperty("role").GetString().Should().Be("review");
+        review.GetProperty("reviewOf").EnumerateArray().Select(x => x.GetString())
+            .Should().BeEquivalentTo(step1Id, step2Id);
+
+        // Шаг сохранил разметку: featureId/role/stepRef/lane
+        var step1 = JsonSerializer.Deserialize<JsonElement>(step1Text);
+        step1.GetProperty("featureId").GetString().Should().Be(epicId);
+        step1.GetProperty("role").GetString().Should().Be("step");
+        step1.GetProperty("stepRef").GetString().Should().Be("D1c");
+        step1.GetProperty("lane").GetString().Should().Be("бэк");
+    }
+
+    [Fact]
+    public async Task Update_ФичаПоля_Меняются()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Эпик",
+            projectId,
+            role = "feature",
+        });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+        var (stepText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Шаг",
+            projectId,
+            featureId = epicId,
+            role = "step",
+            stepRef = "D1c",
+            lane = "бэк",
+        });
+        var stepId = JsonSerializer.Deserialize<JsonElement>(stepText).GetProperty("id").GetString()!;
+
+        // Смена lane/stepRef: поля фичи меняются, featureId/role остаются
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = stepId,
+            lane = "фронт",
+            stepRef = "D2c",
+        });
+        isError.Should().BeFalse();
+        var updated = JsonSerializer.Deserialize<JsonElement>(text);
+        updated.GetProperty("lane").GetString().Should().Be("фронт");
+        updated.GetProperty("stepRef").GetString().Should().Be("D2c");
+        updated.GetProperty("featureId").GetString().Should().Be(epicId);
+        updated.GetProperty("role").GetString().Should().Be("step");
+    }
+
+    // ─── Невалидный role (не из TaskRoles.All) → Deny ─────────────────────────
+
+    [Fact]
+    public async Task Create_НевалиднаяРоль_Deny()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Задача с мусорной ролью",
+            projectId,
+            role = "bogus",
+        });
+
+        isError.Should().BeTrue("role вне списка TaskRoles — fail-closed, агент обязан узнать");
+        text.Should().Contain("Недопустимая роль фичи").And.Contain("bogus");
+    }
+
+    // ─── Невалидный verdict (не из TaskVerdicts.All) → Deny ───────────────────
+
+    [Fact]
+    public async Task Complete_НевалидныйВердикт_Deny()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (createText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Задача на вердикт",
+            projectId,
+        });
+        var taskId = JsonSerializer.Deserialize<JsonElement>(createText).GetProperty("id").GetString()!;
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_complete", new
+        {
+            id = taskId,
+            verification = new { verdict = "bogus" },
+        });
+
+        isError.Should().BeTrue("verdict вне списка TaskVerdicts — fail-closed");
+        text.Should().Contain("Недопустимый вердикт").And.Contain("bogus");
+    }
+
+    // ─── Ревью фичи без вердикта → мягкое предупреждение в ответе tasks_complete ──
+
+    [Fact]
+    public async Task Complete_РевьюФичиБезВердикта_Предупреждение()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Эпик",
+            projectId,
+            role = "feature",
+        });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+        var (reviewText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Ревью фичи",
+            projectId,
+            featureId = epicId,
+            role = "review",
+        });
+        var reviewId = JsonSerializer.Deserialize<JsonElement>(reviewText).GetProperty("id").GetString()!;
+
+        // Закрытие без verdict: карточка его не покажет — мягкое предупреждение, а не отказ
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_complete", new { id = reviewId });
+        isError.Should().BeFalse("закрытие ради UI не блокируем — только предупреждение");
+        var done = JsonSerializer.Deserialize<JsonElement>(text);
+        done.GetProperty("status").GetString().Should().Be("done");
+        done.TryGetProperty("warning", out var warning).Should().BeTrue(
+            "у ревью фичи без вердикта обязан быть отдельный warning (не notes)");
+        warning.GetString().Should().Contain("вердикт");
+    }
+
     // ─── Гейт EnsureNotClosedAtCreate (tasks_create) ─────────────────────────
 
     [Fact]

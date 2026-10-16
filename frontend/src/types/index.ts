@@ -2659,6 +2659,10 @@ export type PersonaScope = 'global' | 'project' | 'sphere';
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
 export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 
+// Пол персоны: female/male — явный выбор, unspecified — дефолт «авто по имени».
+// camelCase-строки из бэкенда (JsonStringEnumConverter(CamelCase))
+export type PersonaGender = 'female' | 'male' | 'unspecified';
+
 // Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
 // конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
 // группировка/статус команды, роутинг памяти команды. none — не задана.
@@ -2942,6 +2946,8 @@ export interface Persona {
   // Облегчённый контекст: краткая карта вместо полного CLAUDE.md, урезанные инструменты и MCP.
   // null/отсутствие — решение не принято (читается как «выкл»)
   lightContext?: boolean | null;
+  // Пол: female/male — явный выбор, unspecified — дефолт «авто по имени»
+  gender?: PersonaGender;
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
@@ -3110,6 +3116,8 @@ export interface CreatePersonaDto {
   greeting?: string;
   memoryEnabled?: boolean;
   lightContext?: boolean;
+  // Пол: female/male — явный выбор, unspecified — дефолт «авто по имени»
+  gender?: PersonaGender;
   // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
   tools?: string[];
   // Профиль доступа (P6): full | readOnly | custom

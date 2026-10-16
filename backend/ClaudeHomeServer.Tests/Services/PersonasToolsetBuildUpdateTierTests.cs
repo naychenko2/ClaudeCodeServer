@@ -89,4 +89,40 @@ public class PersonasToolsetBuildUpdateTierTests
         req.TierMedium.Should().BeNull();
         req.TierWeak.Should().BeNull();
     }
+
+    [Fact]
+    public void GenderFemaleПрокидываетсяВUpdatePersonaRequest()
+    {
+        var args = Args(("id", "p1"), ("memoryEnabled", "true"), ("gender", "female"));
+
+        var req = ClaudeHomeServer.Services.Mcp.Http.PersonasToolset
+            .BuildUpdateRequest(args, sessionProjectId: null);
+
+        req.Should().NotBeNull();
+        req!.Gender.Should().Be(ClaudeHomeServer.Models.PersonaGender.Female);
+    }
+
+    [Fact]
+    public void GenderUnspecifiedПрокидываетсяКакСброс()
+    {
+        var args = Args(("id", "p1"), ("memoryEnabled", "true"), ("gender", "unspecified"));
+
+        var req = ClaudeHomeServer.Services.Mcp.Http.PersonasToolset
+            .BuildUpdateRequest(args, sessionProjectId: null);
+
+        req.Should().NotBeNull();
+        req!.Gender.Should().Be(ClaudeHomeServer.Models.PersonaGender.Unspecified);
+    }
+
+    [Fact]
+    public void ОтсутствиеGenderДаётNullНеМенять()
+    {
+        var args = Args(("id", "p1"), ("memoryEnabled", "true"));
+
+        var req = ClaudeHomeServer.Services.Mcp.Http.PersonasToolset
+            .BuildUpdateRequest(args, sessionProjectId: null);
+
+        req.Should().NotBeNull();
+        req!.Gender.Should().BeNull("gender не передан — не менять");
+    }
 }

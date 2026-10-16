@@ -159,8 +159,9 @@
   /* Закрыть кромку губы и тень под ушком: полоска цвета губы на стыке */
   .ear::after { content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 5px; background: var(--c-bg-main); }
   /* Губы нет (ни ветки, ни объекта): ушко — самостоятельная полоса, без стыка */
-  .ear.solo { border-bottom: 1px solid var(--c-border-light); border-radius: var(--r-lg); margin-bottom: 0; }
-  .ear.solo::after { display: none; }
+  /* Губы нет: ушко растёт из кромки самого поля ввода — фон и рамка карточки, слоем выше неё */
+  .ear.solo { z-index: 3; background: var(--c-bg-white); border-color: var(--c-border); }
+  .ear.solo::after { background: var(--c-bg-white); }
   .ear .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ear .g { display: inline-flex; color: var(--c-text-muted); }
   .mob .ear { height: 31px; margin-right: 12px; max-width: calc(100% - 24px); }

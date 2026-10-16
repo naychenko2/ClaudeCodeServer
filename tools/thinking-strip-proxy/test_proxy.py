@@ -2626,6 +2626,7 @@ class СжатиеЗаглушка(BaseHTTPRequestHandler):
     вид = "text/event-stream"
     тело = b""
     принятые = []
+    заголовки = []
 
     def log_message(self, *a):
         pass
@@ -2633,6 +2634,7 @@ class СжатиеЗаглушка(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         type(self).принятые.append(json.loads(self.rfile.read(n)))
+        type(self).заголовки.append({k.lower(): v for k, v in self.headers.items()})
         тело = type(self).тело
         self.send_response(type(self).статус)
         self.send_header("Content-Type", type(self).вид)
@@ -2685,10 +2687,10 @@ class СохранениеДословногоTests(unittest.TestCase):
 
     def setUp(self):
         class Облако(СжатиеЗаглушка):
-            принятые = []
+            принятые, заголовки = [], []
 
         class Локальный(СжатиеЗаглушка):
-            принятые = []
+            принятые, заголовки = [], []
 
         self.Облако, self.Локальный = Облако, Локальный
         self.облако, self.локальный = поднять(Облако), поднять(Локальный)
@@ -2725,13 +2727,14 @@ class СохранениеДословногоTests(unittest.TestCase):
         msgs.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
         return {"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True, "messages": msgs}
 
-    def спросить(self, doc):
+    def спросить(self, doc, заголовки=None):
         тело = json.dumps(doc).encode()
         c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
         self.журнал = io.StringIO()
         with contextlib.redirect_stderr(self.журнал):
-            c.request("POST", "/v1/messages", body=тело, headers={
-                "Content-Type": "application/json", "Content-Length": str(len(тело))})
+            c.request("POST", "/v1/messages", body=тело, headers=dict({
+                "Content-Type": "application/json", "Content-Length": str(len(тело))},
+                **(заголовки or {})))
             ответ = c.getresponse().read()
         c.close()
         return ответ
@@ -2845,12 +2848,46 @@ class СохранениеДословногоTests(unittest.TestCase):
         реплика = self.последняя_реплика(self.Локальный.принятые[-1])
         self.assertTrue(реплика.endswith(proxy.compactor.instruction_addendum()))
 
-    def test_фолбэк_с_предохранителем_петли(self):
-        """Реле предохранителя стоит до вставки: поток через него приходит тот же."""
+    def test_фолбэк_через_реле_без_петли(self):
+        """Реле предохранителя на пути не мешает вставке: поток через него приходит тот же."""
         proxy.LOOP_GUARD = proxy.JUNK_GUARD = "on"
         self.Облако.статус = 500
         doc = self.запрос()
         self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+
+    def test_фолбэк_петля_после_сводки_и_повтор(self):
+        """Петля после <summary> → обрыв, повтор; в запись CLI идёт сводка повтора с блоком."""
+        class Модель(ПетляЗаглушка):
+            ответы, принятые, оборваны = [], [], []
+        модель = поднять(Модель)
+        self.addCleanup(lambda: (модель.shutdown(), модель.server_close()))
+        proxy.UP_PORT = модель.server_address[1]
+        proxy.LOOP_GUARD = "on"
+        self.Облако.статус = 500
+        Модель.ответы = [
+            поток_ответа([("thinking", "t"), ("text", "<summary>первая</summary>\n" + ВСТУПЛЕНИЕ
+                                                   + ПЛАН * 400)]),
+            поток_ответа([("thinking", "t"), ("text", "<summary>повтор</summary>")])]
+        doc = self.запрос()
+        список = события(self.спросить(doc))
+        проверить_целостность(self, список)
+        self.assertEqual(len(Модель.принятые), 2, "петля поймана, запрос повторён")
+        self.assertTrue(Модель.принятые[1]["messages"][-1]["content"].endswith(
+            proxy.compactor.instruction_addendum()), "повтор несёт то же дополнение")
+        запись = как_cli(список)
+        self.assertTrue(запись.startswith("Summary:\nповтор"))
+        self.assertTrue(запись.endswith(self.ожидаемый_блок(doc).strip()))
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+
+    def test_accept_encoding_в_локаль_не_едет(self):
+        self.Облако.статус = 500
+        self.спросить(self.запрос(), {"Accept-Encoding": "gzip, br"})
+        # Своего заголовка нет — http.client сам ставит identity: сжатого ответа не будет.
+        self.assertEqual(self.Локальный.заголовки[-1].get("accept-encoding", "identity"), "identity")
+        proxy.COMPACT_PRESERVE = "off"
+        self.спросить(self.запрос(), {"Accept-Encoding": "gzip, br"})
+        self.assertEqual(self.Локальный.заголовки[-1]["accept-encoding"], "gzip, br",
+                         "без блока заголовки идут как раньше")
 
     def test_без_облака_блок_тоже_вставляется(self):
         proxy.COMPACT_UPSTREAM = ""
@@ -2975,6 +3012,14 @@ class ВставкаБлокаTests(unittest.TestCase):
         проверить_целостность(self, список)
         проверить_индексы(self, список)
         self.assertTrue(как_cli(список).endswith("БЛОК"))
+
+    def test_сводка_в_начальном_тексте_блока(self):
+        сырое = (sse("message_start", {"type": "message_start", "message": {}})
+                 + sse("content_block_start", {"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "text", "text": "<summary>с</summary>"}})
+                 + sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                 + sse("message_stop", {"type": "message_stop"}))
+        self.assertIn("БЛОК", self.прогнать(сырое, 11).decode())
 
     def test_без_message_start_вставки_нет(self):
         сырое = b'event: error\ndata: {"type":"error"}\n\n'

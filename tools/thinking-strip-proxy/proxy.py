@@ -1832,7 +1832,9 @@ class ВставкаБлока:
             self.начат = True
         elif тип == "content_block_start" and isinstance(индекс, int):
             вид = (данные.get("content_block") or {}).get("type")
-            self.открыт = [индекс, ""] if вид == "text" else None
+            начало = (данные.get("content_block") or {}).get("text")
+            self.открыт = ([индекс, начало if isinstance(начало, str) else ""]
+                           if вид == "text" else None)
         elif тип == "content_block_delta" and self.открыт is not None \
                 and индекс == self.открыт[0]:
             текст = (данные.get("delta") or {}).get("text")
@@ -2284,6 +2286,11 @@ class Handler(BaseHTTPRequestHandler):
                                "thinkingBlocks": 0}
         if resp is None:
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+            if сохранённое is not None:
+                # Сжатый ответ вставка не разберёт, а дополнение инструкции уже велело модели не
+                # пересказывать реплики: запись вышла бы беднее, чем без флага. Облако
+                # (open_compact) Accept-Encoding не шлёт и так.
+                headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
             if body:
                 headers["Content-Length"] = str(len(body))
             conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)

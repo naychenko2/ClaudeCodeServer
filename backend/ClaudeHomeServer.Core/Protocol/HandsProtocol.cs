@@ -114,8 +114,9 @@ public static class HandsFiles
 /// <summary>
 /// Программы, которые мост не запускает никогда (решение владельца 2б, 2026-09-27): белого
 /// списка нет, любая другая <c>.exe</c> по полному пути запускается. Здесь — интерпретаторы,
-/// оболочки и терминалы: каждый исполняет произвольные команды, поэтому и ввода (клика, текста)
-/// в окна их процессов у рук нет — читать и снимать их можно.
+/// оболочки, терминалы и запускалки оболочки («Пуск», поиск, диспетчер задач): каждый исполняет
+/// произвольные команды или ведёт в оболочку, поэтому и ввода (клика, текста) в окна их процессов
+/// у рук нет — читать и снимать их можно.
 /// Сравнение по имени файла без учёта регистра (и по имени без расширения); <c>python*</c> и
 /// <c>pwsh*</c> — по префиксу (сборки <c>pwsh-preview.exe</c>, <c>pwsh-7.4-preview.exe</c>).
 /// </summary>
@@ -130,6 +131,8 @@ public static class HandsForbiddenApps
         // оболочки и терминалы
         "bash.exe", "sh.exe", "wsl.exe", "wslhost.exe", "mintty.exe", "git-bash.exe",
         "wt.exe", "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe",
+        // запускалки оболочки: «Пуск», поиск, диспетчер задач, FAR
+        "StartMenuExperienceHost.exe", "SearchHost.exe", "SearchApp.exe", "Taskmgr.exe", "far.exe",
     ];
 
     public static readonly IReadOnlyList<string> NamePrefixes = ["python", "pwsh"];
@@ -186,6 +189,33 @@ public static class HandsBridgeArgs
     /// по концу хода гасит всё, что ход открыл; имя остаётся для журнала.
     /// </summary>
     public const string TurnJobPrefix = @"Local\AiHome.Turn.";
+
+    /// <summary>
+    /// Эндпоинт OCR (этап A «руки без UIA»): мост шлёт сюда картинку страницы на распознавание
+    /// текста. Значение — адрес хода в сайдкаре с сегментом <c>ocr</c>; создаёт агент,
+    /// сервер и модель его не задают.
+    /// </summary>
+    public const string OcrEndpoint = "--ocr-endpoint";
+
+    /// <summary>
+    /// Путь корня проекта на устройстве (D2d «руки без UIA»): сюда мост пишет файлы, которые
+    /// модель попросила сохранить (<c>saveTo</c> снимка, нарезка скана). Задаёт только агент
+    /// (реальный каталог проекта на машине); сервер и модель его не задают. Без него любая
+    /// запись отказывает — корня, куда писать, нет.
+    /// </summary>
+    public const string ProjectRoot = "--project-root";
+}
+
+/// <summary>
+/// Контракт OCR «рук без UIA» (этап A): одна константа потолка картинки на сервер
+/// (<c>LocalOcrService</c>, <c>SidecarProxy</c>) и мост (<c>OcrClient</c>) — стороны не
+/// разойдутся. Ядро видно и мосту (сборка <c>HandsBridge.Policy</c> компилирует этот файл),
+/// и серверу (проектная ссылка).
+/// </summary>
+public static class HandsOcr
+{
+    /// <summary>Потолок картинки: 8 МБ.</summary>
+    public const long MaxImageBytes = 8L * 1024 * 1024;
 }
 
 /// <summary>

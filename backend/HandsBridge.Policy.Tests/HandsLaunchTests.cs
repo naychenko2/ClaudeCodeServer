@@ -71,6 +71,11 @@ public class HandsLaunchTests
     [InlineData(@"C:\Users\an\AppData\Local\Microsoft\WindowsApps\wt.exe")]
     [InlineData(@"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal\WindowsTerminal.exe")]
     [InlineData(@"C:\Strawberry\perl\bin\perl.exe")]
+    [InlineData(@"C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1htr2yway\StartMenuExperienceHost.exe")]
+    [InlineData(@"C:\Windows\System32\SearchHost.exe")]
+    [InlineData(@"C:\Windows\System32\SearchApp.exe")]
+    [InlineData(@"C:\Windows\System32\Taskmgr.exe")]
+    [InlineData(@"C:\Program Files\Far Manager\far.exe")]
     public void Interpreter_or_terminal_is_never_started(string interpreter)
     {
         var decision = Machine.Policy().CheckLaunch(interpreter, null);
@@ -92,6 +97,9 @@ public class HandsLaunchTests
     [InlineData(@"C:\Program Files\Paint\helper.exe")]
     [InlineData(@"D:\Tools\Some App\viewer.exe")]
     [InlineData(@"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE")]
+    // Ложносрабатывания: far.exe запрещён, но farcry.exe и myfar.exe — нет (сопоставление по имени, не подстрокой)
+    [InlineData(@"C:\Games\farcry.exe")]
+    [InlineData(@"C:\Tools\myfar.exe")]
     public void Any_program_by_full_path_is_allowed_there_is_no_allow_list(string program)
     {
         var decision = Machine.Policy().CheckLaunch(program, null);

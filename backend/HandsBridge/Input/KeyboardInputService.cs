@@ -74,6 +74,22 @@ public sealed class KeyboardInputService : IDisposable
             return KeyboardControlResult.CreateTypeSuccess(0);
         }
 
+        // Руки: удержанный модификатор + символ = сочетание (Ctrl+R, Win+R, …). Символ, который с
+        // удержанными модификаторами собирает запрещённое сочетание, — отказ до ввода.
+        var (ctrl, alt, shift, win) = EffectiveModifiers(ModifierKey.None);
+        if (ctrl || alt || shift || win)
+        {
+            foreach (var c in text)
+            {
+                if (CharToVirtualKey(c, out var vk))
+                {
+                    var gate = HandsPolicy.CheckKeys(vk, ctrl, alt, shift, win);
+                    if (!gate.Allowed)
+                        return KeyboardControlResult.CreateFailure(KeyboardControlErrorCode.InvalidKey, gate.Reason!);
+                }
+            }
+        }
+
         var totalCharacters = 0;
 
         // Process text in chunks to prevent overwhelming the input queue
@@ -239,6 +255,72 @@ public sealed class KeyboardInputService : IDisposable
         };
     }
 
+    /// <summary>
+    /// Эффективные модификаторы: модификаторы вызова ∪ удержанные (<see cref="_heldKeyTracker"/>).
+    /// Удержанный Ctrl/Shift/Alt/Win делает из любой последующей клавиши или символа сочетание —
+    /// гейт <see cref="HandsPolicy.CheckKeys"/>/<see cref="HandsPolicy.CheckKeyDown"/> обязан видеть
+    /// их, иначе <c>key_down Ctrl</c> + <c>press Escape</c> соберёт Ctrl+Esc («Пуск») в обход запрета.
+    /// </summary>
+    private (bool Ctrl, bool Alt, bool Shift, bool Win) EffectiveModifiers(ModifierKey callModifiers)
+    {
+        var ctrl = callModifiers.HasFlag(ModifierKey.Ctrl);
+        var alt = callModifiers.HasFlag(ModifierKey.Alt);
+        var shift = callModifiers.HasFlag(ModifierKey.Shift);
+        var win = callModifiers.HasFlag(ModifierKey.Win);
+
+        foreach (var held in _heldKeyTracker.GetAllHeldKeys())
+        {
+            switch (held.VirtualKeyCode)
+            {
+                case NativeConstants.VK_CONTROL or NativeConstants.VK_LCONTROL or NativeConstants.VK_RCONTROL:
+                    ctrl = true;
+                    break;
+                case NativeConstants.VK_MENU or NativeConstants.VK_LMENU or NativeConstants.VK_RMENU:
+                    alt = true;
+                    break;
+                case NativeConstants.VK_SHIFT or NativeConstants.VK_LSHIFT or NativeConstants.VK_RSHIFT:
+                    shift = true;
+                    break;
+                case NativeConstants.VK_LWIN or NativeConstants.VK_RWIN:
+                    win = true;
+                    break;
+            }
+        }
+
+        return (ctrl, alt, shift, win);
+    }
+
+    /// <summary>Тест: отследить удержанную клавишу, минуя WinAPI (SendInput).</summary>
+    internal void TrackHeldKeyForTest(string keyName, int virtualKeyCode) =>
+        _heldKeyTracker.TrackKeyDown(keyName.ToLowerInvariant(), virtualKeyCode);
+
+    /// <summary>Тест: отпустить удержанную клавишу, минуя WinAPI.</summary>
+    internal void ReleaseHeldKeyForTest(string keyName) =>
+        _heldKeyTracker.TrackKeyUp(keyName.ToLowerInvariant(), out _);
+
+    /// <summary>
+    /// Виртуальный код символа для гейта сочетаний: буквы и цифры — их VK; прочие (пунктуация,
+    /// эмодзи) в системные сочетания не входят — false.
+    /// </summary>
+    private static bool CharToVirtualKey(char c, out int virtualKeyCode)
+    {
+        var upper = char.ToUpperInvariant(c);
+        if (upper is >= 'A' and <= 'Z')
+        {
+            virtualKeyCode = upper;
+            return true;
+        }
+
+        if (c is >= '0' and <= '9')
+        {
+            virtualKeyCode = c;
+            return true;
+        }
+
+        virtualKeyCode = 0;
+        return false;
+    }
+
     /// <inheritdoc />
     public Task<KeyboardControlResult> PressKeyAsync(
         string keyName,
@@ -297,13 +379,10 @@ public sealed class KeyboardInputService : IDisposable
                 errorMsg));
         }
 
-        // Руки: системные сочетания не уходят никогда, какой бы код их ни попросил
-        var gate = HandsPolicy.CheckKeys(
-            virtualKeyCode,
-            modifiers.HasFlag(ModifierKey.Ctrl),
-            modifiers.HasFlag(ModifierKey.Alt),
-            modifiers.HasFlag(ModifierKey.Shift),
-            modifiers.HasFlag(ModifierKey.Win));
+        // Руки: системные сочетания не уходят никогда, какой бы код их ни попросил. Модификаторы —
+        // эффективные (вызов ∪ удержанные): key_down Ctrl + press Escape без этого соберёт Ctrl+Esc.
+        var (ctrl, alt, shift, win) = EffectiveModifiers(modifiers);
+        var gate = HandsPolicy.CheckKeys(virtualKeyCode, ctrl, alt, shift, win);
         if (!gate.Allowed)
         {
             return Task.FromResult(KeyboardControlResult.CreateFailure(KeyboardControlErrorCode.InvalidKey, gate.Reason!));
@@ -524,8 +603,11 @@ public sealed class KeyboardInputService : IDisposable
                 $"Unknown key: '{keyName}'. See documentation for valid key names."));
         }
 
-        // Руки: зажатые Win/Ctrl/Alt собрали бы системное сочетание из следующих нажатий
-        var gate = HandsPolicy.CheckKeyDown(virtualKeyCode);
+        // Руки: зажатые Win/Ctrl/Alt собрали бы системное сочетание из следующих нажатий.
+        // Модификаторы — эффективные (вызов ∪ удержанные): key_down Ctrl + press Escape без этого
+        // соберёт Ctrl+Esc («Пуск») в обход запрета.
+        var (ctrl, alt, shift, win) = EffectiveModifiers(ModifierKey.None);
+        var gate = HandsPolicy.CheckKeyDown(virtualKeyCode, ctrl, alt, shift, win);
         if (!gate.Allowed)
         {
             return Task.FromResult(KeyboardControlResult.CreateFailure(KeyboardControlErrorCode.InvalidKey, gate.Reason!));

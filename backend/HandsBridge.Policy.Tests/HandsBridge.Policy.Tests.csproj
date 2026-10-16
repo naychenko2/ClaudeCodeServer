@@ -12,6 +12,8 @@
   <ItemGroup>
     <ProjectReference Include="..\HandsBridge.Policy\HandsBridge.Policy.csproj" />
     <ProjectReference Include="..\HandsBridge.Browser\HandsBridge.Browser.csproj" />
+    <!-- Scanning (net10.0, не windows): тесты scan_canvas декодируют PNG общим PngDecoder (C4) -->
+    <ProjectReference Include="..\HandsBridge.Scanning\HandsBridge.Scanning.csproj" />
     <!-- Мост нужен рантайм-тестам гейта (HandsBridgeGateRuntimeTests): TFM windows сюда не
          подключить, поэтому только порядок сборки, а сборку грузим рефлексией из hands-bridge/ -->
     <ProjectReference Include="..\HandsBridge\HandsBridge.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
@@ -36,6 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis" Version="4.12.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <!-- Запуск программ руками — только на Windows: Skip.IfNot(IsWindows), на Linux CI честный skip -->

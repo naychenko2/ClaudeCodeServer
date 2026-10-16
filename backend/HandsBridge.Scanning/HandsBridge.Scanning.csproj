@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Руки без UIA (ADR-016 §7.2, этап SC): чистые вычисления над кадрами и страницами —
+       без единого вызова WinAPI, чтобы тесты шли на Linux CI. Раскладка: Pixels/ — сдвиг и
+       стабилизация кадров (склейка схемы), Text/ — склейка текста соседних страниц (документ).
+       Сборку полотна в PNG и OCR делает шаг C1/A, здесь только математика. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ClaudeHomeServer.HandsBridge.Scanning</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

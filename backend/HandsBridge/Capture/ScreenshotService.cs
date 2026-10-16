@@ -5,8 +5,10 @@ namespace Sbroenne.WindowsMcp.Capture;
 
 /// <summary>
 /// Provides screenshot capture services for screens, monitors, windows, and regions.
+/// Not sealed: <c>ocr</c> (A4) captures through the same <see cref="ExecuteAsync"/> (PNG in memory,
+/// no disk), and tests substitute a fake capture.
 /// </summary>
-public sealed class ScreenshotService
+public class ScreenshotService
 {
     private readonly MonitorService _monitorService;
     private readonly Automation.SecureDesktopDetector _secureDesktopDetector;
@@ -29,7 +31,7 @@ public sealed class ScreenshotService
     }
 
     /// <inheritdoc />
-    public async Task<ScreenshotControlResult> ExecuteAsync(
+    public virtual async Task<ScreenshotControlResult> ExecuteAsync(
         ScreenshotControlRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -310,7 +312,8 @@ public sealed class ScreenshotService
                 bitmap,
                 request.ImageFormat,
                 request.Quality);// Handle output mode
-            return BuildCaptureResult(processed, request, $"Captured window: {processed.Width}x{processed.Height} {processed.Format}");
+            return BuildCaptureResult(processed, request, $"Captured window: {processed.Width}x{processed.Height} {processed.Format}",
+                windowRect.Left, windowRect.Top);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -492,7 +495,7 @@ public sealed class ScreenshotService
             request.ImageFormat,
             request.Quality);// Handle output mode
         return Task.FromResult(BuildCaptureResult(processed, request,
-            $"Captured {processed.Width}x{processed.Height} {processed.Format}"));
+            $"Captured {processed.Width}x{processed.Height} {processed.Format}", region.X, region.Y));
     }
 
     /// <summary>
@@ -501,7 +504,9 @@ public sealed class ScreenshotService
     private static ScreenshotControlResult BuildCaptureResult(
         ProcessedImage processed,
         ScreenshotControlRequest request,
-        string message)
+        string message,
+        int originX,
+        int originY)
     {
         string? filePath = null;
 
@@ -511,7 +516,7 @@ public sealed class ScreenshotService
             File.WriteAllBytes(filePath, processed.Data);
         }
 
-        return ScreenshotControlResult.CaptureSuccess(processed, message, filePath);
+        return ScreenshotControlResult.CaptureSuccess(processed, message, filePath).WithFrame(originX, originY);
     }
 
     /// <summary>
@@ -531,7 +536,9 @@ public sealed class ScreenshotService
             File.WriteAllBytes(filePath, processed.Data);
         }
 
-        return ScreenshotControlResult.CompositeSuccess(processed, metadata, message, filePath);
+        // Кадр композита начинается в левом верхнем углу виртуального рабочего стола (может быть отрицательным)
+        return ScreenshotControlResult.CompositeSuccess(processed, metadata, message, filePath)
+            .WithFrame(metadata.VirtualScreen.X, metadata.VirtualScreen.Y);
     }
 
     /// <summary>

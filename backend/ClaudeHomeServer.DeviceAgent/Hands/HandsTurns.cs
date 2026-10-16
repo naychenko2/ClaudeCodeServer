@@ -162,9 +162,13 @@ internal static class HandsAttach
     /// <summary>
     /// Подключить руки: проверки по порядку, затем подмена маркера. Замок машины не берётся.
     /// null — рук ход не просил. <paramref name="projectRoot"/> — корень проекта, уже сверенный
-    /// агентом с корнями машины (а не сырой каталог из spec): от него считается профиль браузера.
+    /// агентом с корнями машины (а не сырой каталог из spec): от него считается профиль браузера,
+    /// и он же идёт мосту как <see cref="HandsBridgeArgs.ProjectRoot"/> (куда писать <c>saveTo</c>).
+    /// <paramref name="ocrEndpoint"/> — адрес OCR хода в сайдкаре (<c>/t/{ключ}/ocr</c>); создаёт
+    /// агент, сервер и модель его не задают.
     /// </summary>
-    public static HandsTurnLease? Prepare(DeviceExecSpawn spawn, string turnId, HandsRuntime? runtime, string? projectRoot = null)
+    public static HandsTurnLease? Prepare(DeviceExecSpawn spawn, string turnId, HandsRuntime? runtime,
+        string? projectRoot = null, string? ocrEndpoint = null)
     {
         var files = spawn.Files ?? [];
         if (!Requested(files)) return null;
@@ -181,20 +185,24 @@ internal static class HandsAttach
         var browserProfile = runtime.BrowserProfilesRoot is { } profiles && projectRoot is not null
             ? HandsBrowserProfile.PathFor(profiles, projectRoot)
             : null;
+        // Корень записи (saveTo): только если реально существует как каталог — иначе мосту его не даём
+        var projectRootArg = projectRoot is not null && Directory.Exists(projectRoot) ? projectRoot : null;
         // Имена событий — свойство хода, а не чата: узел моста живёт только в файлах хода на машине,
         // серверная сигнатура запуска CLI его не видит
         var events = runtime.Activity is null ? null : HandsEventNames.For(turnId);
-        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile, events);
+        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile, events, projectRootArg, ocrEndpoint);
 
         return new HandsTurnLease(jobName, rewritten, events is null ? null : runtime.Activity!.Create(events));
     }
 
     /// <summary>
     /// Маркер допустим ровно в одном месте: <c>mcpServers.hands.type</c> одного JSON-файла spec.
-    /// Любое другое вхождение — отказ, а не «подставим, где нашли».
+    /// Любое другое вхождение — отказ, а не «подставим, где нашли». Аргументы моста (<paramref name="browserProfile"/>,
+    /// <paramref name="projectRoot"/>, <paramref name="ocrEndpoint"/>, события) агент считает сам:
+    /// из узлов, которые шлёт сервер/модель, он ничего не берёт.
     /// </summary>
     internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath, string? browserProfile = null,
-        HandsEventNames? events = null)
+        HandsEventNames? events = null, string? projectRoot = null, string? ocrEndpoint = null)
     {
         var result = new List<DeviceExecFile>(files.Count);
         var replaced = 0;
@@ -238,6 +246,17 @@ internal static class HandsAttach
                 args.Add(events.Busy);
                 args.Add(HandsBridgeArgs.TurnEndEvent);
                 args.Add(events.TurnEnd);
+            }
+            // Корень записи (saveTo) и OCR — свойства хода на машине: их ставит агент, не сервер
+            if (projectRoot is not null)
+            {
+                args.Add(HandsBridgeArgs.ProjectRoot);
+                args.Add(projectRoot);
+            }
+            if (ocrEndpoint is not null)
+            {
+                args.Add(HandsBridgeArgs.OcrEndpoint);
+                args.Add(ocrEndpoint);
             }
             servers[DeviceExecPlaceholders.HandsServerName] = new JsonObject
             {

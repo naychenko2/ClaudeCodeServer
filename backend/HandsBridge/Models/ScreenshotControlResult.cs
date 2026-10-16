@@ -134,6 +134,74 @@ public sealed record ScreenshotControlResult
     public string? UsageHint { get; init; }
 
     /// <summary>
+    /// Screen X of the image's top-left corner. Screen X = screenOriginX + imageX × scaleX.
+    /// </summary>
+    [JsonPropertyName("screenOriginX")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ScreenOriginX { get; init; }
+
+    /// <summary>
+    /// Screen Y of the image's top-left corner. Screen Y = screenOriginY + imageY × scaleY.
+    /// </summary>
+    [JsonPropertyName("screenOriginY")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ScreenOriginY { get; init; }
+
+    /// <summary>
+    /// Screen pixels per image pixel along X (1.0 when the image was not downscaled).
+    /// </summary>
+    [JsonPropertyName("scaleX")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ScaleX { get; init; }
+
+    /// <summary>
+    /// Screen pixels per image pixel along Y (1.0 when the image was not downscaled).
+    /// </summary>
+    [JsonPropertyName("scaleY")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ScaleY { get; init; }
+
+    /// <summary>
+    /// Width of the returned image in pixels (same as <c>width</c>; named for the conversion formula).
+    /// </summary>
+    [JsonPropertyName("imageWidth")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ImageWidth { get; init; }
+
+    /// <summary>
+    /// Height of the returned image in pixels (same as <c>height</c>; named for the conversion formula).
+    /// </summary>
+    [JsonPropertyName("imageHeight")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ImageHeight { get; init; }
+
+    /// <summary>
+    /// Adds the frame mapping (image pixel to screen pixel). The captured area size is
+    /// <c>originalWidth/originalHeight</c> when the image was downscaled, otherwise the image size.
+    /// </summary>
+    /// <param name="originX">Screen X of the captured area's top-left corner.</param>
+    /// <param name="originY">Screen Y of the captured area's top-left corner.</param>
+    public ScreenshotControlResult WithFrame(int originX, int originY)
+    {
+        if (Width is not { } width || Height is not { } height || width <= 0 || height <= 0)
+        {
+            return this;
+        }
+
+        var frame = ClaudeHomeServer.HandsBridge.Policy.ScreenshotGeometry.Create(
+            originX, originY, OriginalWidth ?? width, OriginalHeight ?? height, width, height);
+        return this with
+        {
+            ScreenOriginX = frame.OriginX,
+            ScreenOriginY = frame.OriginY,
+            ScaleX = frame.ScaleX,
+            ScaleY = frame.ScaleY,
+            ImageWidth = frame.ImageWidth,
+            ImageHeight = frame.ImageHeight,
+        };
+    }
+
+    /// <summary>
     /// Creates a successful capture result with LLM optimization metadata.
     /// </summary>
     /// <param name="processed">The processed image data and metadata.</param>

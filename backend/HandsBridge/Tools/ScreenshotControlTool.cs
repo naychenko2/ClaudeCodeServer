@@ -21,8 +21,11 @@ public static partial class ScreenshotControlTool
     /// annotate, monitors, displays, list monitors, region capture, window capture.
     /// </summary>
     /// <remarks>
-    /// **COORDINATE SYSTEM**: Screenshot pixel coordinates = mouse coordinates. No conversion needed!
-    /// If you see a button at pixel (450, 300) in the screenshot, use mouse_control(x=450, y=300, monitorIndex=N).
+    /// **COORDINATE SYSTEM**: mouse_control takes SCREEN coordinates. The response carries screenOriginX/screenOriginY
+    /// (screen position of the image's top-left corner), scaleX/scaleY (screen pixels per image pixel; 1.0 when the
+    /// image was not downscaled) and imageWidth/imageHeight. Convert an image point before clicking:
+    /// Screen X = screenOriginX + imageX × scaleX; Screen Y = screenOriginY + imageY × scaleY.
+    /// For a window capture the origin is the window's top-left corner, not (0, 0).
     ///
     /// Returns base64-encoded image data (JPEG by default, configurable via imageFormat parameter).
     /// Default: JPEG format at quality 60 (LLM-optimized), at logical resolution (matching mouse coordinate space).
@@ -64,6 +67,12 @@ public static partial class ScreenshotControlTool
     /// <param name="outputMode">How to return the screenshot. 'inline' returns base64 data, 'file' saves to disk and returns path. Default: 'inline'.</param>
     /// <param name="outputPath">Directory or file path for output when outputMode is 'file'. If directory, auto-generates filename. If null, uses temp directory.</param>
     /// <param name="includeImage">Include the image in the response. Default: false for annotated screenshots (element metadata is sufficient). Set true to see the actual screenshot pixels.</param>
+    /// <param name="saveTo">
+    /// Save the screenshot into the project (D2d): a path relative to the project root, ending in
+    /// .png or .jpg. When set, the capture is written to the project (a free name is chosen if the
+    /// path is taken) and the response carries the actual path instead of the image bytes. Requires
+    /// the bridge to be started with --project-root; without it the save is refused.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A call result containing the screenshot as an inline image content block (when returned inline) plus a JSON text block with dimensions, file size or path, annotated elements, and error details if failed.</returns>
     [McpServerTool(Name = "screenshot_control", Title = "Screenshot Capture", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -83,6 +92,7 @@ public static partial class ScreenshotControlTool
         [DefaultValue(null)] string? outputMode,
         [DefaultValue(null)] string? outputPath,
         [DefaultValue(false)] bool includeImage,
+        [DefaultValue(null)] string? saveTo,
         CancellationToken cancellationToken)
     {
         var gate = HandsPolicy.CheckScreenshot(action, outputMode, outputPath);
@@ -148,19 +158,6 @@ public static partial class ScreenshotControlTool
                         $"Invalid outputMode: '{outputMode}'. Valid values: 'inline', 'file'"));
             }
 
-            // Validate output path if provided
-            if (outputPath != null)
-            {
-                var directory = Path.GetDirectoryName(outputPath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    return ToCallToolResult(
-                        ScreenshotControlResult.Error(
-                            ScreenshotErrorCode.InvalidRequest,
-                            $"Output directory does not exist: '{directory}'"));
-                }
-            }
-
             // Build region if target is region
             CaptureRegion? region = null;
             if (captureTarget == CaptureTarget.Region)
@@ -182,7 +179,10 @@ public static partial class ScreenshotControlTool
                 // Default: don't include image for annotated screenshots (element metadata is sufficient)
                 // This saves ~100K+ tokens per screenshot
                 var shouldIncludeImage = includeImage;
-                return await CaptureAnnotatedAsync(windowHandle, parsedImageFormat, parsedQuality, parsedOutputMode, outputPath, shouldIncludeImage, cancellationToken);
+                var annotated = await CaptureAnnotatedAsync(windowHandle, parsedImageFormat, parsedQuality, parsedOutputMode, outputPath, shouldIncludeImage, cancellationToken);
+                if (saveTo is not null)
+                    annotated = SaveToProject(annotated, saveTo);
+                return ToCallToolResult(annotated);
             }
 
             // Build request with all parameters
@@ -202,6 +202,8 @@ public static partial class ScreenshotControlTool
 
             // Execute and return result
             var result = await WindowsToolsBase.ScreenshotService.ExecuteAsync(request, cancellationToken);
+            if (saveTo is not null)
+                result = SaveToProject(result, saveTo);
             return ToCallToolResult(result);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -229,9 +231,10 @@ public static partial class ScreenshotControlTool
     }
 
     /// <summary>
-    /// Parses the target string to enum.
+    /// Parses the target string to enum. Internal: <c>ocr</c> (A4) reuses the same target
+    /// selection (screen, monitor, window, region, all monitors) without copying the logic.
     /// </summary>
-    private static CaptureTarget? ParseTarget(string? target)
+    internal static CaptureTarget? ParseTarget(string? target)
     {
         if (string.IsNullOrWhiteSpace(target))
         {
@@ -287,9 +290,12 @@ public static partial class ScreenshotControlTool
     }
 
     /// <summary>
-    /// Captures an annotated screenshot with numbered element labels.
+    /// Captures an annotated screenshot with numbered element labels. Возвращает результат снимка
+    /// (а не <c>CallToolResult</c>), чтобы <see cref="SaveToProject"/> мог его дописать в проект.
+    /// Запись в файл по <c>outputMode</c>/<c>outputPath</c> здесь убрана: гейт
+    /// <c>CheckScreenshot</c> уже отказывает на них, запись в проект идёт только через <c>saveTo</c>.
     /// </summary>
-    private static async Task<CallToolResult> CaptureAnnotatedAsync(
+    private static async Task<ScreenshotControlResult> CaptureAnnotatedAsync(
         string? windowHandle,
         Models.ImageFormat? imageFormat,
         int quality,
@@ -311,61 +317,73 @@ public static partial class ScreenshotControlTool
 
         if (!result.Success)
         {
-            return ToCallToolResult(
-                ScreenshotControlResult.Error(
-                    ScreenshotErrorCode.CaptureError,
-                    result.ErrorMessage ?? "Failed to capture annotated screenshot"));
+            return ScreenshotControlResult.Error(
+                ScreenshotErrorCode.CaptureError,
+                result.ErrorMessage ?? "Failed to capture annotated screenshot");
         }
 
-        // Save to file if outputPath or outputMode is file
-        string? savedFilePath = null;
-        var shouldSaveToFile = outputMode == OutputMode.File || !string.IsNullOrEmpty(outputPath);
+        // By default, don't include image to save tokens (element metadata is sufficient for LLM).
+        // outputMode/outputPath are already constrained to inline/null by the gate, so only includeImage matters.
+        var returnImageInline = includeImage && outputMode != OutputMode.File;
 
-        if (shouldSaveToFile && !string.IsNullOrEmpty(result.ImageData))
+        var annotated = ScreenshotControlResult.AnnotatedSuccess(
+            returnImageInline ? result.ImageData : null,
+            result.Width ?? 0,
+            result.Height ?? 0,
+            result.ImageFormat ?? "jpeg",
+            result.Elements ?? [],
+            filePath: null,
+            result.OriginalWidth,
+            result.OriginalHeight);
+
+        // Привязка кадра к экрану: по ней модель переводит пиксель картинки в экранную точку
+        if (result.OriginX is { } originX && result.OriginY is { } originY)
         {
-            try
-            {
-                var imageBytes = Convert.FromBase64String(result.ImageData);
-                var filePath = outputPath ?? Path.Combine(Path.GetTempPath(), $"annotated_{DateTime.Now:yyyyMMdd_HHmmss}.jpg");
-
-                // If outputPath is a directory, generate filename
-                if (Directory.Exists(outputPath))
-                {
-                    filePath = Path.Combine(outputPath, $"annotated_{DateTime.Now:yyyyMMdd_HHmmss}.jpg");
-                }
-
-                var directory = Path.GetDirectoryName(filePath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                await File.WriteAllBytesAsync(filePath, imageBytes, cancellationToken);
-                savedFilePath = filePath;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                return ToCallToolResult(
-                    ScreenshotControlResult.Error(
-                        ScreenshotErrorCode.CaptureError,
-                        $"Failed to save annotated image to '{outputPath}': {ex.Message}"));
-            }
+            annotated = annotated.WithFrame(originX, originY);
         }
 
-        // Determine if we should return image data inline
-        // By default, don't include image to save tokens (element metadata is sufficient for LLM)
-        var returnImageInline = includeImage && outputMode != OutputMode.File && savedFilePath == null;
+        return annotated;
+    }
 
-        return ToCallToolResult(
-            ScreenshotControlResult.AnnotatedSuccess(
-                returnImageInline ? result.ImageData : null,
-                result.Width ?? 0,
-                result.Height ?? 0,
-                result.ImageFormat ?? "jpeg",
-                result.Elements ?? [],
-                savedFilePath,
-                result.OriginalWidth,
-                result.OriginalHeight));
+    /// <summary>
+    /// saveTo (D2d): снимок сохраняется в проект через <see cref="HandsGate.ProjectFiles"/>.
+    /// Если сохранено — результат несёт фактический путь (с <c>.vN</c>, если имя занято).
+    /// Картинка: annotate-снимок сохраняет её, только если модель явно просила (<c>includeImage</c>);
+    /// обычный снимок — без inline-картинки (экономия токенов), модель получает путь.
+    /// <c>annotate</c> без <c>includeImage</c> — снимок не в памяти, saveTo молча потерялся бы:
+    /// отказ с понятной причиной. Отказ политики — тоже понятная причина.
+    /// </summary>
+    private static ScreenshotControlResult SaveToProject(ScreenshotControlResult result, string saveTo)
+    {
+        if (!result.Success)
+            return result;
+
+        // annotate=true без includeImage: снимок не держится в памяти (ImageData == null) — saveTo
+        // молча потерялся бы (модель не получила бы ни пути, ни картинки, ни ошибки). Отказываем явно:
+        // проще и безопаснее, чем тащить буфер AnnotatedScreenshotService.
+        if (result.ImageData is null)
+            return result.ElementCount is not null
+                ? ScreenshotControlResult.Error(
+                    ScreenshotErrorCode.CaptureError,
+                    "annotate + saveTo requires includeImage=true: the annotated screenshot is not held in memory without the image.")
+                : ScreenshotControlResult.Error(
+                    ScreenshotErrorCode.CaptureError,
+                    "The screenshot carries no image data to save; set includeImage=true.");
+
+        var bytes = Convert.FromBase64String(result.ImageData);
+        var (path, reason) = HandsGate.ProjectFiles.WriteNew(HandsTools.ScreenshotControl, saveTo, bytes);
+        if (path is null)
+            return ScreenshotControlResult.Error(ScreenshotErrorCode.CaptureError, reason!);
+
+        // Annotate: ImageData не null только когда includeImage=true (модель просила картинку) —
+        // тогда и путь, и картинка. Обычный снимок: картинка inline по умолчанию — убираем, даём путь.
+        var isAnnotated = result.ElementCount is not null;
+        return result with
+        {
+            ImageData = isAnnotated ? result.ImageData : null,
+            FilePath = path,
+            Message = $"Saved to '{path}'"
+        };
     }
 
     /// <summary>

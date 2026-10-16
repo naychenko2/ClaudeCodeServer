@@ -41,6 +41,16 @@ public sealed record AnnotatedScreenshotResult
     public int? OriginalHeight { get; init; }
 
     /// <summary>
+    /// Screen X of the captured window's top-left corner (origin of the image).
+    /// </summary>
+    public int? OriginX { get; init; }
+
+    /// <summary>
+    /// Screen Y of the captured window's top-left corner (origin of the image).
+    /// </summary>
+    public int? OriginY { get; init; }
+
+    /// <summary>
     /// Array of annotated elements with their indices matching the numbered labels on the image.
     /// </summary>
     public AnnotatedElement[]? Elements { get; init; }
@@ -65,7 +75,9 @@ public sealed record AnnotatedScreenshotResult
         int height,
         AnnotatedElement[] elements,
         int? originalWidth = null,
-        int? originalHeight = null)
+        int? originalHeight = null,
+        int? originX = null,
+        int? originY = null)
     {
         ArgumentNullException.ThrowIfNull(elements);
         return new()
@@ -77,6 +89,8 @@ public sealed record AnnotatedScreenshotResult
             Height = height,
             OriginalWidth = originalWidth,
             OriginalHeight = originalHeight,
+            OriginX = originX,
+            OriginY = originY,
             Elements = elements,
             ElementCount = elements.Length
         };

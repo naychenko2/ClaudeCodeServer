@@ -335,8 +335,27 @@ internal sealed class TurnExecutor
             throw new ExecRefusedException($"рабочий каталог хода не найден на устройстве: {workingDirectory}");
         }
 
+        // Выдача шлюза и адрес OCR — до рук: мосту нужен ключ хода, а он создаётся здесь
+        var sidecarUrl = _options.SidecarUrl();
+        var grantKey = _grants.Register(control.Gateway);
+        var sidecarTurnUrl = DeviceSidecarRoutes.TurnUrl(sidecarUrl, grantKey);
+        var ocrEndpoint = $"{sidecarTurnUrl}/{DeviceSidecarRoutes.Ocr}";
+
+        // Корень записи (saveTo): если его нет — мосту не даём, причина в лог (формат как у остальных записей)
+        if (projectRoot is not null && !Directory.Exists(projectRoot))
+            _log.LogInformation("Ход {TurnId}: корень проекта «{Root}» не найден — saveTo моста отказывает", control.TurnId, projectRoot);
+
         // Руки — до аренды: отказ по рукам не должен занимать копию CLI
-        var hands = HandsAttach.Prepare(spawn, control.TurnId, _options.Hands, projectRoot);
+        HandsTurnLease? hands = null;
+        try
+        {
+            hands = HandsAttach.Prepare(spawn, control.TurnId, _options.Hands, projectRoot, ocrEndpoint);
+        }
+        catch
+        {
+            _grants.Remove(grantKey);
+            throw;
+        }
 
         // Аренда — первой после рук: не готов харнес — не создаём ни каталогов, ни выдач
         ICliHandle? cli;
@@ -348,17 +367,14 @@ internal sealed class TurnExecutor
         catch
         {
             hands?.Dispose();
+            _grants.Remove(grantKey);
             throw;
         }
 
         TurnWorkspace? workspace = null;
-        string? grantKey = null;
         try
         {
             workspace = TurnWorkspace.Create(_options.TurnsRoot, control.TurnId, _log);
-            grantKey = _grants.Register(control.Gateway);
-            var sidecarUrl = _options.SidecarUrl();
-            var sidecarTurnUrl = DeviceSidecarRoutes.TurnUrl(sidecarUrl, grantKey);
 
             workspace.Materialize(hands?.Files ?? spawn.Files ?? [], sidecarTurnUrl);
             var args = workspace.ResolveArgs(spawn.Args);
@@ -371,7 +387,7 @@ internal sealed class TurnExecutor
         }
         catch
         {
-            if (grantKey is not null) _grants.Remove(grantKey);
+            _grants.Remove(grantKey);
             workspace?.Dispose();
             cli.Dispose();
             hands?.Dispose();

@@ -397,6 +397,10 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Серверный ход провайдера с NormalizeToolInputArrays — тоже через шлюз (ADR-016 §2)
         services.AddSingleton<Gateway.ServerTurnGateway>();
         services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
+        // OCR страницы локальной Qwen (фича «руки без UIA», этап A, шаг A1): картинка → текст.
+        // Именованный HttpClient без таймаута: таймаут страницы держит сам сервис (CTS под PageTimeoutSec).
+        services.AddHttpClient(Gateway.LocalOcrService.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
+        services.AddSingleton<Gateway.LocalOcrService>();
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры

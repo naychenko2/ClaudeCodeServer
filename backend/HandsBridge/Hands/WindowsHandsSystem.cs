@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using ClaudeHomeServer.HandsBridge.Policy;
+using Sbroenne.WindowsMcp.Native;
 
 namespace ClaudeHomeServer.HandsBridge;
 
@@ -110,6 +111,84 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
         {
             CloseHandle(handle);
         }
+    }
+
+    /// <summary>Корень окна под экранной точкой: <c>WindowFromPoint</c> → <c>GetAncestor(GA_ROOT)</c>.</summary>
+    public long GetRootWindowAt(int x, int y)
+    {
+        var hwnd = NativeMethods.WindowFromPoint(new POINT(x, y));
+        return hwnd == 0 ? 0 : (long)NativeMethods.GetAncestor(hwnd, NativeConstants.GA_ROOT);
+    }
+
+    /// <summary>Корень окна по hwnd: <c>GetAncestor(GA_ROOT)</c>; 0 — окна нет.</summary>
+    public long GetRootWindow(long hwnd)
+    {
+        var root = NativeMethods.GetAncestor((nint)hwnd, NativeConstants.GA_ROOT);
+        return root == 0 ? 0 : (long)root;
+    }
+
+    /// <summary>Корень окна переднего плана: Win32 <c>GetForegroundWindow</c> → <c>GetAncestor(GA_ROOT)</c>.</summary>
+    public long GetForegroundWindow()
+    {
+        var foreground = NativeMethods.GetForegroundWindow();
+        return foreground == 0 ? 0 : (long)NativeMethods.GetAncestor(foreground, NativeConstants.GA_ROOT);
+    }
+
+    /// <summary>Границы виртуального рабочего стола (все мониторы); null — узнать не удалось.</summary>
+    public HandsScreenBounds? GetVirtualScreenBounds()
+    {
+        var left = NativeMethods.GetSystemMetrics(NativeConstants.SM_XVIRTUALSCREEN);
+        var top = NativeMethods.GetSystemMetrics(NativeConstants.SM_YVIRTUALSCREEN);
+        var width = NativeMethods.GetSystemMetrics(NativeConstants.SM_CXVIRTUALSCREEN);
+        var height = NativeMethods.GetSystemMetrics(NativeConstants.SM_CYVIRTUALSCREEN);
+        if (width <= 0 || height <= 0)
+            return null;
+        return new HandsScreenBounds(left, top, left + width, top + height);
+    }
+
+    /// <summary>
+    /// Верхнеуровневые видимые окна в z-порядке (сверху вниз). Свёрнутые (<c>IsIconic</c>),
+    /// невидимые (<c>IsWindowVisible</c>) и cloaked-окна (<c>DWMWA_CLOAKED</c>) исключены — их
+    /// пиксели в снимке не участвуют; DWM-тени не считаются. Сбой <c>EnumWindows</c> — null.
+    /// </summary>
+    public IReadOnlyList<HandsVisibleWindow>? EnumerateVisibleWindows()
+    {
+        var windows = new List<HandsVisibleWindow>();
+
+        bool Callback(nint hWnd, nint _)
+        {
+            if (!IsVisibleOnScreen(hWnd))
+                return true;
+
+            if (!NativeMethods.GetWindowRect(hWnd, out var rect))
+                return true;
+
+            var pid = GetWindowProcessId((long)hWnd);
+            windows.Add(new HandsVisibleWindow(
+                (long)hWnd, rect.Left, rect.Top, rect.Right, rect.Bottom,
+                pid is { } id ? GetProcessImagePath(id) : null,
+                IsVisible: true));
+            return true;
+        }
+
+        return NativeMethods.EnumWindows(Callback, 0) ? windows : null;
+    }
+
+    /// <summary>
+    /// Окно видно на экране: <c>IsWindowVisible</c> и не свёрнуто (<c>IsIconic</c>) и не cloaked
+    /// (<c>DWMWA_CLOAKED</c>). Sбой <c>DwmGetWindowAttribute</c> — не cloaked (окно обычное).
+    /// </summary>
+    private static bool IsVisibleOnScreen(nint hWnd)
+    {
+        if (!NativeMethods.IsWindowVisible(hWnd) || NativeMethods.IsIconic(hWnd))
+            return false;
+
+        // Cloaked-окно (DWM): IsWindowVisible его не видит, а пиксели в снимке не участвуют.
+        if (NativeMethods.DwmGetWindowAttributeInt(hWnd, NativeConstants.DWMWA_CLOAKED, out var cloaked, Marshal.SizeOf<int>()) == 0
+            && cloaked != 0)
+            return false;
+
+        return true;
     }
 
     public void Dispose()

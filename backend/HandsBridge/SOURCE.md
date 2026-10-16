@@ -7,25 +7,52 @@
 Назначение — руки локального проекта (ADR-016, раздел «Руки»; план
 `docs/research/hands-plan-2026-09.md`, Ш2). Каждый инструмент до любого действия зовёт гейт
 `HandsPolicy` из проекта `HandsBridge.Policy` (чистый `net10.0`, тесты — `HandsBridge.Policy.Tests`
-на Linux). Запуск моста: `HandsBridge.exe [--exclude-tools screenshot_control]` — узел подставляет
+на Linux). Запуск моста: `HandsBridge.exe [--exclude-tools screenshot_control,browser_screenshot]` — узел подставляет
 агент (Ш3). Белого списка программ нет (решение владельца 2б, 2026-09-27): запрещены только
 интерпретаторы и терминалы `HandsForbiddenApps`. Границы «только свои окна» нет (вторая волна
 решений владельца 2026-09-27, ADR-016 §7): любое окно и снимок экрана разрешены, `--turn-job`
 снят; в окна `HandsForbiddenApps` руки не вводят.
 
+## Возвращённые файлы upstream
+
+Из `v1.3.24` (коммит `b90485c3…`) оставлены и дошли до модели инструменты: `app`, `ui_snapshot`,
+`ui_find`, `ui_click`, `ui_type`, `ui_read`, `window_management`, `screenshot_control` и браузерные
+`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_tabs`, `browser_wait`,
+`browser_screenshot`, `browser_query`, `browser_evaluate`. Их точный список держит сторож
+`HandsBridgeSourceGuardTests.Bridge_exposes_exactly_the_hands_tools`.
+
 ## Что удалено из upstream
 
-Классы инструментов вне набора `app`, `ui_snapshot`, `ui_find`, `ui_click`, `ui_type`, `ui_read`,
-`window_management`, `screenshot_control` — удалены из сборки, а не выключены флагом:
+Классы инструментов вне набора выше — удалены из сборки, а не выключены флагом:
 
-- `Tools/KeyboardControlTool.cs`, `Tools/MouseControlTool.cs`;
 - `Automation/Tools/{UIBatch,UIFile,UIOpenFile,UIReadTable,UISelect,UIWait}Tool.cs`;
 - `Clipboard/Tools`, `Macros/Tools`, `Processes/Tools`.
+
+Upstream-версии `Tools/KeyboardControlTool.cs` и `Tools/MouseControlTool.cs` сначала удалены вместе
+с остальными, а затем **возвращены как собственные инструменты рук** (этапы D2a/D2b, раздел
+«Новые инструменты» ниже) — не в исходном upstream-виде, а с гейтом `HandsPolicy` и швами.
 
 Сервисы этих подсистем (`KeyboardInputService`, `MouseInputService`, `ClipboardService`,
 `MacroService`, `ProcessService`) оставлены: их создаёт `WindowsToolsBase`, а автоматизация
 пользуется вводом изнутри. Модели до них дотянуться нечем — сторож
 `HandsBridgeSourceGuardTests.Bridge_exposes_exactly_the_hands_tools`.
+
+## Новые инструменты (руки без UIA)
+
+Не из upstream — собственные инструменты форка, каждый до действия зовёт гейт `HandsPolicy`:
+
+| Инструмент | Этап | Назначение | Файл |
+|---|---|---|---|
+| `keyboard_control` | D2a | клавиши и печать в окнах без UI Automation | `Tools/KeyboardControlTool.cs` |
+| `mouse_control` | D2b | мышь: move/click/double/right/middle/drag/scroll/get_position | `Tools/MouseControlTool.cs` |
+| `ocr` | A4 | распознавание текста на экране/мониторе/окне/области через сервер (`--ocr-endpoint`) | `Tools/OcrTool.cs` |
+| `scan_document` | A5 | чтение многостраничного документа: PageDown, снимок, распознавание, склейка в один PNG | `Tools/ScanDocumentTool.cs` |
+| `hands_batch` | D2e | пакет keyboard/mouse/wait-шагов одним вызовом; отпускание всех удержанных клавиш в конце | `Tools/HandsBatchTool.cs` (разбор аргументов шага — `Tools/HandsBatchStepArgs.cs`) |
+
+`clipboard_text` (D2c) пока **вне** сборки: в VDI нет буфера обмена. `scan_canvas` (C1-2)
+**в** сборке (класс `Tools/ScanCanvasTool.cs` и тесты), но в первой выкладке не публикуется
+(решение 2026-10-16, второй заход). Имена зарезервированы в `HandsTools`; сторож «ровно эти
+инструменты» вычитает неопубликованные из ожидаемого списка (`notYetInBridge`).
 
 Мост едет в каталоге версии агента и делит его рантайм (2026-09-27), поэтому из сборки убраны
 WinForms и проекция Windows SDK — они добавляли к архиву агента 21 МБ:
@@ -52,7 +79,7 @@ WinForms и проекция Windows SDK — они добавляли к арх
 | `Input/KeyboardInputService.cs` | `CheckKeys`/`CheckKeyDown` по виртуальному коду: Win, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+Alt+… не уходят никогда |
 | `Window/WindowEnumerator.cs`, `Capture/MonitorService.cs` | `Screen.AllScreens` → `Native/DisplayMonitors.cs` (EnumDisplayMonitors + MONITORINFOEX) |
 | `Capture/ScreenshotService.cs` (снимок всех мониторов) | `SystemInformation.VirtualScreen` → `ScreenBounds.GetVirtual()` |
-| `Prompts/*`, `Resources/SystemResources.cs`, `Models/UIAutomationErrorType.cs` | упоминания OCR-фолбэка |
+| `Prompts/*`, `Resources/SystemResources.cs`, `Models/UIAutomationErrorType.cs` | упоминания OCR-фолбэка; D2f переписал промпты — убраны `file_save`, `clipboard`, `ui_macro` |
 | `Program.cs` | `HandsGate.Configure` до старта хоста (профиль браузера и `--activity-event`) |
 | все инструменты, кроме `ui_snapshot`/`ui_find`/`ui_read` | `HandsGate.Acted(...)` сразу после отказа гейта: первое действие хода поднимает событие хода, и агент зажигает плашку (сторож `Tool_reports_its_action_after_the_gate`) |
 | `GlobalUsings.cs` | пространства имён гейта; `System.Drawing` вместо неявного от WinForms |

@@ -2209,6 +2209,8 @@ if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelect
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
 {
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+    // OCR страницы локальной Qwen (фича «руки без UIA», этап A, шаг A2)
+    ClaudeHomeServer.Services.Llm.Gateway.OcrGatewayEndpoints.MapOcrGateway(app);
     // Туннель выхода собственного трафика CLI устройства: тумблер LlmGateway:Egress:Enabled
     ClaudeHomeServer.Services.Llm.Gateway.EgressGatewayEndpoints.MapEgressGateway(app);
 }

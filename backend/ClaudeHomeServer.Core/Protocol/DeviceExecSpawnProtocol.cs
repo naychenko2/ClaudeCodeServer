@@ -82,7 +82,7 @@ public static class DeviceExecCli
 }
 
 /// <summary>
-/// Адресация хода в сайдкаре агента: <c>{сайдкар}/t/{ключ}/{llm|mcp}/…</c>. Ключ — случайность
+/// Адресация хода в сайдкаре агента: <c>{сайдкар}/t/{ключ}/{llm|mcp|ocr}/…</c>. Ключ — случайность
 /// агента, а не id хода сервера. Одно определение для обеих сторон: сервер пишет адреса
 /// MCP через <see cref="DeviceExecPlaceholders.Sidecar"/>, агент разворачивает плейсхолдер в
 /// <see cref="TurnUrl"/> и принимает запросы по тем же сегментам.
@@ -92,6 +92,8 @@ public static class DeviceSidecarRoutes
     public const string TurnSegment = "t";
     public const string Llm = "llm";
     public const string Mcp = "mcp";
+    /// <summary>Маршрут OCR (этап A «руки без UIA»): мост шлёт картинку страницы, сервер распознаёт текст.</summary>
+    public const string Ocr = "ocr";
 
     /// <summary>Адрес хода в сайдкаре: <c>{sidecarUrl}/t/{key}</c>, без завершающего слэша.</summary>
     public static string TurnUrl(string sidecarUrl, string key) => $"{sidecarUrl}/{TurnSegment}/{key}";

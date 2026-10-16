@@ -251,6 +251,32 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     }
 
     /// <summary>
+    /// M-E: решение о проверке точки в <c>MouseInputService.MoveCoreAsync</c>. Чистая функция (без
+    /// <c>SendInput</c>/<c>GetCursorPos</c>), чтобы ветки проверялись таблично на Linux:
+    /// <paramref name="checkCurrentPosition"/> — чистое перемещение (без кнопок) проверяет ЦЕЛЬ
+    /// <c>(x, y)</c>, а не текущую позицию курсора (курсор сейчас вне разрешённого окна — обычный
+    /// случай, и перемещение В разрешённое окно не должно отказывать); кнопки/колесо проверяют
+    /// ТЕКУЩУЮ позицию. <paramref name="policy"/> — гейт «окно под точкой принимает ввод и
+    /// совпадает с целевым» (<see cref="AcceptsInputAt"/>).
+    /// </summary>
+    public static (bool Allowed, string? Reason) DecideMovePoint(
+        int x, int y,
+        int cursorX, int cursorY,
+        long? expectedRoot,
+        bool checkCurrentPosition,
+        HandsPolicy policy)
+    {
+        var (px, py) = checkCurrentPosition ? (cursorX, cursorY) : (x, y);
+        var at = policy.AcceptsInputAt(px, py, expectedRoot);
+        if (!at.Allowed)
+        {
+            return (false, at.Reason);
+        }
+
+        return (true, null);
+    }
+
+    /// <summary>
     /// <c>mouse_control</c>: форма и потолки. Действие — из схемы (upstream <c>MouseAction</c>);
     /// <c>drag</c> — ровно две точки (старт и конец), <c>polyline</c> — две и более,
     /// <c>get_position</c> — ни одной, остальные — одну. Колесо <c>scroll</c>: <c>amount</c> от 1 до

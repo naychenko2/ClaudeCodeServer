@@ -114,6 +114,8 @@ public sealed class MouseInputService
             // M-E: чистое перемещение (без кнопок) — проверяем ЦЕЛЬ (x, y), а не текущую позицию
             //    курсора: курсор сейчас вне разрешённого окна (обычный случай), и перемещение В
             //    разрешённое окно не должно отказывать. Перемещение курсора — не ввод в окно.
+            //    Чистая функция HandsPolicy.DecideMovePoint дублирует эту логику для табличных
+            //    тестов на Linux (без SendInput/GetCursorPos).
             if (!TargetPointAcceptsInput(x, y, expectedForegroundWindow, out var targetReason))
             {
                 return Task.FromResult(MouseControlResult.CreateFailure(

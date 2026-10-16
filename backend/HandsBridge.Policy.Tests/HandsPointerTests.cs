@@ -129,24 +129,7 @@ public class HandsPointerTests
     }
 
     // ---------- M-E: чистое перемещение проверяет ЦЕЛЬ, а не текущую позицию ----------
-
-    /// <summary>
-    /// M-E: чистое перемещение (move, без кнопок) проверяет ЦЕЛЬ (точку, в которую ведём), а не
-    /// текущую позицию курсора. Курсор сейчас над запрещённым окном (терминал), но цель — над
-    /// разрешённым (блокнот хода): перемещение В разрешённое окно не отказывает. Для кнопок/колеса
-    /// проверка текущей позиции сохраняется (отдельный тест ниже).
-    /// </summary>
-    [Fact]
-    public void ME_pure_move_checks_target_not_current_position()
-    {
-        // Цель — над разрешённым окном (100); «текущая позиция» — над запрещённым (терминал, 500).
-        var moveDecision = Policy().CheckPointer("move", Point(AllowedPoint, AllowedPoint), 100, 0);
-        Assert.True(moveDecision.Allowed, $"чистый move в разрешённое окно должен пройти: {moveDecision.Reason}");
-
-        // Клик в ту же точку, но «текущая позиция» над терминалом → отказ (кнопка проверяет позицию).
-        var clickAtTerminal = Policy().CheckPointer("click", Point(TerminalPoint, TerminalPoint), 100, 0);
-        Assert.False(clickAtTerminal.Allowed);
-    }
+    // (реальные тесты на MouseInputService.DecideMovePoint — в MouseMoveTargetTests.cs)
 
     [Fact]
     public void Drag_needs_exactly_two_points()

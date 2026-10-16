@@ -219,6 +219,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             throw new InvalidOperationException("Доклад по этой задаче уже доставлен — перезапуск отключён");
         if (task.OwnerId is null)
             throw new InvalidOperationException("У задачи нет владельца");
+        // Эпик фичи — контейнер, а не работа: исполнителем не запускается (шаг 1.4).
+        // Отказ до claim'а и до подъёма процесса; текст гейта — FeatureEpicLaunchRefusal.
+        if (FeatureEpicLaunchRefusal(task) is { } refusal)
+            throw new InvalidOperationException(refusal);
 
         // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
         // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)
@@ -1406,6 +1410,19 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         Tag: "Исполнитель");
 
     // --- Чистая логика маппинга (извлечена для юнит-тестов) ---
+
+    // Гейты запуска эпика фичи (шаг 1.4): эпик — контейнер фичи, а не работа, поэтому
+    // исполнителем не запускается. null — задача не эпик, запуск не отказывать.
+    // Гейт 2 (более специфичный): Role=feature без FeatureId — противоречие данных.
+    // Гейт 1: Role=feature — эпик; чтобы вести фичу, заведите задачу шага/ревью/проверки.
+    internal static string? FeatureEpicLaunchRefusal(TaskItem task)
+    {
+        if (task.Role != TaskRoles.Feature) return null;
+        if (string.IsNullOrEmpty(task.FeatureId))
+            return "Эпик фичи без привязки к фиче: у задачи роль feature, но FeatureId пуст.";
+        return "Эпик фичи не запускается исполнителем; чтобы вести задачи фичи, " +
+               "заведите задачу шага/ревью/проверки через tasks_create.";
+    }
 
     // Итог хода успешен, если result не error
     internal static bool IsSuccess(ResultMessage result) => result.Subtype != "error";

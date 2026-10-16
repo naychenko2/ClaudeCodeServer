@@ -1663,8 +1663,11 @@ if (!inspectionMode)
     {
         try
         {
-            foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), "claude-mcp-*.json"))
-                try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
+            // claude-mcp-* — сервисный токен; claude-agents-* — определения сабагентов-персон
+            // (оба per-run, штатно удаляются финализацией прогона, осиротели — после крэша).
+            foreach (var pattern in new[] { "claude-mcp-*.json", "claude-agents-*.json" })
+                foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), pattern))
+                    try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
         }
         catch { /* нет доступа к temp — не критично */ }
     });

@@ -110,9 +110,22 @@ class CompactorTests(unittest.TestCase):
         self.assertEqual(compactor.human_texts([_user(text)]), ["реплика человека"])
 
     def test_старый_чат_несколько_разделителей_берёт_последний(self):
-        text = ("## Возможно релевантные заметки\n- заметка\n\n---\n\n"
-                "средняя часть\n\n---\n\nфинальная реплика")
+        # несколько разделителей: режем на последнем, у которого СЛЕВА (в сегменте)
+        # заголовок хвоста — здесь это разделитель перед «финальной репликой».
+        text = ("обвязка 1\n\n---\n\n"
+                "## Возможно релевантные заметки\n- заметка\n\n---\n\n"
+                "финальная реплика")
         self.assertEqual(compactor.human_texts([_user(text)]), ["финальная реплика"])
+
+    def test_старый_чат_реплика_сама_содержит_разделитель(self):
+        # реплика человека сама содержит "\n\n---\n\n": заголовок хвоста — только в
+        # сегменте перед ПЕРВЫМ разделителем, поэтому режем там, а не на последнем
+        # (иначе отвалилась бы «часть 1» реплики).
+        text = ("## Память команды проекта\n- факт\n\n---\n\n"
+                "часть 1 реплики\n\n---\n\nчасть 2 реплики")
+        self.assertEqual(
+            compactor.human_texts([_user(text)]),
+            ["часть 1 реплики\n\n---\n\nчасть 2 реплики"])
 
     def test_старый_чат_system_reminder_вырезан(self):
         text = "<system-reminder>служебная обвязка</system-reminder>привет"
@@ -188,8 +201,46 @@ def _corpus_dir():
     return os.path.join(home, "corpus")
 
 
+# Явные исключения (имя_фикстуры, индекс в humans): служебные <task-notification>,
+# которые стенд считает «humans» по сырому транскрипту, а в реконструированном history
+# их нет/они иные — это не реплики человека, покрытие найденной репликой не требуется.
+# (Задача предвидела c03 и c07; с двунаправленной проверкой c03 покрывается, остаётся c07.)
+_CORPUS_EXCEPTIONS = {
+    ("c07.json", 1): "<task-notification> b4vdpd0xy — служебное уведомление, не человек",
+}
+
+
+def _related(stand, found):
+    """Реплика стенда «покрыта» найденной: одно — подстрока другого (в любую сторону)
+    или есть общее подстроковое окно >= 20 (сырой vs реконструированный текст расходятся
+    обвязкой, а ядро реплики совпадает)."""
+    if not stand or not found:
+        return False
+    if stand in found or found in stand:
+        return True
+    L = 20
+    for s in range(0, max(1, len(found) - L + 1), L):
+        if found[s:s + L] in stand:
+            return True
+    return False
+
+
+def _uncovered(item, filename, found):
+    """Индексы реплик стенда, не покрытых ни одной найденной (кроме исключений)."""
+    hum = item.get("humans") or []
+    out = []
+    for i, h in enumerate(hum):
+        t = h.get("text", "") if isinstance(h, dict) else str(h)
+        if any(_related(t, f) for f in found):
+            continue
+        if (filename, i) in _CORPUS_EXCEPTIONS:
+            continue
+        out.append(i)
+    return out
+
+
 class CorpusTests(unittest.TestCase):
-    """human_texts на корпусе настоящих чатов: число реплик ~ числу humans стенда."""
+    """human_texts на корпусе: (а) >=1 реплики, (б) каждая реплика стенда покрыта."""
 
     @classmethod
     def setUpClass(cls):
@@ -197,27 +248,41 @@ class CorpusTests(unittest.TestCase):
         if not os.path.isdir(cls.dir):
             raise unittest.SkipTest(f"корпус не найден: {cls.dir}")
 
-    def test_корпус_число_реплик(self):
-        rows = []
+    def _items(self):
         for fn in sorted(os.listdir(self.dir)):
             if not (fn.startswith("c") and fn.endswith(".json")):
                 continue
             with open(os.path.join(self.dir, fn), encoding="utf-8") as f:
-                item = json.load(f)
+                yield fn, json.load(f)
+
+    def test_корпус_реплики_покрыты(self):
+        for fn, item in self._items():
             history = item.get("history") or []
+            found = [x for x in compactor.human_texts(history) if x]
             stand = len(item.get("humans") or [])
-            found = len(compactor.human_texts(history))
-            rows.append((fn, stand, found))
-            # Стенд считает humans по сырому транскрипту (is_human/isMeta), мы — по
-            # реконструированному history (Messages body): на краевых (сводка CLI, system-
-            # инъекты) методы расходятся на единицы. Sanity-граница, не точное совпадение:
-            # ловит катастрофу (0 или 10×), а не требует равенства.
-            tol = max(4, int(0.35 * stand))
-            self.assertLessEqual(abs(found - stand), tol,
-                                  f"{fn}: human_texts={found} vs humans={stand} (допуск {tol})")
-        # отчёт: сколько реплик нашлось на каждой фикстуре
-        for fn, stand, found in rows:
-            print(f"  {fn}: humans(стенд)={stand}  human_texts={found}")
+            # (а) на каждой фикстуре найдено >= 1 реплики
+            self.assertGreaterEqual(len(found), 1, f"{fn}: не найдено ни одной реплики")
+            # (б) каждая реплика стенда (кроме исключений) покрыта найденной
+            unc = _uncovered(item, fn, found)
+            self.assertEqual(unc, [], f"{fn}: непокрытые реплики стенда: {unc}")
+            print(f"  {fn}: humans(стенд)={stand}  human_texts={len(found)}")
+
+    def test_корпус_мутация_каждая_вторая_краснеет(self):
+        # мутация: human_texts теряет каждую вторую реплику -> (б) краснеет на
+        # нескольких фикстурах (не только c01)
+        orig = compactor.human_texts
+        compactor.human_texts = lambda msgs: orig(msgs)[::2]
+        try:
+            red = []
+            for fn, item in self._items():
+                history = item.get("history") or []
+                found = [x for x in compactor.human_texts(history) if x]
+                if len(found) < 1 or _uncovered(item, fn, found):
+                    red.append(fn)
+            self.assertGreaterEqual(len(red), 2,
+                                     f"мутация не покраснела достаточно: {red}")
+        finally:
+            compactor.human_texts = orig
 
 
 if __name__ == "__main__":

@@ -390,6 +390,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // found» (пропавший per-run файл --agents / --mcp-config), маркер LocalFileMissingMarker
         // кладётся в Details ErrorMessage — классификатор отдаёт LocalFileMissing, не Unreachable.
         public string? StderrTail;
+        // Tick-метка (Environment.TickCount64) последней строки stderr: WaitForStderrDrainAsync
+        // ждёт, пока stderr «замер» (нет новых строк grace-мс), прежде чем ProcessDeathMessage
+        // прочитает хвост — иначе асинхронный ErrorDataReceived может не дописать маркер.
+        // Сбрасывается per-turn в TrySubmitTurn (как StderrTail).
+        public long LastStderrTick;
         // Резолвится reader'ом на result текущего хода (или финализацией — процесс умер)
         public TaskCompletionSource TurnTcs { get; set; } = NewTcs();
         // Живые фоновые задачи прогона: agentId/runId из tool_result запуска → toolUseId
@@ -2980,8 +2985,10 @@ public class ClaudeSession : ILlmSessionAdapter
             run.CliRetry = new CliRetryStats(0, 0, null);
             // Хвост stderr — per-turn: ProcessDeathMessage читает только stderr ЭТОГО хода,
             // а не накопленный с момента старта процесса (иначе маркер «file not found» из
-            // прошлого хода ложно сработал бы на новом).
+            // прошлого хода ложно сработал бы на новом). Метка времени последней строки —
+            // тоже per-turn: WaitForStderrDrainAsync не должен ждать «завтра» по прошлому ходу.
             run.StderrTail = null;
+            run.LastStderrTick = 0;
             run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
             ArmEchoWait(run, turnUuid); // result'ы до эха этого сообщения — чужие
             run.Process.StandardInput.WriteLine(userMessageJson);
@@ -4433,6 +4440,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     : run.StderrTail + "\n" + line;
                 if (run.StderrTail.Length > StderrTailMax)
                     run.StderrTail = run.StderrTail[^StderrTailMax..];
+                // Метка времени последней строки: WaitForStderrDrainAsync по ней понимает,
+                // что stderr «замер» (все буферизованные строки доставлены) — маркер не теряется.
+                run.LastStderrTick = Environment.TickCount64;
             };
             process.BeginErrorReadLine();
             // Между Start и подпиской процесс мог умереть — обработаем сразу, иначе Exited уже
@@ -4866,7 +4876,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // P30: pending control_response завис бы карточкой до 60-минутного таймаута
                     if (pendingControlResponse) CancelPendingControlResponses();
-                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode, _disposing, run.StderrTail)); }
+                    // Дренаж stderr: хвост может быть ещё не дописан асинхронным ErrorDataReceived
+                    await WaitForStderrDrainAsync(run);
+                    try { await _onMessage(ProcessDeathMessage(pendingControlResponse, exitCode, _disposing, run.StderrTail, run.TurnGotEvent)); }
                     catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
                 }
             }
@@ -4905,7 +4917,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // internal для тестов (InternalsVisibleTo): две ветки — свой Kill из DisposeAsync (disposing=true,
     // новый текст без маркера) и настоящий oom-kill (disposing=false, ProcessKilled + маркер) —
     // проверяются напрямую, без жизненного цикла процесса.
-    internal static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode, bool disposing, string? stderrTail = null)
+    internal static ErrorMessage ProcessDeathMessage(bool pendingControlResponse, int? exitCode, bool disposing, string? stderrTail = null, bool turnGotEvent = false)
     {
         if (pendingControlResponse)
             return new ErrorMessage("Процесс модели завершился во время ожидания разрешения — ход прерван");
@@ -4926,12 +4938,36 @@ public class ClaudeSession : ILlmSessionAdapter
         // LocalFileMissingMarker в Details → классификатор LocalFileMissing (повтор той же пары +
         // честная ошибка), а не Unreachable (смена подписки). Сырой stderr остаётся после маркера —
         // человек видит его в «Подробностях».
-        if (stderrTail is not null
+        //
+        // Маркер ставим ТОЛЬКО если ход не получил ни одного события (turnGotEvent=false): тогда
+        // «Ход не стартовал…» (TurnFailureText.LocalFileMissing) правдив. Поздняя смерть посреди
+        // хода (turnGotEvent=true) с посторонним «file not found» в stderr — легитимный обрыв,
+        // остаётся Unreachable: текст «ход не стартовал» на уже начавшемся ходе лгал бы.
+        if (!turnGotEvent
+            && stderrTail is not null
             && stderrTail.Contains("file not found", StringComparison.OrdinalIgnoreCase))
             return new ErrorMessage(
                 "Процесс модели завершился во время хода — ответ не был получен",
                 Details: $"{TurnErrorClassifier.LocalFileMissingMarker} {stderrTail}");
         return new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен");
+    }
+
+    // Дренаж stderr перед чтением хвоста (ProcessDeathMessage). ErrorDataReceived доставляет
+    // строки stderr асинхронно на фоне: к моменту Exited/EOF хвост (run.StderrTail) может быть
+    // ещё не дописан, и маркер «file not found» терялся бы вероятностно. Ждём, пока stderr «замер»
+    // (нет новых строк grace-мс), с жёстким потолком: маркер не теряется, но и вечного ожидания
+    // не надо. Штатный случай (stderr пуст или давно дописан) выходит сразу.
+    private async Task WaitForStderrDrainAsync(CliRun run)
+    {
+        const int GraceMs = 50;
+        const int HardCapMs = 300;
+        var deadline = Environment.TickCount64 + HardCapMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            var last = run.LastStderrTick;
+            if (last == 0 || Environment.TickCount64 - last >= GraceMs) break;
+            await Task.Delay(15);
+        }
     }
 
     // Смерть процесса CLI по событию ОС (Exited). До фикса P27 смерть детектировалась только по
@@ -4994,7 +5030,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // рядом с ним лжёт. Pending control при этом чистит сам Interrupt.
         if (!willRetry && !_interruptedByUser)
         {
-            var message = ProcessDeathMessage(pendingControlResponse, exitCode, _disposing, run.StderrTail);
+            // Дренаж stderr: хвост может быть ещё не дописан асинхронным ErrorDataReceived
+            await WaitForStderrDrainAsync(run);
+            var message = ProcessDeathMessage(pendingControlResponse, exitCode, _disposing, run.StderrTail, run.TurnGotEvent);
             // Отменяем ожидающие control_response: иначе DecidePermissionAsync держит граф до
             // 60-минутного таймаута, карточка в ленте «Claude ждёт ответа» зависает навсегда (P30).
             if (pendingControlResponse) CancelPendingControlResponses();

@@ -67,6 +67,67 @@ public class ClaudeSessionDisposeDeathMessageTests
         msg.Text.Should().NotBe(TurnFailureText.ProcessKilled);
     }
 
+    // ===== Файл аргумента CLI не найден (инцидент 2026-10-16): производящая сторона =====
+    // ProcessDeathMessage — чистая функция: stderr «file not found» → маркер [Local:file-missing]
+    // в Details (классификатор → LocalFileMissing). Мутация «стереть stderrTail.Contains("file
+    // not found")» (условие становится «stderrTail is not null») обязана покрасить тест
+    // ..._StderrБезFileNotFound_БезМаркера: любой ненулевой stderr ложно ставил бы маркер.
+
+    // «file not found» в stderr → маркер [Local:file-missing] первым токеном Details.
+    [Fact]
+    public void ProcessDeathMessage_FileNotFoundВStderr_МаркерLocalFileMissing()
+    {
+        var msg = ClaudeSession.ProcessDeathMessage(
+            pendingControlResponse: false, exitCode: 1, disposing: false,
+            stderrTail: "Error: --agents file not found: /tmp/claude-agents-abc123.json");
+
+        msg.Details.Should().NotBeNull("маркер [Local:file-missing] — первый токен Details");
+        msg.Details!.Should().StartWith(TurnErrorClassifier.LocalFileMissingMarker,
+            "«file not found» в stderr — локальная гонка per-run файла, маркер ставится");
+        msg.Details.Should().Contain("file not found", "сырой stderr после маркера не теряется");
+    }
+
+    // null в stderr → маркера нет (процесс умер без stderr — обычный обрыв, Unreachable).
+    [Fact]
+    public void ProcessDeathMessage_NullStderr_БезМаркера()
+    {
+        var msg = ClaudeSession.ProcessDeathMessage(
+            pendingControlResponse: false, exitCode: 1, disposing: false, stderrTail: null);
+
+        msg.Details.Should().BeNull(
+            "null в stderr — маркера нет: это не «file not found», а обычный обрыв");
+    }
+
+    // Мутация «стереть .Contains("file not found")»: условие становится «stderrTail is not null»,
+    // и ЛЮБОЙ ненулевой stderr ложно ставил бы маркер. Этот тест её ловит: stderr без
+    // «file not found» → маркера нет.
+    [Fact]
+    public void ProcessDeathMessage_StderrБезFileNotFound_БезМаркера()
+    {
+        var msg = ClaudeSession.ProcessDeathMessage(
+            pendingControlResponse: false, exitCode: 1, disposing: false,
+            stderrTail: "some other startup error, no file involved");
+
+        msg.Details.Should().BeNull(
+            "«file not found» в stderr отсутствует — маркер LocalFileMissing не ставится");
+    }
+
+    // Ход уже получил события (turnGotEvent=true) — смерть посреди хода, а не на старте.
+    // Посторонний «file not found» в stderr не делает это локальной гонкой: текст
+    // «Ход не стартовал» (TurnFailureText.LocalFileMissing) на уже начавшемся ходе лгал бы.
+    // Маркер ставится ТОЛЬКО при !turnGotEvent — тест ловит мутацию «убрать !turnGotEvent».
+    [Fact]
+    public void ProcessDeathMessage_ХодПолучилСобытия_ФайлNotFoundВStderr_БезМаркера()
+    {
+        var msg = ClaudeSession.ProcessDeathMessage(
+            pendingControlResponse: false, exitCode: 1, disposing: false,
+            stderrTail: "Error: --agents file not found: /tmp/claude-agents-abc123.json",
+            turnGotEvent: true);
+
+        msg.Details.Should().BeNull(
+            "ход уже стартовал (turnGotEvent=true) — «file not found» в stderr посторонний, маркера нет");
+    }
+
     // ===== DisposeAsync ставит флаг (ловит мутацию «убрать _disposing = true») =====
 
     [Fact]

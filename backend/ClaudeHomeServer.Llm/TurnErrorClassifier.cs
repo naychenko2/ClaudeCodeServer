@@ -213,9 +213,12 @@ public static class TurnErrorClassifier
         // процесс на той же машине упрётся в тот же пропавший файл), а повтор той же пары (CLI
         // пересоберёт файлы) — лечит. ДО ветки "без result → Unreachable": иначе пропавший файл
         // маскировался бы под мёртвый эндпоинт и фолбэк жёл подписки (инцидент 2026-10-16).
-        // Маркер — основной канал; сырой «file not found» — запасной, если маркер не дошёл.
+        // Маркер — основной канал (ClaudeSession ставит его, только когда ход не стартовал).
+        // Сырой «file not found» — запасной, но только при !HasResult: ответ провайдера (result
+        // есть) с HTML 5xx, содержащим «file not found», — это ProviderError/Unreachable, а не
+        // локальная гонка; без гейта по HasResult цитата в теле ответа ложно дала бы LocalFileMissing.
         if (outcome.ErrorText?.StartsWith(LocalFileMissingMarker, StringComparison.Ordinal) == true
-            || LooksLocalFileMissing(outcome.ErrorText))
+            || (!outcome.HasResult && LooksLocalFileMissing(outcome.ErrorText)))
             return FallbackErrorClass.LocalFileMissing;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа

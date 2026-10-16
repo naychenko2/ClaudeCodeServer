@@ -615,6 +615,25 @@ public class TurnErrorClassifierTests
             "обрыв сети без «file not found» — по-прежнему Unreachable");
     }
 
+    // Ответ провайдера (result есть) с HTML 5xx, содержащим «file not found»: это ProviderError
+    // (5xx), а не локальная гонка per-run файла. Сырая ветка LooksLocalFileMissing по ErrorText
+    // ограничена случаем !HasResult: маркер (ставит ClaudeSession, только когда ход не стартовал)
+    // остаётся основным каналом. Мутация «убрать !HasResult из сырой ветки» обязана покрасить тест:
+    // цитата «file not found» в теле ответа провайдера ложно дала бы LocalFileMissing.
+    [Fact]
+    public void ОтветПровайдера_5xxHtmlСFileNotFound_ОстаётсяProviderError()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = true,
+            Subtype = "error",
+            ApiErrorStatus = "500",
+            ErrorText = "<html><head><title>500 Internal Server Error</title></head><body>file not found</body></html>",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.ProviderError,
+            "ответ провайдера (result есть) с 5xx — ProviderError; «file not found» в HTML — цитата, не локальная гонка");
+    }
+
     [Fact]
     public void LocalFileMissing_WireName()
         => TurnErrorClassifier.WireName(FallbackErrorClass.LocalFileMissing).Should().Be("local_file_missing");

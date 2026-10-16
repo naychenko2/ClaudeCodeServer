@@ -82,7 +82,6 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             Preemptions = p.Preemptions,
             GenTokens = p.GenTokens,
             ItlSeconds = p.ItlSeconds,
-            BusySeconds = p.BusySeconds,
         }).ToArray();
 
         // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
@@ -392,8 +391,6 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
     // с прошлой точки (фронт сводит в интервалы и считает долю из сумм). null — нет данных.
     // Скорость на поток (вторая линия графика): genTokens/itlSeconds — приращения счётчиков
     // с прошлой точки; фронт сводит в интервалы и делит ΣgenTokens/ΣitlSeconds (ток/с).
-    // busySeconds — занятое время генерации стенда (сек) с прошлой точки (wall-clock, не сумма
-    // по потокам); фронт: выработка стенда = ΣgenTokens/ΣbusySeconds, в интервале без генерации → 0.
     public sealed record HistoryPointDto
     {
         public long T { get; init; }
@@ -408,7 +405,6 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public long? Preemptions { get; init; }
         public long? GenTokens { get; init; }
         public double? ItlSeconds { get; init; }
-        public double? BusySeconds { get; init; }
     }
 
     // Чат на стенде: живой ход на локальном движке. Own — чат текущего пользователя

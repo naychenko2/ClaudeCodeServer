@@ -4,12 +4,12 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  avgPerStreamOf, avgStandTotalOf, avgThroughputOf, breakRuns, buildIntervals,
-  buildPerStreamSegments, buildStandTotalSegments, buildThroughputSegments, cacheHitAvg,
+  avgIssuedOf, avgPerStreamOf, avgThroughputOf, breakRuns, buildIntervals,
+  buildIssuedSegments, buildPerStreamSegments, buildThroughputSegments, cacheHitAvg,
   chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
-  kvChartAriaLabel, maxSeriesOf, maxThroughputOf, niceAxisMax, peakStandTotalOf,
+  kvChartAriaLabel, maxSeriesOf, maxThroughputOf, niceAxisMax, peakPerStreamOf,
   peakThroughputOf, perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
-  standTotalBreakRuns, tpChartAriaLabel, xForTime, yForThroughput,
+  tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type ThroughputSample,
 } from './ThroughputChart';
 
@@ -226,7 +226,6 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     preemptions: p.preemptions ?? null,
     genTokens: p.genTokens ?? null,
     itlSeconds: p.itlSeconds ?? null,
-    busySeconds: p.busySeconds ?? null,
   };
 }
 
@@ -348,7 +347,7 @@ describe('intervalCountFor: число интервалов окна', () => {
 
 describe('breakRuns: непрерывные прогоны разрыва (throughput == null)', () => {
   const mk = (tStart: number, tEnd: number, tp: number | null): Interval =>
-    ({ tStart, tEnd, throughput: tp, perStream: null, standTotal: null, kvUsage: null, prefix: null, ram: null, preemptions: null,
+    ({ tStart, tEnd, throughput: tp, perStream: null, kvUsage: null, prefix: null, ram: null, preemptions: null,
       hasData: { prefix: false, ram: false } });
 
   it('один прогон: серия null → пара [start, end]', () => {
@@ -377,23 +376,28 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «Выработка, ток/с» обновляется на hover', () => {
+describe('tpChartAriaLabel: SVG «Скорость генерации, ток/с» обновляется на hover', () => {
   it('базовый: окно + среднее + кэш', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('Выработка, ток/с за 15 минут');
+    expect(label).toContain('Скорость генерации, ток/с за 15 минут');
     expect(label).toContain('412 ток/с');
     expect(label).not.toContain('интервал');
   });
-  it('hover: добавляется интервал с временем и значением', () => {
-    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
+  it('hover: интервал с временем и значениями обеих серий', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250, 120);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('250 ток/с');
+    expect(label).toContain('скорость генерации 250 ток/с');
+    expect(label).toContain('выдано стендом, с паузами 120 ток/с');
   });
-  it('hover на разрыве (throughput null) → «движок не отвечал»', () => {
-    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
+  it('hover: генерации не было, но стенд отвечал → «генерации не было»', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', null, 0);
+    expect(label).toContain('генерации не было');
+    expect(label).not.toContain('движок не отвечал');
+  });
+  it('hover на разрыве (обе серии null) → «движок не отвечал»', () => {
+    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null, null);
     expect(label).toContain('интервал 14:32');
     expect(label).toContain('движок не отвечал');
-    // в части «интервал …:» единицы быть не должно — на разрыве значения нет
     const after = label.split('интервал')[1] ?? '';
     expect(after).not.toMatch(/\d+\s+ток\/с/);
   });
@@ -592,8 +596,8 @@ describe('buildIntervals: кэш — несение при «не спрашив
 // «max одной серии → max обеих» — на ось.
 
 // Минимальный Interval для тестов построения/разрывов линий.
-function mkIt(tStart: number, tEnd: number, perStream: number | null, standTotal: number | null = null): Interval {
-  return { tStart, tEnd, throughput: null, perStream, standTotal, kvUsage: null, prefix: null, ram: null,
+function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput: number | null = null): Interval {
+  return { tStart, tEnd, throughput, perStream, kvUsage: null, prefix: null, ram: null,
     preemptions: null, hasData: { prefix: false, ram: false } };
 }
 
@@ -661,12 +665,12 @@ describe('perStreamBreakRuns: прогоны разрыва второй лин�
 });
 
 describe('maxSeriesOf: верх общей оси по максимуму ОБЕИХ серий (обе на интервалах)', () => {
-  it('«на агента» выше «всего по стенду» — берётся оно', () => {
-    const intervals = [mkIt(0, 1, 300, 100)];   // perStream=300, standTotal=100
+  it('скорость генерации выше «выдано стендом» — берётся она', () => {
+    const intervals = [mkIt(0, 1, 300, 100)];   // perStream=300, throughput=100
     expect(maxSeriesOf(intervals)).toBe(300);
   });
-  it('«всего по стенду» выше — берётся оно', () => {
-    const intervals = [mkIt(0, 1, 300, 500)];   // perStream=300, standTotal=500
+  it('«выдано стендом» выше — берётся оно', () => {
+    const intervals = [mkIt(0, 1, 300, 500)];   // perStream=300, throughput=500
     expect(maxSeriesOf(intervals)).toBe(500);
   });
   it('без данных — 0', () => {
@@ -688,130 +692,73 @@ describe('avgPerStreamOf: средняя на агента за окно', () =>
   });
 });
 
-// === «Всего по стенду» без пауз: standTotal = ΣgenTokens/ΣbusySeconds ===
-// busySeconds — занятое время стенда (wall-clock, не сумма по потокам), поэтому:
-//  • один агент весь интервал → «стенд» = «на агента»;
-//  • простой (busySeconds = 0) → 0, не null, и не размывает скорость агента;
-//  • два параллельных агента → busySeconds не удваивается, «стенд» > «на агента»;
-//  • старый бэкенд (нет busySeconds) → деление на длину интервала (старая формула).
-// Мутация «Σbusy → длина интервала» (старая формула) красит тесты 2 и 5.
+// === Второй план «выдано стендом, с паузами»: throughput интервала (genThroughput) ===
+// Главная линия — perStream (ΣgenTokens/ΣitlSeconds, измерение vLLM); throughput живёт
+// рядом и считается независимо. Мутация «perStream ← throughput» красит оба теста.
 
-describe('buildIntervals: «всего по стенду» без пауз (ΣgenTokens/ΣbusySeconds)', () => {
-  // 15-с интервал, 3 точки по 5 с.
+describe('buildIntervals: скорость генерации и «выдано стендом» живут независимо', () => {
   const T_MIN = 0, T_MAX = 15_000, INTERVAL_MS = 15_000;
 
-  it('один агент весь интервал: «стенд» = «на агента» (обе линии равны)', () => {
-    // Агент 100 ток/с все 15 с: 500 ток/шаг, занято 5 с/шаг, itl 5 с/шаг (один поток).
+  it('агент 2 с пишет и 13 с простаивает: скорость генерации 100, выдано стендом размыто паузами', () => {
     const samples = [
-      sample({ t: 0, genTokens: 500, itlSeconds: 5, busySeconds: 5 }),
-      sample({ t: 5000, genTokens: 500, itlSeconds: 5, busySeconds: 5 }),
-      sample({ t: 10000, genTokens: 500, itlSeconds: 5, busySeconds: 5 }),
+      sample({ t: 0, throughput: 40, genTokens: 200, itlSeconds: 2 }),
+      sample({ t: 5000, throughput: 0, genTokens: 0, itlSeconds: 0 }),
+      sample({ t: 10000, throughput: 0, genTokens: 0, itlSeconds: 0 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // standTotal = 1500/15 = 100; perStream = 1500/15 = 100 → равны
-    expect(intervals[0].standTotal).toBeCloseTo(100, 6);
+    // скорость генерации = 200/2 = 100 — паузы в знаменатель не входят
     expect(intervals[0].perStream).toBeCloseTo(100, 6);
-    expect(intervals[0].standTotal).toBeCloseTo(intervals[0].perStream as number, 6);
+    // выдано стендом = среднее (40+0+0)/3 — паузы размывают (так и задумано)
+    expect(intervals[0].throughput).toBeCloseTo(40 / 3, 6);
   });
 
-  it('агент 2 с пишет и 13 с простаивает: «стенд» = скорость агента, не размывается', () => {
-    // 15-с интервал: агент генерирует 100 ток/с первые 2 с (200 ток), дальше простой.
-    // busySeconds/itlSeconds = 2 на шаге 1, 0 на шагах 2-3.
+  it('два агента параллельно: выдано стендом выше скорости генерации на поток', () => {
     const samples = [
-      sample({ t: 0, genTokens: 200, itlSeconds: 2, busySeconds: 2 }),
-      sample({ t: 5000, genTokens: 0, itlSeconds: 0, busySeconds: 0 }),
-      sample({ t: 10000, genTokens: 0, itlSeconds: 0, busySeconds: 0 }),
+      sample({ t: 0, throughput: 200, genTokens: 1000, itlSeconds: 10 }),
+      sample({ t: 5000, throughput: 200, genTokens: 1000, itlSeconds: 10 }),
+      sample({ t: 10000, throughput: 200, genTokens: 1000, itlSeconds: 10 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // standTotal = 200/2 = 100 (скорость агента); старая формула 200/15 = 13.3
-    expect(intervals[0].standTotal).toBeCloseTo(100, 6);
-    // «на агента» = 200/2 = 100 — совпадает (один агент)
-    expect(intervals[0].perStream).toBeCloseTo(100, 6);
+    expect(intervals[0].perStream).toBeCloseTo(100, 6);   // 3000/30
+    expect(intervals[0].throughput).toBeCloseTo(200, 6);
+    expect(intervals[0].throughput as number).toBeGreaterThan(intervals[0].perStream as number);
   });
 
-  it('два агента параллельно: «стенд» > «на агента»', () => {
-    // Два агента по 100 ток/с: суммарно 200 ток/с. busySeconds = 5/шаг (wall-clock,
-    // оба агента → одна занятая секунда); itlSeconds = 10/шаг (сумма по двум потокам).
-    const samples = [
-      sample({ t: 0, genTokens: 1000, itlSeconds: 10, busySeconds: 5 }),
-      sample({ t: 5000, genTokens: 1000, itlSeconds: 10, busySeconds: 5 }),
-      sample({ t: 10000, genTokens: 1000, itlSeconds: 10, busySeconds: 5 }),
-    ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // standTotal = 3000/15 = 200; perStream = 3000/30 = 100 → стенд вдвое больше
-    expect(intervals[0].standTotal).toBeCloseTo(200, 6);
-    expect(intervals[0].perStream).toBeCloseTo(100, 6);
-    expect(intervals[0].standTotal as number).toBeGreaterThan(intervals[0].perStream as number);
-  });
-
-  it('пустой интервал (без генерации) → 0, не null (простой виден провалом)', () => {
-    // busySeconds = 0 (метрика есть, генерации не было) на всех точках.
-    const samples = [
-      sample({ t: 0, genTokens: 0, itlSeconds: 0, busySeconds: 0 }),
-      sample({ t: 5000, genTokens: 0, itlSeconds: 0, busySeconds: 0 }),
-    ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].standTotal).toBe(0);
-    // perStream: Σitl = 0 → null (не делим на ноль) — разрыв, не 0
+  it('движок молчал (throughput и пары null) → обе серии null (разрыв)', () => {
+    const intervals = buildIntervals([sample({ t: 0 })], T_MIN, T_MAX, INTERVAL_MS);
     expect(intervals[0].perStream).toBeNull();
+    expect(intervals[0].throughput).toBeNull();
   });
+});
 
-  it('старый бэкенд (нет busySeconds) → деление на длину интервала (старая формула)', () => {
-    // genTokens/itlSeconds есть, busySeconds = null (поле не пришло).
+describe('avgIssuedOf: «выдано стендом» за окно — среднее с простоем', () => {
+  it('нули простоя входят в среднее; null пропускается', () => {
     const samples = [
-      sample({ t: 0, genTokens: 200, itlSeconds: 2 }),
-      sample({ t: 5000, genTokens: 0, itlSeconds: 0 }),
-      sample({ t: 10000, genTokens: 0, itlSeconds: 0 }),
+      sample({ t: 1, throughput: 100 }),
+      sample({ t: 2, throughput: 0 }),
+      sample({ t: 3, throughput: null }),
     ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // старая формула: 200 / 15 с = 13.33 (размывается простоем)
-    expect(intervals[0].standTotal).toBeCloseTo(200 / 15, 6);
-    // «на агента» не зависит от busySeconds: 200/2 = 100
-    expect(intervals[0].perStream).toBeCloseTo(100, 6);
+    expect(avgIssuedOf(samples)).toBeCloseTo(50, 6);
+  });
+  it('нет данных → null', () => {
+    expect(avgIssuedOf([sample({ t: 1 })])).toBeNull();
   });
 });
 
-describe('avgStandTotalOf: «всего по стенду» за окно (строка-итог «в среднем»)', () => {
-  it('ΣgenTokens/ΣbusySeconds по всем точкам окна', () => {
-    const samples = [
-      sample({ t: 1, genTokens: 100, busySeconds: 2 }),
-      sample({ t: 2, genTokens: 200, busySeconds: 2 }),
-    ];
-    // (100+200)/(2+2) = 75
-    expect(avgStandTotalOf(samples, 60_000)).toBeCloseTo(75, 6);
-  });
-  it('простой (busySeconds = 0) → 0, не null', () => {
-    const samples = [sample({ t: 1, genTokens: 0, busySeconds: 0 })];
-    expect(avgStandTotalOf(samples, 60_000)).toBe(0);
-  });
-  it('старый бэкенд (нет busySeconds) → деление на длину окна', () => {
-    const samples = [sample({ t: 1, genTokens: 100 })];
-    // 100 / 60 с = 1.667
-    expect(avgStandTotalOf(samples, 60_000)).toBeCloseTo(100 / 60, 6);
-  });
-  it('genTokens вовсе нет → null', () => {
-    expect(avgStandTotalOf([sample({ t: 1 })], 60_000)).toBeNull();
+describe('peakPerStreamOf: пик скорости генерации по интервалам', () => {
+  it('максимум perStream; null пропускает; пусто → 0', () => {
+    const intervals = [mkIt(0, 1, 100, 300), mkIt(1, 2, null, null), mkIt(2, 3, 150, 10)];
+    expect(peakPerStreamOf(intervals)).toBe(150);
+    expect(peakPerStreamOf([])).toBe(0);
   });
 });
 
-describe('peakStandTotalOf: пик «всего по стенду» по интервалам', () => {
-  it('максимум standTotal; null пропускает; пусто → 0', () => {
-    const intervals = [mkIt(0, 1, 100, 200), mkIt(1, 2, null, null), mkIt(2, 3, 50, 150)];
-    expect(peakStandTotalOf(intervals)).toBe(200);
-    expect(peakStandTotalOf([])).toBe(0);
-  });
-});
-
-describe('buildStandTotalSegments / standTotalBreakRuns: линия и разрывы «всего по стенду»', () => {
-  it('null в standTotal рвёт линию: два сегмента', () => {
-    const intervals = [mkIt(0, 30_000, 100, 100), mkIt(30_000, 60_000, null, null), mkIt(60_000, 90_000, 200, 200)];
-    const segs = buildStandTotalSegments(intervals, 0, 90_000, 200, GEOM);
+describe('buildIssuedSegments: линия «выдано стендом» рвётся на null', () => {
+  it('null в throughput рвёт линию: два сегмента; perStream на неё не влияет', () => {
+    const intervals = [mkIt(0, 30_000, 5, 100), mkIt(30_000, 60_000, 5, null), mkIt(60_000, 90_000, 5, 200)];
+    const segs = buildIssuedSegments(intervals, 0, 90_000, 200, GEOM);
     expect(segs).toHaveLength(2);
     expect(segs[0]).toHaveLength(1);
     expect(segs[1]).toHaveLength(1);
-  });
-  it('standTotalBreakRuns: серия null → [start, end]; 0 (не null) — не разрыв', () => {
-    const intervals = [mkIt(0, 1, 10, 10), mkIt(1, 2, null, null), mkIt(2, 3, null, null), mkIt(3, 4, 0, 0)];
-    expect(standTotalBreakRuns(intervals)).toEqual([[1, 2]]);
   });
 });

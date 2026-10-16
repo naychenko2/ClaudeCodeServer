@@ -67,15 +67,10 @@ export interface LocalModelStats {
     // скорость на поток (вторая линия графика, ADR-029): genTokens — приращение
     // vllm:generation_tokens_total, itlSeconds — приращение
     // vllm:inter_token_latency_seconds_sum (сек); фронт: ΣgenTokens/ΣitlSeconds =
-    // средняя скорость на агента (ток/с). null — нет прошлой точки/рестарт (см. api.md)
+    // скорость генерации на поток (ток/с, главная линия графика).
+    // null — нет прошлой точки/рестарт (см. api.md)
     genTokens?: number | null;
     itlSeconds?: number | null;
-    // busySeconds (сек) — занятое время генерации стенда с прошлой точки: сколько секунд
-    // за интервал хотя бы один запрос генерировал. Время по стене, НЕ сумма по потокам
-    // (два параллельных агента дают одну занятую секунду). Фронт: выработка стенда
-    // = ΣgenTokens/ΣbusySeconds (ток/с) — без пауз; в интервале без генерации → 0.
-    // null — нет прошлой точки/рестарт; 0 (не null) — метрика есть, генерации не было.
-    busySeconds?: number | null;
   }[];
   // tensorParallel — необязательное: число GPU в tensor-parallel (Денис добавляет
   // следующим); нет поля — TP = число карт (gpus.length)

@@ -362,12 +362,17 @@ const REPRO_SCHEMA = {
 };
 
 // Подтверждение проверки дефекта. Автора (человек/персона) и отметку времени бэкенд ставит
-// сам по сессии вызова; MCP передаёт только комментарий проверяющего.
+// сам по сессии вызова; MCP передаёт комментарий проверяющего и вердикт (исход витка).
 const VERIFICATION_SCHEMA = {
   type: 'object',
   description: `Подтверждение проверки дефекта (${SEE_INSTRUCTIONS})`,
   properties: {
     notes: { type: 'string', description: 'Комментарий проверяющего (опционально)' },
+    verdict: {
+      type: 'string',
+      enum: ['accepted', 'accepted_with_remarks', 'returned', 'withdrawn'],
+      description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn',
+    },
   },
 };
 
@@ -378,9 +383,41 @@ const OUTCOME_SCHEMA = {
   description: `Исход дефекта (${SEE_INSTRUCTIONS})`,
 };
 
+// Разметка фичи (режим «Исполнение фичи»). Описания по одной строке: общий лимит на
+// tool-level description ≤ 1950 символов (стек MCP режет длинные), значения — enum'ы.
+// Парные поля http-ветки TasksToolset.cs (FeatureIdSchema/RoleSchema/StepRefSchema/LaneSchema/
+// ReviewOfSchema) — паритет по составу полей держит TasksToolsetParityTests.
+const FEATURE_ID_SCHEMA = {
+  type: 'string',
+  description: `Id задачи-эпика фичи (${SEE_INSTRUCTIONS})`,
+};
+
+const ROLE_SCHEMA = {
+  type: 'string',
+  enum: ['feature', 'cut', 'plan', 'step', 'rework', 'review', 'qa', 'final', 'merge', 'consult'],
+  description: 'Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult',
+};
+
+const STEP_REF_SCHEMA = {
+  type: 'string',
+  description: 'Код шага из плана (у step/rework)',
+};
+
+const LANE_SCHEMA = {
+  type: 'string',
+  description: 'Линия (бэк/фронт; у step/rework)',
+};
+
+const REVIEW_OF_SCHEMA = {
+  type: 'array',
+  items: { type: 'string' },
+  description: 'Id задач, которые оценивает это ревью/проверка/финал',
+};
+
 // Ссылки через свойства объектов в inputSchema линтер TS на .js не всегда видит —
 // явное использование убирает ложные ворнинги «declared but never read».
 void KIND_SCHEMA; void REPRO_SCHEMA; void VERIFICATION_SCHEMA; void OUTCOME_SCHEMA;
+void FEATURE_ID_SCHEMA; void ROLE_SCHEMA; void STEP_REF_SCHEMA; void LANE_SCHEMA; void REVIEW_OF_SCHEMA;
 
 // Справочник сервера (поле instructions ответа initialize): клиент кладёт его в контекст один
 // раз на сервер, тогда как повторённый в схемах текст оплачивается в каждой из них — правило
@@ -483,6 +520,11 @@ const TOOLS = [
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
         kind: KIND_SCHEMA,
         repro: REPRO_SCHEMA,
+        featureId: FEATURE_ID_SCHEMA,
+        role: ROLE_SCHEMA,
+        stepRef: STEP_REF_SCHEMA,
+        lane: LANE_SCHEMA,
+        reviewOf: REVIEW_OF_SCHEMA,
         projectId: { type: 'string', description: 'Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)' },
       },
     },
@@ -516,6 +558,11 @@ const TOOLS = [
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
         kind: KIND_SCHEMA,
         repro: REPRO_SCHEMA,
+        featureId: FEATURE_ID_SCHEMA,
+        role: ROLE_SCHEMA,
+        stepRef: STEP_REF_SCHEMA,
+        lane: LANE_SCHEMA,
+        reviewOf: REVIEW_OF_SCHEMA,
         verification: VERIFICATION_SCHEMA,
         outcome: OUTCOME_SCHEMA,
         projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },
@@ -725,7 +772,14 @@ async function callTool(name, args) {
       // (X-Caller-Session-Id) сам, иначе мы бы затирали фактического автора дефолтом чата.
       if (args.verification !== undefined) body.verification = args.verification;
       if (args.outcome !== undefined) body.outcome = args.outcome;
-      return json(await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) }));
+      const task = await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      // Мягкое предупреждение (паритет с CompleteResponse http-ветки): ревью/проверку/финал
+      // фичи закрыли без вердикта — карточка его не покажет, а блокировать закрытие ради UI
+      // нельзя. Отдельное поле warning, не notes.
+      if (task && task.featureId && ['review', 'qa', 'final'].includes(task.role) && !task.verification?.verdict)
+        task.warning = 'У ревью/проверки/финала фичи нет вердикта — карточка его не покажет. '
+          + 'Задайте verification.verdict (accepted · accepted_with_remarks · returned · withdrawn).';
+      return json(task);
     }
 
     case 'tasks_run_executor': {

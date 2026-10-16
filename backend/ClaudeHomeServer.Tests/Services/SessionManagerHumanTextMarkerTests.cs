@@ -219,34 +219,24 @@ public class SessionManagerHumanTextMarkerTests : IDisposable
         var (session, _) = await MkMarkerChatAsync("history");
         session.ClaudeSessionId = "cli-" + Guid.NewGuid().ToString("N");
 
+        var entry = GetEntry(session.Id);
+        var acc = (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
+
         await _sut.SendMessageAsync(session.Id, raw, []);
 
         // Лента: аккумулятор хранит сырую реплику человека, без маркера
-        var entry = GetEntry(session.Id);
-        var acc = (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
         var userMsgs = acc.GetAll().OfType<StoredUserMessage>().ToList();
         userMsgs.Should().Contain(m => m.Text == raw, "лента хранит сырую реплику");
         userMsgs.Should().NotContain(m => m.Text.Contains("ccs:human-text"), "маркер в ленту не уходит");
 
-        // history.json: fire-and-forget запись — даём обработчикам дописать, затем читаем файл
-        await WaitForHistoryAsync(session.ClaudeSessionId!);
-        var historyFile = Path.Combine(_tempDir, "sessions", session.ClaudeSessionId!, "history.json");
-        if (File.Exists(historyFile))
-        {
-            File.ReadAllText(historyFile).Should().NotContain("ccs:human-text", "маркер в history.json не уходит");
-        }
-    }
-
-    // history.json пишется fire-and-forget: ждём появления файла (или короткой паузы, если запись
-    // ещё в пути). Не блокируем тест на потолок — достаточно дать обработчику дописать.
-    private async Task WaitForHistoryAsync(string claudeSessionId)
-    {
-        var file = Path.Combine(_tempDir, "sessions", claudeSessionId, "history.json");
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (File.Exists(file)) return;
-            await Task.Delay(20);
-        }
+        // history.json: в живом ходе пишется fire-and-forget на событиях хода, но mock-адаптер
+        // сообщений не шлёт — запись не сработает сама. Триггерим её явно (SaveSnapshotAsync) и
+        // проверяем файл ЖЁСТКО: он обязан появиться (путь — от SaveKey, а не от ClaudeSessionId)
+        // и маркера в нём нет. minor a Глеба: раньше тест молчал (guard `if (File.Exists)`),
+        // если файл не появился.
+        await acc.SaveSnapshotAsync(_historyService);
+        var historyFile = Path.Combine(_tempDir, "sessions", acc.SaveKey!, "history.json");
+        File.Exists(historyFile).Should().BeTrue("history.json не записан после SaveSnapshotAsync");
+        File.ReadAllText(historyFile).Should().NotContain("ccs:human-text", "маркер в history.json не уходит");
     }
 }

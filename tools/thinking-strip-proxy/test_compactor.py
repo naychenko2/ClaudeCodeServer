@@ -772,6 +772,165 @@ class Step5EscapeCliTagsTests(unittest.TestCase):
                          "мутация (экранирование убрано) не покраснела: CLI не вырезал тег")
 
 
+# --- Шаг 8: повторное сжатие — перенос прошлого <ccs-preserved> в новый блок ---------------
+
+def _cli_summary_msg(block, summary="сводка модели"):
+    """Запись сжатия CLI: user-сообщение с фиксированным префиксом, сводкой и нашим блоком
+    (как её раскладывает CLI: «Summary:» + текст + блок вне тегов)."""
+    return _user(
+        "This session is being continued from a previous conversation that ran out of "
+        "context. Summary of the conversation, whose transcript may be found at:\n"
+        "- Primary request: ...\n\n"
+        "Summary:\n" + summary + "\n" + block)
+
+
+def _section(block, title):
+    """Текст секции блока по заголовку (для проверок); None — секции нет."""
+    lines = block.split("\n")
+    out, found = [], False
+    for ln in lines:
+        if ln == title:
+            found = True
+            continue
+        if found and (ln.startswith("## ") or ln == "</ccs-preserved>"):
+            break
+        if found:
+            out.append(ln)
+    return "\n".join(out).strip() if found else None
+
+
+class Step8RepeatCompactionTests(unittest.TestCase):
+    """Повторное сжатие: прошлый блок переносится в новый (постановка, реплики, файлы,
+    проверки, план, якоря)."""
+
+    def _первое_сжатие(self):
+        """Блок первого сжатия по оригинальной истории (постановка, ранняя поправка, файл,
+        падающая проверка)."""
+        orig = [
+            _user(_marker("исходная постановка задачи")),
+            _user(_marker("ранняя поправка: чини парсер")),
+            _assistant(_tool_use("1", "Edit", file_path="a/b.py")),
+            _assistant(_tool_use("2", "Bash", command="dotnet test -m:4")),
+            _tool_result("2", "Failed: 3", is_error=False),
+        ]
+        return compactor.build_preserved({"messages": orig})
+
+    def test_двойное_сжатие_перенос(self):
+        block1 = self._первое_сжатие()
+        self.assertIsNotNone(block1)
+        # sanity: в первом блоке постановка = исходная, проверка упала
+        self.assertEqual(_section(block1, compactor.SEC_HEAD), "исходная постановка задачи")
+        self.assertIn("Failed: 3", _section(block1, compactor.SEC_CHECKS))
+
+        # Второе сжатие: история = запись CLI (с блоком1) + новые реплики/файлы/проверки.
+        msgs2 = [
+            _cli_summary_msg(block1),
+            _user(_marker("продолжай")),
+            _user(_marker("новая поправка: и тесты тоже")),
+            _assistant(_tool_use("3", "Edit", file_path="a/b.py")),
+            _assistant(_tool_use("4", "Edit", file_path="c/d.py")),
+            _assistant(_tool_use("5", "Bash", command="dotnet test -m:4")),
+            _tool_result("5", "Failed: 0", is_error=False),
+        ]
+        block2 = compactor.build_preserved({"messages": msgs2})
+        self.assertIsNotNone(block2)
+
+        # (1) Постановка = исходная, а НЕ «продолжай» (первая реплика после сжатия).
+        self.assertEqual(_section(block2, compactor.SEC_HEAD), "исходная постановка задачи")
+        # (2) Ранняя поправка из прошлого блока на месте (в «Репликах»).
+        self.assertIn("ранняя поправка: чини парсер", _section(block2, compactor.SEC_HUMANS))
+        # (3) Файлы из обоих периодов: a/b.py (правки из обоих — сумма) и c/d.py (новый).
+        files = _section(block2, compactor.SEC_FILES)
+        self.assertIn("a/b.py (2 правок)", files)
+        self.assertIn("c/d.py (1 правок)", files)
+        # (4) Проверка обновилась: по виду dotnet test — самая свежая (ok), не старая «ошибка».
+        checks = _section(block2, compactor.SEC_CHECKS)
+        self.assertIn("ok", checks)
+        self.assertNotIn("ошибка", checks)
+
+    def test_двойное_сжатие_мутация_постановки(self):
+        # Мутация: прошлый блок не найден (перенос постановки убран) → постановка становится
+        # «продолжай» (первая реплика после сжатия), а не исходной → тест краснеет.
+        orig_prev = compactor._prev_block
+        compactor._prev_block = lambda msgs: None
+        try:
+            block1 = self._первое_сжатие()
+            msgs2 = [
+                _cli_summary_msg(block1),
+                _user(_marker("продолжай")),
+            ]
+            block2 = compactor.build_preserved({"messages": msgs2})
+            self.assertEqual(_section(block2, compactor.SEC_HEAD), "продолжай",
+                             "мутация (перенос постановки убран) не покраснела")
+        finally:
+            compactor._prev_block = orig_prev
+
+    def test_тройное_сжатие_блок_не_растёт(self):
+        # Тройное сжатие: блок держится в PRESERVED_CAP, постановка всё та же.
+        block1 = self._первое_сжатие()
+        # второе
+        msgs2 = [
+            _cli_summary_msg(block1),
+            _user(_marker("продолжай")),
+            _assistant(_tool_use("3", "Edit", file_path="c/d.py")),
+        ]
+        block2 = compactor.build_preserved({"messages": msgs2})
+        self.assertIsNotNone(block2)
+        self.assertLessEqual(len(block2), compactor.PRESERVED_CAP)
+        self.assertEqual(_section(block2, compactor.SEC_HEAD), "исходная постановка задачи")
+        # третье
+        msgs3 = [
+            _cli_summary_msg(block2),
+            _user(_marker("ещё реплика " + "Р" * 5000)),
+            _assistant(_tool_use("4", "Edit", file_path="e/f.py")),
+        ]
+        block3 = compactor.build_preserved({"messages": msgs3})
+        self.assertIsNotNone(block3)
+        self.assertLessEqual(len(block3), compactor.PRESERVED_CAP,
+                            "тройное сжатие: блок вырос за PRESERVED_CAP")
+        self.assertEqual(_section(block3, compactor.SEC_HEAD), "исходная постановка задачи",
+                         "после тройного сжатия постановка изменилась")
+
+    def test_прошлый_блок_с_экранированными_тегами(self):
+        # Прошлый блок, содержащий экранированные ‹analysis>/‹summary>, разбирается корректно:
+        # экранированные теги остаются как есть (не превращаются обратно в настоящие).
+        raw = "обсуждение: <analysis>x</analysis> и <summary>y</summary>"
+        orig = [_user(_marker("постановка")), _user(_marker(raw))]
+        block1 = compactor.build_preserved({"messages": orig})
+        self.assertIn("‹analysis>x‹/analysis>", block1)
+        msgs2 = [_cli_summary_msg(block1), _user(_marker("продолжай"))]
+        block2 = compactor.build_preserved({"messages": msgs2})
+        # экранированные теги перенеслись как есть (не <analysis>, а ‹analysis>)
+        self.assertIn("‹analysis>x‹/analysis>", block2)
+        self.assertNotIn("<analysis>x", block2)
+
+    def test_мусор_вместо_блока(self):
+        # Мусор вместо блока (нет закрывающего тега) → поведение как без блока, без исключения.
+        junk = _user(
+            "This session is being continued from a previous conversation that ran out of "
+            "context. Summary of the conversation, whose transcript may be found at:\n"
+            "- Primary request: ...\n\nSummary:\nсводка\n<ccs-preserved>\n## Постановка задачи "
+            "(дословно)\nисходная постановка\n</ccs-preserved"  # закрывающий тег оборван
+        )
+        msgs = [junk, _user(_marker("продолжай"))]
+        block = compactor.build_preserved({"messages": msgs})
+        self.assertIsNotNone(block)
+        # как без блока: постановка = первая реплика текущей истории («продолжай»)
+        self.assertEqual(_section(block, compactor.SEC_HEAD), "продолжай")
+
+    def test_сводка_без_блока_поведение_как_раньше(self):
+        # Сводка CLI без нашего блока (сжатие с выключенным флагом) → переноса нет.
+        summary = _user(
+            "This session is being continued from a previous conversation that ran out of "
+            "context. Summary of the conversation, whose transcript may be found at:\n"
+            "- Primary request: ...\n\nSummary:\nсводка без блока"
+        )
+        msgs = [summary, _user(_marker("продолжай"))]
+        block = compactor.build_preserved({"messages": msgs})
+        self.assertIsNotNone(block)
+        self.assertEqual(_section(block, compactor.SEC_HEAD), "продолжай")
+
+
 # --- Корпус Веры: реальные чаты (skipUnless, если каталога нет) ------------------------------
 
 def _corpus_dir():

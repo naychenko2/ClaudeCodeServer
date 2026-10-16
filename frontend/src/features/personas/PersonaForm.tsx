@@ -1,11 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
+import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
 import { api } from '../../lib/api';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
- import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
+ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
@@ -173,6 +173,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   // Облегчённый контекст: переключатель Вкл/Выкл без «Авто» (решение владельца)
   const [lightContext, setLightContext] = useState(persona?.lightContext ?? false);
+  // Пол персоны: селект всегда имеет значение; unspecified — дефолт «авто по имени»
+  const [gender, setGender] = useState<PersonaGender>(persona?.gender ?? 'unspecified');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*): с выключенным
@@ -500,7 +502,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     tierStrong, tierMedium, tierWeak,
     projectId: isProjectZone ? projectId : '',
     sphereId: isSphereZone ? sphereId : '',
-    color, greeting: greeting.trim(), memoryEnabled, lightContext,
+    color, greeting: greeting.trim(), memoryEnabled, lightContext, gender,
     tools: [...tools].sort(),
     access,
     specialty,
@@ -536,6 +538,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       greeting: (persona?.greeting ?? '').trim(),
       memoryEnabled: persona?.memoryEnabled ?? false,
       lightContext: persona?.lightContext ?? false,
+      gender: persona?.gender ?? 'unspecified',
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
       access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
@@ -593,6 +596,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       greeting: greeting.trim() || undefined,
       memoryEnabled,
       lightContext,
+      // Пол: всегда явный (текущее значение селекта). unspecified = дефолт «авто по имени»,
+      // совпадает с текущим — нет-оп; female/male — явная установка.
+      gender,
       // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
       tools,
       // Профиль доступа: свой список запретов уходит только при custom
@@ -790,6 +796,19 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   }}
                 />
               </div>
+            </Field>
+          </div>
+          <div style={{ maxWidth: isMobile ? '100%' : 220 }}>
+            <Field label="Пол" hint="Явный выбор рода; «Не указан» — авто по имени">
+              <Select
+                value={gender}
+                onChange={v => setGender(v || 'unspecified')}
+                options={[
+                  { value: 'unspecified', label: 'Не указан' },
+                  { value: 'female', label: 'Женский' },
+                  { value: 'male', label: 'Мужской' },
+                ]}
+              />
             </Field>
           </div>
           <div style={{ maxWidth: isMobile ? '100%' : 360 }}>

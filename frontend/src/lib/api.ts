@@ -438,6 +438,12 @@ const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
 const DEV_SERVER_PORT_WAIT_MS = 300_000;
 const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
 
+// Потолок ожидания «Продолжить в новом чате»: ход записки-передачи — полноценный ход
+// агента, бэкенд ждёт его до HandoffTurnTimeout = 15 мин (ChatContinueService.cs). Берём
+// чуть больше (16 мин): обрыв по этому таймауту — RequestTimeoutError («Сервер не ответил
+// за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
+const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
+
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
 // исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
 // Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
@@ -2074,11 +2080,12 @@ export const api = {
       ),
     // «Продолжить в новом чате»: агент пишет записку-передачу (один ход, десятки секунд),
     // платформа открывает новый чат той же персоны. 409 — чат занят, 400 — нет ходов агента;
-    // оба несут человеческий текст в Error.message
+    // оба несут человеческий текст в Error.message. timeoutMs чуть больше серверного лимита
+    // хода (15 мин) — см. CONTINUE_TIMEOUT_MS: обрыв по таймауту не уводит в офлайн
     continue: (id: string, note?: string) =>
       request<{ newSessionId: string; handoffNoteId: string | null }>(
         `/chats/${id}/continue`,
-        { method: 'POST', body: JSON.stringify(note ? { note } : {}) },
+        { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
       ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы

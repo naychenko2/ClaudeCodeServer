@@ -646,6 +646,7 @@ class Step4BuildPreservedTests(unittest.TestCase):
         self.assertIn("reasoning", text)
         self.assertIn("Keep your answer in the required", text)
         self.assertIn("<analysis>/<summary>", text)
+        self.assertIn("after your summary", text, "блок встаёт после сводки, а не перед ней")
 
     def test_постановка_не_дублируется_в_репликах(self):
         # Дефект 1: постановка (head, index 0) уже в «Постановке» — из «Реплик» её

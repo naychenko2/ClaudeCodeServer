@@ -2619,5 +2619,367 @@ class КартинкиСквозныеTests(unittest.TestCase):
         self.assertTrue(отдано["image_prune"].startswith("on"))
 
 
+class СжатиеЗаглушка(BaseHTTPRequestHandler):
+    """Upstream ответа сжатия: отдаёт заготовленное тело с заданными статусом и типом."""
+    протокол_версия = "HTTP/1.1"
+    статус = 200
+    вид = "text/event-stream"
+    тело = b""
+    принятые = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        type(self).принятые.append(json.loads(self.rfile.read(n)))
+        тело = type(self).тело
+        self.send_response(type(self).статус)
+        self.send_header("Content-Type", type(self).вид)
+        self.send_header("Content-Length", str(len(тело)))
+        self.end_headers()
+        # Мелкими кусками: событие режется посреди, вставка обязана склеивать.
+        try:
+            for i in range(0, len(тело), 97):
+                self.wfile.write(тело[i:i + 97])
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # прокси бросил ответ-ошибку облака, прочитав начало, — так и задумано
+
+
+def проверить_индексы(тест, список):
+    """Индексы блоков у клиента — 0, 1, 2… без дыр и повторов."""
+    индексы = [д["index"] for т, д in список if т == "content_block_start"]
+    тест.assertEqual(индексы, list(range(len(индексы))))
+
+
+def как_cli(список):
+    """Что CLI 2.1.301 положит в запись isCompactSummary из потока ответа сжатия.
+
+    Повторяет бинарник: поток раскладывается по блокам в отдельные сообщения; `KEe` берёт
+    последнее сообщение с текстом, где есть `<summary>` (иначе последнее с текстом); `QEe` —
+    первый текстовый блок, `trim`; `BWr` вырезает <analysis> и меняет <summary> на «Summary:».
+    """
+    import re
+    блоки, открыт = [], None
+    for т, д in список:
+        if т == "content_block_start":
+            открыт = dict(д["content_block"])
+            блоки.append(открыт)
+        elif т == "content_block_delta" and открыт is not None and открыт.get("type") == "text":
+            открыт["text"] = открыт.get("text", "") + д["delta"].get("text", "")
+        elif т == "content_block_stop":
+            открыт = None
+    тексты = [б["text"] for б in блоки if б.get("type") == "text"]
+    выбран = next((т for т in reversed(тексты) if "<summary>" in т), тексты[-1] if тексты else None)
+    if выбран is None or not выбран.strip():
+        return None
+    т = re.sub(r"<analysis>[\s\S]*?</analysis>", "", выбран.strip(), count=1)
+    т = re.sub(r"<summary>([\s\S]*?)</summary>", lambda m: "Summary:\n" + m.group(1).strip(), т,
+               count=1)
+    return re.sub(r"\n\n+", "\n\n", т).strip()
+
+
+class СохранениеДословногоTests(unittest.TestCase):
+    """COMPACT_PRESERVE: <ccs-preserved> в конце текстового блока модели со сводкой."""
+
+    def setUp(self):
+        class Облако(СжатиеЗаглушка):
+            принятые = []
+
+        class Локальный(СжатиеЗаглушка):
+            принятые = []
+
+        self.Облако, self.Локальный = Облако, Локальный
+        self.облако, self.локальный = поднять(Облако), поднять(Локальный)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM, proxy._compact_key,
+                          proxy.COMPACT_PRESERVE, proxy.PRUNE_MODE, proxy.LOOP_GUARD,
+                          proxy.JUNK_GUARD, proxy.SAMPLING, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        proxy.COMPACT_PRESERVE = "on"
+        proxy.PRUNE_MODE, proxy.LOOP_GUARD, proxy.JUNK_GUARD = "off", "off", "off"
+        proxy.SAMPLING = {}
+        for к in ("compact_routed", "compact_fallback", "compact_preserved",
+                  "compact_preserve_failed"):
+            proxy.stats[к] = 0
+        # Модель отвечает размышлением на index 0 и сводкой на index 1 — как MiniMax.
+        self.поток = поток_ответа([("thinking", "Let me analyze."),
+                                   ("text", "<analysis>a</analysis>\n<summary>сводка</summary>")])
+        self.Облако.тело = self.Локальный.тело = self.поток
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM, proxy._compact_key,
+         proxy.COMPACT_PRESERVE, proxy.PRUNE_MODE, proxy.LOOP_GUARD, proxy.JUNK_GUARD,
+         proxy.SAMPLING, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.облако, self.локальный, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def запрос(self):
+        msgs = history(120)
+        msgs.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
+        return {"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True, "messages": msgs}
+
+    def спросить(self, doc):
+        тело = json.dumps(doc).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        self.журнал = io.StringIO()
+        with contextlib.redirect_stderr(self.журнал):
+            c.request("POST", "/v1/messages", body=тело, headers={
+                "Content-Type": "application/json", "Content-Length": str(len(тело))})
+            ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def ожидаемый_блок(self, doc):
+        # Последнее сообщение в этих тестах — чистая инструкция сжатия: блок по истории без неё.
+        return "\n\n" + proxy.compactor.build_preserved(dict(doc, messages=doc["messages"][:-1]))
+
+    def проверить_вставку(self, ответ, блок):
+        список = события(ответ)
+        проверить_целостность(self, список)
+        проверить_индексы(self, список)
+        модель = события(self.поток)
+        # Ровно одно лишнее событие — дельта с блоком перед стопом текстового блока (index 1).
+        self.assertEqual(len(список), len(модель) + 1)
+        стоп = список.index(("content_block_stop", {"type": "content_block_stop", "index": 1}))
+        self.assertEqual(список[стоп - 1], ("content_block_delta", {
+            "type": "content_block_delta", "index": 1,
+            "delta": {"type": "text_delta", "text": блок}}))
+        self.assertEqual(список[:стоп - 1] + список[стоп:], модель,
+                         "остальной поток модели — как есть, индексы не тронуты")
+        # Главное: блок доживает до записи сжатия CLI.
+        запись = как_cli(список)
+        self.assertTrue(запись.startswith("Summary:\nсводка"))
+        self.assertTrue(запись.endswith(блок.strip()))
+        self.assertIn("<ccs-preserved>", запись)
+
+    def последняя_реплика(self, принятое):
+        return принятое["messages"][-1]["content"]
+
+    def test_облако_блок_дописан_к_сводке(self):
+        doc = self.запрос()
+        блок = self.ожидаемый_блок(doc)
+        self.assertIn("<ccs-preserved>", блок)
+        ответ = self.спросить(doc)
+        self.проверить_вставку(ответ, блок)
+        self.assertEqual(proxy.stats["compact_routed"], 1)
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (1, 0))
+        реплика = self.последняя_реплика(self.Облако.принятые[-1])
+        self.assertEqual(реплика, proxy.COMPACT_SIGNATURE + " Summarize.\n\n"
+                         + proxy.compactor.instruction_addendum())
+        # Середина истории не тронута — в облако едет сырая история.
+        self.assertEqual(self.Облако.принятые[-1]["messages"][:-1], doc["messages"][:-1])
+
+    def test_инструкция_сжатия_не_попадает_в_блок(self):
+        """Живая проверка 2026-10-16: без вырезки инструкция CLI шла в «Реплики человека»."""
+        doc = self.запрос()
+        doc["messages"].pop()  # своя инструкция ниже — формой списка
+        doc["messages"].append({"role": "assistant", "content": "ок"})
+        doc["messages"].append({"role": "user", "content": "свежая реплика человека"})
+        doc["messages"].append({"role": "user", "content": [
+            {"type": "text", "text": proxy.COMPACT_SIGNATURE + " Your task is to create a summary."}]})
+        запись = как_cli(события(self.спросить(doc)))
+        блок = запись[запись.index("<ccs-preserved>"):]
+        self.assertNotIn(proxy.COMPACT_SIGNATURE, блок)
+        self.assertNotIn("Your task is to create", блок)
+        self.assertIn("свежая реплика человека", блок)
+
+    def test_вырезка_инструкции_оставляет_прочее(self):
+        msgs = [{"role": "user", "content": "задача"},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t", "content": "вывод"},
+                    {"type": "text", "text": proxy.COMPACT_SIGNATURE + " x"}]}]
+        снимок = copy.deepcopy(msgs)
+        итог = proxy._без_инструкции_сжатия(msgs)
+        self.assertEqual(msgs, снимок, "вход не мутирует")
+        self.assertEqual(итог, [msgs[0], {"role": "user", "content": [msgs[1]["content"][0]]}])
+        self.assertEqual(proxy._без_инструкции_сжатия(
+            [{"role": "user", "content": proxy.COMPACT_SIGNATURE}]), [])
+
+    def test_сводка_во_втором_текстовом_блоке(self):
+        """CLI берёт блок с <summary>, а не первый текстовый — блок едет туда же."""
+        self.поток = поток_ответа([("thinking", "t"), ("text", "<analysis>a</analysis>"),
+                                   ("text", "<summary>сводка</summary>")])
+        self.Облако.тело = self.поток
+        doc = self.запрос()
+        список = события(self.спросить(doc))
+        проверить_целостность(self, список)
+        запись = как_cli(список)
+        self.assertTrue(запись.startswith("Summary:\nсводка"))
+        self.assertIn("<ccs-preserved>", запись)
+        вставки = [д["index"] for т, д in список if т == "content_block_delta"
+                   and "<ccs-preserved>" in д["delta"].get("text", "")]
+        self.assertEqual(вставки, [2])
+
+    def test_тег_summary_разрезан_дельтами(self):
+        self.поток = поток_ответа([("text", "<analysis>a</analysis><summary>сводка</summary>")],
+                                  шаг=3)
+        self.Облако.тело = self.поток
+        список = события(self.спросить(self.запрос()))
+        self.assertIn("<ccs-preserved>", как_cli(список))
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+
+    def test_ответ_без_сводки_как_есть_и_счётчик(self):
+        self.поток = поток_ответа([("text", "просто текст")])
+        self.Облако.тело = self.поток
+        self.assertEqual(self.спросить(self.запрос()), self.поток)
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (0, 1))
+        self.assertIn("нет <summary>", self.журнал.getvalue())
+
+    def test_фолбэк_на_локаль_тоже_получает_блок(self):
+        self.Облако.статус = 401
+        doc = self.запрос()
+        блок = self.ожидаемый_блок(doc)
+        ответ = self.спросить(doc)
+        self.проверить_вставку(ответ, блок)
+        self.assertEqual(proxy.stats["compact_fallback"], 1)
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+        реплика = self.последняя_реплика(self.Локальный.принятые[-1])
+        self.assertTrue(реплика.endswith(proxy.compactor.instruction_addendum()))
+
+    def test_фолбэк_с_предохранителем_петли(self):
+        """Реле предохранителя стоит до вставки: поток через него приходит тот же."""
+        proxy.LOOP_GUARD = proxy.JUNK_GUARD = "on"
+        self.Облако.статус = 500
+        doc = self.запрос()
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+
+    def test_без_облака_блок_тоже_вставляется(self):
+        proxy.COMPACT_UPSTREAM = ""
+        doc = self.запрос()
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+        self.assertEqual(self.Облако.принятые, [])
+
+    def test_выключено_поток_байт_в_байт(self):
+        proxy.COMPACT_PRESERVE = "off"
+        doc = self.запрос()
+        self.assertEqual(self.спросить(doc), self.поток)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.")
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (0, 0))
+
+    def test_обычный_ход_не_трогается(self):
+        doc = self.запрос()
+        doc["messages"][-1] = {"role": "user", "content": "проверь сборку"}
+        self.assertEqual(self.спросить(doc), self.поток)
+        self.assertEqual(self.Облако.принятые, [])
+
+    def test_исключение_compactor_запрос_проходит(self):
+        doc = self.запрос()
+        with unittest.mock.patch.object(proxy.compactor, "build_preserved",
+                                        side_effect=RuntimeError("бах")):
+            ответ = self.спросить(doc)
+        self.assertEqual(ответ, self.поток)
+        self.assertEqual(proxy.stats["compact_preserve_failed"], 1)
+        self.assertEqual(proxy.stats["compact_preserved"], 0)
+        self.assertEqual(proxy.stats["compact_routed"], 1)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.", "тело не тронуто")
+        self.assertIn("сохранение дословного: сборка блока не удалось", self.журнал.getvalue())
+
+    def test_исключение_в_добавке_тело_не_тронуто(self):
+        doc = self.запрос()
+        with unittest.mock.patch.object(proxy.compactor, "instruction_addendum",
+                                        side_effect=ValueError("x")):
+            ответ = self.спросить(doc)
+        self.assertEqual(ответ, self.поток)
+        self.assertEqual(proxy.stats["compact_preserve_failed"], 1)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.")
+
+    def test_none_без_вставки(self):
+        doc = self.запрос()
+        with unittest.mock.patch.object(proxy.compactor, "build_preserved", return_value=None):
+            ответ = self.спросить(doc)
+        self.assertEqual(ответ, self.поток)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.")
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (0, 0))
+
+    def test_ответ_ошибка_не_трогается(self):
+        """Облако упало, локаль тоже ответила ошибкой — клиент видит её как есть."""
+        self.Облако.статус = 500
+        self.Локальный.статус, self.Локальный.вид = 400, "application/json"
+        self.Локальный.тело = b'{"type":"error","error":{"type":"x","message":"y"}}'
+        self.assertEqual(self.спросить(self.запрос()), self.Локальный.тело)
+        self.assertEqual(proxy.stats["compact_preserved"], 0)
+
+    def test_не_потоковый_ответ_блок_в_тексте_со_сводкой(self):
+        doc = self.запрос()
+        doc["stream"] = False
+        модель = {"id": "m", "type": "message", "role": "assistant", "content": [
+            {"type": "thinking", "thinking": "t", "signature": "s"},
+            {"type": "text", "text": "<summary>сводка</summary>"}], "stop_reason": "end_turn"}
+        self.Облако.вид = "application/json"
+        self.Облако.тело = json.dumps(модель).encode()
+        ответ = json.loads(self.спросить(doc))
+        self.assertEqual(ответ["content"][0], модель["content"][0])
+        self.assertEqual(ответ["content"][1], {"type": "text", "text": "<summary>сводка</summary>"
+                                               + self.ожидаемый_блок(doc)})
+        self.assertEqual(len(ответ["content"]), 2)
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+
+    def test_блок_списком_дописывается_в_последний_текст(self):
+        doc = self.запрос()
+        doc["messages"][-1] = {"role": "user", "content": [
+            {"type": "text", "text": proxy.COMPACT_SIGNATURE + " Summarize."},
+            {"type": "text", "text": "Additional: keep it short."}]}
+        self.спросить(doc)
+        реплика = self.последняя_реплика(self.Облако.принятые[-1])
+        self.assertEqual(реплика[0], doc["messages"][-1]["content"][0])
+        self.assertEqual(реплика[1]["text"], "Additional: keep it short.\n\n"
+                         + proxy.compactor.instruction_addendum())
+
+    def test_счётчики_в_stats(self):
+        исходный = self.сохранено[-1]
+        self.assertIn("compact_preserved", исходный)
+        self.assertIn("compact_preserve_failed", исходный)
+        self.спросить(self.запрос())
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual(отдано["compact_preserved"], 1)
+        self.assertEqual(отдано["compact_preserve"], "on")
+
+
+class ВставкаБлокаTests(unittest.TestCase):
+    """Вставка в поток без сокета: куски режут события где угодно."""
+
+    def прогнать(self, сырое, кусок):
+        out = []
+        в = proxy.ВставкаБлока(out.append, "БЛОК")
+        for i in range(0, len(сырое), кусок):
+            в.усвоить(сырое[i:i + кусок])
+        в.дослать()
+        return b"".join(out)
+
+    def test_любая_нарезка_даёт_тот_же_поток(self):
+        сырое = поток_ответа([("thinking", "a" * 300), ("text", "b" * 300 + "<summary>c</summary>"),
+                              ("tool_use", '{"x":1}')])
+        эталон = self.прогнать(сырое, len(сырое))
+        for кусок in (1, 7, 64, 1000):
+            with self.subTest(кусок):
+                self.assertEqual(self.прогнать(сырое, кусок), эталон)
+        список = события(эталон)
+        проверить_целостность(self, список)
+        проверить_индексы(self, список)
+        self.assertTrue(как_cli(список).endswith("БЛОК"))
+
+    def test_без_message_start_вставки_нет(self):
+        сырое = b'event: error\ndata: {"type":"error"}\n\n'
+        self.assertEqual(self.прогнать(сырое, 5), сырое)
+
+
 if __name__ == "__main__":
     unittest.main()

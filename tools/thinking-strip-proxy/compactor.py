@@ -618,10 +618,12 @@ def build_preserved(doc):
 def instruction_addendum():
     """Дополнение к инструкции сжатия CLI (по-английски, как сама инструкция).
 
-    Текст блока <ccs-preserved> модели НЕ передаём — только инструкцию.
+    Текст блока <ccs-preserved> модели НЕ передаём — только инструкцию. Блок встаёт ПОСЛЕ
+    сводки: прокси дописывает его в конец текстового блока модели с <summary> — только этот
+    блок CLI 2.1.301 и берёт в запись сжатия (README, «Сохранение дословного»).
     """
     return (
-        "A <ccs-preserved> block is inserted verbatim before your summary. It holds the "
+        "A <ccs-preserved> block is appended verbatim after your summary. It holds the "
         "task statement, the human's replies, the changed files, the last checks, the plan "
         "and literal anchors. Do NOT restate the human's replies, the files, or the checks "
         "from it — refer to them. Spend your summary on the reasoning, the decisions, the "

@@ -273,6 +273,20 @@ COMPACT_SIGNATURE = os.environ.get(
 # Запрос сжатия при живом стенде молча уходил бы на локаль — те самые 330–430 с стоп-мира.
 # Две величины отвечают на разные вопросы и совпадали случайно.
 COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS", "150000"))
+# Сжатие с сохранением дословного (план «сжатие с сохранением дословного», шаг 5): к сводке в
+# ответе сжатия дописывается <ccs-preserved> — постановка, реплики человека, файлы, проверки,
+# план и якоря, собранные compactor.py по ОРИГИНАЛЬНОМУ телу. Дописывается в тот же текстовый
+# блок, где <summary> (только его CLI 2.1.301 берёт в запись сжатия — см. ВставкаБлока), а
+# текст вне <analysis>/<summary> CLI сохраняет: блок переживает сжатие дословно. Это расширение
+# исключения «прокси — труба» ровно на этот один тип запроса; логика — в compactor.py,
+# состояния у прокси по-прежнему нет. Включение — после замера шага 6.
+COMPACT_PRESERVE = os.environ.get("COMPACT_PRESERVE", "off")
+try:
+    import compactor
+except Exception as _e:  # fail-open: без модуля прокси работает как раньше, вставки нет
+    compactor = None
+    print(f"compactor.py не загружен ({_e!r}) — COMPACT_PRESERVE не действует",
+          file=sys.stderr, flush=True)
 
 # --- Карточка в ленте чата: событие о сдвиге границы -----------------------------------------
 #
@@ -361,6 +375,7 @@ IMAGE_TOKENS_CAP = 2048
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "images_pruned": 0, "images_kept": 0, "image_tokens_saved": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
+         "compact_preserved": 0, "compact_preserve_failed": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
          "loops_truncated": 0, "loop_guard_errors": 0,
@@ -1071,6 +1086,79 @@ def compact_body(doc):
     return json.dumps(dict(doc, model=COMPACT_MODEL), ensure_ascii=False).encode("utf-8")
 
 
+def _preserve_failed(где, e):
+    with lock:
+        stats["compact_preserve_failed"] += 1
+    # Только тип и текст исключения: содержимое чата в журнал не берём.
+    print(f"сохранение дословного: {где} не удалось ({e!r}) — сжатие идёт без блока",
+          file=sys.stderr, flush=True)
+
+
+def _без_инструкции_сжатия(msgs):
+    """История без инструкции сжатия CLI — то, по чему считается блок.
+
+    Инструкция приходит последним сообщением человека, и compactor счёл бы её репликой: живая
+    проверка 2026-10-16 положила в блок ~13K символов «Your task is to create a detailed
+    summary…». Сигнатуру знает прокси, поэтому вырезает здесь: текстовые блоки (или строку),
+    начинающиеся с COMPACT_SIGNATURE, в последнем сообщении человека с текстом. Вход не мутирует.
+    """
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if not isinstance(m, dict) or m.get("role") != "user" or not _tail_text([m]).strip():
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            остаток = None if c.lstrip().startswith(COMPACT_SIGNATURE) else c
+        else:
+            остаток = [b for b in c if not (isinstance(b, dict) and b.get("type") == "text"
+                       and (b.get("text") or "").lstrip().startswith(COMPACT_SIGNATURE))] or None
+        return msgs[:i] + ([] if остаток is None else [dict(m, content=остаток)]) + msgs[i + 1:]
+    return msgs
+
+
+def preserve_for_compact(doc):
+    """Блок <ccs-preserved> для ответа сжатия; None — вставки не будет.
+
+    Звать по ОРИГИНАЛЬНОМУ телу, до любых правок прокси; блок считается по нему без самой
+    инструкции сжатия (`_без_инструкции_сжатия`). Блок не None — в конец текста
+    последнего сообщения человека (это инструкция сжатия CLI) дописывается
+    `instruction_addendum()`: `doc` меняется на месте, и дополнение едет и в облако, и в
+    фолбэк на локаль. Середина истории не трогается.
+
+    Fail-open: любое исключение compactor — журнал, `compact_preserve_failed`, None и
+    нетронутый `doc`. Тело правится только после того, как всё посчитано.
+    """
+    try:
+        if compactor is None:
+            raise RuntimeError("compactor.py не загружен")
+        блок = compactor.build_preserved(dict(doc, messages=_без_инструкции_сжатия(doc["messages"])))
+        if блок is None:
+            return None
+        добавка = compactor.instruction_addendum()
+        if not isinstance(блок, str) or not isinstance(добавка, str):
+            raise TypeError("compactor вернул не строку")
+        msgs = doc["messages"]
+        # То же сообщение, по которому compact_verdict увидел сигнатуру.
+        for i in range(len(msgs) - 1, -1, -1):
+            m = msgs[i]
+            if not isinstance(m, dict) or m.get("role") != "user" or not _tail_text([m]).strip():
+                continue
+            c = m["content"]
+            if isinstance(c, str):
+                новое = c + "\n\n" + добавка
+            else:
+                j = max(k for k, b in enumerate(c)
+                        if isinstance(b, dict) and b.get("type") == "text")
+                новое = list(c)
+                новое[j] = dict(c[j], text=(c[j].get("text") or "") + "\n\n" + добавка)
+            msgs[i] = dict(m, content=новое)
+            return блок
+        raise ValueError("нет сообщения человека с текстом")
+    except Exception as e:
+        _preserve_failed("сборка блока", e)
+        return None
+
+
 def _secret_from_config(файл, путь, зачем):
     """Строка из json-конфига бэкенда по пути вида `A.B.C`; "" — не прочитали (с журналом)."""
     try:
@@ -1673,6 +1761,140 @@ class РелеПотока:
         self.завершён = True
 
 
+class ВставкаБлока:
+    """Поток ответа сжатия: блок <ccs-preserved> — в конец текстового блока со сводкой.
+
+    Почему не отдельным блоком: CLI 2.1.301 раскладывает поток по блокам в отдельные
+    сообщения, и в запись сжатия идёт только ПОСЛЕДНЕЕ сообщение, чей текст содержит
+    `<summary>` (`KEe`), а из него — первый текстовый блок (`QEe`). Отдельный блок до ответа
+    модели CLI выбросил бы — это поймала живая проверка 2026-10-16. Поэтому текст блока уходит
+    лишней `text_delta` перед `content_block_stop` каждого текстового блока, в котором была
+    `<summary>`; индексы модели не меняются. Текст вне тегов CLI сохраняет (`BWr`).
+
+    Стоит ПОСЛЕ реле предохранителя: пометки реле `<summary>` не содержат и не трогаются.
+    Разбор целыми событиями, как у реле. Сбой разбора — сквозной режим до конца ответа и
+    `compact_preserve_failed`: ход важнее блока. Сводки не было вовсе — тоже
+    `compact_preserve_failed` (CLI такой ответ и сам отвергнет).
+    """
+
+    БУФЕР_МАКС = РелеПотока.БУФЕР_МАКС
+
+    def __init__(self, отдать, текст):
+        self.отдать = отдать
+        self.текст = текст
+        self.буфер = b""
+        self.открыт = None  # [индекс, накопленный текст] открытого текстового блока
+        self.вставлен = False
+        self.начат = False  # пришёл message_start: это ответ модели, а не что-то чужое
+        self.сквозной = False
+
+    def усвоить(self, chunk):
+        if self.сквозной:
+            self.отдать(chunk)
+            return
+        self.буфер += chunk
+        событие = b""
+        try:
+            while True:
+                i = self.буфер.find(b"\n\n")
+                if i < 0:
+                    if len(self.буфер) > self.БУФЕР_МАКС:
+                        raise ValueError("нет разделителя событий SSE")
+                    return
+                событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+                self._событие(событие)
+                событие = b""
+        except Exception as e:
+            _preserve_failed("вставка в поток", e)
+            self.сквозной = True
+            остаток, self.буфер = событие + self.буфер, b""
+            if остаток:
+                self.отдать(остаток)
+
+    def дослать(self):
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+        if self.начат and not self.вставлен and not self.сквозной:
+            _preserve_failed("вставка в поток", RuntimeError("в ответе нет <summary>"))
+
+    def _событие(self, сырое):
+        данные = None
+        for строка in сырое.split(b"\n"):
+            if строка.startswith(b"data:"):
+                try:
+                    данные = json.loads(строка[5:].strip())
+                except ValueError:
+                    данные = None
+        тип = данные.get("type") if isinstance(данные, dict) else None
+        индекс = данные.get("index") if isinstance(данные, dict) else None
+        if тип == "message_start":
+            self.начат = True
+        elif тип == "content_block_start" and isinstance(индекс, int):
+            вид = (данные.get("content_block") or {}).get("type")
+            self.открыт = [индекс, ""] if вид == "text" else None
+        elif тип == "content_block_delta" and self.открыт is not None \
+                and индекс == self.открыт[0]:
+            текст = (данные.get("delta") or {}).get("text")
+            if isinstance(текст, str):
+                self.открыт[1] += текст
+        elif тип == "content_block_stop" and self.открыт is not None \
+                and индекс == self.открыт[0]:
+            if "<summary>" in self.открыт[1]:
+                self.отдать(_sse("content_block_delta", {"type": "content_block_delta",
+                                 "index": индекс, "delta": {"type": "text_delta",
+                                                            "text": self.текст}}))
+                if not self.вставлен:
+                    with lock:
+                        stats["compact_preserved"] += 1
+                self.вставлен = True
+            self.открыт = None
+        self.отдать(сырое)
+
+
+class ВставкаВJson:
+    """Не-потоковый ответ сжатия (`stream:false`): блок — в конец текста со сводкой.
+
+    CLI 2.1.301 сжимает потоком, но поведение не должно зависеть от формы ответа: тело
+    копится целиком (оно и так приходит целиком) и правится в `дослать` — по тому же правилу,
+    что и поток: текст блока дописывается в каждый текстовый блок с `<summary>`. Не JSON,
+    нет списка `content` или нет сводки — тело уходит как есть, с `compact_preserve_failed`.
+    """
+
+    def __init__(self, отдать, текст):
+        self.отдать = отдать
+        self.текст = текст
+        self.куски = []
+
+    def усвоить(self, chunk):
+        self.куски.append(chunk)
+
+    def дослать(self):
+        сырое, self.куски = b"".join(self.куски), []
+        if not сырое:
+            return
+        try:
+            doc = json.loads(сырое)
+            if not isinstance(doc, dict) or not isinstance(doc.get("content"), list):
+                raise ValueError("в ответе нет списка content")
+            найдено = False
+            for i, b in enumerate(doc["content"]):
+                if isinstance(b, dict) and b.get("type") == "text" \
+                        and isinstance(b.get("text"), str) and "<summary>" in b["text"]:
+                    doc["content"][i] = dict(b, text=b["text"] + self.текст)
+                    найдено = True
+            if not найдено:
+                raise ValueError("в ответе нет <summary>")
+            готовое = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+        except Exception as e:
+            _preserve_failed("вставка в ответ", e)
+            self.отдать(сырое)
+            return
+        with lock:
+            stats["compact_preserved"] += 1
+        self.отдать(готовое)
+
+
 def retry_body(body):
     """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать."""
     try:
@@ -1864,6 +2086,7 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE,
                                   compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off",
+                                  compact_preserve=COMPACT_PRESERVE,
                                   sampling=SAMPLING or "off",
                                   sampling_fast=SAMPLING_FAST or "off",
                                   effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET,
@@ -1901,6 +2124,7 @@ class Handler(BaseHTTPRequestHandler):
         original = body  # на откат: любая осечка разбора обязана вернуть тело нетронутым
         stripped = False
         compact = None  # тело для облака, если это запрос автосжатия
+        сохранённое = None  # блок <ccs-preserved>, который допишется к сводке в ответе сжатия
         # Заголовок чата нужен обоим потребителям — карточке и дампу: разбор промахов идёт
         # ПО СЕССИЯМ (сравнивается соседняя пара запросов одного чата), и без него дамп
         # прогона превращается в кашу из ходов исполнителя и фоновых действий продукта.
@@ -1915,12 +2139,18 @@ class Handler(BaseHTTPRequestHandler):
                 doc = json.loads(body)
                 if isinstance(doc, dict):
                     # Распознаём и снимаем копию ДО правок: в облако едет сырая история.
-                    if COMPACT_UPSTREAM:
+                    if COMPACT_UPSTREAM or COMPACT_PRESERVE == "on":
                         вердикт, оценка = compact_verdict(doc)
-                        if вердикт == "route":
+                        if вердикт == "route" and COMPACT_PRESERVE == "on":
+                            # По оригинальному телу и до compact_body: дополнение инструкции
+                            # должно уехать и в облако, и в фолбэк на локаль.
+                            сохранённое = preserve_for_compact(doc)
+                            if сохранённое is not None:
+                                stripped = True
+                        if вердикт == "route" and COMPACT_UPSTREAM:
                             compact = compact_body(doc)
                             compact_before = оценка
-                        elif вердикт == "signature_small":
+                        elif вердикт == "signature_small" and COMPACT_UPSTREAM:
                             # Настройка стенда разъехалась: CLI сжимается раньше, чем история
                             # набирает порог. Молча отпускать такой запрос на локаль нельзя —
                             # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
@@ -2018,6 +2248,10 @@ class Handler(BaseHTTPRequestHandler):
                 # разборе тела ломает ход пользователя молча. Тело чужое, доверять его форме
                 # нельзя: `{"type":"text","text":5}` достаточно, чтобы получить TypeError.
                 body, stripped, compact, событие = original, False, None, None
+                if сохранённое is not None:
+                    # Дополнение инструкции ушло вместе с правками — блок без него не вставляем.
+                    сохранённое = None
+                    _preserve_failed("разбор тела", e)
                 print(f"тело пропущено без правок: {e!r}", file=sys.stderr, flush=True)
         with lock:
             stats["requests"] += 1
@@ -2091,19 +2325,36 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(кусок), кусок))
                 self.wfile.flush()
 
+        # Блок <ccs-preserved> — только в успешный ответ сжатия, кто бы его ни писал (облако
+        # или фолбэк на локаль). Ответ-ошибку не трогаем: клиент должен увидеть её как есть.
+        вставка, выход = None, отдать
+        if сохранённое is not None and resp.status == 200:
+            вид = resp.getheader("Content-Type") or ""
+            сжат = (resp.getheader("Content-Encoding") or "identity").lower() != "identity"
+            текст = "\n\n" + сохранённое
+            if сжат:
+                _preserve_failed("ответ", RuntimeError("ответ сжат Content-Encoding"))
+            elif "text/event-stream" in вид:
+                вставка = ВставкаБлока(отдать, текст)
+            elif "application/json" in вид:
+                вставка = ВставкаВJson(отдать, текст)
+            else:
+                _preserve_failed("ответ", RuntimeError(f"непонятный Content-Type {вид!r}"))
+            if вставка is not None:
+                выход = вставка.усвоить
         # Предохранитель — только на потоке локальной модели: облако (автосжатие) не петляет,
         # а ответы-ошибки и не-SSE идут как раньше, байт в байт.
         реле = None
         if ((LOOP_GUARD == "on" or JUNK_GUARD == "on") and первый is None and resp.status == 200
                 and "text/event-stream" in (resp.getheader("Content-Type") or "")):
-            реле = РелеПотока(отдать, петли=LOOP_GUARD == "on",
+            реле = РелеПотока(выход, петли=LOOP_GUARD == "on",
                               детектор_мусора=ДетекторМусора() if JUNK_GUARD == "on" else None)
         итог_петли = {"петли": 0, "повторён": False, "conn": None}
         try:
             if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
                 prefill = time.monotonic() - начало
                 merge_usage(usage_карточки, первый)
-                отдать(первый)
+                выход(первый)
             while True:
                 chunk = resp.read1(65536)
                 if not chunk:
@@ -2115,7 +2366,7 @@ class Handler(BaseHTTPRequestHandler):
                     prefill = time.monotonic() - начало
                 merge_usage(usage_карточки, chunk)
                 if реле is None:
-                    отдать(chunk)
+                    выход(chunk)
                 elif реле.усвоить(chunk):
                     break
             if реле is not None and реле.мусор:
@@ -2124,6 +2375,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._после_петли(реле, conn, body, headers, итог_петли)
             elif реле is not None:
                 реле.дослать()
+            if вставка is not None:
+                вставка.дослать()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -2261,6 +2514,8 @@ if __name__ == "__main__":
           + (f", автосжатие -> {COMPACT_MODEL} на {COMPACT_UPSTREAM} (порог "
              f"{COMPACT_MIN_CONTEXT_TOKENS // 1000}k ток)" if COMPACT_UPSTREAM
              else ", автосжатие в облако выкл")
+          + (", сохранение дословного при сжатии вкл" if COMPACT_PRESERVE == "on"
+             else ", сохранение дословного при сжатии выкл")
           + (f", карточка сдвига границы -> {BACKEND_EVENTS_URL}" if BACKEND_EVENTS_URL
              else ", карточка сдвига границы выкл")
           + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "

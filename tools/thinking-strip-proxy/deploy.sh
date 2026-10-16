@@ -48,7 +48,8 @@ for a in "$@"; do
   esac
 done
 
-target_of() { readlink -f "$DEPLOY_ROOT/$1" 2>/dev/null || true; }
+# Пустая строка, если симлинка ещё нет (readlink -f вернул бы несуществующий путь самого линка).
+target_of() { [ -L "$DEPLOY_ROOT/$1" ] && readlink -f "$DEPLOY_ROOT/$1" || true; }
 
 list_releases() {
   local cur prev

@@ -4877,7 +4877,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     sessionId, voiceModel, _llmProviders.ProviderKey(voiceModel), _llmProviders.ProviderKey(entry.Info.Model));
                 voiceModel = null;
             }
-            await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
+            await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text, auto, systemDirective, senderPersonaId), attachedPaths,
                 suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
         }
     }
@@ -4893,9 +4893,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Текст хода для CLI: исходное сообщение + обвязки.
     // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
     // больше нет: слова ultrawork/ulw ловит keyword-detector плагина oh-my-claudecode.
-    private string BuildCliTurnText(SessionEntry entry, string text)
+    private string BuildCliTurnText(SessionEntry entry, string text, bool auto, bool systemDirective, string? senderPersonaId)
     {
-        var result = text;
+        // Маркер реплики человека (шаг 1 сжатия): только на прозу человека (ShouldMarkHumanText) —
+        // не на слэш-команды/скиллы (разворот скилла важнее) и не на не-человеческие ходы (auto,
+        // systemDirective, реплики персон). Непосредственно перед СЫРЫМ текстом, до любой обвязки
+        // ниже и до вложений (AttachmentInliner в ClaudeSession.SendMessageAsync) — N и sha
+        // относятся только к тому, что человек ввёл. Магслова ниже ищем по сырому text.
+        // Только в текст для CLI: история, лента и превью берут text без маркера (SendDirectAsync).
+        var result = ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ShouldMarkHumanText(text, auto, systemDirective, senderPersonaId)
+            ? ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.WithHumanTextMarker(text)
+            : text;
 
         // Обрыв фонового агента (см. NoteTruncatedBgAgent): CLI объявил его прогон
         // завершённым и отдал координатору последнюю реплику как результат. Пометка едет

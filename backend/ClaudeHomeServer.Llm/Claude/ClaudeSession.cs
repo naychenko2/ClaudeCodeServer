@@ -3006,6 +3006,52 @@ public class ClaudeSession : ILlmSessionAdapter
         _forceNonPlanNextTurn = false;
     }
 
+    // Формат маркера реплики человека (шаг 1 плана «сжатие с сохранением дословного»).
+    // Прокси (шаг 3) найдёт ВСЕ вхождения маркера, для каждого возьмёт N кодовых точек
+    // сразу после "-->\n" и примет только то, чей хеш совпал. N = длина сырого текста в
+    // КОДОВЫХ ТОЧКАХ Unicode (EnumerateRunes, не Length: прокси на Python считает кодовыми
+    // точками, эмодзи по .Length разойдутся). sha = первые 8 hex (нижний регистр) SHA-256
+    // от UTF-8 байтов сырого текста: цитата маркера в recall/заметке/реплике хеш не пройдёт.
+    public const string HumanTextMarkerFormat = "<!-- ccs:human-text chars={0} sha={1} -->";
+
+    // Вставка маркера непосредственно перед сырой репликой: маркер + "\n" + сырой текст.
+    // Вызывается в SessionManager, где сырой текст ещё отдельна от обвязки (BuildCliTurnText)
+    // и вложений (AttachmentInliner) — N и sha относятся ТОЛЬКО к сырой реплике.
+    // public static: SessionManager (Main) вызывает до BuildCliTurnText; Main → Llm разрешено.
+    public static string WithHumanTextMarker(string rawText)
+    {
+        var chars = rawText.EnumerateRunes().Count();
+        var sha = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawText)))[..8]
+            .ToLowerInvariant();
+        return string.Format(CultureInfo.InvariantCulture, HumanTextMarkerFormat, chars, sha) + "\n" + rawText;
+    }
+
+    // Маркер реплики человека (WithHumanTextMarker) ставится только на прозу человека — там,
+    // где его защита имеет смысл. Не ставим:
+    //  • на слэш-команды/скиллы (сырой текст после TrimStart() начинается с '/'): команда —
+    //    не поправка и не ограничение, её дословная защита не нужна, а разворот скилла
+    //    (SkillsService.TryExpandSkill) важнее — маркер первой строкой ломал бы его, потому
+    //    что TryExpandSkill выходит по message[0] != '/';
+    //  • на не-человеческие ходы: auto (автоматика), systemDirective (цикл «до готово»,
+    //    доклады), ходы с senderPersonaId (реплики персон в групповом чате).
+    // public static: SessionManager (Main) вызывает; Main → Llm разрешено.
+    public static bool ShouldMarkHumanText(string rawText, bool auto, bool systemDirective, string? senderPersonaId)
+    {
+        if (auto || systemDirective || senderPersonaId is not null) return false;
+        return !rawText.TrimStart().StartsWith('/');
+    }
+
+    // Склейка хвоста хода: recall + text. Маркер реплики (WithHumanTextMarker) уже стоит
+    // в text (вставлен в SessionManager до обвязки). Без recall (joinedRecall null/пусто)
+    // возвращаем text как есть. internal static: юнит-тест проверяет склейку без процесса CLI.
+    internal static string BuildTurnTextForCli(string? joinedRecall, string text)
+    {
+        if (string.IsNullOrEmpty(joinedRecall))
+            return text;
+        return joinedRecall + "\n\n---\n\n" + text;
+    }
+
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
         bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null)
     {
@@ -3935,7 +3981,7 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 _lastTurnRecallHash = recallHash;
                 sections.AddRange(turnRecallSections);
-                turnTextForCli = joinedRecall + "\n\n---\n\n" + text;
+                turnTextForCli = BuildTurnTextForCli(joinedRecall, text);
             }
         }
 

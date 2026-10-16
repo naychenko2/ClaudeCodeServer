@@ -1771,7 +1771,8 @@ public class SessionManagerTests : IDisposable
         // Пометка одноразовая
         session.Status = SessionStatus.Active;
         await _sut.SendMessageAsync(session.Id, "ещё", []);
-        sent.Should().Be("ещё");
+        // В CLI уходит сырая реплика с маркером человека (шаг 1 сжатия), без обвязки
+        sent.Should().Be(ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.WithHumanTextMarker("ещё"));
     }
 
     [Fact]
@@ -3070,6 +3071,7 @@ public class SessionManagerTests : IDisposable
             new ResultMessage("success", 10, 1, null, null), TestRunId);
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
         _sut.GetPending(session.Id).Should().BeEmpty();
+        // «Доклад» — агентское (chats_send): drain доставляет как auto: true — не-человеческий ход, маркера не получает (ShouldMarkHumanText: auto → false).
         adapter.Verify(a => a.SendMessageAsync("доклад без прерывания", It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
     }

@@ -1056,8 +1056,9 @@ override снята, файл оставлен. При следующей сме
   `kvdisk-trim.sh` выбирает жертвы по времени ЧТЕНИЯ — блоки, которые читают сессии и хранитель,
   не стареют.
 
-Установка на машине: `cp prefix-keeper.{service,timer} ~/.config/systemd/user/ && systemctl --user
-daemon-reload && systemctl --user enable --now prefix-keeper.timer`; `PREFIX_SNAPSHOT_DIR` — в
+Установка на машине (один раз): `cp prefix-keeper.{service,timer} ~/.config/systemd/user/ &&
+systemctl --user daemon-reload && systemctl --user enable --now prefix-keeper.timer`; дальше файлы
+юнита обновляет `deploy.sh` (см. «Развёртывание»), скрипт запускается из `/opt/ccs/proxy/current`; `PREFIX_SNAPSHOT_DIR` — в
 `mode.conf`. Проверка: `journalctl --user -u prefix-keeper.service -n 3`.
 
 ## Предохранитель от петли в потоке (2026-10-15)
@@ -1115,7 +1116,7 @@ daemon-reload && systemctl --user enable --now prefix-keeper.timer`; `PREFIX_SNA
 | `LOOP_RETRY` | `on` | один повтор запроса после петли |
 | `LOOP_RETRY_SAMPLING` | `presence_penalty=0.5,temperature=0.1` | добавки к сэмплингу повтора |
 
-Дефолт `off` в коде — потому что служба запускается из рабочего дерева: код на ветке не должен
+Дефолт `off` в коде — потому что код новой фичи не должен
 менять поведение боя до отмашки. **Откат:** `LOOP_GUARD=off` в `mode.conf` (или убрать строку),
 `sudo cp` drop-in в `/etc/systemd/system/thinking-strip-proxy.service.d/`, `sudo systemctl
 daemon-reload && sudo systemctl restart thinking-strip-proxy`.
@@ -1310,23 +1311,52 @@ python3 -m unittest discover -s tools/thinking-strip-proxy
 
 ## Развёртывание
 
-Юнит живёт рядом с кодом и **запускает прокси прямо из рабочего дерева репозитория** —
-копии расходятся, и за это мы уже платили (сломанная health-проба в неверсионируемом
-`/opt/ccs/switch-release.sh` откатила удачную выкатку 2026-09-22).
+**Прокси на бою работает только из каталога выкладки `/opt/ccs/proxy`** (рядом с `/opt/ccs/app`).
+Рабочая копия репозитория на бой не влияет: переключение веток, правки и `git stash` в ней
+ничего не меняют. Прежняя схема «запуск прямо из рабочего дерева» стоила нам инцидента 16.10:
+основная копия оказалась на ветке исполнителя, юнит перезапустился, и на бою заработал
+непроверенный `compactor.py`.
 
-```bash
-sudo cp tools/thinking-strip-proxy/thinking-strip-proxy.service /etc/systemd/system/
-sudo mkdir -p /etc/systemd/system/thinking-strip-proxy.service.d
-sudo cp tools/thinking-strip-proxy/thinking-strip-proxy.service.d/mode.conf \
-        /etc/systemd/system/thinking-strip-proxy.service.d/
-sudo systemctl daemon-reload && sudo systemctl restart thinking-strip-proxy
+Раскладка:
+
+```
+/opt/ccs/proxy/releases/<UTC-время>-<sha9>/   неизменяемые версии (файлы только для чтения)
+/opt/ccs/proxy/current  -> releases/...        отсюда запускает юнит
+/opt/ccs/proxy/previous -> releases/...        версия для отката
 ```
 
-Цена решения: прокси следует ветке рабочего дерева. На ветке, где этого файла ещё нет, он
-падает и перезапускается каждые 2 секунды, пока файл не вернётся (`Restart=always`) —
-отказ самовосстанавливающийся, но локальная модель на это время недоступна.
+Юнит: `ExecStart=/usr/bin/python3 /opt/ccs/proxy/current/proxy.py`. Ключ MiniMax прокси по-прежнему
+читает из боевого `/opt/ccs/app/appsettings.Local.json` (`COMPACT_KEY_FILE`), снимки префикса
+пишет в `/var/lib/thinking-strip-proxy/prefix` — на рабочую копию не ссылается ничего.
+`prefix-keeper` (пользовательский юнит) тоже запускает `/opt/ccs/proxy/current/prefix_keeper.py`.
 
-Путь `/home/an/Sources/ClaudeCodeServer` в юните зашит так же, как `/opt/ccs` в `ccs.service`.
+**Обновление — только `deploy.sh`**, руками файлы в `/opt/ccs/proxy` и юниты в `/etc` не правят:
+
+```bash
+tools/thinking-strip-proxy/deploy.sh            # выложить master и перезапустить юнит
+tools/thinking-strip-proxy/deploy.sh --list     # какие версии есть, где current/previous
+tools/thinking-strip-proxy/deploy.sh --rollback # вернуться на previous (или --rollback <имя версии>)
+```
+
+Что делает выкладка: берёт **коммит `master`** через `git archive` (не рабочее дерево — любая
+ветка рабочей копии безразлична; не-master отказ, исключение — `ALLOW_NON_MASTER=1`); кладёт
+в новый каталог без `bench/`, `e2e/`, тестов и `__pycache__`; проверяет синтаксис `proxy.py`,
+`compactor.py`, `prefix_keeper.py` ДО переключения; атомарно переключает `current`
+(старый `current` становится `previous`); копирует `thinking-strip-proxy.service` и
+`thinking-strip-proxy.service.d/*.conf` в `/etc/systemd/system/` (со страховочной копией
+`.bak-<время>`, если файл изменился); `daemon-reload`, рестарт юнита; проверяет `/__proxy/stats`
+и что процесс запущен именно из `/opt/ccs/proxy/current`. Если проверка не прошла, сама
+откатывается на прежнюю версию и выходит с ошибкой. Хранится пять последних версий
+(`KEEP`), `current` и `previous` не удаляются.
+
+Откат — `deploy.sh --rollback`: симлинк на предыдущую версию, юниты берутся из неё же, рестарт и
+та же проверка. Вручную: `ln -sfn <версия> /opt/ccs/proxy/current && sudo systemctl restart
+thinking-strip-proxy`.
+
+Источник правды настроек боя — `thinking-strip-proxy.service.d/mode.conf` **в master**:
+правка только на машине в `/etc/...` теряется при следующей выкладке (так 2026-09-23 пропали
+две строки). Изменение режима = коммит в master + `deploy.sh`. Гасить прокси — только юнитом
+(`systemctl stop thinking-strip-proxy`) или по PID, никогда `pkill` по имени.
 
 ## Замер
 

@@ -603,6 +603,9 @@ public sealed partial class PersonasToolset(
     private static PersonaSpecialty? SpecialtyArg(JsonObject arguments) =>
         Enum.TryParse<PersonaSpecialty>(StringArg(arguments, "specialty"), true, out var parsed) ? parsed : null;
 
+    private static PersonaGender? GenderArg(JsonObject arguments) =>
+        Enum.TryParse<PersonaGender>(StringArg(arguments, "gender"), true, out var parsed) ? parsed : null;
+
     internal const string SphereZoneDenial = "Зону персоны сферы меняет только человек";
 
     // Зону персоны через MCP не расширяют и не выдают: модель не создаёт персон сферы и не уводит
@@ -642,6 +645,7 @@ public sealed partial class PersonasToolset(
             MemoryEnabled: BoolArg(arguments, "memoryEnabled"),
             Contract: contract,
             Specialty: SpecialtyArg(arguments),
+            Gender: GenderArg(arguments),
             Bindings: arguments.ContainsKey("bindings") ? BindingRequests(arguments, "bindings") : null,
             AutoBindings: BoolArg(arguments, "autoBindings"),
             // Персона из чата не выбирает аватар руками — просим сгенерировать (best-effort)
@@ -658,7 +662,7 @@ public sealed partial class PersonasToolset(
     internal static UpdatePersonaRequest? BuildUpdateRequest(JsonObject arguments, string? sessionProjectId)
     {
         string[] fields = ["name", "role", "description", "systemPrompt", "effort", "color", "greeting",
-            "memoryEnabled", "scope", "projectId", "handle", "modelTier", "specialty",
+            "memoryEnabled", "scope", "projectId", "handle", "modelTier", "specialty", "gender",
             "character", "tone", "mustDo", "mustNot", "outputFormat", "speechExamples",
             "tierStrong", "tierMedium", "tierWeak"];
         if (!fields.Any(arguments.ContainsKey)) return null;
@@ -685,6 +689,7 @@ public sealed partial class PersonasToolset(
             MemoryEnabled: BoolArg(arguments, "memoryEnabled"),
             Contract: contract,
             Specialty: SpecialtyArg(arguments),
+            Gender: arguments.ContainsKey("gender") ? GenderArg(arguments) : null,
             Handle: OptionalArg(arguments, "handle"),
             ModelTier: arguments.ContainsKey("modelTier") ? StringArg(arguments, "modelTier") : null,
             TierStrong: arguments.ContainsKey("tierStrong") ? StringArg(arguments, "tierStrong") : null,

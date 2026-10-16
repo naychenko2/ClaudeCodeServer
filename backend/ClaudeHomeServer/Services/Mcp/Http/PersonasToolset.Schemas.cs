@@ -73,6 +73,13 @@ public sealed partial class PersonasToolset
             ["description"] = "Специализация для оркестрации команды (роутинг типовых сабагентов на персону); "
                 + "executor/tester при access \"full\" даёт право править файлы — выставляй осознанно",
         },
+        ["gender"] = new JsonObject
+        {
+            ["type"] = "string",
+            ["enum"] = StrEnum("unspecified", "male", "female"),
+            ["description"] = "Пол персоны. Используется при сборке промпта — помогает локальной модели держать род. "
+                + "unspecified (по умолчанию) = модель сама по имени",
+        },
         ["description"] = Str("Короткое описание, кто это (для карточки)"),
         ["character"] = Str($"Характер на «ты» («Ты — …»), 2-5 предложений; слоты — {SeeInstructions}"),
         ["tone"] = Str(),

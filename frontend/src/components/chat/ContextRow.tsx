@@ -35,6 +35,8 @@ interface Props {
   onCommitAll: () => void;
   // Открыть объект в правой панели «Контекст»; по умолчанию — revealContextPanel
   onOpenPrimary?: () => void;
+  // Полоса-подсказка над строкой (ContinueHint): прокидывается в ContextRowView.notice
+  notice?: ReactNode;
 }
 
 const iconOf = (kind: string): ReactNode =>
@@ -99,7 +101,7 @@ function WithGit(props: Props & { project: Project }) {
   );
 }
 
-function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
+function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
   const sessionId = session.id;
   // Клик по чипу объекта открывает панель «Контекст», а открытую мигает карточкой «С чем»
   const onOpenPrimary = onOpenPrimaryProp ?? (() => { revealContextPanel(sessionId); });
@@ -150,6 +152,7 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
         onOpenPrimary={onOpenPrimary}
         onDetach={id => { void detachRef(sessionId, id); }}
         onClear={() => { void clearContext(sessionId); }}
+        notice={notice}
       />
     </div>
   );

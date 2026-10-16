@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Подсказка «Продолжить в новом чате» — варианты A–D</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет был самодостаточным.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R из lib/design.ts. */
+  .t-light {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-track: #D8CFBE; --c-progress-track: #D8CFBE;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-lift-soft: 0 -1px 2px rgba(60, 50, 35, 0.06), 0 -3px 10px rgba(60, 50, 35, 0.08);
+  }
+  .t-dark {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-track: #453F37; --c-progress-track: #453F37;
+    --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-lift-soft: 0 -1px 2px rgba(0,0,0,.35), 0 -3px 10px rgba(0,0,0,.40);
+  }
+  :root {
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-max: 999px;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: #E9E4DA; color: #39332B;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  button { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1500px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: #2A251F; margin: 0 0 6px; }
+  h2.doc { font-family: 'PT Serif', Georgia, serif; font-size: 20px; color: #2A251F; margin: 34px 0 4px; }
+  p.lead { color: #756B5E; margin: 0 0 10px; max-width: 1040px; line-height: 1.55; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; background: #E0D7C8; border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: #E9E4DA; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .lbl { font-size: 11px; color: #9A8F7E; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid #D0C6B4; background: #FBF8F2; border-radius: 10px; padding: 5px 10px; color: #39332B; }
+  .tbtn[aria-pressed="true"] { background: #D97757; color: #FBF8F2; border-color: transparent; }
+
+  table.sum { border-collapse: collapse; width: 100%; max-width: 1240px; font-size: 12.5px; background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; overflow: hidden; }
+  table.sum th, table.sum td { padding: 7px 10px; border-bottom: 1px solid #E8E1D4; text-align: left; vertical-align: top; line-height: 1.45; }
+  table.sum th { color: #9A8F7E; font-size: 11px; font-weight: 600; background: #F4F0E8; }
+  table.sum td.n { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  table.sum tr.rec td { background: #F4ECE1; }
+  .tag { display: inline-block; font-size: 10.5px; font-weight: 700; color: #FBF8F2; background: #D97757; border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; }
+
+  .vhead { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; max-width: 1480px; margin: 0 0 10px; }
+  .vhead .card { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; line-height: 1.5; }
+  .vhead h3 { margin: 0 0 4px; font-size: 15px; color: #2A251F; }
+  .vhead ul { margin: 4px 0 0; padding-left: 18px; }
+  .vhead .pm b { color: #3F7A4F; } .vhead .mn b { color: #B4452F; }
+  @media (max-width: 1100px) { .vhead { grid-template-columns: 1fr; } }
+
+  .grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .frame { background: var(--c-bg-main); color: var(--c-text-primary); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; }
+  .frame .cap { font-size: 11px; color: var(--c-text-muted); margin: 0 0 8px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .frame .cap .m { color: var(--c-accent); font-weight: 700; }
+
+  /* ── Окно чата ── */
+  .chat { position: relative; display: flex; flex-direction: column; background: var(--c-bg-panel); border: 1px solid var(--c-border-light);
+    border-radius: var(--r-xxl); box-shadow: var(--shadow-island); overflow: visible; }
+  .chat.desk { width: 720px; height: 520px; }
+  .chat.mob { width: 390px; height: 640px; border-radius: 22px; }
+  .hbar { height: 40px; flex: 0 0 40px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--c-border-light);
+    background: var(--c-bg-inset); border-radius: var(--r-xxl) var(--r-xxl) 0 0; font-weight: 600; color: var(--c-text-heading); position: relative; }
+  .chat.mob .hbar { height: 44px; flex-basis: 44px; border-radius: 22px 22px 0 0; }
+  .hbar .ttl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .feed { flex: 1; min-height: 0; overflow: hidden; padding: 12px 16px 8px; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; }
+  .chat.mob .feed { padding: 10px 12px 6px; }
+  .msg { line-height: 1.5; max-width: 560px; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 7px 11px; }
+  .tool { align-self: flex-start; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: var(--fs-xs); color: var(--c-text-secondary); background: var(--c-bg-inset); border-radius: var(--r-md); padding: 3px 8px; }
+  .dock { padding: 0 16px 14px; }
+  .chat.mob .dock { padding: 0 12px 8px; }
+
+  svg.i { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.sm { width: 16px; height: 16px; }
+  .ell { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Кольцо контекста в шапке (RingPillBadge) */
+  .ring { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 4px; border-radius: var(--r-max);
+    border: 1px solid var(--c-border); background: var(--c-bg-card); font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-secondary); cursor: pointer; }
+  .ring svg { width: 18px; height: 18px; }
+  .ring .pip { position: absolute; top: -2px; left: 15px; width: 8px; height: 8px; border-radius: 50%; background: var(--c-accent); box-shadow: 0 0 0 2px var(--c-bg-inset); }
+
+  /* Губа: строка контекста над полем (ContextRowView) */
+  .crow { display: flex; align-items: center; gap: 6px; height: 28px; margin: 10px 0 0; min-width: 0; }
+  .chat.mob .crow { margin-top: 4px; }
+  .rchip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-lg) var(--r-lg) 0 0;
+    background: var(--c-bg-inset); color: var(--c-text-secondary); font-size: 12.5px; white-space: nowrap; min-width: 0; flex-shrink: 1; }
+  .rchip.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+  .rchip b { color: var(--c-text-heading); font-weight: 400; }
+  .crow .sp { flex: 1; }
+
+  /* Поле ввода */
+  .comp { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-lift-soft); padding: 10px 12px 8px; }
+  .comp .ph { color: var(--c-text-muted); font-size: var(--fs-md); height: 40px; }
+  .comp .tb { display: flex; align-items: center; gap: 6px; }
+  .comp .rb { width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; color: var(--c-text-secondary); background: var(--c-bg-panel); }
+  .comp .pick { margin-left: auto; font-size: var(--fs-sm); color: var(--c-text-secondary); border: 1px solid var(--c-border); border-radius: var(--r-max); padding: 4px 10px; white-space: nowrap; }
+  .comp .send { width: 32px; height: 32px; border-radius: 50%; background: var(--c-accent); color: var(--c-on-accent); display: inline-grid; place-items: center; }
+
+  /* Соседка: EscalationStickyBanner (как в проде) */
+  .esc { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 0 0 6px; border: 1px solid var(--c-warning); border-radius: var(--r-lg);
+    background: var(--c-warning-bg); color: var(--c-warning-text); font-size: var(--fs-sm); box-shadow: var(--shadow-card); }
+  .esc .cta { flex-shrink: 0; font-size: var(--fs-xs); font-weight: 600; color: var(--c-on-accent); background: var(--c-warning-text); border-radius: var(--r-md); padding: 4px 10px; }
+
+  /* Кирпичи UI-кита */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--r-lg); cursor: pointer; white-space: nowrap; font-size: 13px; }
+  .btn.sm { min-height: 32px; padding: 7px 13px; }
+  .btn.xs { height: 24px; padding: 0 9px; font-size: 12px; line-height: 1; border-radius: var(--r-md); }
+  .btn.primary { background: var(--c-accent); color: var(--c-on-accent); border: none; }
+  .btn.ghost { background: transparent; color: var(--c-text-secondary); border: 1px solid var(--c-border); }
+  .ibtn { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: var(--r-md); border: none; background: transparent; color: var(--c-text-muted); cursor: pointer; flex-shrink: 0; }
+  .ibtn:hover { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .notice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--c-info);
+    background: var(--c-info-bg); color: var(--c-text-primary); font-size: var(--fs-sm); line-height: 1.45; }
+  .notice > svg { color: var(--c-info); margin-top: 2px; }
+
+  /* ── СЕЙЧАС: Notice + кнопки столбиком (ContinueHint) ── */
+  .h-now { padding: 0 12px 4px; }
+  .h-now .col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+
+  /* ── A: чип в строке контекста ── */
+  .h-a { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px 0 8px; border-radius: var(--r-max);
+    background: var(--c-accent-light); color: var(--c-accent); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; flex-shrink: 0; cursor: pointer; border: none; }
+  .h-a:hover { background: var(--c-accent-muted); }
+  .h-a .x { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--c-accent); }
+  .h-a .x:hover { background: var(--c-accent-muted); }
+  .chat.mob .h-a { height: 28px; }
+  .chat.mob .h-a .x { width: 28px; height: 28px; margin-right: -4px; }
+
+  /* ── B: точка на кольце + пункт в поповере ── */
+  .pop { position: absolute; top: 36px; right: 8px; z-index: 5; width: 300px; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: var(--r-xl);
+    background: var(--c-bg-white); box-shadow: var(--shadow-dropdown); font-weight: 400; color: var(--c-text-secondary); font-size: var(--fs-sm); }
+  .chat.mob .pop { top: 40px; right: 6px; width: calc(100% - 12px); }
+  .pop .row { display: flex; align-items: center; gap: 8px; }
+  .pop .bar { height: 4px; border-radius: 2px; background: var(--c-progress-track); margin: 6px 0 10px; overflow: hidden; }
+  .pop .bar i { display: block; height: 100%; width: 31%; background: var(--c-warning); border-radius: 2px; }
+  .pop .sug { border-top: 1px solid var(--c-border-light); margin-top: 10px; padding-top: 10px; }
+  .pop .sug b { color: var(--c-text-heading); font-weight: 600; }
+  .pop .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+  /* ── C: тонкая полоса над строкой контекста (геометрия UndoNotice) ── */
+  .h-c { display: flex; align-items: center; gap: 8px; height: 28px; margin: 10px 0 4px; padding: 0 4px 0 8px; border: 1px solid var(--c-border); border-radius: var(--r-lg);
+    background: var(--c-bg-panel); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .h-c + .crow { margin-top: 0; }
+  .chat.mob .h-c { height: 32px; margin-top: 4px; padding: 0 0 0 8px; }
+  .h-c b { color: var(--c-text-heading); font-weight: 600; }
+  .h-c .go { display: inline-flex; align-items: center; gap: 4px; border: none; background: transparent; padding: 0; cursor: pointer; color: var(--c-accent); font-size: var(--fs-sm); font-weight: 600; flex-shrink: 0; border-radius: var(--r-sm); }
+  .h-c .go:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .h-c .go:focus-visible, .h-c .x:focus-visible, .h-a:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(217,119,87,.24); }
+  .h-c .x { display: inline-grid; place-items: center; width: 20px; height: 20px; border: none; background: transparent; padding: 0; border-radius: var(--r-sm); color: var(--c-text-muted); cursor: pointer; flex-shrink: 0; }
+  .h-c .x:hover { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .chat.mob .h-c .x { width: 32px; height: 30px; }
+
+  /* ── D: Notice в одну строку ── */
+  .h-d { margin: 10px 0 4px; align-items: center; padding: 6px 6px 6px 12px; }
+  .h-d > svg { margin-top: 0; }
+  .h-d + .crow { margin-top: 0; }
+  .chat.mob .h-d { margin-top: 4px; padding: 4px 4px 4px 10px; }
+  .chat.mob .h-d .btn { min-height: 32px; height: 32px; }
+  .chat.mob .h-d .ibtn { width: 32px; height: 32px; }
+
+  .measure { outline: 1.5px dashed var(--c-accent); outline-offset: 1px; }
+  .hide-measure .measure { outline: none; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Подсказка «Продолжить в новом чате» — четыре варианта</h1>
+  <p class="lead">Сценарий: человек полдня ведёт один чат, контекст перевалил за 300K. Ему нужен короткий сигнал «дальше дороже, можно начать с чистого листа» — не отрываясь от поля ввода и не теряя под ним ленту. Сейчас подсказка — информационная карточка с кнопками столбиком, около 90 px между строкой контекста и полем ввода: она отрывает губу строки от карточки поля. Ниже — текущее состояние и варианты от самого тихого (A) до самого заметного (D). Пунктир — граница, по которой скрипт меряет высоту; число в подписи кадра посчитано по живой вёрстке.</p>
+
+  <div class="demo">
+    <span class="lbl">Соседи:</span>
+    <button class="tbtn" id="tEsc" aria-pressed="false">+ полоса эскалации</button>
+    <button class="tbtn" id="tPop" aria-pressed="true">B: поповер открыт</button>
+    <button class="tbtn" id="tMeasure" aria-pressed="true">пунктир замера</button>
+    <span class="lbl">Число контекста:</span>
+    <button class="tbtn" data-k="312K" aria-pressed="true">312K</button>
+    <button class="tbtn" data-k="1,2M" aria-pressed="false">1,2M (длинное)</button>
+  </div>
+
+  <table class="sum">
+    <thead><tr><th>Вариант</th><th>Сколько занимает над полем (десктоп / 390)</th><th>Компоненты дизайн-системы</th><th>Плюсы</th><th>Минусы</th></tr></thead>
+    <tbody>
+      <tr><td><b>Сейчас</b> — Notice с кнопками столбиком</td><td class="n" data-sum="now">—</td><td><code>Notice tone="info"</code>, <code>Button sm</code> ×2</td><td>Не пропустишь</td><td>Самая высокая полоса над полем, отрывает строку контекста от поля, синий тон info чужой для строки</td></tr>
+      <tr><td><b>A</b> — чип в строке контекста</td><td class="n" data-sum="a">—</td><td><code>Chip variant="soft"</code> с <code>onRemove</code>, <code>touch</code> на мобиле</td><td>0 px сверху: живёт в уже существующем ряду</td><td>Ряд и так тесный (ветка, «С чем», «Чем»), на 390 чип съедает место у «Чем»; без git и объекта ряда нет — чипу негде жить; подписи чипов строки считает бэкенд, а этот чип придётся рисовать фронтом</td></tr>
+      <tr><td><b>B</b> — точка на кольце контекста + пункт в поповере</td><td class="n" data-sum="b">—</td><td>Существующий <code>RingPillBadge</code>, пип <code>C.accent</code>, <code>Button xs</code> в поповере</td><td>Над полем ничего; предложение лежит рядом с «Сжать» и шкалой, это одна тема</td><td>Точку в шапке легко не заметить: взгляд у поля ввода. Без открытого поповера непонятно, что сейчас советуют</td></tr>
+      <tr class="rec"><td><b>C</b> — тонкая полоса над строкой <span class="tag">рекомендую</span></td><td class="n" data-sum="c">—</td><td>Геометрия <code>UndoNotice</code> из строки контекста: высота 28, <code>C.bgPanel</code>, <code>C.border</code>, ссылка <code>C.accent</code>; предлагаю вынести её в <code>Notice dense</code></td><td>Одна строка, видна у поля; та же форма, что «Выбор снят · Вернуть», поэтому читается как часть строки, а не отдельная карточка; губа строки снова прилегает к полю</td><td>Всё-таки +32/36 px; «✕» вместо слов «Не сейчас» — значение подписано только в title и aria-label</td></tr>
+      <tr><td><b>D</b> — Notice в одну строку</td><td class="n" data-sum="d">—</td><td><code>Notice tone="info"</code>, <code>Button xs primary</code>, <code>IconButton</code> ✕</td><td>Самый заметный из компактных, кнопка-действие настоящая</td><td>Синяя рамка info среди тёплых полос строки; на 390 от текста остаётся «Контекст 312K»</td></tr>
+    </tbody>
+  </table>
+
+  <div id="variants"></div>
+</div>
+
+<template id="ic-gauge"><svg class="i" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></template>
+<template id="ic-x"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></template>
+<template id="ic-arrow"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></template>
+<template id="ic-branch"><svg class="i" viewBox="0 0 24 24"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></template>
+<template id="ic-alert"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></template>
+<template id="ic-clip"><svg class="i sm" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></template>
+<template id="ic-mic"><svg class="i sm" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg></template>
+<template id="ic-send"><svg class="i sm" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></template>
+
+<script>
+const ic = id => document.getElementById('ic-' + id).innerHTML;
+const state = { esc: false, pop: true, k: '312K' };
+
+const ring = (pip) => `
+  <span class="ring" title="Контекст">
+    <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--c-progress-track)" stroke-width="2.4"/>
+      <circle cx="10" cy="10" r="7.5" fill="none" stroke="var(--c-warning)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="14.6 47.1" transform="rotate(-90 10 10)"/></svg>
+    31%${pip ? '<span class="pip" aria-hidden="true"></span>' : ''}
+  </span>`;
+
+const esc = (mob) => state.esc ? `<div class="esc">${ic('alert')}<span class="ell" style="flex:1"><b>Практика ждёт вашего решения:</b> ${mob ? 'вопрос по миграции' : 'вопрос по миграции схемы задач'}</span><span class="cta">К карточке</span></div>` : '';
+
+function crow(mob, extra) {
+  return `<div class="crow">
+    <span class="rchip mono">${ic('branch')}${mob ? '' : '<b>feat/chat-continue</b>'}</span>
+    <span class="rchip ell">С чем · <b>${mob ? 'кот.png' : 'hero-кот.png · v3'}</b></span>
+    <span class="rchip ell">Чем · <b>${mob ? 'Claude' : 'Claude · Opus 5.5'}</b></span>
+    <span class="sp"></span>${extra || ''}
+  </div>`;
+}
+
+const composer = (mob) => `<div class="comp"><div class="ph">Сообщение…</div>
+  <div class="tb"><span class="rb">${ic('clip')}</span><span class="rb">${ic('mic')}</span>
+  <span class="pick">${mob ? 'Opus' : 'Opus 5.5 · ▮▮▮▯▯'}</span><span class="send">${ic('send')}</span></div></div>`;
+
+// Каждый вариант возвращает { head, above, row, between } — куда в окне встаёт подсказка
+const V = {
+  now: mob => ({ between: `<div class="h-now measure"><div class="notice">${ic('gauge')}<div style="flex:1;min-width:0">Контекст ${state.k}. Продолжить в новом чате? Дешевле, и агент меньше путается.</div>
+      <div class="col"><span class="btn sm primary">Продолжить</span><span class="btn sm ghost">Не сейчас</span></div></div></div>` }),
+  a: mob => ({ row: `<button class="h-a measure" title="Контекст ${state.k} — продолжить в новом чате">${ic('gauge')}${state.k}${mob ? '' : ' · В новый чат'}<span class="x" title="Не сейчас" aria-label="Не сейчас">${ic('x')}</span></button>` }),
+  b: mob => ({ head: ring(true) + (state.pop ? `<div class="pop">
+        <div class="row"><span style="flex:1">Контекст</span><b style="color:var(--c-text-heading)">${state.k} из 1M</b></div>
+        <div class="bar"><i></i></div>
+        <div class="row"><span style="flex:1;color:var(--c-text-muted)">Сжатие освободит место в этом чате</span><span class="btn xs ghost">Сжать</span></div>
+        <div class="sug"><b>Продолжить в новом чате?</b> Агент напишет записку-передачу — дешевле, и он меньше путается.
+          <div class="acts"><span class="btn xs primary">Продолжить</span><span class="btn xs ghost">Не сейчас</span></div></div>
+      </div>` : '') }),
+  c: mob => ({ above: `<div class="h-c measure" role="status">${ic('gauge')}<span class="ell" style="flex:1">Контекст <b>${state.k}</b>${mob ? '' : ' · дешевле продолжить в новом чате'}</span>
+      <button class="go">${mob ? 'В новый чат' : 'Продолжить'}${ic('arrow')}</button>
+      <button class="x" title="Не сейчас — напомню, когда вырастет ещё на 100K" aria-label="Не сейчас">${ic('x')}</button></div>` }),
+  d: mob => ({ above: `<div class="notice h-d measure" role="status">${ic('gauge')}<div class="ell" style="flex:1">Контекст ${state.k}${mob ? '' : ' — дешевле продолжить в новом чате'}</div>
+      <span class="btn xs primary">Продолжить</span><button class="ibtn" title="Не сейчас" aria-label="Не сейчас">${ic('x')}</button></div>` }),
+};
+
+function chat(key, mob) {
+  const p = V[key](mob);
+  return `<div class="chat ${mob ? 'mob' : 'desk'}">
+    <div class="hbar"><span class="ttl">Чат · Продолжить в новом чате — фронт</span>${p.head || ring(false)}</div>
+    <div class="feed">
+      <div class="msg user">Ок, теперь проверь мобильную раскладку</div>
+      <div class="tool">Read frontend/src/components/chat/ContinueChat.tsx</div>
+      <div class="msg">Проверил: на 390 px кнопки встают столбиком, текст переносится на три строки.</div>
+    </div>
+    <div class="dock">
+      ${p.above || ''}${crow(mob, p.row)}${esc(mob)}${p.between || ''}${composer(mob)}
+    </div>
+  </div>`;
+}
+
+const META = {
+  now: { t: 'Сейчас — Notice с кнопками столбиком', why: 'Как в проде: полоса стоит МЕЖДУ строкой контекста и полем, губа строки висит в воздухе.', plus: ['Не пропустишь'], minus: ['Самая высокая полоса над полем', 'Синий info среди тёплых полос строки', 'Разрывает губу «строка → поле»'] },
+  a: { t: 'A — чип в строке контекста', why: 'Сигнал живёт в правом конце ряда «Где · С чем · Чем». Клик по чипу открывает диалог, ✕ — «Не сейчас».', plus: ['0 px над полем', 'Рядом с тем, что пользователь и так читает перед отправкой'], minus: ['На 390 место у «Чем» уходит чипу, лестница ряда сжимается раньше', 'Ряда нет без git и объекта — нужен запасной вариант', 'Подписи ряда считает бэкенд, этот чип — исключение'] },
+  b: { t: 'B — точка на кольце контекста + пункт в поповере', why: 'Над полем ничего не появляется. На кольце в шапке загорается точка C.accent, в поповере кольца под «Сжать» — предложение и две кнопки.', plus: ['Ноль места над полем', 'Тема одна: шкала, «Сжать» и «Продолжить» рядом'], minus: ['Точку в шапке легко пропустить', 'Чтобы понять совет, его надо открыть'] },
+  c: { t: 'C — тонкая полоса над строкой (рекомендую)', why: 'Та же форма, что у «Выбор снят · Вернуть» (UndoNotice): 28 px, панельный фон, ссылка-действие и ✕. Встаёт НАД строкой контекста, губа снова прилегает к полю.', plus: ['Одна строка, видна у поля', 'Читается как часть строки, а не отдельная карточка', 'Готовая геометрия — новых значений в шкалах нет'], minus: ['+32 px (десктоп) / +36 px (390)', '«Не сейчас» — ✕ с подсказкой, не словами'] },
+  d: { t: 'D — Notice в одну строку', why: 'Сегодняшний Notice, но кнопки в ряд: «Продолжить» — xs primary, «Не сейчас» — ✕ IconButton.', plus: ['Самый заметный из компактных', 'Кнопка-действие настоящая'], minus: ['Синий info выбивается из тёплой губы', 'На 390 от текста остаётся «Контекст 312K»'] },
+};
+
+function render() {
+  const host = document.getElementById('variants');
+  host.innerHTML = Object.keys(V).map(key => {
+    const m = META[key];
+    const frames = [['desk', 't-light', 'Десктоп · светлая'], ['desk', 't-dark', 'Десктоп · тёмная'], ['mob', 't-light', '390 · светлая'], ['mob', 't-dark', '390 · тёмная']]
+      .map(([d, th, cap]) => `<div class="frame ${th}" data-v="${key}" data-d="${d}"><div class="cap">${cap}<span class="m"></span></div>${chat(key, d === 'mob')}</div>`).join('');
+    return `<h2 class="doc">${m.t}</h2>
+      <div class="vhead"><div class="card"><div class="why">${m.why}</div></div>
+        <div class="card"><div class="pm"><b>+</b> ${m.plus.join('; ')}</div><div class="mn"><b>−</b> ${m.minus.join('; ')}</div></div></div>
+      <div class="grid">${frames}</div>`;
+  }).join('');
+  measure();
+}
+
+// Высота, которую подсказка добавляет над полем: от верхней кромки зоны «подсказка + ряд + поле»
+// с подсказкой и без неё. Для A и B — 0, если ряд и шапка не выросли.
+function measure() {
+  const res = {};
+  document.querySelectorAll('.frame').forEach(fr => {
+    const el = fr.querySelector('.measure');
+    let h = 0;
+    if (el) {
+      const cs = getComputedStyle(el);
+      const inRow = el.closest('.crow');
+      h = inRow ? 0 : Math.round(el.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom));
+      // Полоса над рядом забирает у ряда его верхний отступ: считаем только прирост
+      if (!inRow && el.nextElementSibling && el.nextElementSibling.classList.contains('crow')) {
+        h -= fr.querySelector('.chat').classList.contains('mob') ? 4 : 10;
+      }
+    }
+    fr.querySelector('.cap .m').textContent = `+${h} px над полем`;
+    const k = fr.dataset.v, d = fr.dataset.d;
+    (res[k] ||= {})[d] = h;
+  });
+  for (const k in res) {
+    const td = document.querySelector(`[data-sum="${k}"]`);
+    if (td) td.textContent = `+${res[k].desk} / +${res[k].mob} px`;
+  }
+  window.__heights = res;
+}
+
+const tog = (id, key) => document.getElementById(id).addEventListener('click', e => {
+  state[key] = !state[key]; e.currentTarget.setAttribute('aria-pressed', state[key]); render();
+});
+tog('tEsc', 'esc'); tog('tPop', 'pop');
+document.getElementById('tMeasure').addEventListener('click', e => {
+  const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', on); document.body.classList.toggle('hide-measure', !on);
+});
+document.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => {
+  state.k = b.dataset.k; document.querySelectorAll('[data-k]').forEach(x => x.setAttribute('aria-pressed', x === b)); render();
+}));
+render();
+</script>
+</body>
+</html>

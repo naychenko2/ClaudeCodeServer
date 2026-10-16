@@ -3089,10 +3089,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             </div>
           )}
           {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
-              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать */}
+              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать.
+              Подсказка «Продолжить в новом чате» (вариант C) — тонкой полосой внутри строки,
+              над полем: строка снова прилегает к карточке, а не висит в воздухе */}
           {!embedded && online && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
-              onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
+              onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll}
+              notice={showContinueHint
+                ? <ContinueHint tokens={ctxEstimate.tokens!} isMobile={isMobile === true} onOpen={openContinue}
+                    onSnooze={() => setHintSnoozedAt(ctxEstimate.tokens)} />
+                : undefined}
+            />
           )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
@@ -3115,12 +3122,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               others={openEscalations.length - 1}
               onJump={jumpToEscalation}
             />
-          )}
-          {showContinueHint && (
-            <div style={{ padding: `0 ${SP.md}px ${SP.xs}px`, maxWidth: CHAT_MAX_W, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
-              <ContinueHint tokens={ctxEstimate.tokens!} onOpen={openContinue}
-                onSnooze={() => setHintSnoozedAt(ctxEstimate.tokens)} />
-            </div>
           )}
           {continueOpen && <ContinueChatDialog onConfirm={handleContinue} onClose={() => setContinueOpen(false)} />}
           <Composer

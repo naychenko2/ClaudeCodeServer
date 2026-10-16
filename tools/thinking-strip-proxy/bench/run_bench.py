@@ -25,9 +25,16 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 
-TYPES = ["fact", "artifact", "continuation", "decision", "correction"]
+# correction_syn — вставленные make_synthetic.py поправки (вопрос помечен synthetic), correction —
+# настоящие реплики человека из корпуса: считаются раздельно.
+TYPES = ["fact", "artifact", "continuation", "decision", "correction", "correction_syn"]
 TYPE_RU = {"fact": "факты", "artifact": "артефакты", "continuation": "продолжение",
-           "decision": "решения", "correction": "поправки человека"}
+           "decision": "решения", "correction": "поправки (настоящие)",
+           "correction_syn": "поправки (синтетические)"}
+
+
+def qtype(q):
+    return "correction_syn" if q.get("synthetic") else q["type"]
 GOOD = 4  # оценка, с которой ответ считаем «сохранённым»
 
 ANSWER_SYSTEM = ("Ты — ассистент, продолжающий работу после сжатия контекста. В начале диалога — "
@@ -208,15 +215,22 @@ def main():
     ap.add_argument("--sum-workers", type=int, default=3)
     ap.add_argument("--ans-workers", type=int, default=2)
     ap.add_argument("--fresh", action="store_true", help="игнорировать кэш прогона")
+    ap.add_argument("--tag", default="", help="суффикс каталога прогона (повторы для оценки шума)")
     a = ap.parse_args()
 
     name, summarize, whole = load_scheme(a.scheme)
-    run = os.path.join(a.out, name)
+    run = os.path.join(a.out, name + (("-" + a.tag) if a.tag else ""))
     os.makedirs(run, exist_ok=True)
+    local = common.local_endpoint()
+    # Судья: BENCH_JUDGE=local — та же локальная модель, что отвечает; BENCH_JUDGE_URL/KEY/MODEL —
+    # любой Anthropic-совместимый эндпоинт; иначе MiniMax-M3 (как в базовой линии шага 2).
     judge_ep = (os.environ.get("BENCH_JUDGE_URL"), os.environ.get("BENCH_JUDGE_KEY"),
                 os.environ.get("BENCH_JUDGE_MODEL"))
-    judge_ep = judge_ep if all(judge_ep) else common.minimax_endpoint()
-    local = common.local_endpoint()
+    if os.environ.get("BENCH_JUDGE") == "local":
+        judge_ep = (os.environ.get("BENCH_JUDGE_LOCAL_URL", local[0]), "x",
+                    os.environ.get("BENCH_JUDGE_LOCAL_MODEL", local[2]))
+    elif not all(judge_ep):
+        judge_ep = common.minimax_endpoint()
 
     items = []
     for fn in sorted(os.listdir(a.corpus)):
@@ -271,6 +285,7 @@ def main():
 
     # --- отчёт
     rows, by_type, all_scores = [], defaultdict(list), []
+    per_q = []
     corr_good = corr_total = 0
     verb, rows_corr = [], []
     for it in items:
@@ -278,23 +293,27 @@ def main():
         sc = defaultdict(list)
         for i, q in enumerate(it["questions"]):
             s = ev.get(str(i), {}).get("score")
-            sc[q["type"]].append(s)
+            t = qtype(q)
+            sc[t].append(s)
+            v = None
             if s is not None:
-                by_type[q["type"]].append(s)
+                by_type[t].append(s)
                 all_scores.append(s)
-            if q["type"] == "correction":
+            if t in ("correction", "correction_syn"):
+                v = verbatim_share(q.get("human_quote", ""), sums[it["id"]]["text"])
+            if t == "correction":
                 corr_total += 1
                 corr_good += 1 if (s or 0) >= GOOD else 0
-                v = verbatim_share(q.get("human_quote", ""), sums[it["id"]]["text"])
                 verb.append(v)
                 rows_corr.append((it["id"], s, v))
+            per_q.append({"id": it["id"], "i": i, "type": t, "score": s, "verbatim": v})
         allq = [x for v in sc.values() for x in v]
         rows.append((it["id"], f"{it['est_tokens'] // 1000}k", len(it["questions"]), mean(allq),
                      {t: mean(sc[t]) for t in TYPES}, len(sums[it["id"]]["text"]),
                      sums[it["id"]]["sec"]))
 
     L = []
-    L.append(f"# Базовая линия сжатия — схема `{name}`\n")
+    L.append(f"# Прогон стенда сжатия — схема `{name}`{(' (' + a.tag + ')') if a.tag else ''}\n")
     L.append(f"Запросов: {len(items)}, вопросов: {len(all_scores)}; ответчик — {local[2]} (стенд), "
              f"судья — {judge_ep[2]}.\n")
     L.append("## По запросам (средняя оценка 0–5)\n")
@@ -312,7 +331,7 @@ def main():
                  f"{fmt(sum(1 for x in xs if x >= GOOD) / len(xs) if xs else None)} |")
     L.append(f"| **все** | {len(all_scores)} | **{fmt(mean(all_scores))}** | "
              f"{fmt(sum(1 for x in all_scores if x >= GOOD) / len(all_scores) if all_scores else None)} |")
-    L.append("\n## Поправки человека\n")
+    L.append("\n## Поправки человека (настоящие)\n")
     L.append(f"- Сохранено (ответ оценён ≥{GOOD}): **{corr_good} из {corr_total}** "
              f"({fmt(corr_good / corr_total if corr_total else None)})")
     L.append(f"- Реплика человека дословно в сводке (доля 3-словных окон, среднее): **{fmt(mean(verb))}**; "
@@ -325,7 +344,11 @@ def main():
     with open(os.path.join(run, "report.md"), "w", encoding="utf-8") as f:
         f.write(report + "\n")
     jsave(os.path.join(run, "results.json"), {
-        "scheme": name, "mean": mean(all_scores),
+        "scheme": name, "tag": a.tag, "judge": judge_ep[2], "mean": mean(all_scores),
+        "per_question": per_q,
+        "per_item": {it["id"]: {"chars": len(sums[it["id"]]["text"]),
+                                "est_tokens": common.est_tokens(sums[it["id"]]["text"]),
+                                "meta": sums[it["id"]]["meta"]} for it in items},
         "by_type": {t: mean(by_type[t]) for t in TYPES},
         "corrections": {"good": corr_good, "total": corr_total, "verbatim_mean": mean(verb)}})
     print(report)

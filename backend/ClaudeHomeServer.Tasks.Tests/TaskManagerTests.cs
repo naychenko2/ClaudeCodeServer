@@ -1033,4 +1033,75 @@ public class TaskManagerTests : IDisposable
         cleared.StepRef.Should().BeNull();
         cleared.Lane.Should().BeNull();
     }
+
+    // ─── Наследование featureId (шаг 1.3) ─────────────────────────────────────
+    // Если задачу создаёт чат-исполнитель задачи-фичи (Role=feature), сервер
+    // наследует featureId от эпика. Дефект внутри фичи дополнительно получает role=qa.
+    // Update наследования не делает: агент к тому моменту знает, что редактирует.
+
+    [Fact]
+    public void Create_ДефектИзЧатаИсполнителяФичи_НаследуетFeatureIdИRoleQa()
+    {
+        var epic = CreateEpic("u");
+        _sut.MarkClaudeStarted(epic.Id, "sess-exec", DateTime.UtcNow);
+
+        var defect = _sut.Create(null, "u", new CreateTaskRequest("баг",
+            Kind: TaskKind.Defect, SourceSessionId: "sess-exec"));
+
+        defect.FeatureId.Should().Be(epic.Id, "featureId наследуется от эпика");
+        defect.Role.Should().Be(TaskRoles.Qa, "дефект внутри фичи получает роль qa");
+    }
+
+    [Fact]
+    public void Create_ОбычнаяЗадачаИзЧатаИсполнителяФичи_НаследуетFeatureId_RoleNull()
+    {
+        var epic = CreateEpic("u");
+        _sut.MarkClaudeStarted(epic.Id, "sess-exec", DateTime.UtcNow);
+
+        var task = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            SourceSessionId: "sess-exec"));
+
+        task.FeatureId.Should().Be(epic.Id, "featureId наследуется");
+        task.Role.Should().BeNull("обычная задача не получает роль автоматически");
+    }
+
+    [Fact]
+    public void Create_БезРодителяФичиВСтекке_ПоляОстаютсяNull()
+    {
+        // Сессия не привязана ни к одной задаче — контекста нет
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            SourceSessionId: "orphan-sess"));
+
+        task.FeatureId.Should().BeNull();
+        task.Role.Should().BeNull();
+    }
+
+    [Fact]
+    public void Create_ИзЧатаГдеИсполнительИмеетЗадачуНеFeature_НаследованияНет()
+    {
+        // Родитель — обычный шаг (Role=step), не эпик фичи
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            Role: TaskRoles.Step));
+        _sut.MarkClaudeStarted(step.Id, "sess-step", DateTime.UtcNow);
+
+        var child = _sut.Create(null, "u", new CreateTaskRequest("ребёнок",
+            SourceSessionId: "sess-step"));
+
+        child.FeatureId.Should().BeNull("Role≠feature — контекст ложный, наследуем нечего");
+        child.Role.Should().BeNull();
+    }
+
+    [Fact]
+    public void Update_НаследованияFeatureIdНеБывает_Regression()
+    {
+        var epic = CreateEpic("u");
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+
+        // Update не должен пересчитывать featureId: агент знает, что редактирует
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"))!;
+
+        updated.FeatureId.Should().Be(epic.Id, "featureId не пересчитывается при Update");
+        updated.Role.Should().Be(TaskRoles.Step, "role тоже не меняется");
+    }
 }

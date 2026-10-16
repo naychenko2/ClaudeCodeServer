@@ -203,6 +203,23 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
+
+        // Наследование featureId: если задачу создаёт чат-исполнитель задачи-фичи
+        // (тот же поиск родителя, что ComputeDelegationDepth), а featureId не задан
+        // явно — привязываем к эпике. Role=feature у родителя — обязательное условие,
+        // иначе контекст ложный (см. FindOwningFeature).
+        if (task.FeatureId is null)
+        {
+            var owning = FindOwningFeature(req.SourceSessionId, null, ownerId);
+            if (owning is not null)
+                task.FeatureId = owning.Id;
+        }
+
+        // Дефект внутри фичи: роль qa (агент, заводящий баг, сам не знает, что он
+        // в фиче — сервер ставит роль, чтобы FeatureProjector не потерял дефект).
+        if (task.Role is null && task.FeatureId is not null && task.Kind == TaskKind.Defect)
+            task.Role = TaskRoles.Qa;
+
         // Инвариант: исполнитель-персона подразумевает исполнение силами Claude
         NormalizePersonaAssignee(task);
         NormalizeWorktree(task);
@@ -304,6 +321,24 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         !string.IsNullOrEmpty(sourceSessionId) && GetBySession(sourceSessionId) is { } parent
             ? parent.DelegationDepth + 1
             : 0;
+
+    // Родительская задача-фича (эпик) по контексту исполнителя: ищем задачу, которую
+    // исполняет сессия-источник (тот же поиск, что ComputeDelegationDepth), и проверяем,
+    // что это эпик фичи (Role=feature) того же владельца. executorLaunchedBySessionId —
+    // запасной путь: если sourceSessionId не дал результата, пробуем сессию, запустившую
+    // исполнителя. null — контекст ложный или отсутствует.
+    private TaskItem? FindOwningFeature(string? sourceSessionId, string? executorLaunchedBySessionId, string ownerId)
+    {
+        TaskItem? candidate = null;
+        if (!string.IsNullOrEmpty(sourceSessionId))
+            candidate = GetBySession(sourceSessionId);
+        if (candidate is null && !string.IsNullOrEmpty(executorLaunchedBySessionId))
+            candidate = GetBySession(executorLaunchedBySessionId);
+        if (candidate is null) return null;
+        if (candidate.OwnerId != ownerId) return null;
+        if (candidate.Role != TaskRoles.Feature) return null;
+        return candidate;
+    }
 
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
     // Внутри колонки относительный порядок сохраняется (сортировка на доске по Order).

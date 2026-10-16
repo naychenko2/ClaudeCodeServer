@@ -160,10 +160,12 @@ public class SnakePlanner
         // позиционирование в угол, полотно не растит.
         if (CurrentStep.Kind != ScanStepKind.ToStart)
         {
+            // Minor: на строках справа налево measuredShift отрицательный — простое «+=» уменьшало
+            //    ширину и занижало потолки площади. Держим МАКСИМУМ достигнутой ширины/высоты.
             if (CurrentStep.Axis == Axis.Horizontal)
-                _canvasWidth += measuredShift;
+                _canvasWidth = Math.Max(_canvasWidth, _canvasWidth + measuredShift);
             else
-                _canvasHeight += measuredShift;
+                _canvasHeight = Math.Max(_canvasHeight, _canvasHeight + measuredShift);
         }
 
         // Хеш кадра для признака конца прокрутки (два последних кадра одинаковы).

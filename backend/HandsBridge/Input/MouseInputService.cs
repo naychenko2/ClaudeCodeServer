@@ -17,7 +17,8 @@ public sealed class MouseInputService
             y,
             extraFlags: 0,
             expectedForegroundWindow: null,
-            cancellationToken);
+            cancellationToken,
+            checkCurrentPosition: false);
 
     internal Task<MouseControlResult> MoveAsync(
         int x,
@@ -29,7 +30,8 @@ public sealed class MouseInputService
             y,
             extraFlags: 0,
             expectedForegroundWindow,
-            cancellationToken);
+            cancellationToken,
+            checkCurrentPosition: false);
 
     /// <summary>
     /// Moves the cursor as part of a held-button stroke. Sets <c>MOUSEEVENTF_MOVE_NOCOALESCE</c> so Windows
@@ -46,14 +48,16 @@ public sealed class MouseInputService
             y,
             NativeConstants.MOUSEEVENTF_MOVE_NOCOALESCE,
             expectedForegroundWindow,
-            cancellationToken);
+            cancellationToken,
+            checkCurrentPosition: true);
 
     private static Task<MouseControlResult> MoveCoreAsync(
         int x,
         int y,
         uint extraFlags,
         nint? expectedForegroundWindow,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool checkCurrentPosition)
     {
         // Validate coordinates against virtual screen bounds
         var (isValid, screenBounds) = CoordinateNormalizer.ValidateCoordinates(x, y);
@@ -95,12 +99,28 @@ public sealed class MouseInputService
                 screenBounds));
         }
 
-        if (!CursorPointAcceptsInput(expectedForegroundWindow, out var movePointReason))
+        if (checkCurrentPosition)
         {
-            return Task.FromResult(MouseControlResult.CreateFailure(
-                MouseControlErrorCode.WrongTargetWindow,
-                movePointReason ?? "The point no longer lands in the target window.",
-                screenBounds));
+            if (!CursorPointAcceptsInput(expectedForegroundWindow, out var movePointReason))
+            {
+                return Task.FromResult(MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    movePointReason ?? "The point no longer lands in the target window.",
+                    screenBounds));
+            }
+        }
+        else
+        {
+            // M-E: чистое перемещение (без кнопок) — проверяем ЦЕЛЬ (x, y), а не текущую позицию
+            //    курсора: курсор сейчас вне разрешённого окна (обычный случай), и перемещение В
+            //    разрешённое окно не должно отказывать. Перемещение курсора — не ввод в окно.
+            if (!TargetPointAcceptsInput(x, y, expectedForegroundWindow, out var targetReason))
+            {
+                return Task.FromResult(MouseControlResult.CreateFailure(
+                    MouseControlErrorCode.WrongTargetWindow,
+                    targetReason ?? "The target point is not over the allowed window.",
+                    screenBounds));
+            }
         }
 
         // Send the input
@@ -183,7 +203,8 @@ public sealed class MouseInputService
                 y.Value,
                 extraFlags: 0,
                 expectedForegroundWindow,
-                cancellationToken).GetAwaiter().GetResult();
+                cancellationToken,
+                checkCurrentPosition: true).GetAwaiter().GetResult();
             if (!moveResult.Success)
             {
                 return Task.FromResult(moveResult);
@@ -342,6 +363,30 @@ public sealed class MouseInputService
     }
 
     /// <summary>
+    /// M-E: для ЧИСТОГО перемещения (без кнопок) проверяем ЦЕЛЬ <c>(x, y)</c>, а не текущую позицию
+    /// курсора: курсор сейчас вне разрешённого окна (обычный случай), и перемещение В разрешённое
+    /// окно не должно отказывать. Перемещение курсора — не ввод в окно. <c>null</c> — публичная
+    /// перегрузка, проверку не делаем.
+    /// </summary>
+    private static bool TargetPointAcceptsInput(int x, int y, nint? expectedForegroundWindow, out string? reason)
+    {
+        reason = null;
+        if (expectedForegroundWindow is not { } window)
+        {
+            return true;
+        }
+
+        var at = HandsGate.Policy.AcceptsInputAt(x, y, window.ToInt64());
+        if (!at.Allowed)
+        {
+            reason = at.Reason;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Gets the title of the window at the specified screen coordinates.
     /// </summary>
     /// <param name="x">The x-coordinate.</param>
@@ -488,7 +533,8 @@ public sealed class MouseInputService
                 y.Value,
                 extraFlags: 0,
                 expectedForegroundWindow,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                checkCurrentPosition: true).ConfigureAwait(false);
             if (!moveResult.Success)
             {
                 return moveResult;
@@ -689,7 +735,8 @@ public sealed class MouseInputService
                 y.Value,
                 extraFlags: 0,
                 expectedForegroundWindow,
-                cancellationToken).GetAwaiter().GetResult();
+                cancellationToken,
+                checkCurrentPosition: true).GetAwaiter().GetResult();
             if (!moveResult.Success)
             {
                 return Task.FromResult(moveResult);
@@ -848,7 +895,8 @@ public sealed class MouseInputService
                 y.Value,
                 extraFlags: 0,
                 expectedForegroundWindow,
-                cancellationToken).GetAwaiter().GetResult();
+                cancellationToken,
+                checkCurrentPosition: true).GetAwaiter().GetResult();
             if (!moveResult.Success)
             {
                 return Task.FromResult(moveResult);
@@ -1036,7 +1084,8 @@ public sealed class MouseInputService
             points[0].Y,
             extraFlags: 0,
             expectedForegroundWindow,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            checkCurrentPosition: true).ConfigureAwait(false);
         if (!moveToStartResult.Success)
         {
             return moveToStartResult;
@@ -1334,7 +1383,8 @@ public sealed class MouseInputService
                 y.Value,
                 extraFlags: 0,
                 expectedForegroundWindow,
-                cancellationToken).GetAwaiter().GetResult();
+                cancellationToken,
+                checkCurrentPosition: true).GetAwaiter().GetResult();
             if (!moveResult.Success)
             {
                 return Task.FromResult(moveResult);

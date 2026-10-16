@@ -45,7 +45,9 @@ public static class ShiftEstimator
     /// Оценка сдвига. <paramref name="grayBefore"/>/<paramref name="grayAfter"/> — серые кадры
     /// (row-major, 0..255) одного размера <c>width × height</c>; <paramref name="expectedShift"/> —
     /// ожидаемый сдвиг (подсказка от прокрутки), <paramref name="searchFraction"/> — доля окна
-    /// поиска (0..0.5, по умолчанию 0.5 = ±50 %).
+    /// поиска (0..0.5, по умолчанию 0.5 = ±50 %). Окно симметричное, от нуля: подходит, когда
+    /// ожидаемый сдвиг ≤ 50 % размера. Для больших шагов (перекрытие &lt; 50 %) используйте
+    /// <see cref="EstimateAround"/>.
     /// </summary>
     public static ShiftResult Estimate(
         ReadOnlySpan<byte> grayBefore,
@@ -56,31 +58,62 @@ public static class ShiftEstimator
         int expectedShift,
         double searchFraction = 0.5)
     {
-        if (width <= 0 || height <= 0)
-            throw new ArgumentException("Ширина и высота должны быть положительными.", nameof(width));
-
-        var expected = (long)width * height;
-        if (grayBefore.Length != expected || grayAfter.Length != expected)
-            throw new ArgumentException(
-                $"Кадров {grayBefore.Length} и {grayAfter.Length}, а ожидается {expected} (width × height).",
-                nameof(grayBefore));
-
-        // Схлопываем в 1D-сигнал: вертикаль — среднее по строке, горизонталь — по столбцу.
-        var a = axis == Axis.Vertical ? RowProfile(grayBefore, width, height) : ColProfile(grayBefore, width, height);
-        var b = axis == Axis.Vertical ? RowProfile(grayAfter, width, height) : ColProfile(grayAfter, width, height);
-
-        var n = Math.Min(a.Length, b.Length);
+        var (a, b, n) = BuildProfiles(grayBefore, grayAfter, width, height, axis);
         if (n == 0)
             return new ShiftResult(0, 0.0, 0.0, true);
 
         var fraction = Math.Clamp(searchFraction, 0.0, 0.5);
         var maxShift = Math.Max(0, Math.Min((int)(fraction * n), n - 1));
+        return EstimateRange(a, b, n, expectedShift, -maxShift, maxShift);
+    }
 
+    /// <summary>
+    /// Оценка сдвига с окном поиска ВОКРУГ ожидаемого сдвига (K1):
+    /// <c>[expectedShift − tol, expectedShift + tol]</c>, где <c>tol = searchFraction × n</c>
+    /// (по умолчанию ±35 % размера). Окно не шире допустимого перекрытия кадров: оба кадра
+    /// перекрываются минимум на <c>minOverlapFraction × n</c> (по умолчанию 10 %), т.е.
+    /// <c>|s| ≤ (1 − minOverlapFraction) × n</c>. Симметричное окно от нуля (<see cref="Estimate"/>)
+    /// не находит истинный сдвиг, когда он &gt; 50 % размера (перекрытие &lt; 50 %, в т.ч. дефолт 15 %):
+    /// планировщик ждёт сдвиг 85 % области, а окно ±50 % его не покрывает.
+    /// </summary>
+    public static ShiftResult EstimateAround(
+        ReadOnlySpan<byte> grayBefore,
+        ReadOnlySpan<byte> grayAfter,
+        int width,
+        int height,
+        Axis axis,
+        int expectedShift,
+        double searchFraction = 0.35,
+        double minOverlapFraction = 0.10)
+    {
+        var (a, b, n) = BuildProfiles(grayBefore, grayAfter, width, height, axis);
+        if (n == 0)
+            return new ShiftResult(0, 0.0, 0.0, true);
+
+        var tolerance = (int)(Math.Clamp(searchFraction, 0.0, 1.0) * n);
+        // Окно не шире допустимого перекрытия: |s| ≤ (1 − minOverlapFraction) × n.
+        var maxValid = (int)((1.0 - Math.Clamp(minOverlapFraction, 0.0, 1.0)) * n);
+        var lo = Math.Clamp(expectedShift - tolerance, -maxValid, maxValid);
+        var hi = Math.Clamp(expectedShift + tolerance, -maxValid, maxValid);
+        if (lo > hi)
+            (lo, hi) = (hi, lo);
+        return EstimateRange(a, b, n, expectedShift, lo, hi);
+    }
+
+    /// <summary>
+    /// Ядро оценки: корреляционный поиск на сдвигах <c>[lo, hi]</c>, разбор неоднозначности
+    /// (повторяющийся узор → ближайший к <paramref name="expectedShift"/>), плоский сигнал,
+    /// признак <see cref="ShiftResult.Ambiguous"/>. Общий для <see cref="Estimate"/> и
+    /// <see cref="EstimateAround"/> (разное только окно поиска).
+    /// </summary>
+    private static ShiftResult EstimateRange(
+        ReadOnlySpan<double> a, ReadOnlySpan<double> b, int n, int expectedShift, int lo, int hi)
+    {
         var bestShift = 0;
         var bestScore = double.NegativeInfinity;
         var secondBestScore = double.NegativeInfinity;
 
-        for (var s = -maxShift; s <= maxShift; s++)
+        for (var s = lo; s <= hi; s++)
         {
             var score = Correlation(a, b, s, n);
 
@@ -103,7 +136,7 @@ public static class ShiftEstimator
         {
             var threshold = SecondPeakRatio * bestScore;
             var bestDistance = int.MaxValue;
-            for (var s = -maxShift; s <= maxShift; s++)
+            for (var s = lo; s <= hi; s++)
             {
                 if (Correlation(a, b, s, n) < threshold)
                     continue;
@@ -133,6 +166,34 @@ public static class ShiftEstimator
             || Math.Abs(bestShift - expectedShift) > FarFromExpected;
 
         return new ShiftResult(bestShift, bestScore, secondBestScore, ambiguous);
+    }
+
+    /// <summary>
+    /// Профили (1D-сигналы) обоих кадров + длина профиля <c>n</c>. <paramref name="grayBefore"/>/
+    /// <paramref name="grayAfter"/> — серые кадры (row-major, 0..255) одного размера
+    /// <c>width × height</c>. Вертикаль — среднее по строке, горизонталь — по столбцу.
+    /// </summary>
+    private static (double[] A, double[] B, int N) BuildProfiles(
+        ReadOnlySpan<byte> grayBefore,
+        ReadOnlySpan<byte> grayAfter,
+        int width,
+        int height,
+        Axis axis)
+    {
+        if (width <= 0 || height <= 0)
+            throw new ArgumentException("Ширина и высота должны быть положительными.", nameof(width));
+
+        var expected = (long)width * height;
+        if (grayBefore.Length != expected || grayAfter.Length != expected)
+            throw new ArgumentException(
+                $"Кадров {grayBefore.Length} и {grayAfter.Length}, а ожидается {expected} (width × height).",
+                nameof(grayBefore));
+
+        // Схлопываем в 1D-сигнал: вертикаль — среднее по строке, горизонталь — по столбцу.
+        var a = axis == Axis.Vertical ? RowProfile(grayBefore, width, height) : ColProfile(grayBefore, width, height);
+        var b = axis == Axis.Vertical ? RowProfile(grayAfter, width, height) : ColProfile(grayAfter, width, height);
+        var n = Math.Min(a.Length, b.Length);
+        return (a, b, n);
     }
 
     /// <summary>

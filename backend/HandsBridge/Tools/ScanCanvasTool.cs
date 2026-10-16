@@ -105,7 +105,7 @@ public static partial class ScanCanvasTool
     /// </summary>
     /// <param name="windowHandle">Window handle (decimal string from window_management). Required: the diagram window to scan; it must accept input and be the foreground window (activate it with window_management first).</param>
     /// <param name="scrollMethod">How the canvas is scrolled: "wheel" (default), "shift_wheel" or "arrows". Unknown until the VDI spike, so it is a parameter.</param>
-    /// <param name="overlapPercent">Overlap between neighbouring tiles, in percent (default 15, range 0–99).</param>
+    /// <param name="overlapPercent">Overlap between neighbouring tiles, in percent (default 15, range 10–90). Below 10 the frames stop overlapping enough to measure the shift; above 90 the step is too small.</param>
     /// <param name="saveTo">Where to save the assembled canvas: a path relative to the project root ending in .png (required — without it the canvas cannot be saved).</param>
     /// <param name="maxTiles">Maximum number of tiles (default 100, cap 100).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -141,7 +141,9 @@ public static partial class ScanCanvasTool
             return busy;
 
         var method = ParseScrollMethod(scrollMethod);
-        var overlap = overlapPercent is null ? DefaultOverlapPercent : Math.Clamp(overlapPercent.Value, 0, 99);
+        // K1: допустимо 10–90. Ниже 10 % кадра почти не перекрываются — сдвиг не измерить;
+        // выше 90 % шаг крошечный (много плиток). Дефолт 15 % остаётся рабочим.
+        var overlap = overlapPercent is null ? DefaultOverlapPercent : Math.Clamp(overlapPercent.Value, 10, 90);
 
         var options = new ScanCanvasOptions
         {
@@ -208,31 +210,19 @@ public static partial class ScanCanvasTool
         }
 
         // 2. «В начало»: прокрутка вверх-влево до края (стоп по стабильности кадра).
-        var prev = frame;
-        var atStart = false;
-        for (var i = 0; i < MaxToStartSteps; i++)
+        // M-C: отказ ввода (смена окна, отказ гейта) — отдельная причина, не «не доехали»;
+        // «time» — превышен бюджет (остановка, а не «дальше строить змейку»).
+        var (frame2, atStart, refused, reason) = await ScrollToStartAsync(d, o, frame, o.MaxElapsedMs, ct);
+        frame = frame2;
+        if (refused)
+            return FailResult($"could not reach the start of the canvas: {reason}");
+        if (reason == "time")
         {
-            ct.ThrowIfCancellationRequested();
-            if (!await ScrollAxis(d, o, Axis.Vertical, -1, ct)) break;   // up
-            if (!await ScrollAxis(d, o, Axis.Horizontal, -1, ct)) break;  // left
-            (frame, _, _) = await d.CaptureFrame(ct);
-            if (FrameStability.IsEndOfScroll([Hash(prev), Hash(frame)]) || FrameStability.AreStable(prev, frame, 1.0))
-            {
-                atStart = true;
-                break;
-            }
-
-            prev = frame;
-            if (started.ElapsedMilliseconds > o.MaxElapsedMs)
-            {
-                // Minor (b): время истекло в «в начало» — это остановка, а не «дальше строить змейку».
-                result.Truncated = true;
-                result.TruncationReason = "time";
-                return result;
-            }
+            result.Truncated = true;
+            result.TruncationReason = "time";
+            return result;
         }
-
-        if (!atStart && started.ElapsedMilliseconds <= o.MaxElapsedMs)
+        if (!atStart)
             return FailResult("could not reach the start of the canvas (it kept scrolling).");
 
         // 3. Область содержимого: шаг вниз, пара кадров → ContentRegion; затем возврат вверх.
@@ -261,11 +251,24 @@ public static partial class ScanCanvasTool
                 return FailResult("could not place the cursor at the center of the content region.");
         }
 
-        // 5. Калибровка шага (M4): первый шаг — один щелчок, измеряем фактический сдвиг
-        //    (shiftPerTick); дальше число щелчков = round(ожидаемый сдвиг / shiftPerTick).
-        var (shiftPerTickX, shiftPerTickY) = await CalibrateStep(d, o, region, frame, frameW, frameH, ct);
+        // 5. Калибровка шага (M4): один щелчок по каждой оси, фактический сдвиг (shiftPerTick);
+        //    дальше число щелчков = round(ожидаемый сдвиг / shiftPerTick).
+        var (shiftPerTickX, shiftPerTickY, calibAmbiguous) = await CalibrateStep(d, o, region, frame, frameW, frameH, ct);
         if (shiftPerTickX <= 0 && shiftPerTickY <= 0)
             return FailResult("the scroll did not move the canvas (no measurable shift after one step).");
+
+        // M-B: после калибровки («вниз, потом вверх») возврат неточен при нелинейной прокрутке —
+        //    topLeft снимался бы со сдвигом (потерян верхний край). Заново «в начало» по
+        //    стабильности кадра, и только потом снимаем topLeft.
+        var (frame3, _, refused2, reason2) = await ScrollToStartAsync(d, o, frame, o.MaxElapsedMs, ct);
+        frame = frame3;
+        if (refused2)
+            return FailResult($"could not return to the start after calibration: {reason2}");
+
+        // M-D: калибровка неоднозначна (повторяющийся узор → период, а не щелчок) — предупреждение,
+        //    а не молчаливый успех.
+        if (calibAmbiguous)
+            result.TruncationReason ??= "uncertain_geometry: step calibration is ambiguous (repeating pattern)";
 
         // 5. Змейка: шаги планировщика, на каждом — прокрутка (нужное число щелчков) + снимок +
         //    знаковый сдвиг + Feed. Позиция плитки = накопленные смещения на холсте.
@@ -280,6 +283,9 @@ public static partial class ScanCanvasTool
         var tiles = new List<Tile>();
         var canvasX = 0;
         var canvasY = 0;
+        // M-D: число плиток с неоднозначным сдвигом (Ambiguous, повторяющийся узор) — для
+        // uncertain_geometry (отдельно от «сомнительных швов» по низкой корреляции/расхождению).
+        var ambiguousTiles = 0;
 
         // C2: первое окно (верх-лево холста) — первая плитка в (0,0).
         var (topLeft, topLeftW, topLeftH) = await d.CaptureFrame(ct);
@@ -301,15 +307,20 @@ public static partial class ScanCanvasTool
             var expected = step.ExpectedShift;
             var perTick = step.Axis == Axis.Horizontal ? shiftPerTickX : shiftPerTickY;
             var clicks = perTick > 0 ? Math.Clamp((int)Math.Round((double)expected / perTick), 1, MaxClicksPerStep) : 1;
-            var moved = false;
+            // M-C: отказ ввода (смена окна, отказ гейта, исключение) посреди скана — НЕ «не доехали»
+            //    и не успех: остановка с причиной «input refused». Счётчик успешных щелчков:
+            //    0 — отказ сразу, < clicks — отказ посреди шага, = clicks — шаг выполнен.
+            var moved = 0;
             for (var c = 0; c < clicks; c++)
             {
                 if (!await ScrollAxis(d, o, step.Axis, step.Direction, ct))
                     break;
-                moved = true;
+                moved++;
             }
-            if (!moved)
-                break;
+            if (moved == 0)
+                return FailResult("input refused: the scroll did not move the canvas (window changed or gate refused)");
+            if (moved < clicks)
+                return FailResult($"input refused mid-step: expected {clicks} scrolls, got {moved} (window changed or gate refused)");
 
             var (next, nextW, nextH) = await d.CaptureFrame(ct);
 
@@ -323,8 +334,19 @@ public static partial class ScanCanvasTool
             {
                 // C1: знаковый сдвиг (из ShiftEstimator, «сдвиг содержимого») → смещение плитки
                 // на холсте (инверсия в ОДНОМ месте, ToTileShift).
-                var contentShift = MeasureShift(o, step.Axis, expected, lastFrame, next, frameW, frameH, region);
-                tileOffset = ToTileShift(contentShift);
+                // K1: подсказка оценщику — со ЗНАКОМ (конвенция: + = контент вправо/вниз).
+                // Скролл +1 (вправо/вниз) двигает контент влево/вверх → hint отрицательный.
+                // K1: подсказка = ФАКТИЧЕСКИЙ сдвиг шага (clicks × shiftPerTick), а не номинальный
+                // step.ExpectedShift: число щелчков округляется, поэтому фактический сдвиг может
+                // отличаться от номинала (4 щелчка × 30 = 120 ≠ 110), и окно центрируется на истинном.
+                var hint = -step.Direction * (clicks * perTick);
+                // K1: hint = фактический сдвиг шага (окно центрируется на истинном), minOverlap 0.05:
+                // фактический сдвиг может превышать (1 − 0.10) × n (окно обрезало бы истинный),
+                // поэтому допускаем перекрытие кадров до 5 % — при малом перекрытии плиток это нормально.
+                var shiftResult = MeasureShiftEstimate(o, step.Axis, hint, lastFrame, next, frameW, frameH, region, minOverlapFraction: 0.05);
+                if (shiftResult.Ambiguous)
+                    ambiguousTiles++;
+                tileOffset = ToTileShift(shiftResult.Shift);
 
                 // C3: позиция плитки = накопленные смещения на холсте (знак учтён инверсией).
                 if (step.Axis == Axis.Horizontal)
@@ -366,18 +388,29 @@ public static partial class ScanCanvasTool
         result.Tiles = tiles.Count;
         result.DoubtfulSeams = canvas.DoubtfulSeams;
 
+        // M-D: высокая доля плиток с НЕОДНОЗНАЧНЫМ сдвигом (Ambiguous, >25 %) — повторяющийся
+        //    узор (несколько равных пиков корреляции), геометрия неопределённа, не молчаливый успех.
+        //    Считаем именно Ambiguous (а не любые «сомнительные швы» по низкой корреляции):
+        //    сетчатая текстура даёт отдельные швы с низкой корреляцией, но не повторяющийся узор.
+        var hasUncertainGeometry = tiles.Count > 0 && (double)ambiguousTiles / tiles.Count > 0.25;
+        if (hasUncertainGeometry)
+            result.TruncationReason ??= "uncertain_geometry: more than 25% of the tiles have an ambiguous shift (repeating pattern)";
+
         // 7. PNG (только если холст не отклонён) → запись в проект.
         if (!canvas.Truncated && canvas.Pixels.Length > 0)
         {
             var png = PngEncoder.Encode(canvas.Pixels, canvas.Width, canvas.Height);
-            var (path, reason) = d.Files.WriteNew(HandsTools.ScanCanvas, o.SaveTo, png);
+            var (path, writeReason) = d.Files.WriteNew(HandsTools.ScanCanvas, o.SaveTo, png);
             if (path is null)
-                return FailResult($"the canvas was assembled, but the file could not be created: {reason}");
+                return FailResult($"the canvas was assembled, but the file could not be created: {writeReason}");
             result.Path = path;
             result.SizeBytes = png.Length;
         }
 
-        result.Done = true;
+        // M-D: неопределённая геометрия (повторяющийся узор → >25 % сомнительных швов) — это НЕ
+        // чистый «Done»-успех (иначе «успех с развалившимся холстом»). Done=false + причина
+        // «uncertain_geometry» (выше) — явное предупреждение, а не молчаливый успех.
+        result.Done = !hasUncertainGeometry;
         result.DurationMs = started.ElapsedMilliseconds;
         return result;
     }
@@ -406,18 +439,76 @@ public static partial class ScanCanvasTool
     }
 
     /// <summary>
-    /// Калибровка шага (M4): один щелчок по каждой оси, фактический сдвиг (shiftPerTick).
-    /// Возвращает (px per tick по X, px per tick по Y); 0 — ось не двигает.
+    /// «В начало»: прокрутка вверх-влево до края (стоп по стабильности кадра). Возвращает
+    /// (кадр, достигли ли начала, был ли отказ ввода, причина). M-C: отказ ввода (смена окна,
+    /// отказ гейта) — отдельная причина, а не «не доехали»; «time» — превышен бюджет.
     /// </summary>
-    private static async Task<(int X, int Y)> CalibrateStep(
+    private static async Task<(byte[] Frame, bool AtStart, bool Refused, string? Reason)> ScrollToStartAsync(
+        ScanCanvasDeps d, ScanCanvasOptions o, byte[] startFrame, long maxElapsedMs, CancellationToken ct)
+    {
+        var prev = startFrame;
+        var atStart = false;
+        var refused = false;
+        string? reason = null;
+        var started = Stopwatch.StartNew();
+        for (var i = 0; i < MaxToStartSteps; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!await ScrollAxis(d, o, Axis.Vertical, -1, ct))
+            {
+                refused = true;
+                reason = "input refused: scroll up failed (window changed or gate refused)";
+                break;
+            }
+            if (!await ScrollAxis(d, o, Axis.Horizontal, -1, ct))
+            {
+                refused = true;
+                reason = "input refused: scroll left failed (window changed or gate refused)";
+                break;
+            }
+            var (cur, _, _) = await d.CaptureFrame(ct);
+            // Два соседних кадра совпали — упёрлись в край (дальше некуда).
+            if (FrameStability.IsEndOfScroll([Hash(prev), Hash(cur)]) || FrameStability.AreStable(prev, cur, 1.0))
+            {
+                atStart = true;
+                prev = cur;
+                break;
+            }
+
+            prev = cur;
+            if (started.ElapsedMilliseconds > maxElapsedMs)
+            {
+                reason = "time";
+                break;
+            }
+        }
+
+        return (prev, atStart, refused, reason);
+    }
+
+    /// <summary>
+    /// Калибровка шага (M4): один щелчок по каждой оси, фактический сдвиг (shiftPerTick).
+    /// Возвращает (px per tick по X, px per tick по Y, Ambiguous); 0 — ось не двигает.
+    /// M-D: подсказка оценщику — ожидаемый сдвиг на щелчок (не 0), и флаг Ambiguous не
+    /// игнорируется (повторяющийся узор → период, а не щелчок).
+    /// </summary>
+    private static async Task<(int X, int Y, bool Ambiguous)> CalibrateStep(
         ScanCanvasDeps d, ScanCanvasOptions o, Rect region, byte[] atStart, int w, int h, CancellationToken ct)
     {
+        // M4: один щелчок по каждой оси, фактический сдвиг (shiftPerTick). Подсказка 0 (окно
+        // симметричное от нуля, ±35 %): один щелчок — малый сдвиг, он всегда в этом окне. M-D:
+        // флаг Ambiguous НЕ игнорируем (повторяющийся узор → несколько равных пиков → период,
+        // а не щелчок) → выше даём uncertain_geometry.
+
         // Горизонталь: один щелчок вправо, измеряем сдвиг, возврат влево.
         var shiftX = 0;
+        var ambiguous = false;
         if (await ScrollAxis(d, o, Axis.Horizontal, +1, ct))
         {
             var (afterX, _, _) = await d.CaptureFrame(ct);
-            shiftX = Math.Abs(MeasureShift(o, Axis.Horizontal, 0, atStart, afterX, w, h, region));
+            var estX = MeasureShiftEstimate(o, Axis.Horizontal, 0, atStart, afterX, w, h, region);
+            shiftX = Math.Abs(estX.Shift);
+            ambiguous |= estX.Ambiguous;
             await ScrollAxis(d, o, Axis.Horizontal, -1, ct); // возврат
         }
 
@@ -426,11 +517,13 @@ public static partial class ScanCanvasTool
         if (await ScrollAxis(d, o, Axis.Vertical, +1, ct))
         {
             var (afterY, _, _) = await d.CaptureFrame(ct);
-            shiftY = Math.Abs(MeasureShift(o, Axis.Vertical, 0, atStart, afterY, w, h, region));
+            var estY = MeasureShiftEstimate(o, Axis.Vertical, 0, atStart, afterY, w, h, region);
+            shiftY = Math.Abs(estY.Shift);
+            ambiguous |= estY.Ambiguous;
             await ScrollAxis(d, o, Axis.Vertical, -1, ct); // возврат
         }
 
-        return (shiftX, shiftY);
+        return (shiftX, shiftY, ambiguous);
     }
 
     /// <summary>
@@ -465,7 +558,12 @@ public static partial class ScanCanvasTool
                 finally
                 {
                     if (!await d.KeyUp("Shift", ct))
+                    {
+                        // M2: отказ KeyUp — отпустить всё (HeldKeyTracker) и пометить шаг: агент
+                        // узнает об отказе, а не получит молчаливый «успех».
                         ReleaseAllHeldKeys();
+                        wheelOk = false;
+                    }
                 }
                 return wheelOk;
 
@@ -493,13 +591,24 @@ public static partial class ScanCanvasTool
     /// содержимого» (положительный — контент <c>before</c> сдвинут вниз/вправо в <c>after</c>).
     /// Плоский/неопределённый сдвиг → 0. <paramref name="w"/>/<paramref name="h"/> — размер окна.
     /// </summary>
-    private static int MeasureShift(ScanCanvasOptions o, Axis axis, int expectedShift, byte[] before, byte[] after, int w, int h, Rect region)
+    /// <summary>
+    /// Полный результат оценки сдвига шага (<see cref="ShiftResult"/>: сдвиг, NCC, Ambiguous) по
+    /// области содержимого. <paramref name="expectedShift"/> — подсказка: K1 — окно поиска строится
+    /// ВОКРУГ неё (не симметрично от нуля: при перекрытии &lt; 50 % истинный сдвиг &gt; 50 % размера);
+    /// M-D — для калибровки это ожидаемый сдвиг на щелчок, а не 0 (иначе повторяющийся узор даёт
+    /// период, а не щелчок).
+    /// </summary>
+    private static ShiftResult MeasureShiftEstimate(ScanCanvasOptions o, Axis axis, int expectedShift, byte[] before, byte[] after, int w, int h, Rect region, double searchFraction = 0.35, double minOverlapFraction = 0.10)
     {
         var (beforeCrop, cw, ch) = CropRegion(before, w, h, region);
         var (afterCrop, _, _) = CropRegion(after, w, h, region);
-        var est = ShiftEstimator.Estimate(Gray(beforeCrop), Gray(afterCrop), cw, ch, axis, expectedShift);
-        return est.Shift;
+        return ShiftEstimator.EstimateAround(Gray(beforeCrop), Gray(afterCrop), cw, ch, axis, expectedShift, searchFraction, minOverlapFraction);
     }
+
+
+    /// <summary>Знаковый сдвиг шага (только величина, из <see cref="MeasureShiftEstimate"/>).</summary>
+    private static int MeasureShift(ScanCanvasOptions o, Axis axis, int expectedShift, byte[] before, byte[] after, int w, int h, Rect region, double searchFraction = 0.35, double minOverlapFraction = 0.10)
+        => MeasureShiftEstimate(o, axis, expectedShift, before, after, w, h, region, searchFraction, minOverlapFraction).Shift;
 
     /// <summary>
     /// C3: вырез области содержимого из полного кадра окна: рамка/лента/линейки НЕ попадают в

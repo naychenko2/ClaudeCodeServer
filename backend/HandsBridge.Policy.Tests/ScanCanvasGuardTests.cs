@@ -22,12 +22,12 @@ public class ScanCanvasGuardTests
     private static string Read(string relative) =>
         System.IO.File.ReadAllText(System.IO.Path.Combine(BridgeDir, relative));
 
-    /// <summary>Тело метода инструмента (от <c>[McpServerTool(Name="scan_canvas")</c> до закрытия скобок).</summary>
+    /// <summary>Тело метода инструмента (от сигнатуры <c>ExecuteAsync</c> до закрытия скобок).</summary>
     private static string ToolBody()
     {
         var source = Read("Tools/ScanCanvasTool.cs");
-        var start = source.IndexOf($"[McpServerTool(Name = \"{ToolName}\"", StringComparison.Ordinal);
-        Assert.True(start >= 0, "нет инструмента scan_canvas");
+        var start = source.IndexOf("public static async Task<CallToolResult> ExecuteAsync", StringComparison.Ordinal);
+        Assert.True(start >= 0, "нет метода ExecuteAsync у scan_canvas");
 
         var open = source.IndexOf('{', source.IndexOf("CancellationToken cancellationToken)", start, StringComparison.Ordinal));
         var depth = 0;
@@ -124,14 +124,15 @@ public class ScanCanvasGuardTests
     // ---------- 4. «Ровно эти инструменты»: scan_canvas в мосту и в HandsTools.All ----------
 
     /// <summary>
-    /// <c>scan_canvas</c> в списке инструментов моста: в <c>HandsTools.All</c> есть
-    /// <c>"scan_canvas"</c>, а в мосту — <c>[McpServerTool(Name = "scan_canvas")</c>.
+    /// <c>scan_canvas</c> не публикуется в первой выкладке: атрибут <c>[McpServerTool(Name = "scan_canvas")</c>
+    /// снят (модель инструмент не видит), но имя зарезервировано в <c>HandsTools.All</c>.
+    /// Мутация «вернуть публикацию» (вставить атрибут) → красный.
     /// </summary>
     [Fact]
-    public void Scan_canvas_in_the_bridge_tool_list()
+    public void Scan_canvas_not_published_in_the_first_release()
     {
         var source = Read("Tools/ScanCanvasTool.cs");
-        Assert.Contains("[McpServerTool(Name = \"scan_canvas\"", source);
+        Assert.DoesNotContain("[McpServerTool(Name = \"scan_canvas\"", source);
 
         var policySource = System.IO.File.ReadAllText(System.IO.Path.Combine(BridgeDir, "..", "HandsBridge.Policy", "HandsPolicy.cs"));
         Assert.Contains("\"scan_canvas\"", policySource);

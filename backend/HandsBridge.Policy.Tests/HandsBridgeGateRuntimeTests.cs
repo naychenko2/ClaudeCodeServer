@@ -210,8 +210,12 @@ public class HandsBridgeGateRuntimeTests
     internal static async Task<(bool IsError, string Text)> Call(string typeName, Dictionary<string, object?> args)
     {
         var type = Bridge.Value.GetType(typeName, throwOnError: true)!;
-        var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(m => m.GetCustomAttributes().Any(a => a.GetType().Name == "McpServerToolAttribute"));
+        var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static);
+        // По атрибуту [McpServerTool]; если снят (scan_canvas — не публикуется в первой выкладке),
+        // fallback по имени: у такого инструмента ровно один публичный статический ExecuteAsync.
+        var method = methods.FirstOrDefault(m => m.GetCustomAttributes()
+                .Any(a => a.GetType().Name == "McpServerToolAttribute"))
+            ?? methods.Single(m => m.Name == "ExecuteAsync");
 
         var values = method.GetParameters()
             .Select(p => p.ParameterType == typeof(CancellationToken) ? CancellationToken.None

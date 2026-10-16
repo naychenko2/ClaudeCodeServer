@@ -49,9 +49,10 @@ Upstream-версии `Tools/KeyboardControlTool.cs` и `Tools/MouseControlTool.
 | `scan_document` | A5 | чтение многостраничного документа: PageDown, снимок, распознавание, склейка в один PNG | `Tools/ScanDocumentTool.cs` |
 | `hands_batch` | D2e | пакет keyboard/mouse/wait-шагов одним вызовом; отпускание всех удержанных клавиш в конце | `Tools/HandsBatchTool.cs` (разбор аргументов шага — `Tools/HandsBatchStepArgs.cs`) |
 
-`clipboard_text` (D2c) и `scan_canvas` (C1-2) пока **вне** сборки: в VDI нет буфера обмена,
-полотно — позже. Их имена зарезервированы в `HandsTools`, но сторож «ровно эти инструменты»
-их из ожидаемого списка вычитает (`notYetInBridge`).
+`clipboard_text` (D2c) пока **вне** сборки: в VDI нет буфера обмена. `scan_canvas` (C1-2)
+**в** сборке (класс `Tools/ScanCanvasTool.cs` и тесты), но в первой выкладке не публикуется
+(решение 2026-10-16, второй заход). Имена зарезервированы в `HandsTools`; сторож «ровно эти
+инструменты» вычитает неопубликованные из ожидаемого списка (`notYetInBridge`).
 
 Мост едет в каталоге версии агента и делит его рантайм (2026-09-27), поэтому из сборки убраны
 WinForms и проекция Windows SDK — они добавляли к архиву агента 21 МБ:

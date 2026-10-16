@@ -34,6 +34,9 @@ namespace Sbroenne.WindowsMcp.Tools;
 /// <c>truncated</c>+причина, длительность): картинку в ответ НЕ возвращаем. Потолки библиотеки
 /// (сторона ≤ 16 384, ≤ 64 Мп, ≤ 100 плиток, ≤ 5 мин) → <c>truncated</c> с причиной.
 /// </para>
+/// <para>
+/// Не публикуется в первой выкладке (решение 2026-10-16, см. заметку «scan_canvas: план второго захода»).
+/// </para>
 /// </summary>
 [McpServerToolType]
 [SupportedOSPlatform("windows")]
@@ -110,8 +113,11 @@ public static partial class ScanCanvasTool
     /// <param name="maxTiles">Maximum number of tiles (default 100, cap 100).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A call result: the PNG path, the canvas size, the grid (rows × columns), the tile count, the doubtful seams, the truncation flag with reason, and the duration.</returns>
-    [McpServerTool(Name = "scan_canvas", Title = "Scan Canvas", Destructive = true, OpenWorld = false)]
-    public static async partial Task<CallToolResult> ExecuteAsync(
+    // Публикация в tools/list снята в первой выкладке (решение 2026-10-16): атрибут McpServerTool
+    // (имя scan_canvas) и `partial` (определяющее объявление генерирует source-generator по
+    // атрибуту) возвращаются при втором заходе, см. заметку «scan_canvas: план второго захода».
+    // Класс остаётся типом инструментов ([McpServerToolType]).
+    public static async Task<CallToolResult> ExecuteAsync(
         [DefaultValue(null)] string? windowHandle,
         [DefaultValue(null)] string? scrollMethod,
         [DefaultValue(null)] int? overlapPercent,

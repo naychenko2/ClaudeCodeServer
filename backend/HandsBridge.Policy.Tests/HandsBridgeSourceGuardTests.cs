@@ -75,8 +75,10 @@ public class HandsBridgeSourceGuardTests
         var notYetInBridge = new[]
         {
             HandsTools.ClipboardText,
+            // ScanCanvas: снят с публикации в первой выкладке (решение 2026-10-16, заметка
+            // «scan_canvas: план второго захода»); вернётся одной строкой при втором заходе.
+            HandsTools.ScanCanvas,
             // ScanDocument убран из списка: инструмент scan_document теперь в мосту (A5).
-            // ScanCanvas убран из списка: инструмент scan_canvas теперь в мосту (C1-2).
         };
         var expected = HandsTools.All.Where(t => !notYetInBridge.Contains(t)).Order().ToList();
 

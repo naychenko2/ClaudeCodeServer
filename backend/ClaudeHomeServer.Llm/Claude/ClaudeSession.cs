@@ -3006,6 +3006,28 @@ public class ClaudeSession : ILlmSessionAdapter
         _forceNonPlanNextTurn = false;
     }
 
+    // Формат маркера реплики человека (шаг 1 плана «сжатие с сохранением дословного»).
+    // Прокси (шаг 3) берёт последние N кодовых точек сообщения (= реплика) и проверяет, что
+    // маркер стоит ровно перед ними; цитата маркера в recall/реплике не сбивает проверку —
+    // она не встанет ровно перед хвостом. N = длина реплики в КОДОВЫХ ТОЧКАХ Unicode
+    // (EnumerateRunes, не Length: прокси на Python считает кодовыми точками, эмодзи по
+    // .Length разойдутся). Маркер вклеивается непосредственно перед text, после "---".
+    internal const string HumanTextMarkerFormat = "<!-- ccs:human-text chars={0} -->";
+
+    // Склейка хвоста хода: recall + маркер реплики + text. Маркер (HumanTextMarkerFormat)
+    // вклеивается непосредственно перед text, после "---"; N — длина text в кодовых точках.
+    // Без recall (joinedRecall null/пусто) маркера нет — возвращаем text как есть.
+    // internal static: юнит-тест проверяет склейку без процесса CLI.
+    internal static string BuildTurnTextForCli(string? joinedRecall, string text)
+    {
+        if (string.IsNullOrEmpty(joinedRecall))
+            return text;
+        var humanChars = text.EnumerateRunes().Count();
+        return joinedRecall + "\n\n---\n"
+            + string.Format(CultureInfo.InvariantCulture, HumanTextMarkerFormat, humanChars)
+            + "\n\n" + text;
+    }
+
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
         bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null)
     {
@@ -3935,7 +3957,7 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 _lastTurnRecallHash = recallHash;
                 sections.AddRange(turnRecallSections);
-                turnTextForCli = joinedRecall + "\n\n---\n\n" + text;
+                turnTextForCli = BuildTurnTextForCli(joinedRecall, text);
             }
         }
 

@@ -338,7 +338,7 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
          othersCount?, speed: { genPerStream?, prefillPerStream?, avgGenTps?, avgPromptTps? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
-         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds? }],
+         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
      window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
@@ -346,11 +346,14 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      точки; prefixHits/prefixQueries (токены), ramHits/ramQueries (чанки), preemptions (штуки) — ПРИРАЩЕНИЕ
      счётчика с прошлой точки (не с предыдущего опроса). null — нет прошлой точки, метрика не отдана или
      счётчик упал (рестарт); отрицательных значений нет. Долю за интервал фронт считает из сумм.
-     history скорость генерации на поток (главная линия графика): genTokens (vllm:generation_tokens_total) и
-     itlSeconds (vllm:inter_token_latency_seconds_sum, сек) — ПРИРАЩЕНИЕ счётчиков с прошлой точки,
-     правило null то же, что у серий кэша. Фронт сводит точки в интервалы и считает скорость генерации
-     на поток: ΣgenTokens/ΣitlSeconds (ток/с) — измерение vLLM, та же формула «генерации на поток» (ADR-029).
-     Вторым планом графика идёт genThroughput («выдано стендом, с паузами»). Поля busySeconds больше нет.
+     history скорость генерации на поток (главная линия графика): genTokens (vllm:generation_tokens_total),
+     itlSeconds (vllm:inter_token_latency_seconds_sum, сек) и itlCount (vllm:inter_token_latency_seconds_count,
+     число шагов декодирования) — ПРИРАЩЕНИЕ счётчиков с прошлой точки, правило null то же, что у серий кэша.
+     Фронт сводит точки в интервалы и считает скорость генерации на поток: ΣgenTokens/ΣitlSeconds (ток/с) —
+     измерение vLLM, та же формула «генерации на поток» (ADR-029). Поле «Шаг модели» графика: время шага
+     ΣitlSeconds/ΣitlCount×1000 (мс) и токенов за шаг ΣgenTokens/ΣitlCount; ступенька «Агентов в генерации»
+     ΣitlSeconds/длина интервала (ADR-029, v2.2). genThroughput с графика убран (v2.2), но в API остался:
+     пик «выдачи» читает карточка «Скорость». Поля busySeconds больше нет.
      speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
      genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
      в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).

@@ -753,12 +753,14 @@ public class LocalModelStatsPollerTests
 
     // ─── Скорость на поток: приращения для второй линии графика «Нагрузка и кэш» ─────────
     //
-    // Точка кольца несёт два приращения с прошлой ТОЧКИ: genTokens (generation_tokens_total)
-    // и itlSeconds (inter_token_latency_seconds_sum). Фронт сводит точки в интервалы
-    // (15/60 с) и считает среднюю скорость на поток: ΣgenTokens/ΣitlSeconds (ток/с) —
-    // та же формула «генерации на поток» (ADR-029). Правило null то же, что у серий кэша:
-    // нет прошлой точки, метрика не на прошлой/текущей точке, либо счётчик упал (рестарт) →
-    // null; отрицательных значений нет.
+    // Точка кольца несёт три приращения с прошлой ТОЧКИ: genTokens (generation_tokens_total),
+    // itlSeconds (inter_token_latency_seconds_sum) и itlCount (inter_token_latency_seconds_count
+    // = число шагов декодирования). Фронт сводит точки в интервалы (15/60 с) и считает
+    // среднюю скорость на поток: ΣgenTokens/ΣitlSeconds (ток/с) — та же формула «генерации
+    // на поток» (ADR-029) — и «шаг модели»: время шага ΣitlSeconds/ΣitlCount (мс), токенов
+    // за шаг ΣgenTokens/ΣitlCount, агентов в генерации ΣitlSeconds/длина интервала.
+    // Правило null то же, что у серий кэша: нет прошлой точки, метрика не на прошлой/текущей
+    // точке, либо счётчик упал (рестарт) → null; отрицательных значений нет.
 
     // (26) Обычный интервал: genTokens/itlSeconds — приращения с прошлой ТОЧКИ.
     // Мутация: считать приращение с предыдущего ОПРОСА (а не точки) → при частом опросе
@@ -833,6 +835,72 @@ public class LocalModelStatsPollerTests
         var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
         history[1].GenTokens.Should().Be(300, "счётчик есть → приращение 400 − 100 = 300");
         history[1].ItlSeconds.Should().BeNull("метрики нет (null на обеих точках) → null, не 0");
+    }
+
+    // (29) ItlCount: приращение числа шагов декодирования (inter_token_latency_seconds_count)
+    // с прошлой ТОЧКИ. Фронт: ΣitlSeconds/ΣitlCount = время шага, ΣgenTokens/ΣitlCount =
+    // токенов за шаг (график «Шаг модели»).
+    // Мутация: считать с предыдущего ОПРОСА (а не точки) → при частом опросе краснеет;
+    // здесь базовый случай (опрос = точка, шаг 5 с).
+    [Fact]
+    public async Task ItlCount_NormalInterval_IncrementFromPreviousPoint()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            GenerationTokens = 100,
+            InterTokenLatencySum = 2,
+            InterTokenLatencyCount = 4,
+            Running = 1,
+        });
+        await h.Poller.PollOnceAsync();
+
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot
+        {
+            GenerationTokens = 700,
+            InterTokenLatencySum = 12,
+            InterTokenLatencyCount = 14,
+            Running = 1,
+        });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history.Should().HaveCount(2);
+        history[0].ItlCount.Should().BeNull("нет прошлой точки → null, не 0");
+        history[1].ItlCount.Should().Be(10, "14 − 4 = 10 шагов");
+    }
+
+    // (30) ItlCount: рестарт счётчика (14 → 2) → null, не отрицательное.
+    // Мутация: не резать по разрыву → −12, тест краснеет.
+    [Fact]
+    public async Task ItlCount_CounterRestart_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { InterTokenLatencyCount = 14, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { InterTokenLatencyCount = 2, Running = 0 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].ItlCount.Should().BeNull("рестарт (счётчик упал) → null, не −12");
+    }
+
+    // (31) ItlCount: метрики нет (null на обеих точках) → null, не 0.
+    // Мутация: вернуть 0 вместо null → тест краснеет.
+    [Fact]
+    public async Task ItlCount_MetricAbsent_IsNull()
+    {
+        var h = new Harness();
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 100, Running = 1 });
+        await h.Poller.PollOnceAsync();
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        h.Source.Snapshots.Enqueue(new EngineSnapshot { GenerationTokens = 400, Running = 1 });
+        await h.Poller.PollOnceAsync();
+
+        var history = h.Poller.GetHistory(TimeSpan.FromHours(1));
+        history[1].ItlCount.Should().BeNull("метрики нет (null на обеих точках) → null, не 0");
     }
 
     // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).

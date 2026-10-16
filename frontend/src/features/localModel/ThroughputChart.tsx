@@ -23,8 +23,9 @@ import type { LocalModelStats } from './api';
 
 // Точка истории: t — unix-мс; throughput/running — как раньше; серии кэша v2.1
 // (kvUsage — доля 0..1, остальные — приращения счётчиков с прошлой точки).
-// genTokens/itlSeconds — приращения для скорости генерации на поток (главная линия, ADR-029).
-// null — нет данных (разрыв), 0 — настоящее значение.
+// genTokens/itlSeconds/itlCount — приращения для скорости генерации на поток (главная
+// линия, ADR-029) и графика «Шаг модели» (время шага, токенов за шаг, агентов в
+// генерации). null — нет данных (разрыв), 0 — настоящее значение.
 export interface ThroughputSample {
   t: number;
   throughput: number | null;
@@ -37,6 +38,7 @@ export interface ThroughputSample {
   preemptions: number | null;
   genTokens: number | null;
   itlSeconds: number | null;
+  itlCount: number | null;
 }
 
 // Геометрия области построения в единицах SVG.
@@ -67,6 +69,17 @@ export interface Interval {
   // Движок отдал хотя бы одну точку с этой серией (в т.ч. 0/0 — «не спрашивали»).
   // false — серии в интервале нет вовсе: линия обрывается (рестарт / молчание).
   hasData: { prefix: boolean; ram: boolean };
+  // «Шаг модели» (ADR-029): скорость генерации, разложенная на множители.
+  // stepMs — время шага, мс: ΣitlSeconds/ΣitlCount×1000 (длительность одного прохода
+  // модели; растёт от параллельных агентов, длинного контекста, чужого prefill).
+  // tokensPerStep — токенов за шаг: ΣgenTokens/ΣitlCount (угадывание спекулятивного
+  // декода: шаг прежний, скорость упала → просело угадывание).
+  // null — разрыв (молчание/рестарт) или ΣitlCount = 0 (шагов не было).
+  stepMs: number | null;
+  tokensPerStep: number | null;
+  // Агентов в генерации: ΣitlSeconds/длина интервала (с) — среднее число одновременно
+  // генерирующих потоков. null — движок молчал (разрыв); 0 — отвечал, но токены не выдавал.
+  agents: number | null;
 }
 
 // === Чистая геометрия (тестируется без React/DOM) ===
@@ -173,6 +186,57 @@ export function buildIssuedSegments(
   return buildIntervalSegments(intervals, it => it.throughput, tMin, tMax, maxSeries, geom);
 }
 
+// Поле «Шаг модели»: серия «время шага, мс» — своя шкала (0..максимум серии),
+// null — обрыв. Та же геометрия, что у линий интервалов, но нормировка — к максимуму
+// СОБСТВЕННОЙ серии (две серии поля не делят одну ось: единицы разные).
+export function buildStepMsSegments(
+  intervals: Interval[],
+  tMin: number,
+  tMax: number,
+  maxSeries: number,
+  geom: ChartGeom,
+): { x: number; y: number }[][] {
+  return buildIntervalSegments(intervals, it => it.stepMs, tMin, tMax, maxSeries, geom);
+}
+
+// Поле «Шаг модели»: серия «токенов за шаг» — своя шкала (0..максимум серии), null — обрыв.
+export function buildTokensPerStepSegments(
+  intervals: Interval[],
+  tMin: number,
+  tMax: number,
+  maxSeries: number,
+  geom: ChartGeom,
+): { x: number; y: number }[][] {
+  return buildIntervalSegments(intervals, it => it.tokensPerStep, tMin, tMax, maxSeries, geom);
+}
+
+// Поле «Агентов в генерации»: ступенчатая линия (как «Вытеснения», но непрерывная
+// величина, а не события): горизонталь на уровне значения интервала, вертикальный
+// переход на границе. null — обрыв (движок молчал). Атрибут points полилинии.
+export function buildAgentsSteps(
+  intervals: Interval[],
+  tMin: number,
+  tMax: number,
+  maxAgents: number,
+  geom: ChartGeom,
+): string[] {
+  const span = tMax - tMin;
+  const segs: string[] = [];
+  let cur: string[] = [];
+  for (const it of intervals) {
+    if (it.agents == null) {
+      if (cur.length) { segs.push(cur.join(' ')); cur = []; }
+      continue;
+    }
+    const y = yForCount(it.agents, maxAgents, geom);
+    const x0 = geom.left + (geom.width - geom.left - geom.right) * ((it.tStart - tMin) / span);
+    const x1 = geom.left + (geom.width - geom.left - geom.right) * ((it.tEnd - tMin) / span);
+    cur.push(`${round1(x0)},${round1(y)}`, `${round1(x1)},${round1(y)}`);
+  }
+  if (cur.length) segs.push(cur.join(' '));
+  return segs;
+}
+
 // Замкнутая область под линией: по каждому сегменту — вниз к дну, через точки, обратно.
 export function segmentsToArea(segments: { x: number; y: number }[][], geom: ChartGeom): string[] {
   const floor = geom.height - geom.bottom;
@@ -242,6 +306,78 @@ export function peakPerStreamOf(intervals: Interval[]): number {
   return max;
 }
 
+// === «Шаг модели»: время шага, токенов за шаг, агентов в генерации (ADR-029) ===
+// Скорость генерации, разложенная на множители: скорость на поток = токенов за шаг ÷
+// время шага, × сколько потоков генерировало. Все три — из уже собираемых счётчиков vLLM.
+
+// Верх шкалы времени шага (мс): максимум stepMs по интервалам. 0 — если данных нет.
+export function maxStepMsOf(intervals: Interval[]): number {
+  let max = 0;
+  for (const it of intervals) {
+    if (it.stepMs != null && it.stepMs > max) max = it.stepMs;
+  }
+  return max;
+}
+
+// Верх шкалы «токенов за шаг»: максимум tokensPerStep по интервалам. 0 — если данных нет.
+export function maxTokensPerStepOf(intervals: Interval[]): number {
+  let max = 0;
+  for (const it of intervals) {
+    if (it.tokensPerStep != null && it.tokensPerStep > max) max = it.tokensPerStep;
+  }
+  return max;
+}
+
+// Верх шкалы «агентов в генерации»: максимум agents по интервалам. 0 — если данных нет.
+export function maxAgentsOf(intervals: Interval[]): number {
+  let max = 0;
+  for (const it of intervals) {
+    if (it.agents != null && it.agents > max) max = it.agents;
+  }
+  return max;
+}
+
+// Среднее время шага (мс) за окно: ΣitlSeconds/ΣitlCount×1000 по всем точкам окна,
+// где ОБА приращения на месте. null — нет данных (молчание/рестарт) или ΣitlCount = 0.
+export function avgStepMsOf(samples: ThroughputSample[]): number | null {
+  let sumItl = 0, sumCnt = 0, any = false;
+  for (const s of samples) {
+    if (s.itlSeconds != null && s.itlCount != null) {
+      sumItl += s.itlSeconds;
+      sumCnt += s.itlCount;
+      any = true;
+    }
+  }
+  return any && sumCnt > 0 ? (sumItl / sumCnt) * 1000 : null;
+}
+
+// Среднее «токенов за шаг» за окно: ΣgenTokens/ΣitlCount по всем точкам окна,
+// где ОБА приращения на месте. null — нет данных или ΣitlCount = 0.
+export function avgTokensPerStepOf(samples: ThroughputSample[]): number | null {
+  let sumGen = 0, sumCnt = 0, any = false;
+  for (const s of samples) {
+    if (s.genTokens != null && s.itlCount != null) {
+      sumGen += s.genTokens;
+      sumCnt += s.itlCount;
+      any = true;
+    }
+  }
+  return any && sumCnt > 0 ? sumGen / sumCnt : null;
+}
+
+// Среднее число агентов в генерации за окно: ΣitlSeconds/длина окна (с) — среднее
+// число одновременно генерирующих потоков. null — движок молчал всё окно (разрыв).
+export function avgAgentsOf(samples: ThroughputSample[], windowMs: number): number | null {
+  let sumItl = 0, any = false;
+  for (const s of samples) {
+    if (s.itlSeconds != null) {
+      sumItl += s.itlSeconds;
+      any = true;
+    }
+  }
+  return any ? sumItl / (windowMs / 1000) : null;
+}
+
 // «Круглая» шкала (только график выработки): верх = ближайшее сверху число из ряда
 // 1, 2, 5 × 10ⁿ от максимума, НЕ МЕНЕЕ 10 (простой не схлопывает ось в 0/1).
 // Середина = верх / 2. Примеры: макс 37 → 50; 412 → 500; 980 → 1000; 0 → 10; 1 → 10.
@@ -296,6 +432,7 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
       preemptions: h.preemptions ?? null,
       genTokens: h.genTokens ?? null,
       itlSeconds: h.itlSeconds ?? null,
+      itlCount: h.itlCount ?? null,
     });
   }
   return out;
@@ -354,6 +491,11 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     let sumRH = 0, sumRQ = 0, hasRH = false;
     let sumPre = 0, hasPre = false;
     let sumGen = 0, sumItl = 0, hasStream = false;
+    // «Шаг модели»: время шага (itlSeconds/itlCount), токенов за шаг (genTokens/itlCount),
+    // агентов (itlSeconds/длина интервала) — из тех же приращений, каждая пара отдельно.
+    let sumItlSec = 0, sumItlCnt = 0, hasStep = false;
+    let sumGen2 = 0, sumItlCnt2 = 0, hasTps = false;
+    let sumItlAll = 0, hasItlAll = false;
     for (const s of samples) {
       if (s.t < tStart || s.t >= tEnd) continue;
       if (s.throughput != null) { sumTp += s.throughput; nTp++; }
@@ -363,6 +505,9 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       if (s.preemptions != null) { sumPre += s.preemptions; hasPre = true; }
       // скорость на поток: только когда ОБА приращения точки на месте (иначе дробь не честная)
       if (s.genTokens != null && s.itlSeconds != null) { sumGen += s.genTokens; sumItl += s.itlSeconds; hasStream = true; }
+      if (s.itlSeconds != null && s.itlCount != null) { sumItlSec += s.itlSeconds; sumItlCnt += s.itlCount; hasStep = true; }
+      if (s.genTokens != null && s.itlCount != null) { sumGen2 += s.genTokens; sumItlCnt2 += s.itlCount; hasTps = true; }
+      if (s.itlSeconds != null) { sumItlAll += s.itlSeconds; hasItlAll = true; }
     }
     let prefix: number | null;
     if (hasPH && sumPQ > 0) prefix = sumPH / sumPQ;
@@ -377,6 +522,15 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     // скорость генерации на поток: ΣgenTokens/ΣitlSeconds (измерение vLLM); null — разрыв
     // (молчание/рестарт) или Σitl = 0 (токены не делим на ноль).
     const perStream = hasStream && sumItl > 0 ? sumGen / sumItl : null;
+    // «Шаг модели»: время шага (мс) и токенов за шаг — Σ/Σ по интервалу; null — разрыв
+    // (молчание/рестарт) или ΣitlCount = 0 (шагов не было, на ноль не делим).
+    const stepMs = hasStep && sumItlCnt > 0 ? (sumItlSec / sumItlCnt) * 1000 : null;
+    const tokensPerStep = hasTps && sumItlCnt2 > 0 ? sumGen2 / sumItlCnt2 : null;
+    // Агентов в генерации: ΣitlSeconds/длина интервала (с) — среднее число одновременно
+    // генерирующих потоков. 0 — движок отвечал, но токены не выдавал (не разрыв);
+    // null — молчал (разрыв).
+    const intervalSec = (tEnd - tStart) / 1000;
+    const agents = hasItlAll ? sumItlAll / intervalSec : null;
     out.push({
       tStart,
       tEnd,
@@ -387,6 +541,9 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       ram,
       preemptions: hasPre ? sumPre : null,
       hasData: { prefix: hasPH, ram: hasRH },
+      stepMs,
+      tokensPerStep,
+      agents,
     });
   }
   return out;
@@ -461,23 +618,50 @@ export function chartAriaLabel(window: Window, avg: number | null, hit: number |
 }
 
 // aria-label SVG «Скорость генерации, ток/с»: базовая сводка; при hover — время
-// интервала и значения ОБЕИХ серий (скорость генерации + выдано стендом) или
-// «движок не отвечал» на разрыве обеих.
+// интервала, значение главной серии и «шаг модели» (время шага, токенов за шаг,
+// агентов) или «движок не отвечал» на разрыве всех.
 export function tpChartAriaLabel(
   window: Window, avg: number | null, hit: number | null,
-  hoverTime: string | null, hoverPerStream: number | null, hoverIssued?: number | null,
+  hoverTime: string | null, hoverPerStream: number | null,
+  hoverStepMs?: number | null, hoverTokensPerStep?: number | null, hoverAgents?: number | null,
 ): string {
   const parts = [`Скорость генерации, ток/с за ${WINDOW_LABEL[window]}`];
   if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
   if (hit != null) parts.push(`кэш ${formatPerc(hit)}`);
   if (hoverTime != null) {
-    if (hoverPerStream == null && hoverIssued == null) {
+    if (hoverPerStream == null && hoverStepMs == null && hoverTokensPerStep == null && hoverAgents == null) {
       parts.push(`интервал ${hoverTime}: движок не отвечал`);
     } else {
       parts.push(`интервал ${hoverTime}: скорость генерации ${hoverPerStream != null ? formatTps(hoverPerStream) : 'генерации не было'}`);
-      if (hoverIssued != null) parts.push(`выдано стендом, с паузами ${formatTps(hoverIssued)}`);
+      if (hoverStepMs != null) parts.push(`шаг ${Math.round(hoverStepMs)} мс`);
+      if (hoverTokensPerStep != null) parts.push(`${hoverTokensPerStep.toFixed(1)} ток/шаг`);
+      if (hoverAgents != null) parts.push(`${hoverAgents.toFixed(1)} агентов`);
     }
   }
+  return parts.join(', ');
+}
+
+// aria-label SVG «Шаг модели»: базовая подпись; при hover — время шага (мс) и
+// токенов за шаг интервала. «—» — серия в интервале не была (молчание/рестарт).
+export function stepChartAriaLabel(
+  window: Window,
+  hoverTime: string | null, hoverStepMs: number | null, hoverTokensPerStep: number | null,
+): string {
+  const parts = [`Шаг модели за ${WINDOW_LABEL[window]}`];
+  if (hoverTime != null) {
+    parts.push(`интервал ${hoverTime}: шаг ${hoverStepMs != null ? `${Math.round(hoverStepMs)} мс` : '—'}, `
+      + `токенов за шаг ${hoverTokensPerStep != null ? hoverTokensPerStep.toFixed(1) : '—'}`);
+  }
+  return parts.join(', ');
+}
+
+// aria-label SVG «Агентов в генерации»: базовая подпись; при hover — значение интервала.
+export function agentsChartAriaLabel(
+  window: Window,
+  hoverTime: string | null, hoverAgents: number | null,
+): string {
+  const parts = [`Агентов в генерации за ${WINDOW_LABEL[window]}`];
+  if (hoverTime != null) parts.push(`интервал ${hoverTime}: ${hoverAgents != null ? hoverAgents.toFixed(1) : '—'}`);
   return parts.join(', ');
 }
 
@@ -521,11 +705,14 @@ export const WINDOW_MS: Record<Window, number> = { '5m': 5 * 60_000, '15m': 15 *
 // выбор не персистентен, так что дефолт и есть то, что видит первый раз.
 export const DEFAULT_WINDOW: Window = '5m';
 
-// Геометрия полей: выработка 96 px, кэш 64 px, вытеснения 32 px. Поле справа 28 px
-// (подписи оси Y), слева 0 (подписи «ср.»/«данных нет» рисуются внутри поля).
-// bottom=0: ось времени общая, рисуется под последним полем.
+// Геометрия полей: выработка 96 px, кэш 64 px, шаг модели 48 px, агенты 32 px,
+// вытеснения 32 px. Поле справа 28 px (подписи оси Y), слева 0 (подписи
+// «ср.»/«данных нет» рисуются внутри поля). bottom=0: ось времени общая,
+// рисуется под последним полем.
 const GEOM_TP: ChartGeom = { width: 340, height: 96, left: 0, right: 28, top: 8, bottom: 0 };
 const GEOM_KV: ChartGeom = { width: 340, height: 64, left: 0, right: 28, top: 6, bottom: 0 };
+const GEOM_STEP: ChartGeom = { width: 340, height: 48, left: 0, right: 28, top: 4, bottom: 0 };
+const GEOM_AG: ChartGeom = { width: 340, height: 32, left: 0, right: 28, top: 4, bottom: 0 };
 const GEOM_EV: ChartGeom = { width: 340, height: 32, left: 0, right: 28, top: 4, bottom: 0 };
 
 // Метки общей оси времени: «−5 / −3 / −1 / сейчас» (5m), «−15 / −10 / −5 / сейчас» (15m),
@@ -541,10 +728,12 @@ function timeTicks(window: Window): { f: number; label: string }[] {
 }
 
 // Пустая заглушка: нет ни одной точки в окне — «нет данных за период».
+// Высота — сумма всех полей (скорость, кэш, шаг модели, агенты, вытеснения) + ось времени.
 function EmptyChart() {
   return (
     <div style={{
-      height: GEOM_TP.height + SP.sm + GEOM_KV.height, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: GEOM_TP.height + GEOM_KV.height + GEOM_STEP.height + GEOM_AG.height + GEOM_EV.height + SP.sm * 4 + 18,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: C.bgInset, borderRadius: R.sm, fontSize: FS.sm, color: C.textMuted,
     }}>
       Нет данных за период
@@ -602,19 +791,34 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const maxT = niceAxisMax(maxSeriesOf(intervals));
   // «в среднем» — скорость генерации на поток за окно: ΣgenTokens/ΣitlSeconds.
   const avg = avgPerStreamOf(samples);
-  const avgIssued = avgIssuedOf(samples);
   const hitAvg = cacheHitAvg(samples);
   const preTotal = preemptionTotal(samples);
 
   const geomTp: ChartGeom = { ...GEOM_TP, width };
   const geomKv: ChartGeom = { ...GEOM_KV, width };
+  const geomStep: ChartGeom = { ...GEOM_STEP, width };
+  const geomAg: ChartGeom = { ...GEOM_AG, width };
   const geomEv: ChartGeom = { ...GEOM_EV, width };
 
   // Состояния полей: движок не отдал серию → NotReported; вытеснения null → строки нет.
   const tpNotReported = samples.every(s => s.throughput == null);
   const cacheNotReported = samples.every(s => s.kvUsage == null && s.prefixQueries == null && s.ramQueries == null);
   const evNotReported = samples.every(s => s.preemptions == null);
+  // «Шаг модели» и «агентов» нечего показывать, когда ни один интервал не отдал
+  // соответствующую серию (молчание/рестарт всё окно) — поле не рисуется вовсе.
+  const stepNotReported = intervals.every(it => it.stepMs == null && it.tokensPerStep == null);
+  const agNotReported = intervals.every(it => it.agents == null);
   const hasRam = intervals.some(it => it.ram != null);
+
+  // «Шаг модели»: у каждой серии СВОЯ шкала (0..свой максимум) — единицы разные
+  // (мс против токенов/шаг), одну ось они не делят. Агенты — целая шкала, как вытеснения.
+  const maxStepMs = maxStepMsOf(intervals);
+  const maxTps = maxTokensPerStepOf(intervals);
+  const agMax = Math.max(2, Math.ceil(maxAgentsOf(intervals)));
+  // Средние за окно (легенда без считывания): время шага, токенов за шаг, агентов.
+  const avgStepMs = avgStepMsOf(samples);
+  const avgTps = avgTokensPerStepOf(samples);
+  const avgAgents = avgAgentsOf(samples, WINDOW_MS[window]);
 
   // Главная линия «скорость генерации»: из интервалов (ΣgenTokens/ΣitlSeconds), с заливкой.
   const tpSegments = useMemo(
@@ -624,8 +828,11 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   );
   const tpPoints = segmentsToPoints(tpSegments);
   const tpAreas = segmentsToArea(tpSegments, geomTp);
-  // Второй план «выдано стендом, с паузами»: среднее genThroughput по интервалу, общая ось.
-  const issuedPoints = segmentsToPoints(buildIssuedSegments(intervals, tMin, tMax, maxT, geomTp));
+  // Поле «Шаг модели»: две серии, каждая на СВОЕЙ шкале (0..свой максимум) —
+  // время шага (мс) и токенов за шаг. Агенты — ступенчатая линия на целой шкале.
+  const stepMsLines = segmentsToPoints(buildStepMsSegments(intervals, tMin, tMax, maxStepMs, geomStep));
+  const tpsLines = segmentsToPoints(buildTokensPerStepSegments(intervals, tMin, tMax, maxTps, geomStep));
+  const agentsSteps = buildAgentsSteps(intervals, tMin, tMax, agMax, geomAg);
 
   // Считывание: индекс интервала (0..n-1) под курсором/пальцем; null — нет.
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -677,14 +884,16 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
     const mm = String(d.getMinutes()).padStart(2, '0');
     const time = window === '5m' ? `${hh}:${mm}:${String(d.getSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
     hoverTime = time;
-    if (hover.perStream == null && hover.throughput == null) {
+    if (hover.perStream == null && hover.stepMs == null && hover.tokensPerStep == null && hover.agents == null) {
       summary = `${time} · движок не отвечал`;
     } else {
-      // Обе серии: «скорость генерации» + «выдано стендом, с паузами». Генерации в
-      // интервале не было (perStream = null при живом движке) — так и пишем.
-      summary = hover.perStream != null
-        ? `${time} · скорость генерации ${formatTps(hover.perStream)} · выдано стендом ${formatTps(hover.throughput)}`
-        : `${time} · генерации не было · выдано стендом ${formatTps(hover.throughput)}`;
+      // «скорость N · шаг M мс · K ток/шаг · агентов X»: скорость на поток + шаг
+      // модели, разложенный на множители. «—» — серии в интервале не было
+      // (молчание/рестарт на этой серии), остальные значения не подменяются нулём.
+      summary = `${time} · скорость ${hover.perStream != null ? formatTps(hover.perStream) : '—'}`
+        + ` · шаг ${hover.stepMs != null ? `${Math.round(hover.stepMs)} мс` : '—'}`
+        + ` · ${hover.tokensPerStep != null ? `${hover.tokensPerStep.toFixed(1)} ток/шаг` : '—'}`
+        + ` · агентов ${hover.agents != null ? hover.agents.toFixed(1) : '—'}`;
     }
   } else {
     const parts: string[] = [];
@@ -760,12 +969,20 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const legendRam = hover ? formatPerc(hover.ram) : (hasRam ? '—' : null);
   const legendKv = hover ? formatPerc(hover.kvUsage) : '—';
 
-  // Легенда графика 1: значения ОБЕИХ серий — интервала (считывание) или за окно.
-  // formatTps(null) = '—' (серия в интервале/окне не была). «Выдано стендом» за окно —
-  // среднее genThroughput по всем точкам, где движок отвечал, ВКЛЮЧАЯ простой: серия «с паузами»
-  // (avgThroughputOf здесь не годится — он отбрасывает точки без запросов).
+  // Легенда графика 1: значение главной серии — интервала (считывание) или за окно.
+  // formatTps(null) = '—' (серия в интервале/окне не была).
   const legendPerStream = hover ? formatTps(hover.perStream) : formatTps(avg);
-  const legendIssued = hover ? formatTps(hover.throughput) : formatTps(avgIssued);
+  // Легенда «Шаг модели»: значения интервала (считывание) или средние за окно.
+  const legendStepMs = hover
+    ? (hover.stepMs != null ? String(Math.round(hover.stepMs)) : '—')
+    : (avgStepMs != null ? String(Math.round(avgStepMs)) : '—');
+  const legendTps = hover
+    ? (hover.tokensPerStep != null ? hover.tokensPerStep.toFixed(1) : '—')
+    : (avgTps != null ? avgTps.toFixed(1) : '—');
+  // Значение «Агентов в генерации» (справа в заголовке поля): интервал или среднее за окно.
+  const legendAgents = hover
+    ? (hover.agents != null ? hover.agents.toFixed(1) : '—')
+    : (avgAgents != null ? avgAgents.toFixed(1) : '—');
 
   // Ось времени (общая, под последным полем)
   const ticks = timeTicks(window);
@@ -810,7 +1027,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
             <>
               <FieldLabel>Скорость генерации, ток/с на поток</FieldLabel>
               <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}
-                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.perStream ?? null, hover?.throughput ?? null)}>
+                aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.perStream ?? null, hover?.stepMs ?? null, hover?.tokensPerStep ?? null, hover?.agents ?? null)}>
                 {[0, 0.5, 1].map(f => {
                   const y = yForThroughput(maxT * f, maxT, geomTp);
                   return (
@@ -848,30 +1065,22 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                     </g>
                   );
                 })()}
-                {/* Второй план «выдано стендом, с паузами»: тонко и приглушённо (C.textMuted),
-                    под главной линией; рвётся на null так же, как главная. */}
-                {issuedPoints.map((pts, i) => (
-                  <polyline key={`isl${i}`} points={pts} fill="none" stroke={C.textMuted} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />
-                ))}
                 {tpAreas.map((d, i) => <path key={`tpa${i}`} d={d} fill={C.accent} fillOpacity={0.12} />)}
                 {tpPoints.map((pts, i) => (
                   <polyline key={`tpl${i}`} points={pts} fill="none" stroke={C.accent} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
                 ))}
-                {hoverX != null && hover && (hover.perStream != null || hover.throughput != null) && (() => {
+                {hoverX != null && hover && (hover.perStream != null || hover.stepMs != null || hover.tokensPerStep != null || hover.agents != null) && (() => {
                   const psY = hover.perStream != null ? yForThroughput(hover.perStream, maxT, geomTp) : null;
-                  const isY = hover.throughput != null ? yForThroughput(hover.throughput, maxT, geomTp) : null;
                   return (
                     <g>
                       <line x1={hoverX} x2={hoverX} y1={geomTp.top} y2={GEOM_TP.height - geomTp.bottom} stroke={C.textMuted} strokeWidth={1} />
-                      {isY != null && <circle cx={hoverX} cy={isY} r={3} fill={C.textMuted} stroke={C.bgCard} strokeWidth={2} />}
                       {psY != null && <circle cx={hoverX} cy={psY} r={3} fill={C.accent} stroke={C.bgCard} strokeWidth={2} />}
                     </g>
                   );
                 })()}
               </svg>
-              {/* Легенда: обе серии. Значение — интервала (считывание) или за окно. Пояснения —
-                  в title (подсказка при наведении). Перенос строки разрешён: на узкой ширине
-                  две подписи с числами в одну строку не влезают. */}
+              {/* Легенда: главная серия. Значение — интервала (считывание) или за окно.
+                  Пояснение — в title (подсказка при наведении). */}
               <div aria-live="polite" style={{
                 marginTop: SP.xxs, minHeight: FS.xs * 1.45, display: 'flex', flexWrap: 'wrap', alignItems: 'center',
                 columnGap: SP.md, rowGap: SP.xxs, fontSize: FS.xs, color: C.textSecondary,
@@ -880,11 +1089,6 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
                   <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.accent}` }} />
                   скорость генерации <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendPerStream}</b>
-                </span>
-                <span title="сколько токенов стенд выдал за это время всего; ниже скорости генерации — стенд простаивал, выше — работали несколько агентов"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-                  <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.textMuted}` }} />
-                  выдано стендом, с паузами <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendIssued}</b>
                 </span>
               </div>
             </>
@@ -963,7 +1167,91 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
             )}
         </div>
 
-        {/* === Поле 3: вытеснения (нет строки, если движок не отдаёт счётчик) === */}
+        {/* === Поле 3: шаг модели — время шага (мс) и токенов за шаг; каждая серия на СВОЕЙ шкале === */}
+        {!stepNotReported && (
+          <div style={{ marginTop: SP.sm }}>
+            <FieldLabel>Шаг модели</FieldLabel>
+            <svg viewBox={`0 0 ${width} ${GEOM_STEP.height}`} width={width} height={GEOM_STEP.height} style={{ display: 'block' }}
+              aria-label={stepChartAriaLabel(window, hoverTime, hover?.stepMs ?? null, hover?.tokensPerStep ?? null)}>
+              {[0, 0.5, 1].map(f => (
+                <line key={`stg${f}`} x1={geomStep.left} x2={width - geomStep.right} y1={yForPerc(f, geomStep)} y2={yForPerc(f, geomStep)}
+                  stroke={f === 0 ? C.border : C.borderLight} strokeWidth={1} />
+              ))}
+              {renderBreaks(geomStep, GEOM_STEP.height)}
+              {noDataX != null && noDataX > geomStep.left + 1 && (
+                <rect x={geomStep.left} y={geomStep.top} width={Math.max(0, noDataX - geomStep.left)} height={GEOM_STEP.height - geomStep.top - geomStep.bottom}
+                  fill={C.bgInset} fillOpacity={0.5} />
+              )}
+              {/* Время шага (мс) — C.info, токенов за шаг — C.success; каждая нормирована
+                  к СВОЕМУ максимуму (0..1 в области построения), цифры — в легенде и строке-итог. */}
+              {stepMsLines.map((pts, i) => (
+                <polyline key={`stl${i}`} points={pts} fill="none" stroke={C.info} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+              ))}
+              {tpsLines.map((pts, i) => (
+                <polyline key={`stt${i}`} points={pts} fill="none" stroke={C.success} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+              ))}
+              {hoverX != null && hover && (hover.stepMs != null || hover.tokensPerStep != null) && (() => {
+                const smY = hover.stepMs != null && maxStepMs > 0 ? yForThroughput(hover.stepMs, maxStepMs, geomStep) : null;
+                const tpY = hover.tokensPerStep != null && maxTps > 0 ? yForThroughput(hover.tokensPerStep, maxTps, geomStep) : null;
+                return (
+                  <g>
+                    <line x1={hoverX} x2={hoverX} y1={geomStep.top} y2={GEOM_STEP.height - geomStep.bottom} stroke={C.textMuted} strokeWidth={1} />
+                    {smY != null && <circle cx={hoverX} cy={smY} r={3} fill={C.info} stroke={C.bgCard} strokeWidth={2} />}
+                    {tpY != null && <circle cx={hoverX} cy={tpY} r={3} fill={C.success} stroke={C.bgCard} strokeWidth={2} />}
+                  </g>
+                );
+              })()}
+            </svg>
+            {/* Легенда: значения интервала (считывание) или средние за окно. Пояснения — в title. */}
+            <div aria-live="polite" style={{
+              marginTop: SP.xxs, height: FS.xs * 1.45, display: 'flex', alignItems: 'center', gap: SP.md,
+              fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+            }}>
+              <span title="сколько длится один проход модели. Растёт, когда работает несколько агентов или контекст длинный"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.info}` }} />
+                шаг <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendStepMs} мс</b>
+              </span>
+              <span title="сколько токенов модель выдаёт за проход благодаря угадыванию. Меньше — текст трудный для угадывания"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.success}` }} />
+                <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendTps}</b> ток/шаг
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* === Поле 4: агентов в генерации — тонкая ступенька, целая шкала === */}
+        {!agNotReported && (
+          <div style={{ marginTop: SP.sm }}>
+            <FieldLabel right={
+              <span aria-live="polite" title="сколько агентов в среднем одновременно получали токены"
+                style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading, fontSize: FS.xs }}>
+                {legendAgents}
+              </span>
+            }>
+              Агентов в генерации
+            </FieldLabel>
+            <svg viewBox={`0 0 ${width} ${GEOM_AG.height}`} width={width} height={GEOM_AG.height} style={{ display: 'block' }}
+              aria-label={agentsChartAriaLabel(window, hoverTime, hover?.agents ?? null)}>
+              <line x1={geomAg.left} x2={width - geomAg.right} y1={GEOM_AG.height - geomAg.bottom} y2={GEOM_AG.height - geomAg.bottom} stroke={C.border} strokeWidth={1} />
+              <text x={width - geomAg.right + 4} y={geomAg.top + 3} textAnchor="start" fontFamily={FONT.mono} fontSize={FS.xs} fill={C.textMuted}>{agMax}</text>
+              {renderBreaks(geomAg, GEOM_AG.height)}
+              {noDataX != null && noDataX > geomAg.left + 1 && (
+                <rect x={geomAg.left} y={geomAg.top} width={Math.max(0, noDataX - geomAg.left)} height={GEOM_AG.height - geomAg.top - geomAg.bottom}
+                  fill={C.bgInset} fillOpacity={0.5} />
+              )}
+              {agentsSteps.map((pts, i) => (
+                <polyline key={`ags${i}`} points={pts} fill="none" stroke={C.textMuted} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />
+              ))}
+              {hoverX != null && hover && (
+                <line x1={hoverX} x2={hoverX} y1={geomAg.top} y2={GEOM_AG.height - geomAg.bottom} stroke={C.textMuted} strokeWidth={1} />
+              )}
+            </svg>
+          </div>
+        )}
+
+        {/* === Поле 5: вытеснения (нет строки, если движок не отдаёт счётчик) === */}
         {!evNotReported && (
           <div style={{ marginTop: SP.sm }}>
             <FieldLabel right={

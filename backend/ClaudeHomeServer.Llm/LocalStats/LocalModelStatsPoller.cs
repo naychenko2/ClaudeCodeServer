@@ -312,8 +312,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 Preemptions = CounterDelta(_lastPointSnap, snap, s => s.Preemptions),
                 // Скорость на поток (вторая линия графика): приращения с прошлой ТОЧКИ,
                 // фронт сводит в интервалы и делит ΣgenTokens/ΣitlSeconds (ток/с).
+                // ItlCount — число шагов декодирования: фронт считает из трёх приращений
+                // время шага (ΣitlSeconds/ΣitlCount), токенов за шаг (ΣgenTokens/ΣitlCount)
+                // и агентов в генерации (ΣitlSeconds/длина интервала).
                 GenTokens = CounterDelta(_lastPointSnap, snap, s => s.GenerationTokens),
                 ItlSeconds = DoubleCounterDelta(_lastPointSnap, snap, s => s.InterTokenLatencySum),
+                ItlCount = CounterDelta(_lastPointSnap, snap, s => s.InterTokenLatencyCount),
             };
 
             lock (_gate)

@@ -116,6 +116,12 @@ public sealed record LocalModelStatsPoint
 
     // Приращение суммы inter-token-времени (vllm:inter_token_latency_seconds_sum, сек) с прошлой точки.
     public double? ItlSeconds { get; init; }
+
+    // Приращение счётчика inter-token-событий (vllm:inter_token_latency_seconds_count =
+    // число шагов декодирования) с прошлой точки. Фронт: ΣitlSeconds/ΣitlCount = время шага
+    // (мс), ΣgenTokens/ΣitlCount = токенов за шаг, ΣitlSeconds/длина интервала = агентов в
+    // генерации (график «Шаг модели», ADR-029).
+    public long? ItlCount { get; init; }
 }
 
 // Средняя скорость на поток за окно (5m/15m/1h, те же окна, что у графика «Нагрузка»):

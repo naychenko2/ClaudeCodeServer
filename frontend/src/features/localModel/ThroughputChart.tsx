@@ -74,11 +74,12 @@ export interface Interval {
   // Движок отдал хотя бы одну точку с этой серией (в т.ч. 0/0 — «не спрашивали»).
   // false — серии в интервале нет вовсе: линия обрывается (рестарт / молчание).
   hasData: { prefix: boolean; ram: boolean };
-  // «Куда уходит время агентов» (ADR-029, v2.3): составная полоса долей (в сумме 100 %):
-  // gen — генерирует (модель реально выдаёт токены), prefill — читает промпт, wait — ждёт
-  // соседа (генерация стоит, пока стенд читает чужой prefill), queue — в очереди.
-  // null — интервал без данных (молчание/рестарт): полоса не рисуется.
-  timeShares: TimeShares | null;
+  // «Куда уходит время агентов» (ADR-029, v2.4): три состояния интервала.
+  // shares — составная полоса долей (в сумме 100 %): gen — генерирует (модель реально
+  // выдаёт токены), prefill — читает промпт, wait — ждёт соседа (генерация стоит, пока
+  // стенд читает чужой prefill), queue — в очередь; idle — движок отвечал, но шагов/
+  // запросов не было (сумма четырёх = 0); break — движок молчал/рестарт/нет данных.
+  timeShares: TimeState;
 }
 
 // Доли «куда уходит время» (0..1, в сумме 1). Порядок — порядок сегментов полосы.
@@ -88,6 +89,17 @@ export interface TimeShares {
   wait: number;     // ждёт соседа
   queue: number;    // в очереди
 }
+
+// Состояние интервала «куда уходит время» — три взаимоисключающих (ADR-029, v2.4):
+// • shares — доли (сумма 1): цветная полоса на всю высоту поля;
+// • idle   — движок отвечал, но шагов/запросов не было (сумма четырёх = 0):
+//            нейтральная заливка «простой» на всю высоту;
+// • break  — движок молчал/рестарт/нет данных: заливки нет (фон-разрыв).
+// Простой ≠ нет данных: null-разрыв не красим «простоем» (правило null = разрыв).
+export type TimeState =
+  | { kind: 'shares'; shares: TimeShares }
+  | { kind: 'idle' }
+  | { kind: 'break' };
 
 // === Чистая геометрия (тестируется без React/DOM) ===
 
@@ -199,12 +211,16 @@ export function buildIssuedSegments(
 // «Чистый шаг» общий для окна (считается в buildIntervals), поэтому доли интервалов
 // соизмеримы между собой.
 
-// Высота полосы (px): тонкая горизонтальная лента, вертикально центрированная в поле.
-const TIME_BAR_H = 14;
-
 // Цвета сегментов (только токены C.*): генерирует — accent, читает промпт — info,
-// ждёт соседа — warning, в очереди — smoke (нейтральный).
-const TIME_BAR_COLORS = [C.accent, C.info, C.warning, C.smoke] as const;
+// ждёт соседа — success, в очереди — smoke (нейтральный).
+// «Ждёт соседа» — success (зелёный), а не warning: в обеих темах warning (янтарь)
+// сливается с accent (оранжевый) «генерирует»; зелёный — комплементарный, различим.
+const TIME_BAR_COLORS = [C.accent, C.info, C.success, C.smoke] as const;
+
+// Нейтральная заливка «простой» (ADR-029, v2.4): движок отвечал, но шагов/запросов
+// не было (сумма четырёх = 0). Спокойный утопленный тон C.bgInset — в обеих темах.
+// Сплошной (opacity 1), в отличие от разрыва (C.bgInset 0.5 + пунктир): простой ≠ нет данных.
+const TIME_BAR_IDLE_COLOR = C.bgInset;
 
 // Подписи сегментов (легенда + считывание): порядок = порядок сегментов полосы.
 const TIME_BAR_LABELS = ['генерирует', 'читает промпт', 'ждёт соседа', 'в очереди'] as const;
@@ -217,16 +233,21 @@ const TIME_BAR_TITLES = [
   'запрос ещё не принят стендом',
 ] as const;
 
-// Полоса долей интервала: 4 прямоугольника (сегменты) пропорционально долям, на
-// x-диапазоне интервала [x0, x1]. null — интервал без долей (молчание/рестарт):
-// не рисуется. Возвращает {x, w, color} каждого ненулевого сегмента.
+// Подпись и пояснение состояния «простой» (нейтральная заливка).
+const TIME_IDLE_LABEL = 'простой';
+const TIME_IDLE_TITLE = 'движок отвечал, но шагов и запросов не было';
+
+// Полоса интервала «куда уходит время» (ADR-029, v2.4) на x-диапазоне [x0, x1].
+// shares — 4 сегмента пропорционально долям; idle — один нейтральный (простой) на всю
+// ширину; break — пусто (фон-разрыв рисует renderBreaks). Возвращает {x, w, color}.
 export function buildTimeSharesBar(
-  shares: TimeShares | null,
+  state: TimeState,
   x0: number,
   x1: number,
 ): { x: number; w: number; color: string }[] {
-  if (shares == null) return [];
-  const order = [shares.gen, shares.prefill, shares.wait, shares.queue];
+  if (state.kind === 'break') return [];
+  if (state.kind === 'idle') return [{ x: x0, w: x1 - x0, color: TIME_BAR_IDLE_COLOR }];
+  const order = [state.shares.gen, state.shares.prefill, state.shares.wait, state.shares.queue];
   const out: { x: number; w: number; color: string }[] = [];
   let x = x0;
   for (let i = 0; i < 4; i++) {
@@ -237,38 +258,43 @@ export function buildTimeSharesBar(
   return out;
 }
 
-// aria-label SVG «Куда уходит время агентов»: базовая подпись; при hover — доли
-// интервала (в %). «—» — интервал без долей (молчание/рестарт).
+// aria-label SVG «Куда уходит время агентов»: базовая подпись; при hover — состояние
+// интервала: доли (в %) / «простой» / «движок не отвечал» (разрыв).
 export function timeSharesAriaLabel(
   window: Window,
   hoverTime: string | null,
-  hoverShares: TimeShares | null,
+  hoverState: TimeState | null,
 ): string {
   const parts = [`Куда уходит время агентов за ${WINDOW_LABEL[window]}`];
-  if (hoverTime != null) {
-    if (hoverShares == null) {
+  if (hoverTime != null && hoverState != null) {
+    if (hoverState.kind === 'break') {
       parts.push(`интервал ${hoverTime}: движок не отвечал`);
+    } else if (hoverState.kind === 'idle') {
+      parts.push(`интервал ${hoverTime}: простой`);
     } else {
       const pct = (v: number) => `${Math.round(v * 100)} %`;
+      const s = hoverState.shares;
       parts.push(`интервал ${hoverTime}: `
-        + `генерирует ${pct(hoverShares.gen)} · `
-        + `читает промпт ${pct(hoverShares.prefill)} · `
-        + `ждёт соседа ${pct(hoverShares.wait)} · `
-        + `в очереди ${pct(hoverShares.queue)}`);
+        + `генерирует ${pct(s.gen)} · `
+        + `читает промпт ${pct(s.prefill)} · `
+        + `ждёт соседа ${pct(s.wait)} · `
+        + `в очереди ${pct(s.queue)}`);
     }
   }
   return parts.join(', ');
 }
 
-// Строка-считывание долей: « · генерирует X % · читает промпт Y % · ждёт соседа Z % ·
-// в очереди W %». Пустая строка — долей не было (молчание/рестарт).
-function timeSharesSummary(shares: TimeShares | null): string {
-  if (shares == null) return '';
+// Строка-считывание состояния интервала: « · генерирует X % · … · в очереди W %»
+// (shares), « · простой» (idle) или «» (break — строка-итог уже показывает «не отвечал»).
+function timeSharesSummary(state: TimeState | null): string {
+  if (state == null || state.kind === 'break') return '';
+  if (state.kind === 'idle') return ` · ${TIME_IDLE_LABEL}`;
   const pct = (v: number) => `${Math.round(v * 100)} %`;
-  return ` · генерирует ${pct(shares.gen)}`
-    + ` · читает промпт ${pct(shares.prefill)}`
-    + ` · ждёт соседа ${pct(shares.wait)}`
-    + ` · в очереди ${pct(shares.queue)}`;
+  const s = state.shares;
+  return ` · генерирует ${pct(s.gen)}`
+    + ` · читает промпт ${pct(s.prefill)}`
+    + ` · ждёт соседа ${pct(s.wait)}`
+    + ` · в очереди ${pct(s.queue)}`;
 }
 
 // Замкнутая область под линией: по каждому сегменту — вниз к дну, через точки, обратно.
@@ -341,16 +367,16 @@ export function peakPerStreamOf(intervals: Interval[]): number {
 }
 
 // Средние доли «куда уходит время» за окно: среднее по интервалам, у которых есть
-// доли (каждая строка 0..1, сумма 1). null — ни один интервал не отдал долей.
-// Легенда без считывания показывает «типовой» интервал окна (средние доли).
+// доли (kind === 'shares'; каждая строка 0..1, сумма 1). null — ни один интервал не
+// отдал долей. Легенда без считывания показывает «типовой» интервал окна (средние доли).
 export function avgTimeSharesOf(intervals: Interval[]): TimeShares | null {
   let gen = 0, prefill = 0, wait = 0, queue = 0, n = 0;
   for (const it of intervals) {
-    if (it.timeShares == null) continue;
-    gen += it.timeShares.gen;
-    prefill += it.timeShares.prefill;
-    wait += it.timeShares.wait;
-    queue += it.timeShares.queue;
+    if (it.timeShares.kind !== 'shares') continue;
+    gen += it.timeShares.shares.gen;
+    prefill += it.timeShares.shares.prefill;
+    wait += it.timeShares.shares.wait;
+    queue += it.timeShares.shares.queue;
     n++;
   }
   if (n === 0) return null;
@@ -468,6 +494,9 @@ interface RawInterval {
   sumPrefillSec: number; hasPrefillSec: boolean;
   sumQueueSec: number; hasQueueSec: boolean;
   sumPromptTokens: number; hasPromptTokens: boolean;
+  // Движок отвечал в интервале: хотя бы одна non-null из itlSeconds/itlCount/prefillSeconds/
+  // queueSeconds. Отличает «простой» (отвечал, суммы 0) от «разрыва» (молчал, всё null).
+  hasAnyTime: boolean;
 }
 
 // 10-й перцентиль: 10 % значений не выше этого. null — пустой массив.
@@ -498,19 +527,21 @@ function cleanStepOf(raw: RawInterval[]): number | null {
   return sumItlCnt > 0 ? sumItlSec / sumItlCnt : null;
 }
 
-// Доли «куда уходит время» интервала: 4 секунды (генерирует/ждёт/читает/очередь) →
-// доли в сумме 1. null — интервал без шагов (молчание/рестарт) или сумма = 0.
+// Состояние «куда уходит время» интервала (ADR-029, v2.4).
 // gen = ΣitlCnt × чистый шаг; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
 // гистограмм. Не-отчётные серии (null) — 0, не null: доля просто не участвует.
-function timeSharesOf(r: RawInterval, cleanStep: number | null): TimeShares | null {
-  if (cleanStep == null || !r.hasStep || r.sumItlCnt <= 0) return null;
-  const gen = r.sumItlCnt * cleanStep;
+// Сумма четырёх > 0 → shares (доли, сумма 1). Сумма = 0 → idle (движок отвечал)
+// или break (молчал): простой ≠ нет данных (null = разрыв).
+function timeSharesOf(r: RawInterval, cleanStep: number | null): TimeState {
+  const gen = cleanStep != null && r.hasStep ? r.sumItlCnt * cleanStep : 0;
   const wait = Math.max(0, r.sumItlSec - gen);
   const prefill = r.hasPrefillSec ? r.sumPrefillSec : 0;
   const queue = r.hasQueueSec ? r.sumQueueSec : 0;
   const total = gen + wait + prefill + queue;
-  if (total <= 0) return null;
-  return { gen: gen / total, prefill: prefill / total, wait: wait / total, queue: queue / total };
+  if (total > 0) {
+    return { kind: 'shares', shares: { gen: gen / total, prefill: prefill / total, wait: wait / total, queue: queue / total } };
+  }
+  return r.hasAnyTime ? { kind: 'idle' } : { kind: 'break' };
 }
 
 // Точки → интервалы: выработка — среднее, занято — максимум, попадания/RAM —
@@ -534,6 +565,7 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     let sumPrefillSec = 0, hasPrefillSec = false;
     let sumQueueSec = 0, hasQueueSec = false;
     let sumPromptTokens = 0, hasPromptTokens = false;
+    let hasAnyTime = false;
     for (const s of samples) {
       if (s.t < tStart || s.t >= tEnd) continue;
       if (s.throughput != null) { sumTp += s.throughput; nTp++; }
@@ -547,6 +579,8 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       if (s.prefillSeconds != null) { sumPrefillSec += s.prefillSeconds; hasPrefillSec = true; }
       if (s.queueSeconds != null) { sumQueueSec += s.queueSeconds; hasQueueSec = true; }
       if (s.promptTokens != null) { sumPromptTokens += s.promptTokens; hasPromptTokens = true; }
+      // «Движок отвечал»: хотя бы одна non-null из четырёх серий поля (0 — ответ, null — молчание).
+      if (s.itlSeconds != null || s.itlCount != null || s.prefillSeconds != null || s.queueSeconds != null) hasAnyTime = true;
     }
     raw.push({
       tStart, tEnd,
@@ -559,6 +593,7 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       sumPrefillSec, hasPrefillSec,
       sumQueueSec, hasQueueSec,
       sumPromptTokens, hasPromptTokens,
+      hasAnyTime,
     });
   }
   // Второй проход: «чистый шаг» окна (общий для всех интервалов), из него — доли.
@@ -823,9 +858,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const tpNotReported = samples.every(s => s.throughput == null);
   const cacheNotReported = samples.every(s => s.kvUsage == null && s.prefixQueries == null && s.ramQueries == null);
   const evNotReported = samples.every(s => s.preemptions == null);
-  // «Куда уходит время» нечего показывать, когда ни один интервал не отдал долей
-  // (молчание/рестарт всё окно) — поле не рисуется вовсе.
-  const tsNotReported = intervals.every(it => it.timeShares == null);
+  // «Куда уходит время» нечего показывать, когда движок молчал всё окно (все
+  // интервалы — break) — поле не рисуется вовсе. Простой (idle) и доли (shares) — рисуем.
+  const tsNotReported = intervals.every(it => it.timeShares.kind === 'break');
   const hasRam = intervals.some(it => it.ram != null);
 
   // «Куда уходит время»: средние доли за окно (легенда без считывания) — «типовой»
@@ -840,10 +875,11 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   );
   const tpPoints = segmentsToPoints(tpSegments);
   const tpAreas = segmentsToArea(tpSegments, geomTp);
-  // Поле «Куда уходит время»: составная полоса долей на каждом интервале. Полоса —
-  // тонкая горизонтальная лента (TIME_BAR_H px), вертикально центрированная в поле.
+  // Поле «Куда уходит время» (ADR-029, v2.4): на каждом интервале — полоса на ВСЮ
+  // высоту поля. shares — 4 цветных сегмента; idle — нейтральная заливка «простой»;
+  // break — фон-разрыв (renderBreaks). Высота по нагрузке НЕ вводится (ADR-029 v2.3).
+  const tsPlotTop = geomTs.top;
   const tsPlotH = GEOM_TS.height - geomTs.top - geomTs.bottom;
-  const tsBarY = geomTs.top + (tsPlotH - TIME_BAR_H) / 2;
   const tsBars = intervals.map(it => {
     const x0 = geomTs.left + (width - geomTs.left - geomTs.right) * ((it.tStart - tMin) / (tMax - tMin));
     const x1 = geomTs.left + (width - geomTs.left - geomTs.right) * ((it.tEnd - tMin) / (tMax - tMin));
@@ -900,11 +936,12 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
     const mm = String(d.getMinutes()).padStart(2, '0');
     const time = window === '5m' ? `${hh}:${mm}:${String(d.getSeconds()).padStart(2, '0')}` : `${hh}:${mm}`;
     hoverTime = time;
-    if (hover.perStream == null && hover.timeShares == null) {
+    if (hover.timeShares.kind === 'break') {
+      // Движок молчал (все серии null) — «не отвечал»; perStream здесь тоже null.
       summary = `${time} · движок не отвечал`;
     } else {
-      // «скорость N · генерирует X % · читает промпт Y % · ждёт соседа Z % · в очереди W %»:
-      // скорость на поток + куда уходит время. «—» — серии в интервале не было.
+      // «скорость N · <куда уходит время>»: shares — доли, idle — «простой».
+      // «—» — скорости в интервале не было (idle: движок отвечал, но шагов не было).
       summary = `${time} · скорость ${hover.perStream != null ? formatTps(hover.perStream) : '—'}`
         + timeSharesSummary(hover.timeShares);
     }
@@ -986,7 +1023,12 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   // formatTps(null) = '—' (серия в интервале/окне не была).
   const legendPerStream = hover ? formatTps(hover.perStream) : formatTps(avg);
   // Легенда «Куда уходит время»: доли интервала (считывание) или средние за окно.
-  const legendShares = hover ? hover.timeShares : avgShares;
+  // hover.timeShares — TimeState; доли — только если kind === 'shares', иначе «—».
+  const legendShares: TimeShares | null = hover
+    ? (hover.timeShares.kind === 'shares' ? hover.timeShares.shares : null)
+    : avgShares;
+  // «простой»: 100 %, если интервал под курсором — простой; иначе «—».
+  const legendIdle = hover ? hover.timeShares.kind === 'idle' : false;
 
   // Ось времени (общая, под последным полем)
   const ticks = timeTicks(window);
@@ -1182,7 +1224,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
             <FieldLabel>Куда уходит время агентов</FieldLabel>
             <svg viewBox={`0 0 ${width} ${GEOM_TS.height}`} width={width} height={GEOM_TS.height} style={{ display: 'block' }}
               aria-label={timeSharesAriaLabel(window, hoverTime, hover?.timeShares ?? null)}>
-              <line x1={geomTs.left} x2={width - geomTs.right} y1={tsBarY + TIME_BAR_H} y2={tsBarY + TIME_BAR_H}
+              <line x1={geomTs.left} x2={width - geomTs.right} y1={GEOM_TS.height - geomTs.bottom} y2={GEOM_TS.height - geomTs.bottom}
                 stroke={C.border} strokeWidth={1} />
               {renderBreaks(geomTs, GEOM_TS.height)}
               {noDataX != null && noDataX > geomTs.left + 1 && (
@@ -1190,7 +1232,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                   fill={C.bgInset} fillOpacity={0.5} />
               )}
               {tsBars.map((segs, i) => segs.map((s, j) => (
-                <rect key={`tsb${i}-${j}`} x={s.x} y={tsBarY} width={Math.max(0, s.w)} height={TIME_BAR_H} fill={s.color} />
+                <rect key={`tsb${i}-${j}`} x={s.x} y={tsPlotTop} width={Math.max(0, s.w)} height={tsPlotH} fill={s.color} />
               )))}
               {hoverX != null && hover && (
                 <line x1={hoverX} x2={hoverX} y1={geomTs.top} y2={GEOM_TS.height - geomTs.bottom} stroke={C.textMuted} strokeWidth={1} />
@@ -1212,6 +1254,12 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                   </span>
                 );
               })}
+              {/* «простой»: нейтральная заливка; 100 %, когда интервал под курсором — простой. */}
+              <span title={TIME_IDLE_TITLE}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                <span style={{ width: 8, height: 8, background: TIME_BAR_IDLE_COLOR, border: `1px solid ${C.border}` }} />
+                {TIME_IDLE_LABEL} <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendIdle ? '100 %' : '—'}</b>
+              </span>
             </div>
           </div>
         )}

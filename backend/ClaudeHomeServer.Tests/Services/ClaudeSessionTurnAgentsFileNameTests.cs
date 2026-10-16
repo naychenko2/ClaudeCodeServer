@@ -15,7 +15,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // одного прогона не трогает файл другого. --agents исключён из BuildLaunchSignature, смена
 // состава сабагентов-персон ловится fingerprint'ом содержимого, а не путём.
 //
-// Мутация «общий/стабильный путь» (оба вызова BuildTurnAgentsFileName дают одно имя) обязана
+// Тест идёт через BuildTurnAgentsFileIdentity — ЕДИНУЮ точку, которую BuildArgs использует
+// для имени файла и fingerprint'а (не через чистые BuildTurnAgentsFileName/TurnAgentsFingerprint
+// в обход неё): иначе мутация «общий/стабильный путь» в BuildArgs остаётся невидимой, и
+// тест тавтологичен (сам пишет два файла и сам удаляет первый). Мутация «общий путь +
+// --agents обратно в сигнатуре» (оба вызова дают одно имя, путь входит в сигнатуру) обязана
 // покрасить тесты ниже: файл второй сборки удалится финализацией первой.
 public class ClaudeSessionTurnAgentsFileNameTests
 {
@@ -26,7 +30,9 @@ public class ClaudeSessionTurnAgentsFileNameTests
 
     // Гонка финализации: два хода одной сессии, одна сборка за другой. Финализация убитого
     // прогона первого хода удаляет СВОЙ файл; файл второго хода (на который стартует новый
-    // процесс) должен существовать в момент Start.
+    // процесс) должен существовать в момент Start. Идём через BuildTurnAgentsFileIdentity —
+    // ту же точку, что BuildArgs: имена двух сборок обязаны различаться, иначе оба файла —
+    // один, и File.Delete первого убивает второй.
     [Fact]
     public void ФинализацияПервогоХода_НеУдаляетФайлВторого()
     {
@@ -34,12 +40,13 @@ public class ClaudeSessionTurnAgentsFileNameTests
         Directory.CreateDirectory(dir);
         try
         {
-            // сборка хода 1
-            var p1 = Path.Combine(dir, ClaudeSession.BuildTurnAgentsFileName());
-            File.WriteAllText(p1, AgentsJson);
+            // сборка хода 1 и хода 2 — через ту же точку, что BuildArgs
+            var id1 = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson);
+            var id2 = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson);
 
-            // сборка хода 2 (та же сессия, тот же контент)
-            var p2 = Path.Combine(dir, ClaudeSession.BuildTurnAgentsFileName());
+            var p1 = Path.Combine(dir, id1.FileName);
+            var p2 = Path.Combine(dir, id2.FileName);
+            File.WriteAllText(p1, AgentsJson);
             File.WriteAllText(p2, AgentsJson);
 
             // финализация убитого прогона хода 1 удаляет свой файл
@@ -54,21 +61,21 @@ public class ClaudeSessionTurnAgentsFileNameTests
         }
     }
 
-    // Две сборки (или две сессии) с одним содержимым → РАЗНЫЕ пути в args. Общий путь —
-    // мутация, краснеющая здесь: оба вызова дали бы одно имя.
+    // Две сборки (или две сессии) с одним содержимым → РАЗНЫЕ имена файлов. Общий/стабильный
+    // путь — мутация, краснеющая здесь: оба вызова BuildTurnAgentsFileIdentity дали бы одно имя.
     [Fact]
     public void ДвеСборкиСОднимКонтентом_РазныеПути()
     {
-        var a = ClaudeSession.BuildTurnAgentsFileName();
-        var b = ClaudeSession.BuildTurnAgentsFileName();
-        a.Should().NotBe(b, "путь --agents уникален на каждую сборку, как у --mcp-config");
+        var a = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson).FileName;
+        var b = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson).FileName;
+        a.Should().NotBe(b, "имя --agents уникален на каждую сборку, как у --mcp-config");
     }
 
     // Формат имени: claude-agents-{32 hex}.json (Guid в N-формате)
     [Fact]
     public void ИмяНесётФорматGuid()
     {
-        var name = ClaudeSession.BuildTurnAgentsFileName();
+        var name = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson).FileName;
         name.Should().StartWith("claude-agents-");
         name.Should().EndWith(".json");
         var token = name["claude-agents-".Length..^5];
@@ -76,16 +83,18 @@ public class ClaudeSessionTurnAgentsFileNameTests
         token.Should().MatchRegex("^[0-9a-f]{32}$");
     }
 
-    // Fingerprint содержимого: детерминирован, различен для разного контента (смена состава
-    // сабагентов-персон → новый fingerprint → новый процесс; правка персоны — отдельно).
+    // Fingerprint содержимого (то, что входит в BuildLaunchSignature ВМЕСТО пути): детерминирован
+    // и различен для разного контента. Свойство «сигнатуры совпадают при том же составе
+    // сабагентов и различаются при другом» держится именно на нём: совпадение fingerprint =
+    // совпадение вклада --agents в сигнатуру.
     [Fact]
     public void FingerprintДетерминированИРазличенДляДругогоКонтента()
     {
-        var same1 = ClaudeSession.TurnAgentsFingerprint(AgentsJson);
-        var same2 = ClaudeSession.TurnAgentsFingerprint(AgentsJson);
+        var same1 = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson).Fingerprint;
+        var same2 = ClaudeSession.BuildTurnAgentsFileIdentity(AgentsJson).Fingerprint;
         same1.Should().Be(same2, "fingerprint детерминирован на том же содержимом");
 
-        var other = ClaudeSession.TurnAgentsFingerprint(OtherAgentsJson);
+        var other = ClaudeSession.BuildTurnAgentsFileIdentity(OtherAgentsJson).Fingerprint;
         other.Should().NotBe(same1, "смена состава сабагентов меняет fingerprint → новый процесс");
     }
 }

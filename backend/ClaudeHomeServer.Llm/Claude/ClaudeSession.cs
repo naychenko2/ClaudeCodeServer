@@ -3343,11 +3343,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 // удаляла тот же файл, на который стартует новый → exit=1 → фолбэк.
                 // --agents исключён из BuildLaunchSignature (как --mcp-config); смена состава
                 // сабагентов-персон ловится fingerprint'ом содержимого, а не путём.
-                var path = Path.Combine(_launcher.HostTempDir, BuildTurnAgentsFileName());
+                // Единая точка сборки пары «имя + отпечаток» (BuildTurnAgentsFileIdentity):
+                // имя — в args (путь), отпечаток — в BuildLaunchSignature (вместо пути).
+                var (fileName, fingerprint) = BuildTurnAgentsFileIdentity(json);
+                var path = Path.Combine(_launcher.HostTempDir, fileName);
                 File.WriteAllText(path, json);
                 turnAgentsPath = path;
                 args.AddRange(["--agents", _launcher.Paths.ToRuntime(path)]);
-                turnAgentsFingerprint = TurnAgentsFingerprint(json);
+                turnAgentsFingerprint = fingerprint;
             }
             catch (Exception ex)
             {
@@ -5244,6 +5247,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // его финализация удаляла тот же файл, на который стартует новый → exit=1 → фолбэк.
     // internal для поведенческого теста (InternalsVisibleTo).
     internal static string BuildTurnAgentsFileName() => $"claude-agents-{Guid.NewGuid():N}.json";
+
+    // Имя per-run файла --agents + отпечаток его содержимого: ЕДИНАЯ точка сборки пары,
+    // которую BuildArgs кладёт в args (имя → путь) и BuildLaunchSignature (отпечаток, не
+    // путь). Имя уникален на каждую сборку (Guid, как --mcp-config) — финализация одного
+    // прогона не трогает файл другого; отпечаток детерминирован по контенту — смена состава
+    // сабагентов-персон → новый отпечаток → новый процесс. internal для поведенческого теста.
+    internal static (string FileName, string Fingerprint) BuildTurnAgentsFileIdentity(string agentsJson) =>
+        (BuildTurnAgentsFileName(), TurnAgentsFingerprint(agentsJson));
 
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
     // хода → его можно отдать живому процессу в stdin; отличие → новый процесс.

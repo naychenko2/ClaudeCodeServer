@@ -1,67 +1,91 @@
+using System.IO;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Имя per-run файла --agents (дефект ed581448): {id сессии}-{хэш содержимого}.
-// До фикса имя было только {хэш} — детерминировано по (владелец + персоны), так что ВСЕ
-// чаты одной персоны делили ОДИН файл, и выход одного чата (File.Delete при финализации)
-// удалял файл, которым пользуется соседний живой/стартующий чат той же персоны: новый чат
-// падал с «--agents file not found» (exit=1) и уходил в фолбэк на чужую подписку.
-// Фикс добавляет id сессии в имя: файл перестал быть общим, а путь в пределах сессии
-// стабилен (сигнатура запуска не дрожит) и меняется при правке персоны (штатный перезапуск).
+// Поведенческий тест гонки за файл --agents (дефект ed581448, доработка по ревью Глеба).
+//
+// Суть дефекта: файл --agents пишется в BuildArgs, а при несовпадении сигнатуры запуска
+// убивается прежний прогон этой же сессии, и ЕГО финализация (File.Delete) удаляла тот же
+// файл, на который стартует новый процесс → exit=1 → Unreachable → фолбэк.
+//
+// Фикс — как у --mcp-config: путь уникален на каждую сборку (Guid), поэтому финализация
+// одного прогона не трогает файл другого. --agents исключён из BuildLaunchSignature, смена
+// состава сабагентов-персон ловится fingerprint'ом содержимого, а не путём.
+//
+// Мутация «общий/стабильный путь» (оба вызова BuildTurnAgentsFileName дают одно имя) обязана
+// покрасить тесты ниже: файл второй сборки удалится финализацией первой.
 public class ClaudeSessionTurnAgentsFileNameTests
 {
-    // Один и тот же контент сабагентов (детерминирован по персонам)
-    private const string SameAgentsJson = """{"agents":[{"name":"denis","prompt":"p1"}]}""";
+    // Контент сабагентов (детерминирован по персонам)
+    private const string AgentsJson = """{"agents":[{"name":"denis","prompt":"p1"}]}""";
     // Другой контент (правка персоны)
     private const string OtherAgentsJson = """{"agents":[{"name":"kira","prompt":"p2"}]}""";
 
-    // Два чата одной персоны: тот же контент, разные id сессий → РАЗНЫЕ имена файла.
-    // Выход первого (удаление СВОЕГО файла) больше не трогает файл второго.
+    // Гонка финализации: два хода одной сессии, одна сборка за другой. Финализация убитого
+    // прогона первого хода удаляет СВОЙ файл; файл второго хода (на который стартует новый
+    // процесс) должен существовать в момент Start.
     [Fact]
-    public void ДваЧатаОднойПерсоны_РазныеИменаФайла()
+    public void ФинализацияПервогоХода_НеУдаляетФайлВторого()
     {
-        var a = ClaudeSession.BuildTurnAgentsFileName("session-a", SameAgentsJson);
-        var b = ClaudeSession.BuildTurnAgentsFileName("session-b", SameAgentsJson);
-        a.Should().NotBe(b, "файл --agents перестал быть общим между чатами одной персоны");
-        a.Should().Contain("session-a");
-        b.Should().Contain("session-b");
+        var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // сборка хода 1
+            var p1 = Path.Combine(dir, ClaudeSession.BuildTurnAgentsFileName());
+            File.WriteAllText(p1, AgentsJson);
+
+            // сборка хода 2 (та же сессия, тот же контент)
+            var p2 = Path.Combine(dir, ClaudeSession.BuildTurnAgentsFileName());
+            File.WriteAllText(p2, AgentsJson);
+
+            // финализация убитого прогона хода 1 удаляет свой файл
+            File.Delete(p1);
+
+            File.Exists(p2).Should().BeTrue(
+                "финализация хода 1 не должна тронуть файл хода 2, на который стартует новый процесс");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
     }
 
-    // Путь стабилен между ходами одной сессии: та же сессия, тот же контент → то же имя
-    // (сигнатура запуска не дрожит, живой процесс доживания переиспользуется).
+    // Две сборки (или две сессии) с одним содержимым → РАЗНЫЕ пути в args. Общий путь —
+    // мутация, краснеющая здесь: оба вызова дали бы одно имя.
     [Fact]
-    public void ПутьСтабиленМеждуХодамиОднойСессии()
+    public void ДвеСборкиСОднимКонтентом_РазныеПути()
     {
-        var first = ClaudeSession.BuildTurnAgentsFileName("session-a", SameAgentsJson);
-        var second = ClaudeSession.BuildTurnAgentsFileName("session-a", SameAgentsJson);
-        first.Should().Be(second);
+        var a = ClaudeSession.BuildTurnAgentsFileName();
+        var b = ClaudeSession.BuildTurnAgentsFileName();
+        a.Should().NotBe(b, "путь --agents уникален на каждую сборку, как у --mcp-config");
     }
 
-    // Смена персоны меняет путь: та же сессия, другой контент → другой хэш → другое имя
-    // (штатный перезапуск процесса на новый файл).
+    // Формат имени: claude-agents-{32 hex}.json (Guid в N-формате)
     [Fact]
-    public void СменаПерсоны_МеняетИмяФайла()
+    public void ИмяНесётФорматGuid()
     {
-        var before = ClaudeSession.BuildTurnAgentsFileName("session-a", SameAgentsJson);
-        var after = ClaudeSession.BuildTurnAgentsFileName("session-a", OtherAgentsJson);
-        before.Should().NotBe(after);
-    }
-
-    // Формат имени: claude-agents-{id}-{16 hex}.json; хэш детерминирован (стабилен на том же входе).
-    [Fact]
-    public void ИмяНесётФорматИДетерминированныйХэш()
-    {
-        const string prefix = "claude-agents-abc-";
-        var name = ClaudeSession.BuildTurnAgentsFileName("abc", SameAgentsJson);
-        name.Should().StartWith(prefix);
+        var name = ClaudeSession.BuildTurnAgentsFileName();
+        name.Should().StartWith("claude-agents-");
         name.Should().EndWith(".json");
-        var hashPart = name[prefix.Length..^5];
-        hashPart.Should().HaveLength(16);
-        hashPart.Should().MatchRegex("^[0-9a-f]{16}$");
-        // Детерминированность: повторный вызов тем же входом — тот же хэш
-        hashPart.Should().Be(ClaudeSession.BuildTurnAgentsFileName("abc", SameAgentsJson)[prefix.Length..^5]);
+        var token = name["claude-agents-".Length..^5];
+        token.Should().HaveLength(32);
+        token.Should().MatchRegex("^[0-9a-f]{32}$");
+    }
+
+    // Fingerprint содержимого: детерминирован, различен для разного контента (смена состава
+    // сабагентов-персон → новый fingerprint → новый процесс; правка персоны — отдельно).
+    [Fact]
+    public void FingerprintДетерминированИРазличенДляДругогоКонтента()
+    {
+        var same1 = ClaudeSession.TurnAgentsFingerprint(AgentsJson);
+        var same2 = ClaudeSession.TurnAgentsFingerprint(AgentsJson);
+        same1.Should().Be(same2, "fingerprint детерминирован на том же содержимом");
+
+        var other = ClaudeSession.TurnAgentsFingerprint(OtherAgentsJson);
+        other.Should().NotBe(same1, "смена состава сабагентов меняет fingerprint → новый процесс");
     }
 }

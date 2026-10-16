@@ -3327,6 +3327,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Локальный проект (ADR-016): файл доезжает на устройство в составе spawn
         // (RemoteProcessRunner.FileArgFlags), как --mcp-config.
         string? turnAgentsPath = null;
+        string turnAgentsFingerprint = "";
         if (personaAgents is { Agents.Count: > 0 })
         {
             var defs = _lastBareModeApplied
@@ -3335,11 +3336,18 @@ public class ClaudeSession : ILlmSessionAdapter
             try
             {
                 var json = ClaudeAgentsJson.Serialize(defs);
-                var path = Path.Combine(_launcher.HostTempDir, BuildTurnAgentsFileName(Info.Id, json));
-                if (!File.Exists(path) || File.ReadAllText(path) != json)
-                    File.WriteAllText(path, json);
+                // Guid на каждую сборку — как --mcp-config: путь НЕ стабилен между ходами,
+                // поэтому финализация убитого прогона (File.Delete) не может удалить файл, на
+                // который стартует новый. Стабильный путь {id}-{хэш} (пред. фикс) порождал
+                // гонку: несовпадение сигнатуры убивало прежний прогон, его финализация
+                // удаляла тот же файл, на который стартует новый → exit=1 → фолбэк.
+                // --agents исключён из BuildLaunchSignature (как --mcp-config); смена состава
+                // сабагентов-персон ловится fingerprint'ом содержимого, а не путём.
+                var path = Path.Combine(_launcher.HostTempDir, BuildTurnAgentsFileName());
+                File.WriteAllText(path, json);
                 turnAgentsPath = path;
                 args.AddRange(["--agents", _launcher.Paths.ToRuntime(path)]);
+                turnAgentsFingerprint = TurnAgentsFingerprint(json);
             }
             catch (Exception ex)
             {
@@ -4258,7 +4266,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // учтены в его базе отдельно). Картинки не считаем: у local-qwen их нет.
         _lastTurnInputChars = (combinedPrompt?.Length ?? 0) + turnTextForCli.Length;
 
-        var signature = BuildLaunchSignature(args, mcpServerKeys, envOverrides, personaLayerPrompt);
+        var signature = BuildLaunchSignature(args, mcpServerKeys, turnAgentsFingerprint, envOverrides, personaLayerPrompt);
         LastLaunchSignature = signature;
 
         // Same-process ход: прогон дожил с прошлого хода (фоновые агенты ещё работают),
@@ -5219,19 +5227,23 @@ public class ClaudeSession : ILlmSessionAdapter
         return result;
     }
 
-    // Имя per-run файла --agents: {id сессии}-{хэш содержимого}. Id сессии убирает
-    // разделяемость файла между чатами одной персоны (дефект ed581448: все чаты персоны
-    // делили один файл, и выход одного удалял файл, которым пользуется соседний чат).
-    // Хэш содержимого держит путь стабильным в пределах сессии (сигнатура запуска не
-    // дрожит) и меняет его при правке персоны (штатный перезапуск процесса). Чистая
+    // Отпечаток содержимого per-run файла --agents: входит в BuildLaunchSignature ВМЕСТО
+    // пути (путь теперь уникален на каждую сборку — Guid, как у --mcp-config, и не должен
+    // мерцать в сигнатуре). Смена состава сабагентов-персон → новый отпечаток → новый
+    // процесс; правка персоны (personaLayerPrompt) перезапускает процесс отдельно. Чистая
     // функция для теста.
-    internal static string BuildTurnAgentsFileName(string sessionId, string agentsJson)
-    {
-        var hash = Convert.ToHexString(
+    internal static string TurnAgentsFingerprint(string agentsJson) =>
+        Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(agentsJson)))
             [..16].ToLowerInvariant();
-        return $"claude-agents-{sessionId}-{hash}.json";
-    }
+
+    // Имя per-run файла --agents: claude-agents-{Guid}.json. Guid на каждую сборку — как у
+    // --mcp-config: путь НЕ стабилен между ходами, поэтому финализация убитого прогона
+    // (File.Delete) не может удалить файл, на который стартует новый. Стабильный путь
+    // {id}-{хэш} (пред. фикс) порождал гонку: несовпадение сигнатуры убивало прежний прогон,
+    // его финализация удаляла тот же файл, на который стартует новый → exit=1 → фолбэк.
+    // internal для поведенческого теста (InternalsVisibleTo).
+    internal static string BuildTurnAgentsFileName() => $"claude-agents-{Guid.NewGuid():N}.json";
 
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
     // хода → его можно отдать живому процессу в stdin; отличие → новый процесс.
@@ -5493,16 +5505,22 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     private static string BuildLaunchSignature(
-        IReadOnlyList<string> args, string mcpServerKeys,
+        IReadOnlyList<string> args, string mcpServerKeys, string turnAgentsFingerprint,
         IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
     {
         var sb = new System.Text.StringBuilder();
         for (var i = 0; i < args.Count; i++)
         {
-            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt") { i++; continue; }
+            // --agents исключён, как --mcp-config: путь уникален на каждую сборку (Guid) и
+            // не должен мерцать в сигнатуре; смена состава сабагентов ловится fingerprint'ом.
+            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt" or "--agents") { i++; continue; }
             sb.Append(args[i]).Append('\u0001');
         }
         sb.Append("mcp=").Append(mcpServerKeys).Append('\u0001');
+        // Отпечаток содержимого файла --agents (вместо пути): смена состава сабагентов-персон
+        // → новый отпечаток → новый процесс; правка персоны (personaLayerPrompt) — отдельно.
+        if (!string.IsNullOrEmpty(turnAgentsFingerprint))
+            sb.Append("agents=").Append(turnAgentsFingerprint).Append('\u0001');
         foreach (var (k, v) in envOverrides) sb.Append(k).Append('=').Append(v).Append('\u0001');
         if (!string.IsNullOrEmpty(personaLayerPrompt))
             sb.Append("persona=").Append(personaLayerPrompt);

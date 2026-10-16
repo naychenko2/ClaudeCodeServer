@@ -16,6 +16,7 @@ import type { FormatModel } from '../../lib/chatContext/formatTypes';
 import { Badge, Button, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { RowChip, ellipsis, FlatChips, ChipHeight, ShrinkChips, CHIP_H } from './RowChip';
+import { RowNotice } from './RowNotice';
 import { FormatBody } from '../generation/format/FormatBody';
 import { FormatChip } from '../generation/format/FormatChip';
 import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
@@ -76,6 +77,9 @@ export interface ContextRowViewProps {
   onClear: () => void;
   // Витрина: принудительная ступень вместо лестницы
   pick?: LadderPick;
+  // Полоса-подсказка над строкой (ContinueHint): рендерится сразу после UndoNotice, обе
+  // полосы стоят одна над другой. undefined — полосы нет
+  notice?: ReactNode;
 }
 
 export const rowFacts = (p: Pick<ContextRowViewProps, 'git' | 'primary' | 'refs' | 'exec' | 'isMobile' | 'format'>): LadderFacts => ({
@@ -397,20 +401,18 @@ function UndoNotice({ offer, onUndo }: { offer: RowOffer; onUndo: () => void }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offer.until]);
   return (
-    <div data-context-notice="" role="status" style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm, height: 28, margin: `0 0 ${SP.xs}px`, padding: `0 ${SP.sm}px`,
-      border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgPanel, fontSize: FS.sm, color: C.textSecondary,
-    }}>
-      <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      <span style={{ ...ellipsis, flex: 1 }}>Выбор снят — поле снова «Чат»</span>
-      {offer.until && <span style={{ color: C.textMuted, flexShrink: 0 }}>{left} с</span>}
-      <button type="button" data-undo="" onClick={onUndo} style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs, border: 'none', background: 'transparent', cursor: 'pointer',
-        color: C.accent, fontSize: FS.sm, fontWeight: 600, fontFamily: 'inherit', padding: 0, flexShrink: 0,
-      }}>
-        <RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />Вернуть
-      </button>
-    </div>
+    <RowNotice
+      dataAttr="context-notice"
+      icon={<Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      text={<>Выбор снят — поле снова «Чат»</>}
+      middle={offer.until ? <span style={{ color: C.textMuted, flexShrink: 0 }}>{left} с</span> : null}
+      action={{
+        label: 'Вернуть',
+        onClick: onUndo,
+        data: 'undo',
+        iconBefore: <RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      }}
+    />
   );
 }
 
@@ -562,10 +564,14 @@ export function ContextRowView(props: ContextRowViewProps) {
   }, [sig, drop, isMobile, props.pick]);
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
-    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться
-    return props.offer
-      ? <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}><UndoNotice offer={props.offer} onUndo={props.onUndo} /></div>
-      : null;
+    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» и подсказка обязаны остаться
+    if (!props.offer && !props.notice) return null;
+    return (
+      <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}>
+        {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
+        {props.notice}
+      </div>
+    );
   }
   const f = pick.form;
   const close = () => setMenu(null);
@@ -650,6 +656,7 @@ export function ContextRowView(props: ContextRowViewProps) {
     // composerLip) ложится на этот зазор, а не на низ ленты
     <div data-context-row-host="" style={{ position: 'relative', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
+      {props.notice}
       {subNote && subNote !== dismissedNote && !menu && <FormatNote text={subNote} onClose={() => setDismissedNote(subNote)} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <FlatChips.Provider value>

@@ -49,6 +49,10 @@ describe('порог подсказки', () => {
   it('формат «N K»', () => {
     expect(formatContextK(312_400)).toBe('312K');
   });
+  it('от 1M — в миллионах «N,NM»', () => {
+    expect(formatContextK(1_200_000)).toBe('1,2M');
+    expect(formatContextK(1_000_000)).toBe('1M');
+  });
 });
 
 describe('связи продолжения', () => {

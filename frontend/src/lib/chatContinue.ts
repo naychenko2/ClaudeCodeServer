@@ -43,7 +43,13 @@ export function shouldShowContinueHint(opts: {
   return true;
 }
 
+// 312K / 1,2M: от 1M — в миллионах с одной цифрой после запятой, чтобы длинное число
+// не разъезжало тонкую полосу «Продолжить» (спецификация continue-hint-variants.md)
 export function formatContextK(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const m = Math.round((tokens / 1_000_000) * 10) / 10;
+    return `${m.toString().replace('.', ',')}M`;
+  }
   return `${Math.round(tokens / 1000)}K`;
 }
 

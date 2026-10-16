@@ -3812,6 +3812,10 @@ function ContinueChatKit() {
       {hidden
         ? <Button size="sm" variant="secondary" onClick={() => setHidden(false)}>Показать подсказку снова</Button>
         : <ContinueHint tokens={312_000} onOpen={() => setDialog('ok')} onSnooze={() => setHidden(true)} />}
+      {/* Мобильный вариант: короче («В новый чат»), полоса 32 px */}
+      <div style={{ maxWidth: 390 }}>
+        <ContinueHint tokens={312_000} isMobile onOpen={() => setDialog('ok')} onSnooze={() => {}} />
+      </div>
       <ContinuationBanner kind="from" name="Оркестратор — спринт 12" onOpen={() => {}} />
       <ContinuationBanner kind="into" onOpen={() => {}} />
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>

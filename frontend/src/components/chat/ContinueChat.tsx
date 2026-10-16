@@ -1,10 +1,9 @@
 import { useCallback, useState } from 'react';
-import { ArrowLeft, ArrowRight, Gauge } from 'lucide-react';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { C, FONT, FS, MODAL_W, R, SP } from '../../lib/design';
 import { Field, Modal, ModalActions, ProgressBar, TextArea } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { formatContextK, submitContinue } from '../../lib/chatContinue';
-import { RowNotice } from './RowNotice';
+import { submitContinue } from '../../lib/chatContinue';
+import { LipEar } from './LipEar';
 
 // «Продолжить в новом чате» — три общих куска UI: диалог подтверждения, подсказка при
 // большом контексте и плашки связи старого/нового чата. Логика запроса — в ChatPanel,
@@ -67,32 +66,16 @@ export function ContinueChatDialog({ onConfirm, onClose }: DialogProps) {
   );
 }
 
-// Ненавязчивая полоса над строкой контекста: контекст вырос выше порога.
-// Вариант C (спецификация docs/design/mockups/continue-hint-variants.md): тонкая полоса
-// RowNotice, а не плашка Notice — строка контекста снова прилегает к полю ввода.
-// isMobile — тексты короче («В новый чат» вместо «Продолжить»), полоса 32 px.
+// Ненавязчивая подсказка над строкой контекста: контекст вырос выше порога.
+// Вариант 2 · Ушко (v2.2, спецификация docs/design/mockups/continue-hint-v2.md): закладка
+// LipEar у правого края верхней кромки — язык композера, а не отдельная полоса. Основание
+// (губа или поле ввода) задаёт контекст LipEarBaseContext из ContextRowView; isMobile — тексты
+// короче («В новый чат» вместо «Продолжить») и высота 31 px.
 export function ContinueHint({ tokens, onOpen, onSnooze, isMobile }: {
   tokens: number; onOpen: () => void; onSnooze: () => void; isMobile?: boolean;
 }) {
   return (
-    <RowNotice
-      isMobile={isMobile}
-      testId="continue-hint"
-      icon={<Gauge size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-      text={<>Контекст <b style={{ color: C.textHeading, fontWeight: 600 }}>{formatContextK(tokens)}</b>{isMobile ? '' : ' · дешевле продолжить в новом чате'}</>}
-      action={{
-        label: isMobile ? 'В новый чат' : 'Продолжить',
-        onClick: onOpen,
-        testId: 'continue-hint-open',
-        iconAfter: <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-      }}
-      snooze={{
-        onClick: onSnooze,
-        title: 'Не сейчас — напомню, когда вырастет ещё на 100K',
-        ariaLabel: 'Не сейчас',
-        testId: 'continue-hint-snooze',
-      }}
-    />
+    <LipEar tokens={tokens} onOpen={onOpen} onSnooze={onSnooze} isMobile={isMobile} />
   );
 }
 

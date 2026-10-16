@@ -417,7 +417,7 @@ public class VoiceLocalTurnTests : IDisposable
 
         var method = typeof(SessionManager).GetMethod("BuildCliTurnText",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = (string)method.Invoke(_sut, [entry, "теперь по делу"])!;
+        var result = (string)method.Invoke(_sut, [entry, "теперь по делу", false, false, null])!;
         result.Should().Contain("[Контекст: до этого пользователь разговаривал голосом",
             "CLI не знает реплик разговора — им нужна сводка");
         result.Should().Contain("Говорю с локали.", "в сводке хвост истории разговора");

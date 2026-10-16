@@ -61,6 +61,7 @@ public static partial class MouseControlTool
     /// Screen Y = screenOriginY + imageY × scaleY.
     /// drag: press at (x,y), move, release at (toX,toY); useful to pan canvases (holding Space via keyboard is a separate step).
     /// scroll: positive amount scrolls the content toward the direction; left/right use the horizontal wheel.
+    /// For click/drag by coordinates the cursor must already be over an allowed window; move it there first.
     /// </summary>
     /// <param name="action">The mouse action: move, click, double_click, right_click, middle_click, drag, scroll, or get_position.</param>
     /// <param name="x">X coordinate in screen pixels (required for move, the click actions, drag start and scroll; ignored by get_position).</param>

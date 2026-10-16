@@ -324,6 +324,59 @@ public class HandsBridgeSourceGuardTests
         var expected = checkedMethods.Concat(excludedMethods).ToHashSet(StringComparer.Ordinal);
         var actual = allMethodsWithSendInput.ToHashSet(StringComparer.Ordinal);
         Assert.Equal(expected, actual);
+
+        // M-E (MAJOR-5a): ветка else (checkCurrentPosition: false) в MoveCoreAsync обязана
+        // проверять ЦЕЛЬ (TargetPointAcceptsInput) перед SendInput — иначе чистый move в
+        // запрещённое окно проходил бы.
+        var moveCore = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(m => m.Identifier.Text == "MoveCoreAsync");
+        var moveBody = moveCore.Body!;
+        var ifCheckCurrent = moveBody.DescendantNodes().OfType<IfStatementSyntax>()
+            .Single(i => i.Condition.ToString().Contains("checkCurrentPosition"));
+        var elseClause = ifCheckCurrent.Else;
+        Assert.True(elseClause is not null, "MoveCoreAsync: нет ветки else (checkCurrentPosition: false)");
+
+        var targetChecks = elseClause!.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(IsTargetPointCheckCall)
+            .ToList();
+        Assert.True(targetChecks.Count > 0, "MoveCoreAsync: в else нет TargetPointAcceptsInput");
+
+        var moveSendInputs = moveBody.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(IsSendInputCall)
+            .ToList();
+        var firstMoveSendInput = moveSendInputs.MinBy(inv => inv.SpanStart)!;
+        var firstTargetCheck = targetChecks.MinBy(inv => inv.SpanStart)!;
+        Assert.True(firstTargetCheck.SpanStart < firstMoveSendInput.SpanStart,
+            $"MoveCoreAsync: TargetPointAcceptsInput (span {firstTargetCheck.SpanStart}) после SendInput (span {firstMoveSendInput.SpanStart})");
+
+        // M-E (MAJOR-5b): MoveCoreAsync с checkCurrentPosition: false вызывают ТОЛЬКО два
+        // чистых MoveAsync; все остальные (кнопки, колесо, stroke) — true.
+        var moveCoreCalls = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(c => c.Expression is IdentifierNameSyntax { Identifier.Text: "MoveCoreAsync" })
+            .ToList();
+        Assert.True(moveCoreCalls.Count > 0, "нет вызовов MoveCoreAsync");
+
+        foreach (var call in moveCoreCalls)
+        {
+            var checkArg = call.ArgumentList.Arguments
+                .FirstOrDefault(a => a.NameColon?.Name?.Identifier.Text == "checkCurrentPosition");
+            Assert.True(checkArg is not null, $"MoveCoreAsync: нет именованного аргумента checkCurrentPosition в {call}");
+
+            var value = checkArg!.Expression;
+            var callerMethod = call.Ancestors().OfType<MethodDeclarationSyntax>().First();
+            var isPureMove = callerMethod.Identifier.Text == "MoveAsync";
+
+            if (isPureMove)
+            {
+                Assert.True(value is LiteralExpressionSyntax { Token.Text: "false" },
+                    $"MoveAsync: checkCurrentPosition должен быть false (чистый move), но {value}");
+            }
+            else
+            {
+                Assert.True(value is LiteralExpressionSyntax { Token.Text: "true" },
+                    $"{callerMethod.Identifier.Text}: checkCurrentPosition должен быть true, но {value}");
+            }
+        }
     }
 
     /// <summary>
@@ -946,6 +999,10 @@ public class HandsBridgeSourceGuardTests
     /// <summary>Вызов <c>CursorPointAcceptsInput(...)</c> — метод того же класса, без квалификатора.</summary>
     private static bool IsPointCheckCall(InvocationExpressionSyntax inv) =>
         inv.Expression is IdentifierNameSyntax { Identifier.Text: "CursorPointAcceptsInput" };
+
+    /// <summary>Вызов <c>TargetPointAcceptsInput(...)</c> — проверка ЦЕЛИ (x, y), без квалификатора.</summary>
+    private static bool IsTargetPointCheckCall(InvocationExpressionSyntax inv) =>
+        inv.Expression is IdentifierNameSyntax { Identifier.Text: "TargetPointAcceptsInput" };
 
     /// <summary>
     /// Вызов члена <c>MouseInputService</c>: <c>WindowsToolsBase.MouseInputService.XxxAsync(...)</c>.

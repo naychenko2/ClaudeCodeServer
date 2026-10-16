@@ -3316,14 +3316,9 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
         // Per-run файл --agents (CLI ≥ 2.1.281 принимает путь к JSON при -p): определения
-        // сабагентов-персон. Имя файла — {id сессии}-{хэш содержимого}: содержимое
-        // детерминировано по (владелец + персоны + их настройки), так что БЕЗ id все чаты
-        // одной персоны делили один файл, и выход одного чата удалял файл, которым пользуется
-        // соседний чат той же персоны (гонка, дефект ed581448). Id сессии (Info.Id) стабилен
-        // между ходами, поэтому путь входит в сигнатуру запуска стабильно: правка персоны →
-        // новый хэш → новый путь → штатный перезапуск процесса. omitClaudeMd — по факту
-        // BareMode ЭТОГО прогона (блок выше): сессия, где CLAUDE.md проекта не грузится
-        // целиком, не должна тянуть его и в сабагента.
+        // сабагентов-персон. Путь, args и вклад в сигнатуру собирает PrepareTurnAgents (там же
+        // разбор гонки ed581448). omitClaudeMd — по факту BareMode ЭТОГО прогона (блок выше):
+        // сессия, где CLAUDE.md проекта не грузится целиком, не должна тянуть его и в сабагента.
         // Локальный проект (ADR-016): файл доезжает на устройство в составе spawn
         // (RemoteProcessRunner.FileArgFlags), как --mcp-config.
         string? turnAgentsPath = null;
@@ -3336,21 +3331,8 @@ public class ClaudeSession : ILlmSessionAdapter
             try
             {
                 var json = ClaudeAgentsJson.Serialize(defs);
-                // Guid на каждую сборку — как --mcp-config: путь НЕ стабилен между ходами,
-                // поэтому финализация убитого прогона (File.Delete) не может удалить файл, на
-                // который стартует новый. Стабильный путь {id}-{хэш} (пред. фикс) порождал
-                // гонку: несовпадение сигнатуры убивало прежний прогон, его финализация
-                // удаляла тот же файл, на который стартует новый → exit=1 → фолбэк.
-                // --agents исключён из BuildLaunchSignature (как --mcp-config); смена состава
-                // сабагентов-персон ловится fingerprint'ом содержимого, а не путём.
-                // Единая точка сборки пары «имя + отпечаток» (BuildTurnAgentsFileIdentity):
-                // имя — в args (путь), отпечаток — в BuildLaunchSignature (вместо пути).
-                var (fileName, fingerprint) = BuildTurnAgentsFileIdentity(json);
-                var path = Path.Combine(_launcher.HostTempDir, fileName);
-                File.WriteAllText(path, json);
-                turnAgentsPath = path;
-                args.AddRange(["--agents", _launcher.Paths.ToRuntime(path)]);
-                turnAgentsFingerprint = fingerprint;
+                (turnAgentsPath, turnAgentsFingerprint) =
+                    PrepareTurnAgents(json, _launcher.HostTempDir, _launcher.Paths.ToRuntime, args);
             }
             catch (Exception ex)
             {
@@ -5248,13 +5230,21 @@ public class ClaudeSession : ILlmSessionAdapter
     // internal для поведенческого теста (InternalsVisibleTo).
     internal static string BuildTurnAgentsFileName() => $"claude-agents-{Guid.NewGuid():N}.json";
 
-    // Имя per-run файла --agents + отпечаток его содержимого: ЕДИНАЯ точка сборки пары,
-    // которую BuildArgs кладёт в args (имя → путь) и BuildLaunchSignature (отпечаток, не
-    // путь). Имя уникален на каждую сборку (Guid, как --mcp-config) — финализация одного
-    // прогона не трогает файл другого; отпечаток детерминирован по контенту — смена состава
-    // сабагентов-персон → новый отпечаток → новый процесс. internal для поведенческого теста.
-    internal static (string FileName, string Fingerprint) BuildTurnAgentsFileIdentity(string agentsJson) =>
-        (BuildTurnAgentsFileName(), TurnAgentsFingerprint(agentsJson));
+    // Вся проводка per-run файла --agents, которой пользуется BuildArgs (своего про --agents
+    // он больше ничего не делает): пишет файл в hostTempDir, дописывает в args пару
+    // «--agents <путь среды>» и возвращает хостовый путь (его удаляет финализация прогона)
+    // и вклад в BuildLaunchSignature — отпечаток содержимого, а не путь. Путь уникален на
+    // каждую сборку (Guid, как --mcp-config): стабильный путь давал гонку ed581448 —
+    // несовпадение сигнатуры убивало прежний прогон, его финализация удаляла тот же файл,
+    // на который стартует новый → exit=1 → фолбэк. internal для поведенческого теста.
+    internal static (string Path, string Fingerprint) PrepareTurnAgents(
+        string agentsJson, string hostTempDir, Func<string, string> toRuntime, List<string> args)
+    {
+        var path = Path.Combine(hostTempDir, BuildTurnAgentsFileName());
+        File.WriteAllText(path, agentsJson);
+        args.AddRange(["--agents", toRuntime(path)]);
+        return (path, TurnAgentsFingerprint(agentsJson));
+    }
 
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
     // хода → его можно отдать живому процессу в stdin; отличие → новый процесс.
@@ -5515,7 +5505,8 @@ public class ClaudeSession : ILlmSessionAdapter
             || (v.Major == major && v.Minor == minor && v.Build >= patch);
     }
 
-    private static string BuildLaunchSignature(
+    // internal для поведенческого теста --agents (зовёт её на реальных args PrepareTurnAgents).
+    internal static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys, string turnAgentsFingerprint,
         IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
     {

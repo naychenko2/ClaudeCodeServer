@@ -4,12 +4,15 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  avgIssuedOf, avgPerStreamOf, avgThroughputOf, breakRuns, buildIntervals,
-  buildIssuedSegments, buildPerStreamSegments, buildThroughputSegments, cacheHitAvg,
+  agentsChartAriaLabel, avgAgentsOf, avgIssuedOf, avgPerStreamOf, avgStepMsOf, avgTokensPerStepOf,
+  avgThroughputOf, breakRuns, buildAgentsSteps, buildIntervals,
+  buildIssuedSegments, buildPerStreamSegments, buildStepMsSegments, buildTokensPerStepSegments,
+  buildThroughputSegments, cacheHitAvg,
   chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
-  kvChartAriaLabel, maxSeriesOf, maxThroughputOf, niceAxisMax, peakPerStreamOf,
+  kvChartAriaLabel, maxAgentsOf, maxSeriesOf, maxStepMsOf, maxTokensPerStepOf, maxThroughputOf,
+  niceAxisMax, peakPerStreamOf,
   peakThroughputOf, perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
-  tpChartAriaLabel, xForTime, yForThroughput,
+  stepChartAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type ThroughputSample,
 } from './ThroughputChart';
 
@@ -226,6 +229,7 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     preemptions: p.preemptions ?? null,
     genTokens: p.genTokens ?? null,
     itlSeconds: p.itlSeconds ?? null,
+    itlCount: p.itlCount ?? null,
   };
 }
 
@@ -383,19 +387,23 @@ describe('tpChartAriaLabel: SVG «Скорость генерации, ток/с
     expect(label).toContain('412 ток/с');
     expect(label).not.toContain('интервал');
   });
-  it('hover: интервал с временем и значениями обеих серий', () => {
-    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250, 120);
+  it('hover: интервал со скоростью и «шагом модели»', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250, 34, 3.9, 1.5);
     expect(label).toContain('интервал 14:32');
     expect(label).toContain('скорость генерации 250 ток/с');
-    expect(label).toContain('выдано стендом, с паузами 120 ток/с');
+    expect(label).toContain('шаг 34 мс');
+    expect(label).toContain('3.9 ток/шаг');
+    expect(label).toContain('1.5 агентов');
   });
-  it('hover: генерации не было, но стенд отвечал → «генерации не было»', () => {
-    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', null, 0);
+  it('hover: генерации не было, но шаг модели есть → «генерации не было» + серия шага', () => {
+    const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', null, null, 2.1, 0.8);
     expect(label).toContain('генерации не было');
+    expect(label).toContain('2.1 ток/шаг');
+    expect(label).toContain('0.8 агентов');
     expect(label).not.toContain('движок не отвечал');
   });
-  it('hover на разрыве (обе серии null) → «движок не отвечал»', () => {
-    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null, null);
+  it('hover на разрыве (все серии null) → «движок не отвечал»', () => {
+    const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null, null, null, null);
     expect(label).toContain('интервал 14:32');
     expect(label).toContain('движок не отвечал');
     const after = label.split('интервал')[1] ?? '';
@@ -596,9 +604,10 @@ describe('buildIntervals: кэш — несение при «не спрашив
 // «max одной серии → max обеих» — на ось.
 
 // Минимальный Interval для тестов построения/разрывов линий.
-function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput: number | null = null): Interval {
+function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput: number | null = null,
+  stepMs: number | null = null, tokensPerStep: number | null = null, agents: number | null = null): Interval {
   return { tStart, tEnd, throughput, perStream, kvUsage: null, prefix: null, ram: null,
-    preemptions: null, hasData: { prefix: false, ram: false } };
+    preemptions: null, hasData: { prefix: false, ram: false }, stepMs, tokensPerStep, agents };
 }
 
 describe('buildIntervals: скорость на агента из СУММ приращений', () => {
@@ -760,5 +769,179 @@ describe('buildIssuedSegments: линия «выдано стендом» рвё
     expect(segs).toHaveLength(2);
     expect(segs[0]).toHaveLength(1);
     expect(segs[1]).toHaveLength(1);
+  });
+});
+
+// === «Шаг модели»: время шага, токенов за шаг, агентов в генерации (ADR-029) ===
+// Скорость генерации, разложенная на множители: скорость на поток = токенов за шаг ÷
+// время шага, × сколько потоков генерировало. Все три — из тех же приращений;
+// null = разрыв (молчание/рестарт), ΣitlCount = 0 — деление на ноль.
+
+describe('buildIntervals: «шаг модели» из СУММ приращений', () => {
+  const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
+
+  it('stepMs = ΣitlSeconds/ΣitlCount×1000, tokensPerStep = ΣgenTokens/ΣitlCount', () => {
+    const samples = [
+      sample({ t: 5_000, genTokens: 100, itlSeconds: 10, itlCount: 20 }),
+      sample({ t: 10_000, genTokens: 200, itlSeconds: 20, itlCount: 40 }),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    // (10 + 20) / (20 + 40) × 1000 = 500 мс/шаг; (100 + 200) / (20 + 40) = 5 ток/шаг
+    expect(intervals[0].stepMs).toBeCloseTo(500, 6);
+    expect(intervals[0].tokensPerStep).toBeCloseTo(5, 6);
+  });
+
+  it('agents = ΣitlSeconds/длина интервала (с): 30 с inter-token за 30 с = 1 агент', () => {
+    const samples = [
+      sample({ t: 5_000, itlSeconds: 10 }),
+      sample({ t: 10_000, itlSeconds: 20 }),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].agents).toBeCloseTo(1, 6);
+  });
+
+  it('два параллельных агента: 60 с inter-token за 30 с = 2 агента', () => {
+    const samples = [
+      sample({ t: 5_000, itlSeconds: 30 }),
+      sample({ t: 10_000, itlSeconds: 30 }),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].agents).toBeCloseTo(2, 6);
+  });
+
+  it('разрыв: точка без itlCount → stepMs/tokensPerStep null; молчание → agents null', () => {
+    const samples = [
+      sample({ t: 5_000, genTokens: 100, itlSeconds: 10 }),  // itlCount нет
+      sample({ t: 35_000 }),                                    // движок молчит
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].stepMs).toBeNull();
+    expect(intervals[0].tokensPerStep).toBeNull();
+    expect(intervals[0].agents).toBeCloseTo(10 / 30, 6);  // itlSeconds был → агенты считаются
+    expect(intervals[1].stepMs).toBeNull();
+    expect(intervals[1].tokensPerStep).toBeNull();
+    expect(intervals[1].agents).toBeNull();
+  });
+
+  it('ΣitlCount = 0 (itlSeconds есть, шагов не было) → stepMs null, не деление на ноль', () => {
+    const samples = [sample({ t: 5_000, itlSeconds: 5, itlCount: 0 })];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].stepMs).toBeNull();
+  });
+});
+
+describe('maxStepMsOf/maxTokensPerStepOf/maxAgentsOf: верх шкал', () => {
+  it('максимум серии; null пропускает; пусто → 0', () => {
+    const intervals = [
+      mkIt(0, 1, 10, null, 100, 3, 1.5),
+      mkIt(1, 2, null, null, null, null, null),
+      mkIt(2, 3, 20, null, 300, 7, 2.5),
+    ];
+    expect(maxStepMsOf(intervals)).toBe(300);
+    expect(maxTokensPerStepOf(intervals)).toBe(7);
+    expect(maxAgentsOf(intervals)).toBe(2.5);
+    expect(maxStepMsOf([])).toBe(0);
+    expect(maxTokensPerStepOf([])).toBe(0);
+    expect(maxAgentsOf([])).toBe(0);
+  });
+});
+
+describe('avgStepMsOf/avgTokensPerStepOf/avgAgentsOf: средние за окно', () => {
+  it('stepMs = ΣitlSeconds/ΣitlCount×1000 по всем точкам окна', () => {
+    const samples = [
+      sample({ t: 1, itlSeconds: 10, itlCount: 20 }),
+      sample({ t: 2, itlSeconds: 20, itlCount: 40 }),
+    ];
+    expect(avgStepMsOf(samples)).toBeCloseTo(500, 6);
+  });
+
+  it('tokensPerStep = ΣgenTokens/ΣitlCount; нет данных → null; ΣitlCount = 0 → null', () => {
+    const samples = [
+      sample({ t: 1, genTokens: 100, itlCount: 20 }),
+      sample({ t: 2, genTokens: 200, itlCount: 40 }),
+    ];
+    expect(avgTokensPerStepOf(samples)).toBeCloseTo(5, 6);
+    expect(avgTokensPerStepOf([sample({ t: 1 })])).toBeNull();
+    expect(avgTokensPerStepOf([sample({ t: 1, genTokens: 100, itlCount: 0 })])).toBeNull();
+  });
+
+  it('agents = ΣitlSeconds/длина окна (с); молчание (все null) → null', () => {
+    const samples = [
+      sample({ t: 1, itlSeconds: 30 }),
+      sample({ t: 2, itlSeconds: 30 }),
+    ];
+    expect(avgAgentsOf(samples, 60_000)).toBeCloseTo(1, 6);
+    expect(avgAgentsOf([sample({ t: 1 })], 60_000)).toBeNull();
+  });
+});
+
+describe('buildStepMsSegments/buildTokensPerStepSegments: линии «шага модели» рвутся на null', () => {
+  it('null в середине — два отдельных сегмента; без null — один', () => {
+    const intervals = [
+      mkIt(0, 30_000, 10, null, 100, 3),
+      mkIt(30_000, 60_000, 10, null, null, null),
+      mkIt(60_000, 90_000, 10, null, 200, 5),
+    ];
+    const ms = buildStepMsSegments(intervals, 0, 90_000, 200, GEOM);
+    expect(ms).toHaveLength(2);
+    expect(ms[0]).toHaveLength(1);
+    expect(ms[1]).toHaveLength(1);
+    const tps = buildTokensPerStepSegments(intervals, 0, 90_000, 5, GEOM);
+    expect(tps).toHaveLength(2);
+    expect(tps[0]).toHaveLength(1);
+    expect(tps[1]).toHaveLength(1);
+    const solid = buildStepMsSegments(
+      [mkIt(0, 30_000, 10, null, 100, 3), mkIt(30_000, 60_000, 10, null, 120, 4)], 0, 60_000, 120, GEOM);
+    expect(solid).toHaveLength(1);
+    expect(solid[0]).toHaveLength(2);
+  });
+});
+
+describe('buildAgentsSteps: ступенчатая линия «агентов в генерации»', () => {
+  it('каждый интервал — горизонталь (x0..x1 на уровне y); null рвёт прогон', () => {
+    const intervals = [
+      mkIt(0, 30_000, 10, null, null, null, 1),
+      mkIt(30_000, 60_000, 10, null, null, null, 2),
+      mkIt(60_000, 90_000, 10, null, null, null, null),
+      mkIt(90_000, 120_000, 10, null, null, null, 1.5),
+    ];
+    const segs = buildAgentsSteps(intervals, 0, 120_000, 2, GEOM);
+    expect(segs).toHaveLength(2, 'null в середине рвёт: два прогона');
+    // Каждый интервал — 2 точки (x0,y),(x1,y): первый прогон (2 интервала) — 4 точки,
+    // второй (1 интервал) — 2; на границе интервалов x совпадает → вертикальный переход.
+    expect(segs[0].split(' ')).toHaveLength(4);
+    expect(segs[1].split(' ')).toHaveLength(2);
+  });
+
+  it('без null — один непрерывный прогон; пусто — нет сегментов', () => {
+    const intervals = [mkIt(0, 30_000, 10, null, null, null, 1), mkIt(30_000, 60_000, 10, null, null, null, 1)];
+    expect(buildAgentsSteps(intervals, 0, 60_000, 2, GEOM)).toHaveLength(1);
+    expect(buildAgentsSteps([], 0, 60_000, 2, GEOM)).toHaveLength(0);
+  });
+});
+
+describe('stepChartAriaLabel: SVG «Шаг модели» обновляется на hover', () => {
+  it('базовый: окно; без hover — без интервала', () => {
+    const label = stepChartAriaLabel('15m', null, null, null);
+    expect(label).toBe('Шаг модели за 15 минут');
+  });
+  it('hover: интервал со временем шага и токенов за шаг; null — «—»', () => {
+    const label = stepChartAriaLabel('15m', '14:32', 34, 3.9);
+    expect(label).toContain('интервал 14:32');
+    expect(label).toContain('шаг 34 мс');
+    expect(label).toContain('токенов за шаг 3.9');
+    const empty = stepChartAriaLabel('15m', '14:32', null, null);
+    expect(empty).toContain('шаг —');
+    expect(empty).toContain('токенов за шаг —');
+  });
+});
+
+describe('agentsChartAriaLabel: SVG «Агентов в генерации» обновляется на hover', () => {
+  it('базовый: окно; hover — значение интервала; null — «—»', () => {
+    expect(agentsChartAriaLabel('1h', null, null)).toBe('Агентов в генерации за 1 час');
+    const label = agentsChartAriaLabel('1h', '14:32', 1.5);
+    expect(label).toContain('интервал 14:32');
+    expect(label).toContain('1.5');
+    expect(agentsChartAriaLabel('1h', '14:32', null)).toContain('—');
   });
 });

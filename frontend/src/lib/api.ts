@@ -68,9 +68,14 @@ export interface LocalModelStats {
     // vllm:generation_tokens_total, itlSeconds — приращение
     // vllm:inter_token_latency_seconds_sum (сек); фронт: ΣgenTokens/ΣitlSeconds =
     // скорость генерации на поток (ток/с, главная линия графика).
+    // itlCount — приращение vllm:inter_token_latency_seconds_count (число шагов
+    // декодирования); фронт: ΣitlSeconds/ΣitlCount = время шага (мс),
+    // ΣgenTokens/ΣitlCount = токенов за шаг, ΣitlSeconds/длина интервала = агентов
+    // в генерации (график «Шаг модели»).
     // null — нет прошлой точки/рестарт (см. api.md)
     genTokens?: number | null;
     itlSeconds?: number | null;
+    itlCount?: number | null;
   }[];
   // tensorParallel — необязательное: число GPU в tensor-parallel (Денис добавляет
   // следующим); нет поля — TP = число карт (gpus.length)

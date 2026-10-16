@@ -150,18 +150,6 @@ public sealed record LocalModelStatsPoint
     public long? PromptTokens { get; init; }
 }
 
-// Средняя скорость на поток за окно (5m/15m/1h, те же окна, что у графика «Нагрузка»):
-// ток/с, считаем только время, когда генерация реально шла (знаменатель — суммарное
-// время движка, простой не входит). null — нет данных за окно или рестарт счётчика.
-public sealed record LocalModelStatsAverage
-{
-    // Средняя скорость генерации на поток (ток/с) за окно: Δgeneration_tokens/Δdecode_time.
-    public double? GenTps { get; init; }
-
-    // Средняя скорость чтения промпта (ток/с) за окно: Δprefill_kv_computed_tokens/Δprefill_time.
-    public double? PromptTps { get; init; }
-}
-
 // Публичный API поллера (для контроллера шага 11). Чтение без блокировки фоновых циклов:
 // Current — атомарный снимок, GetHistory — копия среза кольца.
 public interface ILocalModelStatsReader
@@ -178,9 +166,4 @@ public interface ILocalModelStatsReader
     // Точки кольца за окно `window` (от настоящего момента назад); sinceUnixMs — фильтр
     // «только новее этого момента» (unix-мс). Пусто — окно пустое или движок не ходил.
     IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null);
-
-    // Средняя скорость на поток за окно `window` (5m/15m/1h, те же окна, что у графика):
-    // Δсчётчика/Δсуммы времени движка. Простой (движок молчит) в среднее не входит;
-    // нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
-    LocalModelStatsAverage GetAverageSpeed(TimeSpan window);
 }

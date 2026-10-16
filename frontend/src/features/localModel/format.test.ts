@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clamp01, formatGpuMem, formatPerc, formatPower, formatSince, formatTps,
+  clamp01, formatGpuMem, formatPerc, formatPower, formatSince, formatTps, formatUpdatedAt,
   gpuCountLabel, gpuLabel, gpuOrdinal, whoRows,
 } from './format';
 
@@ -61,6 +61,23 @@ describe('formatSince: «не отвечает с HH:MM» (unix-мс)', () => {
   it('без момента — пусто', () => {
     expect(formatSince(undefined)).toBe('');
     expect(formatSince(null)).toBe('');
+  });
+});
+
+describe('formatUpdatedAt: «обновлено HH:MM:SS» (время последней точки истории)', () => {
+  it('последняя (максимальная по t) точка — локальное время HH:MM:SS', () => {
+    const last = new Date(2026, 9, 13, 14, 32, 7).getTime();
+    const earlier = new Date(2026, 9, 13, 14, 30, 0).getTime();
+    expect(formatUpdatedAt([{ t: earlier }, { t: last }])).toBe('обновлено 14:32:07');
+  });
+  it('секунды/минуты дополняются до двух цифр', () => {
+    const ms = new Date(2026, 9, 13, 9, 5, 3).getTime();
+    expect(formatUpdatedAt([{ t: ms }])).toBe('обновлено 09:05:03');
+  });
+  it('без точек (null/пусто) — пусто: честного источника времени нет', () => {
+    expect(formatUpdatedAt(undefined)).toBe('');
+    expect(formatUpdatedAt(null)).toBe('');
+    expect(formatUpdatedAt([])).toBe('');
   });
 });
 

@@ -233,29 +233,6 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         p.GetProperty("itlSeconds").GetDouble().Should().Be(10.5);
     }
 
-    // ─── speed: средняя скорость на поток за окно графика (avgGenTps/avgPromptTps) ─────
-
-    // speed.avgGenTps/avgPromptTps — средняя скорость на поток за окно графика (15m/1h):
-    // Δсчётчика/Δсуммы времени. Приходит из reader.GetAverageSpeed(window) и сериализуется
-    // camelCase. Мутация: не передавать avg из reader в SpeedDto → поля null, тест краснеет.
-    [Fact]
-    public async Task Speed_AvgTps_Из_Окна()
-    {
-        var reader = new FakeReader
-        {
-            Current = new LocalModelStatsCurrent { Configured = true, Status = "working" },
-            Average = new LocalModelStatsAverage { GenTps = 42.0, PromptTps = 1000.0 },
-        };
-        var factory = BuildFactoryWithFakes(reader);
-        using var client = factory.CreateAuthenticatedClient();
-
-        var resp = await client.GetAsync("/api/local-model/stats?window=15m");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("speed").GetProperty("avgGenTps").GetDouble().Should().Be(42.0);
-        body.GetProperty("speed").GetProperty("avgPromptTps").GetDouble().Should().Be(1000.0);
-    }
-
     // ─── chats: phase — required string ─────────────────────────────────────────────
 
     // Пустая активная сессия → chats: []. ChatDto.Phase — required string (default "unknown"):
@@ -780,13 +757,12 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
-    // Фейковый ILocalModelStatsReader: тест задаёт Current, Points и Average;
-    // GetHistory фильтрует по since, GetAverageSpeed отдаёт заданное среднее.
+    // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;
+    // GetHistory фильтрует по since.
     private sealed class FakeReader : ILocalModelStatsReader
     {
         public LocalModelStatsCurrent Current { get; init; } = new() { Status = "notConnected", Configured = false };
         public List<LocalModelStatsPoint> Points { get; init; } = [];
-        public LocalModelStatsAverage Average { get; set; } = new();
         public double? TokensPerStep { get; set; }
 
         public IReadOnlyList<LocalModelStatsPoint> GetHistory(TimeSpan window, long? sinceUnixMs = null)
@@ -797,8 +773,6 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
                 : (now - window).UtcDateTime;
             return Points.Where(p => p.Timestamp >= since).ToList();
         }
-
-        public LocalModelStatsAverage GetAverageSpeed(TimeSpan window) => Average;
     }
 
     // Фейковый IGpuSampler: пустой список — нет nvidia-smi (блок не показывать).

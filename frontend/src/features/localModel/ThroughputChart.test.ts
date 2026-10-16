@@ -10,7 +10,7 @@ import {
   chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
   kvChartAriaLabel, maxSeriesOf, maxThroughputOf,
   niceAxisMax, peakPerStreamOf, percentile10,
-  peakThroughputOf, perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
+  perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
   timeSharesAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type TimeShares, type ThroughputSample,
 } from './ThroughputChart';
@@ -186,29 +186,6 @@ describe('avgThroughputOf: среднее без простоя (running > 0)', 
     ];
     // только 200
     expect(avgThroughputOf(samples)).toBe(200);
-  });
-});
-
-describe('peakThroughputOf: пик по истории в пределах окна', () => {
-  const now = 1_000_000;
-  it('максимум genThroughput в окне; вне окна не считается', () => {
-    const history = [
-      { t: now - 10_000, genThroughput: 100 },
-      { t: now - 5_000, genThroughput: 400 },
-      { t: now - 1_000, genThroughput: 250 },
-      // вне окна (старше 15 мин)
-      { t: now - 20 * 60_000, genThroughput: 999 },
-    ];
-    expect(peakThroughputOf(history, 15 * 60_000, now)).toBe(400);
-  });
-
-  it('null не влияет; пусто — 0', () => {
-    const history = [
-      { t: now - 10_000, genThroughput: null },
-      { t: now - 5_000, genThroughput: 300 },
-    ];
-    expect(peakThroughputOf(history, 15 * 60_000, now)).toBe(300);
-    expect(peakThroughputOf([], 15 * 60_000, now)).toBe(0);
   });
 });
 

@@ -53,6 +53,19 @@ export function formatSince(ms?: number | null): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+// «обновлено HH:MM:SS» — время последней точки истории (unix-мс, серверные таймштампы,
+// не Date.now() клиента: часы рассинхронизированы). Пустая строка — точек нет, честного
+// источника времени нет (фразу не показываем).
+export function formatUpdatedAt(history?: { t: number }[] | null): string {
+  let max = 0;
+  for (const h of history ?? []) if (h.t > max) max = h.t;
+  if (max <= 0) return '';
+  const d = new Date(max);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `обновлено ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // === Подписи видеокарт ===
 
 // «RTX 3090 · текст» / «RTX 3090 · медиа» — имя из nvidia-smi хоста плюс место работы

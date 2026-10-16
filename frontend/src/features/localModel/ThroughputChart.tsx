@@ -420,17 +420,6 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
   return out;
 }
 
-// Пик выработки (максимум genThroughput) по истории в пределах окна — для «пик».
-export function peakThroughputOf(history: LocalModelStats['history'], windowMs: number, now: number): number {
-  const from = now - windowMs;
-  let max = 0;
-  for (const h of history ?? []) {
-    if (h.t < from || h.t > now) continue;
-    if (h.genThroughput != null && h.genThroughput > max) max = h.genThroughput;
-  }
-  return max;
-}
-
 // === Сведение в интервалы (чистые функции, тестируются) ===
 
 // Число интервалов окна: 5 мин — 20 по 15 с, 15 мин — 60 по 15 с, 1 ч — 60 по 60 с.
@@ -1173,7 +1162,10 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                       из RAM <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendRam ?? '—'}</b>
                     </span>
                   )}
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span
+                    title="Это не заполненность памяти: блоки освобождаются и переиспользуются следующими запросами"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
                     <span style={{ width: 8, height: 8, background: C.textMuted, opacity: 0.18, border: `1px solid ${C.border}` }} />
                     занято <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendKv}</b>
                   </span>

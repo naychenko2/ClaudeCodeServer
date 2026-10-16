@@ -37,11 +37,10 @@ export interface LocalModelStats {
   running?: number;
   waiting?: number;
   othersCount?: number;
-  // genPerStream/prefillPerStream — сейчас, на поток (~60 с); avgGenTps/avgPromptTps —
-  // средняя на поток за окно графика (window): Δсчётчика/Δсуммы времени, простой не входит;
+  // genPerStream/prefillPerStream — сейчас, на поток (~60 с, как чувствует отдельный чат);
   // speculativeSpeedup — «ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δitl_count
   // за окно ~60 с, во сколько раз DFlash ускоряет генерацию; null — нет данных/рестарт или шагов не было
-  speed?: { genPerStream?: number; prefillPerStream?: number; avgGenTps?: number | null; avgPromptTps?: number | null; speculativeSpeedup?: number | null };
+  speed?: { genPerStream?: number; prefillPerStream?: number; speculativeSpeedup?: number | null };
   // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
   // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
   // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;

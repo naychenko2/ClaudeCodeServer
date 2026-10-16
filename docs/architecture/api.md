@@ -335,7 +335,7 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 ```
 GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (только admin; иначе 403)
      → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
-         othersCount?, speed: { genPerStream?, prefillPerStream?, avgGenTps?, avgPromptTps?, speculativeSpeedup? },
+         othersCount?, speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
          history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, prefillSeconds?, queueSeconds?, promptTokens? }],
@@ -355,17 +355,16 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      поток» (ADR-029). Поле «Куда уходит время агентов» графика (v2.3, вместо «Шаг модели» и «Агентов в
      генерации»): составная полоса 100 % — генерирует (ΣitlCount×чистый шаг), читает промпт (ΔprefillSeconds),
      ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); «чистый шаг» — 10-й перцентиль
-     времени шага по «чистым» интервалам (ADR-029, v2.3). genThroughput с графика убран (v2.2), но в API остался:
-     пик «выдачи» читает карточка «Скорость». Поля busySeconds больше нет.
+     времени шага по «чистым» интервалам (ADR-029, v2.3). genThroughput с графика убран (v2.2), но в истории
+     остался (вторая линия «выдано стендом» и детект разрыва); «пик» в графике — по главной линии (скорость на
+     поток), не по genThroughput. Поля busySeconds больше нет.
      speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
      genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
      в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).
      speculativeSpeedup (v2.3) — «ускорение угадыванием ×N»: Δgeneration_tokens/ΔitlCount за окно ~60 с (во сколько
      раз черновая модель DFlash/MTP ускоряет генерацию; null — шагов не было).
-     avgGenTps/avgPromptTps — СРЕДНЯЯ скорость на поток (ток/с) за окно графика (window, 5m/15m/1h):
-     Δgeneration_tokens/Δinter_token_latency (генерация) и Δprefill_kv_computed_tokens/Δprefill_time (чтение промпта).
-     Простой (движок молчит) в среднее не входит;
-     нет данных за окно или рестарт счётчика (отрицательная дельта) → null, не 0.
+     (2026-10-16: avgGenTps/avgPromptTps — средняя на поток за окно графика — убраны из DTO и GetAverageSpeed:
+     дубль «среднее/пик за окно» под KPI карточки «Скорость» удалён, среднее и пик теперь только в графике; ADR-029 п.11.)
      chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
      othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi;
      иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).

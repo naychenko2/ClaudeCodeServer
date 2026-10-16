@@ -36,9 +36,34 @@ MARKER_FORMAT = "<!-- ccs:human-text chars={0} sha={1} -->"
 # Маркер + "\n" + сырой текст. {n} — кодовые точки, {s} — 8 hex SHA-256.
 _MARKER_RE = re.compile(r"<!--\s*ccs:human-text\s+chars=(\d+)\s+sha=([0-9a-fA-F]{8})\s*-->\n")
 
-# Заголовки хвоста хода: их наличие в тексте старой реплики означает, что перед ними
+# Заголовки секций хвоста хода из бэкенда (ClaudeSession: turnRecallSections /
+# alwaysTailSections). Их наличие в тексте старой реплики означает, что перед ними
 # (до последнего "---") — обвязка, а реплика человека — после.
-_TAIL_HEADERS = ("## Память команды проекта", "Возможно релевантные заметки")
+#
+# Полный список заголовков (сверен по коду бэкенда):
+#   «## Память команды проекта»        — TeamMemoryService.cs:26
+#   «Возможно релевантные заметки»     — NotesKnowledgeService.cs:77
+#   «## Контекст хода»                  — TurnContextContributor.cs:95
+#   «## Картинки в этом чате»          — ImageEditorStateContributor.cs:89
+#   «## Звук в этом чате»              — AudioEditorStateContributor.cs:51
+#   «## Видео в этом чате»             — VideoEditorStateContributor.cs:110
+#   «## Картинки и видео: локальная модель по умолчанию» — LocalMediaDefaultContributor.cs:74
+#   «## Структура кода проекта»        — CodeGraphPromptProvider.cs:148
+#   «### Привязанные знания и правила» — PersonaBindingsService.cs:780
+#
+# НЕ включаем: «## ЗАДАЧА / ## ПРАВИЛА / ## КОНТЕКСТ / ## Возможно релевантные заметки»
+# — это части текста задачи-исполнителя (пишет бэкенд), а не хвост хода.
+_TAIL_HEADERS = (
+    "## Память команды проекта",
+    "Возможно релевантные заметки",
+    "## Контекст хода",
+    "## Картинки в этом чате",
+    "## Звук в этом чате",
+    "## Видео в этом чате",
+    "## Картинки и видео: локальная модель по умолчанию",
+    "## Структура кода проекта",
+    "### Привязанные знания и правила",
+)
 
 # Сводка прошлого сжатия CLI: user-сообщение, начинающееся с этой строки — не реплика и не
 # голова (это сводка, а не человек).
@@ -169,25 +194,37 @@ def head(messages, cap=HEAD_CAP):
     return _truncate(texts[0], cap)
 
 
+def _recent_humans_indexed(messages, cap=HUMANS_CAP):
+    """Реплики человека от новых к старым, пока влезает в cap (кодовые точки).
+
+    Возвращает list[(text, index)], где index — позиция реплики в ХРОНОЛОГИЧЕСКОМ
+    списке human_texts (0 = постановка, самая старая). Одна длинная реплика — тоже с
+    меткой пропуска, а не отбрасывается: берём её целиком (с обрезкой), если она
+    влезает в оставшийся бюджет, и останавливаемся.
+    """
+    texts = human_texts(messages)
+    out = []
+    budget = cap
+    for idx in range(len(texts) - 1, -1, -1):
+        t = texts[idx]
+        if not t:
+            continue
+        if len(t) <= budget:
+            out.append((t, idx))
+            budget -= len(t)
+        else:
+            out.append((_truncate(t, budget), idx))
+            break
+    return out
+
+
 def recent_humans(messages, cap=HUMANS_CAP):
     """Реплики человека от новых к старым, пока влезает в cap (кодовые точки).
 
     Одна длинная реплика — тоже с меткой пропуска, а не отбрасывается: берём её целиком
     (с обрезкой), если она влезает в оставшийся бюджет, и останавливаемся.
     """
-    texts = human_texts(messages)
-    out = []
-    budget = cap
-    for t in reversed(texts):
-        if not t:
-            continue
-        if len(t) <= budget:
-            out.append(t)
-            budget -= len(t)
-        else:
-            out.append(_truncate(t, budget))
-            break
-    return out
+    return [t for t, _ in _recent_humans_indexed(messages, cap)]
 
 
 # =============================================================================
@@ -452,7 +489,11 @@ def build_preserved(doc):
     """
     msgs = (doc or {}).get("messages") or []
     head_text = head(msgs)
-    humans = recent_humans(msgs)
+    # Реплики с индексом: постановка (index 0) уже в «Постановке» — из «Реплик» её
+    # исключаем, чтобы не дублировать. Индекс — позиция в истории, не текст: одинаковые
+    # короткие «Продолжай» не схлопываются.
+    humans_indexed = _recent_humans_indexed(msgs)
+    humans = [t for t, idx in humans_indexed if idx != 0]
     files = changed_files(msgs)
     checks = last_checks(msgs)
     plan = last_plan(msgs)

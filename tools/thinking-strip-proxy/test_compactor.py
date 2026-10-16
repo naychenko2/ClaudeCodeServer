@@ -142,6 +142,44 @@ class CompactorTests(unittest.TestCase):
         # без заголовков хвоста — не режем, оставляем весь текст
         self.assertEqual(compactor.human_texts([_user("просто текст")]), ["просто текст"])
 
+    def test_старый_чат_хвост_только_всегда_секции(self):
+        # Дефект 2: хвост хода состоит ТОЛЬКО из «всегда-хвостовых» секций
+        # (Контекст хода, Картинки) — без «Память команды»/«заметки». Эвристика
+        # должна всё равно узнать хвост и вырезать его, оставив реплику человека.
+        text = ("## Контекст хода\nГде: master\n\n---\n\n"
+                "## Картинки в этом чате\n- картинка 1\n\n---\n\n"
+                "реплика человека")
+        self.assertEqual(compactor.human_texts([_user(text)]), ["реплика человека"])
+
+    def test_старый_чат_хвост_все_виды_секций(self):
+        # Дефект 2: хвост со ВСЕМИ новыми заголовками (звук, видео, локальная модель,
+        # структура кода, привязанные знания) — каждый узнаётся, реплика — после.
+        text = ("## Контекст хода\nГде: master\n\n---\n\n"
+                "## Картинки в этом чате\n- к1\n\n---\n\n"
+                "## Звук в этом чате\n- з1\n\n---\n\n"
+                "## Видео в этом чате\n- в1\n\n---\n\n"
+                "## Картинки и видео: локальная модель по умолчанию\nправило\n\n---\n\n"
+                "## Структура кода проекта (Code Graph)\nхабы\n\n---\n\n"
+                "### Привязанные знания и правила\n- источник\n\n---\n\n"
+                "реплика человека")
+        self.assertEqual(compactor.human_texts([_user(text)]), ["реплика человека"])
+
+    def test_мутация_новые_заголовки_краснеет(self):
+        # Мутация: убрать НОВЫЕ заголовки из _TAIL_HEADERS (оставить только исходные два) →
+        # эвристика перестаёт узнавать хвост из «всегда-хвостовых» секций → хвост НЕ вырезается,
+        # синтетика краснеет (вместо «реплика человека» остаётся весь текст с хвостом).
+        orig = compactor._TAIL_HEADERS
+        compactor._TAIL_HEADERS = ("## Память команды проекта", "Возможно релевантные заметки")
+        try:
+            text = ("## Контекст хода\nГде: master\n\n---\n\n"
+                    "## Картинки в этом чате\n- картинка 1\n\n---\n\n"
+                    "реплика человека")
+            out = compactor.human_texts([_user(text)])
+            self.assertEqual(out, [text.strip()],
+                             "мутация (новые заголовки убраны) не покраснела: хвост всё равно вырезан")
+        finally:
+            compactor._TAIL_HEADERS = orig
+
     # --- tool_result — не реплика -------------------------------------------------------------
 
     def test_tool_result_не_реплика(self):
@@ -357,8 +395,11 @@ class Step4AnchorsTests(unittest.TestCase):
 
 class Step4BuildPreservedTests(unittest.TestCase):
     def test_структура_блока(self):
+        # постановка (head) + вторая реплика: «Реплики» содержит только вторую (head не
+        # дублируется — дефект 1).
         msgs = [
             _user(_marker("постановка задачи")),
+            _user(_marker("продолжи с правок")),
             _assistant(_tool_use("1", "Edit", file_path="a/b.py")),
             _assistant(_tool_use("2", "Bash", command="dotnet build -m:4")),
             _tool_result("2", "Build succeeded", is_error=False),
@@ -368,6 +409,7 @@ class Step4BuildPreservedTests(unittest.TestCase):
         self.assertTrue(block.endswith("</ccs-preserved>"))
         self.assertIn("## Постановка задачи (дословно)", block)
         self.assertIn("## Реплики человека", block)
+        self.assertIn("продолжи с правок", block)
         self.assertIn("## Изменённые файлы", block)
         self.assertIn("## Последние проверки", block)
         self.assertIn("a/b.py", block)
@@ -411,6 +453,34 @@ class Step4BuildPreservedTests(unittest.TestCase):
         self.assertIsInstance(text, str)
         self.assertIn("<ccs-preserved>", text)
         self.assertIn("reasoning", text)
+
+    def test_постановка_не_дублируется_в_репликах(self):
+        # Дефект 1: постановка (head, index 0) уже в «Постановке» — из «Реплик» её
+        # исключаем. Две одинаковые короткие «Продолжай» (index 1, 2) НЕ схлопываются:
+        # идентичность — по позиции в истории, не по тексту.
+        msgs = [
+            _user(_marker("постановка задачи")),
+            _user(_marker("Продолжай")),
+            _user(_marker("Продолжай")),
+        ]
+        block = compactor.build_preserved({"messages": msgs})
+        self.assertIn("## Постановка задачи (дословно)", block)
+        self.assertIn("## Реплики человека", block)
+        # постановка (нижний регистр) встречается ровно один раз — только в «Постановке»
+        self.assertEqual(block.count("постановка задачи"), 1,
+                         "постановка продублирована в «Репликах»")
+        # обе «Продолжай» остались (не схлопнулись)
+        self.assertEqual(block.count("Продолжай"), 2,
+                         "одинаковые короткие реплики схлопнулись")
+
+    def test_одна_реплика_равна_постановке(self):
+        # Дефект 1: единственная реплика = постановка; «Реплики» пустые, блок — только
+        # «Постановка» (без дубля).
+        msgs = [_user(_marker("единственная постановка"))]
+        block = compactor.build_preserved({"messages": msgs})
+        self.assertIn("## Постановка задачи", block)
+        self.assertNotIn("## Реплики человека", block,
+                         "единственная реплика-постановка продублирована в «Репликах»")
 
 
 # --- Корпус Веры: реальные чаты (skipUnless, если каталога нет) ------------------------------
@@ -516,6 +586,32 @@ class CorpusTests(unittest.TestCase):
             if head:
                 self.assertIn(head[:200], block, f"{fn}: постановка не найдена в блоке")
             print(f"  {fn}: block={len(block)} code points")
+
+    def test_корпус_блок_без_хвоста_и_постановка_один_раз(self):
+        # Дефекты 1+2 на корпусе: (а) блок не содержит НОВЫХ заголовков хвоста хода
+        # (те, что раньше эвристика не узнавала); (б) постановка (head) встречается в блоке
+        # ровно один раз (не продублирована в «Репликах»).
+        #
+        # Проверяем только НОВЫЕ заголовки (с «##»/«###»): существующий
+        # «Возможно релевантные заметки» (без «##») неоднозначен — он подстрокой
+        # совпадает с «## Возможно релевантные заметки» внутри текста задачи (head),
+        # а это часть постановки, а не хвост.
+        new_headers = [h for h in compactor._TAIL_HEADERS if h.startswith("#")]
+        self.assertGreaterEqual(len(new_headers), 7, "в константе меньше 7 новых заголовков")
+        for fn, item in self._items():
+            history = item.get("history") or []
+            block = compactor.build_preserved({"messages": history})
+            if block is None:
+                continue
+            # (а) ни один НОВЫЙ заголовок хвоста хода не в блоке
+            for h in new_headers:
+                self.assertNotIn(h, block, f"{fn}: новый заголовок хвоста {h!r} остался в блоке")
+            # (б) постановка ровно один раз (head[:200] — в блоке только в «Постановке»)
+            head = compactor.head(history)
+            if head:
+                n = block.count(head[:200])
+                self.assertEqual(n, 1, f"{fn}: постановка встречается {n} раз (ожидалось 1)")
+            print(f"  {fn}: block={len(block)}, new-tail-headers=0, head=1x")
 
 
 if __name__ == "__main__":

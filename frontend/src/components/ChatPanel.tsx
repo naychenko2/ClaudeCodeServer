@@ -56,7 +56,7 @@ import { ContextRow } from './chat/ContextRow';
 import { chatContextApi } from '../lib/chatContext/api';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
-import { navPush, type NavSnapshot } from '../lib/nav';
+import { navPush, getNav, type NavSnapshot } from '../lib/nav';
 import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
 import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
 import { useIsTouch } from '../lib/breakpoints';
@@ -1315,9 +1315,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     try {
       const result = await api.chats.continue(session.id, note || undefined);
       setContinueOpen(false);
-      navPush(project
-        ? { screen: 'project', project, chatId: result.newSessionId, view: 'chat', file: null }
-        : { screen: 'chats', chatId: result.newSessionId });
+      // Живое событие chat_continued могло уже увести в новый чат (гонка с ответом POST) —
+      // не дублируем navPush, если мы уже там.
+      if (getNav()?.chatId !== result.newSessionId) {
+        navPush(project
+          ? { screen: 'project', project, chatId: result.newSessionId, view: 'chat', file: null }
+          : { screen: 'chats', chatId: result.newSessionId });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Не удалось продолжить в новом чате';
       // 409 «уже продолжен»: тост с текстом и ссылкой на новый чат, если ссылка пришла

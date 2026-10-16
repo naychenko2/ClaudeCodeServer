@@ -74,8 +74,9 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    // window=5m/15m/1h — валидные → 200 (5m — третье окно графика, v2.1).
+    // window=1m/5m/15m/1h — валидные → 200 (1m — окно графика, v2.4).
     [Theory]
+    [InlineData("1m")]
     [InlineData("5m")]
     [InlineData("15m")]
     [InlineData("1h")]

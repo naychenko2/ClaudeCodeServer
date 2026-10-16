@@ -321,7 +321,8 @@ describe('preemptionTotal: сумма вытеснений по окну', () =>
 });
 
 describe('intervalCountFor: число интервалов окна', () => {
-  it('5m → 20 (по 15 с), 15m → 60 (по 15 с), 1h → 60 (по 60 с)', () => {
+  it('1m → 12 (по 5 с), 5m → 20 (по 15 с), 15m → 60 (по 15 с), 1h → 60 (по 60 с)', () => {
+    expect(intervalCountFor('1m')).toBe(12);
     expect(intervalCountFor('5m')).toBe(20);
     expect(intervalCountFor('15m')).toBe(60);
     expect(intervalCountFor('1h')).toBe(60);

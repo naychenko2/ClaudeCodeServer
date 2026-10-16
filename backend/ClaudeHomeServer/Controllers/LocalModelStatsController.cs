@@ -28,8 +28,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
-    // GET /api/local-model/stats?window=5m|15m|1h&since=<unix ms>
-    // window: по умолчанию 15m; белый список 5m/15m/1h, иное → 400.
+    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>
+    // window: по умолчанию 15m; белый список 1m/5m/15m/1h, иное → 400.
     // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
@@ -38,7 +38,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         CancellationToken ct)
     {
         if (!TryParseWindow(window, out var windowSpan))
-            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 5m, 15m, 1h)" });
+            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
 
         var current = _reader?.Current;
 
@@ -275,7 +275,7 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         PowerLimitW = s.PowerLimit,
     };
 
-    // window: null/пусто → 15m (дефолт); белый список 5m/15m/1h (ровно как в сообщении 400);
+    // window: null/пусто → 15m (дефолт); белый список 1m/5m/15m/1h (ровно как в сообщении 400);
     // иное → false (400).
     private static bool TryParseWindow(string? raw, out TimeSpan window)
     {
@@ -287,6 +287,9 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         }
         switch (raw.Trim())
         {
+            case "1m":
+                window = TimeSpan.FromMinutes(1);
+                return true;
             case "5m":
                 window = TimeSpan.FromMinutes(5);
                 return true;

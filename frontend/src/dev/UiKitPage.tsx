@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef, type CSSProperties, Fragment } from 'react';
 import { ContinueChatDialog, ContinueHint, ContinuationBanner } from '../components/chat/ContinueChat';
+import { LipEarBaseContext } from '../components/chat/LipEar';
 import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
@@ -3807,14 +3808,28 @@ function ContinueChatKit() {
     if (fail) throw new Error('Чат занят — дождитесь окончания хода');
     setDialog(null);
   };
+  // Ушко в контексте основания: host-колонка + провайдер (губа/поле). Показываем оба
+  // основания (губа и поле) × (десктоп/мобила), чтобы видеть стык, цвета и высоту.
+  const cell = (base: 'lip' | 'field', isMobile: boolean, label: string) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxWidth: isMobile ? 390 : undefined }}>
+      <span style={{ fontSize: FS.xs, color: C.textMuted }}>{label}</span>
+      <LipEarBaseContext.Provider value={base}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <ContinueHint tokens={312_000} isMobile={isMobile} onOpen={() => setDialog('ok')} onSnooze={() => {}} />
+        </div>
+      </LipEarBaseContext.Provider>
+    </div>
+  );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       {hidden
         ? <Button size="sm" variant="secondary" onClick={() => setHidden(false)}>Показать подсказку снова</Button>
-        : <ContinueHint tokens={312_000} onOpen={() => setDialog('ok')} onSnooze={() => setHidden(true)} />}
-      {/* Мобильный вариант: короче («В новый чат»), полоса 32 px */}
-      <div style={{ maxWidth: 390 }}>
-        <ContinueHint tokens={312_000} isMobile onOpen={() => setDialog('ok')} onSnooze={() => {}} />
+        : <LipEarBaseContext.Provider value="lip"><ContinueHint tokens={312_000} onOpen={() => setDialog('ok')} onSnooze={() => setHidden(true)} /></LipEarBaseContext.Provider>}
+      <div style={{ display: 'flex', gap: SP.md, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {cell('lip', false, 'десктоп · на губе')}
+        {cell('field', false, 'десктоп · на поле (без губы)')}
+        {cell('lip', true, 'мобила · на губе')}
+        {cell('field', true, 'мобила · на поле (без губы)')}
       </div>
       <ContinuationBanner kind="from" name="Оркестратор — спринт 12" onOpen={() => {}} />
       <ContinuationBanner kind="into" onOpen={() => {}} />

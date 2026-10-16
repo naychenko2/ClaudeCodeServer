@@ -17,6 +17,7 @@ import { Badge, Button, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { RowChip, ellipsis, FlatChips, ChipHeight, ShrinkChips, CHIP_H } from './RowChip';
 import { RowNotice } from './RowNotice';
+import { LipEarBaseContext } from './LipEar';
 import { FormatBody } from '../generation/format/FormatBody';
 import { FormatChip } from '../generation/format/FormatChip';
 import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
@@ -564,12 +565,14 @@ export function ContextRowView(props: ContextRowViewProps) {
   }, [sig, drop, isMobile, props.pick]);
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
-    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» и подсказка обязаны остаться
+    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» и подсказка обязаны остаться.
+    // Губы нет — ушко (если есть) растёт из кромки самого поля ввода (base = 'field'); у хоста нижнего
+    // отступа нет, иначе ушко отлипнет от поля.
     if (!props.offer && !props.notice) return null;
     return (
-      <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}>
+      <div data-context-row-host="" style={{ position: 'relative', display: 'flex', flexDirection: 'column', margin: `${SP.xs}px 0 0` }}>
         {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
-        {props.notice}
+        {props.notice && <LipEarBaseContext.Provider value="field">{props.notice}</LipEarBaseContext.Provider>}
       </div>
     );
   }
@@ -653,10 +656,11 @@ export function ContextRowView(props: ContextRowViewProps) {
 
   return (
     // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
-    // composerLip) ложится на этот зазор, а не на низ ленты
-    <div data-context-row-host="" style={{ position: 'relative', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
+    // composerLip) ложится на этот зазор, а не на низ ленты. Хост — колонка: ушко (LipEar)
+    // alignSelf: flex-end у правого края, остальные дети растягиваются на всю ширину, как в блоке.
+    <div data-context-row-host="" style={{ position: 'relative', display: 'flex', flexDirection: 'column', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
-      {props.notice}
+      {props.notice && <LipEarBaseContext.Provider value="lip">{props.notice}</LipEarBaseContext.Provider>}
       {subNote && subNote !== dismissedNote && !menu && <FormatNote text={subNote} onClose={() => setDismissedNote(subNote)} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <FlatChips.Provider value>

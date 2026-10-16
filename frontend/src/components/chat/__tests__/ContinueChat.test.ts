@@ -40,8 +40,8 @@ describe('кнопка «Продолжить в новом чате»', () => {
   });
 });
 
-describe('подсказка при большом контексте (вариант C: полоса RowNotice)', () => {
-  it('десктоп: размер, «Продолжить» со стрелкой, ✕ «Не сейчас», role=status', () => {
+describe('подсказка при большом контексте (вариант 2 · Ушко)', () => {
+  it('десктоп: число, «Продолжить» со стрелкой, ✕ «Не сейчас», role=status, видимый текст', () => {
     const html = renderToStaticMarkup(createElement(ContinueHint, { tokens: 312_000, onOpen: () => {}, onSnooze: () => {} }));
     expect(html).toContain('data-testid="continue-hint"');
     expect(html).toContain('role="status"');
@@ -50,13 +50,14 @@ describe('подсказка при большом контексте (вари�
     expect(html).toContain('aria-label="Не сейчас"');
     expect(html).toContain('>312K<');
     expect(html).toContain('Продолжить');
-    expect(html).toContain('дешевле продолжить в новом чате');
+    // Видимый текст — «312K · дешевле в новом чате» (слово «Контекст» только в title-тултипе)
+    expect(html).toContain('дешевле в новом чате');
   });
-  it('мобила: короче — «Контекст 312K» и «В новый чат»', () => {
+  it('мобила: короче — «312K» и «В новый чат», без длинного хвоста', () => {
     const html = renderToStaticMarkup(createElement(ContinueHint, { tokens: 312_000, isMobile: true, onOpen: () => {}, onSnooze: () => {} }));
     expect(html).toContain('data-testid="continue-hint"');
     expect(html).toContain('В новый чат');
-    expect(html).not.toContain('дешевле продолжить в новом чате');
+    expect(html).not.toContain('дешевле в новом чате');
   });
 });
 

@@ -230,4 +230,42 @@ public class ContentRegionTests
         Assert.Equal(20, result.Region.Y);
         Assert.Equal(130, result.Region.Bottom + 1);
     }
+
+    /// <summary>
+    /// m-B: полоса прокрутки ВПЛОТНУЮ к содержимому (без зазора) — ограничение: по проекции она
+    /// неотличима от содержимого и входит в область (x[10,197), а не x[10,180)). В отличие от
+    /// полосы с зазором (M4), которая отсекается. Зафиксировано как ограничение в XML-doc
+    /// <see cref="ContentRegion"/>.
+    /// </summary>
+    [Fact]
+    public void mB_scroll_strip_adjacent_to_content_is_included_in_region()
+    {
+        var before = new byte[W * H];
+        var after = new byte[W * H];
+        Array.Fill(before, (byte)0);
+        Array.Fill(after, (byte)0);
+
+        // Плотное содержимое x[10,180) × y[10,140), «после» — другое.
+        for (var y = 10; y < 140; y++)
+            for (var x = 10; x < 180; x++)
+            {
+                before[y * W + x] = (byte)((x + y) % 256);
+                after[y * W + x] = (byte)((x + y + 50) % 256);
+            }
+
+        // Полоса прокрутки ВПЛОТНУЮ: x[180,197) × y[10,140), тоже меняется (зазора 180..194 нет).
+        for (var y = 10; y < 140; y++)
+            for (var x = 180; x < 197; x++)
+            {
+                before[y * W + x] = (byte)100;
+                after[y * W + x] = (byte)200;
+            }
+
+        var result = ContentRegion.Determine(before, after, W, H, tolerance: 8.0);
+
+        // Ограничение: полоса входит в область (x[10,197)), а не только содержимое (x[10,180)).
+        Assert.True(result.Ok);
+        Assert.Equal(10, result.Region.X);
+        Assert.Equal(197, result.Region.Right + 1);
+    }
 }

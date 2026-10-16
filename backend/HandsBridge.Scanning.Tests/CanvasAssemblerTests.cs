@@ -364,4 +364,19 @@ public class CanvasAssemblerTests
         Assert.Single(result.DoubtfulSeams);
         Assert.Contains("Ambiguous", result.DoubtfulSeams[0].Reason, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// m-C: холст 10000×10000 — стороны (10000 &lt; 16 384) в пределах потолка, но площадь
+    /// (100 000 000 &gt; 64 000 000) его превышает: отказ по ПЛОЩАДИ, а не по стороне.
+    /// </summary>
+    [Fact]
+    public void mC_canvas_10000x10000_truncated_by_area()
+    {
+        var t1 = new Tile(new byte[] { 1, 2, 3 }, 1, 1, 0, 0, 0, 0, 1.0, false);
+        var t2 = new Tile(new byte[] { 4, 5, 6 }, 1, 1, 9999, 9999, 0, 0, 1.0, false);
+        var result = CanvasAssembler.Assemble(new List<Tile> { t1, t2 });
+
+        Assert.True(result.Truncated);
+        Assert.Contains("Площадь", result.TruncationReason, StringComparison.OrdinalIgnoreCase);
+    }
 }

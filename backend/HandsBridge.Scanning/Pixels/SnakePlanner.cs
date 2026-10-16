@@ -140,9 +140,11 @@ public class SnakePlanner
     /// <summary>
     /// Кормит автомат «снимком после шага»: <paramref name="grayFrame"/> — серый кадр
     /// (row-major, 0..255) после выполнения текущего шага, <paramref name="measuredShift"/> —
-    /// измеренный сдвиг этого шага (из <see cref="ShiftEstimator"/>), <paramref name="elapsedMs"/>
-    /// — время, прошедшее от начала сканирования (извне, часы не читаем). Возвращает следующий
-    /// шаг (или <c>Done</c>).
+    /// ЗНАКОВЫЙ измеренный сдвиг этого шага (из <see cref="ShiftEstimator"/>: положительный —
+    /// контент <c>before</c> сдвинут вниз/вправо в <c>after</c>, отрицательный — вверх/влево;
+    /// знак зависит от направления шага, в т.ч. строки змейки справа налево),
+    /// <paramref name="elapsedMs"/> — время, прошедшее от начала сканирования (извне, часы не
+    /// читаем). Возвращает следующий шаг (или <c>Done</c>).
     /// </summary>
     public ScanStep Feed(ReadOnlySpan<byte> grayFrame, int measuredShift, long elapsedMs)
     {

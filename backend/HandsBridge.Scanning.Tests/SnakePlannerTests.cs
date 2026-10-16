@@ -343,4 +343,119 @@ public class SnakePlannerTests
         Assert.Throws<ArgumentException>(() => new SnakePlanner(100, 100, overlapFraction: double.NaN));
         Assert.Throws<ArgumentException>(() => new SnakePlanner(100, 100, overlapFraction: 1.0));
     }
+
+    /// <summary>
+    /// m-A: рост полотна по ВЫСОТЕ. После горизонтальной строки вертикальные шаги (measuredShift=918)
+    /// наращивают <c>_canvasHeight</c> до потолка по стороне (16 384) → <c>Truncated</c> с причиной
+    /// «Сторона». Мутация «убрать <c>_canvasHeight += measuredShift</c>» красит: высота застрянет на
+    /// <c>regionHeight</c> и потолок не сработает.
+    /// </summary>
+    [Fact]
+    public void mA_vertical_steps_grow_canvas_height_to_ceiling()
+    {
+        var planner = new SnakePlanner(regionWidth: 100, regionHeight: 80, maxSide: SnakePlanner.DefaultMaxSide);
+
+        const int rows = 20, cols = 2;
+        var row = 0;
+        var col = 0;
+        var current = planner.CurrentStep;
+        var guard = 0;
+        while (current.Kind != ScanStepKind.Done && guard++ < 500)
+        {
+            if (current.Kind == ScanStepKind.ToStart)
+            {
+                row = 0;
+                col = 0;
+            }
+            else if (current.Kind == ScanStepKind.Step)
+            {
+                if (current.Axis == Axis.Horizontal)
+                {
+                    var nc = col + current.Direction;
+                    if (nc >= 0 && nc < cols)
+                        col = nc;
+                }
+                else
+                {
+                    var nr = row + current.Direction;
+                    if (nr >= 0 && nr < rows)
+                        row = nr;
+                }
+            }
+
+            var frame = FrameAt(row, col, 100, 80);
+            // measuredShift: 918 для вертикальных шагов (рост высоты), 0 для горизонтальных/ToStart
+            // (ширина остаётся 100 — потолок по стороне срабатывает только по высоте).
+            var shift = current.Kind == ScanStepKind.Step && current.Axis == Axis.Vertical ? 918 : 0;
+            current = planner.Feed(frame, shift, elapsedMs: 1000 + guard);
+        }
+
+        Assert.True(planner.Truncated, "Полотно по высоте должно превысить потолок");
+        Assert.Contains("Сторона", planner.TruncationReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// m-D: знак <c>measuredShift</c>. Строка змейки справа налево (вторая строка) — горизонтальный
+    /// шаг с <c>Direction=-1</c> — получает ОТРИЦАТЕЛЬНЫЙ измеренный сдвиг (контент сдвинут влево).
+    /// Тест фиксирует, что знак сохраняется: в <c>MeasuredShifts</c> есть отрицательные значения.
+    /// </summary>
+    [Fact]
+    public void mD_leftward_row_uses_negative_measured_shift()
+    {
+        var planner = new SnakePlanner(regionWidth: 100, regionHeight: 80);
+
+        const int rows = 2, cols = 2;
+        var row = 0;
+        var col = 0;
+        var current = planner.CurrentStep;
+        var guard = 0;
+        while (current.Kind != ScanStepKind.Done && guard++ < 100)
+        {
+            if (current.Kind == ScanStepKind.ToStart)
+            {
+                row = 0;
+                col = 0;
+            }
+            else if (current.Kind == ScanStepKind.Step)
+            {
+                if (current.Axis == Axis.Horizontal)
+                {
+                    var nc = col + current.Direction;
+                    if (nc >= 0 && nc < cols)
+                        col = nc;
+                }
+                else
+                {
+                    var nr = row + current.Direction;
+                    if (nr >= 0 && nr < rows)
+                        row = nr;
+                }
+            }
+
+            var frame = FrameAt(row, col, 100, 80);
+            // Знаковый сдвиг: вправо +90, влево -90, вниз +80; ToStart — 0.
+            var shift = current.Kind switch
+            {
+                ScanStepKind.Step when current.Axis == Axis.Horizontal => current.Direction > 0 ? 90 : -90,
+                ScanStepKind.Step when current.Axis == Axis.Vertical => 80,
+                _ => 0,
+            };
+            current = planner.Feed(frame, shift, elapsedMs: 1000 + guard);
+        }
+
+        // Вторая строка идёт влево → отрицательные измеренные сдвиги зафиксированы.
+        Assert.Contains(planner.MeasuredShifts, s => s < 0);
+        // И вправо (первая строка) — положительные.
+        Assert.Contains(planner.MeasuredShifts, s => s > 0);
+    }
+
+    /// <summary>Уникальный серый кадр по позиции (row, col); на краю (позиция не меняется) — тот же кадр.</summary>
+    private static byte[] FrameAt(int row, int col, int w, int h)
+    {
+        var frame = new byte[w * h];
+        var seed = row * 1000 + col;
+        for (var i = 0; i < frame.Length; i++)
+            frame[i] = (byte)((i + seed * 37) % 256);
+        return frame;
+    }
 }

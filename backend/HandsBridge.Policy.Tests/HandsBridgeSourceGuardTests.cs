@@ -559,6 +559,92 @@ public class HandsBridgeSourceGuardTests
         Assert.Contains("ReleaseAllKeysAsync", gate);
     }
 
+    /// <summary>
+    /// Руки без UIA — склейка схемы (C1-2.1, M1): <c>ScanCanvasTool</c> зовёт только ВНУТРЕННИЕ
+    /// перегрузки <c>MouseInputService</c>/<c>KeyboardInputService</c>, которые принимают целевое окно
+    /// (<c>nint</c>) — иначе повторная проверка окна/точки перед <c>SendInput</c> (гонка «гейт → ввод»)
+    /// не сработает. Публичные перегрузки окна не принимают и проверки не делают. Единственное
+    /// исключение — <c>ReleaseAllKeysAsync</c> (публичная, без окна): отпускание ВСЕХ удержанных
+    /// клавиш при отказе <c>KeyUp</c> (M2). Разбор синтаксический (Roslyn): каждый вызов члена
+    /// сервисов обязан передавать окно (не null/default/IntPtr.Zero) и иметь достаточно аргументов.
+    /// </summary>
+    [Fact]
+    public void ScanCanvas_tool_calls_only_the_guarded_overloads()
+    {
+        var root = ParseTree(Read("Tools/ScanCanvasTool.cs"));
+
+        // Внутренние перегрузки, которые инструмент вправе вызывать (мин. число аргументов).
+        var internalMinArgs = new Dictionary<string, int>
+        {
+            ["MoveAsync"] = 4,     // x, y, окно, токен (M3: постановка курсора)
+            ["ScrollAsync"] = 6,   // direction, amount, x, y, окно, токен
+            ["PressKeyAsync"] = 5,  // key, mods, repeat, окно, токен
+            ["KeyDownAsync"] = 3,   // key, окно, токен
+            ["KeyUpAsync"] = 3,     // key, окно, токен
+        };
+        // Публичные перегрузки без окна: в схеме их нет, инструмент звать не должен.
+        var forbidden = new[]
+        {
+            "ClickAsync", "DoubleClickAsync", "RightClickAsync", "MiddleClickAsync",
+            "DragAsync", "StrokeAsync", "TypeTextAsync", "ExecuteSequenceAsync",
+            "GetKeyboardLayoutAsync", "WaitForIdleAsync", "GetHeldKeyNames",
+        };
+        // Единственная допустимая публичная перегрузка (без окна): отпускание всех клавиш (M2).
+        var allowedPublic = new[] { "ReleaseAllKeysAsync" };
+
+        var calls = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(c => IsMouseInputServiceCall(c) || IsKeyboardInputServiceCall(c))
+            .ToList();
+
+        Assert.NotEmpty(calls);
+
+        foreach (var call in calls)
+        {
+            var member = (MemberAccessExpressionSyntax)call.Expression;
+            var name = member.Name.Identifier.Text;
+
+            if (allowedPublic.Contains(name))
+                continue; // ReleaseAllKeysAsync — исключение (отпускание всех клавиш)
+
+            Assert.Contains(name, internalMinArgs);
+            Assert.DoesNotContain(name, forbidden);
+
+            var argCount = call.ArgumentList.Arguments.Count;
+            Assert.True(argCount >= internalMinArgs[name],
+                $"{name}: {argCount} аргументов — меньше {internalMinArgs[name]} внутренней перегрузки (публичная без окна?)");
+
+            // Аргумент перед CancellationToken — окно: не null/default/IntPtr.Zero.
+            var windowArg = call.ArgumentList.Arguments[^2].Expression;
+            Assert.False(IsNullOrDefault(windowArg),
+                $"{name}: аргумент окна = «{windowArg}» (должен быть не null/default/IntPtr.Zero)");
+        }
+    }
+
+    /// <summary>
+    /// C1-2.1, M2: горизонталь <c>shift_wheel</c> — Shift удержан, и его отпускание (<c>KeyUp</c>)
+    /// стоит в <c>finally</c> (отпускание при отмене/исключении), а результат <c>KeyUp</c> не
+    /// игнорируется (отказ → <c>ReleaseAllKeysAsync</c>). Разбор Roslyn: есть <c>try</c> с
+    /// <c>finally</c>, где вызов <c>KeyUp</c> вложен в <c>if</c> (результат проверен).
+    /// </summary>
+    [Fact]
+    public void ScanCanvas_shift_wheel_releases_shift_in_finally_and_checks_the_result()
+    {
+        var root = ParseTree(Read("Tools/ScanCanvasTool.cs"));
+
+        // finally, где вызывается KeyUp (отпускание Shift)
+        var finallyWithKeyUp = root.DescendantNodes().OfType<TryStatementSyntax>()
+            .Select(t => t.Finally?.Block)
+            .FirstOrDefault(b => b is not null && b.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Any(c => c.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "KeyUp" }));
+        Assert.NotNull(finallyWithKeyUp);
+
+        // Результат KeyUp не игнорируется: вызов вложен в if (условие проверяет результат).
+        var keyUpChecked = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(c => c.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "KeyUp" })
+            .Any(c => c.Ancestors().OfType<IfStatementSyntax>().Any());
+        Assert.True(keyUpChecked, "KeyUp: результат не вложен в if — отказ может игнорироваться");
+    }
+
     [Fact]
     public void Screen_pixels_are_never_copied_for_a_window()
     {

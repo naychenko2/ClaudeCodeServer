@@ -12,6 +12,8 @@
   <ItemGroup>
     <ProjectReference Include="..\HandsBridge.Policy\HandsBridge.Policy.csproj" />
     <ProjectReference Include="..\HandsBridge.Browser\HandsBridge.Browser.csproj" />
+    <!-- Scanning (net10.0, не windows): тесты scan_canvas декодируют PNG общим PngDecoder (C4) -->
+    <ProjectReference Include="..\HandsBridge.Scanning\HandsBridge.Scanning.csproj" />
     <!-- Мост нужен рантайм-тестам гейта (HandsBridgeGateRuntimeTests): TFM windows сюда не
          подключить, поэтому только порядок сборки, а сборку грузим рефлексией из hands-bridge/ -->
     <ProjectReference Include="..\HandsBridge\HandsBridge.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />

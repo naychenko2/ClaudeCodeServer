@@ -18,11 +18,12 @@ namespace Sbroenne.WindowsMcp.Tools;
 /// <summary>
 /// Склейка большой схемы (Visio, в разы больше окна) в ОДИН PNG — шаг C1 «руки без UIA».
 /// Схема открыта в окне без UIA (Citrix/VDI): доступны только клавиши, мышь и снимки. Инструмент
-/// убирает курсор из области содержимого, прокручивает схему «в начало» (верх-лево, стоп по
-/// <see cref="FrameStability"/>), определяет область содержимого (<see cref="ContentRegion"/>),
-/// листает её змейкой (<see cref="SnakePlanner"/>, знаковый сдвиг из <see cref="ShiftEstimator"/>),
-/// снимает каждое окно в память, собирает плитки в общий холст (<see cref="CanvasAssembler"/>) и
-/// кодирует результат в PNG (<see cref="PngEncoder"/>) через <see cref="HandsProjectFiles"/>.
+/// ставит курсор над областью содержимого (колесо) или активирует окно (стрелки), прокручивает схему
+/// «в начало» (верх-лево, стоп по <see cref="FrameStability"/>), определяет область содержимого
+/// (<see cref="ContentRegion"/>), листает её змейкой (<see cref="SnakePlanner"/>, знаковый сдвиг из
+/// <see cref="ShiftEstimator"/>), снимает каждое окно в память, вырезает из него область
+/// содержимого, собирает плитки в общий холст (<see cref="CanvasAssembler"/>) и кодирует результат
+/// в PNG (<see cref="PngEncoder"/>) через <see cref="HandsProjectFiles"/>.
 /// <para>
 /// Способ прокрутки (<c>scrollMethod</c>) неизвестен до спайка на VDI, поэтому параметр:
 /// <c>wheel</c> (колесо; по горизонтали — hwheel), <c>shift_wheel</c> (Shift+колесо для горизонтали)
@@ -57,6 +58,12 @@ public static partial class ScanCanvasTool
     private const int MaxToStartSteps = 200;
 
     /// <summary>
+    /// Потолок числа щелчков/нажатий на один шаг (M4): больше — прокрутка «не догоняет» план,
+    /// дальше шаг не имеет смысла.
+    /// </summary>
+    private const int MaxClicksPerStep = 20;
+
+    /// <summary>
     /// Снимки для скана: в бою — <c>WindowsToolsBase.ScreenshotService</c> (тот же снимок окна,
     /// что <c>screenshot_control</c>: PNG в памяти, на диск не пишется); в тестах — фейк.
     /// </summary>
@@ -77,16 +84,23 @@ public static partial class ScanCanvasTool
 
     /// <summary>
     /// Scans a diagram larger than the window (Visio in Citrix/VDI, no UIA tree) into ONE PNG:
-    /// the cursor is moved out of the content, the canvas is scrolled to the top-left corner, the
-    /// content region is measured, the canvas is paged in a snake (signed shift from the shift
-    /// estimator), each window is captured, the tiles are assembled into a single canvas and
-    /// encoded as a PNG in the project. The reply carries only metadata (path, size, grid, tile
-    /// count, doubtful seams, truncation, duration) — the image itself is not returned.
+    /// the cursor is placed over the content (wheel) or the window is activated (arrows), the
+    /// canvas is scrolled to the top-left corner, the content region is measured, the canvas is
+    /// paged in a snake (signed shift from the shift estimator), each window's content region is
+    /// captured, the tiles are assembled into a single canvas and encoded as a PNG in the project.
+    /// The reply carries only metadata (path, size, grid, tile count, doubtful seams, truncation,
+    /// duration) — the image itself is not returned.
     /// <para>
     /// <c>scrollMethod</c> selects how the canvas is scrolled (unknown until the VDI spike):
     /// <c>wheel</c> (wheel; horizontal via hwheel, the default), <c>shift_wheel</c> (Shift+wheel for
     /// the horizontal axis) or <c>arrows</c> (arrow keys). All go through the internal overloads that
     /// re-check the target window before each input.
+    /// </para>
+    /// <para>
+    /// The window must be activated (foreground) before the call: for <c>arrows</c> the keys go to
+    /// the foreground window, and for <c>wheel</c>/<c>shift_wheel</c> the cursor is placed over the
+    /// content. A scroll bar stuck to the window edge (m-B) can eat the wheel, so keep the window
+    /// away from it or use <c>arrows</c>.
     /// </para>
     /// </summary>
     /// <param name="windowHandle">Window handle (decimal string from window_management). Required: the diagram window to scan; it must accept input and be the foreground window (activate it with window_management first).</param>
@@ -143,7 +157,7 @@ public static partial class ScanCanvasTool
 
         var deps = new ScanCanvasDeps
         {
-            MovePointer = (x, y, ct) => MovePointerAsync(x, y, window, ct),
+            PlaceCursor = (wx, wy, ct) => PlaceCursorAsync(wx, wy, window, ct),
             WheelScroll = (dir, amount, ct) => WheelScrollAsync(dir, amount, window, ct),
             PressKey = (key, mods, repeat, ct) => PressKeyAsync(key, mods, repeat, window, ct),
             KeyDown = (key, ct) => KeyDownAsync(key, window, ct),
@@ -166,21 +180,34 @@ public static partial class ScanCanvasTool
     // ---------- ядро цикла (internal: тесты зовут его напрямую на Linux) ----------
 
     /// <summary>
-    /// Цикл скана: подготовка (курсор из области) → «в начало» (стоп по стабильности) → область
-    /// содержимого → змейка (знаковый сдвиг) → сборка холста → PNG → запись. Чистая логика без
-    /// WinAPI: все обращения к системе — через <paramref name="d"/>.
+    /// Цикл скана: подготовка (курсор над областью / активация окна) → «в начало» (стоп по
+    /// стабильности) → область содержимого → калибровка шага → змейка (знаковый сдвиг) → сборка
+    /// холста → PNG → запись. Чистая логика без WinAPI: все обращения к системе — через
+    /// <paramref name="d"/>.
     /// </summary>
     internal static async Task<ScanCanvasResult> RunScanAsync(ScanCanvasOptions o, ScanCanvasDeps d, CancellationToken ct)
     {
         var result = new ScanCanvasResult { StopReason = "end_of_scroll" };
         var started = Stopwatch.StartNew();
 
-        // 1. Подготовка: убрать курсор из области содержимого (в угол) — только мышью, без клавиш.
-        if (!await d.MovePointer(2, 2, ct))
-            return FailResult("could not move the cursor out of the content area.");
+        // M5: предпроверка saveTo ДО первого действия (расширение, корень проекта, потолок,
+        // свободное имя): плохой путь — отказ без единого вызова ввода/снимка.
+        var saveCheck = HandsGate.Policy.CheckOutputPath(HandsTools.ScanCanvas, d.Files.ProjectRoot, o.SaveTo,
+            bytes: 0, d.Files.FilesWrittenThisTurn, appendOwn: false, ownFiles: null);
+        if (!saveCheck.Allowed)
+            return FailResult($"saveTo '{o.SaveTo}': {saveCheck.Reason}");
+
+        // 1. Снимок (размер окна) + подготовка курсора (M3): для колеса/shift_wheel курсор ставится
+        //    НАД содержимым (центр окна — безопасная точка над контентом; region ещё неизвестен),
+        //    для стрелков мышь не нужна (окно уже передним планом, как в scan_document).
+        var (frame, frameW, frameH) = await d.CaptureFrame(ct);
+        if (o.ScrollMethod is not ScrollMethod.Arrows)
+        {
+            if (!await d.PlaceCursor(frameW / 2, frameH / 2, ct))
+                return FailResult("could not place the cursor over the content (the window center is not over the allowed window).");
+        }
 
         // 2. «В начало»: прокрутка вверх-влево до края (стоп по стабильности кадра).
-        var (frame, frameW, frameH) = await d.CaptureFrame(ct);
         var prev = frame;
         var atStart = false;
         for (var i = 0; i < MaxToStartSteps; i++)
@@ -198,9 +225,10 @@ public static partial class ScanCanvasTool
             prev = frame;
             if (started.ElapsedMilliseconds > o.MaxElapsedMs)
             {
+                // Minor (b): время истекло в «в начало» — это остановка, а не «дальше строить змейку».
                 result.Truncated = true;
                 result.TruncationReason = "time";
-                break;
+                return result;
             }
         }
 
@@ -223,7 +251,24 @@ public static partial class ScanCanvasTool
         if (region.Width <= 0 || region.Height <= 0)
             return FailResult("the content region could not be determined (the canvas did not move).");
 
-        // 4. Змейка: шаги планировщика, на каждом — прокрутка + снимок + знаковый сдвиг + Feed.
+        // 4. M3: теперь region известен — курсор точно в ЦЕНТР region (внутри области), чтобы
+        //    колесо/shift_wheel шло в схему, а не в рамку/ленту.
+        if (o.ScrollMethod is not ScrollMethod.Arrows)
+        {
+            var cx = region.X + region.Width / 2;
+            var cy = region.Y + region.Height / 2;
+            if (!await d.PlaceCursor(cx, cy, ct))
+                return FailResult("could not place the cursor at the center of the content region.");
+        }
+
+        // 5. Калибровка шага (M4): первый шаг — один щелчок, измеряем фактический сдвиг
+        //    (shiftPerTick); дальше число щелчков = round(ожидаемый сдвиг / shiftPerTick).
+        var (shiftPerTickX, shiftPerTickY) = await CalibrateStep(d, o, region, frame, frameW, frameH, ct);
+        if (shiftPerTickX <= 0 && shiftPerTickY <= 0)
+            return FailResult("the scroll did not move the canvas (no measurable shift after one step).");
+
+        // 5. Змейка: шаги планировщика, на каждом — прокрутка (нужное число щелчков) + снимок +
+        //    знаковый сдвиг + Feed. Позиция плитки = накопленные смещения на холсте.
         var planner = new SnakePlanner(
             region.Width, region.Height,
             overlapFraction: o.OverlapFraction,
@@ -235,50 +280,64 @@ public static partial class ScanCanvasTool
         var tiles = new List<Tile>();
         var canvasX = 0;
         var canvasY = 0;
-        var lastFrame = frame;
 
-        // Первый шаг — ToStart: мы уже в начале (шаг 2), поэтому кадр текущего положения.
+        // C2: первое окно (верх-лево холста) — первая плитка в (0,0).
+        var (topLeft, topLeftW, topLeftH) = await d.CaptureFrame(ct);
+        tiles.Add(MakeTile(topLeft, topLeftW, topLeftH, region, 0, 0, measuredShift: 0, expectedShift: 0));
+        var lastFrame = topLeft;
+
+        // Первый шаг — ToStart: мы уже в начале (шаг 2), поэтому кадр текущего положения (сдвиг 0).
         var step = planner.CurrentStep;
         if (step.Kind == ScanStepKind.ToStart)
         {
-            var (topLeft, _, _) = await d.CaptureFrame(ct);
-            var shift = MeasureShift(o, Axis.Vertical, 0, lastFrame, topLeft, frameW, frameH);
-            lastFrame = topLeft;
-            step = planner.Feed(Gray(topLeft), shift, started.ElapsedMilliseconds);
+            step = planner.Feed(Gray(topLeft), 0, started.ElapsedMilliseconds);
         }
 
         while (step.Kind == ScanStepKind.Step)
         {
             ct.ThrowIfCancellationRequested();
 
-            // Прокрутка по оси шага в заданном направлении.
-            if (!await ScrollAxis(d, o, step.Axis, step.Direction, ct))
+            // Прокрутка по оси шага: нужное число щелчков (M4, калибровка).
+            var expected = step.ExpectedShift;
+            var perTick = step.Axis == Axis.Horizontal ? shiftPerTickX : shiftPerTickY;
+            var clicks = perTick > 0 ? Math.Clamp((int)Math.Round((double)expected / perTick), 1, MaxClicksPerStep) : 1;
+            var moved = false;
+            for (var c = 0; c < clicks; c++)
+            {
+                if (!await ScrollAxis(d, o, step.Axis, step.Direction, ct))
+                    break;
+                moved = true;
+            }
+            if (!moved)
                 break;
 
             var (next, nextW, nextH) = await d.CaptureFrame(ct);
 
-            // Знаковый сдвиг (из ShiftEstimator): положительный — контент before сдвинут в after.
-            var measured = MeasureShift(o, step.Axis, step.ExpectedShift, lastFrame, next, frameW, frameH);
+            // Край схемы: кадр не изменился (упёрлись) — реального движения нет, плитка не
+            // добавляется (иначе это дубликат: тот же кадр, что предыдущий). Планировщик сам
+            // распознаёт край по хэшу кадра (SnakePlanner) и переходит к следующему этапу:
+            // для горизонтали — вниз на строку, для вертикали — Done.
+            var noChange = FrameStability.AreStable(lastFrame, next, 1.0);
+            var tileOffset = 0;
+            if (!noChange)
+            {
+                // C1: знаковый сдвиг (из ShiftEstimator, «сдвиг содержимого») → смещение плитки
+                // на холсте (инверсия в ОДНОМ месте, ToTileShift).
+                var contentShift = MeasureShift(o, step.Axis, expected, lastFrame, next, frameW, frameH, region);
+                tileOffset = ToTileShift(contentShift);
 
-            // Позиция плитки = накопленные ИЗМЕРЕННЫЕ сдвиги (знак учитывается).
-            if (step.Axis == Axis.Horizontal)
-                canvasX += measured;
-            else
-                canvasY += measured;
+                // C3: позиция плитки = накопленные смещения на холсте (знак учтён инверсией).
+                if (step.Axis == Axis.Horizontal)
+                    canvasX += tileOffset;
+                else
+                    canvasY += tileOffset;
 
-            tiles.Add(new Tile(
-                Pixels: next,
-                Width: nextW,
-                Height: nextH,
-                CanvasX: canvasX,
-                CanvasY: canvasY,
-                MeasuredShift: measured,
-                ExpectedShift: step.ExpectedShift,
-                Score: 1.0,
-                Ambiguous: false));
+                tiles.Add(MakeTile(next, nextW, nextH, region, canvasX, canvasY, tileOffset, step.ExpectedShift));
 
-            lastFrame = next;
-            step = planner.Feed(Gray(next), measured, started.ElapsedMilliseconds);
+                lastFrame = next;
+            }
+
+            step = planner.Feed(Gray(next), tileOffset, started.ElapsedMilliseconds);
 
             // Потолок: автомат в Done, Truncated с причиной.
             if (planner.Truncated)
@@ -292,7 +351,7 @@ public static partial class ScanCanvasTool
         if (tiles.Count == 0)
             return FailResult("no tiles were captured (the canvas did not move).");
 
-        // 5. Сборка холста по измеренным сдвигам + сомнительные швы.
+        // 6. Сборка холста по измеренным сдвигам + сомнительные швы.
         var canvas = CanvasAssembler.Assemble(tiles);
         if (canvas.Truncated)
         {
@@ -307,7 +366,7 @@ public static partial class ScanCanvasTool
         result.Tiles = tiles.Count;
         result.DoubtfulSeams = canvas.DoubtfulSeams;
 
-        // 6. PNG (только если холст не отклонён) → запись в проект.
+        // 7. PNG (только если холст не отклонён) → запись в проект.
         if (!canvas.Truncated && canvas.Pixels.Length > 0)
         {
             var png = PngEncoder.Encode(canvas.Pixels, canvas.Width, canvas.Height);
@@ -324,7 +383,58 @@ public static partial class ScanCanvasTool
     }
 
     /// <summary>
-    /// Прокрутка на один шаг по оси в заданном направлении, по способу <paramref name="o"/>:
+    /// M3: поставить курсор в точку <c>(windowX, windowY)</c> в координатах ОКНА (центр region /
+    /// центр окна). Точка конвертируется в экранные (окно: <c>GetWindowRect</c> + смещение),
+    /// проверяется на разрешённое окно (<see cref="HandsPolicy.AcceptsInputAt"/>) ДО перемещения
+    /// (внутренняя <c>MoveAsync</c> тоже проверяет, что точка над целевым окном), и переводится
+    /// внутренней перегрузкой. Для <c>arrows</c> вызывающий сам не двигает мышь.
+    /// </summary>
+    private static async Task<bool> PlaceCursorAsync(int windowX, int windowY, long window, CancellationToken ct)
+    {
+        // Экранное положение левого верхнего угла окна (координаты точки — в системе окна).
+        if (!NativeMethods.GetWindowRect((nint)window, out var rect))
+            return false;
+        var screenX = rect.Left + windowX;
+        var screenY = rect.Top + windowY;
+
+        // Проверка ЦЕЛИ (не текущей позиции) ДО перемещения: точка над разрешённым окном.
+        if (!HandsGate.Policy.AcceptsInputAt(screenX, screenY, window).Allowed)
+            return false;
+
+        var res = await WindowsToolsBase.MouseInputService.MoveAsync(screenX, screenY, (nint)window, ct);
+        return res.Success;
+    }
+
+    /// <summary>
+    /// Калибровка шага (M4): один щелчок по каждой оси, фактический сдвиг (shiftPerTick).
+    /// Возвращает (px per tick по X, px per tick по Y); 0 — ось не двигает.
+    /// </summary>
+    private static async Task<(int X, int Y)> CalibrateStep(
+        ScanCanvasDeps d, ScanCanvasOptions o, Rect region, byte[] atStart, int w, int h, CancellationToken ct)
+    {
+        // Горизонталь: один щелчок вправо, измеряем сдвиг, возврат влево.
+        var shiftX = 0;
+        if (await ScrollAxis(d, o, Axis.Horizontal, +1, ct))
+        {
+            var (afterX, _, _) = await d.CaptureFrame(ct);
+            shiftX = Math.Abs(MeasureShift(o, Axis.Horizontal, 0, atStart, afterX, w, h, region));
+            await ScrollAxis(d, o, Axis.Horizontal, -1, ct); // возврат
+        }
+
+        // Вертикаль: один щелчок вниз, измеряем сдвиг, возврат вверх.
+        var shiftY = 0;
+        if (await ScrollAxis(d, o, Axis.Vertical, +1, ct))
+        {
+            var (afterY, _, _) = await d.CaptureFrame(ct);
+            shiftY = Math.Abs(MeasureShift(o, Axis.Vertical, 0, atStart, afterY, w, h, region));
+            await ScrollAxis(d, o, Axis.Vertical, -1, ct); // возврат
+        }
+
+        return (shiftX, shiftY);
+    }
+
+    /// <summary>
+    /// Прокрутка на ОДИН щелчок по оси в заданном направлении, по способу <paramref name="o"/>:
     /// <c>wheel</c> (колесо/hwheel), <c>shift_wheel</c> (Shift+колесо для горизонтали) или
     /// <c>arrows</c> (стрелки). Все — через внутренние перегрузки с проверкой окна/точки.
     /// </summary>
@@ -342,12 +452,22 @@ public static partial class ScanCanvasTool
             case ScrollMethod.ShiftWheel:
                 if (axis == Axis.Vertical)
                     return await d.WheelScroll(vertDir, 1, ct);
-                // Горизонталь: Shift удержан + вертикальное колесо.
-                if (!await d.KeyDown("Shift", ct))
+                // M2: горизонталь — Shift удержан + вертикальное колесо; KeyUp в finally, его
+                // результат не игнорируется (отказ → ошибка + отпускание всего через HeldKeyTracker).
+                var shiftDown = await d.KeyDown("Shift", ct);
+                if (!shiftDown)
                     return false;
-                var ok = await d.WheelScroll(vertDir, 1, ct);
-                await d.KeyUp("Shift", ct);
-                return ok;
+                var wheelOk = false;
+                try
+                {
+                    wheelOk = await d.WheelScroll(vertDir, 1, ct);
+                }
+                finally
+                {
+                    if (!await d.KeyUp("Shift", ct))
+                        ReleaseAllHeldKeys();
+                }
+                return wheelOk;
 
             case ScrollMethod.Arrows:
             default:
@@ -358,25 +478,79 @@ public static partial class ScanCanvasTool
     }
 
     /// <summary>
-    /// Знаковый сдвиг шага (из <see cref="ShiftEstimator"/>): <paramref name="before"/>/<paramref
-    /// name="after"/> — кадры до/после шага; знак: положительный — контент <c>before</c> сдвинут
-    /// вниз/вправо в <c>after</c>. Плоский/неопределённый сдвиг → 0. <paramref name="w"/>/<paramref
-    /// name="h"/> — размер окна (все кадры одного скана — одного размера).
+    /// C1: «сдвиг содержимого между кадрами» (<see cref="ShiftEstimator"/>, положительный — контент
+    /// <c>before</c> сдвинут вниз/вправо в <c>after</c>) → «смещение плитки на холсте» (положительный
+    /// — окно сдвинулось вправо/вниз). Инверсия — в этом ЕДИНСТВЕННОМ месте: позиция плитки
+    /// (<c>canvasX/Y += tileOffset</c>) и <c>planner.Feed</c> (контракт m-D: вправо/вниз —
+    /// положительный) получают уже «смещение плитки», а не сырой сдвиг содержимого.
     /// </summary>
-    private static int MeasureShift(ScanCanvasOptions o, Axis axis, int expectedShift, byte[] before, byte[] after, int w, int h)
+    private static int ToTileShift(int contentShift) => -contentShift;
+
+    /// <summary>
+    /// Знаковый сдвиг шага (из <see cref="ShiftEstimator"/>), C3: оценка ТОЛЬКО по области
+    /// содержимого — <paramref name="before"/>/<paramref name="after"/> вырезаются в
+    /// <paramref name="region"/> (рамка/лента/линейки не тянут оценку к нулю). Знак: «сдвиг
+    /// содержимого» (положительный — контент <c>before</c> сдвинут вниз/вправо в <c>after</c>).
+    /// Плоский/неопределённый сдвиг → 0. <paramref name="w"/>/<paramref name="h"/> — размер окна.
+    /// </summary>
+    private static int MeasureShift(ScanCanvasOptions o, Axis axis, int expectedShift, byte[] before, byte[] after, int w, int h, Rect region)
     {
-        var est = ShiftEstimator.Estimate(Gray(before), Gray(after), w, h, axis, expectedShift);
+        var (beforeCrop, cw, ch) = CropRegion(before, w, h, region);
+        var (afterCrop, _, _) = CropRegion(after, w, h, region);
+        var est = ShiftEstimator.Estimate(Gray(beforeCrop), Gray(afterCrop), cw, ch, axis, expectedShift);
         return est.Shift;
     }
 
-    // ---------- реальные швы (Windows) ----------
-
-    /// <summary>Перевод курсора в точку (внутренняя перегрузка с проверкой окна/точки).</summary>
-    private static async Task<bool> MovePointerAsync(int x, int y, long window, CancellationToken ct)
+    /// <summary>
+    /// C3: вырез области содержимого из полного кадра окна: рамка/лента/линейки НЕ попадают в
+    /// холст и НЕ тянут оценку сдвига. Возвращает (RGB-пиксели области, ширина, высота).
+    /// </summary>
+    private static (byte[] Pixels, int Width, int Height) CropRegion(byte[] rgb, int w, int h, Rect region)
     {
-        var res = await WindowsToolsBase.MouseInputService.MoveAsync(x, y, (nint)window, ct);
-        return res.Success;
+        var cw = Math.Max(0, region.Width);
+        var ch = Math.Max(0, region.Height);
+        var cropped = new byte[cw * ch * 3];
+        for (var y = 0; y < ch; y++)
+        {
+            var srcY = region.Y + y;
+            if (srcY < 0 || srcY >= h)
+                continue;
+            for (var x = 0; x < cw; x++)
+            {
+                var srcX = region.X + x;
+                if (srcX < 0 || srcX >= w)
+                    continue;
+                var srcIdx = (srcY * w + srcX) * 3;
+                var dstIdx = (y * cw + x) * 3;
+                cropped[dstIdx] = rgb[srcIdx];
+                cropped[dstIdx + 1] = rgb[srcIdx + 1];
+                cropped[dstIdx + 2] = rgb[srcIdx + 2];
+            }
+        }
+        return (cropped, cw, ch);
     }
+
+    /// <summary>
+    /// Плитка холста: область содержимого кадра (C3) в позиции (canvasX, canvasY) на холсте.
+    /// <paramref name="measuredShift"/> — смещение плитки на холсте (C1, из ToTileShift);
+    /// <paramref name="expectedShift"/> — ожидаемый сдвиг шага (для детекции сомнительных швов).
+    /// </summary>
+    private static Tile MakeTile(byte[] rgb, int w, int h, Rect region, int canvasX, int canvasY, int measuredShift, int expectedShift)
+    {
+        var (pixels, cw, ch) = CropRegion(rgb, w, h, region);
+        return new Tile(
+            Pixels: pixels,
+            Width: cw,
+            Height: ch,
+            CanvasX: canvasX,
+            CanvasY: canvasY,
+            MeasuredShift: measuredShift,
+            ExpectedShift: expectedShift,
+            Score: 1.0,
+            Ambiguous: false);
+    }
+
+    // ---------- реальные швы (Windows) ----------
 
     /// <summary>Колесо/hwheel (внутренняя перегрузка с проверкой окна/точки).</summary>
     private static async Task<bool> WheelScrollAsync(string direction, int amount, long window, CancellationToken ct)
@@ -421,6 +595,12 @@ public static partial class ScanCanvasTool
         return res.Success;
     }
 
+    /// <summary>M2: при отказе KeyUp — отпустить ВСЕ удержанные клавиши (HeldKeyTracker).</summary>
+    private static void ReleaseAllHeldKeys()
+    {
+        _ = WindowsToolsBase.KeyboardInputService.ReleaseAllKeysAsync(CancellationToken.None);
+    }
+
     /// <summary>Снимок окна: PNG в памяти (на диск не пишется) → сырые пиксели RGB и размеры.</summary>
     private static async Task<(byte[] Pixels, int Width, int Height)> CaptureWindowAsync(string windowHandle, CancellationToken ct)
     {
@@ -441,78 +621,26 @@ public static partial class ScanCanvasTool
     }
 
     /// <summary>
-    /// Декод PNG (8 бит, RGB/RGBA) → RGB-пиксели (3 канала). Минимальный декодер: сигнатура, IHDR,
-    /// IDAT (zlib), фильтры None/Sub (те, что пишет <see cref="PngEncoder"/>).
+    /// C4: PNG (8 бит, RGB/RGBA) → RGB-пиксели (3 канала) через общий декодер <see cref="PngDecoder"/>
+    /// (все пять фильтров, CRC, zlib). RGBA → RGB: альфа композитится на белый (простое и честное:
+    /// непрозрачный фон схем — no-op, полупрозрачное не «пропадает»).
     /// </summary>
     internal static byte[] DecodePngToRgb(byte[] png)
     {
-        // IHDR: width (4), height (4), depth (1), colorType (1) — смещение 16.
-        var width = ReadUInt32Big(png, 16);
-        var height = ReadUInt32Big(png, 20);
-        var colorType = png[25];
-        var channels = colorType == 6 ? 4 : 3; // 2 = RGB, 6 = RGBA
+        var (decoded, w, h, channels) = PngDecoder.Decode(png);
+        if (channels == 3)
+            return decoded;
 
-        // IDAT: все чанки IDAT подряд (zlib-поток).
-        var idat = new List<byte>();
-        var offset = 8;
-        while (offset + 8 <= png.Length)
+        // RGBA → RGB: композит на белый (alpha/255 * pixel + (255 - alpha/255) * 255).
+        var rgb = new byte[w * h * 3];
+        for (var i = 0; i < w * h; i++)
         {
-            var len = ReadUInt32Big(png, offset);
-            var type = new string(new[] { (char)png[offset + 4], (char)png[offset + 5], (char)png[offset + 6], (char)png[offset + 7] });
-            if (type == "IDAT")
-            {
-                for (var i = 0; i < len; i++)
-                    idat.Add(png[offset + 8 + i]);
-            }
-            offset += 12 + len; // length(4) + type(4) + data(len) + crc(4)
-            if (type == "IEND")
-                break;
+            var s = i * 4;
+            var a = decoded[s + 3] / 255.0;
+            for (var c = 0; c < 3; c++)
+                rgb[i * 3 + c] = (byte)(decoded[s + c] * a + 255 * (1 - a));
         }
-
-        var raw = DecompressZlib(idat.ToArray());
-        var rowLen = width * channels;
-        var pixels = new byte[width * height * 3];
-        var prev = new byte[rowLen];
-        for (var y = 0; y < height; y++)
-        {
-            var filter = raw[y * (1 + rowLen)];
-            var src = raw.AsSpan().Slice(y * (1 + rowLen) + 1, rowLen);
-            var dst = pixels.AsSpan().Slice(y * rowLen, rowLen);
-            for (var i = 0; i < rowLen; i++)
-            {
-                var a = src[i];
-                var b = filter == 1 ? (byte)(a + prev[i]) : a; // Sub: a + left
-                dst[i] = b;
-                prev[i] = b;
-            }
-
-            // RGBA → RGB: альфа отбрасывается (фон схем — непрозрачный).
-            if (channels == 4)
-            {
-                for (var x = 0; x < width; x++)
-                {
-                    var s = (y * width + x) * 4;
-                    var d = (y * width + x) * 3;
-                    pixels[d] = pixels[s];
-                    pixels[d + 1] = pixels[s + 1];
-                    pixels[d + 2] = pixels[s + 2];
-                }
-            }
-        }
-
-        return pixels;
-    }
-
-    private static int ReadUInt32Big(byte[] b, int offset) =>
-        (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] << 8) | b[offset + 3];
-
-    private static byte[] DecompressZlib(byte[] data)
-    {
-        using var input = new System.IO.MemoryStream(data);
-        using var zlib = new System.IO.Compression.ZLibStream(input, System.IO.Compression.CompressionMode.Decompress);
-        using var output = new System.IO.MemoryStream();
-        zlib.CopyTo(output);
-        return output.ToArray();
+        return rgb;
     }
 
     /// <summary>RGB → серый (среднее каналов), для ContentRegion/ShiftEstimator/стабильности.</summary>
@@ -555,7 +683,8 @@ public static partial class ScanCanvasTool
 
     /// <summary>
     /// Ответ модели: только метаданные (путь, размер, сетка, число плиток, сомнительные швы,
-    /// <c>truncated</c>+причина, длительность). Картинку в ответ НЕ возвращаем.
+    /// <c>truncated</c>+причина, длительность). Картинку в ответ НЕ возвращаем. Minor (a): ошибка
+    /// (<c>StopReason=error</c>) → <c>IsError=true</c>, иначе агент не увидит провал.
     /// </summary>
     private static CallToolResult ToCallToolResult(ScanCanvasResult r)
     {
@@ -563,9 +692,11 @@ public static partial class ScanCanvasTool
             .Select(s => new { reason = s.Reason, tileA = s.TileA, tileB = s.TileB })
             .ToArray();
 
+        var isError = r.StopReason == "error" || !r.Done;
+
         var payload = new
         {
-            success = true,
+            success = !isError,
             path = r.Path,
             width = r.Width,
             height = r.Height,
@@ -584,7 +715,7 @@ public static partial class ScanCanvasTool
         return new CallToolResult
         {
             Content = [new TextContentBlock { Text = JsonSerializer.Serialize(payload, WindowsToolsBase.JsonOptions) }],
-            IsError = false,
+            IsError = isError,
         };
     }
 
@@ -630,8 +761,8 @@ public static partial class ScanCanvasTool
     /// </summary>
     internal sealed class ScanCanvasDeps
     {
-        /// <summary>Перевести курсор в точку (x, y) с проверкой окна/точки.</summary>
-        public required Func<int, int, CancellationToken, Task<bool>> MovePointer { get; init; }
+        /// <summary>M3: поставить курсор в точку (windowX, windowY) в координатах ОКНА (центр region/окна).</summary>
+        public required Func<int, int, CancellationToken, Task<bool>> PlaceCursor { get; init; }
         /// <summary>Колесо/hwheel: направление ("Up"/"Down"/"Left"/"Right") и 1 notch.</summary>
         public required Func<string, int, CancellationToken, Task<bool>> WheelScroll { get; init; }
         /// <summary>Нажать клавишу: имя клавиши, имя модификатора ("None"/"Ctrl"/"Shift"/"Alt"), repeat раз.</summary>

@@ -8,13 +8,14 @@ using Xunit;
 namespace HandsBridge.Policy.Tests;
 
 /// <summary>
-/// Ядро <c>scan_canvas</c> (C1 «руки без UIA»): цикл «курсор из области → в начало → область
-/// содержимого → змейка (знаковый сдвиг) → сборка холста → PNG → запись» вызывается напрямую
-/// (<c>RunScanAsync</c>, internal) на фейках (снимок окна, прокрутка, клавиши) — WinAPI в нём нет,
-/// поэтому Linux-тесты покрывают: полный проход до PNG (байты декодируются и равны оригиналу),
-/// сомнительные швы на сетке, <c>truncated</c> по плиткам, отказ без <c>saveTo</c>, <c>.v2.png</c>
-/// при повторе, <c>scrollMethod</c>=arrows/shift_wheel (правильные внутренние перегрузки), отмену.
-/// Мост грузится рефлексией (тот же путь, что <see cref="HandsBridgeGateRuntimeTests"/>).
+/// Ядро <c>scan_canvas</c> (C1 «руки без UIA»): цикл «курсор над областью → в начало → область
+/// содержимого → калибровка шага → змейка (знаковый сдвиг) → сборка холста → PNG → запись»
+/// вызывается напрямую (<c>RunScanAsync</c>, internal) на фейках (снимок окна, прокрутка, клавиши)
+/// — WinAPI в нём нет, поэтому Linux-тесты покрывают: полный проход до PNG, попиксельное совпадение
+/// холста с эталонной схемой (0 неверных), сомнительные швы, <c>truncated</c>, отказ без <c>saveTo</c>,
+/// <c>.v2.png</c> при повторе, <c>scrollMethod</c>=arrows/shift_wheel, калибровку шага (M4),
+/// предпроверку saveTo (M5), отмену. Мост грузится рефлексией (тот же путь, что
+/// <see cref="HandsBridgeGateRuntimeTests"/>).
 /// </summary>
 [Collection(HandsBridgeGateRuntimeTests.Collection)]
 public class ScanCanvasToolTests
@@ -46,38 +47,82 @@ public class ScanCanvasToolTests
     }
 
     /// <summary>
-    /// Синтетическая «схема»: окно <paramref name="w"/>×<paramref name="h"/> с рамкой (10 px,
-    /// статична) и содержимым — 2D-градиентом, зависящим от позиции прокрутки <c>(sx, sy)</c>.
-    /// Прокрутка меняет позицию (с клампом в границы схемы), снимок — вид окна в этой позиции.
-    /// Записывает каждый вызов ввода (для проверки <c>scrollMethod</c>).
+    /// Синтетическая «схема» (C1–C3): окно <paramref name="w"/>×<paramref name="h"/> с рамкой
+    /// (10 px, статична) и содержимым — ПСЕВДОСЛУЧАЙНОЙ текстурой без периода (фиксированный seed),
+    /// зависящей от позиции прокрутки <c>(sx, sy)</c>. Прокрутка меняет позицию (с клампом в границы
+    /// схемы); снимок — вид окна в этой позиции. Шаг одного щелчка ≤ 40 % окна. Записывает каждый
+    /// вызов ввода (для проверки <c>scrollMethod</c> и M4/M5).
     /// </summary>
-    private sealed class FakeScheme
+    private class FakeScheme
     {
         public const int Border = 10;
         public readonly int W;
         public readonly int H;
-        public readonly int StepX;
-        public readonly int StepY;
+        public readonly int StepX;   // px per click, horizontal (≤ 40 % of W)
+        public readonly int StepY;   // px per click, vertical (≤ 40 % of H)
+        public readonly int ContentW; // W - 2*Border
+        public readonly int ContentH; // H - 2*Border
         public readonly int MaxSx;
         public readonly int MaxSy;
+        public readonly int SchemeW; // MaxSx + ContentW
+        public readonly int SchemeH; // MaxSy + ContentH
 
         public int Sx;
         public int Sy;
 
-        /// <summary>Журнал вызовов: "move", "wheel:Up", "key:Down", "keydown:Shift", ...</summary>
+        /// <summary>Журнал вызовов: "place:cursor", "wheel:Up", "key:Down", "keydown:Shift", ...</summary>
         public readonly List<string> Calls = new();
 
-        public FakeScheme(int w, int h, int stepX, int stepY, int schemeCols, int schemeRows)
+        /// <summary>Эталонная схема (полный холст): псевдослучайная текстура, фиксированный seed.</summary>
+        public readonly byte[] Scheme;
+
+        public FakeScheme(int w, int h, int stepX, int stepY, int schemeCols, int schemeRows, double overlapFraction = 0.5)
         {
             W = w;
             H = h;
             StepX = stepX;
             StepY = stepY;
-            MaxSx = (schemeCols - 1) * stepX;
-            MaxSy = (schemeRows - 1) * stepY;
+            ContentW = w - 2 * Border;
+            ContentH = h - 2 * Border;
+            // Фактический шаг инструмента (M4): clicks = round(ожидаемый/StepX), ожидаемый =
+            // ContentW*(1-overlap). Схема таплится именно этим шагом (не одним щелчком), поэтому
+            // MaxSx/MaxSy — в фактических шагах, а не в щелчках.
+            var expectedX = (int)(ContentW * (1 - overlapFraction));
+            var expectedY = (int)(ContentH * (1 - overlapFraction));
+            var clicksX = Math.Clamp((int)Math.Round((double)expectedX / stepX), 1, 20);
+            var clicksY = Math.Clamp((int)Math.Round((double)expectedY / stepY), 1, 20);
+            MaxSx = (schemeCols - 1) * clicksX * stepX;
+            MaxSy = (schemeRows - 1) * clicksY * stepY;
+            SchemeW = MaxSx + ContentW;
+            SchemeH = MaxSy + ContentH;
+
+            // Псевдослучайная текстура без периода (фиксированный seed): базовый уровень каждой
+            // КОЛОНКИ и каждой СТРОКИ — псевдослучайный (непериодический), поэтому профиль
+            // колонки/строки (то, что видит ShiftEstimator) непериодичен и корреляция находит
+            // истинный сдвиг, а не ложный период. Мелкий шум — чтобы пиксели не были плоскими.
+            var rng = new Random(12345);
+            var colBase = new int[SchemeW];
+            for (var x = 0; x < SchemeW; x++)
+                colBase[x] = rng.Next(0, 256);
+            var rowBase = new int[SchemeH];
+            for (var y = 0; y < SchemeH; y++)
+                rowBase[y] = rng.Next(0, 256);
+
+            Scheme = new byte[SchemeW * SchemeH * 3];
+            for (var y = 0; y < SchemeH; y++)
+            {
+                for (var x = 0; x < SchemeW; x++)
+                {
+                    var idx = (y * SchemeW + x) * 3;
+                    var v = (colBase[x] + rowBase[y] + rng.Next(0, 20)) % 256;
+                    Scheme[idx] = (byte)v;
+                    Scheme[idx + 1] = (byte)((v + 60) % 256);
+                    Scheme[idx + 2] = (byte)((v + 120) % 256);
+                }
+            }
         }
 
-        /// <summary>Снимок окна в текущей позиции: рамка статична, содержимое — градиент от (sx, sy).</summary>
+        /// <summary>Снимок окна в текущей позиции: рамка статична, содержимое — схема в (Sx, Sy).</summary>
         public (byte[] Pixels, int Width, int Height) Capture()
         {
             var pixels = new byte[W * H * 3];
@@ -93,20 +138,25 @@ public class ScanCanvasToolTests
                         continue;
                     }
 
-                    var cx = Sx + x;
-                    var cy = Sy + y;
-                    var v = (byte)((cx * 3 + cy * 5) % 256);
-                    pixels[idx] = v;
-                    pixels[idx + 1] = (byte)((v + 40) % 256);
-                    pixels[idx + 2] = (byte)((v + 80) % 256);
+                    var sx = Sx + (x - Border);
+                    var sy = Sy + (y - Border);
+                    if (sx < 0 || sx >= SchemeW || sy < 0 || sy >= SchemeH)
+                    {
+                        pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = 0;
+                        continue;
+                    }
+                    var sidx = (sy * SchemeW + sx) * 3;
+                    pixels[idx] = Scheme[sidx];
+                    pixels[idx + 1] = Scheme[sidx + 1];
+                    pixels[idx + 2] = Scheme[sidx + 2];
                 }
             }
 
             return (pixels, W, H);
         }
 
-        /// <summary>Прокрутка: колесо (Up/Down/Left/Right) — по вертикали/горизонтали.</summary>
-        public bool Wheel(string direction)
+        /// <summary>Прокрутка: колесо (Up/Down/Left/Right) — по вертикали/горизонтали на StepX/StepY.</summary>
+        public virtual bool Wheel(string direction)
         {
             Calls.Add($"wheel:{direction}");
             switch (direction)
@@ -128,7 +178,7 @@ public class ScanCanvasToolTests
             return true;
         }
 
-        /// <summary>Клавиша (стрелки): Up/Down/Left/Right — по вертикали/горизонтали.</summary>
+        /// <summary>Клавиша (стрелки): Up/Down/Left/Right — по вертикали/горизонтали на StepX/StepY.</summary>
         public bool Key(string key)
         {
             Calls.Add($"key:{key}");
@@ -163,9 +213,10 @@ public class ScanCanvasToolTests
             return true;
         }
 
-        public bool Move(int x, int y)
+        /// <summary>M3: курсор в точку (windowX, windowY) в координатах окна.</summary>
+        public bool PlaceCursor(int windowX, int windowY)
         {
-            Calls.Add("move");
+            Calls.Add($"place:{windowX},{windowY}");
             return true;
         }
     }
@@ -198,7 +249,7 @@ public class ScanCanvasToolTests
     private static object MakeDeps(FakeScheme fake, object files)
     {
         var d = Activator.CreateInstance(DepsType)!;
-        Set(d, "MovePointer", new Func<int, int, CancellationToken, Task<bool>>((x, y, _) => Task.FromResult(fake.Move(x, y))));
+        Set(d, "PlaceCursor", new Func<int, int, CancellationToken, Task<bool>>((x, y, _) => Task.FromResult(fake.PlaceCursor(x, y))));
         Set(d, "WheelScroll", new Func<string, int, CancellationToken, Task<bool>>((dir, _, _) => Task.FromResult(fake.Wheel(dir))));
         Set(d, "PressKey", new Func<string, object, int, CancellationToken, Task<bool>>((key, _, _, _) => Task.FromResult(fake.Key(key))));
         Set(d, "KeyDown", new Func<string, CancellationToken, Task<bool>>((key, _) => Task.FromResult(fake.KeyDown(key))));
@@ -211,10 +262,10 @@ public class ScanCanvasToolTests
     private static void Set(object o, string prop, object? value) =>
         o.GetType().GetProperty(prop)!.SetValue(o, value);
 
-    private static async Task<Out> Run(object options, object deps)
+    private static async Task<Out> Run(object options, object deps, CancellationToken ct = default)
     {
         var method = ToolType.GetMethod("RunScanAsync", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static)!;
-        var task = (Task)method.Invoke(null, [options, deps, CancellationToken.None])!;
+        var task = (Task)method.Invoke(null, [options, deps, ct])!;
         await task;
         var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
         var t = result.GetType();
@@ -243,39 +294,51 @@ public class ScanCanvasToolTests
 
     private static string NewRoot()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "hands-c12-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "hands-c121-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return dir;
     }
 
     /// <summary>
-    /// Полный проход: схема 3×2 окна (сдвиг 100 px, перекрытие 15 %) → змейка до конца → один PNG.
-    /// Байты PNG декодируются (сигнатура/IHDR) и холст не пустой.
+    /// C1–C3 (главный критерий): схема 3×2 окна (шаг 60/40 px ≤ 40 % окна, рамка 10 px,
+    /// псевдослучайная текстура без периода) → змейка до конца → один PNG. Итоговый холст
+    /// сверяется ПОПИКСЕЛЬНО с эталонной схемой: 0 неверных пикселей из N.
     /// </summary>
     [Fact]
-    public async Task Full_pass_produces_a_png()
+    public async Task Full_pass_canvas_matches_the_reference_scheme_pixel_by_pixel()
     {
         var root = NewRoot();
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 3, schemeRows: 2);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("scheme.png", 100, 15, "Wheel");
+            var options = MakeOptions("scheme.png", 100, 50, "Wheel");
 
             var r = await Run(options, deps);
-
             Assert.True(r.Done, $"не до конца: {r.Error}");
             Assert.Equal("scheme.png", r.Path);
             Assert.True(r.Tiles > 0, "ни одной плитки");
             Assert.True(r.SizeBytes > 8, "PNG пустой");
-            Assert.True(r.Width > 0 && r.Height > 0, "холст нулевой");
-            // PNG существует на диске и начинается с сигнатуры.
+
+            // Холст = эталонная схема: размер совпадает.
+            Assert.Equal(fake.SchemeW, r.Width);
+            Assert.Equal(fake.SchemeH, r.Height);
+
+            // Попиксельное сравнение: декодируем PNG и сравниваем с эталоном.
             var png = File.ReadAllBytes(Path.Combine(root, "scheme.png"));
-            Assert.Equal(0x89, png[0]);
-            Assert.Equal(0x50, png[1]); // 'P'
-            Assert.Equal(0x4E, png[2]); // 'N'
-            Assert.Equal(0x47, png[3]); // 'G'
+            var (pixels, w, h) = DecodePng(png);
+            Assert.Equal(fake.SchemeW, w);
+            Assert.Equal(fake.SchemeH, h);
+            Assert.Equal(fake.Scheme.Length, pixels.Length);
+
+            var wrong = 0;
+            for (var i = 0; i < fake.Scheme.Length; i++)
+            {
+                if (fake.Scheme[i] != pixels[i])
+                    wrong++;
+            }
+            Assert.Equal(0, wrong); // 0 неверных пикселей из N
         }
         finally
         {
@@ -284,31 +347,27 @@ public class ScanCanvasToolTests
     }
 
     /// <summary>
-    /// Байты PNG декодируются и равны оригиналу: холст (из CanvasAssembler) кодируется в PNG,
-    /// декодер возвращает те же пиксели (R/G/B) и те же размеры.
+    /// M4: калибровка шага. Фейк, где один щелчок = 30 px (StepX=30): инструмент делает нужное
+    /// число щелчков (round(ожидаемый/30)), и 100 плиток хватает на схему «в разы больше окна».
     /// </summary>
     [Fact]
-    public async Task Png_bytes_decode_to_the_original_canvas()
+    public async Task M4_calibration_uses_the_right_number_of_clicks()
     {
         var root = NewRoot();
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 3, schemeRows: 2);
+            // Один щелчок = 30 px; схема 5×3 окна (в разы больше окна).
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 5, schemeRows: 3);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("scheme.png", 100, 15, "Wheel");
+            var options = MakeOptions("m4.png", 100, 50, "Wheel");
 
             var r = await Run(options, deps);
             Assert.True(r.Done, $"не до конца: {r.Error}");
-
-            var png = File.ReadAllBytes(Path.Combine(root, "scheme.png"));
-            // Декодер: IHDR (width/height) + IDAT (zlib) + фильтры None/Sub → пиксели.
-            var (pixels, w, h) = DecodePng(png);
-            Assert.Equal(r.Width, w);
-            Assert.Equal(r.Height, h);
-            Assert.Equal(w * h * 3, pixels.Length);
-            // Холст не пустой: есть ненулевые пиксели (содержимое схемы).
-            Assert.Contains(pixels, b => b != 0);
+            Assert.True(r.Tiles > 0, "ни одной плитки");
+            // Холст = схема: размер совпадает.
+            Assert.Equal(fake.SchemeW, r.Width);
+            Assert.Equal(fake.SchemeH, r.Height);
         }
         finally
         {
@@ -317,8 +376,63 @@ public class ScanCanvasToolTests
     }
 
     /// <summary>
-    /// Сомнительные швы на сетке: на повторяющемся градиенте корреляция даёт несколько пиков →
-    /// часть швов помечается сомнительной (число &gt; 0).
+    /// M4: нулевой сдвиг (прокрутка не двигает) → остановка с понятной причиной, а не
+    /// бесконечный цикл. Фейк, у которого колесо не меняет позицию.
+    /// </summary>
+    [Fact]
+    public async Task M4_zero_shift_stops_with_a_clear_reason()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files = NewProjectFiles(root);
+            // Колесо не двигает: позиция не меняется → сдвиг нулевой → область не определена.
+            var frozen = new FrozenWheelFake(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
+            var deps = MakeDeps(frozen, files);
+            var options = MakeOptions("frozen.png", 100, 50, "Wheel");
+
+            var r = await Run(options, deps);
+            // Не бесконечный цикл: остановился с понятной причиной (область не определена).
+            Assert.Equal("error", r.StopReason);
+            Assert.NotNull(r.Error);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// M5: предпроверка saveTo ДО первого действия. Плохой путь (не .png) → отказ без единого
+    /// вызова ввода/снимка (0 вызовов фейков).
+    /// </summary>
+    [Fact]
+    public async Task M5_bad_saveTo_refuses_before_any_input()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files = NewProjectFiles(root);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
+            var deps = MakeDeps(fake, files);
+            // Не .png → CheckOutputPath отказывает.
+            var options = MakeOptions("scheme.txt", 100, 50, "Wheel");
+
+            var r = await Run(options, deps);
+            Assert.Equal("error", r.StopReason);
+            Assert.NotNull(r.Error);
+            // Ни одного вызова ввода/снимка (предпроверка до всего).
+            Assert.Empty(fake.Calls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Сомнительные швы на сетке: на псевдослучайной текстуре с мелким шагом корреляция может дать
+    /// несколько пиков → часть швов помечается сомнительной (число &gt; 0).
     /// </summary>
     [Fact]
     public async Task Repeating_grid_marks_doubtful_seams()
@@ -327,10 +441,9 @@ public class ScanCanvasToolTests
         try
         {
             var files = NewProjectFiles(root);
-            // Мелкий шаг (30 px) → сильный повтор градиента → сомнительные швы.
             var fake = new FakeScheme(w: 200, h: 150, stepX: 30, stepY: 30, schemeCols: 4, schemeRows: 3);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("grid.png", 100, 15, "Wheel");
+            var options = MakeOptions("grid.png", 100, 50, "Wheel");
 
             var r = await Run(options, deps);
             Assert.True(r.Done, $"не до конца: {r.Error}");
@@ -353,9 +466,9 @@ public class ScanCanvasToolTests
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 4, schemeRows: 3);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 4, schemeRows: 3);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("capped.png", maxTiles: 2, overlapPercent: 15, scrollMethod: "Wheel");
+            var options = MakeOptions("capped.png", maxTiles: 2, overlapPercent: 50, scrollMethod: "Wheel");
 
             var r = await Run(options, deps);
             Assert.True(r.Truncated, "ожидался truncated по плиткам");
@@ -377,9 +490,9 @@ public class ScanCanvasToolTests
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 3, schemeRows: 2);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("", 100, 15, "Wheel");
+            var options = MakeOptions("", 100, 50, "Wheel");
 
             var r = await Run(options, deps);
             Assert.Equal("error", r.StopReason);
@@ -403,9 +516,9 @@ public class ScanCanvasToolTests
         {
             File.WriteAllText(Path.Combine(root, "taken.png"), "pre-existing");
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 3, schemeRows: 2);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("taken.png", 100, 15, "Wheel");
+            var options = MakeOptions("taken.png", 100, 50, "Wheel");
 
             var r = await Run(options, deps);
             Assert.Equal("taken.v2.png", r.Path);
@@ -420,7 +533,8 @@ public class ScanCanvasToolTests
     }
 
     /// <summary>
-    /// <c>scrollMethod=arrows</c>: прокрутка — только клавиши (стрелки), колесо не используется.
+    /// <c>scrollMethod=arrows</c>: прокрутка — только клавиши (стрелки), колесо не используется,
+    /// курсор не двигается (M3: для стрелков мышь не нужна).
     /// </summary>
     [Fact]
     public async Task Arrows_scroll_method_uses_key_overloads()
@@ -429,15 +543,16 @@ public class ScanCanvasToolTests
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 3, schemeRows: 2);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("arrows.png", 100, 15, "Arrows");
+            var options = MakeOptions("arrows.png", 100, 50, "Arrows");
 
             var r = await Run(options, deps);
             Assert.True(r.Done, $"не до конца: {r.Error}");
-            // Были нажатия стрелок, колесо — нет.
+            // Были нажатия стрелок, колесо — нет, курсор не двигался.
             Assert.Contains(fake.Calls, c => c.StartsWith("key:"));
             Assert.DoesNotContain(fake.Calls, c => c.StartsWith("wheel:"));
+            Assert.DoesNotContain(fake.Calls, c => c.StartsWith("place:"));
         }
         finally
         {
@@ -446,7 +561,8 @@ public class ScanCanvasToolTests
     }
 
     /// <summary>
-    /// <c>scrollMethod=shift_wheel</c>: горизонталь — Shift+колесо (keydown:Shift + wheel + keyup:Shift).
+    /// <c>scrollMethod=shift_wheel</c>: горизонталь — Shift+колесо (keydown:Shift + wheel +
+    /// keyup:Shift). M2: KeyUp в finally (символ keyup:Shift всегда после keydown:Shift).
     /// </summary>
     [Fact]
     public async Task ShiftWheel_scroll_method_holds_shift_for_horizontal()
@@ -455,9 +571,9 @@ public class ScanCanvasToolTests
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 3, schemeRows: 2);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("shift.png", 100, 15, "ShiftWheel");
+            var options = MakeOptions("shift.png", 100, 50, "ShiftWheel");
 
             var r = await Run(options, deps);
             Assert.True(r.Done, $"не до конца: {r.Error}");
@@ -465,6 +581,33 @@ public class ScanCanvasToolTests
             Assert.Contains(fake.Calls, c => c == "keydown:Shift");
             Assert.Contains(fake.Calls, c => c == "keyup:Shift");
             Assert.Contains(fake.Calls, c => c.StartsWith("wheel:"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// M3: колесо/shift_wheel — курсор ставится в центр region (внутри области), а не в (2,2).
+    /// </summary>
+    [Fact]
+    public async Task M3_wheel_places_cursor_at_region_center()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files = NewProjectFiles(root);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 3, schemeRows: 2);
+            var deps = MakeDeps(fake, files);
+            var options = MakeOptions("cursor.png", 100, 50, "Wheel");
+
+            var r = await Run(options, deps);
+            Assert.True(r.Done, $"не до конца: {r.Error}");
+            // Был вызов PlaceCursor (курсор над областью), не в (2,2).
+            Assert.Contains(fake.Calls, c => c.StartsWith("place:"));
+            // Точка — не (2,2) (старая захардкоженная).
+            Assert.DoesNotContain(fake.Calls, c => c == "place:2,2");
         }
         finally
         {
@@ -483,9 +626,9 @@ public class ScanCanvasToolTests
         try
         {
             var files = NewProjectFiles(root);
-            var fake = new FakeScheme(w: 200, h: 150, stepX: 100, stepY: 100, schemeCols: 5, schemeRows: 5);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 40, stepY: 30, schemeCols: 5, schemeRows: 5);
             var deps = MakeDeps(fake, files);
-            var options = MakeOptions("cancel.png", 100, 15, "Wheel");
+            var options = MakeOptions("cancel.png", 100, 50, "Wheel");
 
             using var cts = new CancellationTokenSource();
             cts.Cancel(); // сразу отменено
@@ -500,64 +643,56 @@ public class ScanCanvasToolTests
         }
     }
 
-    // ---------- минимальный PNG-декодер (сигнатура, IHDR, IDAT zlib, фильтры None/Sub) ----------
+    /// <summary>
+    /// M4: калибровка делает НЕСКОЛЬКО щелчков на шаг (round(ожидаемый/щелчок) &gt; 1): один
+    /// щелчок = 30 px, ожидаемый сдвиг 90 px (50 % перекрытия) → 3 щелчка на шаг.
+    /// </summary>
+    [Fact]
+    public async Task M4_first_step_makes_multiple_clicks_when_needed()
+    {
+        var root = NewRoot();
+        try
+        {
+            var files = NewProjectFiles(root);
+            var fake = new FakeScheme(w: 200, h: 150, stepX: 30, stepY: 30, schemeCols: 3, schemeRows: 2);
+            var deps = MakeDeps(fake, files);
+            var options = MakeOptions("m4b.png", 100, 50, "Wheel");
+
+            var r = await Run(options, deps);
+            Assert.True(r.Done, $"не до конца: {r.Error}");
+            // Ожидаемый горизонтальный сдвиг = 180 * (1 - 0.5) = 90; 90 / 30 = 3 щелчка на шаг.
+            // Колесо вправо вызывалось ≥ 3 раза (калибровка 1 + шаг ≥ 2).
+            var rightWheels = fake.Calls.Count(c => c == "wheel:Right");
+            Assert.True(rightWheels >= 3, $"ожидалось ≥ 3 wheel:Right, получено {rightWheels}");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    // ---------- M4: фейк с «замёрзшим» колесом (не двигает) ----------
+
+    private sealed class FrozenWheelFake : FakeScheme
+    {
+        public FrozenWheelFake(int w, int h, int stepX, int stepY, int schemeCols, int schemeRows)
+            : base(w, h, stepX, stepY, schemeCols, schemeRows) { }
+        // Колесо не двигает: позиция не меняется → сдвиг нулевой.
+        public override bool Wheel(string direction)
+        {
+            Calls.Add($"wheel:{direction}");
+            return true;
+        }
+    }
+
+    // ---------- PNG-декодер: единственный проверенный декодер проекта (C4) ----------
+    // Холст — RGB (3 канала), поэтому <see cref="PngDecoder.Decode"/> возвращает пиксели как есть.
+    // Раньше тут был собственный «минимальный» декодер, который неправильно раскрывал фильтр Sub
+    // (добавлял пиксель предыдущей строки, а не левого соседа) — на Sub-строках холст сдвигался.
 
     private static (byte[] Pixels, int Width, int Height) DecodePng(byte[] png)
     {
-        var width = (png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19];
-        var height = (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23];
-        var colorType = png[25];
-        var channels = colorType == 6 ? 4 : 3;
-
-        var idat = new List<byte>();
-        var offset = 8;
-        while (offset + 8 <= png.Length)
-        {
-            var len = (png[offset] << 24) | (png[offset + 1] << 16) | (png[offset + 2] << 8) | png[offset + 3];
-            var type = new string(new[] { (char)png[offset + 4], (char)png[offset + 5], (char)png[offset + 6], (char)png[offset + 7] });
-            if (type == "IDAT")
-            {
-                for (var i = 0; i < len; i++)
-                    idat.Add(png[offset + 8 + i]);
-            }
-            offset += 12 + len;
-            if (type == "IEND")
-                break;
-        }
-
-        using var input = new MemoryStream(idat.ToArray());
-        using var zlib = new System.IO.Compression.ZLibStream(input, System.IO.Compression.CompressionMode.Decompress);
-        using var output = new MemoryStream();
-        zlib.CopyTo(output);
-        var raw = output.ToArray();
-
-        var rowLen = width * channels;
-        var pixels = new byte[width * height * 3];
-        var prev = new byte[rowLen];
-        for (var y = 0; y < height; y++)
-        {
-            var filter = raw[y * (1 + rowLen)];
-            for (var i = 0; i < rowLen; i++)
-            {
-                var a = raw[y * (1 + rowLen) + 1 + i];
-                var b = filter == 1 ? (byte)(a + prev[i]) : a;
-                pixels[y * rowLen + i] = b;
-                prev[i] = b;
-            }
-
-            if (channels == 4)
-            {
-                for (var x = 0; x < width; x++)
-                {
-                    var s = (y * width + x) * 4;
-                    var d = (y * width + x) * 3;
-                    pixels[d] = pixels[s];
-                    pixels[d + 1] = pixels[s + 1];
-                    pixels[d + 2] = pixels[s + 2];
-                }
-            }
-        }
-
+        var (pixels, width, height, _) = ClaudeHomeServer.HandsBridge.Scanning.Imaging.PngDecoder.Decode(png);
         return (pixels, width, height);
     }
 }

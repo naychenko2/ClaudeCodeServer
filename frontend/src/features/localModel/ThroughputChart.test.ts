@@ -12,7 +12,7 @@ import {
   niceAxisMax, peakPerStreamOf, percentile10,
   perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
   timeSharesAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
-  type ChartGeom, type Interval, type TimeShares, type ThroughputSample,
+  type ChartGeom, type Interval, type TimeShares, type TimeState, type ThroughputSample,
 } from './ThroughputChart';
 
 // Геометрия как в компоненте (height 96, left 0, right 28)
@@ -573,8 +573,9 @@ describe('buildIntervals: кэш — несение при «не спрашив
 // «max одной серии → max обеих» — на ось.
 
 // Минимальный Interval для тестов построения/разрывов линий.
+// timeShares по умолчанию — break (движок молчал); shares/idle — явным.
 function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput: number | null = null,
-  timeShares: TimeShares | null = null): Interval {
+  timeShares: TimeState = { kind: 'break' }): Interval {
   return { tStart, tEnd, throughput, perStream, kvUsage: null, prefix: null, ram: null,
     preemptions: null, hasData: { prefix: false, ram: false }, timeShares };
 }
@@ -770,12 +771,9 @@ describe('buildIntervals: «куда уходит время» — доли из
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
     // чистый шаг = percentile10([0.5, 2.0]) = 0.5
     // интервал 0: gen = 20×0.5 = 10, wait = 10−10 = 0 → 100 % генерации
-    expect(intervals[0].timeShares).toEqual({ gen: 1, prefill: 0, wait: 0, queue: 0 });
+    expect(intervals[0].timeShares).toEqual({ kind: 'shares', shares: { gen: 1, prefill: 0, wait: 0, queue: 0 } });
     // интервал 1: gen = 20×0.5 = 10, wait = 40−10 = 30 → 25 % генерации, 75 % ждёт
-    expect(intervals[1].timeShares!.gen).toBeCloseTo(0.25, 6);
-    expect(intervals[1].timeShares!.wait).toBeCloseTo(0.75, 6);
-    expect(intervals[1].timeShares!.prefill).toBe(0);
-    expect(intervals[1].timeShares!.queue).toBe(0);
+    expect(intervals[1].timeShares).toEqual({ kind: 'shares', shares: { gen: 0.25, prefill: 0, wait: 0.75, queue: 0 } });
   });
 
   it('prefill/очередь — приращения гистограмм; доли в сумме 1', () => {
@@ -784,7 +782,10 @@ describe('buildIntervals: «куда уходит время» — доли из
       sample({ t: 5_000, itlSeconds: 20, itlCount: 20, promptTokens: 0, prefillSeconds: 5, queueSeconds: 3 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    const s = intervals[0].timeShares!;
+    const st = intervals[0].timeShares;
+    expect(st.kind).toBe('shares');
+    if (st.kind !== 'shares') return;
+    const s = st.shares;
     // total = 20 (gen) + 0 (wait) + 5 (prefill) + 3 (queue) = 28
     expect(s.gen).toBeCloseTo(20 / 28, 6);
     expect(s.wait).toBe(0);
@@ -793,16 +794,29 @@ describe('buildIntervals: «куда уходит время» — доли из
     expect(s.gen + s.wait + s.prefill + s.queue).toBeCloseTo(1, 6);
   });
 
-  it('молчание (без itl) → timeShares null (полоса не рисуется)', () => {
+  it('молчание (без itl) → break (заливки нет, фон-разрыв)', () => {
     const intervals = buildIntervals([sample({ t: 5_000 })], T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].timeShares).toBeNull();
+    expect(intervals[0].timeShares).toEqual({ kind: 'break' });
+  });
+
+  it('простой: движок отвечал (itl=0), но шагов/запросов не было → idle', () => {
+    // itlSeconds/itlCount = 0 (реальные нули, не null) → движок отвечал, но шагов нет.
+    const intervals = buildIntervals([sample({ t: 5_000, itlSeconds: 0, itlCount: 0 })], T_MIN, T_MAX, INTERVAL_MS);
+    expect(intervals[0].timeShares).toEqual({ kind: 'idle' });
+  });
+
+  it('простой ≠ разрыв: itl=0 (idle) vs itl=null (break)', () => {
+    const idle = buildIntervals([sample({ t: 5_000, itlSeconds: 0, itlCount: 0 })], T_MIN, T_MAX, INTERVAL_MS);
+    const brk = buildIntervals([sample({ t: 5_000 })], T_MIN, T_MAX, INTERVAL_MS);
+    expect(idle[0].timeShares).toEqual({ kind: 'idle' });
+    expect(brk[0].timeShares).toEqual({ kind: 'break' });
   });
 });
 
 describe('buildTimeSharesBar: сегменты полосы на x-диапазоне интервала', () => {
-  it('4 сегмента пропорционально долям, суммарная ширина = x1−x0', () => {
+  it('shares: 4 сегмента пропорционально долям, суммарная ширина = x1−x0', () => {
     const shares: TimeShares = { gen: 0.5, prefill: 0.25, wait: 0.15, queue: 0.1 };
-    const segs = buildTimeSharesBar(shares, 0, 100);
+    const segs = buildTimeSharesBar({ kind: 'shares', shares }, 0, 100);
     expect(segs).toHaveLength(4);
     expect(segs[0].w).toBeCloseTo(50, 6);
     expect(segs[1].w).toBeCloseTo(25, 6);
@@ -810,24 +824,31 @@ describe('buildTimeSharesBar: сегменты полосы на x-диапаз�
     expect(segs[3].w).toBeCloseTo(10, 6);
     expect(segs.reduce((a, s) => a + s.w, 0)).toBeCloseTo(100, 6);
   });
-  it('null → нет сегментов; нулевая доля — сегмент не рисуется', () => {
-    expect(buildTimeSharesBar(null, 0, 100)).toHaveLength(0);
-    const segs = buildTimeSharesBar({ gen: 1, prefill: 0, wait: 0, queue: 0 }, 0, 100);
+  it('break → нет сегментов; shares с нулевой долей — сегмент не рисуется', () => {
+    expect(buildTimeSharesBar({ kind: 'break' }, 0, 100)).toHaveLength(0);
+    const segs = buildTimeSharesBar({ kind: 'shares', shares: { gen: 1, prefill: 0, wait: 0, queue: 0 } }, 0, 100);
     expect(segs).toHaveLength(1);
+  });
+  it('idle → один нейтральный сегмент на всю ширину', () => {
+    const segs = buildTimeSharesBar({ kind: 'idle' }, 0, 100);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].x).toBe(0);
+    expect(segs[0].w).toBeCloseTo(100, 6);
   });
 });
 
 describe('avgTimeSharesOf: средние доли за окно (легенда без считывания)', () => {
-  it('среднее по интервалам с долями; без долей → null', () => {
+  it('среднее по интервалам с долями; break/idle не входят; без долей → null', () => {
     const base: TimeShares = { gen: 0.5, prefill: 0.25, wait: 0.15, queue: 0.1 };
     const intervals = [
-      mkIt(0, 1, 10, null, base),
-      mkIt(1, 2, 10, null, { gen: 0.7, prefill: 0.1, wait: 0.1, queue: 0.1 }),
-      mkIt(2, 3, null, null, null),   // без долей — не входит
+      mkIt(0, 1, 10, null, { kind: 'shares', shares: base }),
+      mkIt(1, 2, 10, null, { kind: 'shares', shares: { gen: 0.7, prefill: 0.1, wait: 0.1, queue: 0.1 } }),
+      mkIt(2, 3, null, null, { kind: 'break' }),   // без долей — не входит
+      mkIt(3, 4, null, null, { kind: 'idle' }),     // простой — не входит
     ];
     const avg = avgTimeSharesOf(intervals);
     expect(avg!.gen).toBeCloseTo(0.6, 6);
-    expect(avgTimeSharesOf([mkIt(0, 1, null, null, null)])).toBeNull();
+    expect(avgTimeSharesOf([mkIt(0, 1, null, null, { kind: 'break' })])).toBeNull();
   });
 });
 
@@ -835,13 +856,14 @@ describe('timeSharesAriaLabel: SVG «Куда уходит время» обно
   it('базовый: окно; без hover — без интервала', () => {
     expect(timeSharesAriaLabel('15m', null, null)).toBe('Куда уходит время агентов за 15 минут');
   });
-  it('hover: доли интервала в %; null — «движок не отвечал»', () => {
-    const label = timeSharesAriaLabel('15m', '14:32', { gen: 0.45, prefill: 0.2, wait: 0.3, queue: 0.05 });
+  it('hover: доли интервала в %; break — «движок не отвечал»; idle — «простой»', () => {
+    const label = timeSharesAriaLabel('15m', '14:32', { kind: 'shares', shares: { gen: 0.45, prefill: 0.2, wait: 0.3, queue: 0.05 } });
     expect(label).toContain('интервал 14:32');
     expect(label).toContain('генерирует 45 %');
     expect(label).toContain('читает промпт 20 %');
     expect(label).toContain('ждёт соседа 30 %');
     expect(label).toContain('в очереди 5 %');
-    expect(timeSharesAriaLabel('15m', '14:32', null)).toContain('движок не отвечал');
+    expect(timeSharesAriaLabel('15m', '14:32', { kind: 'break' })).toContain('движок не отвечал');
+    expect(timeSharesAriaLabel('15m', '14:32', { kind: 'idle' })).toContain('простой');
   });
 });

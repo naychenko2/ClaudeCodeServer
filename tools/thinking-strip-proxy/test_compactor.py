@@ -323,6 +323,61 @@ class Step4LastChecksTests(unittest.TestCase):
         checks = compactor.last_checks(msgs)
         self.assertEqual(len(checks[0]["result"]), 600)
 
+    def test_статус_ошибка_run_tests_упало(self):
+        # mcp__tests__run_tests: is_error=False, но «упало 3» → ошибка
+        msgs = [
+            _assistant(_tool_use("m1", "mcp__tests__run_tests", target="X.Tests")),
+            _tool_result("m1", "упало 3", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ошибка")
+
+    def test_статус_ошибка_dotnet_test_failed(self):
+        # Bash dotnet test: is_error=False, но «Failed: 3» → ошибка
+        msgs = [
+            _assistant(_tool_use("b1", "Bash", command="dotnet test -m:4")),
+            _tool_result("b1", "Failed: 3", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ошибка")
+
+    def test_статус_ошибка_build_failed(self):
+        # mcp__dev__build: is_error=False, но «Build FAILED» → ошибка
+        msgs = [
+            _assistant(_tool_use("m2", "mcp__dev__build", target="backend/X")),
+            _tool_result("m2", "Build FAILED", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ошибка")
+
+    def test_статус_ok_failed_0(self):
+        # «Failed: 0» → не падение (ноль) → ok
+        msgs = [
+            _assistant(_tool_use("b2", "Bash", command="dotnet test -m:4")),
+            _tool_result("b2", "Failed: 0", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ok")
+
+    def test_статус_неизвестно_без_пары(self):
+        # tool_use без парного tool_result → неизвестно
+        msgs = [_assistant(_tool_use("b3", "Bash", command="dotnet test -m:4"))]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "неизвестно")
+
+    def test_npm_run_dev_не_проверка(self):
+        # npm run dev (dev-сервер) → не проверка
+        msgs = [
+            _assistant(_tool_use("n1", "Bash", command="npm run dev")),
+            _tool_result("n1", "listening on :3000", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs), [])
+
+    def test_npm_run_build_проверка(self):
+        # npm run build → проверка (отдельный вид)
+        msgs = [
+            _assistant(_tool_use("n2", "Bash", command="npm run build")),
+            _tool_result("n2", "built", is_error=False),
+        ]
+        checks = compactor.last_checks(msgs)
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0]["kind"], "npm run build")
+
     def test_пустая_история(self):
         self.assertEqual(compactor.last_checks([]), [])
 
@@ -362,17 +417,57 @@ class Step4AnchorsTests(unittest.TestCase):
         self.assertIn("https://example.com/x", a)
 
     def test_sha_только_рядом_с_commit(self):
-        # hex 7-40 без слова commit/в git-выводе — не якорь
-        a = compactor.anchors([{"role": "user", "content": "число 1234567 без контекста"}])
-        self.assertNotIn("1234567", a)
-        b = compactor.anchors([{"role": "user", "content": "commit 1234567 сделан"}])
-        self.assertIn("1234567", b)
+        # SHA: hex 7-40, хотя бы одна буква a-f, рядом со словом git/commit/коммит
+        # (слово целиком, не подстрока «digit»/«legit»).
+        # «commit 3ac8eb44d» → SHA (есть буквы a, c, e, b, d)
+        a = compactor.anchors([{"role": "user", "content": "commit 3ac8eb44d сделан"}])
+        self.assertIn("3ac8eb44d", a)
+        # «digit 1234567» → не SHA (только цифры, нет букв a-f; «digit» ≠ «git»)
+        b = compactor.anchors([{"role": "user", "content": "digit 1234567"}])
+        self.assertNotIn("1234567", b)
+        # «20260412» → не SHA (только цифры, нет контекста)
+        c = compactor.anchors([{"role": "user", "content": "20260412"}])
+        self.assertNotIn("20260412", c)
+        # «git log 98765432» → не SHA (есть «git», но только цифры, нет букв a-f)
+        d = compactor.anchors([{"role": "user", "content": "git log 98765432"}])
+        self.assertNotIn("98765432", d)
 
-    def test_строки_ошибок(self):
-        text = "всё хорошо\nerror CS0123: member not found\nFAIL: test_x"
-        a = compactor.anchors([{"role": "user", "content": text}])
-        self.assertTrue(any("error CS0123" in x for x in a))
-        self.assertTrue(any("FAIL: test_x" in x for x in a))
+    def test_строки_ошибок_из_tool_result(self):
+        # строки ошибок — ТОЛЬКО из tool_result (не из прозы человека/ассистента)
+        msgs = [
+            {"role": "user", "content": "всё хорошо"},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": "error CS0123: member not found\nFAIL: test_x",
+                 "is_error": False},
+            ]},
+        ]
+        a = compactor.anchors(msgs)
+        self.assertTrue(any("error CS0123" in x for x in a),
+                        "строка ошибки из tool_result не найдена")
+        self.assertTrue(any("FAIL: test_x" in x for x in a),
+                        "строка ошибки из tool_result не найдена")
+
+    def test_строки_ошибок_не_из_прозы(self):
+        # проза человека: «ошибка в обработчике, не fail-safe» → не якорь
+        a = compactor.anchors([{"role": "user", "content": "ошибка в обработчике, не fail-safe"}])
+        self.assertFalse(any("ошибка в обработчике" in x for x in a),
+                         "проза человека стала строкой ошибки")
+
+    def test_строка_ошибки_урезана_до_300(self):
+        # длинная строка ошибки в tool_result → урезана до 300 кодовых точек
+        long_line = "error: " + "x" * 500
+        msgs = [
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": long_line, "is_error": False},
+            ]},
+        ]
+        a = compactor.anchors(msgs)
+        matching = [x for x in a if x.startswith("error:")]
+        self.assertTrue(matching, "длинная строка ошибки не найдена")
+        self.assertLessEqual(len(matching[0]), 300,
+                            "строка ошибки не урезана до 300")
 
     def test_дедуп_и_новые_сверху(self):
         # путь в старом и новом сообщении: держим свежее, новые сверху
@@ -448,11 +543,77 @@ class Step4BuildPreservedTests(unittest.TestCase):
         self.assertIn("постановка", block)
         self.assertIn("свежая реплика", block)
 
+    def test_cap_порядок_урезания_ступенчато(self):
+        # Порядок урезания: якоря → проверки → файлы → старые реплики (постановка и
+        # свежая реплика — никогда). Мутация ("anchors","checks","files") → ("plan",)
+        # должна покраснеть.
+        msgs = [
+            _user(_marker("постановка")),
+            _user(_marker("старая реплика " + "С" * 2000)),
+            _user(_marker("свежая реплика")),
+            _assistant(_tool_use("1", "Edit", file_path="a/b.py")),
+            _assistant(_tool_use("2", "Bash", command="dotnet build -m:4")),
+            _tool_result("2", "ok", is_error=False),
+            _assistant(_tool_use("3", "Bash", command="dotnet test -m:4")),
+            _tool_result("3", "x" * 500, is_error=False),
+            _user("см. /home/an/src/a.py, /home/an/src/b.py, /home/an/src/c.py"),
+        ]
+        orig_cap = compactor.PRESERVED_CAP
+        try:
+            # Уровень 1: умеренное превышение → исчезают только якоря
+            # (проверки, файлы, старые реплики на месте)
+            compactor.PRESERVED_CAP = 2800
+            block = compactor.build_preserved({"messages": msgs})
+            self.assertLessEqual(len(block), 2800)
+            self.assertNotIn("## Якоря", block, "якоря должны исчезнуть на уровне 1")
+            self.assertIn("## Последние проверки", block, "проверки на месте на уровне 1")
+            self.assertIn("## Изменённые файлы", block, "файлы на месте на уровне 1")
+            self.assertIn("старая реплика", block, "старая реплика на месте на уровне 1")
+            self.assertIn("постановка", block)
+            self.assertIn("свежая реплика", block)
+
+            # Уровень 2: больше → исчезают и проверки (файлы, старые реплики на месте)
+            compactor.PRESERVED_CAP = 2195
+            block = compactor.build_preserved({"messages": msgs})
+            self.assertLessEqual(len(block), 2195)
+            self.assertNotIn("## Якоря", block)
+            self.assertNotIn("## Последние проверки", block, "проверки должны исчезнуть на уровне 2")
+            self.assertIn("## Изменённые файлы", block, "файлы на месте на уровне 2")
+            self.assertIn("старая реплика", block, "старая реплика на месте на уровне 2")
+            self.assertIn("постановка", block)
+            self.assertIn("свежая реплика", block)
+
+            # Уровень 3: ещё больше → исчезают и файлы (старые реплики на месте)
+            compactor.PRESERVED_CAP = 2170
+            block = compactor.build_preserved({"messages": msgs})
+            self.assertLessEqual(len(block), 2170)
+            self.assertNotIn("## Якоря", block)
+            self.assertNotIn("## Последние проверки", block)
+            self.assertNotIn("## Изменённые файлы", block, "файлы должны исчезнуть на уровне 3")
+            self.assertIn("старая реплика", block, "старая реплика на месте на уровне 3")
+            self.assertIn("постановка", block)
+            self.assertIn("свежая реплика", block)
+
+            # Уровень 4: много → исчезают и старые реплики (постановка + свежая — всегда)
+            compactor.PRESERVED_CAP = 300
+            block = compactor.build_preserved({"messages": msgs})
+            self.assertLessEqual(len(block), 300)
+            self.assertNotIn("## Якоря", block)
+            self.assertNotIn("## Последние проверки", block)
+            self.assertNotIn("## Изменённые файлы", block)
+            self.assertNotIn("старая реплика", block, "старая реплика должна исчезнуть на уровне 4")
+            self.assertIn("постановка", block, "постановка — всегда")
+            self.assertIn("свежая реплика", block, "свежая реплика — всегда")
+        finally:
+            compactor.PRESERVED_CAP = orig_cap
+
     def test_instruction_addendum_английский(self):
         text = compactor.instruction_addendum()
         self.assertIsInstance(text, str)
         self.assertIn("<ccs-preserved>", text)
         self.assertIn("reasoning", text)
+        self.assertIn("Keep your answer in the required", text)
+        self.assertIn("<analysis>/<summary>", text)
 
     def test_постановка_не_дублируется_в_репликах(self):
         # Дефект 1: постановка (head, index 0) уже в «Постановке» — из «Реплик» её

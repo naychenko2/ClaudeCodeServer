@@ -235,16 +235,45 @@ def recent_humans(messages, cap=HUMANS_CAP):
 PRESERVED_CAP = 60000
 
 # Виды проверок (last_checks): подстрока в команде Bash / имя mcp-тула.
-_CHECK_BASH_PATTERNS = ("dotnet build", "dotnet test", "npm run", "npx tsc",
+# npm: только build|test|lint|typecheck (npx tsc — тоже) — каждый скрипт отдельный вид;
+# «npm run dev» (dev-сервер) — не проверка.
+_CHECK_BASH_PATTERNS = ("dotnet build", "dotnet test", "npm run build", "npm run test",
+                         "npm run lint", "npm run typecheck", "npx tsc",
                          "pytest", "python3 -m unittest")
 _CHECK_MCP_TOOLS = ("mcp__dev__build", "mcp__tests__run_tests")
+
+# Маркеры НЕНОЛЕВОГО падения в выводе проверки (is_error=false, но тесты/сборка упали).
+# Нули не считаются: «Failed: 0», «0 failed», «упало 0» — маркер не дают.
+#   Failed:\s*[1-9]   — dotnet test «Failed: 3»
+#   [1-9]\d*\s+failed  — xUnit «3 failed»
+#   упало\s*[1-9]      — «упало 3»
+#   Build FAILED       — dotnet build
+#   error CS\d+        — C#
+#   error TS\d+        — TypeScript
+#   FAILED \(          — pytest «FAILED (…»
+#   ^FAIL              — xUnit «FAIL TestName» (в начале строки)
+#   Traceback          — Python
+# re.MULTILINE: ^ — начало каждой строки.
+_FAILURE_RE = re.compile(
+    r"Failed:\s*[1-9]|[1-9]\d*\s+failed|упало\s*[1-9]|Build FAILED"
+    r"|error CS\d+|error TS\d+|FAILED \([^)]*\)|^FAIL|Traceback",
+    re.MULTILINE)
+
+
+def _has_failure_marker(text):
+    """Ненулевое падение в выводе проверки: маркер в тексте (см. _FAILURE_RE)."""
+    return bool(_FAILURE_RE.search(text or ""))
 
 # Якоря (anchors): только дословные совпадения, не пересказ.
 _ANCHOR_PATH = re.compile(r"(?:[A-Za-z]:)?(?:/[\w.\-~]+)+/[\w.\-]+\.\w{1,8}")
 _ANCHOR_URL = re.compile(r"https?://\S+")
 _ANCHOR_UUID = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
-_ANCHOR_SHA = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
+# SHA: 7-40 hex, но не длиннее 40: (?=[0-9a-fA-F]*\b) — граница на первом
+# не-hex/белом после 40 (без неё \b после {7,40} не держит 41+ hex: \b не
+# требует hex-границы, и «1234567890abcdef1234567890abcdef1234567890» (48 hex)
+# резалось бы в 40).
+_ANCHOR_SHA = re.compile(r"\b[0-9a-fA-F]{7,40}(?=[0-9a-fA-F]*\b)")
 _ANCHOR_TASKID = re.compile(r"<task-id>([^<]+)</task-id>")
 # «Первые строки ошибок»: маркеры, по которым строка считается ошибкой.
 _ERROR_MARKERS = ("error", "exception", "fail", "ошибка")
@@ -344,8 +373,17 @@ def last_checks(messages):
             if not kinds:
                 continue
             tr = results.get(b.get("id"))
-            is_error = bool(tr.get("is_error")) if tr else False
-            result = _tool_result_text(tr.get("content"))[:600] if tr else ""
+            # Статус трёхзначный:
+            #   «неизвестно» — парного tool_result нет (прерван или ещё идёт);
+            #   «ошибка»     — is_error=true ИЛИ маркер ненулевого падения в выводе;
+            #   «ok»         — пара есть, is_error=false и маркеров падения нет.
+            if tr is None:
+                is_error, status, result = False, "неизвестно", ""
+            else:
+                is_error = bool(tr.get("is_error"))
+                full = _tool_result_text(tr.get("content"))
+                status = "ошибка" if (is_error or _has_failure_marker(full)) else "ok"
+                result = full[:600]
             if name == "Bash":
                 label = (inp.get("command") or "")[:200]
             else:
@@ -353,7 +391,7 @@ def last_checks(messages):
                 label = f"{name}: {target}".strip(": ")
             for k in kinds:
                 last[k] = {"kind": k, "label": label, "is_error": is_error,
-                            "result": result}
+                            "status": status, "result": result}
     return list(last.values())
 
 
@@ -402,9 +440,13 @@ def last_plan(messages):
     return "\n".join(parts)[:6000]
 
 
-def _anchor_candidates(text):
-    """Дословные якоря в тексте: пути, URL, UUID, id задач, SHA (рядом с commit/в git),
-    первые строки ошибок. Порядок — порядок вхождения в тексте."""
+def _anchor_candidates(text, is_tool_result=False):
+    """Дословные якоря в тексте: пути, URL, UUID, id задач, SHA (рядом с git/commit/коммит),
+    строки ошибок. Порядок — порядок вхождения в тексте.
+
+    is_tool_result: строки ошибок берём ТОЛЬКО из вывода инструмента (не из прозы человека
+    и ассистента); одну строку урезаем до 300 кодовых точек.
+    """
     out = []
     for mt in _ANCHOR_PATH.finditer(text):
         out.append(mt.group(0))
@@ -414,18 +456,24 @@ def _anchor_candidates(text):
         out.append(mt.group(0))
     for mt in _ANCHOR_TASKID.finditer(text):
         out.append(mt.group(1))
-    # SHA: 7-40 hex, но только рядом со словом commit/коммит или в выводе git
+    # SHA: 7-40 hex, хотя бы одна буква a-f (чистые числа/даты/размеры — не SHA),
+    # рядом со словом git/commit/коммит (слово целиком, не подстрока «digit»/«legit»).
     for mt in _ANCHOR_SHA.finditer(text):
-        line = text[max(0, mt.start() - 40):mt.end() + 40].lower()
-        if "commit" in line or "коммит" in line or "git " in line:
-            out.append(mt.group(0))
-    # первые строки ошибок
-    for ln in text.splitlines():
-        low = ln.lower()
-        if any(mk in low for mk in _ERROR_MARKERS) or re.search(r"error\s+cs\d+", low):
-            s = ln.strip()
-            if s:
-                out.append(s)
+        sha = mt.group(0)
+        if not re.search(r"[a-fA-F]", sha):
+            continue
+        ctx = text[max(0, mt.start() - 40):mt.end() + 40].lower()
+        if (re.search(r"\bgit\b", ctx) or re.search(r"\bcommit\b", ctx)
+                or re.search(r"\bкоммит\w*", ctx)):
+            out.append(sha)
+    # строки ошибок: только из tool_result, одна строка ≤ 300 кодовых точек
+    if is_tool_result:
+        for ln in text.splitlines():
+            low = ln.lower()
+            if any(mk in low for mk in _ERROR_MARKERS) or re.search(r"error\s+cs\d+", low):
+                s = ln.strip()
+                if s:
+                    out.append(s[:300])
     return out
 
 
@@ -438,14 +486,26 @@ def anchors(messages, cap=8000):
     out = []
     # новые сверху: идём от новых сообщений к старым, дедуп держит самое свежее вхождение
     for m in reversed(messages or []):
+        # text-блоки: пути, URL, UUID, taskid, SHA (строки ошибок — нет)
         text = _text_blocks(m)
-        if not text:
-            continue
-        for cand in _anchor_candidates(text):
-            if cand in seen:
-                continue
-            seen.add(cand)
-            out.append(cand)
+        if text:
+            for cand in _anchor_candidates(text, is_tool_result=False):
+                if cand not in seen:
+                    seen.add(cand)
+                    out.append(cand)
+        # tool_result: строки ошибок (только отсюда, не из прозы человека/ассистента)
+        c = m.get("content")
+        if isinstance(c, list):
+            for b in c:
+                if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+                    continue
+                tr_text = _tool_result_text(b.get("content"))
+                if not tr_text:
+                    continue
+                for cand in _anchor_candidates(tr_text, is_tool_result=True):
+                    if cand not in seen:
+                        seen.add(cand)
+                        out.append(cand)
     # обрезка по cap: берём с новых (сверху), пока влезает
     total = 0
     kept = []
@@ -473,8 +533,7 @@ def _fmt_files(files):
 def _fmt_checks(checks):
     lines = []
     for c in checks:
-        status = "ошибка" if c["is_error"] else "ok"
-        lines.append(f"[{c['kind']}] {c['label']} — {status}")
+        lines.append(f"[{c['kind']}] {c['label']} — {c['status']}")
         if c["result"]:
             lines.append("    " + c["result"].replace("\n", "\n    "))
     return lines
@@ -559,5 +618,7 @@ def instruction_addendum():
         "task statement, the human's replies, the changed files, the last checks, the plan "
         "and literal anchors. Do NOT restate the human's replies, the files, or the checks "
         "from it — refer to them. Spend your summary on the reasoning, the decisions, the "
-        "rejected approaches, and the reasons."
+        "rejected approaches, and the reasons. Keep your answer in the required "
+        "<analysis>/<summary> format; the preserved block is inserted by the system, do "
+        "not reproduce it."
     )

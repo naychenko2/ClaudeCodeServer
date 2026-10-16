@@ -1,0 +1,33 @@
+[
+ {
+  "id": "epic-gw-hint-headers",
+  "title": "Атрибуция статистики локальных моделей по подсказочным заголовкам CLI в шлюзе /gw",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-14T23:37",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "feat/gw-hint-headers",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "ghh-s1",
+  "title": "Денис: атрибуция по подсказочным заголовкам CLI в шлюзе /gw",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-14T23:37",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-gw-hint-headers",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

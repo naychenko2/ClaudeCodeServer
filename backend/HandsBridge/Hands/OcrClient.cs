@@ -86,6 +86,7 @@ internal sealed class OcrClient
                     $"the image is more than the {MaxImageBytes} ceiling: shrink the region"),
                 401 => OcrOutcome.Fail("unauthorized",
                     "the turn token was not accepted by the sidecar; try again"),
+                404 => ParseNotFound(body),
                 _ => OcrOutcome.Fail("unexpected_status",
                     $"the OCR server answered with status {status}"),
             };
@@ -160,6 +161,20 @@ internal sealed class OcrClient
             _ => OcrOutcome.Fail("busy",
                 "the OCR server is busy or its reason is unknown; try again later"),
         };
+    }
+
+    /// <summary>
+    /// 404: два случая. (1) У сервера нет маршрута <c>/gw/.../ocr</c> (старый сервер) —
+    /// сайдкар пропускает пустой 404: «обновите сервер». (2) Маршрут есть, но проект хода
+    /// не найден (fail-closed, <c>project_not_found</c> в теле) — проект чинит владелец.
+    /// </summary>
+    private static OcrOutcome ParseNotFound(string body)
+    {
+        if (body.Contains("project_not_found", StringComparison.Ordinal))
+            return OcrOutcome.Fail("project_not_found",
+                "the project of this turn was not found on the server; ask the owner");
+        return OcrOutcome.Fail("not_supported",
+            "server does not support ocr (update the server)");
     }
 
     private static string? GetString(JsonElement root, string name) =>

@@ -274,6 +274,20 @@ public sealed class OcrGatewayEndpointTests : IAsyncLifetime
         (await resp.Content.ReadAsStringAsync()).Should().Contain("hands_refused");
     }
 
+    // fail-closed (финальное ревью, блокер 3): сессия указывает на проект, а проект не в
+    // менеджере — эндпоинт отказывает (404), а не пропускает: пропуск дал бы OCR на окна
+    // проекта, которого сервер не знает. Мутация: вернуть «return null» — тест краснеет (200).
+    [Fact]
+    public async Task ПроектНеНайден_404_FailClosed()
+    {
+        _projects.Project = null;
+
+        var t = StartTurn();
+        var resp = await _client.SendAsync(Req(t));
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("project_not_found");
+    }
+
     [Fact]
     public async Task Успех_200_ПоКонтракту()
     {

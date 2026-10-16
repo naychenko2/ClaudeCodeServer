@@ -31,10 +31,11 @@ internal sealed partial class SidecarProxy(TurnGrants grants, IDeviceIdentity de
     public const string TurnTokenHeader = "X-Turn-Token";
 
     /// <summary>
-    /// Потолок тела OCR: 8 МБ, тот же, что у картинки на сервере (LocalOcrService.MaxImageBytes).
-    /// Превышение — 413 до чтения тела: по Content-Length, а не по факту передачи.
+    /// Потолок тела OCR: 8 МБ — единая константа (HandsOcr.MaxImageBytes, Core/Protocol),
+    /// та же, что у картинки на сервере. Превышение — 413 до чтения тела: по Content-Length,
+    /// а не по факту передачи.
     /// </summary>
-    public const long MaxOcrBodyBytes = 8L * 1024 * 1024;
+    public const long MaxOcrBodyBytes = HandsOcr.MaxImageBytes;
 
     // Что клиент не вправе передать дальше: его авторизация, наши заголовки (их ставим мы),
     // контекст MCP (его ставит шлюз по привязке токена) и hop-by-hop

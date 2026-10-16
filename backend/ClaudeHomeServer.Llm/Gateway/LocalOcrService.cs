@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -30,8 +31,9 @@ public sealed class LocalOcrService(
     public const string ProviderKey = "local-qwen";
     // Именованный HttpClient (регистрация — в LlmSubsystem, рядом с остальным шлюзом).
     public const string HttpClientName = "local-ocr";
-    // Потолок картинки: 8 МБ.
-    public const long MaxImageBytes = 8L * 1024 * 1024;
+    // Потолок картинки: 8 МБ — единая константа (HandsOcr.MaxImageBytes, Core/Protocol):
+    // сервер, сайдкар и мост не разойдутся.
+    public const long MaxImageBytes = HandsOcr.MaxImageBytes;
     // Потолок генерации ответа (токенов): страницы короткие, запас на длинный Markdown.
     private const int MaxOutputTokens = 8192;
 

@@ -53,8 +53,12 @@ public static class OcrGatewayEndpoints
         var refusal = HandsRefusal(grant, sessions, projects, deviceChannel);
         if (refusal is not null)
         {
-            await WriteJsonAsync(http, StatusCodes.Status403Forbidden,
-                new { error = "hands_refused" });
+            // fail-closed (финальное ревью, блокер 3): проект, на который указывает сессия,
+            // не найден — 404 (руки не «запрещены», проект неизвестен); остальные отказы — 403.
+            var (refusalStatus, refusalError) = refusal == ProjectNotFoundReason
+                ? (StatusCodes.Status404NotFound, ProjectNotFoundReason)
+                : (StatusCodes.Status403Forbidden, "hands_refused");
+            await WriteJsonAsync(http, refusalStatus, new { error = refusalError });
             return;
         }
 
@@ -111,8 +115,14 @@ public static class OcrGatewayEndpoints
         await WriteJsonAsync(http, status, new { reason });
     }
 
+    // Причина fail-closed-отказа: проект, на который указывает сессия, не в менеджере проектов.
+    // Публичная: мост (OcrClient) по ней отличает «проект не найден» от «сервер без маршрута».
+    public const string ProjectNotFoundReason = "project_not_found";
+
     // ProjectCapabilities.HandsRefusal: null — можно, иначе причина.
     // Чат вне проекта (ProjectId = null) — серверный, руки не нужны.
+    // Проект не найден — fail-closed (ProjectNotFoundReason): руки не «запрещены», но
+    // проверить их нельзя — пропустить, и OCR читал бы окна проекта, которого сервер не знает.
     private static string? HandsRefusal(
         TurnTokenGrant grant, ISessionDirectory sessions, IProjectManager projects,
         IDeviceExecChannel? deviceChannel)
@@ -120,7 +130,7 @@ public static class OcrGatewayEndpoints
         var session = sessions.GetById(grant.SessionId);
         if (session?.ProjectId is not { } projectId) return null;
         var project = projects.GetById(projectId);
-        if (project is null) return null;
+        if (project is null) return ProjectNotFoundReason;
         var device = ProjectCapabilities.IsDeviceBound(project)
             ? deviceChannel?.GetStatus(grant.OwnerId, project.DeviceId!)
             : null;

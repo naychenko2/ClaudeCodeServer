@@ -116,6 +116,34 @@ public class OcrToolTests
         Assert.Equal("unauthorized", outcome.Reason);
     }
 
+    // Старый сервер без маршрута /gw/.../ocr: сайдкар пропускает пустой 404 —
+    // модель получает понятное «обновите сервер», а не голый статус.
+    [Fact]
+    public async Task NotSupported_404_empty_body_says_update_the_server()
+    {
+        SetupClient("http://fake/ocr", new FakeOcrHandler(_ => Json(404, "")));
+
+        var outcome = ReadOutcome(await CallClient(SmallPng()));
+
+        Assert.False(outcome.Ok);
+        Assert.Equal("not_supported", outcome.Reason);
+        Assert.Contains("server does not support ocr (update the server)", outcome.Message!);
+    }
+
+    // Маршрут есть, но проект хода не найден (fail-closed, блокер 3): 404 с телом
+    // project_not_found — отдельное сообщение, не «обновите сервер».
+    [Fact]
+    public async Task ProjectNotFound_404_with_body_says_ask_the_owner()
+    {
+        SetupClient("http://fake/ocr", new FakeOcrHandler(_ => Json(404, """{"error":"project_not_found"}""")));
+
+        var outcome = ReadOutcome(await CallClient(SmallPng()));
+
+        Assert.False(outcome.Ok);
+        Assert.Equal("project_not_found", outcome.Reason);
+        Assert.Contains("ask the owner", outcome.Message!);
+    }
+
     [Fact]
     public async Task Garbage_200_is_bad_response_not_an_exception()
     {
@@ -340,6 +368,18 @@ public class OcrToolTests
     }
 
     /// <summary>
+    /// Гейту — known bounds: screen-цель (<c>primary_screen</c>) проходит <c>CheckOcrScreen</c>
+    /// (fail-closed: неизвестные границы — отказ). По умолчанию гейт — <c>NoWindows</c> (null).
+    /// </summary>
+    private static void SetGatePolicyWithKnownBounds()
+    {
+        var gateType = Bridge.GetType("ClaudeHomeServer.HandsBridge.HandsGate", throwOnError: true)!;
+        var windows = new FakeWindows().Bounds(new HandsScreenBounds(0, 0, 1920, 1080));
+        gateType.GetField("s_policy", BindingFlags.NonPublic | BindingFlags.Static)!
+            .SetValue(null, new HandsPolicy(windows));
+    }
+
+    /// <summary>
     /// Без <c>--ocr-endpoint</c> (агент старый) инструмент отвечает «update the agent»
     /// — до снимка и до отправки на сервер.
     /// </summary>
@@ -347,6 +387,7 @@ public class OcrToolTests
     public async Task Without_endpoint_the_tool_says_update_the_agent()
     {
         SetupClient(null, new FakeOcrHandler(_ => Json(200, """{"text":"x"}""")));
+        SetGatePolicyWithKnownBounds();
 
         var (isError, text) = await HandsBridgeGateRuntimeTests.Call(OcrToolType,
             new() { ["target"] = "primary_screen" });
@@ -366,6 +407,7 @@ public class OcrToolTests
         var fullText = new string('x', 5000);
         SetupClient("http://fake/ocr", new FakeOcrHandler(_ => Json(200,
             JsonSerializer.Serialize(new { text = fullText, model = "m", ms = 1, promptTokens = 1, completionTokens = 1 }))));
+        SetGatePolicyWithKnownBounds();
 
         // Снимок: фейк ScreenshotService (ExecuteAsync — canned PNG в памяти, на диск не пишется);
         // шов OcrTool.CaptureService — WindowsToolsBase (и его WinAPI) тест не трогает.

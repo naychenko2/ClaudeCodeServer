@@ -355,6 +355,38 @@ class Step4LastChecksTests(unittest.TestCase):
         ]
         self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ok")
 
+    def test_статус_ok_fail_safe(self):
+        # «FAIL_SAFE ok» в начале строки — имя, а не xUnit-маркер падения
+        msgs = [
+            _assistant(_tool_use("b4", "Bash", command="python3 -m unittest test_x")),
+            _tool_result("b4", "FAIL_SAFE ok\nRan 3 tests\n\nOK", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ok")
+
+    def test_статус_xunit_fail_ошибка(self):
+        msgs = [
+            _assistant(_tool_use("b5", "Bash", command="dotnet test")),
+            _tool_result("b5", "FAIL Ns.Tests.X\n", is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ошибка")
+
+    def test_статус_traceback_при_зелёном_итоге_ok(self):
+        # Тест печатает трассу ожидаемого исключения, но прогон зелёный
+        вывод = "Traceback (most recent call last):\n  ...\nValueError: x\nRan 5 tests\n\nOK"
+        msgs = [
+            _assistant(_tool_use("b6", "Bash", command="python3 -m unittest t")),
+            _tool_result("b6", вывод, is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ok")
+
+    def test_статус_traceback_без_итога_ошибка(self):
+        msgs = [
+            _assistant(_tool_use("b7", "Bash", command="pytest -q")),
+            _tool_result("b7", "Traceback (most recent call last):\nImportError: y",
+                         is_error=False),
+        ]
+        self.assertEqual(compactor.last_checks(msgs)[0]["status"], "ошибка")
+
     def test_статус_неизвестно_без_пары(self):
         # tool_use без парного tool_result → неизвестно
         msgs = [_assistant(_tool_use("b3", "Bash", command="dotnet test -m:4"))]

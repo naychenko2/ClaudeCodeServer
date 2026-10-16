@@ -251,18 +251,25 @@ _CHECK_MCP_TOOLS = ("mcp__dev__build", "mcp__tests__run_tests")
 #   error CS\d+        — C#
 #   error TS\d+        — TypeScript
 #   FAILED \(          — pytest «FAILED (…»
-#   ^FAIL              — xUnit «FAIL TestName» (в начале строки)
-#   Traceback          — Python
+#   ^FAIL\b(?!_)       — xUnit «FAIL TestName» (в начале строки; «FAIL_SAFE ok» — не падение)
 # re.MULTILINE: ^ — начало каждой строки.
 _FAILURE_RE = re.compile(
     r"Failed:\s*[1-9]|[1-9]\d*\s+failed|упало\s*[1-9]|Build FAILED"
-    r"|error CS\d+|error TS\d+|FAILED \([^)]*\)|^FAIL|Traceback",
+    r"|error CS\d+|error TS\d+|FAILED \([^)]*\)|^FAIL\b(?!_)",
     re.MULTILINE)
+# Traceback — падение, только если зелёного итога нет: тесты, проверяющие обработку
+# исключений, печатают трассы и всё равно проходят («OK», «Passed!», «N passed»).
+_TRACEBACK_RE = re.compile(r"Traceback")
+_GREEN_SUMMARY_RE = re.compile(
+    r"^OK(?:\s|$)|Passed!|\b\d+\s+passed\b|Failed:\s*0\b|упало\s*0\b", re.MULTILINE)
 
 
 def _has_failure_marker(text):
     """Ненулевое падение в выводе проверки: маркер в тексте (см. _FAILURE_RE)."""
-    return bool(_FAILURE_RE.search(text or ""))
+    text = text or ""
+    if _FAILURE_RE.search(text):
+        return True
+    return bool(_TRACEBACK_RE.search(text)) and not _GREEN_SUMMARY_RE.search(text)
 
 # Якоря (anchors): только дословные совпадения, не пересказ.
 _ANCHOR_PATH = re.compile(r"(?:[A-Za-z]:)?(?:/[\w.\-~]+)+/[\w.\-]+\.\w{1,8}")

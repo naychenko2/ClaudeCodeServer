@@ -255,4 +255,92 @@ public class SnakePlannerTests
         Assert.Throws<ArgumentException>(() => new SnakePlanner(regionWidth: 0, regionHeight: 100));
         Assert.Throws<ArgumentException>(() => new SnakePlanner(regionWidth: 100, regionHeight: -1));
     }
+
+    /// <summary>
+    /// M5: шаг по оси = размер области вдоль этой оси − перекрытие. Для 1920×1080:
+    /// горизонтальный 1632, вертикальный 918 (15 %).
+    /// </summary>
+    [Fact]
+    public void M5_step_is_per_axis()
+    {
+        var planner = new SnakePlanner(regionWidth: 1920, regionHeight: 1080);
+
+        // Один и тот же кадр → после ToStart конец прокрутки.
+        var frame = new byte[1920 * 1080];
+        for (var i = 0; i < frame.Length; i++)
+            frame[i] = (byte)42;
+
+        // Шаг 1 (после ToStart) — горизонтальный: ExpectedShift = 1632.
+        var hStep = planner.Feed(frame, 0, 1000);
+        Assert.Equal(Axis.Horizontal, hStep.Axis);
+        Assert.Equal(1632, hStep.ExpectedShift);
+
+        // Шаг 2 (тот же кадр → endOfScroll) — вертикальный: ExpectedShift = 918.
+        var vStep = planner.Feed(frame, 0, 2000);
+        Assert.Equal(Axis.Vertical, vStep.Axis);
+        Assert.Equal(918, vStep.ExpectedShift);
+    }
+
+    /// <summary>
+    /// M2 + M3: полотно растёт по ИЗМЕРЕННЫМ сдвигам (не по окну). 100 шагов по 918 px при
+    /// окне 1920×1080 превышают потолок по стороне/площади; автомат переходит в Done.
+    /// </summary>
+    [Fact]
+    public void M2_M3_growing_canvas_truncates_and_stops()
+    {
+        var planner = new SnakePlanner(regionWidth: 1920, regionHeight: 1080);
+
+        var step = 0;
+        var current = planner.CurrentStep;
+        while (current.Kind != ScanStepKind.Done && step < 100)
+        {
+            // Уникальный кадр (нет конца прокрутки) + измеренный сдвиг 918 px.
+            var frame = new byte[1920 * 1080];
+            for (var i = 0; i < frame.Length; i++)
+                frame[i] = (byte)((i + step * 7) % 256);
+            current = planner.Feed(frame, measuredShift: 918, elapsedMs: 1000 + step);
+            step++;
+        }
+
+        Assert.True(planner.Truncated, "Полотно должно превысить потолок");
+        Assert.NotNull(planner.TruncationReason);
+        // M3: после срабатывания потолка автомат в Done (не только флаг).
+        Assert.Equal(ScanStepKind.Done, current.Kind);
+    }
+
+    /// <summary>
+    /// m2: точная последовательность шагов змейки на сетке 2×3: R,R,R,D,L,L,L,D и число плиток.
+    /// </summary>
+    [Fact]
+    public void M2_m2_exact_step_sequence_and_tile_count()
+    {
+        const int rows = 2, cols = 3;
+        var steps = RunSnake(rows, cols);
+
+        // Только Step-ы (без ToStart/Done): точная последовательность направлений.
+        var seq = steps
+            .Where(s => s.Kind == ScanStepKind.Step)
+            .Select(s => s.Axis == Axis.Horizontal ? (s.Direction > 0 ? "R" : "L") : "D")
+            .ToList();
+
+        // Строка 0: R R (вправо) + R (в край) = 3×R; D (вниз); строка 1: L L + L (в край) = 3×L; D (в край).
+        Assert.Equal(new[] { "R", "R", "R", "D", "L", "L", "L", "D" }, seq);
+
+        // Число плиток = число Step-ов (ToStart не плитка, Done не плитка).
+        Assert.Equal(seq.Count, planner_TileCount(steps));
+    }
+
+    private static int planner_TileCount(List<ScanStep> steps)
+        => steps.Count(s => s.Kind == ScanStepKind.Step);
+
+    /// <summary>
+    /// m4: валидация параметров — отрицательное перекрытие и NaN дают понятный отказ.
+    /// </summary>
+    [Fact]
+    public void M4_m4_overlap_validation_throws()
+    {
+        Assert.Throws<ArgumentException>(() => new SnakePlanner(100, 100, overlapFraction: -0.1));
+        Assert.Throws<ArgumentException>(() => new SnakePlanner(100, 100, overlapFraction: double.NaN));
+        Assert.Throws<ArgumentException>(() => new SnakePlanner(100, 100, overlapFraction: 1.0));
+    }
 }

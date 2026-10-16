@@ -58,8 +58,9 @@ public static class PngEncoder
             var src = pixels.Slice(y * rowLen, rowLen);
             var dst = raw.AsSpan().Slice(y * (1 + rowLen) + 1, rowLen);
 
-            var noneScore = 0;
-            var subScore = 0;
+            // m4: суммы эвристики в long — на ширине выше ~8 млн px int переполняется.
+            var noneScore = 0L;
+            var subScore = 0L;
             for (var i = 0; i < rowLen; i++)
             {
                 noneScore += src[i];

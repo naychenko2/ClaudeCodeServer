@@ -129,4 +129,105 @@ public class ContentRegionTests
         Assert.Equal(H, result.Region.Height);
         Assert.True(result.Confidence > 0.9);
     }
+
+    /// <summary>
+    /// M4: ползунок полосы прокрутки (тонкая колонка, двигается при прокрутке) отделён от
+    /// содержимого зазором — min/max раздувал бы область, проекции берут только «полку» содержимого.
+    /// </summary>
+    [Fact]
+    public void M4_scrollbar_thumb_excluded_from_region()
+    {
+        var before = new byte[W * H];
+        var after = new byte[W * H];
+        Array.Fill(before, (byte)0);
+        Array.Fill(after, (byte)0);
+
+        // Плотное содержимое x[10,180) × y[10,140), «после» — другое.
+        for (var y = 10; y < 140; y++)
+            for (var x = 10; x < 180; x++)
+            {
+                before[y * W + x] = (byte)((x + y) % 256);
+                after[y * W + x] = (byte)((x + y + 50) % 256);
+            }
+
+        // Ползунок: тонкая колонка x[195,197) × y[20,130), двигается (зазор 180..194 — фон).
+        for (var y = 20; y < 130; y++)
+            for (var x = 195; x < 197; x++)
+            {
+                before[y * W + x] = (byte)100;
+                after[y * W + x] = (byte)200;
+            }
+
+        var result = ContentRegion.Determine(before, after, W, H, tolerance: 8.0);
+
+        // Область = содержимое x[10,180) × y[10,140); ползунок (x 195-196) исключён.
+        Assert.True(result.Ok);
+        Assert.Equal(10, result.Region.X);
+        Assert.Equal(180, result.Region.Right + 1);
+        Assert.Equal(10, result.Region.Y);
+        Assert.Equal(140, result.Region.Bottom + 1);
+    }
+
+    /// <summary>
+    /// M4: выброс в углу (один пиксель — часы/курсор) при плотном содержимом не раздувает область:
+    /// его строка и столбец имеют долю изменившихся ниже порога.
+    /// </summary>
+    [Fact]
+    public void M4_corner_outlier_excluded_with_dense_content()
+    {
+        var before = new byte[W * H];
+        var after = new byte[W * H];
+        Array.Fill(before, (byte)0);
+        Array.Fill(after, (byte)0);
+
+        // Плотное содержимое x[10,190) × y[10,140), «после» — другое.
+        for (var y = 10; y < 140; y++)
+            for (var x = 10; x < 190; x++)
+            {
+                before[y * W + x] = (byte)((x + y) % 256);
+                after[y * W + x] = (byte)((x + y + 40) % 256);
+            }
+
+        // Выброс в углу: один пиксель (195, 5) изменился.
+        before[5 * W + 195] = (byte)10;
+        after[5 * W + 195] = (byte)200;
+
+        var result = ContentRegion.Determine(before, after, W, H, tolerance: 8.0);
+
+        // Область = плотное содержимое; выброс в углу (195,5) не входит.
+        Assert.True(result.Ok);
+        Assert.Equal(10, result.Region.X);
+        Assert.Equal(190, result.Region.Right + 1);
+        Assert.Equal(10, result.Region.Y);
+        Assert.Equal(140, result.Region.Bottom + 1);
+    }
+
+    /// <summary>
+    /// M4: пустой (неизменённый) фон у краёв кадра не входит в область — только блок содержимого.
+    /// </summary>
+    [Fact]
+    public void M4_empty_background_at_edge_excluded()
+    {
+        var before = new byte[W * H];
+        var after = new byte[W * H];
+        Array.Fill(before, (byte)0); // фон 0
+        Array.Fill(after, (byte)0);   // фон 0 (не изменился)
+
+        // Блок содержимого x[30,120) × y[20,130), «после» — другое; фон вокруг — 0.
+        for (var y = 20; y < 130; y++)
+            for (var x = 30; x < 120; x++)
+            {
+                before[y * W + x] = (byte)((x + y) % 256);
+                after[y * W + x] = (byte)((x + y + 30) % 256);
+            }
+
+        var result = ContentRegion.Determine(before, after, W, H, tolerance: 8.0);
+
+        // Область = блок содержимого; пустой фон у краёв не входит.
+        Assert.True(result.Ok);
+        Assert.Equal(30, result.Region.X);
+        Assert.Equal(120, result.Region.Right + 1);
+        Assert.Equal(20, result.Region.Y);
+        Assert.Equal(130, result.Region.Bottom + 1);
+    }
 }

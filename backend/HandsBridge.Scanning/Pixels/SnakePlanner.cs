@@ -62,7 +62,8 @@ public class SnakePlanner
 
     private readonly int _regionWidth;
     private readonly int _regionHeight;
-    private readonly int _stepShift;
+    private readonly int _stepShiftH;
+    private readonly int _stepShiftV;
     private readonly int _maxTiles;
     private readonly int _maxSide;
     private readonly long _maxArea;
@@ -74,6 +75,8 @@ public class SnakePlanner
     private int _hDir = 1;
     private int _tiles;
     private long _elapsedMs;
+    private long _canvasWidth;
+    private long _canvasHeight;
 
     private readonly List<ulong> _hashes = new();
     private readonly List<int> _measuredShifts = new();
@@ -99,13 +102,23 @@ public class SnakePlanner
         if (regionWidth <= 0 || regionHeight <= 0)
             throw new ArgumentException("Размер области должен быть положительным.", nameof(regionWidth));
 
+        // m4: валидация доли перекрытия: NaN схлопывается в шаг 1 px, отрицательная даёт шаг
+        // больше области (дыры), >= 1 — нулевой шаг.
+        if (double.IsNaN(overlapFraction) || overlapFraction < 0 || overlapFraction >= 1)
+            throw new ArgumentException(
+                $"Доля перекрытия {overlapFraction} должна быть в [0, 1).", nameof(overlapFraction));
+
         _regionWidth = regionWidth;
         _regionHeight = regionHeight;
-        _stepShift = ComputeStep(regionWidth, regionHeight, overlapFraction);
+        _stepShiftH = ComputeStepH(regionWidth, overlapFraction);
+        _stepShiftV = ComputeStepV(regionHeight, overlapFraction);
         _maxTiles = maxTiles;
         _maxSide = maxSide;
         _maxArea = maxArea;
         _maxElapsedMs = maxElapsedMs;
+        // M2: полотно стартует с размера окна и растёт по измеренным сдвигам.
+        _canvasWidth = regionWidth;
+        _canvasHeight = regionHeight;
     }
 
     /// <summary>Текущий шаг, который инструмент должен выполнить (или <c>Done</c>).</summary>
@@ -139,6 +152,17 @@ public class SnakePlanner
         _elapsedMs = elapsedMs;
         _measuredShifts.Add(measuredShift);
         _tiles++;
+
+        // M2: полотно растёт по ИЗМЕРЕННЫМ сдвигам, а не по окну. Ось шага, который только что
+        // выполнен, берём из CurrentStep (он ещё не заменён на следующий в switch ниже). ToStart —
+        // позиционирование в угол, полотно не растит.
+        if (CurrentStep.Kind != ScanStepKind.ToStart)
+        {
+            if (CurrentStep.Axis == Axis.Horizontal)
+                _canvasWidth += measuredShift;
+            else
+                _canvasHeight += measuredShift;
+        }
 
         // Хеш кадра для признака конца прокрутки (два последних кадра одинаковы).
         _hashes.Add(HashFrame(grayFrame));
@@ -197,16 +221,16 @@ public class SnakePlanner
         return CurrentStep;
     }
 
-    /// <summary>Шаг в текущем горизонтальном направлении.</summary>
+    /// <summary>Шаг в текущем горизонтальном направлении (M5: шаг по горизонтали).</summary>
     private void AdvanceHorizontal()
     {
-        CurrentStep = new ScanStep(ScanStepKind.Step, Axis.Horizontal, _hDir, _stepShift);
+        CurrentStep = new ScanStep(ScanStepKind.Step, Axis.Horizontal, _hDir, _stepShiftH);
     }
 
-    /// <summary>Шаг вниз (переход на следующую строку).</summary>
+    /// <summary>Шаг вниз (переход на следующую строку) (M5: шаг по вертикали).</summary>
     private void AdvanceVertical()
     {
-        CurrentStep = new ScanStep(ScanStepKind.Step, Axis.Vertical, 1, _stepShift);
+        CurrentStep = new ScanStep(ScanStepKind.Step, Axis.Vertical, 1, _stepShiftV);
     }
 
     private void SetDone()
@@ -215,8 +239,9 @@ public class SnakePlanner
     }
 
     /// <summary>
-    /// Проверяет потолки. Порядок: число плиток → сторона → площадь → время. Первый превышенный
-    /// фиксирует причину.
+    /// Проверяет потолки по РАСТУЩЕМУМУ полотну (M2: не по окну, а по накопленным измеренным
+    /// сдвигам). Порядок: число плиток → сторона → площадь → время. Первый превышенный фиксирует
+    /// причину. M3: при срабатывании любого потолка автомат переходит в Done (Truncated остаётся).
     /// </summary>
     private void CheckCeilings()
     {
@@ -228,34 +253,40 @@ public class SnakePlanner
             _truncated = true;
             _truncationReason = $"Превышено число плиток: {_tiles} > {_maxTiles}.";
         }
-        else if (_regionWidth > _maxSide || _regionHeight > _maxSide)
+        else if (_canvasWidth > _maxSide || _canvasHeight > _maxSide)
         {
             _truncated = true;
-            _truncationReason = $"Сторона области превышает {_maxSide} px.";
+            _truncationReason = $"Сторона полотна {_canvasWidth}×{_canvasHeight} px превышает потолок {_maxSide} px.";
         }
-        else if ((long)_regionWidth * _regionHeight > _maxArea)
+        else if (_canvasWidth * _canvasHeight > _maxArea)
         {
             _truncated = true;
-            _truncationReason = $"Площадь области превышает {_maxArea} px².";
+            _truncationReason = $"Площадь полотна {_canvasWidth * _canvasHeight} px² превышает потолок {_maxArea} px².";
         }
         else if (_elapsedMs > _maxElapsedMs)
         {
             _truncated = true;
             _truncationReason = $"Превышено время: {_elapsedMs} ms > {_maxElapsedMs} ms.";
         }
+
+        // M3: при срабатывании любого потолка автомат останавливается (Done), а не идёт дальше.
+        if (_truncated && _phase != Phase.Done)
+        {
+            _phase = Phase.Done;
+            SetDone();
+        }
     }
 
     /// <summary>
-    /// Шаг по оси = размер области вдоль этой оси минус перекрытие. Берём меньшее из шага по
-    /// горизонтали и по вертикали, чтобы шаг был одинаковым для обеих осей (змейка шагает на
-    /// одну величину). Округление вниз: перекрытие не меньше заданной доли.
+    /// M5: шаг по оси = размер области вдоль этой оси минус перекрытие. Горизонтальный и
+    /// вертикальный шаги различны (змейка шагает на разную величину по осям). Округление вниз:
+    /// перекрытие не меньше заданной доли.
     /// </summary>
-    private static int ComputeStep(int regionWidth, int regionHeight, double overlapFraction)
-    {
-        var w = (int)(regionWidth * (1.0 - overlapFraction));
-        var h = (int)(regionHeight * (1.0 - overlapFraction));
-        return Math.Max(1, Math.Min(w, h));
-    }
+    private static int ComputeStepH(int regionWidth, double overlapFraction)
+        => Math.Max(1, (int)(regionWidth * (1.0 - overlapFraction)));
+
+    private static int ComputeStepV(int regionHeight, double overlapFraction)
+        => Math.Max(1, (int)(regionHeight * (1.0 - overlapFraction)));
 
     /// <summary>FNV-1a 64-bit хеш кадра (детерминированный, без внешних зависимостей).</summary>
     private static ulong HashFrame(ReadOnlySpan<byte> frame)

@@ -53,10 +53,12 @@ public static class ContentRegion
                 $"Кадры {grayBefore.Length} и {grayAfter.Length} пикселей, а ожидается {expected} (width × height).",
                 nameof(grayBefore));
 
-        var minX = int.MaxValue;
-        var minY = int.MaxValue;
-        var maxX = -1;
-        var maxY = -1;
+        // M4: не min/max по любым изменившимся пикселям (раздувается выбросами — ползунок полосы
+        // прокрутки, часы, курсор в углу), а проекции: доля изменившихся пикселей в каждой строке
+        // и каждом столбце. «Полка» — самый длинный непрерывный участок строк/столбцов, где доля
+        // выше порога; область = пересечение полок по X и Y.
+        var rowChanged = new int[height];
+        var colChanged = new int[width];
         var changed = 0;
 
         for (var i = 0; i < grayBefore.Length; i++)
@@ -68,18 +70,41 @@ public static class ContentRegion
             changed++;
             var x = i % width;
             var y = i / width;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
+            rowChanged[y]++;
+            colChanged[x]++;
         }
 
         if (changed == 0)
             return new ContentRegionResult(false, Rect.Empty, 0.0,
                 "Кадры совпадают в пределах допуска: содержимое не изменилось, область не определена.");
 
-        var region = new Rect(minX, minY, maxX - minX + 1, maxY - minY + 1);
-        var density = (double)changed / region.Area;
+        // Порог «полки»: строка/столбец считается частью содержимого, если изменилась не меньше
+        // этой доли его пикселей. Выброс (ползунок, курсор, часы) даёт долю ~0.005 в своей
+        // строке/столбце; плотное содержимое — от ~0.45 (узкий блок) до 1.0. Порог 0.1 разделяет.
+        const double plateauThreshold = 0.1;
+
+        // Самая длинная непрерывная «полка» строк (по Y) и столбцов (по X).
+        var (rowStart, rowEnd) = LongestActiveRun(rowChanged, height, width, plateauThreshold);
+        var (colStart, colEnd) = LongestActiveRun(colChanged, width, height, plateauThreshold);
+
+        if (rowStart < 0 || colStart < 0)
+            return new ContentRegionResult(false, Rect.Empty, 0.0,
+                "Не найдена непрерывная «полка» изменившихся строк/столбцов: " +
+                "изменения разрознены (шум/выбросы), а не сплошное содержимое.");
+
+        var region = new Rect(colStart, rowStart, colEnd - colStart + 1, rowEnd - rowStart + 1);
+
+        // Плотность внутри найденной области (вторая защита от выбросов, прошедших полку).
+        var changedInRegion = 0;
+        for (var y = rowStart; y <= rowEnd; y++)
+            for (var x = colStart; x <= colEnd; x++)
+            {
+                var diff = Math.Abs((int)grayBefore[y * width + x] - grayAfter[y * width + x]);
+                if (diff > tolerance)
+                    changedInRegion++;
+            }
+
+        var density = (double)changedInRegion / region.Area;
         var regionFraction = (double)region.Area / ((long)width * height);
 
         // Крошечная область (доля кадра ниже порога) — шум, даже если внутри плотность 100 %.
@@ -94,5 +119,62 @@ public static class ContentRegion
                 "область, вероятно, шум, а не содержимое.");
 
         return new ContentRegionResult(true, region, density, null);
+    }
+
+    /// <summary>
+    /// Самая длинная непрерывная «полка»: участок индексов, где доля изменившихся пикселей
+    /// (<paramref name="changedAt"/> / <paramref name="lineLength"/>) не меньше
+    /// <paramref name="threshold"/>. Возвращает (start, end) включительно, или (-1, -1), если
+    /// подходящей строки/столбца нет.
+    /// </summary>
+    private static (int start, int end) LongestActiveRun(
+        int[] changedAt,
+        int lineCount,
+        int lineLength,
+        double threshold)
+    {
+        var bestStart = -1;
+        var bestEnd = -1;
+        var bestLen = 0;
+        var runStart = -1;
+
+        for (var i = 0; i < lineCount; i++)
+        {
+            var active = (double)changedAt[i] / lineLength >= threshold;
+            if (active)
+            {
+                if (runStart < 0)
+                    runStart = i;
+            }
+            else
+            {
+                if (runStart >= 0)
+                {
+                    var len = i - runStart;
+                    if (len > bestLen)
+                    {
+                        bestLen = len;
+                        bestStart = runStart;
+                        bestEnd = i - 1;
+                    }
+
+                    runStart = -1;
+                }
+            }
+        }
+
+        // Хвостовой run (доходит до конца).
+        if (runStart >= 0)
+        {
+            var len = lineCount - runStart;
+            if (len > bestLen)
+            {
+                bestLen = len;
+                bestStart = runStart;
+                bestEnd = lineCount - 1;
+            }
+        }
+
+        return (bestStart, bestEnd);
     }
 }

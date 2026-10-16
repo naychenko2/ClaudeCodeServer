@@ -1,3 +1,5 @@
+using ClaudeHomeServer.HandsBridge.Scanning.Pixels;
+
 namespace ClaudeHomeServer.HandsBridge.Scanning.Imaging;
 
 /// <summary>
@@ -28,7 +30,9 @@ public readonly record struct DoubtfulSeam(string Reason, int TileA, int TileB);
 /// <summary>
 /// Результат сборки: <see cref="Pixels"/> — холст (RGB/RGBA, row-major), <see cref="Width"/>/
 /// <see cref="Height"/> — размер холста, <see cref="Rows"/>/<see cref="Columns"/> — сетка
-/// (число строк/столбцов плиток), <see cref="DoubtfulSeams"/> — список сомнительных швов.
+/// (число строк/столбцов плиток), <see cref="DoubtfulSeams"/> — список сомнительных швов,
+/// <see cref="Truncated"/>/<see cref="TruncationReason"/> — холст превысил потолок (сторона/площадь)
+/// и был отклонён до аллокации (M1).
 /// </summary>
 public readonly record struct CanvasResult(
     byte[] Pixels,
@@ -36,7 +40,9 @@ public readonly record struct CanvasResult(
     int Height,
     int Rows,
     int Columns,
-    IReadOnlyList<DoubtfulSeam> DoubtfulSeams);
+    IReadOnlyList<DoubtfulSeam> DoubtfulSeams,
+    bool Truncated = false,
+    string? TruncationReason = null);
 
 /// <summary>
 /// Сборка плиток в общий холст по ИЗМЕРЕННЫМ сдвигам (не номинальным): координаты плитки =
@@ -71,6 +77,15 @@ public static class CanvasAssembler
         if (tiles.Count == 0)
             throw new ArgumentException("Нужна хотя бы одна плитка.", nameof(tiles));
 
+        // M6: валидация входных плиток — размер положительный (иначе DivideByZero в каналах).
+        foreach (var t in tiles)
+        {
+            if (t.Width <= 0 || t.Height <= 0)
+                throw new ArgumentException(
+                    $"Плитка в ({t.CanvasX}, {t.CanvasY}): размер {t.Width}×{t.Height} должен быть положительным.",
+                    nameof(tiles));
+        }
+
         // Каналы: все плитки одного типа (3 или 4).
         var channels = tiles[0].Pixels.Length / ((long)tiles[0].Width * tiles[0].Height);
         if (channels != 3 && channels != 4)
@@ -78,29 +93,55 @@ public static class CanvasAssembler
                 $"Первая плитка: {channels} каналов, ожидается 3 (RGB) или 4 (RGBA).",
                 nameof(tiles));
 
+        // M6: длина буфера ровно w×h×каналы (иначе остаток молча отбрасывался).
         foreach (var t in tiles)
         {
-            var ch = t.Pixels.Length / ((long)t.Width * t.Height);
-            if (ch != channels)
+            var expected = (long)t.Width * t.Height * channels;
+            if (t.Pixels.Length != expected)
                 throw new ArgumentException(
-                    $"Плитка в ({t.CanvasX}, {t.CanvasY}) имеет {ch} каналов, ожидается {channels}.",
+                    $"Плитка в ({t.CanvasX}, {t.CanvasY}): буфер {t.Pixels.Length} байт, ожидается {expected} ({t.Width}×{t.Height}×{channels}).",
                     nameof(tiles));
         }
 
-        // Размер холста = обёртка всех плиток.
-        var maxRight = 0;
-        var maxBottom = 0;
-        foreach (var t in tiles)
+        // M6: нормализация координат — только если есть отрицательные CanvasX/Y (сдвиг
+        // «влево/вверх от старта»), чтобы не было отрицательных индексов. Ненулевая, но
+        // положительная координата (плитка «далеко от начала») остаётся как есть — её должен
+        // отклонить потолок (M1).
+        var shiftX = Math.Min(0, tiles.Min(t => t.CanvasX));
+        var shiftY = Math.Min(0, tiles.Min(t => t.CanvasY));
+        var grid = tiles
+            .Select(t => t with { CanvasX = t.CanvasX - shiftX, CanvasY = t.CanvasY - shiftY })
+            .ToList();
+
+        // Размер холста = обёртка всех плиток. Считаем в long, чтобы не переполнить int на
+        // больших холстах (M1): плитка 1×1 на (40000, 40000) даёт maxRight×maxBottom ≈ 1,6×10⁹.
+        var maxRight = 0L;
+        var maxBottom = 0L;
+        foreach (var t in grid)
         {
-            maxRight = Math.Max(maxRight, t.CanvasX + t.Width);
-            maxBottom = Math.Max(maxBottom, t.CanvasY + t.Height);
+            maxRight = Math.Max(maxRight, (long)t.CanvasX + t.Width);
+            maxBottom = Math.Max(maxBottom, (long)t.CanvasY + t.Height);
         }
+
+        // M1: потолок ДО выделения холста. Сторона ≤ 16 384 px и площадь ≤ 64 Мп (те же потолки,
+        // что в PngEncoder/SnakePlanner). Превышен — понятный отказ (Truncated) без аллокации.
+        if (maxRight > SnakePlanner.DefaultMaxSide || maxBottom > SnakePlanner.DefaultMaxSide)
+            return new CanvasResult(Array.Empty<byte>(), (int)maxRight, (int)maxBottom, 0, 0,
+                Array.Empty<DoubtfulSeam>(),
+                Truncated: true,
+                TruncationReason: $"Сторона холста {maxRight}×{maxBottom} px превышает потолок {SnakePlanner.DefaultMaxSide} px.");
+
+        if (maxRight * maxBottom > PngEncoder.MaxPixels)
+            return new CanvasResult(Array.Empty<byte>(), (int)maxRight, (int)maxBottom, 0, 0,
+                Array.Empty<DoubtfulSeam>(),
+                Truncated: true,
+                TruncationReason: $"Площадь холста {maxRight * maxBottom} px² превышает потолок {PngEncoder.MaxPixels} px².");
 
         var canvas = new byte[maxRight * maxBottom * channels];
 
         // «Первая запись выигрывает»: раскладываем от верхнего-левого к нижнему-правому, и каждая
         // плитка пишет только в ещё пустые пиксели. В перекрытии выигрывает более верхняя/левая.
-        var order = tiles
+        var order = grid
             .Select((t, i) => (t, i))
             .OrderBy(p => p.t.CanvasY)
             .ThenBy(p => p.t.CanvasX)
@@ -115,7 +156,8 @@ public static class CanvasAssembler
                 for (var x = 0; x < t.Width; x++)
                 {
                     var cx = t.CanvasX + x;
-                    var pixelIdx = cy * maxRight + cx;
+                    // M1: индекс в long (checked), чтобы cy*maxRight+cx не переполнил int.
+                    var pixelIdx = checked(cy * maxRight + cx);
                     if (filled[pixelIdx])
                         continue; // уже заполнено более верхней/левой плиткой
 
@@ -130,13 +172,13 @@ public static class CanvasAssembler
         }
 
         // Сетка: число строк/столбцов по уникальным координатам.
-        var rows = tiles.Select(t => t.CanvasY).Distinct().Count();
-        var cols = tiles.Select(t => t.CanvasX).Distinct().Count();
+        var rows = grid.Select(t => t.CanvasY).Distinct().Count();
+        var cols = grid.Select(t => t.CanvasX).Distinct().Count();
 
         // Сомнительные швы: для каждой пары соседних плиток (по позиции) проверяем метаданные.
-        var seams = FindDoubtfulSeams(tiles, shiftTolerance, minScore);
+        var seams = FindDoubtfulSeams(grid, shiftTolerance, minScore);
 
-        return new CanvasResult(canvas, maxRight, maxBottom, rows, cols, seams);
+        return new CanvasResult(canvas, (int)maxRight, (int)maxBottom, rows, cols, seams);
     }
 
     /// <summary>

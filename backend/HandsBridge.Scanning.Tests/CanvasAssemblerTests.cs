@@ -269,4 +269,99 @@ public class CanvasAssemblerTests
 
         Assert.Equal(original, result.Pixels);
     }
+
+    /// <summary>
+    /// M1: плитка 1×1 «далеко от начала» (40000, 40000) — холст 40001×40001, сторона &gt; 16 384.
+    /// Отказ (Truncated) до аллокации, без OverflowException.
+    /// </summary>
+    [Fact]
+    public void M1_tile_far_from_origin_rejects_before_allocation()
+    {
+        var tile = new Tile(new byte[] { 1, 2, 3 }, 1, 1, 40000, 40000, 0, 0, 1.0, false);
+        var result = CanvasAssembler.Assemble(new List<Tile> { tile });
+
+        Assert.True(result.Truncated);
+        Assert.Contains("Сторона", result.TruncationReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// M1: холст 25000×25000 (две плитки 1×1 в противоположных углах) — сторона &gt; 16 384.
+    /// Отказ до аллокации (иначе ~1,9 ГБ).
+    /// </summary>
+    [Fact]
+    public void M1_canvas_25000x25000_rejects_before_allocation()
+    {
+        var t1 = new Tile(new byte[] { 1, 2, 3 }, 1, 1, 0, 0, 0, 0, 1.0, false);
+        var t2 = new Tile(new byte[] { 4, 5, 6 }, 1, 1, 24999, 24999, 0, 0, 1.0, false);
+        var result = CanvasAssembler.Assemble(new List<Tile> { t1, t2 });
+
+        Assert.True(result.Truncated);
+        Assert.Contains("Сторона", result.TruncationReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// M6: отрицательные CanvasX/Y нормализуются по минимальной координате — холст строится от 0,
+    /// отрицательных индексов нет.
+    /// </summary>
+    [Fact]
+    public void M6_negative_coordinates_normalized_to_origin()
+    {
+        var p1 = new byte[10 * 10 * 3];
+        var p2 = new byte[10 * 10 * 3];
+        var t1 = new Tile(p1, 10, 10, -5, 0, 0, 0, 1.0, false);
+        var t2 = new Tile(p2, 10, 10, 5, 0, 0, 0, 1.0, false);
+
+        var result = CanvasAssembler.Assemble(new List<Tile> { t1, t2 });
+
+        // После нормализации: t1 → (0,0), t2 → (10,0). Холст 20×10, без обрезки.
+        Assert.Equal(20, result.Width);
+        Assert.Equal(10, result.Height);
+        Assert.False(result.Truncated);
+    }
+
+    /// <summary>M6: плитка с нулевым размером — понятный отказ (не DivideByZero).</summary>
+    [Fact]
+    public void M6_zero_size_tile_throws()
+    {
+        var t = new Tile(new byte[0], 0, 10, 0, 0, 0, 0, 1.0, false);
+        Assert.Throws<ArgumentException>(() => CanvasAssembler.Assemble(new List<Tile> { t }));
+    }
+
+    /// <summary>
+    /// M6: длина буфера не ровно w×h×каналы (301 вместо 300) — раньше остаток отбрасывался молча.
+    /// </summary>
+    [Fact]
+    public void M6_buffer_length_mismatch_throws()
+    {
+        var t = new Tile(new byte[301], 10, 10, 0, 0, 0, 0, 1.0, false);
+        Assert.Throws<ArgumentException>(() => CanvasAssembler.Assemble(new List<Tile> { t }));
+    }
+
+    /// <summary>
+    /// m1: Ambiguous=true при высоком Score (0.95 &gt; порога 0.5) — шов помечен именно из-за
+    /// Ambiguous, а не из-за низкого Score. Мутация «убрать Ambiguous» должна краснить.
+    /// </summary>
+    [Fact]
+    public void M1_m1_ambiguous_high_score_marks_seam()
+    {
+        const int W = 40, H = 30;
+        const int overlapX = 6;
+        var stepX = W - overlapX;
+        const int cols = 2;
+        var origW = (cols - 1) * stepX + W;
+        var original = MakeOriginal(origW, H);
+
+        var tiles = new List<Tile>();
+        for (var c = 0; c < cols; c++)
+        {
+            var x0 = c * stepX;
+            var pixels = Crop(original, origW, x0, 0, W, H);
+            tiles.Add(new Tile(pixels, W, H, x0, 0, stepX, stepX, 0.95, true));
+        }
+
+        var result = CanvasAssembler.Assemble(tiles, minScore: 0.5);
+
+        Assert.Single(result.DoubtfulSeams);
+        Assert.Contains("Ambiguous", result.DoubtfulSeams[0].Reason, StringComparison.OrdinalIgnoreCase);
+    }
 }

@@ -2543,7 +2543,7 @@ export function Composer({
           bandRef={auroraRef}
         />
       )}
-      <div style={{ ...containerStyle, position: 'relative', zIndex: 2 }}>
+      <div data-composer-card="" style={{ ...containerStyle, position: 'relative', zIndex: 2 }}>
       {/* Перетаскивание файла над композером: подсказка поверх карточки.
           pointerEvents:none — иначе слой перехватил бы drop у самой карточки */}
       {dragOver && (

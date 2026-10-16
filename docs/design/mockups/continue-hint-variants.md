@@ -46,7 +46,9 @@
 
 | Часть | Десктоп | Мобила (`isMobile`) |
 |---|---|---|
-| Полоса | `height: 28`, `margin: 0 0 ${SP.xs}px`, `padding: 0 ${SP.xs}px 0 ${SP.sm}px`, `gap: SP.sm`, `border: 1px solid C.border`, `borderRadius: R.lg`, `background: C.bgPanel`, `fontSize: FS.sm`, `color: C.textSecondary`, `display: flex`, `alignItems: center` | `height: 32`, `padding: 0 0 0 ${SP.sm}px`, остальное то же |
+| Полоса | `height: 28`, `margin: 0 0 ${SP.xs}px`, `padding: 0 ${rightPad}px 0 ${SP.sm}px`, `gap: SP.sm`, `border: 1px solid C.border`, `borderRadius: R.lg`, `background: C.bgPanel`, `fontSize: FS.sm`, `color: C.textSecondary`, `display: flex`, `alignItems: center` | `height: 32`, `padding: 0 ${rightPad}px 0 ${SP.sm}px`, остальное то же |
+
+`rightPad` (правый отступ) — `SP.xs` (4 px), когда есть ✕ «Не сейчас» (zаточен под крестик), и `SP.sm` (8 px) без ✕ (как у «Вернуть»/UndoNotice); на мобиле без ✕ не 0.
 | Иконка | `Gauge`, `ICON_SIZE.xs`, `ICON_STROKE`, цвет наследуется (`C.textSecondary`), `flexShrink: 0` | то же |
 | Текст | `<span>` с `flex: 1`, `minWidth: 0` и многоточием (`ellipsis` из `RowChip`). Число — `<b>` с цветом `C.textHeading` и `fontWeight: 600` | то же |
 | «Продолжить» | `<button type="button">`: без фона и рамки, `padding: 0`, `color: C.accent`, `fontSize: FS.sm`, `fontWeight: 600`, `gap: SP.xs`, справа `ArrowRight` `ICON_SIZE.xs`, `flexShrink: 0`, `borderRadius: R.sm` | то же |

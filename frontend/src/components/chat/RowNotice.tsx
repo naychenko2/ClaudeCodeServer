@@ -59,11 +59,14 @@ export function RowNotice({ icon, text, middle, action, snooze, isMobile, testId
   const [hoverX, setHoverX] = useState(false);
   const [pressX, setPressX] = useState(false);
 
+  // Правый отступ: SP.xs (4 px) — заточен под ✕ (snooze); без ✕ (UndoNotice) — SP.sm (8 px),
+  // как было у UndoNotice. На мобиле без ✕ отступ не должен становиться 0.
+  const rightPad = snooze ? SP.xs : SP.sm;
   const bar: CSSProperties = {
     boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: SP.sm,
     height: isMobile ? 32 : 28,
     margin: `0 0 ${SP.xs}px`,
-    padding: isMobile ? `0 0 0 ${SP.sm}px` : `0 ${SP.xs}px 0 ${SP.sm}px`,
+    padding: `0 ${rightPad}px 0 ${SP.sm}px`,
     border: `1px solid ${C.border}`, borderRadius: R.lg,
     background: C.bgPanel, fontSize: FS.sm, color: C.textSecondary,
   };

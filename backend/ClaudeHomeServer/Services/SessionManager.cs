@@ -3120,6 +3120,89 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return new ChatBranchResult(branchSession, draft);
     }
 
+    // Имя чата-продолжения: «<имя> · продолжение»; если имя уже кончается на «· продолжение»
+    // или «· продолжение N» — счётчик растёт («· продолжение 2», «· продолжение 3»…).
+    internal static string ContinuationName(string? name)
+    {
+        const string Suffix = " · продолжение";
+        var baseName = string.IsNullOrWhiteSpace(name) ? "Чат" : name.Trim();
+        var m = System.Text.RegularExpressions.Regex.Match(baseName, @"^(?<head>.*) · продолжение(?: (?<n>\d+))?$",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!m.Success) return baseName + Suffix;
+        var next = m.Groups["n"].Success && int.TryParse(m.Groups["n"].Value, out var n) ? n + 1 : 2;
+        return $"{m.Groups["head"].Value}{Suffix} {next}";
+    }
+
+    // «Продолжить в новом чате»: новый чат той же персоны с теми же настройками, но БЕЗ истории
+    // и транскрипта — только смысл (записку сервис шлёт первым сообщением). В отличие от
+    // BranchAsync не копирует транскрипт CLI, поэтому годится и локальному проекту. Групповой чат и
+    // режим «Командная реализация» не поддерживаются: их состояние живёт в Session, а не в записке.
+    // Старый чат НЕ архивируется и UpdatedAt не двигается; ссылки ставятся в обе стороны.
+    // Занятость чата проверяет вызывающий (ChatContinueService): ход передачи уже завершён.
+    public async Task<Session> CreateContinuationAsync(string sessionId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } source
+            || !_sessions.TryGetValue(sessionId, out _))
+            throw new KeyNotFoundException("Чат не найден");
+
+        if (source.Participants is { Count: > 0 })
+            throw new ChatContinueNotSupportedException(
+                "Групповой чат нельзя продолжить в новом: состав спикеров живёт в чате");
+        if (source.TeamImplement is not null)
+            throw new ChatContinueNotSupportedException(
+                "Чат в режиме «Командная реализация» нельзя продолжить в новом: состояние волн живёт в чате");
+
+        var newName = ContinuationName(source.Name);
+        var created = !string.IsNullOrWhiteSpace(source.PersonaId)
+            ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
+                name: newName, contextProjectId: source.ProjectId)
+            : source.ProjectId is not null
+                ? await CreateAsync(source.ProjectId, source.Mode, name: newName,
+                    model: source.Model, effort: source.Effort)
+                : await CreateChatAsync(ownerId, source.Mode, name: newName,
+                    model: source.Model, effort: source.Effort);
+
+        if (!_sessions.TryGetValue(created.Id, out var newEntry)) return created;
+        var n = newEntry.Info;
+        // Те же настройки, что у источника: персональная фабрика подставляет модель персоны, а не
+        // выбранную человеком в этом чате, поэтому модель/провайдер/effort переписываются ПОСЛЕ
+        n.Model = source.Model;
+        n.Provider = source.Provider;
+        n.Effort = source.Effort;
+        n.Mode = source.Mode;
+        n.AgentName = source.AgentName;
+        // Разрешённые «всегда» инструменты едут с работой: смысл передачи — не заставлять
+        // человека заново проходить карточки разрешений (в отличие от ветки, где это эскалация прав)
+        n.AutoAllowTools = [.. source.AutoAllowTools];
+        n.Context = [.. source.Context.Select(c => new SessionContextEntry
+            { Type = c.Type, Id = c.Id, Title = c.Title })];
+        n.VoiceMode = source.VoiceMode;
+        n.VoiceStyle = source.VoiceStyle;
+        n.NotificationsMuted = source.NotificationsMuted;
+        n.ExcludeFromDossiers = source.ExcludeFromDossiers;
+        // Рабочее дерево тот же путь, но владеет им по-прежнему источник (WorktreeOwned=false):
+        // удаление продолжения не снесёт дерево под старым чатом. Дерево есть только у проектного
+        // чата и до первого хода — как в AttachWorktreeAsync; следующий ход пересоздаст адаптер с cwd
+        if (source.WorktreePath is not null && n.ProjectId is not null)
+        {
+            n.WorktreePath = source.WorktreePath;
+            n.WorktreeBranch = source.WorktreeBranch;
+            n.WorktreeOwned = false;
+        }
+        // Model/Provider/Effort переписаны ПОСЛЕ создания адаптера (фабрика подставила модель
+        // персоны, а не выбранную человеком) — следующий ход обязан пересобрать адаптер с
+        // перенесёнными значениями, а не повторить путь персоны. Worktree-ветка тоже сюда:
+        // адаптер строится с cwd, не с дерева.
+        newEntry.AdapterStale = true;
+        n.ContinuedFromSessionId = sessionId;
+        source.ContinuedInSessionId = n.Id;
+        SaveSessions();
+
+        await TurnEvents.PublishAsync(new SessionContinued(
+            new TurnContext(n.Id, ownerId, 0, 0, n.ProjectId), sessionId));
+        return n;
+    }
+
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
@@ -5060,7 +5143,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // результат через историю (chats_history).
     public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
         TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null,
-        string? senderOrigin = null, string? senderChatName = null, bool preempt = true)
+        string? senderOrigin = null, string? senderChatName = null, bool preempt = true,
+        bool systemDirective = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -5134,7 +5218,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
-        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin);
+        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId,
+            systemDirective: systemDirective, senderOrigin: senderOrigin);
         entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
         entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
@@ -5410,6 +5495,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (removedWaiting) SaveSessions();
         if (removed) await BroadcastPendingAsync(sessionId, entry);
         return removed;
+    }
+
+    // Убрать поставленное (queued) сообщение по тексту — для служебных отправок (записка-передача),
+    // которые не должны отработать отдельным ходом, если чат занялся между проверкой занятости и
+    // отправкой. true, если что-то убрано.
+    public bool RemovePendingByText(string sessionId, string text)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        lock (entry.PendingLock)
+        {
+            var idx = entry.Pending.FindIndex(p => p.Text == text);
+            if (idx < 0) return false;
+            entry.Pending.RemoveAt(idx);
+            return true;
+        }
     }
 
     // Прерывание хода («Стоп») замораживает очередь: сообщения НЕ выбрасываются (как было
@@ -9543,15 +9643,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             {
                 case ResultMessage rm:
                     waiter.TrySetResult(new TurnResult(
-                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd));
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd,
+                        Succeeded: true));
                     break;
                 case ErrorMessage em:
-                    waiter.TrySetResult(new TurnResult(em.Text, 0, null));
+                    // Ошибка хода (протухший логин CLI и пр.) — не штатная реплика
+                    waiter.TrySetResult(new TurnResult(em.Text, 0, null, Succeeded: false));
                     break;
                 case ExitedMessage:
-                    // Прерван без result — отдаём то, что ассистент успел написать
+                    // Прерван без result — отдаём то, что ассистент успел написать (обрубок,
+                    // не готовая реплика)
                     waiter.TrySetResult(new TurnResult(
-                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null));
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null, Succeeded: false));
                     break;
             }
         }
@@ -10153,8 +10256,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 }
 
 // Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
-// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал)
-public record TurnResult(string Reply, long DurationMs, double? CostUsd);
+// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).
+// Succeeded — ход завершился штатным result (true); error/«Стоп» (exited) — false: тогда Reply
+// это сообщение об ошибке или обрубок, а не готовая реплика.
+public record TurnResult(string Reply, long DurationMs, double? CostUsd, bool Succeeded);
 
 // Результат отправки с ожиданием: Queued — сессия была занята, сообщение встало в очередь
 // и уйдёт после текущего хода; QueueFull — очередь переполнена, сообщение отброшено;

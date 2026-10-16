@@ -569,6 +569,25 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // «Продолжить в новом чате»: агент пишет записку-передачу в этом чате (платный ход, ждём его
+    // конца), платформа сохраняет её заметкой и открывает новый чат с ней. Оркестрация живёт в
+    // ChatContinueService. Коды: 404 — чат не найден/чужой; 400 — продолжать нечего (нет ходов
+    // агента) или тип чата не поддерживается (групповой, штаб); 409 — чат занят (идёт ход) либо
+    // агент не написал записку; текст ошибки годится для тоста.
+    [HttpPost("{id}/continue")]
+    public async Task<IActionResult> Continue(string id, [FromBody] ContinueChatRequest? req,
+        [FromServices] ChatContinueService continuation)
+    {
+        try
+        {
+            var result = await continuation.ContinueAsync(UserId, id, req?.Note);
+            return Ok(new { newSessionId = result.NewSessionId, handoffNoteId = result.HandoffNoteId });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ChatContinueNotSupportedException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -689,6 +708,10 @@ public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force
 public record MigrateProviderRequest(string? Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);
+
+// «Продолжить в новом чате». Note — необязательная приписка человека: что делать дальше
+// (уходит в первое сообщение нового чата)
+public record ContinueChatRequest(string? Note = null);
 
 // Ветвление чата (шаг 4 плана «Ветвление чата», контракт §6 docs/research/chat-branching-2026-09.md).
 // AnchorText обязателен: индекс — договорённость двух счётчиков (клиент/сервер), сверка текста

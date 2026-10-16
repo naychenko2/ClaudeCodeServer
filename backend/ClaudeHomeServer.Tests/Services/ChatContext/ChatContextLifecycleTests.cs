@@ -86,7 +86,8 @@ public sealed class ChatContextLifecycleTests : IDisposable
     {
         var bus = await StartedLifecycle();
 
-        bus.Subscribers.Should().Be(2);
+        // Deleted, Branched и Continued
+        bus.Subscribers.Should().Be(3);
     }
 
     private async Task<FakeBus> StartedLifecycle()

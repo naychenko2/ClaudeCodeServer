@@ -777,6 +777,10 @@ builder.Services.AddSingleton<TeamWaveService>();
 // в стадии «волна N» навсегда
 builder.Services.AddGatedHostedService<TeamWaveWatchdog>(builder.Configuration);
 builder.Services.AddSingleton<SessionSummaryService>();
+// «Продолжить в новом чате»: записка-передача от агента и новый чат с ней. Хостед-сервис —
+// подписка на TurnCompleted для продолжений, поставленных инструментом chats_continue из хода чата
+builder.Services.AddSingleton<ChatContinueService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatContinueService>());
 // Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов») и
 // карта плана (место plan-map, «Визуальный разворот плана» часть B) —
 // DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).

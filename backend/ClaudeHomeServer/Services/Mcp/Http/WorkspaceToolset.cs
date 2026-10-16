@@ -75,7 +75,8 @@ public sealed partial class WorkspaceToolset(
     KnowledgeBaseCatalogService knowledgeCatalog,
     ISessionBroadcaster broadcaster,
     SessionContextResolver contextResolver,
-    INoteAccessor? notes = null) : IMcpParameterizedToolset
+    INoteAccessor? notes = null,
+    ChatContinueService? continuation = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -167,6 +168,7 @@ public sealed partial class WorkspaceToolset(
             ["chats_report_up"] = "chats",
             ["chats_update"] = "chats",
             ["chats_archive"] = "chats",
+            ["chats_continue"] = "chats",
             ["files_delete"] = "destructive",
             ["chats_delete"] = "destructive",
             ["deploy_start"] = "deploy",
@@ -1482,6 +1484,44 @@ public sealed partial class WorkspaceToolset(
                 return archivedSession is null
                     ? Deny($"Сессия {sid} не найдена.")
                     : Json(new { id = archivedSession.Id, isArchived = archivedSession.IsArchived });
+            }
+
+            case "chats_continue":
+            {
+                if (continuation is null) return Deny("Продолжение в новом чате недоступно на этом сервере");
+                // Без sessionId — текущий чат агента (ротация на границе этапа)
+                var sid = StringArg(arguments, "sessionId");
+                var isSelf = sid.Length == 0 || sid == session.Id;
+                if (isSelf) sid = session.Id;
+                var target = sessions.GetOwned(sid, context.OwnerId);
+                if (target is null) return Deny($"Сессия {sid} не найдена.");
+                if (target.ProjectId is { } targetPid
+                    && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
+                    return Deny(zoneDenied);
+                // Чужой чат делегированный ход не продолжает (тот же гейт, что у chats_send/chats_archive);
+                // собственный — можно: это ротация своей работы, а не вмешательство в чужую
+                if (!isSelf && DelegatedDenied(context, session, "Продолжение чата в новом") is { } gateDenied)
+                    return Deny(gateDenied);
+                if (target.Participants is { Count: > 0 } || target.TeamImplement is not null)
+                    return Deny("Групповой чат и режим «Командная реализация» нельзя продолжить в новом");
+                var userNote = OptionalArg(arguments, "note");
+                // Из собственного хода дождаться его конца нельзя — продолжение встаёт в очередь
+                // и стартует, когда ход кончится; чужой чат продолжаем сразу, но фоном
+                var queued = continuation.Schedule(context.OwnerId, sid, userNote, afterCurrentTurn: isSelf);
+                return queued
+                    ? Json(new
+                    {
+                        status = "scheduled",
+                        hint = isSelf
+                            ? "продолжение стартует после завершения этого хода: завершай ход коротким сообщением "
+                              + "(записку-передачу попросит система отдельным ходом), в новом чате появится записка"
+                            : "продолжение запущено фоном: агент чата напишет записку, затем откроется новый чат",
+                    })
+                    : Json(new
+                    {
+                        status = "already_scheduled",
+                        hint = "продолжение этого чата уже стоит в очереди — повторно не ставь",
+                    });
             }
 
             case "chats_send":

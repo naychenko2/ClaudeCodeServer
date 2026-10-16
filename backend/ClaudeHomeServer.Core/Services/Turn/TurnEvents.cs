@@ -133,3 +133,13 @@ public sealed record SessionBranched(TurnContext Turn, string SourceSessionId) :
 {
     public const string Event = "session/branched";
 }
+
+// session/continued — «Продолжить в новом чате»: создан чат Turn.SessionId, которому от
+// SourceSessionId передана только записка (историю и транскрипт он не наследует). Отдельное
+// событие, а не SessionBranched: подсистемы редакторов копируют по ветке нити, чьи записи
+// разрешаются по ленте источника, а в чате-продолжении этой ленты нет. Подписывается только
+// контекст чата (ChatContextLifecycle): материалы, закреплённые за чатом, едут вместе с работой.
+public sealed record SessionContinued(TurnContext Turn, string SourceSessionId) : ITurnNotification
+{
+    public const string Event = "session/continued";
+}

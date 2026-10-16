@@ -813,6 +813,23 @@ const SECTION_TOOLS = {
         },
       },
     },
+    {
+      name: 'chats_continue',
+      description: 'Продолжить работу в НОВОМ чате той же персоны: агент пишет записку-передачу (цель, сделано, ' +
+        'состояние, решения, следующий шаг), платформа открывает новый чат с ней, а контекст падает ' +
+        'с сотен тысяч токенов до десятков. Это не ветвление: переносится смысл, а не история. ' +
+        'Старый чат остаётся как есть. Без sessionId — ТЕКУЩИЙ чат: продолжение встаёт в очередь и ' +
+        'стартует, когда твой ход кончится (изнутри хода дождаться его конца нельзя), поэтому после ' +
+        'вызова просто заверши ход. Подходит на границе этапа, когда контекст разросся. ' +
+        'Групповой чат и режим «Командная реализация» не продолжаются.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string', description: 'ID сессии (пусто — текущий чат)' },
+          note: { type: 'string', description: 'Необязательная приписка: что делать дальше в новом чате' },
+        },
+      },
+    },
   ],
   // Разрушающие операции — отдельная секция за флагом workspace-destructive
   // (у персоны дополнительно нужен tool-ключ destructive)
@@ -1299,6 +1316,22 @@ async function callTool(name, args) {
         method: 'PUT', body: JSON.stringify({ archived: args.archived }),
       });
       return json({ id: updated.id, isArchived: updated.isArchived === true });
+    }
+
+    case 'chats_continue': {
+      // Ветка отката заморожена: очередь «после текущего хода» живёт только в http-ветке wsp.
+      // Чужой чат продолжаем тем же REST-эндпоинтом, что и кнопка в интерфейсе; свой — нельзя,
+      // изнутри собственного хода его конец не дождаться.
+      const sessionId = String(args.sessionId ?? '') || SELF_SESSION_ID;
+      if (!sessionId) throw new Error('Не указан sessionId');
+      if (SELF_SESSION_ID && sessionId === SELF_SESSION_ID)
+        throw new Error('Продолжение собственного чата доступно только в http-ветке wsp (stdio-ветка заморожена)');
+      const projectId = await resolveSessionProject(sessionId);
+      if (projectId) checkProjectAllowed(projectId);
+      const result = await api(`/api/chats/${encodeURIComponent(sessionId)}/continue`, {
+        method: 'POST', body: JSON.stringify(args.note ? { note: String(args.note) } : {}),
+      });
+      return json(result);
     }
 
     case 'chats_delete': {

@@ -234,6 +234,19 @@ def recent_humans(messages, cap=HUMANS_CAP):
 # Потолок блока <ccs-preserved> в КОДОВЫХ ТОЧКАХ.
 PRESERVED_CAP = 60000
 
+# Заголовки секций блока <ccs-preserved>: единый источник для сборки (build_preserved) и
+# разбора прошлого блока (шаг 8, _prev_block). Заголовок — всегда отдельная строка, и
+# разделитель блока — точное совпадение строки; заголовок внутри постановки (собственный
+# markdown человека) — редкий случай, в нём секция обрезается на этой строке.
+SEC_HEAD = "## Постановка задачи (дословно)"
+SEC_HUMANS = "## Реплики человека (дословно, новые сверху)"
+SEC_FILES = "## Изменённые файлы"
+SEC_CHECKS = "## Последние проверки"
+SEC_PLAN = "## План и задачи"
+SEC_ANCHORS = "## Якоря (дословно из истории)"
+_TITLE_KEY = {SEC_HEAD: "head", SEC_HUMANS: "humans", SEC_FILES: "files",
+              SEC_CHECKS: "checks", SEC_PLAN: "plan", SEC_ANCHORS: "anchors"}
+
 # Виды проверок (last_checks): подстрока в команде Bash / имя mcp-тула.
 # npm: только build|test|lint|typecheck (npx tsc — тоже) — каждый скрипт отдельный вид;
 # «npm run dev» (dev-сервер) — не проверка.
@@ -562,6 +575,210 @@ def _escape_cli_tags(text):
     return _CLI_TAG_RE.sub(lambda m: "‹" + m.group(0)[1:], text)
 
 
+# =============================================================================
+# Шаг 8: повторное сжатие — перенос прошлого <ccs-preserved> в новый блок
+# =============================================================================
+#
+# После первого сжатия постановка, ранние реплики, файлы и проверки живут только в записи
+# сжатия — user-сообщении «This session is being continued from a previous conversation…»,
+# где после «Summary:» стоит наш <ccs-preserved>…</ccs-preserved>. При втором сжатии
+# human_texts эту запись пропускает целиком (_is_cli_summary), и прошлый блок терялся:
+# «Постановка» становилась первой репликой после сжатия (часто «Продолжай»), а исходная
+# постановка, старые поправки и список изменённых файлов исчезали. Поэтому прошлый блок
+# разбираем по секциям и переносим его содержимое в новый.
+
+def _prev_block_body(text):
+    """Тело ПОСЛЕДНЕГО <ccs-preserved>…</ccs-preserved> в тексте; None — нет или сломан.
+
+    «Последний» — последнее открывающее и последнее закрывающее после него: если блоков
+    вдруг несколько, берём самый свежий. Сломанный блок (нет закрывающего тега, или он
+    стоит до открывающего) → None: поведение как без блока.
+    """
+    start = text.rfind("<ccs-preserved>")
+    if start < 0:
+        return None
+    end = text.rfind("</ccs-preserved>")
+    if end < start + len("<ccs-preserved>"):
+        return None
+    return text[start + len("<ccs-preserved>"):end]
+
+
+def _split_sections(body):
+    """Тело блока → dict key -> текст секции (разделители — точные совпадения строк).
+
+    Секции, которых в блоке нет, — без ключа. Известных заголовков нет вовсе (мусор
+    вместо блока) — пустой dict.
+    """
+    lines = body.split("\n")
+    marks = []
+    for i, ln in enumerate(lines):
+        key = _TITLE_KEY.get(ln)
+        if key is not None:
+            marks.append((i, key))
+    out = {}
+    for j, (i, key) in enumerate(marks):
+        stop = marks[j + 1][0] if j + 1 < len(marks) else len(lines)
+        text = "\n".join(lines[i + 1:stop]).strip()
+        if text:
+            out[key] = text
+    return out
+
+
+# Строка секции «Изменённые файлы»: `path` или `path (N правок)` или
+# `path (N правок, перезапись)` — вывод _fmt_files. Суффикс закреплён на конце строки,
+# поэтому путь в скобками не путается с суффиксом.
+_OLD_FILE_LINE = re.compile(
+    r"^(?P<path>.+?)\s*\((?:(?P<edits>\d+)\s+правок(?:,\s*перезапись)?|перезапись)\)$")
+
+
+def _parse_old_files(text):
+    """Секция «Изменённые файлы» прошлого блока: list {path, edits, write}."""
+    out = []
+    for ln in text.split("\n"):
+        ln = ln.strip()
+        if not ln:
+            continue
+        m = _OLD_FILE_LINE.match(ln)
+        if m:
+            path = m.group("path")
+            edits = int(m.group("edits")) if m.group("edits") else 0
+            write = "перезапись" in m.group(0)[len(path):]
+        else:
+            path, edits, write = ln, 0, False
+        out.append({"path": path, "edits": edits, "write": write})
+    return out
+
+
+# Строка секции «Последние проверки»: `[kind] label — status` (вывод _fmt_checks);
+# результат — отступные строки после заголовка.
+_OLD_CHECK_LINE = re.compile(r"^\[(?P<kind>[^\]]+)\]\s*(?P<label>.*?)\s*—\s*(?P<status>\S+)$")
+
+
+def _parse_old_checks(text):
+    """Секция «Последние проверки» прошлого блока: list {kind, label, is_error, status,
+    result}. Результат — отступные строки после заголовочной (до следующего заголовка)."""
+    out = []
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        m = _OLD_CHECK_LINE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        result = []
+        j = i + 1
+        while j < len(lines) and (lines[j].startswith("    ") or not lines[j].strip()):
+            if lines[j].strip():
+                result.append(lines[j].strip())
+            j += 1
+        out.append({"kind": m.group("kind"), "label": m.group("label"),
+                    "is_error": m.group("status") == "ошибка",
+                    "status": m.group("status"), "result": "\n".join(result)})
+        i = j
+    return out
+
+
+def _prev_block(msgs):
+    """Разобранный прошлый блок <ccs-preserved> из записи сжатия CLI; None — нет.
+
+    Ищем в user-сообщениях, начинающихся с «This session is being continued…» (сводка
+    прошлого сжатия): в последнем таком сообщении — последнее <ccs-preserved>…</ccs-preserved>.
+    Секции переносим в те же формы, что и свежие:
+      head     — постановка (текст);
+      humans   — реплики (newest first, как в блоке; склеенный текст секции — одна запись:
+                 границы реплик в собранном блоке неоднозначны, а для урезания «самые
+                 старые» это самый старый кусок);
+      files    — list {path, edits, write};
+      checks   — list {kind, label, is_error, status, result};
+      plan     — текст плана;
+      anchors  — list[str].
+    Мусор вместо блока (нет закрывающего тега, нет ни одного заголовка) → None: поведение
+    как без блока, без исключения.
+    """
+    for m in reversed(msgs or []):
+        if m.get("role") != "user":
+            continue
+        text = _text_blocks(m)
+        if not _is_cli_summary(text):
+            continue
+        body = _prev_block_body(text)
+        if body is None:
+            continue  # этой записи блока нет (сжатие с выключенным флагом) — ищем раньше
+        secs = _split_sections(body)
+        if not secs:
+            continue  # мусор вместо блока — ищем раньше
+        return {
+            "head": secs.get("head"),
+            "humans": [secs["humans"]] if "humans" in secs else [],
+            "files": _parse_old_files(secs["files"]) if "files" in secs else [],
+            "checks": _parse_old_checks(secs["checks"]) if "checks" in secs else [],
+            "plan": secs.get("plan"),
+            "anchors": secs["anchors"].split("\n") if "anchors" in secs else [],
+        }
+    return None
+
+
+def _merge_files(new_files, old_files):
+    """Файлы: новые касания сверху, прошлые ниже; дубли пути схлопываются (число правок —
+    сумма, перезапись — OR)."""
+    merged = {}
+    order = []
+    for f in list(new_files) + list(old_files):
+        if f["path"] not in merged:
+            merged[f["path"]] = {"path": f["path"], "edits": 0, "write": False}
+            order.append(f["path"])
+        e = merged[f["path"]]
+        e["edits"] += f["edits"]
+        e["write"] = e["write"] or f["write"]
+    return [merged[p] for p in order]
+
+
+def _merge_checks(new_checks, old_checks):
+    """Проверки: по каждому виду (kind) — самая свежая; новая перекрывает прошлую."""
+    by_kind = {}
+    for c in list(new_checks) + list(old_checks):
+        by_kind.setdefault(c["kind"], c)
+    return list(by_kind.values())
+
+
+def _merge_anchors(new_anchors, old_anchors, cap=8000):
+    """Якоря: новые + прошлые, дедуп (новое вхождение держим), обрезка по cap как в anchors()."""
+    seen = set()
+    out = []
+    for a in list(new_anchors) + list(old_anchors):
+        if a not in seen:
+            seen.add(a)
+            out.append(a)
+    total = 0
+    kept = []
+    for a in out:
+        if total + len(a) > cap and kept:
+            break
+        kept.append(a)
+        total += len(a)
+    return kept
+
+
+def _cap_humans(humans, cap=HUMANS_CAP):
+    """Потолок HUMANS_CAP на списке реплик (новые сверху): урезаются самые старые (хвост).
+
+    Та же логика бюджета, что в _recent_humans_indexed: одна длинная реплика не отбрасывается,
+    а берётся с меткой пропуска, если влезает в оставшийся бюджет, — и обрыв.
+    """
+    out = []
+    budget = cap
+    for t in humans:
+        if not t:
+            continue
+        if len(t) <= budget:
+            out.append(t)
+            budget -= len(t)
+        else:
+            out.append(_truncate(t, budget))
+            break
+    return out
+
+
 def build_preserved(doc):
     """Блок <ccs-preserved>: постановка + реплики + файлы + проверки + план + якоря.
 
@@ -569,33 +786,52 @@ def build_preserved(doc):
     PRESERVED_CAP: при превышении режем в порядке «якоря → проверки → файлы → старые
     реплики»; постановка и самая свежая реплика — никогда. Теги <analysis>/<summary> в
     тексте экранируются (< → ‹), чтобы разбор CLI по первому вхождению их не задел.
+
+    Повторное сжатие (шаг 8): если в истории есть запись прошлого сжатия CLI с нашим
+    блоком, его секции переносим: постановка — из прошлого блока (а не первая реплика
+    после сжатия), реплики — новые сверху + прошлые (общий потолок HUMANS_CAP, урезаются
+    самые старые), файлы — объединение (дубли схлопываются, правки суммируются),
+    проверки — по каждому виду самая свежая, план — свежий иначе прошлый, якоря — новые +
+    прошлые (дедуп, потолок). Сводка CLI без нашего блока — поведение как без переноса.
     """
     msgs = (doc or {}).get("messages") or []
+    prev = _prev_block(msgs)
+    # Постановка: из прошлого блока, если он её сохранил; иначе — как раньше (первая
+    # реплика текущей истории).
     head_text = head(msgs)
-    # Реплики с индексом: постановка (index 0) уже в «Постановке» — из «Реплик» её
-    # исключаем, чтобы не дублировать. Индекс — позиция в истории, не текст: одинаковые
-    # короткие «Продолжай» не схлопываются.
-    humans_indexed = _recent_humans_indexed(msgs)
-    humans = [t for t, idx in humans_indexed if idx != 0]
-    files = changed_files(msgs)
-    checks = last_checks(msgs)
-    plan = last_plan(msgs)
-    anchors_list = anchors(msgs)
+    if prev and prev["head"]:
+        head_text = prev["head"]
+    # Реплики (newest first): свежие из текущей истории, затем прошлые из прошлого блока.
+    # Постановка (head) уже в «Постановке» — из «Реплик» её исключаем, чтобы не дублировать,
+    # но только когда она из текущей истории (первое сжатие: head = первая реплика). Когда
+    # head перенесён из прошлого блока, свежих не исключаем: их первая (idx 0) — обычная
+    # реплика после сжатия, а не постановка. Потолок HUMANS_CAP — на объединённом списке:
+    # урезаются самые старые, то есть сначала прошлые.
+    texts = list(reversed(human_texts(msgs)))  # newest first; head (idx 0) — в хвосте
+    if prev and prev["head"]:
+        new_humans = texts
+    else:
+        new_humans = texts[:-1] if texts else []
+    humans = _cap_humans(new_humans + (prev["humans"] if prev else []))
+    files = _merge_files(changed_files(msgs), prev["files"] if prev else [])
+    checks = _merge_checks(last_checks(msgs), prev["checks"] if prev else [])
+    plan = last_plan(msgs) or (prev["plan"] if prev else None)
+    anchors_list = _merge_anchors(anchors(msgs), prev["anchors"] if prev else [])
 
     # Разделы: key -> (title, lines). Порядок в блоке фиксирован.
     secs = {}
     if head_text:
-        secs["head"] = ("## Постановка задачи (дословно)", [head_text])
+        secs["head"] = (SEC_HEAD, [head_text])
     if humans:
-        secs["humans"] = ("## Реплики человека (дословно, новые сверху)", list(humans))
+        secs["humans"] = (SEC_HUMANS, list(humans))
     if files:
-        secs["files"] = ("## Изменённые файлы", _fmt_files(files))
+        secs["files"] = (SEC_FILES, _fmt_files(files))
     if checks:
-        secs["checks"] = ("## Последние проверки", _fmt_checks(checks))
+        secs["checks"] = (SEC_CHECKS, _fmt_checks(checks))
     if plan:
-        secs["plan"] = ("## План и задачи", plan.splitlines())
+        secs["plan"] = (SEC_PLAN, plan.splitlines())
     if anchors_list:
-        secs["anchors"] = ("## Якоря (дословно из истории)", list(anchors_list))
+        secs["anchors"] = (SEC_ANCHORS, list(anchors_list))
 
     if not secs:
         return None

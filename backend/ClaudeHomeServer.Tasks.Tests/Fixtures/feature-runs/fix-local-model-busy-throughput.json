@@ -1,0 +1,48 @@
+[
+ {
+  "id": "epic-local-model-busy-throughput",
+  "title": "Занятое время стенда и линия «всего по стенду» без пауз",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-15T13:27",
+  "completed": "2026-10-15T14:25",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "fix/local-model-busy-throughput",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "lbt-s1",
+  "title": "Денис: busySeconds в точках кольца истории LocalModelStatsPoller",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-15T13:27",
+  "completed": "2026-10-15T13:41",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-local-model-busy-throughput",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "lbt-s2",
+  "title": "Кира: линия «всего по стенду» на графике — выработка по busySeconds",
+  "persona": "Кира",
+  "status": "done",
+  "created": "2026-10-15T13:27",
+  "completed": "2026-10-15T14:25",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-local-model-busy-throughput",
+  "stepRef": "Ш2",
+  "lane": "фронт",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

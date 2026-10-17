@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using Xunit;
@@ -1210,5 +1211,89 @@ public class McpToolsetStabilityTests
         first.Signature.Should().NotBeNullOrEmpty();
         second.Signature.Should().Be(first.Signature,
             "руки — свойство чата, а не хода: сигнатура запуска между ходами не мерцает");
+    }
+
+    /// <summary>
+    /// Разметка фичи (режим «Исполнение фичи»): схема MCP tasks меняется БЕЗУСЛОВНО —
+    /// новые параметры (featureId/role/stepRef/lane/reviewOf в tasks_create/update, verdict в
+    /// verification) есть в tools/list всегда, не по флагу/персоне/ходу. Иначе сигнатура
+    /// запуска мерцала бы между ходами. Сторож: (1) состав (имена) стабилен — новых
+    /// инструментов нет, разметка — параметры существующих; (2) суммарная длина
+    /// tool-level description укладывается в лимит стека MCP (~1950, CLI режет на ~2 КБ).
+    /// </summary>
+    [Fact]
+    public void Фича_СхемаToolsList_СтабильнаИВПределахЛимита()
+    {
+        var project = ClaudeHomeServer.Services.Mcp.Http.TasksToolset.ProjectChatTools;
+        var personal = ClaudeHomeServer.Services.Mcp.Http.TasksToolset.PersonalTools;
+
+        // 13 инструментов, те же имена в проектном и личном контексте — новых нет
+        project.Should().HaveCount(13, "состав tools/list tasks стабилен: 13 инструментов");
+        personal.Should().HaveCount(13);
+        // Минор 4: порядок инструментов — часть отпечатка tools/list. BeEquivalentTo без
+        // WithStrictOrdering прощал бы перестановку, и регресс порядка прошёл бы мимо.
+        project.Select(t => t.Name).Should().BeEquivalentTo(personal.Select(t => t.Name),
+            options => options.WithStrictOrdering(),
+            "состав (имена) не зависит от контекста чата: проект/личные — один набор, в том же порядке");
+
+        // Лимит стека MCP: суммарные tool-level description ≤ 1950 (CLI усекает на ~2 КБ)
+        foreach (var (label, tools) in new[] { ("project", project), ("personal", personal) })
+        {
+            var total = tools.Sum(t => t.Description.Length);
+            total.Should().BeLessOrEqualTo(1950,
+                $"{label}: суммарные tool-level description ушли за лимит стека MCP");
+
+            // Минор 1: per-tool лимит 1950 на СУММУ описаний ПАРАМЕТРОВ (properties.*.description)
+            // одного инструмента — та же граница стека MCP, но на другом уровне схемы. Глобальная
+            // сумма tool-level description (выше) её не покрывает: добавление параметров разъезжало
+            // бы метрику молча, пока верхние описания оставались короткими.
+            foreach (var tool in tools)
+            {
+                var propSum = SumPropertyDescriptions(tool);
+                propSum.Should().BeLessOrEqualTo(1950,
+                    $"{label}/{tool.Name}: сумма описаний параметров ушла за лимит стека MCP");
+            }
+        }
+    }
+
+    // Минор 1: сумма длин description всех ПАРАМЕТРОВ (inputSchema.properties.*.description)
+    // одного инструмента. Граница стека MCP (~1950) — на уровне параметра, а не только на
+    // tool-level description; хелпер — единая точка, которую сверяют и основной тест, и провокация.
+    private static int SumPropertyDescriptions(ClaudeHomeServer.Services.Mcp.Http.McpToolSchema tool)
+    {
+        var total = 0;
+        if (tool.InputSchema["properties"] is JsonObject props)
+        {
+            foreach (var (name, node) in props)
+            {
+                if (node is JsonObject obj && obj["description"] is JsonValue v && v.TryGetValue<string>(out var desc))
+                    total += desc.Length;
+            }
+        }
+        return total;
+    }
+
+    // Провокация минора 1: хелпер обязан увидеть, что сумма описаний параметров одного
+    // инструмента ушла за лимит. Синтетический инструмент с одним параметром, чьё описание
+    // длиннее 1950: если хелпер не считает description, сумма 0 и проверка ложно-зелёная.
+    [Fact]
+    public void Минор1_СуммаОписанийПараметров_ПровокацияДлинноеОписание_Краснеет()
+    {
+        var schema = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["provoked"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = new string('x', 2000),
+                },
+            },
+        };
+        var tool = new ClaudeHomeServer.Services.Mcp.Http.McpToolSchema("provoked_tool", "короткое", schema);
+
+        SumPropertyDescriptions(tool).Should().BeGreaterThan(1950,
+            "описание единственного параметра длиннее лимита — хелпер обязан это увидеть");
     }
 }

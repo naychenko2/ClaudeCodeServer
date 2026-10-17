@@ -116,6 +116,22 @@ public class TaskItem
     // а не этой молчаливой сессии. Ставит только tasks_create при создании; аддитивное nullable-поле,
     // BackupSchema.Version не растёт.
     public string? ReportToSessionId { get; set; }
+    // ─── Фича (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md) ───
+    // Аддитивные nullable-поля: размеченные по-новому задачи получают их, старые — null.
+    // BackupSchema.Version не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    // Id задачи-эпика фичи; у эпика самого null.
+    public string? FeatureId { get; set; }
+    // Роль задачи в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult.
+    public string? Role { get; set; }
+    // Код шага из плана («B1», «F2»); у step/rework, по нему доработка склеивается со своим шагом.
+    public string? StepRef { get; set; }
+    // Линия («бэк», «фронт»); подпись берётся как есть.
+    public string? Lane { get; set; }
+    // Id задач, которые оценивает это ревью/проверка/финал. Пусто/у final,qa — вся фича.
+    public List<string>? ReviewOf { get; set; }
+    // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
+    public DateTime? AwaitingHumanSince { get; set; }
+    public string? AwaitingHumanReason { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /

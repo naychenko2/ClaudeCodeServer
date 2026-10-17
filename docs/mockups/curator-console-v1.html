@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пульт куратора — табло фич, экран фичи, шаг · макет v1</title>
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-progress-track:#D8CFBE;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28; --c-on-warning:#201C18;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-peek:0 2px 6px rgba(60,50,35,.14),0 20px 48px rgba(23,19,15,.32);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,.12);
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(217,119,87,.13),transparent 55%),radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.10),transparent 60%);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-on-dark:#FFFFFF;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-progress-track:#5C544A;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E; --c-on-warning:#201C18;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-peek:0 2px 8px rgba(0,0,0,.50),0 24px 56px rgba(0,0,0,.68);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --shadow-press:inset 0 1px 4px rgba(0,0,0,.38);
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(227,138,106,.11),transparent 55%),radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.08),transparent 60%);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body {
+  background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45;
+}
+button { font:inherit; }
+.serif { font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk {
+  position:sticky; top:0; z-index:2000; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:11px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button {
+  border:none; background:transparent; color:var(--c-text-secondary); padding:4px 10px; border-radius:7px;
+  font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:5px;
+}
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+
+/* ===== Приложение ===== */
+.stage { padding:16px; display:flex; justify-content:center; }
+.app { width:100%; max-width:1180px; position:relative; }
+.app.m {
+  width:360px; height:760px; border:1px solid var(--c-border); border-radius:28px; overflow:hidden;
+  transform:translateZ(0); /* фиксированные слои (шторки) — внутри «телефона» */
+  background:var(--c-bg-main);
+}
+.app.m .scroll { height:100%; overflow:auto; }
+.canvas { background:var(--canvas-glow), var(--c-bg-main); min-height:100%; padding:8px 16px 32px; }
+.app.m .canvas { padding:0 0 0; }
+
+.hub { display:flex; align-items:center; gap:12px; height:52px; padding:0 4px; }
+.app.m .hub { height:56px; padding:0 14px; background:var(--c-bg-main); border-bottom:1px solid var(--c-border); position:sticky; top:0; z-index:5; }
+.hub .ttl { font-size:22px; color:var(--c-text-heading); margin:0; font-weight:700; }
+.app.m .hub .ttl { font-size:18px; }
+.hub .sp { flex:1; }
+.hub .who { font-size:12px; color:var(--c-text-muted); }
+.crumb { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--c-text-muted); margin:0 0 8px; }
+.app.m .crumb { padding:8px 14px 0; }
+.back {
+  border:none; background:transparent; color:var(--c-text-secondary); cursor:pointer; padding:6px 8px; margin-left:-8px;
+  border-radius:8px; display:inline-flex; align-items:center; gap:4px; font-size:13px; min-height:32px;
+}
+.back:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .back { min-height:40px; }
+
+.island { background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-island); }
+.isl-h { display:flex; align-items:center; gap:8px; height:40px; padding:0 14px; background:var(--c-bg-inset); border-radius:14px 14px 0 0; border-bottom:1px solid var(--c-border-light); }
+.isl-h h3 { margin:0; font-size:13px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.isl-h .aux { font-size:11px; color:var(--c-text-muted); }
+.isl-b { padding:14px; }
+.app.m .island { border-radius:14px; margin:0 8px 8px; }
+
+/* Кнопки — Button из ui/ (primary / secondary / ghost / danger; sm 32 / md 40) */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px; border:none; cursor:pointer;
+  font-weight:600; font-size:13px; padding:7px 13px; border-radius:10px; min-height:32px; white-space:nowrap;
+  transition:background .15s, color .15s, opacity .15s;
+}
+.btn.md, .app.m .btn { font-size:14px; padding:10px 16px; border-radius:12px; min-height:40px; }
+.btn.xs { font-size:12px; padding:0 9px; min-height:24px; height:24px; border-radius:8px; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); box-shadow:var(--shadow-button); }
+.btn.secondary { background:var(--c-bg-panel); color:var(--c-text-secondary); }
+.btn.ghost { background:transparent; color:var(--c-text-secondary); border:1px solid var(--c-border); }
+.btn.ghost:hover, .btn.secondary:hover { color:var(--c-text-primary); background:var(--c-bg-selected); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn:active { box-shadow:var(--shadow-press); }
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.btn[disabled] { opacity:.45; cursor:not-allowed; box-shadow:none; }
+.btn.full { width:100%; }
+
+/* Статусные тона: цвет + форма глифа (дальтонизм) */
+.t-wait   { --tc:var(--c-info);         --tt:var(--c-info);         --tb:var(--c-info-bg); }
+.t-loop   { --tc:var(--c-warning);      --tt:var(--c-warning-text); --tb:var(--c-warning-bg); }
+.t-crash, .t-reopen { --tc:var(--c-danger); --tt:var(--c-danger-text); --tb:var(--c-danger-bg); }
+.t-run    { --tc:var(--c-text-heading); --tt:var(--c-text-heading); --tb:var(--c-bg-selected); }
+.t-frozen { --tc:var(--c-text-muted);   --tt:var(--c-text-secondary); --tb:var(--c-bg-selected); }
+.t-done   { --tc:var(--c-success);      --tt:var(--c-success-text); --tb:var(--c-success-bg); }
+.g { flex-shrink:0; display:inline-block; vertical-align:-2px; }
+.pulse { animation:pulse 1.6s ease-in-out infinite; transform-origin:center; transform-box:fill-box; }
+@keyframes pulse { 0%,100% { opacity:.25; } 50% { opacity:.9; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation:none; opacity:.5; } }
+
+/* ===== Табло фич ===== */
+.sum { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:8px; }
+.app.m .sum { grid-template-columns:1fr 1fr; padding:8px 8px 0; }
+.kpi { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:10px 12px; }
+.kpi .v { font-size:22px; font-weight:700; color:var(--c-text-heading); line-height:1.15; font-variant-numeric:tabular-nums; }
+.kpi .k { font-size:11px; color:var(--c-text-muted); }
+.kpi .h { font-size:11px; color:var(--c-text-secondary); margin-top:2px; }
+.kpi.bad .v { color:var(--c-warning-text); }
+.app.m .kpi:last-child { grid-column:1 / -1; }
+
+.attn { display:flex; flex-direction:column; gap:6px; }
+.attn button {
+  display:flex; gap:10px; align-items:flex-start; text-align:left; width:100%; cursor:pointer;
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:9px 12px; color:var(--c-text-primary);
+}
+.attn button:hover { background:var(--c-bg-selected); }
+.attn .s { color:var(--c-text-secondary); font-size:12px; }
+.attn .g { margin-top:2px; }
+
+.boardgrid { display:grid; grid-template-columns:1fr 340px; gap:8px; align-items:start; }
+.app.m .boardgrid { display:block; }
+.group-h { display:flex; align-items:center; gap:8px; margin:14px 2px 8px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+.group-h:first-child { margin-top:2px; }
+.group-h .n { background:var(--c-bg-selected); color:var(--c-text-secondary); border-radius:999px; padding:0 7px; font-size:11px; }
+.group-h button { margin-left:auto; }
+.app.m .group-h { margin:14px 16px 8px; }
+.cards { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.app.m .cards { grid-template-columns:1fr; padding:0 8px; }
+
+/* Карточка фичи — она же шапка экрана фичи (крупнее) */
+.fc {
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-card);
+  padding:12px 14px; text-align:left; width:100%; color:var(--c-text-primary); cursor:pointer; display:block;
+  transition:box-shadow .15s, border-color .15s;
+}
+button.fc:hover { box-shadow:var(--shadow-island); border-color:var(--c-border); }
+button.fc:active { box-shadow:var(--shadow-press); }
+button.fc:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.fc .top { display:flex; align-items:flex-start; gap:8px; }
+.fc .name { flex:1; min-width:0; font-weight:600; font-size:14px; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fc .stl { font-size:13px; color:var(--tt); font-weight:600; margin:2px 0 8px 22px; }
+.fc .stl .q { color:var(--c-text-secondary); font-weight:400; }
+.fc .met { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--c-text-secondary); margin-top:10px; }
+.fc .met b { color:var(--c-text-heading); font-weight:600; font-variant-numeric:tabular-nums; }
+.fc .met .bad b { color:var(--c-warning-text); }
+.fc .ask { margin-top:10px; display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--c-info); background:var(--c-info-bg); border-radius:8px; padding:6px 10px; }
+.fc .ask.danger { color:var(--c-danger-text); background:var(--c-danger-bg); }
+.fc .ask.warn { color:var(--c-warning-text); background:var(--c-warning-bg); }
+.fc.done { opacity:.85; }
+.fc.lg { cursor:default; padding:16px 18px; border-radius:14px; }
+.fc.lg .name { font-size:22px; font-weight:700; font-family:"PT Serif",Georgia,serif; white-space:normal; }
+.fc.lg .stl { font-size:14px; margin-left:24px; }
+.app.m .fc.lg .name { font-size:18px; }
+
+.avs { display:flex; }
+.av {
+  width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+  color:var(--c-on-dark); font-size:10px; font-weight:700; border:2px solid var(--c-bg-card); margin-left:-6px;
+}
+.av:first-child { margin-left:0; }
+.av.lg { width:28px; height:28px; font-size:11px; margin:0; border:none; }
+
+.ruler { display:grid; grid-template-columns:repeat(6,1fr); gap:3px; margin-left:22px; }
+.ruler .seg { height:4px; border-radius:999px; background:var(--c-border); }
+.ruler .seg.past { background:var(--c-text-muted); opacity:.55; }
+.ruler .seg.cur { background:var(--tc); }
+.ruler .lab { grid-row:2; font-size:11px; color:var(--tt); white-space:nowrap; font-weight:600; margin-top:2px; }
+.fc.lg .ruler { margin-left:24px; }
+
+.prog { display:inline-flex; align-items:center; gap:6px; }
+.bar { display:inline-block; width:64px; height:4px; background:var(--c-progress-track); border-radius:999px; overflow:hidden; position:relative; vertical-align:middle; }
+.bar i { position:absolute; left:0; top:0; bottom:0; background:var(--c-success); border-radius:999px; }
+.bar s { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--c-text-muted); }
+
+/* Плашка решения: заменяет верх шапки */
+.plate { border-radius:14px 14px 0 0; padding:14px 18px; margin:-16px -18px 14px; border-bottom:1px solid; }
+.plate.info    { background:var(--c-info-bg);    border-color:var(--c-info);   --pc:var(--c-info); }
+.plate.warning { background:var(--c-warning-bg); border-color:var(--c-warning);--pc:var(--c-warning-text); }
+.plate.danger  { background:var(--c-danger-bg);  border-color:var(--c-danger-border); --pc:var(--c-danger-text); }
+.plate.neutral { background:var(--c-bg-selected);border-color:var(--c-border); --pc:var(--c-text-secondary); }
+.plate .pt { display:flex; align-items:center; gap:8px; font-weight:700; color:var(--pc); font-size:15px; }
+.plate .pw { margin-left:auto; font-size:12px; font-weight:600; color:var(--pc); white-space:nowrap; }
+.plate .pr { margin:6px 0 10px; color:var(--c-text-primary); max-width:72ch; }
+.plate .pb { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.plate .why { font-size:12px; color:var(--c-text-secondary); margin-top:8px; display:flex; gap:6px; }
+.app.m .plate .pw { display:none; }
+
+/* Мобильная плашка снизу */
+.dock {
+  position:sticky; bottom:0; z-index:6; margin-top:12px; padding:12px 14px 14px; border-top:1px solid;
+  box-shadow:var(--shadow-sheet); border-radius:22px 22px 0 0;
+}
+.dock.info    { background:var(--c-info-bg);    border-color:var(--c-info);   --pc:var(--c-info); }
+.dock.warning { background:var(--c-warning-bg); border-color:var(--c-warning);--pc:var(--c-warning-text); }
+.dock.danger  { background:var(--c-danger-bg);  border-color:var(--c-danger-border); --pc:var(--c-danger-text); }
+.dock.neutral { background:var(--c-bg-selected);border-color:var(--c-border); --pc:var(--c-text-secondary); }
+.dock .pt { display:flex; align-items:center; gap:8px; font-weight:700; color:var(--pc); font-size:14px; }
+.dock .pw { font-size:12px; color:var(--pc); margin:2px 0 8px 24px; font-weight:600; }
+.dock .pr { font-size:12px; color:var(--c-text-primary); margin:0 0 10px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.dock .pb { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.dock .pb .btn:first-child { grid-column:1 / -1; }
+
+/* ===== Экран фичи ===== */
+.fgrid { display:grid; grid-template-columns:1fr 300px; gap:8px; align-items:start; margin-top:8px; }
+.app.m .fgrid { display:block; margin-top:0; }
+.col { display:flex; flex-direction:column; gap:8px; }
+.app.m .col { gap:0; }
+
+.digest { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+.digest li { display:flex; gap:8px; align-items:flex-start; }
+.digest .dot { width:7px; height:7px; border-radius:50%; margin-top:6px; flex-shrink:0; background:var(--c-border); }
+.digest li.new .dot { background:var(--c-accent); }
+.digest li.new { color:var(--c-text-heading); }
+.digest li:not(.new) { color:var(--c-text-secondary); }
+
+.cv-wrap { overflow-x:auto; }
+.cv svg { display:block; width:100%; min-width:640px; height:auto; }
+.cv text { font-family:"Hanken Grotesk","Segoe UI",sans-serif; }
+.hit { cursor:pointer; }
+.hit:hover + .hl, .hl:hover { opacity:1; }
+.cv-cap { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; font-size:12px; color:var(--c-text-secondary); margin-top:6px; }
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-muted); margin-top:10px; padding-top:10px; border-top:1px solid var(--c-border-light); }
+.legend span { display:inline-flex; align-items:center; gap:5px; }
+
+.vc { list-style:none; margin:0; padding:0; position:relative; }
+.vc li { position:relative; padding:0 0 12px 30px; }
+.vc li:before { content:""; position:absolute; left:10px; top:20px; bottom:0; width:var(--w,2px); margin-left:calc(var(--w,2px) / -2 + 1px); background:var(--lc,var(--c-text-muted)); opacity:.5; border-radius:2px; }
+.vc li:last-child:before { display:none; }
+.vc li.todo:before { background:none; border-left:2px dashed var(--c-dashed); opacity:1; }
+.vc .gw { position:absolute; left:0; top:1px; width:22px; height:22px; display:flex; align-items:center; justify-content:center; }
+.vc .row { display:flex; align-items:center; gap:8px; min-height:24px; }
+.vc .nm { font-weight:600; color:var(--c-text-heading); }
+.vc li.past .nm, .vc li.todo .nm { font-weight:400; color:var(--c-text-muted); }
+.vc .cur-box { margin-top:6px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--c-text-secondary); }
+.badge { display:inline-flex; align-items:center; gap:3px; border-radius:999px; padding:0 7px; font-size:11px; font-weight:600; background:var(--c-bg-selected); color:var(--c-text-secondary); border:none; cursor:pointer; min-height:20px; }
+.badge.hot { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.badge.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.app.m .badge { min-height:28px; padding:0 10px; }
+
+.side .blk + .blk { border-top:1px solid var(--c-border-light); }
+.blk { padding:12px 14px; }
+.blk .cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.fcv { font-size:20px; font-weight:700; color:var(--c-text-heading); font-variant-numeric:tabular-nums; }
+.fcv small { font-size:13px; font-weight:600; color:var(--c-text-secondary); }
+.shift { font-size:12px; font-weight:600; }
+.shift.up { color:var(--c-warning-text); }
+.shift.down { color:var(--c-success-text); }
+.mut { color:var(--c-text-muted); font-size:12px; }
+.sec { color:var(--c-text-secondary); font-size:12px; }
+.link { border:none; background:none; padding:0; color:var(--c-text-secondary); text-decoration:underline; text-decoration-color:var(--c-dashed); text-underline-offset:3px; cursor:pointer; font-size:12px; }
+.link:hover { color:var(--c-text-primary); }
+.app.m .link { min-height:32px; }
+.ppl { display:flex; flex-direction:column; gap:8px; }
+.ppl .p { display:flex; gap:8px; align-items:center; }
+.ppl .p .t { font-size:12px; color:var(--c-text-secondary); }
+.ppl .p .n { font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.risk { display:flex; gap:8px; align-items:flex-start; background:var(--c-warning-bg); color:var(--c-warning-text); border-radius:10px; padding:8px 10px; font-size:12px; }
+.build { display:flex; gap:8px; align-items:center; font-size:12px; }
+
+.menu-wrap { position:relative; }
+.menu {
+  position:absolute; right:0; top:calc(100% + 4px); z-index:50; min-width:260px; background:var(--c-bg-white);
+  border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:4px;
+}
+.menu button {
+  display:flex; gap:10px; width:100%; text-align:left; padding:8px 10px; border:none; background:transparent; border-radius:8px; cursor:pointer; color:var(--c-text-primary);
+}
+.menu button:hover { background:var(--c-bg-selected); }
+.menu button .d { display:block; font-size:11px; color:var(--c-text-muted); }
+.menu hr { border:none; border-top:1px solid var(--c-border-light); margin:4px 0; }
+
+.lines .ln { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+.lines .lnn { width:150px; font-size:12px; color:var(--c-text-secondary); flex-shrink:0; }
+.app.m .lines .lnn { width:100%; }
+.step {
+  display:inline-flex; align-items:center; gap:4px; border:1px solid var(--c-border-light); background:var(--c-bg-card);
+  border-radius:8px; padding:2px 7px; font-size:11px; cursor:pointer; color:var(--c-text-secondary); min-height:24px;
+}
+.step:hover { background:var(--c-bg-selected); }
+.step.hot { border-color:var(--c-warning); }
+.step b { font-family:"JetBrains Mono",monospace; font-weight:500; color:var(--c-text-primary); }
+.app.m .step { min-height:32px; }
+
+.check { list-style:none; margin:0; padding:0; }
+.check li { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--c-border-light); }
+.check li:last-child { border-bottom:none; }
+.check .ci { flex:1; }
+.check .ci .s { font-size:12px; color:var(--c-text-muted); }
+.check li.no .ci > span:first-child { color:var(--c-danger-text); font-weight:600; }
+.check li.pend { opacity:.6; }
+
+.pf { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.app.m .pf { grid-template-columns:1fr 1fr; }
+.pf .c { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:10px; }
+.pf .c .k { font-size:11px; color:var(--c-text-muted); }
+.pf .c .v { font-size:16px; font-weight:700; color:var(--c-text-heading); }
+.pf .c .h { font-size:11px; color:var(--c-text-secondary); }
+
+textarea, input[type=text], select {
+  width:100%; font:inherit; font-size:14px; color:var(--c-text-heading); background:var(--c-bg-white);
+  border:1px solid var(--c-border); border-radius:12px; padding:9px 12px; resize:vertical;
+}
+textarea:focus, input[type=text]:focus, select:focus { outline:none; border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+label.fl { display:block; font-size:12px; font-weight:600; color:var(--c-text-secondary); margin:10px 0 6px; }
+
+/* ===== Шаг ===== */
+.rounds { list-style:none; margin:0; padding:0; }
+.rounds > li { position:relative; padding:0 0 16px 28px; }
+.rounds > li:before { content:""; position:absolute; left:9px; top:22px; bottom:0; border-left:2px solid var(--c-border); }
+.rounds > li:last-child:before { display:none; }
+.rounds .rn { position:absolute; left:0; top:0; width:20px; height:20px; border-radius:50%; background:var(--c-bg-selected); color:var(--c-text-secondary); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.rounds .rn.hot { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.rounds .rh { font-weight:600; color:var(--c-text-heading); }
+.ev { display:flex; gap:8px; align-items:flex-start; margin-top:6px; font-size:12px; color:var(--c-text-secondary); }
+.quote { margin-top:6px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; font-size:12px; color:var(--c-text-primary); }
+.cat { display:inline-block; font-size:11px; font-weight:600; border-radius:6px; padding:0 6px; background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.files { width:100%; border-collapse:collapse; font-size:12px; }
+.files td { padding:6px 4px; border-bottom:1px solid var(--c-border-light); }
+.files td.p { font-family:"JetBrains Mono",monospace; color:var(--c-text-primary); word-break:break-all; }
+.add { color:var(--c-diff-add-text); background:var(--c-diff-add-bg); border-radius:4px; padding:0 4px; font-family:"JetBrains Mono",monospace; }
+.rem { color:var(--c-diff-rem-text); background:var(--c-diff-rem-bg); border-radius:4px; padding:0 4px; font-family:"JetBrains Mono",monospace; }
+.chat { display:flex; flex-direction:column; gap:8px; max-height:360px; overflow:auto; padding:2px; }
+.msg { max-width:85%; border-radius:12px; padding:8px 10px; font-size:13px; }
+.msg.them { background:var(--c-bg-card); border:1px solid var(--c-border-light); align-self:flex-start; }
+.msg.me { background:var(--c-accent-light); align-self:flex-end; color:var(--c-text-heading); }
+.msg .who { font-size:11px; color:var(--c-text-muted); margin-bottom:2px; }
+.composer { display:flex; gap:8px; margin-top:10px; }
+
+/* ===== Шторки, диалоги, тост ===== */
+.ov { position:fixed; inset:0; background:var(--c-overlay); z-index:2100; }
+.drawer {
+  position:fixed; top:16px; right:16px; bottom:16px; width:440px; max-width:calc(100% - 32px); z-index:2101;
+  background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-peek);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.app.m .drawer { top:auto; left:0; right:0; bottom:0; width:auto; max-width:none; max-height:85%; border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.grab { display:none; width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:8px auto 0; }
+.app.m .grab { display:block; }
+.drawer .isl-h { border-radius:0; }
+.app.m .drawer .isl-h { background:transparent; border-bottom:none; height:44px; }
+.drawer .body { overflow:auto; padding:14px; flex:1; }
+.x { border:none; background:transparent; color:var(--c-text-muted); width:32px; height:32px; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.x:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .x { width:40px; height:40px; }
+.dlg {
+  position:fixed; z-index:2101; left:50%; top:50%; transform:translate(-50%,-50%); width:440px; max-width:calc(100% - 32px);
+  background:var(--c-bg-card); border-radius:20px; box-shadow:var(--shadow-modal); padding:22px; max-height:calc(100% - 32px); overflow:auto;
+}
+.dlg.confirm { width:380px; }
+.app.m .dlg { left:0; right:0; top:auto; bottom:0; transform:none; width:auto; max-width:none; border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:16px 16px 20px; }
+.dlg h2 { margin:0 0 6px; font-size:18px; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+.dlg .lead { color:var(--c-text-secondary); margin:0 0 12px; }
+.cons { background:var(--c-warning-bg); border-radius:12px; padding:10px 12px; margin:12px 0; }
+.cons .cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-warning-text); font-weight:700; margin-bottom:4px; }
+.cons ul { margin:0; padding-left:18px; color:var(--c-text-primary); }
+.cons ul li { margin:3px 0; }
+.cons.info { background:var(--c-info-bg); }
+.cons.info .cap { color:var(--c-info); }
+.acts { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; flex-wrap:wrap; }
+.app.m .acts { flex-direction:column-reverse; }
+.app.m .acts .btn { width:100%; }
+.prio { list-style:none; margin:0; padding:0; border:1px solid var(--c-border-light); border-radius:12px; overflow:hidden; }
+.prio li { display:flex; gap:8px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--c-border-light); font-size:13px; background:var(--c-bg-white); }
+.prio li:last-child { border-bottom:none; }
+.prio li .no { width:18px; color:var(--c-text-muted); font-variant-numeric:tabular-nums; }
+.prio li.me { background:var(--c-accent-light); font-weight:600; color:var(--c-text-heading); }
+.prio li.moved { color:var(--c-warning-text); }
+.who-list { display:flex; flex-direction:column; gap:6px; }
+.who-list label { display:flex; gap:10px; align-items:center; border:1px solid var(--c-border); border-radius:12px; padding:8px 10px; cursor:pointer; background:var(--c-bg-white); }
+.who-list label:has(input:checked) { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.who-list .pr { margin-left:auto; font-size:11px; color:var(--c-text-muted); text-align:right; }
+.toast {
+  position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:2200; background:var(--c-text-heading); color:var(--c-bg-main);
+  border-radius:12px; padding:10px 16px; box-shadow:var(--shadow-dropdown); font-size:13px; max-width:calc(100% - 32px);
+}
+.app.m .toast { bottom:96px; }
+
+.cats .r { display:grid; grid-template-columns:140px 1fr 24px; gap:8px; align-items:center; margin-bottom:6px; font-size:12px; }
+.cats .tr { height:8px; background:var(--c-progress-track); border-radius:999px; overflow:hidden; }
+.cats .tr i { display:block; height:100%; background:var(--c-warning); border-radius:999px; }
+.cats .tr i.m { background:var(--c-text-muted); }
+.tl .r { display:grid; grid-template-columns:110px 1fr; gap:8px; align-items:center; margin-bottom:8px; font-size:12px; }
+.tl .lane { position:relative; height:14px; background:var(--c-bg-inset); border-radius:4px; }
+.tl .lane i { position:absolute; top:2px; bottom:2px; border-radius:3px; }
+.tl .w { background:var(--c-text-muted); opacity:.45; }
+.tl .h { background:var(--c-info); opacity:.55; }
+.tl .s { background:var(--c-danger); opacity:.45; }
+.tl .l { background:var(--c-warning); opacity:.6; }
+.tl .now { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--c-accent); }
+.tl .axis { display:grid; grid-template-columns:110px 1fr; gap:8px; font-size:10px; color:var(--c-text-muted); }
+.tl .axis div:last-child { display:flex; justify-content:space-between; }
+.empty { text-align:center; padding:24px 12px; color:var(--c-text-secondary); }
+.empty .ic { width:44px; height:44px; border-radius:50%; background:var(--c-bg-selected); display:inline-flex; align-items:center; justify-content:center; margin-bottom:8px; }
+.empty h4 { margin:0 0 4px; color:var(--c-text-heading); font-size:15px; }
+.hr { height:1px; background:var(--c-border-light); margin:12px 0; }
+</style>
+</head>
+<body>
+
+<div class="mk">
+  <h1 class="serif">Пульт куратора · макет v1</h1>
+  <div class="grp"><span class="lbl">Экран</span><div class="pills" id="mk-screen"></div></div>
+  <div class="grp"><span class="lbl">Состояние фичи</span><div class="pills" id="mk-state"></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" id="mk-theme"></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" id="mk-width"></div></div>
+</div>
+
+<div class="stage"><div class="app" id="app"></div></div>
+
+<script>
+/* ======================= Данные (выдуманные, правдоподобные) ======================= */
+const PH = ['Разрез','План','Производство','Проверка','Финальное ревью','Мерж'];
+// Палитра аватаров — GROUP_COLORS из design.ts; инициалы поверх — C.onDark
+const P = {
+  den:{n:'Денис',r:'бэк',c:'#3E7CA6'}, kira:{n:'Кира',r:'фронт',c:'#8E4A82'}, kuz:{n:'Кузьма',r:'бэк, локальная модель',c:'#7A7250'},
+  gleb:{n:'Глеб',r:'ревью',c:'#4B6BB0'}, vera:{n:'Вера',r:'проверка',c:'#3F7A4F'}, alex:{n:'Александр',r:'архитектор',c:'#C2693B'},
+  egor:{n:'Егор',r:'план',c:'#B4452F'}, sof:{n:'Софья',r:'оркестратор',c:'#8E4A82'}, mark:{n:'Марк',r:'мерж',c:'#4B6BB0'},
+  maya:{n:'Майя',r:'макеты',c:'#3F7A4F'},
+};
+const F = {
+  stats:{ title:'Статистика локальных моделей v2', branch:'feat/local-model-stats-v2', st:'wait', phase:2,
+    head:'Производство', state:'ждёт вас', dur:'2 ч 15 мин', acc:12, tot:20, plan:14, lines:[['бэк',7,11],['фронт',5,9]],
+    fc:{lo:'6',hi:'10 ч',conf:'грубо',n:4,shift:'+2 ч',dir:'up'}, waitYou:'2 ч 15 мин',
+    people:[['den','ждёт доступ на B7'],['kira','делает F6 · 18 мин'],['gleb','свободен']],
+    rps:'0,8', rpsBad:true, heavy:'Доработок больше, чем шагов: 16 возвратов на 20 шагов. Главная причина — разрез без критериев производительности.',
+    move:'молчит 2 ч 15 мин', moveBad:true,
+    conv:{st:['done','done','wait','todo','todo','todo'], passes:[1,2,0,0,0], self:16, hot:true, loops:[]},
+    mark:'ждёт вас · 2 ч 15 мин',
+    plate:{tone:'info', title:'Нужен доступ к стенду vLLM', reason:'Денис на шаге B7 «живая скорость» просит доступ к :8000 — без него тесты шага не прогнать. Остальные шаги идут.',
+      wait:'ждёт вас 2 ч 15 мин · с 12:05', btns:[['Дать доступ','primary','dlg:grant'],['Ответить','ghost','step:chat'],['Открыть шаг','ghost','step']]},
+    ask:'Нужен доступ к стенду vLLM', digest:[[1,'Денис встал на B7: нужен доступ к стенду'],[1,'Кира: шаг F5 «кольцо Ctx» принят с первого круга'],[0,'Прогноз сдвинулся на +2 ч: B4 ушёл на 4-й круг'],[0,'Глеб принял B4 и B5']],
+    step:'B7', stepName:'Живая скорость в кольце Ctx', build:['ok','CI зелёный · 3 мин назад'], neigh:'Общий файл с «Уборкой карты»: frontend/src/lib/api.ts' },
+
+  history:{ title:'История медиа-генераций', branch:'feat/media-history', st:'wait', phase:4, accept:true,
+    head:'Приёмка', state:'ждёт вас', dur:'25 мин', acc:11, tot:11, lines:[['бэк',6,6],['фронт',5,5]],
+    fc:{lo:'20',hi:'40 мин',conf:'уверенно',n:7,shift:'',dir:'',note:'до мержа после вашей приёмки'}, waitYou:'25 мин',
+    people:[['alex','финальное ревью: принято 14:20'],['vera','проверка пройдена'],['mark','ждёт запроса на мерж']],
+    rps:'0,3', move:'25 мин назад',
+    conv:{st:['done','done','done','done','wait','todo'], passes:[1,1,1,2,0], self:3, hot:false, loops:[{from:4,to:2,n:1}]},
+    mark:'приёмка · 25 мин',
+    plate:{tone:'info', title:'Финальное ревью принято — подтвердите приёмку', reason:'Александр принял фичу в 14:20 со второго захода (первый вернул два блокера по пагинации). Ваше подтверждение встанет рядом с его вердиктом, не вместо него.',
+      wait:'ждёт вас 25 мин · с 14:20', btns:[['Принять','primary','dlg:accept'],['Вернуть','ghost','dlg:return']]},
+    ask:'Приёмка: 2 пункта чек-листа не готовы', digest:[[1,'Александр принял финальное ревью'],[1,'CI упал на MediaHistoryTests.Paging после ребейза'],[0,'Вера прошла проверку и регрессию соседних фич']],
+    step:'B6', stepName:'Пагинация истории', build:['bad','CI красный · MediaHistoryTests.Paging'], neigh:'Пересечений с другими фичами нет' },
+
+  pult:{ title:'Пульт куратора', branch:'feat/curator-console', st:'wait', phase:1, noplan:true,
+    head:'План', state:'плана нет', dur:'1 ч', acc:0, tot:0, lines:[],
+    fc:{early:true}, waitYou:'1 ч',
+    people:[['alex','разрез принят'],['maya','делает макет']],
+    rps:'—', move:'1 ч назад',
+    conv:{st:['done','wait','todo','todo','todo','todo'], passes:[1,0,0,0,0], self:0, hot:false, loops:[]},
+    mark:'плана нет',
+    plate:{tone:'info', title:'Плана нет — шаги не нарезаны', reason:'Разрез Александра принят час назад, но план никто не составляет. Без плана нет шагов, линий и прогноза.',
+      wait:'ждёт вас 1 ч · с 13:05', btns:[['Позвать Егора','primary','dlg:callEgor'],['Составлю сам','ghost','toast:Открыт черновик плана — шаги добавляйте по линиям']]},
+    ask:'Плана нет — позвать Егора?', digest:[[1,'Александр: разрез принят'],[1,'Майя взяла макет целевого образа']],
+    step:'—', stepName:'', build:['ok','ветка без коммитов кода'], neigh:'Пересечений с другими фичами нет' },
+
+  bg:{ title:'Фон проекта v3', branch:'feat/project-bg-v3', st:'reopen', phase:5,
+    head:'Открыта заново', state:'после мержа', dur:'35 мин', acc:10, tot:10, lines:[['бэк',4,4],['фронт',6,6]],
+    fc:{lo:'1',hi:'3 ч',conf:'грубо',n:5,shift:'',dir:'',note:'на исправление'},
+    people:[['den','свободен'],['mark','ждёт решения: чинить или откатить']],
+    rps:'0,4', move:'smoke упал 35 мин назад', moveBad:true,
+    conv:{st:['done','done','done','done','done','reopen'], passes:[1,1,1,1,1], self:4, hot:false, loops:[{from:5,to:2,n:1,danger:true}]},
+    mark:'открыта заново',
+    plate:{tone:'danger', title:'Открыта заново после мержа', reason:'Smoke на master упал по п. 3: у проектов без цвета фон не рисуется. Регрессия пришла с мержем этой фичи 2 ч назад.',
+      wait:'на master 35 мин', btns:[['Поручить исправление','primary','dlg:fix'],['Откатить мерж','ghost','dlg:revert'],['Открыть дефект','ghost','step']]},
+    ask:'Smoke на master упал по п. 3', digest:[[1,'Smoke на master: п. 3 «фон проекта без цвета» упал'],[0,'Марк смержил фичу в 12:40']],
+    step:'D1', stepName:'Дефект: фон без цвета проекта', build:['bad','smoke master красный · п. 3'], neigh:'Затронута «Уборка карты»: общий ProjectHeader.tsx' },
+
+  hands:{ title:'Руки без UIA: трек D, ввод', branch:'feat/hands-no-uia', st:'crash', phase:2,
+    head:'Производство', state:'стоит', dur:'40 мин', acc:8, tot:14, lines:[['трек D · ввод',3,7],['трек A · распознавание',5,7]],
+    fc:{lo:'4',hi:'7 ч',conf:'грубо',n:4,shift:'+40 мин',dir:'up'},
+    people:[['kira','упала на D4'],['kuz','делает A6 · 25 мин'],['gleb','ревью A5']],
+    rps:'0,6', rpsBad:true, move:'D4 молчит 40 мин', moveBad:true,
+    conv:{st:['done','done','crash','todo','todo','todo'], passes:[1,1,0,0,0], self:6, hot:true, loops:[]},
+    mark:'стоит сейчас · 40 мин',
+    plate:{tone:'danger', title:'Исполнитель упал на шаге D4', reason:'Ход Киры оборвался ошибкой «Stream closed» на шаге D4 «ввод с клавиатуры». Последний коммит — 41 мин назад, незакоммиченного нет. Трек A идёт без помех.',
+      wait:'стоит 40 мин · с 13:25', btns:[['Перезапустить','primary','dlg:restart'],['Позвать другого','ghost','dlg:callOther'],['Открыть разговор','ghost','step:chat']]},
+    ask:'Кира упала на D4 — нужен перезапуск', digest:[[1,'Кира упала на D4: Stream closed'],[0,'Кузьма: A5 принят со 2-го круга'],[0,'Прогноз +40 мин']],
+    step:'D4', stepName:'Ввод с клавиатуры', build:['ok','CI зелёный · 41 мин назад'], neigh:'Пересечений с другими фичами нет' },
+
+  multi:{ title:'Мультиперсонаж, этап 4: склейка', branch:'feat/multichar-stage4', st:'loop', phase:2,
+    head:'Производство', state:'возврат', dur:'3-й круг ревью B3', acc:9, tot:16, plan:11, lines:[['бэк',5,9],['фронт',4,7]],
+    fc:{lo:'8',hi:'14 ч',conf:'грубо',n:4,shift:'+4 ч',dir:'up',note:'с поправкой на петлю'},
+    people:[['den','доработка B3 · 3-й круг'],['gleb','ждёт B3'],['kira','делает F5 · 30 мин']],
+    rps:'0,9', rpsBad:true, heavy:'3 круга на B3: критерий шага не описывает повороты головы — исполнитель чинит наугад.',
+    move:'20 мин назад',
+    conv:{st:['done','done','loop','todo','todo','todo'], passes:[1,1,0,0,0], self:9, hot:true, loops:[]},
+    mark:'3-й круг · B3',
+    plate:{tone:'warning', title:'Шаг B3 вернули в третий раз', reason:'Глеб: маска снова теряет край лица при повороте больше 30°. Категория — разрез: в критериях шага повороты не описаны, исполнитель чинит наугад.',
+      wait:'петля идёт 4 ч 40 мин', btns:[['Позвать архитектора','primary','dlg:recut'],['Открыть шаг','ghost','step'],['Принять шаг','disabled','']],
+      why:'«Принять шаг» недоступно: Глеб вернул шаг. Ваше подтверждение идёт после «принято» ревьюера, а не вместо него.'},
+    ask:'B3 вернули в 3-й раз — позвать архитектора?', digest:[[1,'Глеб вернул B3 в 3-й раз: край маски при повороте'],[1,'Прогноз +4 ч с поправкой на петлю'],[0,'Кира: F4 принят']],
+    step:'B3', stepName:'Склейка маски по краю лица', build:['warn','CI: 1 тест падает · FaceMaskEdgeTests'], neigh:'Пересечений с другими фичами нет' },
+
+  cleanup:{ title:'Уборка карты проекта, фаза 2', branch:'feat/map-hygiene-2', st:'run', phase:2,
+    head:'Производство', state:'идёт', dur:'3 ч 10 мин', acc:7, tot:12, lines:[['бэк',4,6],['фронт',3,6]],
+    fc:{lo:'3',hi:'5 ч',conf:'уверенно',n:6,shift:'−30 мин',dir:'down'},
+    people:[['kira','делает F4 · 12 мин'],['kuz','делает B5 · 25 мин'],['gleb','ревью B4']],
+    rps:'0,3', move:'5 мин назад',
+    conv:{st:['done','done','run','todo','todo','todo'], passes:[1,1,0,0,0], self:4, hot:false, loops:[]},
+    mark:'идёт', plate:null,
+    digest:[[1,'Приняты 3 шага: B3, F2, F3'],[1,'Прогноз −30 мин: шаги идут быстрее медианы'],[0,'Кузьма взял B5']],
+    step:'B5', stepName:'Поиск мёртвых ссылок во вложенных картах', build:['ok','CI зелёный · 12 мин назад'], neigh:'Общий файл со «Статистикой v2»: frontend/src/lib/api.ts' },
+
+  voice:{ title:'Голосовые заметки', branch:'feat/voice-notes', st:'frozen', phase:2,
+    head:'Производство', state:'заморожена', dur:'2 дня', acc:3, tot:9, lines:[['бэк',2,5],['фронт',1,4]],
+    fc:{paused:true}, people:[],
+    rps:'0,3', move:'2 дня назад',
+    conv:{st:['done','done','frozen','todo','todo','todo'], passes:[1,1,0,0,0], self:1, hot:false, loops:[]},
+    mark:'заморожена',
+    plate:{tone:'neutral', title:'Заморожена вами 13.10', reason:'Причина: ждём ответа Яндекса по квоте SpeechKit. Остановлены 2 шага (B3 Денис, F2 Кира) — наработки лежат в ветке.',
+      wait:'на паузе 2 дня', btns:[['Возобновить','primary','dlg:resume'],['Изменить причину','ghost','dlg:freeze']]},
+    digest:[[0,'С прошлого визита ничего не изменилось — фича на паузе']],
+    step:'B3', stepName:'Распознавание длинных записей', build:['ok','CI зелёный · 2 дня назад'], neigh:'Ветка отстала от master на 46 коммитов' },
+
+  spheres:{ title:'Сферы: устав и полка памяти', branch:'feat/spheres-charter', st:'done', phase:5,
+    head:'Готово', state:'смержено', dur:'вчера в 18:05', acc:11, tot:11, plan:9, lines:[['бэк',7,7],['фронт',4,4]],
+    fc:{done:true}, people:[],
+    rps:'0,45', move:'вчера 18:05',
+    conv:{st:['done','done','done','done','done','done'], passes:[1,2,1,1,2], self:5, hot:true, loops:[{from:4,to:2,n:1}]},
+    mark:'готово', plate:null,
+    digest:[[1,'Марк смержил в master, smoke зелёный'],[0,'Александр принял финальное ревью со 2-го захода']],
+    step:'B4', stepName:'Зона персоны через ISphereDirectory', build:['ok','master зелёный'], neigh:'—' },
+};
+const ORDER = [
+  ['Ждёт вас',['stats','history','pult']],
+  ['Стоит и возвраты',['bg','hands','multi']],
+  ['Идёт',['cleanup']],
+  ['На паузе',['voice']],
+  ['Готово за 7 дней',['spheres']],
+];
+const STATES = [['wait','Стоит / ждёт вас','stats'],['run','Идёт','cleanup'],['loop','Возврат','multi'],['accept','Приёмка','history'],
+  ['done','Готово','spheres'],['crash','Исполнитель упал','hands'],['frozen','Заморожена','voice'],['reopen','Открыта заново','bg'],['noplan','Без плана','pult']];
+
+/* ======================= Состояние макета ======================= */
+const S = { screen:'board', fid:'stats', theme:'light', mobile:false, sheet:null, dlg:null, menu:false,
+  ack:{ci:false, lesson:false}, tab:'rounds', chatWith:'exec', chat:{exec:[],orch:[]}, showPaused:true, showDone:true, linesOpen:false, toast:null };
+
+/* ======================= Примитивы ======================= */
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const TONE = {wait:'t-wait', run:'t-run', loop:'t-loop', crash:'t-crash', reopen:'t-reopen', frozen:'t-frozen', done:'t-done', todo:'', past:''};
+// Глиф состояния: форма дублирует цвет
+function glyph(k, s=14){
+  const v = `width="${s}" height="${s}" viewBox="0 0 16 16" class="g"`;
+  switch(k){
+    case 'crash': case 'stuck': return `<svg ${v}><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" style="fill:var(--c-danger)"/></svg>`;
+    case 'reopen': return `<svg ${v}><rect x="3" y="3" width="10" height="10" rx="1.5" style="fill:none;stroke:var(--c-danger);stroke-width:2"/><path d="M6 8h4" style="stroke:var(--c-danger);stroke-width:2;stroke-linecap:round"/></svg>`;
+    case 'wait': return `<svg ${v}><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" style="fill:var(--c-info)"/></svg>`;
+    case 'loop': return `<svg ${v}><path d="M12.6 9.2A4.8 4.8 0 1 1 11.3 4.4" style="fill:none;stroke:var(--c-warning);stroke-width:2.2;stroke-linecap:round"/><path d="M9.2 2.6 12.6 3.4 11.8 6.8" style="fill:none;stroke:var(--c-warning);stroke-width:2;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'run': return `<svg ${v}><circle cx="8" cy="8" r="6.5" class="pulse" style="fill:none;stroke:var(--c-text-heading);stroke-width:1.5"/><circle cx="8" cy="8" r="3.5" style="fill:var(--c-text-heading)"/></svg>`;
+    case 'done': return `<svg ${v}><circle cx="8" cy="8" r="7" style="fill:var(--c-success)"/><path d="M4.8 8.2 7 10.3l4.3-4.6" style="fill:none;stroke:var(--c-bg-card);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'frozen': return `<svg ${v}><rect x="3.5" y="2.5" width="3" height="11" rx="1" style="fill:var(--c-text-muted)"/><rect x="9.5" y="2.5" width="3" height="11" rx="1" style="fill:var(--c-text-muted)"/></svg>`;
+    case 'past': return `<svg ${v}><circle cx="8" cy="8" r="6.5" style="fill:var(--c-bg-selected);stroke:var(--c-text-muted);stroke-width:1"/><path d="M5.3 8.1 7.1 9.9l3.6-3.8" style="fill:none;stroke:var(--c-text-muted);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    default: return `<svg ${v}><circle cx="8" cy="8" r="6" style="fill:none;stroke:var(--c-dashed);stroke-width:1.5;stroke-dasharray:2.5 2"/></svg>`;
+  }
+}
+const IC = {
+  back:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>',
+  x:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  chev:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>',
+  up:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m18 15-6-6-6 6"/></svg>',
+  down:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>',
+  pause:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
+  play:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m6 4 14 8-14 8Z"/></svg>',
+  cut:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></svg>',
+  warn:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="g"><path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></svg>',
+  info:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="g"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+  ok:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="g"><path d="M20 6 9 17l-5-5"/></svg>',
+  send:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
+  plan:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
+};
+const av = (k, lg) => `<span class="av${lg?' lg':''}" style="background:${P[k].c}" title="${P[k].n}">${P[k].n.slice(0,1)}</span>`;
+const btn = (label, v, a, extra='') => v==='disabled'
+  ? `<button class="btn ghost" disabled ${extra}>${label}</button>`
+  : `<button class="btn ${v}" data-a="${esc(a)}" ${extra}>${label}</button>`;
+
+function fcText(f){
+  if (f.fc.early) return `<span class="mut">рано для прогноза</span>`;
+  if (f.fc.paused) return `<span class="mut">на паузе — не считается</span>`;
+  if (f.fc.done) return `<span>смержено</span>`;
+  return `<b>${f.fc.lo}–${f.fc.hi}</b> · ${f.fc.conf}`;
+}
+function ruler(f){
+  const t = TONE[f.st];
+  return `<div class="ruler ${t}">${PH.map((p,i)=>`<span class="seg ${i<f.phase?'past':i===f.phase?'cur':''}"></span>`).join('')}
+    <span class="lab" style="grid-column:${Math.min(f.phase+1,5)} / span 2">${PH[f.phase]}</span></div>`;
+}
+function progress(f){
+  if (!f.tot) return `<span class="mut">шагов нет</span>`;
+  const pct = Math.round(f.acc/f.tot*100);
+  const mark = f.plan ? `<s style="left:${Math.round(f.plan/f.tot*100)}%" title="план был ${f.plan}"></s>` : '';
+  return `<span class="prog"><span class="bar"><i style="width:${pct}%"></i>${mark}</span> принято <b>${f.acc} из ${f.tot}</b>${f.plan?` <span class="mut">· план был ${f.plan}</span>`:''}</span>`;
+}
+
+/* ---------- Карточка фичи (табло) = шапка экрана фичи (lg) ---------- */
+function card(id, lg){
+  const f = F[id], t = TONE[f.st];
+  const ppl = f.people.map(p=>p[0]);
+  const plate = lg && f.plate && !S.mobile ? plateHtml(f) : '';
+  const tag = lg ? 'div' : 'button';
+  const askTone = f.st==='crash'||f.st==='reopen' ? ' danger' : f.st==='loop' ? ' warn' : '';
+  return `<${tag} class="fc ${t}${lg?' lg':''}${f.st==='done'?' done':''}" ${lg?'':`data-a="open:${id}"`}>
+    ${plate}
+    <div class="top">${glyph(f.st, lg?16:14)}<span class="name">${esc(f.title)}</span>
+      ${ppl.length?`<span class="avs">${ppl.map(k=>av(k)).join('')}</span>`:''}</div>
+    <div class="stl">${f.head} · ${f.state} <span class="q">${f.dur}</span></div>
+    ${ruler(f)}
+    <div class="met">
+      <span>${progress(f)}</span>
+      <span>прогноз ${fcText(f)}</span>
+      <span class="${f.rpsBad?'bad':''}">возвратов на шаг <b>${f.rps}</b></span>
+      <span class="${f.moveBad?'bad':''}">${f.moveBad?'<b>'+f.move+'</b>':f.move}</span>
+    </div>
+    ${!lg && f.ask ? `<div class="ask${askTone}">${glyph(f.st==='loop'?'loop':f.st==='crash'?'crash':f.st==='reopen'?'reopen':'wait',12)}<span>${f.ask}</span></div>`:''}
+    ${lg && f.heavy ? `<div class="risk" style="margin-top:12px">${IC.warn}<span><b>Уходит в тяжёлую.</b> ${f.heavy}</span></div>`:''}
+  </${tag}>`;
+}
+function plateHtml(f){
+  const p = f.plate;
+  let btns = p.btns.map(b=>btn(b[0], b[1], b[2])).join('');
+  let why = p.why || '';
+  if (f.accept){
+    const ready = S.ack.ci && S.ack.lesson;
+    btns = (ready ? btn('Принять','primary','dlg:accept') : btn('Принять','disabled','')) + btn('Вернуть','ghost','dlg:return');
+    if (!ready) why = `«Принять» недоступно: не готовы пункты чек-листа — ${[!S.ack.ci&&'CI по ветке',!S.ack.lesson&&'урок не записан'].filter(Boolean).join(', ')}.`;
+  }
+  return `<div class="plate ${p.tone}">
+    <div class="pt">${glyph(f.st==='run'?'wait':f.st,16)}<span>${p.title}</span><span class="pw">${p.wait}</span></div>
+    <div class="pr">${p.reason}</div>
+    <div class="pb">${btns}</div>
+    ${why?`<div class="why">${IC.info}<span>${why}</span></div>`:''}
+  </div>`;
+}
+function dockHtml(f){
+  const p = f.plate; if (!p) return '';
+  let bs = p.btns.filter(b=>b[1]!=='disabled');
+  if (f.accept){ const ready = S.ack.ci && S.ack.lesson; bs = [[ 'Принять', ready?'primary':'disabled', 'dlg:accept'],['Вернуть','ghost','dlg:return']]; }
+  return `<div class="dock ${p.tone}">
+    <div class="pt">${glyph(f.st,16)}<span>${p.title}</span></div>
+    <div class="pw">${p.wait}</div>
+    <div class="pr">${p.reason}</div>
+    <div class="pb">${bs.slice(0,3).map(b=>btn(b[0],b[1],b[2])).join('')}</div>
+  </div>`;
+}
+
+/* ---------- Конвейер (горизонтальный, SVG) ---------- */
+function conveyor(f){
+  const c = f.conv, y = 78, xs = PH.map((_,i)=>58+i*128.8);
+  let s = `<defs>
+    <marker id="ah-m" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" style="fill:var(--c-text-muted)"/></marker>
+    <marker id="ah-w" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" style="fill:var(--c-warning)"/></marker>
+    <marker id="ah-d" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" style="fill:var(--c-danger)"/></marker>
+  </defs>`;
+  for (let i=0;i<5;i++){
+    const p = c.passes[i], x1 = xs[i]+18, x2 = xs[i+1]-18;
+    if (p>0){
+      const w = Math.min(2+(p-1)*3, 10);
+      s += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" style="stroke:var(--c-text-muted);stroke-width:${w};stroke-linecap:round;opacity:.5"/>`;
+      if (p>1) s += `<text x="${(x1+x2)/2}" y="${y-10}" text-anchor="middle" style="fill:var(--c-text-secondary);font-size:11px;font-weight:600">×${p} прохода</text>`;
+    } else s += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" style="stroke:var(--c-dashed);stroke-width:1.5;stroke-dasharray:4 4"/>`;
+  }
+  if (c.self>0){
+    const x = xs[2], col = c.hot?'var(--c-warning)':'var(--c-text-muted)', w = Math.min(1.5+c.self*.35, 6);
+    const d = `M${x-12},${y+14} C${x-40},${y+62} ${x+40},${y+62} ${x+12},${y+14}`;
+    s += `<path d="${d}" style="fill:none;stroke:${col};stroke-width:${w};opacity:${c.hot?1:.6}" marker-end="url(#ah-${c.hot?'w':'m'})"/>`;
+    s += `<text x="${x}" y="${y+74}" text-anchor="middle" style="fill:${c.hot?'var(--c-warning-text)':'var(--c-text-secondary)'};font-size:12px;font-weight:700">↺${c.self} кругов ревью</text>`;
+    s += `<path d="${d}" class="hit" data-a="sheet:loop" style="fill:none;stroke:transparent;stroke-width:22"/>`;
+    s += `<rect x="${x-58}" y="${y+62}" width="116" height="18" class="hit" data-a="sheet:loop" style="fill:transparent"/>`;
+  }
+  c.loops.forEach(l=>{
+    const x1 = xs[l.from], x2 = xs[l.to]+20, col = l.danger?'var(--c-danger)':l.n>=3?'var(--c-warning)':'var(--c-text-muted)';
+    const d = `M${x1},${y+18} C${x1},${y+112} ${x2},${y+112} ${x2},${y+20}`;
+    s += `<path d="${d}" style="fill:none;stroke:${col};stroke-width:${1.5+l.n};${l.danger?'stroke-dasharray:6 4;':''}opacity:${l.danger||l.n>=3?1:.6}" marker-end="url(#ah-${l.danger?'d':l.n>=3?'w':'m'})"/>`;
+    s += `<text x="${(x1+x2)/2}" y="${y+98}" text-anchor="middle" style="fill:${l.danger?'var(--c-danger-text)':'var(--c-text-secondary)'};font-size:12px;font-weight:700">↺${l.n} ${l.danger?'после мержа':'возврат'}</text>`;
+    s += `<path d="${d}" class="hit" data-a="sheet:loop" style="fill:none;stroke:transparent;stroke-width:22"/>`;
+  });
+  PH.forEach((p,i)=>{
+    const st = c.st[i], x = xs[i], cur = i===f.phase && st!=='done';
+    s += `<text x="${x}" y="${y-28}" text-anchor="middle" style="fill:${cur?'var(--c-text-heading)':'var(--c-text-muted)'};font-size:12px;font-weight:${cur?700:400}">${p}</text>`;
+    if (st==='done') s += `<circle cx="${x}" cy="${y}" r="15" style="fill:var(--c-bg-selected);stroke:var(--c-text-muted);stroke-width:1"/><path d="M${x-5},${y} l3.5,3.5 l6.5,-7" style="fill:none;stroke:var(--c-text-muted);stroke-width:2;stroke-linecap:round;stroke-linejoin:round"/>`;
+    else if (st==='todo') s += `<circle cx="${x}" cy="${y}" r="15" style="fill:var(--c-bg-card);stroke:var(--c-dashed);stroke-width:1.5;stroke-dasharray:3 3"/>`;
+    else s += `<circle cx="${x}" cy="${y}" r="16" style="fill:var(--c-bg-card);stroke:var(--tc);stroke-width:2"/><g transform="translate(${x-9},${y-9})">${glyph(st,18)}</g>`;
+    if (cur){
+      const w = Math.max(84, f.mark.length*6.6+20);
+      const clickable = ['wait','crash','loop','reopen','frozen'].includes(st);
+      s += `<g ${clickable?'class="hit" data-a="sheet:stuck"':''}>
+        <rect x="${x-w/2}" y="${y-66}" width="${w}" height="22" rx="11" style="fill:var(--tb);stroke:var(--tc);stroke-width:1"/>
+        <text x="${x}" y="${y-51}" text-anchor="middle" style="fill:var(--tt);font-size:11.5px;font-weight:700">${f.mark}${clickable?' ›':''}</text></g>`;
+    }
+  });
+  return `<div class="cv-wrap cv ${TONE[f.st]}"><svg viewBox="0 0 760 196" role="img" aria-label="Конвейер фичи">${s}</svg></div>`;
+}
+/* ---------- Конвейер вертикальный (мобила) ---------- */
+function conveyorV(f){
+  const c = f.conv;
+  return `<ul class="vc ${TONE[f.st]}">${PH.map((p,i)=>{
+    const st = c.st[i], cur = i===f.phase && st!=='done';
+    const w = c.passes[i] ? Math.min(2+(c.passes[i]-1)*3,10) : 2;
+    const g = st==='done' ? glyph('past',18) : st==='todo' ? glyph('todo',18) : glyph(st,18);
+    let badges = '';
+    if (i===2 && c.self) badges += `<button class="badge${c.hot?' hot':''}" data-a="sheet:loop">↺${c.self}</button>`;
+    c.loops.filter(l=>l.to===i).forEach(l=>badges += `<button class="badge${l.danger?' dng':l.n>=3?' hot':''}" data-a="sheet:loop">↺${l.n} ${l.danger?'после мержа':'возврат'}</button>`);
+    const box = cur ? `<div class="cur-box"><b style="color:var(--tt)">${f.mark}</b><br>${f.lines.length?f.lines.map(l=>`${l[0]} ${l[1]} из ${l[2]}`).join(' · '):'шагов пока нет'}
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${['wait','crash','loop','reopen','frozen'].includes(st)?btn('Что случилось','ghost','sheet:stuck'):''}${f.lines.length?btn('Шаги','ghost','sheet:lines'):''}</div></div>` : '';
+    return `<li class="${st==='done'?'past':st==='todo'?'todo':'cur'}" style="--w:${w}px"><span class="gw">${g}</span>
+      <div class="row"><span class="nm">${p}</span>${c.passes[i]>1?`<span class="mut">×${c.passes[i]}</span>`:''}${badges}</div>${box}</li>`;
+  }).join('')}</ul>`;
+}
+
+/* ======================= Экраны ======================= */
+function screenBoard(){
+  const kpi = `<div class="sum">
+    <div class="kpi"><div class="k">В работе</div><div class="v">8</div><div class="h">из них ждут вас 3</div></div>
+    <div class="kpi"><div class="k">Смержено за 7 дней</div><div class="v">3</div><div class="h">1 открыта заново</div></div>
+    <div class="kpi bad"><div class="k">Возвратов на шаг</div><div class="v">0,62</div><div class="h">цель ≤ 0,4</div></div>
+    <div class="kpi"><div class="k">Средний цикл шага</div><div class="v">52 мин</div><div class="h">медиана 38 мин</div></div>
+    <div class="kpi"><div class="k">Дольше всех ждёт вас</div><div class="v">2 ч 15 мин</div><div class="h">«Статистика v2»</div></div>
+  </div>`;
+  const attn = `<div class="island"><div class="isl-h"><h3>На что обратить внимание</h3></div><div class="isl-b attn">
+    <button data-a="open:bg">${glyph('reopen')}<span><b>«Фон проекта v3» открыта заново.</b><br><span class="s">Smoke на master упал по п. 3 — решить: чинить или откатить.</span></span></button>
+    <button data-a="open:stats">${glyph('wait')}<span><b>Вас ждут 3 фичи.</b><br><span class="s">Дольше всех — «Статистика v2», 2 ч 15 мин: доступ к стенду.</span></span></button>
+    <button data-a="open:multi">${glyph('loop')}<span><b>Возвратов на шаг 0,62 — выше цели.</b><br><span class="s">2 из 3 длинных петель за неделю — из-за разреза. Предложение: просить у архитектора критерии краёв и поворотов.</span></span></button>
+    <button data-a="open:cleanup">${glyph('run')}<span><b>Локальные слоты заняты оба.</b><br><span class="s">«Уборка карты» ждёт слот 10 мин — прогнозы учитывают общую очередь.</span></span></button>
+  </div></div>`;
+  const groups = ORDER.map(([name, ids])=>{
+    const coll = (name==='На паузе' && !S.showPaused) || (name.startsWith('Готово') && !S.showDone);
+    const key = name==='На паузе' ? 'paused' : name.startsWith('Готово') ? 'done' : '';
+    return `<div class="group-h"><span>${name}</span><span class="n">${ids.length}</span>${key?`<button class="btn xs ghost" data-a="grp:${key}">${coll?'Показать':'Свернуть'}</button>`:''}</div>
+      ${coll?'':`<div class="cards">${ids.map(id=>card(id)).join('')}</div>`}`;
+  }).join('');
+  if (S.mobile) return `${kpi}<div style="height:8px"></div>${attn}${groups}<div style="height:24px"></div>`;
+  return `${kpi}<div class="boardgrid"><div>${groups}</div><div style="position:sticky;top:64px">${attn}</div></div>`;
+}
+
+function blkForecast(f){
+  let body;
+  if (f.fc.early) body = `<div class="fcv"><small>рано для прогноза</small></div><div class="sec">Нет утверждённого плана и 3 принятых шагов. Прогноз появится сам.</div>`;
+  else if (f.fc.paused) body = `<div class="fcv"><small>на паузе</small></div><div class="sec">Пока фича заморожена, прогноз не считается и не дрейфует.</div>`;
+  else if (f.fc.done) body = `<div class="fcv">14 ч <small>факт</small></div><div class="sec">Прогноз на старте: 8–12 ч · промах +2 ч</div>`;
+  else body = `<div class="fcv">${f.fc.lo}–${f.fc.hi} <small>· ${f.fc.conf}</small></div>
+    <div class="sec">${f.fc.note||'до мержа'} · оценка по ${f.fc.n} фичам</div>
+    ${f.fc.shift?`<div class="shift ${f.fc.dir}">${f.fc.dir==='up'?'↑':'↓'} ${f.fc.shift} со вчерашнего обхода</div>`:''}
+    ${f.waitYou?`<div class="sec" style="margin-top:4px">плюс ждёт вас <b>${f.waitYou}</b> — время человека в прогноз не входит</div>`:''}`;
+  return `<div class="blk"><div class="cap">Прогноз</div>${body}${f.fc.early||f.fc.paused||f.fc.done?'':`<div style="margin-top:6px"><button class="link" data-a="sheet:forecast">Как считали</button></div>`}</div>`;
+}
+function blkPeople(f){
+  if (!f.people.length) return `<div class="blk"><div class="cap">Кто работает</div><div class="mut">Сейчас никто — ${f.st==='done'?'фича смержена':'фича на паузе'}.</div></div>`;
+  return `<div class="blk"><div class="cap">Кто работает</div><div class="ppl">${f.people.map(p=>`<div class="p">${av(p[0],true)}<div><div class="n">${P[p[0]].n} <span class="mut">· ${P[p[0]].r}</span></div><div class="t">${p[1]}</div></div></div>`).join('')}</div>
+    <div class="sec" style="margin-top:8px">Последнее движение: ${f.moveBad?`<b style="color:var(--c-warning-text)">${f.move}</b>`:f.move}</div></div>`;
+}
+function blkBuild(f){
+  const g = f.build[0]==='ok' ? `<span style="color:var(--c-success)">${IC.ok}</span>` : f.build[0]==='bad' ? glyph('crash',12) : `<span style="color:var(--c-warning-text)">${IC.warn}</span>`;
+  return `<div class="blk"><div class="cap">Ветка и соседи</div><div class="mono mut" style="font-size:11px;margin-bottom:6px;word-break:break-all">${f.branch}</div>
+    <div class="build">${g}<span>${f.build[1]}</span></div><div class="sec" style="margin-top:6px">${f.neigh}</div></div>`;
+}
+function blkCourse(f){
+  const frozen = f.st==='frozen', off = f.st==='done';
+  const menu = S.menu ? `<div class="menu" role="menu">
+      <button data-a="dlg:prioUp"><span>${IC.up}</span><span>Поднять приоритет<span class="d">Встанет выше соседей в очереди слотов</span></span></button>
+      <button data-a="dlg:prioDown"><span>${IC.down}</span><span>Опустить приоритет<span class="d">Пропустит вперёд другие фичи</span></span></button>
+      <hr>
+      ${frozen?`<button data-a="dlg:resume"><span>${IC.play}</span><span>Возобновить<span class="d">Шаги вернутся исполнителям</span></span></button>`
+        :`<button data-a="dlg:freeze"><span>${IC.pause}</span><span>Заморозить…<span class="d">Остановить с причиной</span></span></button>`}
+      <button data-a="dlg:recut"><span>${IC.cut}</span><span>Переразрезать…<span class="d">Позвать архитектора на новый разрез</span></span></button>
+    </div>` : '';
+  return `<div class="blk"><div class="cap">Ход фичи</div>
+    <div class="sec" style="margin-bottom:8px">Приоритет: <b style="color:var(--c-text-heading)">${({stats:2,history:1,pult:6,bg:3,hands:4,multi:5,cleanup:7,voice:8,spheres:'—'})[S.fid]}</b> из 8 у куратора</div>
+    <div class="menu-wrap">${off?btn('Изменить ход','disabled',''):`<button class="btn ghost full" data-a="menu">Изменить ход ${IC.chev}</button>`}${menu}</div>
+    ${off?'<div class="mut" style="margin-top:6px">Фича смержена — менять нечего.</div>':''}</div>`;
+}
+function blkDigest(f){
+  return `<div class="island"><div class="isl-h"><h3>С прошлого визита</h3><span class="aux">вчера в 21:40</span></div><div class="isl-b">
+    <ul class="digest">${f.digest.map(d=>`<li class="${d[0]?'new':''}"><span class="dot"></span><span>${d[1]}</span></li>`).join('')}</ul></div></div>`;
+}
+function blkConveyor(f){
+  const lineSum = f.lines.length ? `Производство: ${f.lines.map(l=>`${l[0]} ${l[1]} из ${l[2]}`).join(' · ')}` : 'Шагов пока нет';
+  const body = S.mobile ? conveyorV(f) : conveyor(f);
+  const legend = S.mobile ? '' : `<div class="legend">
+    <span>${glyph('past',12)} пройдено</span><span>${glyph('run',12)} идёт</span><span>${glyph('wait',12)} ждёт вас</span>
+    <span>${glyph('loop',12)} возврат, цвет — от 3 кругов</span><span>${glyph('crash',12)} стоит</span><span>${glyph('frozen',12)} пауза</span>
+    <span>толщина линии — число проходов</span><span>${f.conv.self||f.conv.loops.length?'':'петель нет'}</span></div>`;
+  return `<div class="island"><div class="isl-h"><h3>Конвейер</h3><span class="aux">по ролям задач · данные 1 мин назад</span></div><div class="isl-b">
+    ${body}
+    <div class="cv-cap"><span>${lineSum}</span>${f.lines.length?`<button class="link" data-a="lines">${S.linesOpen?'Свернуть шаги':'Шаги по линиям'}</button>`:''}<button class="link" data-a="sheet:timeline">Лента времени</button></div>
+    ${S.linesOpen && f.lines.length ? linesHtml(f) : ''}
+    ${legend}</div></div>`;
+}
+function linesHtml(f){
+  return `<div class="lines" style="margin-top:12px">${f.lines.map((l,li)=>{
+    const pref = l[0].startsWith('фронт')?'F':l[0].startsWith('трек A')?'A':l[0].startsWith('трек D')?'D':'B';
+    const cells = Array.from({length:l[2]},(_,i)=>{
+      const n = `${pref}${i+1}`, done = i<l[1], cur = i===l[1];
+      const r = (f.step===n) ? 3 : (i*7+li*3)%5===0 ? 2 : 1;
+      // Шаг, на котором стоит фича, показываем её состоянием, где бы он ни был в линии
+      const key = f.step===n && !['run','done'].includes(f.st);
+      const g = key ? glyph(f.st,12) : done ? glyph('past',12) : cur ? glyph('run',12) : glyph('todo',12);
+      return `<button class="step${r>=3?' hot':''}" data-a="step" title="${n}">${g}<b>${n}</b>${r>1&&(done||cur)?`<span style="color:${r>=3?'var(--c-warning-text)':'inherit'}">↺${r}</span>`:''}</button>`;
+    }).join('');
+    return `<div class="ln"><span class="lnn">${l[0]} · ${l[1]} из ${l[2]}</span>${cells}</div>`;
+  }).join('')}</div>`;
+}
+function blkChecklist(f){
+  const items = [
+    ['Все шаги приняты','11 из 11, отменённых нет',1],
+    ['Финальное ревью «принято»','Александр, 14:20, второй заход',1],
+    ['Нет открытых дефектов по области','0 открытых',1],
+    ['Проверка Веры пройдена','и регрессия соседних фич: «Медиа», «Редактор картинок»',1],
+    ['Мобильная проверка','360, 390 и 768 px — скриншоты в задаче',1],
+    ['Тексты новых строк','7 строк, Софья',1],
+    ['CI зелёный по ветке', S.ack.ci?'перезапущен, зелёный':'падает MediaHistoryTests.Paging после ребейза', S.ack.ci?1:0, 'ci'],
+    ['«Что нового» обновлено','запись от 15.10',1],
+    ['Урок записан', S.ack.lesson?'«Пагинацию проверять на пустой странице до ревью»':'не записан', S.ack.lesson?1:0, 'lesson'],
+    ['После мержа — smoke на master','будет после мержа, приёмку не блокирует',-1],
+  ];
+  return `<div class="island"><div class="isl-h"><h3>Чек-лист приёмки</h3><span class="aux">${items.filter(i=>i[2]===1).length} из 9 · блокирует «Принять»</span></div><div class="isl-b">
+    ${!(S.ack.ci&&S.ack.lesson)?`<div class="risk" style="margin-bottom:10px">${IC.warn}<span><b>Риски перед приёмкой:</b> CI красный после ребейза; урок не записан. Пока они открыты, «Принять» недоступно.</span></div>`:''}
+    <ul class="check">${items.map(i=>`<li class="${i[2]===1?'':i[2]===0?'no':'pend'}">
+      ${i[2]===1?`<span style="color:var(--c-success)">${IC.ok}</span>`:i[2]===0?glyph('crash',14):glyph('todo',14)}
+      <div class="ci"><span>${i[0]}</span><div class="s">${i[1]}</div></div>
+      ${i[3]==='ci'&&!S.ack.ci?btn('Перезапустить CI','ghost','ck:ci'):''}${i[3]==='lesson'&&!S.ack.lesson?btn('Записать урок','ghost','dlg:lesson'):''}
+    </li>`).join('')}</ul>
+    <div class="mut" style="margin-top:8px">В макете кнопки сразу закрывают пункт, чтобы показать разблокировку «Принять».</div></div></div>`;
+}
+function blkDone(f){
+  return `<div class="island"><div class="isl-h"><h3>Итоги: план против факта</h3><span class="aux">калибрует прогноз следующих фич</span></div><div class="isl-b">
+    <div class="pf">
+      <div class="c"><div class="k">Шагов</div><div class="v">11</div><div class="h">план был 9 · +2 по разрезу</div></div>
+      <div class="c"><div class="k">Длительность</div><div class="v">14 ч</div><div class="h">прогноз 8–12 ч · промах +2 ч</div></div>
+      <div class="c"><div class="k">На петлях</div><div class="v">3 ч 10 мин</div><div class="h">↺5, из них 3 на B4</div></div>
+      <div class="c"><div class="k">Ждали вас</div><div class="v">4 ч 30 мин</div><div class="h">3 ч из них — ночь 13.10</div></div>
+    </div>
+    <div class="hr"></div>
+    <label class="fl" for="lesson">Записать урок</label>
+    <textarea id="lesson" rows="2" placeholder="Что сделать иначе в следующей фиче — уйдёт в память команды"></textarea>
+    <div style="display:flex;justify-content:flex-end;margin-top:8px">${btn('Записать урок','primary','toast:Урок записан в память команды')}</div></div></div>`;
+}
+function blkNoPlan(f){
+  return `<div class="island"><div class="isl-h"><h3>Конвейер</h3></div><div class="isl-b">
+    ${S.mobile?conveyorV(f):conveyor(f)}
+    <div class="empty"><div class="ic" style="color:var(--c-text-secondary)">${IC.plan}</div><h4>Плана нет</h4>
+    <div>Разрез принят. Когда появится план, здесь встанут шаги по линиям, а справа — прогноз.</div></div></div></div>`;
+}
+
+function screenFeature(){
+  const f = F[S.fid];
+  const crumb = `<div class="crumb"><button class="back" data-a="nav:board">${IC.back} Все фичи</button>
+    ${S.mobile?'':`<span>·</span><span>куратор Андрей · дублёр Софья</span><span>·</span><span>данные обновлены 1 мин назад</span>`}</div>`;
+  let main;
+  if (f.accept) main = blkChecklist(f);
+  else if (f.noplan) main = blkNoPlan(f);
+  else main = blkConveyor(f);
+  const left = `${f.digest?blkDigest(f):''}${main}${f.st==='done'?blkDone(f):''}`;
+  const side = `<div class="island side">${blkForecast(f)}${blkPeople(f)}${blkBuild(f)}${blkCourse(f)}
+    <div class="blk"><button class="btn ghost full" data-a="step:orch">Разговор с оркестратором фичи</button></div></div>`;
+  if (S.mobile){
+    return `${crumb}<div style="padding:0 8px 8px">${card(S.fid,true)}</div>${left}<div class="island side">${blkPeople(f)}${blkBuild(f)}${blkCourse(f)}
+      <div class="blk"><button class="btn ghost full" data-a="step:orch">Разговор с оркестратором</button></div></div>${dockHtml(f)}`;
+  }
+  return `${crumb}${card(S.fid,true)}<div class="fgrid"><div class="col">${left}</div><div class="col">${side}</div></div>`;
+}
+
+function screenStep(){
+  const f = F[S.fid];
+  const stepId = f.step==='—' ? 'B1' : f.step;
+  const execK = (f.people.find(p=>p[0]!=='gleb'&&p[0]!=='alex'&&p[0]!=='mark') || ['den'])[0];
+  const exec = P[execK].n;
+  const head = `<div class="crumb"><button class="back" data-a="nav:feature">${IC.back} ${esc(f.title)}</button></div>
+    <div class="fc lg t-loop" style="${S.mobile?'margin:0 8px 8px;width:auto':''}">
+      <div class="top">${glyph('loop',16)}<span class="name">${stepId} · ${esc(f.stepName||'Шаг')}</span></div>
+      <div class="stl">Ревью · 3-й круг <span class="q">Глеб смотрит 12 мин</span></div>
+      <div class="met"><span>исполнитель <b>${exec}</b></span><span>ревьюер <b>Глеб</b></span><span>линия <b>${stepId[0]==='F'?'фронт':stepId[0]==='A'?'трек A':stepId[0]==='D'?'трек D':'бэк'}</b></span><span>на шаге <b>4 ч 40 мин</b>, из них доработки 2 ч 10 мин</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        ${btn('Принять шаг','disabled','')}${btn('Вернуть','ghost','dlg:return')}${btn('Позвать коллегу','ghost','dlg:callOther')}
+      </div>
+      <div class="why" style="font-size:12px;color:var(--c-text-secondary);margin-top:8px;display:flex;gap:6px">${IC.info}<span>Принять можно после «принято» Глеба: подтверждение куратора идёт вслед за ревьюером.</span></div>
+    </div>`;
+  const tabs = `<div class="pills" style="margin:${S.mobile?'0 8px 8px':'8px 0'}">
+    ${[['rounds','Круги ревью'],['changes','Изменения и тесты'],['chat','Разговор']].map(t=>`<button class="${S.tab===t[0]?'on':''}" data-a="tab:${t[0]}" style="${S.mobile?'min-height:36px':''}">${t[1]}</button>`).join('')}</div>`;
+  let body = '';
+  if (S.tab==='rounds') body = `<div class="island"><div class="isl-h"><h3>История кругов</h3><span class="aux">↺3 — петля подсвечена с 3-го круга</span></div><div class="isl-b"><ul class="rounds">
+    <li><span class="rn">1</span><div class="rh">Круг 1 · 13.10, 16:20</div>
+      <div class="ev">${av(execK)}<span>${exec} сделал(а) шаг · коммит <span class="mono">a41c9e2</span> · тесты 38/38</span></div>
+      <div class="ev">${av('gleb')}<span>Глеб вернул через 25 мин <span class="cat">разрез</span></span></div>
+      <div class="quote">«Маска рвётся по краю при повороте головы. В критериях шага поворотов нет — от чего отталкиваться?»</div></li>
+    <li><span class="rn">2</span><div class="rh">Круг 2 · 13.10, 18:05</div>
+      <div class="ev">${av(execK)}<span>Исправлено: сглаживание края на 4 px · коммит <span class="mono">7be0d13</span></span></div>
+      <div class="ev">${av('gleb')}<span>Глеб вернул через 40 мин <span class="cat">разрез</span> <span class="cat">исполнитель</span></span></div>
+      <div class="quote">«Стало лучше на фронтальных фото, на профиле — та же дыра. И тест FaceMaskEdgeTests не покрывает поворот».</div></li>
+    <li><span class="rn hot">3</span><div class="rh" style="color:var(--c-warning-text)">Круг 3 · сейчас</div>
+      <div class="ev">${av(execK)}<span>Доработка сдана 12 мин назад · коммит <span class="mono">c90f4a8</span> · тесты 41/42</span></div>
+      <div class="ev">${glyph('run',14)}<span>Глеб смотрит</span></div></li>
+  </ul></div></div>`;
+  if (S.tab==='changes') body = `<div class="island"><div class="isl-h"><h3>Изменения</h3><span class="aux">3 коммита · 5 файлов</span></div><div class="isl-b">
+    <table class="files">
+      <tr><td class="p">backend/ClaudeHomeServer.ImageEditor/Faces/MaskComposer.cs</td><td><span class="add">+84</span> <span class="rem">−21</span></td></tr>
+      <tr><td class="p">backend/ClaudeHomeServer.ImageEditor/Faces/EdgeFeather.cs</td><td><span class="add">+46</span></td></tr>
+      <tr><td class="p">backend/ClaudeHomeServer.Tests/ImageEditor/FaceMaskEdgeTests.cs</td><td><span class="add">+63</span> <span class="rem">−4</span></td></tr>
+      <tr><td class="p">docs/features/multichar.md</td><td><span class="add">+6</span></td></tr>
+    </table>
+    <div class="hr"></div>
+    <div class="build">${glyph('crash',12)}<span><b>Тесты 41 из 42.</b> Падает <span class="mono">FaceMaskEdgeTests.Profile_45deg_KeepsEdge</span></span></div>
+    <div class="quote mono" style="font-size:11px">Expected edge coverage ≥ 0.97, actual 0.91 (profile_45.png)</div>
+    <div class="sec" style="margin-top:8px">Сборка ветки зелёная · 12 мин назад</div></div></div>`;
+  if (S.tab==='chat'){
+    const orch = S.chatWith==='orch';
+    const base = orch
+      ? [['them','Софья','По B3 уже третий круг. Предлагаю позвать Александра: критерий про повороты должен прийти из разреза, а не из ревью.'],['them','Софья','Пока жду вашего решения, Денис держит B3, остальные шаги идут.']]
+      : [['them',exec,'Сдал третий круг: добавил растушёвку края по карте нормалей. Профиль 45° всё ещё даёт 0,91 — без договорённости, какой угол считаем рабочим, дальше чинить наугад.'],['them',exec,'Если скажете «до 30°» — закрою шаг за 20 минут.']];
+    const msgs = base.concat(S.chat[orch?'orch':'exec']);
+    body = `<div class="island"><div class="isl-h"><h3>Разговор</h3><div class="pills">
+      <button class="${!orch?'on':''}" data-a="chat:exec">С исполнителем</button><button class="${orch?'on':''}" data-a="chat:orch">С оркестратором фичи</button></div></div>
+      <div class="isl-b"><div class="chat">${msgs.map(m=>`<div class="msg ${m[0]}"><div class="who">${m[1]}</div>${esc(m[2])}</div>`).join('')}</div>
+      <div class="composer"><input type="text" id="chatin" placeholder="${orch?'Написать Софье':'Написать '+exec}"><button class="btn primary" data-a="send" aria-label="Отправить">${IC.send}</button></div></div></div>`;
+  }
+  return `${head}${tabs}${body}<div style="height:24px"></div>`;
+}
+
+/* ======================= Шторки (раскрытия P2) ======================= */
+function sheetHtml(){
+  const f = F[S.fid]; let t = '', b = '';
+  if (S.sheet==='loop'){
+    t = `Петля возврата · ${f.conv.loops.some(l=>l.danger)?'после мержа':'ревью ↔ доработка'}`;
+    b = `<div class="sec" style="margin-bottom:10px">Всего ↺${f.conv.self||1} на ${f.tot||'—'} шагов · возвратов на шаг <b>${f.rps}</b> (цель ≤ 0,4). Самая длинная петля — ${f.step}, 3 круга.</div>
+      <div class="cap mut" style="text-transform:uppercase;font-size:11px;letter-spacing:.05em;margin-bottom:6px">Причины по категориям</div>
+      <div class="cats">
+        <div class="r"><span>Разрез</span><span class="tr"><i style="width:56%"></i></span><b>5</b></div>
+        <div class="r"><span>Исполнитель</span><span class="tr"><i class="m" style="width:33%"></i></span><b>3</b></div>
+        <div class="r"><span>Придирчивое ревью</span><span class="tr"><i class="m" style="width:11%"></i></span><b>1</b></div>
+      </div>
+      <div class="sec" style="margin:6px 0 12px">Категорию ставит ревьюер при возврате; без неё — «по заголовкам», это помечено.</div>
+      <div class="quote"><b>${f.step}</b> · Глеб: «Маска снова теряет край при повороте больше 30°» <span class="cat">разрез</span></div>
+      <div class="quote"><b>${f.step}</b> · Глеб: «Тест не покрывает профиль» <span class="cat">исполнитель</span></div>
+      <div class="cons info"><div class="cap">Что можно сделать</div><ul><li>Позвать архитектора дописать критерий шага (поворот, допустимое покрытие края).</li><li>Или ответить исполнителю самому — «рабочий угол до 30°».</li></ul></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${btn('Позвать архитектора','primary','dlg:recut')}${btn('Открыть шаг','ghost','step')}</div>`;
+  }
+  if (S.sheet==='stuck'){
+    const now = {wait:['Ждёт вас',f.plate?.reason||'',f.plate?.wait||''],crash:['Стоит',f.plate.reason,f.plate.wait],loop:['Петля',f.plate.reason,f.plate.wait],reopen:['Открыта заново',f.plate.reason,f.plate.wait],frozen:['Пауза',f.plate.reason,f.plate.wait]}[f.st]||['','',''];
+    t = `Застревание · ${now[0]}`;
+    b = `<div class="fc ${TONE[f.st]}" style="cursor:default"><div class="top">${glyph(f.st)}<span class="name" style="white-space:normal">${now[2]}</span></div><div style="margin-top:6px">${now[1]}</div></div>
+      <div class="sec" style="margin:12px 0 6px">Кто: ${f.people.map(p=>P[p[0]].n+' — '+p[1]).join('; ')||'никто'}</div>
+      <div class="sec">Что было до: шаг ${f.step} начат 4 ч 40 мин назад, последнее движение — ${f.move}.</div>
+      <div class="hr"></div>
+      <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Стояло раньше (история)</div>
+      <ul class="digest"><li><span class="dot"></span><span>13.10, 01:10–11:05 — ждали вас 10 ч (ночь), доступ к репозиторию</span></li><li><span class="dot"></span><span>14.10, 15:40–16:20 — исполнитель упал, перезапущен</span></li></ul>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">${btn('Позвать исполнителя','ghost','dlg:callOther')}${btn('Позвать ревьюера','ghost','dlg:callOther')}${btn('Открыть разговор','ghost','step:chat')}</div>`;
+  }
+  if (S.sheet==='timeline'){
+    t = 'Лента времени';
+    const rows = PH.map((p,i)=>{
+      const st = f.conv.st[i]; let segs = '';
+      const base = [[2,12],[14,22],[22,78],[78,86],[86,93],[93,97]][i];
+      if (st==='done') segs = `<i class="w" style="left:${base[0]}%;width:${base[1]-base[0]}%"></i>`;
+      if (i===1 && st==='done') segs += `<i class="h" style="left:${base[0]+2}%;width:3%"></i>`;
+      if (i===2 && st!=='todo'){
+        const end = st==='done' ? base[1] : 80;
+        segs = `<i class="w" style="left:22%;width:${end-22}%"></i><i class="h" style="left:30%;width:18%" title="ждали вас 10 ч, ночь"></i><i class="l" style="left:52%;width:9%" title="петля B4"></i><i class="s" style="left:63%;width:3%" title="исполнитель упал"></i>`;
+        if (st!=='done') segs += `<i class="${st==='wait'?'h':st==='loop'?'l':st==='frozen'?'w':'s'}" style="left:74%;width:6%"></i>`;
+      }
+      return `<div class="r"><span>${p}</span><span class="lane">${segs}${i===f.phase&&st!=='done'?'<span class="now" style="left:80%"></span>':''}</span></div>`;
+    }).join('');
+    b = `<div class="tl">${rows}<div class="axis"><div></div><div><span>13.10</span><span>14.10</span><span>15.10 · сейчас</span></div></div></div>
+      <div class="legend" style="border:none;padding:0;margin-top:14px"><span><i style="display:inline-block;width:14px;height:8px;background:var(--c-text-muted);opacity:.45;border-radius:2px"></i> работа</span>
+      <span><i style="display:inline-block;width:14px;height:8px;background:var(--c-info);opacity:.55;border-radius:2px"></i> ждали вас</span>
+      <span><i style="display:inline-block;width:14px;height:8px;background:var(--c-warning);opacity:.6;border-radius:2px"></i> петля</span>
+      <span><i style="display:inline-block;width:14px;height:8px;background:var(--c-danger);opacity:.45;border-radius:2px"></i> стояло</span></div>
+      <div class="sec" style="margin-top:10px">Время — только здесь: на конвейере толщина означает проходы, а не часы. Прошлые застревания приглушены, чтобы не спорить с текущим.</div>`;
+  }
+  if (S.sheet==='lines'){ t = 'Шаги по линиям'; b = linesHtml(f) + `<div class="sec">Нажмите шаг, чтобы открыть его историю.</div>`; }
+  if (S.sheet==='forecast'){
+    t = 'Как считали прогноз';
+    b = `<ul class="digest" style="gap:8px">
+      <li><span class="dot"></span><span><b>Единица — круг.</b> Осталось ${f.tot-f.acc||0} шагов × (1 + доля возвратов фичи ${f.rps}) = ${Math.round(((f.tot-f.acc)||0)*(1+parseFloat(String(f.rps).replace(',','.'))||1))} кругов.</span></li>
+      <li><span class="dot"></span><span><b>Длительность круга</b> — 25–80-й процентиль по ${f.fc.n||'—'} прошлым фичам куратора.</span></li>
+      <li><span class="dot"></span><span><b>Параллельность</b> не выше 2: у локальных исполнителей два слота, очередь общая для всех ваших фич.</span></li>
+      <li><span class="dot"></span><span><b>Время человека не входит</b> — рядом отдельно «ждёт вас».</span></li>
+      <li><span class="dot"></span><span><b>Уверенность «${f.fc.conf||'—'}»:</b> ${f.fc.conf==='уверенно'?'больше 6 фич в выборке и разброс меньше 2×':'выборка меньше 6 фич или разброс больше 2×'}.</span></li></ul>
+      <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px">Дрейф прогноза</div>
+      <svg viewBox="0 0 300 80" style="width:100%;height:auto;display:block">
+        <path d="M10 50 L80 46 L150 40 L220 30 L290 22 L290 44 L220 50 L150 58 L80 62 L10 64Z" style="fill:var(--c-bg-selected)"/>
+        <path d="M10 57 L80 54 L150 49 L220 40 L290 33" style="fill:none;stroke:var(--c-text-secondary);stroke-width:2"/>
+        <text x="10" y="76" style="fill:var(--c-text-muted);font-size:10px">13.10</text><text x="140" y="76" style="fill:var(--c-text-muted);font-size:10px">14.10</text><text x="262" y="76" style="fill:var(--c-text-muted);font-size:10px">сейчас</text>
+      </svg>
+      <div class="sec">Полоса — диапазон, линия — середина. Прогноз провален, если срок прошёл, — тогда здесь появится отметка.</div>`;
+  }
+  return `<div class="ov" data-a="close"></div><div class="drawer" role="dialog" aria-label="${esc(t)}"><span class="grab"></span>
+    <div class="isl-h"><h3>${t}</h3><button class="x" data-a="close" aria-label="Закрыть">${IC.x}</button></div><div class="body">${b}</div></div>`;
+}
+
+/* ======================= Диалоги «Изменить ход» и решения ======================= */
+const DLG = {
+  prioUp: f => ({ t:'Поднять приоритет?', lead:`«${f.title}» встанет выше соседей в общей очереди слотов.`, prio:'up',
+    cons:['Шаги в работе не прерываются: новый порядок действует со следующего шага.','«История медиа-генераций» уступит слот — её прогноз сдвинется на +30–50 мин.'], ok:'Поднять' }),
+  prioDown: f => ({ t:'Опустить приоритет?', lead:`Соседние фичи получат слоты раньше «${f.title}».`, prio:'down',
+    cons:['Шаги в работе не прерываются.',`Прогноз «${f.title}» сдвинется на +1–2 ч.`,'«Мультиперсонаж» и «Уборка карты» получат слот раньше.'], ok:'Опустить' }),
+  freeze: f => ({ t:f.st==='frozen'?'Изменить причину паузы':'Заморозить фичу?', lead:'Исполнители остановятся после сохранения работы, прогноз встанет на паузу.', reason:'Причина — её увидят команда и дублёр', reasonPh:'Например: ждём ответа Яндекса по квоте',
+    cons:[`${f.people.filter(p=>/делает|доработка/.test(p[1])).length||2} шага в работе будут остановлены — наработки сохранятся в ветке.`,'Освободятся локальные слоты: соседние фичи двинутся быстрее.','Прогноз этой фичи не считается до возобновления.'], ok:'Заморозить' }),
+  resume: f => ({ t:'Возобновить фичу?', lead:'Шаги вернутся тем же исполнителям, причина паузы уйдёт в ленту времени.', info:true,
+    cons:['Остановленные шаги B3 (Денис) и F2 (Кира) продолжат с последнего коммита.','Ветка отстала от master на 46 коммитов — первым шагом будет ребейз.','Прогноз пересчитается за 1–2 принятых шага.'], ok:'Возобновить' }),
+  recut: f => ({ t:'Переразрезать фичу?', lead:'Александр получит задачу на новый разрез с вашей причиной. Цена — около 25 мин сильной модели.', reason:'Что не так с текущим разрезом', reasonPh:'Например: в критериях шагов нет поворотов головы',
+    cons:[`Шаги в работе (${f.people.filter(p=>/делает|доработка/.test(p[1])).map(p=>P[p[0]].n).join(', ')||'—'}) будут остановлены до нового разреза.`,'Принятые шаги останутся, не начатые — пересоберутся по новому разрезу.','Прогноз сбросится в «рано для прогноза», пока нет нового плана и 3 принятых шагов.'], ok:'Позвать архитектора' }),
+  accept: f => ({ t:'Подтвердить приёмку?', lead:'Вердикт Александра «принято» остаётся как есть — ваша отметка встаёт рядом.', info:true,
+    cons:['Марку уйдёт запрос на мерж; условия проверит сервер. Выкатки с этого экрана нет.','После мержа появится пункт «smoke на master».'], ok:'Принять' }),
+  return: f => ({ t:'Вернуть на доработку?', lead:'Вернёте вы — запись пойдёт с вашей подписью, вердикт ревьюера не перезаписывается.', reason:'Что исправить', reasonPh:'Конкретно и проверяемо', cat:true,
+    cons:[`Шаг вернётся исполнителю, начнётся следующий круг.`,'Прогноз сдвинется на +1–2 ч.'], ok:'Вернуть' }),
+  grant: f => ({ t:'Дать доступ к стенду vLLM?', lead:'Денису на шаг B7: чтение метрик :8000, без прав перезапуска.', info:true,
+    cons:['Доступ живёт до конца шага и снимается сам.','Шаг B7 продолжится сразу, ожидание «ждёт вас» закроется.'], ok:'Дать доступ' }),
+  restart: f => ({ t:'Перезапустить исполнителя?', lead:'Кира продолжит D4 с последнего коммита в том же разговоре.', info:true,
+    cons:['Ход начнётся заново: незакоммиченного нет, ничего не потеряется.','Если упадёт снова — предложим другого исполнителя.'], ok:'Перезапустить' }),
+  callOther: f => ({ t:'Позвать коллегу', lead:'Кого позвать на шаг — у каждого своя цена.', who:true, ok:'Позвать' }),
+  callEgor: f => ({ t:'Позвать Егора составить план?', lead:'Егор нарежет шаги по линиям из принятого разреза.', info:true,
+    cons:['Цена — около 15 мин средней модели.','План придёт вам на подтверждение, шаги без него не стартуют.'], ok:'Позвать Егора' }),
+  fix: f => ({ t:'Поручить исправление?', lead:'Денис получит дефект с шагами воспроизведения из smoke.', info:true,
+    cons:['Фича вернётся в «Производство», откроется новый круг.','Мерж исправления — снова через ревью Глеба и запрос Марку.'], ok:'Поручить Денису' }),
+  revert: f => ({ t:'Откатить мерж?', lead:'Это запрос Марку, а не действие: условия отката проверит сервер.', reason:'Почему откатываем', reasonPh:'Например: регрессия на master, чинить дольше часа',
+    cons:['«Уборка карты» использует ProjectHeader.tsx из этой фичи — ей понадобится ребейз.','Фича вернётся в «Производство» целиком.'], ok:'Отправить запрос Марку' }),
+  lesson: f => ({ t:'Записать урок', lead:'Урок уйдёт в память команды и закроет пункт чек-листа.', reason:'Урок', reasonPh:'Что сделать иначе в следующий раз', ok:'Записать', ck:'lesson' }),
+};
+function dlgHtml(){
+  const f = F[S.fid], d = DLG[S.dlg](f);
+  const order = ['history','stats','bg','hands','multi','pult','cleanup','voice'];
+  let extra = '';
+  if (d.prio){
+    const i = order.indexOf(S.fid), j = d.prio==='up' ? Math.max(0,i-1) : Math.min(order.length-1,i+1);
+    const nw = order.slice(); nw.splice(i,1); nw.splice(j,0,S.fid);
+    extra = `<label class="fl">Новый порядок у куратора</label><ul class="prio">${nw.map((k,n)=>`<li class="${k===S.fid?'me':n===i?'moved':''}"><span class="no">${n+1}</span>${glyph(F[k].st,12)}<span>${esc(F[k].title)}</span>${k===S.fid?`<span class="mut" style="margin-left:auto">было ${i+1}</span>`:''}</li>`).join('')}</ul>`;
+  }
+  if (d.who) extra = `<div class="who-list">${[['alex','Архитектор: уточнить критерий','≈25 мин · сильная'],['kira','Другой исполнитель','≈40 мин · средняя'],['kuz','Локальный исполнитель','≈60 мин · бесплатно, очередь'],['gleb','Ревьюер: посмотреть раньше очереди','≈10 мин · средняя']]
+    .map((w,n)=>`<label><input type="radio" name="who" ${n===0?'checked':''}>${av(w[0],true)}<span><b>${P[w[0]].n}</b><br><span class="mut">${w[1]}</span></span><span class="pr">${w[2]}</span></label>`).join('')}</div>`;
+  const cat = d.cat ? `<label class="fl" for="dcat">Категория</label><select id="dcat"><option>Разрез</option><option>Исполнитель</option><option>Критерии шага</option><option>Другое</option></select>` : '';
+  const reason = d.reason ? `<label class="fl" for="dreason">${d.reason} <span class="mut">· обязательно</span></label><textarea id="dreason" rows="3" placeholder="${d.reasonPh}"></textarea>` : '';
+  const cons = d.cons ? `<div class="cons${d.info?' info':''}"><div class="cap">${d.info?'Что произойдёт':'Последствия'}</div><ul>${d.cons.map(c=>`<li>${c}</li>`).join('')}</ul></div>` : '';
+  return `<div class="ov" data-a="close"></div><div class="dlg${d.who||d.prio?'':' confirm'}" role="dialog" aria-label="${esc(d.t)}">
+    <h2>${d.t}</h2><p class="lead">${d.lead}</p>${extra}${cat}${reason}${cons}
+    <div class="acts">${btn('Отмена','ghost','close')}<button class="btn primary" data-a="confirm" id="dok" ${d.reason?'disabled':''}>${d.ok}</button></div></div>`;
+}
+
+/* ======================= Рендер ======================= */
+function render(){
+  document.documentElement.setAttribute('data-theme', S.theme);
+  const app = document.getElementById('app');
+  app.className = 'app' + (S.mobile ? ' m' : '');
+  let scr = S.screen==='board' ? screenBoard() : S.screen==='feature' ? screenFeature() : screenStep();
+  const hub = `<div class="hub"><h2 class="ttl serif">Пульт куратора</h2><span class="sp"></span>${S.mobile?'':'<span class="who">Андрей · 8 фич в работе</span>'}</div>`;
+  const inner = `<div class="canvas">${hub}${scr}</div>`;
+  app.innerHTML = (S.mobile ? `<div class="scroll">${inner}</div>` : inner)
+    + (S.sheet ? sheetHtml() : '') + (S.dlg ? dlgHtml() : '') + (S.toast ? `<div class="toast" role="status">${S.toast}</div>` : '');
+  renderBar();
+}
+function renderBar(){
+  const pills = (id, items, cur, key) => document.getElementById(id).innerHTML =
+    items.map(i=>`<button class="${cur===i[0]?'on':''}" data-mk="${key}:${i[0]}">${i[1]}</button>`).join('');
+  pills('mk-screen', [['board','Табло фич'],['feature','Экран фичи'],['step','Шаг']], S.screen, 'screen');
+  const curState = (STATES.find(s=>s[2]===S.fid)||[])[0];
+  document.getElementById('mk-state').innerHTML = STATES.map(s=>`<button class="${curState===s[0]?'on':''}" data-mk="state:${s[0]}">${glyph(s[0]==='accept'||s[0]==='noplan'?'wait':s[0],11)}${s[1]}</button>`).join('');
+  pills('mk-theme', [['light','Светлая'],['dark','Тёмная']], S.theme, 'theme');
+  pills('mk-width', [['desk','Десктоп'],['m','Мобильный 360']], S.mobile?'m':'desk', 'width');
+}
+let toastT;
+function toast(t){ S.toast = t; render(); clearTimeout(toastT); toastT = setTimeout(()=>{ S.toast=null; render(); }, 2600); }
+
+document.addEventListener('click', e=>{
+  const mk = e.target.closest('[data-mk]');
+  if (mk){
+    const [k,v] = mk.dataset.mk.split(':');
+    if (k==='screen') S.screen = v;
+    if (k==='state'){ S.fid = STATES.find(s=>s[0]===v)[2]; if (S.screen==='board') S.screen='feature'; S.linesOpen = v==='done'; }
+    if (k==='theme') S.theme = v;
+    if (k==='width') S.mobile = v==='m';
+    S.sheet = S.dlg = null; S.menu = false; render(); return;
+  }
+  const el = e.target.closest('[data-a]');
+  if (!el){ if (S.menu){ S.menu=false; render(); } return; }
+  const a = el.dataset.a, i = a.indexOf(':'), k = i<0?a:a.slice(0,i), v = i<0?'':a.slice(i+1);
+  if (k!=='menu') S.menu = false;
+  switch(k){
+    case 'nav': S.screen = v; S.sheet = S.dlg = null; break;
+    case 'open': S.fid = v; S.screen = 'feature'; S.linesOpen = F[v].st==='done'; break;
+    case 'step': S.screen = 'step'; S.sheet = S.dlg = null; if (v==='chat'||v==='orch'){ S.tab='chat'; S.chatWith = v==='orch'?'orch':'exec'; } else S.tab='rounds'; break;
+    case 'sheet': S.sheet = v; break;
+    case 'dlg': S.dlg = v; S.sheet = null; break;
+    case 'close': S.sheet = S.dlg = null; break;
+    case 'menu': S.menu = !S.menu; break;
+    case 'lines': S.linesOpen = !S.linesOpen; break;
+    case 'grp': if (v==='paused') S.showPaused = !S.showPaused; else S.showDone = !S.showDone; break;
+    case 'ck': S.ack[v] = true; break;
+    case 'tab': S.tab = v; break;
+    case 'chat': S.chatWith = v; break;
+    case 'send': { const inp = document.getElementById('chatin'); if (inp && inp.value.trim()){ S.chat[S.chatWith].push(['me','Вы',inp.value.trim()]); } break; }
+    case 'toast': toast(v); return;
+    case 'confirm': {
+      const d = DLG[S.dlg](F[S.fid]); if (d.ck) S.ack[d.ck] = true;
+      S.dlg = null; toast(`Готово: ${d.ok.toLowerCase()} — запись в ленте фичи`); return;
+    }
+  }
+  render();
+});
+document.addEventListener('input', e=>{
+  if (e.target.id==='dreason'){ const ok = document.getElementById('dok'); if (ok) ok.disabled = !e.target.value.trim(); }
+});
+document.addEventListener('keydown', e=>{
+  if (e.key==='Escape' && (S.sheet||S.dlg||S.menu)){ S.sheet = S.dlg = null; S.menu = false; render(); }
+  if (e.key==='Enter' && e.target.id==='chatin'){ document.querySelector('[data-a="send"]').click(); }
+});
+render();
+</script>
+</body>
+</html>

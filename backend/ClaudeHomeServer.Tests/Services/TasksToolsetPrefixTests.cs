@@ -201,4 +201,41 @@ public class TasksToolsetPrefixTests : IClassFixture<TestWebApplicationFactory>
         var card = JsonSerializer.Deserialize<JsonElement>(getText);
         card.GetProperty("title").GetString().Should().Be("Задача для записи");
     }
+
+    // ─── Карточка по префиксу несёт разметку фичи (featureId/role/stepRef/lane) ─────
+
+    [Fact]
+    public async Task Get_ПоПрефиксу_ВозвращаетПоляФичи()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync("prefix-feature");
+
+        // Эпик (случайный id) — источник featureId
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Эпик", role = "feature" });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+
+        // Задача с управляемым id: префикс детерминирован
+        var createdId = await CreateProjectTaskWithIdAsync(projectId,
+            "77778888-9999-0000-1111-222233334444", "Задача с разметкой фичи");
+
+        // Разметку фичи ставим через tasks_update (MCP)
+        var (updText, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = createdId,
+            featureId = epicId,
+            role = "step",
+            stepRef = "D1c",
+            lane = "бэк",
+        });
+        isError.Should().BeFalse("разметка фичи легитимна — update не должен падать");
+
+        // tasks_get по префиксу возвращает карточку с полями фичи
+        var (text, _) = await CallToolAsync(sessionId, "tasks_get", new { id = "77778888" });
+        var card = JsonSerializer.Deserialize<JsonElement>(text);
+        card.GetProperty("id").GetString().Should().Be(createdId);
+        card.GetProperty("featureId").GetString().Should().Be(epicId);
+        card.GetProperty("role").GetString().Should().Be("step");
+        card.GetProperty("stepRef").GetString().Should().Be("D1c");
+        card.GetProperty("lane").GetString().Should().Be("бэк");
+    }
 }

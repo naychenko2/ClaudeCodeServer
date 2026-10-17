@@ -251,6 +251,14 @@ public sealed class TasksToolset(
                     // Вид карточки и шаги воспроизведения дефекта. null Kind — Task (дефолт)
                     Kind: KindArg(arguments),
                     Repro: ReproArg(arguments),
+                    // Разметка фичи (режим «Исполнение фичи»): featureId/stepRef/lane — свободные
+                    // строки, role — enum из TaskRoles, reviewOf — список id. null = «не задано»;
+                    // валидация (role/verdict из списка, эпик существует) — fail-closed в TaskManager
+                    FeatureId: OptionalArg(arguments, "featureId"),
+                    Role: OptionalArg(arguments, "role"),
+                    StepRef: OptionalArg(arguments, "stepRef"),
+                    Lane: OptionalArg(arguments, "lane"),
+                    ReviewOf: LabelsArg(arguments, "reviewOf"),
                     ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId));
                 TaskItem created;
                 try
@@ -321,6 +329,7 @@ public sealed class TasksToolset(
                 var verificationEffective = verificationArg is null ? null : new TaskVerification
                 {
                     Notes = verificationArg.Notes,
+                    Verdict = verificationArg.Verdict,
                     VerifiedAt = DateTime.UtcNow,
                     PersonaId = session.PersonaId,
                 };
@@ -359,7 +368,14 @@ public sealed class TasksToolset(
                     Kind: KindArg(arguments),
                     Repro: arguments.ContainsKey("repro") ? ReproArg(arguments) : null,
                     Verification: verificationEffective,
-                    Outcome: outcomeArg);
+                    Outcome: outcomeArg,
+                    // Разметка фичи: null = не менять, "" = очистить (строки), список = целиком
+                    // (reviewOf). Та же семантика, что у dueDate/worktreePath/labels выше
+                    FeatureId: arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
+                    Role: arguments.ContainsKey("role") ? StringArg(arguments, "role") : null,
+                    StepRef: arguments.ContainsKey("stepRef") ? StringArg(arguments, "stepRef") : null,
+                    Lane: arguments.ContainsKey("lane") ? StringArg(arguments, "lane") : null,
+                    ReviewOf: arguments.ContainsKey("reviewOf") ? LabelsArg(arguments, "reviewOf") : null);
                 TaskItem updated;
                 try
                 {
@@ -411,6 +427,7 @@ public sealed class TasksToolset(
                 var verificationEffective = verificationArg is null ? null : new TaskVerification
                 {
                     Notes = verificationArg.Notes,
+                    Verdict = verificationArg.Verdict,
                     VerifiedAt = DateTime.UtcNow,
                     PersonaId = session.PersonaId,
                 };
@@ -451,7 +468,7 @@ public sealed class TasksToolset(
                 // гасит карточку «штаб закрыл задачу», приписанного действия нет
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб закрыл задачу — блокер снят");
-                return Json(updated);
+                return CompleteResponse(updated);
             }
 
             case "tasks_run_executor":
@@ -819,6 +836,21 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
 
+    // Ответ tasks_complete: сериализованная карточка + мягкое предупреждение (отдельное поле
+    // warning, НЕ notes), если ревью/проверку/финал фичи закрыли без вердикта — карточка его
+    // не покажет, а блокировать закрытие ради UI нельзя (разрез §5). Сериализация — теми же
+    // JsonOpts, что Json<T>: кириллица без \u-экранирования, enum'ы camelCase.
+    private static McpToolCallResult CompleteResponse(TaskItem task)
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(task, JsonOpts))!.AsObject();
+        if (task.FeatureId is not null
+            && task.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final
+            && string.IsNullOrEmpty(task.Verification?.Verdict))
+            json["warning"] = "У ревью/проверки/финала фичи нет вердикта — карточка его не покажет. "
+                + "Задайте verification.verdict (accepted · accepted_with_remarks · returned · withdrawn).";
+        return new(json.ToJsonString(JsonOpts));
+    }
+
     // Сессия-вызыватель — чат-исполнитель другой задачи T, ждущий результата (планировщик, QA):
     // новая задача докладывает туда же, куда докладывает T, а не этой сессии, которая по правилу
     // «решать нечего» промолчит. Не исполнитель (обычный чат, человек) — null, адресат прежний.
@@ -901,13 +933,15 @@ public sealed class TasksToolset(
             Actual = OptionalArg(rep, "actual"),
         };
 
-    // Вердикт проверки дефекта: клиент шлёт только notes. VerifiedAt и PersonaId подставляет
+    // Вердикт проверки: клиент шлёт notes и verdict. VerifiedAt и PersonaId подставляет
     // сервер из сессии вызова (X-Caller-Session-Id у REST-пути, хвост-сессия у MCP). null —
-    // ключа нет, не менять.
+    // ключа нет, не менять. verdict — исход витка (TaskVerdicts): accepted · accepted_with_remarks
+    // · returned · withdrawn; null = старая семантика «проверено».
     private static TaskVerification? VerificationArg(JsonObject arguments) =>
         arguments["verification"] is not JsonObject ver ? null : new TaskVerification
         {
             Notes = OptionalArg(ver, "notes"),
+            Verdict = OptionalArg(ver, "verdict"),
         };
 
     // Исход дефекта: единственное допустимое значение — closedWithoutCheck. Прочее отбрасываем
@@ -1062,6 +1096,11 @@ public sealed class TasksToolset(
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
                     ["kind"] = KindSchema(),
                     ["repro"] = ReproSchema(),
+                    ["featureId"] = FeatureIdSchema(),
+                    ["role"] = RoleSchema(),
+                    ["stepRef"] = StepRefSchema(),
+                    ["lane"] = LaneSchema(),
+                    ["reviewOf"] = ReviewOfSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -1123,6 +1162,11 @@ public sealed class TasksToolset(
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
                     ["kind"] = KindSchema(),
                     ["repro"] = ReproSchema(),
+                    ["featureId"] = FeatureIdSchema(),
+                    ["role"] = RoleSchema(),
+                    ["stepRef"] = StepRefSchema(),
+                    ["lane"] = LaneSchema(),
+                    ["reviewOf"] = ReviewOfSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
@@ -1353,7 +1397,7 @@ public sealed class TasksToolset(
     };
 
     // Подтверждение проверки дефекта. Автора (человек/персона) и отметку времени бэкенд ставит
-    // сам по сессии вызова; MCP передаёт только комментарий проверяющего.
+    // сам по сессии вызова; MCP передаёт комментарий проверяющего и вердикт (исход витка).
     private static JsonObject VerificationSchema() => new()
     {
         ["type"] = "object",
@@ -1361,6 +1405,12 @@ public sealed class TasksToolset(
         ["properties"] = new JsonObject
         {
             ["notes"] = new JsonObject { ["type"] = "string", ["description"] = "Комментарий проверяющего (опционально)" },
+            ["verdict"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["enum"] = StringArray(TaskVerdicts.All),
+                ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn",
+            },
         },
     };
 
@@ -1371,6 +1421,50 @@ public sealed class TasksToolset(
         ["type"] = "string",
         ["enum"] = new JsonArray { "closedWithoutCheck" },
         ["description"] = "Исход дефекта (закрытие без отдельной проверки; только для kind=defect)",
+    };
+
+    // --- Разметка фичи (режим «Исполнение фичи»). Описания по одной строке: общий лимит на
+    // tool-level description ≤ 1950 символов (стек MCP режет длинные), значения — enum'ы. ---
+
+    // JsonArray из списка строк: JsonNode имеет неявный оператор из string, поэтому Add(string)
+    // кладет JsonValue. Общий для role/verdict — не плодим одноразовые инициализаторы.
+    private static JsonArray StringArray(IReadOnlyList<string> values)
+    {
+        var arr = new JsonArray();
+        foreach (var v in values) arr.Add(v);
+        return arr;
+    }
+
+    private static JsonObject FeatureIdSchema() => new()
+    {
+        ["type"] = "string",
+        ["description"] = "Id задачи-эпика фичи (см. инструкции сервера tasks)",
+    };
+
+    private static JsonObject RoleSchema() => new()
+    {
+        ["type"] = "string",
+        ["enum"] = StringArray(TaskRoles.All),
+        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult",
+    };
+
+    private static JsonObject StepRefSchema() => new()
+    {
+        ["type"] = "string",
+        ["description"] = "Код шага из плана (у step/rework)",
+    };
+
+    private static JsonObject LaneSchema() => new()
+    {
+        ["type"] = "string",
+        ["description"] = "Линия (бэк/фронт; у step/rework)",
+    };
+
+    private static JsonObject ReviewOfSchema() => new()
+    {
+        ["type"] = "array",
+        ["items"] = new JsonObject { ["type"] = "string" },
+        ["description"] = "Id задач, которые оценивает это ревью/проверка/финал",
     };
 
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>

@@ -191,9 +191,35 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             CompletedAt = req.Status == TaskItemStatus.Done ? DateTime.UtcNow : null,
             Kind = req.Kind ?? TaskKind.Task,
             Repro = req.Repro,
+            // Фича (режим «Исполнение фичи»): разметка, пустая строка = «не задано»
+            FeatureId = Trimmed(req.FeatureId),
+            Role = Trimmed(req.Role),
+            StepRef = Trimmed(req.StepRef),
+            Lane = Trimmed(req.Lane),
+            ReviewOf = req.ReviewOf,
+            AwaitingHumanSince = req.AwaitingHumanSince,
+            AwaitingHumanReason = Trimmed(req.AwaitingHumanReason),
+            Verification = req.Verification,
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
+
+        // Наследование featureId: если задачу создаёт чат-исполнитель задачи-фичи
+        // (тот же поиск родителя, что ComputeDelegationDepth), а featureId не задан
+        // явно — привязываем к эпике. Role=feature у родителя — обязательное условие,
+        // иначе контекст ложный (см. FindOwningFeature).
+        if (task.FeatureId is null)
+        {
+            var owning = FindOwningFeature(req.SourceSessionId, null, ownerId);
+            if (owning is not null)
+                task.FeatureId = owning.Id;
+        }
+
+        // Дефект внутри фичи: роль qa (агент, заводящий баг, сам не знает, что он
+        // в фиче — сервер ставит роль, чтобы FeatureProjector не потерял дефект).
+        if (task.Role is null && task.FeatureId is not null && task.Kind == TaskKind.Defect)
+            task.Role = TaskRoles.Qa;
+
         // Инвариант: исполнитель-персона подразумевает исполнение силами Claude
         NormalizePersonaAssignee(task);
         NormalizeWorktree(task);
@@ -204,6 +230,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // review-признак резолвится вызывающей стороной (BoardColumnHelper.IsReview).
         DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
         DefectRules.EnsureReproOnReview(task, targetColumn);
+        // Фича: fail-closed валидация featureId/role/verdict/reviewOf (до вставки в словарь,
+        // чтобы при отказе состояние менеджера не изменилось)
+        ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
+            task.ReviewOf, task.PersonaId, ownerId);
         _tasks[task.Id] = task;
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
@@ -231,6 +261,66 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     private static string? Trimmed(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Валидация полей фичи (fail-closed, режим «Исполнение фичи»). Проверяет ЭФФЕКТИВНОЕ
+    // состояние — то, что окажется на задаче после операции: Create передаёт только что
+    // заполненную task, Update — слияние req и текущего состояния. ownerId — владелец задачи;
+    // по нему сверяются ВСЕ ссылки (эпик и reviewOf), иначе чужой владелец читал бы разметку.
+    // Бросает InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
+    // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
+    private void ValidateFeatureFields(
+        string? featureId, string? role, string? verdict,
+        List<string>? reviewOf, string? personaId, string ownerId)
+    {
+        // role — только из списка TaskRoles
+        if (role is not null && !TaskRoles.All.Contains(role))
+            throw new InvalidOperationException(
+                $"Недопустимая роль фичи «{role}». Допустимые: {string.Join(", ", TaskRoles.All)}.");
+
+        // Привязанная к фиче роль (не feature/cut/plan) обязана указывать на живой эпик:
+        // иначе задача «висяк» — роль есть, а фичи нет (fail-closed, шаг 1.2). featureId
+        // null для не-привязанных ролей (feature/cut/plan) — валидно, как и раньше.
+        if (role is not null && !TaskRoles.FeatureIdOptional.Contains(role) && featureId is null)
+            throw new InvalidOperationException(
+                $"Роль {role} требует featureId — укажите id эпика фичи.");
+
+        // verdict — только из списка TaskVerdicts
+        if (verdict is not null && !TaskVerdicts.All.Contains(verdict))
+            throw new InvalidOperationException(
+                $"Недопустимый вердикт «{verdict}». Допустимые: {string.Join(", ", TaskVerdicts.All)}.");
+
+        // Эпик фичи не запускается исполнителем: role=feature + personaId — рассинхрон
+        // (NormalizePersonaAssignee сделал бы его Claude-задачей, которую можно было запустить).
+        if (role == TaskRoles.Feature && personaId is not null)
+            throw new InvalidOperationException("Эпик фичи не запускается исполнителем: уберите personaId.");
+
+        // featureId: эпик существует, тот же владелец и Role=feature
+        if (featureId is not null)
+        {
+            var epic = GetById(featureId);
+            if (epic is null)
+                throw new InvalidOperationException($"Фича не найдена: задача-эпик «{featureId}» не существует.");
+            if (epic.OwnerId != ownerId)
+                throw new InvalidOperationException("Эпик принадлежит другому владельцу.");
+            if (epic.Role != TaskRoles.Feature)
+                throw new InvalidOperationException($"Это не эпик фичи: у задачи «{featureId}» роль ≠ feature.");
+        }
+
+        // reviewOf: каждая ссылка — на задачу той же фичи (featureId) и того же владельца
+        if (reviewOf is not null)
+        {
+            foreach (var refId in reviewOf)
+            {
+                var target = GetById(refId);
+                if (target is null)
+                    throw new InvalidOperationException($"reviewOf: задача «{refId}» не найдена.");
+                if (target.OwnerId != ownerId)
+                    throw new InvalidOperationException($"reviewOf: задача «{refId}» принадлежит другому владельцу.");
+                if (target.FeatureId != featureId)
+                    throw new InvalidOperationException($"reviewOf: задача «{refId}» из другой фичи.");
+            }
+        }
+    }
+
     // Глубина цепочки делегирования новой задачи: если её создали из чата, который сам
     // сейчас исполняет родительскую задачу (её LinkedSessionId == sourceSessionId) —
     // глубина родителя + 1; иначе (обычный чат, UI, API) — 0.
@@ -238,6 +328,28 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         !string.IsNullOrEmpty(sourceSessionId) && GetBySession(sourceSessionId) is { } parent
             ? parent.DelegationDepth + 1
             : 0;
+
+    // Родительская задача-фича (эпик) по контексту исполнителя: ищем задачу, которую
+    // исполняет сессия-источник (тот же поиск, что ComputeDelegationDepth), и поднимаемся
+    // к её фиче. executorLaunchedBySessionId — запасной путь: если sourceSessionId не дал
+    // результата, пробуем сессию, запустившую исполнителя. null — контекст ложный или отсутствует.
+    //
+    // В жизни сессия исполняет НЕ эпик (Role=feature), а шаг/ревью/проверку/финал фичи:
+    // эпик не запускается исполнителем (гейт 1.4 — role=feature + personaId — отказ).
+    // У такой задачи FeatureId указывает на эпик — поднимаемся к нему. Если сама задача —
+    // эпик (Role=feature, FeatureId=null), возвращаем её (обход гейта в тестах).
+    private TaskItem? FindOwningFeature(string? sourceSessionId, string? executorLaunchedBySessionId, string ownerId)
+    {
+        TaskItem? candidate = null;
+        if (!string.IsNullOrEmpty(sourceSessionId))
+            candidate = GetBySession(sourceSessionId);
+        if (candidate is null && !string.IsNullOrEmpty(executorLaunchedBySessionId))
+            candidate = GetBySession(executorLaunchedBySessionId);
+        if (candidate is null) return null;
+        if (candidate.OwnerId != ownerId) return null;
+        if (candidate.FeatureId is not null) return GetById(candidate.FeatureId);
+        return candidate.Role == TaskRoles.Feature ? candidate : null;
+    }
 
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
     // Внутри колонки относительный порядок сохраняется (сортировка на доске по Order).
@@ -330,6 +442,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         DefectRules.EnsureVerificationOnClose(effective);
         DefectRules.EnsureReproOnReview(effective, effectiveColumn);
 
+        // Фича: fail-closed валидация на ЭФФЕКТИВНОМ состоянии (req ?? task), до мутации.
+        // null в req = не менять (берём из task), "" = сбросить (null) — та же семантика,
+        // что и при применении полей ниже.
+        var effFeatureId = req.FeatureId is null ? task.FeatureId : Trimmed(req.FeatureId);
+        var effRole = req.Role is null ? task.Role : Trimmed(req.Role);
+        var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
+        var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
+        var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
+        ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "");
+
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
         if (req.Status is not null) task.Status = req.Status.Value;
@@ -389,6 +511,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.Repro is not null) task.Repro = req.Repro;
         if (req.Verification is not null) task.Verification = req.Verification;
         if (req.Outcome is not null) task.Outcome = req.Outcome;
+        // Фича (режим «Исполнение фичи»): null = не менять, "" = сбросить (строки);
+        // ReviewOf — null = не менять, список = задать целиком; AwaitingHuman* — null = не менять
+        if (req.FeatureId is not null) task.FeatureId = Trimmed(req.FeatureId);
+        if (req.Role is not null) task.Role = Trimmed(req.Role);
+        if (req.StepRef is not null) task.StepRef = Trimmed(req.StepRef);
+        if (req.Lane is not null) task.Lane = Trimmed(req.Lane);
+        if (req.ReviewOf is not null) task.ReviewOf = req.ReviewOf;
+        if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
+        if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
 
         // Завершение/переоткрытие: фиксируем дату+время перехода в Done.
         // Первый переход в Done → CompletedAt = сейчас; уход из Done → сброс.
@@ -846,7 +977,25 @@ public record CreateTaskRequest(
     // при попадании в review-колонку); у обычной задачи игнорируется.
     DefectRepro? Repro = null,
     // Адресат доклада от родительской задачи (см. TaskItem.ReportToSessionId); UI/REST не шлют
-    string? ReportToSessionId = null);
+    string? ReportToSessionId = null,
+    // ─── Фича (режим «Исполнение фичи») ───
+    // Id задачи-эпика фичи; null — задача вне фичи. Валидация: эпик существует,
+    // тот же OwnerId и Role=feature (TaskManager.ValidateFeatureFields).
+    string? FeatureId = null,
+    // Роль задачи в фиче (TaskRoles): feature · cut · plan · step · rework · review · qa · final · merge · consult
+    string? Role = null,
+    // Код шага из плана («B1", «F2"); у step/rework, по нему доработка склеивается со своим шагом
+    string? StepRef = null,
+    // Линия («бэк", «фронт"); у step/rework, подпись берётся как есть
+    string? Lane = null,
+    // Id задач, которые оценивает это ревью/проверка/финал; null — не задано
+    List<string>? ReviewOf = null,
+    // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика
+    DateTime? AwaitingHumanSince = null,
+    string? AwaitingHumanReason = null,
+    // Вердикт (TaskVerification.Verdict): accepted · accepted_with_remarks · returned · withdrawn;
+    // null = старая семантика «проверено»
+    TaskVerification? Verification = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -896,6 +1045,20 @@ public record UpdateTaskRequest(
     DefectOutcome? Outcome = null,
     // Запустивший исполнителя (адресат доклада): null = не менять, "" = сбросить
     string? ExecutorLaunchedBySessionId = null,
-    string? ExecutorLaunchedByPersonaId = null);
+    string? ExecutorLaunchedByPersonaId = null,
+    // ─── Фича (режим «Исполнение фичи») ─── null = не менять, "" = сбросить (строки)
+    // Id задачи-эпика фичи; валидация — как в Create (TaskManager.ValidateFeatureFields)
+    string? FeatureId = null,
+    // Роль задачи в фиче (TaskRoles); null = не менять, "" = сбросить
+    string? Role = null,
+    // Код шага из плана; null = не менять, "" = сбросить
+    string? StepRef = null,
+    // Линия; null = не менять, "" = сбросить
+    string? Lane = null,
+    // Id задач, которые оценивает это ревью/проверка/финал; null = не менять, список = задать целиком
+    List<string>? ReviewOf = null,
+    // «Ждёт вас»: null = не менять, значение = задать
+    DateTime? AwaitingHumanSince = null,
+    string? AwaitingHumanReason = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

@@ -188,6 +188,35 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("priority").GetString().Should().Be("high");
     }
 
+    // ─── Дефект a7b3b85d: PUT возвращает verification.verdict ─────────────────
+    // MCP tasks_complete копировал Verdict, а REST PUT пересобирая TaskVerification
+    // терял его — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
+
+    [Fact]
+    public async Task Update_РевьюФичи_ВердиктСохраняетсяЧерезPut()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var review = await CreateTaskAsync(new { title = "ревью", featureId = epicId, role = "review" });
+        var reviewId = review.GetProperty("id").GetString();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{reviewId}", new
+        {
+            status = "done",
+            verification = new { verdict = "accepted" },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("verification").GetProperty("verdict").GetString()
+            .Should().Be("accepted", "PUT обязан сохранить вердикт, как MCP tasks_complete");
+
+        // GET по id — вердикт переживает перезапись, не только в теле PUT
+        var get = await _client.GetAsync($"/api/tasks/{reviewId}");
+        var got = await get.Content.ReadFromJsonAsync<JsonElement>();
+        got.GetProperty("verification").GetProperty("verdict").GetString().Should().Be("accepted");
+    }
+
     [Fact]
     public async Task Delete_УдаляетЗадачу()
     {

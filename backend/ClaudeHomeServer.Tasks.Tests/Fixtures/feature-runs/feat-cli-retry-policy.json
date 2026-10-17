@@ -1,0 +1,48 @@
+[
+ {
+  "id": "epic-cli-retry-policy",
+  "title": "CLI 2.1.300: политика повторов 429/529 и дотягивания ответа — наша цепочка фолбэка",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-14T23:30",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "feat/cli-retry-policy",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "crp-s1",
+  "title": "Денис: реализация архитектурного решения — владелец фолбэка наша цепочка (ADR-007 §4)",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-14T23:14",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-cli-retry-policy",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "crp-r1",
+  "title": "Денис: доработка политики повторов — факт повторов CLI из api_retry в паспорт",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T23:15",
+  "completed": "2026-10-14T23:30",
+  "kind": "rework",
+  "role": "rework",
+  "featureId": "epic-cli-retry-policy",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

@@ -362,6 +362,9 @@ public class TasksController(
                     Notes = req.Verification.Notes,
                     VerifiedAt = DateTime.UtcNow,
                     PersonaId = callerPersonaId,
+                    // Дефект a7b3b85d: verdict терялся при PUT (MCP tasks_complete его копировал,
+                    // REST — нет) — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
+                    Verdict = req.Verification.Verdict,
                 },
             };
         }

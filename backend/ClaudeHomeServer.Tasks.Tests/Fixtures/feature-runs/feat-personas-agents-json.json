@@ -1,0 +1,48 @@
+[
+ {
+  "id": "epic-personas-agents-json",
+  "title": "CLI 2.1.300: персоны-консультанты через --agents JSON",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-15T00:44",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "feat/personas-agents-json",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "paj-s1",
+  "title": "Денис: персоны-консультанты через --agents JSON (ClaudeAgentsJson)",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-15T00:41",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-personas-agents-json",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "paj-r1",
+  "title": "Денис: доработка --agents JSON — ужать раздел «Агенты» в CLAUDE.md под потолок карты",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-15T00:43",
+  "completed": "2026-10-15T00:44",
+  "kind": "rework",
+  "role": "rework",
+  "featureId": "epic-personas-agents-json",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

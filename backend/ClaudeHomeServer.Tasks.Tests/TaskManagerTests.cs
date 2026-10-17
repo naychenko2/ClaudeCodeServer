@@ -213,6 +213,57 @@ public class TaskManagerTests : IDisposable
         reloaded.ReminderMinutes.Should().Be(15);
     }
 
+    [Fact]
+    public void Персистентность_СтараяЗадачаБезПолейФичи_ЧитаетсяСNull()
+    {
+        var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("старая задача"));
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id)!;
+
+        reloaded.FeatureId.Should().BeNull();
+        reloaded.Role.Should().BeNull();
+        reloaded.StepRef.Should().BeNull();
+        reloaded.Lane.Should().BeNull();
+        reloaded.ReviewOf.Should().BeNull();
+        reloaded.AwaitingHumanSince.Should().BeNull();
+        reloaded.AwaitingHumanReason.Should().BeNull();
+        reloaded.Verification.Should().BeNull();
+    }
+
+    [Fact]
+    public void Персистентность_ЗаполненныеПоляФичи_ПереживаютСохранениеИЧтение()
+    {
+        var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("задача фичи"));
+        task.FeatureId = "epic-1";
+        task.Role = TaskRoles.Step;
+        task.StepRef = "B1";
+        task.Lane = "бэк";
+        task.ReviewOf = ["t-1", "t-2"];
+        task.AwaitingHumanSince = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc);
+        task.AwaitingHumanReason = "merge";
+        task.Verification = new TaskVerification
+        {
+            VerifiedAt = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc),
+            Verdict = TaskVerdicts.AcceptedWithRemarks,
+            Notes = "с замечаниями"
+        };
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id)!;
+
+        reloaded.FeatureId.Should().Be("epic-1");
+        reloaded.Role.Should().Be(TaskRoles.Step);
+        reloaded.StepRef.Should().Be("B1");
+        reloaded.Lane.Should().Be("бэк");
+        reloaded.ReviewOf.Should().BeEquivalentTo(["t-1", "t-2"]);
+        reloaded.AwaitingHumanSince.Should().Be(new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc));
+        reloaded.AwaitingHumanReason.Should().Be("merge");
+        reloaded.Verification.Should().NotBeNull();
+        reloaded.Verification!.Verdict.Should().Be(TaskVerdicts.AcceptedWithRemarks);
+        reloaded.Verification.Notes.Should().Be("с замечаниями");
+    }
+
     // ─── SpawnNextOccurrence ─────────────────────────────────────────────────
 
     [Fact]
@@ -837,5 +888,312 @@ public class TaskManagerTests : IDisposable
         _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
 
         _sut.GetById(task.Id)!.Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    // ─── Фича: валидация полей (режим «Исполнение фичи») ─────────────────────
+    // Эпик фичи — задача с Role=feature; задачи фичи ссылаются на него через FeatureId.
+    // Валидация fail-closed в TaskManager.ValidateFeatureFields: role/verdict только из
+    // списков, featureId — на живой эпик того же владельца, reviewOf — на задачи той же
+    // фичи и того же владельца, role=feature не совмещается с personaId.
+
+    private TaskItem CreateEpic(string ownerId, string title = "эпик фичи") =>
+        _sut.Create(null, ownerId, new CreateTaskRequest(title, Role: TaskRoles.Feature));
+
+    [Fact]
+    public void Create_ФичаСуществует_FeatureIdУказываетНаНеё_Принята()
+    {
+        var epic = CreateEpic("u");
+
+        var task = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+
+        task.FeatureId.Should().Be(epic.Id);
+        task.Role.Should().Be(TaskRoles.Step);
+        task.StepRef.Should().Be("B1");
+        task.Lane.Should().Be("бэк");
+    }
+
+    [Fact]
+    public void Create_ЧужойВладелецЭпика_Отказ()
+    {
+        var epic = CreateEpic("u1");
+
+        var act = () => _sut.Create(null, "u2", new CreateTaskRequest("шаг", FeatureId: epic.Id));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*другому владельцу*");
+    }
+
+    [Fact]
+    public void Create_FeatureIdНаЗадачуБезРолиFeature_Отказ()
+    {
+        _sut.Create(null, "u", new CreateTaskRequest("обычная", Id: "not-epic"));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("шаг", FeatureId: "not-epic"));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*не эпик фичи*");
+    }
+
+    [Fact]
+    public void Create_FeatureIdНаНесуществующуюЗадачу_Отказ()
+    {
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("шаг", FeatureId: "ghost-epic"));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Фича не найдена*");
+    }
+
+    [Fact]
+    public void Create_RoleFeatureСПерсоной_Отказ()
+    {
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("эпик",
+            Role: TaskRoles.Feature, PersonaId: "prs-1"));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*не запускается исполнителем*");
+    }
+
+    [Fact]
+    public void Create_RoleНеИзСписка_ОтказСоСписком()
+    {
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("t", Role: "bogus"));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Недопустимая роль*")
+            .WithMessage("*" + TaskRoles.Feature + "*");
+    }
+
+    // Минор 2: пара к Create_RoleНеИзСписка. Валидация role ловит НЕВАЛИДНОЕ значение и при
+    // UPDATE — через effective-state (req ?? task) в ValidateFeatureFields, а не только при
+    // создании. Создаём валидную задачу (без роли), обновляем с role="banana" (вне TaskRoles.All)
+    // → отказ с тем же сообщением, что и Create.
+    [Fact]
+    public void Update_RoleНеИзСписка_ОтказСоСписком()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Role: "banana"));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Недопустимая роль*")
+            .WithMessage("*" + TaskRoles.Feature + "*");
+    }
+
+    [Fact]
+    public void Create_VerdictНеИзСписка_Отказ()
+    {
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("t",
+            Verification: new TaskVerification { Verdict = "bogus" }));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Недопустимый вердикт*");
+    }
+
+    [Fact]
+    public void Create_ReviewOfНаЗадакуДругойФичи_Отказ()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        var inB = _sut.Create(null, "u", new CreateTaskRequest("шаг B",
+            FeatureId: epicB.Id, Role: TaskRoles.Step));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epicA.Id, Role: TaskRoles.Review, ReviewOf: [inB.Id]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*из другой фичи*");
+    }
+
+    [Fact]
+    public void Create_ReviewOfНаЗадакуЧужогоВладельца_Отказ()
+    {
+        var epicA = CreateEpic("u1", "фича A");
+        var inA = _sut.Create(null, "u1", new CreateTaskRequest("шаг A",
+            FeatureId: epicA.Id, Role: TaskRoles.Step));
+
+        var act = () => _sut.Create(null, "u2", new CreateTaskRequest("ревью", ReviewOf: [inA.Id]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*другому владельцу*");
+    }
+
+    [Fact]
+    public void Create_ПоляФичиВалидны_Принята()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id],
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = "принято" }));
+
+        review.FeatureId.Should().Be(epic.Id);
+        review.Role.Should().Be(TaskRoles.Review);
+        review.ReviewOf.Should().BeEquivalentTo([step.Id]);
+        review.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
+    }
+
+    // Роли, привязанные к фиче (featureId обязателен): всё, кроме feature/cut/plan.
+    // Выводим из TaskRoles, чтобы при добавлении роли список не расползался по тестам.
+    private static string[] BoundRoles =>
+        TaskRoles.All.Where(r => !TaskRoles.FeatureIdOptional.Contains(r)).ToArray();
+
+    // ─── Дефект d0b2ff78: привязанная к фиче роль без featureId = «висяк» ─────────
+    // Каждая роль из {step, rework, review, qa, final, merge, consult} требует featureId
+    // (live эпик); featureId=null для не-привязанных ролей (feature/cut/plan) — валидно.
+
+    [Fact]
+    public void Create_ПривязаннаяРольБезFeatureId_Отказ()
+    {
+        foreach (var role in BoundRoles)
+        {
+            var act = () => _sut.Create(null, "u", new CreateTaskRequest("t", Role: role));
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage($"*Роль {role} требует featureId*",
+                    $"роль {role} без featureId обязана быть отклонена fail-closed");
+        }
+    }
+
+    [Fact]
+    public void Create_ПривязаннаяРольСFeatureId_Принята()
+    {
+        var epic = CreateEpic("u");
+        foreach (var role in BoundRoles)
+        {
+            var task = _sut.Create(null, "u", new CreateTaskRequest("t", FeatureId: epic.Id, Role: role));
+            task.FeatureId.Should().Be(epic.Id);
+            task.Role.Should().Be(role);
+        }
+    }
+
+    [Fact]
+    public void Create_ПривязаннаяРольСНесуществующимFeatureId_Отказ()
+    {
+        foreach (var role in BoundRoles)
+        {
+            var act = () => _sut.Create(null, "u",
+                new CreateTaskRequest("t", FeatureId: "ghost-epic", Role: role));
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*Фича не найдена*",
+                    $"роль {role} с несуществующим featureId — эпик не найден");
+        }
+    }
+
+    [Fact]
+    public void Create_НеПривязаннаяРольБезFeatureId_Принята()
+    {
+        foreach (var role in TaskRoles.FeatureIdOptional)
+        {
+            var task = _sut.Create(null, "u", new CreateTaskRequest("t", Role: role));
+            task.Role.Should().Be(role);
+            task.FeatureId.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public void Update_ПоляФичи_ПрименяютсяИСбрасываются()
+    {
+        var epic = CreateEpic("u");
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+
+        var set = _sut.Update(task.Id, new UpdateTaskRequest(
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"))!;
+        set.FeatureId.Should().Be(epic.Id);
+        set.Role.Should().Be(TaskRoles.Step);
+        set.StepRef.Should().Be("B1");
+        set.Lane.Should().Be("бэк");
+
+        // "" = сбросить строковые поля (null = не менять)
+        var cleared = _sut.Update(task.Id, new UpdateTaskRequest(
+            FeatureId: "", Role: "", StepRef: "", Lane: ""))!;
+        cleared.FeatureId.Should().BeNull();
+        cleared.Role.Should().BeNull();
+        cleared.StepRef.Should().BeNull();
+        cleared.Lane.Should().BeNull();
+    }
+
+    // ─── Наследование featureId (шаг 1.3) ─────────────────────────────────────
+    // Если задачу создаёт чат-исполнитель задачи-фичи (Role=feature), сервер
+    // наследует featureId от эпика. Дефект внутри фичи дополнительно получает role=qa.
+    // Update наследования не делает: агент к тому моменту знает, что редактирует.
+
+    [Fact]
+    public void Create_ДефектИзЧатаИсполнителяФичи_НаследуетFeatureIdИRoleQa()
+    {
+        var epic = CreateEpic("u");
+        _sut.MarkClaudeStarted(epic.Id, "sess-exec", DateTime.UtcNow);
+
+        var defect = _sut.Create(null, "u", new CreateTaskRequest("баг",
+            Kind: TaskKind.Defect, SourceSessionId: "sess-exec"));
+
+        defect.FeatureId.Should().Be(epic.Id, "featureId наследуется от эпика");
+        defect.Role.Should().Be(TaskRoles.Qa, "дефект внутри фичи получает роль qa");
+    }
+
+    [Fact]
+    public void Create_ОбычнаяЗадачаИзЧатаИсполнителяФичи_НаследуетFeatureId_RoleNull()
+    {
+        var epic = CreateEpic("u");
+        _sut.MarkClaudeStarted(epic.Id, "sess-exec", DateTime.UtcNow);
+
+        var task = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            SourceSessionId: "sess-exec"));
+
+        task.FeatureId.Should().Be(epic.Id, "featureId наследуется");
+        task.Role.Should().BeNull("обычная задача не получает роль автоматически");
+    }
+
+    [Fact]
+    public void Create_БезРодителяФичиВСтекке_ПоляОстаютсяNull()
+    {
+        // Сессия не привязана ни к одной задаче — контекста нет
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            SourceSessionId: "orphan-sess"));
+
+        task.FeatureId.Should().BeNull();
+        task.Role.Should().BeNull();
+    }
+
+    [Fact]
+    public void Create_ИзЧатаГдеИсполнительИмеетЗадачуНеFeature_НаследованияНет()
+    {
+        // Родитель — задача, не привязанная к эпика (Role=cut, FeatureId=null):
+        // ни эпик фичи, ни шаг фичи — наследовать нечего.
+        var cut = _sut.Create(null, "u", new CreateTaskRequest("разрез",
+            Role: TaskRoles.Cut));
+        _sut.MarkClaudeStarted(cut.Id, "sess-cut", DateTime.UtcNow);
+
+        var child = _sut.Create(null, "u", new CreateTaskRequest("ребёнок",
+            SourceSessionId: "sess-cut"));
+
+        child.FeatureId.Should().BeNull("не фича и не шаг фичи — наследуем нечего");
+        child.Role.Should().BeNull();
+    }
+
+    // ─── Регрессия: живое наследование через шаг фичи (не эпик) ───────────────
+    // Живой сценарий: сессия исполняет ШАГ фичи (эпик исполнителем не запускается —
+    // гейт 1.4), исполнитель создаёт свою задачу без явного featureId — сервер
+    // наследует featureId от эпика, к которому шаг привязан.
+    [Fact]
+    public void Create_ИзЧатаИсполнителяШагаФичи_НаследуетFeatureId_Regression()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        _sut.MarkClaudeStarted(step.Id, "sess-step", DateTime.UtcNow);
+
+        var child = _sut.Create(null, "u", new CreateTaskRequest("своя задача",
+            SourceSessionId: "sess-step"));
+
+        child.FeatureId.Should().Be(epic.Id, "featureId наследуется от эпика через шаг");
+    }
+
+    [Fact]
+    public void Update_НаследованияFeatureIdНеБывает_Regression()
+    {
+        var epic = CreateEpic("u");
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+
+        // Update не должен пересчитывать featureId: агент знает, что редактирует
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"))!;
+
+        updated.FeatureId.Should().Be(epic.Id, "featureId не пересчитывается при Update");
+        updated.Role.Should().Be(TaskRoles.Step, "role тоже не меняется");
     }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -129,6 +130,77 @@ public class TasksToolsetParityTests
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }
+    }
+
+    // Минор Глеба: сверка enum-значений. Имя свойства и required-набор совпали, а список
+    // значений enum разошёлся (http добавил значение, stdio — нет) — молчаливое расхождение:
+    // одна ветка принимает аргумент, который другая отклоняет. Для каждого свойства с enum в
+    // tasks_create/tasks_update/tasks_complete значения обязаны совпадать посимвольно, в том же
+    // порядке. Http-схема — JsonObject (McpToolSchema.InputSchema), stdio — JsonElement; оба
+    // приводим к JsonNode и идём по properties.*.enum.
+    private static Dictionary<string, List<string>> EnumValues(JsonNode? root)
+    {
+        var result = new Dictionary<string, List<string>>();
+        if (root is not JsonObject obj || obj["properties"] is not JsonObject props) return result;
+        foreach (var (name, prop) in props)
+        {
+            if (prop is JsonObject po && po["enum"] is JsonArray arr)
+                result[name] = arr.Select(v => v!.GetValue<string>()).ToList();
+        }
+        return result;
+    }
+
+    [SkippableFact]
+    public void EnumЗначения_СовпадаютПосимвольно()
+    {
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        if (stdio is null) return;
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        var stdioByName = stdio.ToDictionary(t => t.Name);
+
+        // Минор 3: не хардкод create/update/complete, а ВСЕ инструменты, у которых есть enum,
+        // без исключений. tasks_list (status/priority/assignee/scope) раньше был мимо; паритет
+        // обязан ловиться на любом БУДУЩЕМ enum'е, а не на заведённом.
+        foreach (var (toolName, csharpTool) in byName)
+        {
+            var csharpEnums = EnumValues(csharpTool.InputSchema);
+            if (csharpEnums.Count == 0) continue; // без enum'ов — сравнивать нечего
+            stdioByName.Should().ContainKey(toolName, $"stdio-ветка обязана иметь {toolName}");
+            var stdioEnums = EnumValues(JsonNode.Parse(stdioByName[toolName].Schema.GetRawText()));
+
+            csharpEnums.Keys.Should().BeEquivalentTo(stdioEnums.Keys,
+                $"свойства с enum в {toolName} обязаны совпадать между ветками");
+
+            foreach (var name in csharpEnums.Keys)
+            {
+                csharpEnums[name].Should().BeEquivalentTo(stdioEnums[name],
+                    options => options.WithStrictOrdering(),
+                    $"enum-значения свойства {toolName}.{name} не должны расходиться между ветками");
+            }
+        }
+    }
+
+    // Провокация: сторож обязан покраснеть, если значение добавлено в http-схему, но не в
+    // stdio. Добавляю «provoked-role» только в http-список role и проверяю, что сравнение
+    // это видит (NotBeEquivalentTo). Без чувствительности к составу/порядку главный тест выше
+    // был бы ложно-зелёным.
+    [SkippableFact]
+    public void EnumЗначения_ПровокацияHttpДополнительноеЗначение_Краснеет()
+    {
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        if (stdio is null) return;
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        var stdioByName = stdio.ToDictionary(t => t.Name);
+
+        var csharpEnums = EnumValues(byName["tasks_create"].InputSchema);
+        var stdioEnums = EnumValues(JsonNode.Parse(stdioByName["tasks_create"].Schema.GetRawText()));
+        csharpEnums.Should().ContainKey("role", "tasks_create.role — enum из TaskRoles");
+
+        csharpEnums["role"] = [.. csharpEnums["role"], "provoked-role"];
+
+        csharpEnums["role"].Should().NotBeEquivalentTo(stdioEnums["role"],
+            options => options.WithStrictOrdering(),
+            "значение, добавленное только в http, обязан поймать сторож парности enum");
     }
 
     /// <summary>Хвост маршрута — та же точка правды, что у memory: форма не может разъехаться.</summary>

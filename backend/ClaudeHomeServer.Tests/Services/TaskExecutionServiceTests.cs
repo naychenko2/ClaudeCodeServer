@@ -29,6 +29,40 @@ public class TaskExecutionServiceTests
         TaskExecutionService.IsSuccess(Result(subtype)).Should().Be(expected);
     }
 
+    // ─── Гейты запуска эпика фичи (шаг 1.4) ──────────────────────────────────
+    // Эпик — контейнер фичи, а не работа: исполнителем не запускается. Два гейта:
+    // Role=feature без FeatureId — противоречие данных; Role=feature — эпик, вести
+    // фичу задачами шага/ревью/проверки. Оба возвращают текст отказа, null — не эпик.
+
+    [Fact]
+    public void FeatureEpicLaunchRefusal_РольFeatureБезFeatureId_ПротиворечиеДанных()
+    {
+        var task = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, FeatureId = null };
+
+        TaskExecutionService.FeatureEpicLaunchRefusal(task)
+            .Should().Be("Эпик фичи без привязки к фиче: у задачи роль feature, но FeatureId пуст.");
+    }
+
+    [Fact]
+    public void FeatureEpicLaunchRefusal_РольFeatureСFeatureId_ЭпикНеЗапускается()
+    {
+        var task = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, FeatureId = "epic-1" };
+
+        TaskExecutionService.FeatureEpicLaunchRefusal(task)
+            .Should().Be("Эпик фичи не запускается исполнителем; чтобы вести задачи фичи, " +
+                       "заведите задачу шага/ревью/проверки через tasks_create.");
+    }
+
+    [Fact]
+    public void FeatureEpicLaunchRefusal_НеЭпик_ЗапускНеОтказывается()
+    {
+        // Задача фичи (шаг) — исполнителем запускается; гейт на неё не срабатывает
+        var step = new TaskItem { Title = "шаг", Role = TaskRoles.Step, FeatureId = "epic-1" };
+        TaskExecutionService.FeatureEpicLaunchRefusal(step).Should().BeNull();
+        // Задача вообще без роли фичи
+        TaskExecutionService.FeatureEpicLaunchRefusal(new TaskItem { Title = "обычная" }).Should().BeNull();
+    }
+
     // ─── Модель исполнителя: задача → персона → место ────────────────────────
 
     [Fact]

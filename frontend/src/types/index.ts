@@ -603,6 +603,10 @@ export interface Task {
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
+  // Режим «Исполнение фичи»: связь задачи с фичей (эпик) и кодом шага.
+  // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
+  featureId?: string | null;   // id задачи-эпика
+  stepRef?: string | null;    // код шага из плана («Ш1», «D1c»)
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
   // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»

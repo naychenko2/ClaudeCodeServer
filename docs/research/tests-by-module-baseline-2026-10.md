@@ -147,3 +147,35 @@ slnx → `NotesController.cs` (та же вертикаль, что у Notes.Tes
 - `ClaudeHomeServer.CodeGraph.Tests`: 1 упало из 74.
 - `ClaudeHomeServer.Images.Tests`: 1 упало из 733 — `LocalMediaHistorySourceTests.Expired_410`
   (тест монолита, выполняется внутри Images.Tests).
+
+## Ранжирование прочих вертикалей (шаг 0.2 — порядок шагов 3.7–3.14)
+
+Методика: для каждой вертикали — `git log --since=1.month --name-only -- <продуктовые-пути>`
+из корня worktree (окно 2026-09-17 → 2026-10-17). «Частота правок» = число **уникальных
+продуктовых файлов**, затронных за месяц. Приоритет шага 3 = ранг по частоте правок (по
+убыванию; при равенстве числа файлов — по числу коммитов). Выше частота — раньше вертикаль
+выносится: активно правимый код даёт больше регрессий, изолированные быстрые тесты там ценнее.
+
+| Вертикаль | Коммиты за месяц | Уникальные файлы в правках | Приоритет шага 3 |
+|---|---:|---:|---|
+| TestRuns | 12 | 22 | 1 → **3.7** |
+| ChatContext | 23 | 21 | 2 → **3.8** |
+| Architecture | 5 | 16 | 3 → **3.9** |
+| LocalStats | 16 | 14 | 4 → **3.10** |
+| Deploy | 9 | 5 | 5 → **3.11** |
+| RemoteCommands | 3 | 5 | 6 → **3.12** |
+| Watchdog | 4 | 3 | 7 → **3.13** |
+| Telemetry | 2 | 2 | 8 → **3.14** |
+
+Примечания:
+- TestRuns (22 файла) и ChatContext (21 файл) — фактически пара наверху. ChatContext правится
+  чаще по числу коммитов (23 против 12), но TestRuns задевает больше **уникальных** файлов,
+  поэтому ранг 1 у TestRuns. Разница 22/21 — в пределах шума; порядок 3.7/3.8 взаимозаменяем.
+- Этот ранг **заменяет** предварительный порядок в [плане](tests-by-module-plan-2026-10.md)
+  (пачки F/G): пачка F = 3.7–3.10 (TestRuns, ChatContext, Architecture, LocalStats),
+  пачка G = 3.11–3.14 (Deploy, RemoteCommands, Watchdog, Telemetry).
+- Продуктовые пути, по которым считали: ChatContext → `Core/Services/ChatContext/`;
+  LocalStats → `Llm/LocalStats/`; RemoteCommands → `Services/RemoteCommands/` +
+  `Controllers/RemoteCommandsController.cs` + `Core/Models/RemoteCommandsOptions.cs`;
+  Telemetry → `ClaudeHomeServer/Telemetry/` + `Core/Telemetry/`; Architecture, TestRuns,
+  Watchdog, Deploy — собственные сборки (каталог проекта целиком).

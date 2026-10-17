@@ -813,7 +813,7 @@ export interface FeatureFlagDefinition {
   title: string;
   description: string;
   default: boolean;
-  stage: 'dev' | 'beta' | 'stable';
+  stage: 'dev' | 'beta' | 'stable' | 'experimental';
 }
 
 // Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»

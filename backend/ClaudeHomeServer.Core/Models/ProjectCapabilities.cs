@@ -25,6 +25,12 @@ public sealed record ProjectCapabilityGroup(string Host, bool Available, string?
 /// <summary>Можно ли запускать ход проекта прямо сейчас.</summary>
 public sealed record ProjectExecCapability(bool Available, string? Reason);
 
+/// <summary>
+/// Доступны ли плагины проекта (ADR-031 §5.8): у серверного — да, у локального в MVP —
+/// нет (каталог пакетов и секреты на устройство не едут). Причина — текст для человека.
+/// </summary>
+public sealed record ProjectPluginsCapability(bool Available, string? Reason);
+
 /// <summary>Вердикт для фоновой работы по проекту (ADR-016, план §5).</summary>
 public enum ProjectBackgroundVerdict
 {
@@ -90,6 +96,10 @@ public static class ProjectFeatures
     // считает ProjectCapabilities.HandsRefusal, а не состояние группы
     public const string Hands = "hands";
 
+    // Плагины (ADR-031): пакет владельца — навыки/команды CLI, панели, MCP/секреты.
+    // Доступность считает ProjectCapabilities.Plugins, а не группа.
+    public const string Plugins = "plugins";
+
     public static readonly IReadOnlyList<string> FileBound =
         [Files, Diff, Git, FileWatcher, Terminal, DevServers, Skills, Attachments];
 
@@ -121,7 +131,8 @@ public sealed record ProjectCapabilities(
     ProjectCapabilityGroup Platform,
     ProjectCapabilityGroup ServerContent,
     ProjectCapabilityGroup Transcript,
-    ProjectExecCapability Exec)
+    ProjectExecCapability Exec,
+    ProjectPluginsCapability Plugins)
 {
     public const string DeviceMissingReason = "Устройство проекта не найдено или отозвано";
     public const string DeviceOfflineReason = "Устройство проекта не в сети";
@@ -137,6 +148,8 @@ public sealed record ProjectCapabilities(
         "Агент устройства старой версии, в нём нет рук: обновите агента AI Home на устройстве";
     public const string HandsNotWindowsReason = "Руки есть только у агента на Windows: на этом устройстве их нет";
     public const string HandsProjectOffReason = "Руки выключены в настройках проекта";
+    public const string PluginsLocalOffReason =
+        "У локального проекта плагины выключены: каталог пакетов и секреты на устройство не едут (MVP)";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
@@ -289,7 +302,8 @@ public sealed record ProjectCapabilities(
                 platform,
                 new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.ServerContent),
                 new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.Transcript),
-                new ProjectExecCapability(true, null));
+                new ProjectExecCapability(true, null),
+                new ProjectPluginsCapability(true, null));
 
         string? filesReason =
             device is null ? DeviceMissingReason
@@ -311,6 +325,7 @@ public sealed record ProjectCapabilities(
             platform,
             new ProjectCapabilityGroup(CapabilityHost.Off, false, ServerContentOffReason, ProjectFeatures.ServerContent),
             new ProjectCapabilityGroup(CapabilityHost.Off, false, TranscriptOnDeviceReason, ProjectFeatures.Transcript),
-            new ProjectExecCapability(execReason is null, execReason));
+            new ProjectExecCapability(execReason is null, execReason),
+            new ProjectPluginsCapability(false, PluginsLocalOffReason));
     }
 }

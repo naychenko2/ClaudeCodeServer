@@ -28,7 +28,7 @@ flowchart LR
 
 | Слой | Что | Файлы (по плану) |
 |---|---|---|
-| Core | модели манифеста и установки, швы `IPluginDirSource`, `IPluginCapability`, фича в `ProjectCapabilities` | `Core/Models/Plugins/`, `Core/Services/Plugins/` |
+| Core | модели `PluginManifest`/`PluginInstall` (манифест и запись установки), швы `IPluginDirSource`/`IPluginCapability`, `ProjectCapabilities.Plugins` | `Core/Models/Plugins/PluginManifest.cs`, `Core/Models/Plugins/PluginInstall.cs`, `Core/Services/Plugins/IPluginDirSource.cs`, `Core/Services/Plugins/IPluginCapability.cs`, `Core/Models/ProjectCapabilities.cs` |
 | Вертикаль | `PluginsSubsystem` (ключ `plugins`), `PluginStore`, валидатор пакета, REST установки и согласия, мост, прокси `net:`, тулсет `plugins` | `backend/ClaudeHomeServer.Plugins/` |
 | Llm | `--plugin-dir` по `IPluginDirSource`, опциональная зависимость | `Llm/Claude/ClaudeSession.cs` |
 | Execution | read-only mount `data/plugins` + правило `DockerPathMapper` одной правкой | `DockerPathMapper.cs` |

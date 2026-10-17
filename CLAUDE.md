@@ -238,6 +238,10 @@ one-shot действия и разговор с исполнителем «Ло
 C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs/architecture/model.viaduct.json` под git; динамический модуль + MF-remote, фич-флага нет. **Код Viaduct здесь не правится.**
 Инварианты и подробности — [backend/ClaudeHomeServer.Architecture/CLAUDE.md](backend/ClaudeHomeServer.Architecture/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
+## Плагины (ClaudeHomeServer.Plugins) — в работе
+
+Пакет владельца из существующих примитивов: навыки и команды — нативный формат CLI через `--plugin-dir`, панель — iframe без `allow-same-origin` с мостом v1, сеть — прокси `net:{host}`; флаги `plugins-mvp`, `plugins-build-yourself` ([ADR-031](docs/adr/ADR-031-plugins.md)). **Серверного кода плагина нет; пакеты — только в `data/plugins/{owner}`, не в общих каталогах CLI; ставит и выдаёт права только человек.** Устройство и правила правок — [docs/architecture/plugins.md](docs/architecture/plugins.md).
+
 ## Внутренние подсистемы (Services/Composition)
 
 Внутренние границы продукта — **подсистемы**, контракт

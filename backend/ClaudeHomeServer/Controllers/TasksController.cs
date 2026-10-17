@@ -463,7 +463,8 @@ public class TasksController(
     // автономный цикл волн иначе невозможен, а лавину держит бюджет итерации (Э4).
     // Ход-реакция на доклад исполнителя запускать может: запрет снят решением владельца
     // (мешал и пользы не давал), цикл «доклад → запуск → доклад» останавливает «Стоп».
-    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AllowInTeamImplement = true)]
+    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AllowInTeamImplement = true,
+        AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);

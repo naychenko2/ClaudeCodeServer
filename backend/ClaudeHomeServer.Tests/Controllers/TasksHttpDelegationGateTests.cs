@@ -108,7 +108,7 @@ public class TasksHttpDelegationGateTests : IDisposable
     }
 
     /// <summary>
-    /// Главный сценарий: ход с agentDepth=1 (чат позвали из другого чата через chats_send)
+    /// Потолок глубины: ход с agentDepth=2 (цепочка делегирования ушла глубже допустимого)
     /// не может запустить исполнителя задачи. Отказ — текстом для модели, тем же, что
     /// отдал бы REST-гейт [DenyOnDelegatedTurn].
     /// </summary>
@@ -116,13 +116,31 @@ public class TasksHttpDelegationGateTests : IDisposable
     public async Task ДелегированныйХод_НеМожетЗапуститьИсполнителя()
     {
         var (_, sessionId) = await CreateProjectWithSessionAsync();
-        _adapters.AgentDepth = 1;
+        _adapters.AgentDepth = 2;
 
         var answer = await CallToolAsync(Client, sessionId, "tasks_run_executor", new { taskId = "any" });
 
         answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
         ToolText(answer).Should().Contain("недоступно на делегированном ходу",
             "тот же текст, что у REST-гейта — модель должна понять, что цепочка дальше не идёт");
+    }
+
+    /// <summary>
+    /// Решение владельца 17.10: на глубине 1 (чат позван из другого чата) запуск исполнителя
+    /// РАЗРЕШЁН — анти-рекурсия стала потолком глубины, а не запретом. Гейт пропускает, и
+    /// отказ дальше даёт только отсутствие задачи — это доказывает, что прошёл именно гейт.
+    /// </summary>
+    [Fact]
+    public async Task Глубина1_ЗапускРазрешён()
+    {
+        var (_, sessionId) = await CreateProjectWithSessionAsync();
+        _adapters.AgentDepth = 1;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_run_executor", new { taskId = "нет-такой" });
+
+        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        ToolText(answer).Should().Contain("не найдена")
+            .And.NotContain("делегированном", "на глубине 1 запуск разрешён — гейт не режет");
     }
 
     /// <summary>
@@ -162,14 +180,15 @@ public class TasksHttpDelegationGateTests : IDisposable
     }
 
     /// <summary>
-    /// Делегированный ход, пришедший ещё и докладом, по-прежнему запрещён: снятый запрет
-    /// касается только реакционного хода, цепочка делегирования дальше не идёт.
+    /// Делегированный ход глубины 2, пришедший ещё и докладом, по-прежнему запрещён: снятый
+    /// запрет касается только реакционного хода, а на глубине 2+ цепочка делегирования дальше
+    /// не идёт.
     /// </summary>
     [Fact]
     public async Task ДелегированныйХодДоклада_ПоПрежнемуЗапрещён()
     {
         var (_, sessionId) = await CreateProjectWithSessionAsync();
-        _adapters.AgentDepth = 1;
+        _adapters.AgentDepth = 2;
         _adapters.SuppressTasksExecute = true;
 
         var answer = await CallToolAsync(Client, sessionId, "tasks_run_executor", new { taskId = "any" });

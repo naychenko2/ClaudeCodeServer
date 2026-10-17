@@ -485,7 +485,8 @@ public sealed class TasksToolset(
                     "Запуск задачи на исполнение",
                     alsoWhenExecutorSuppressed: false,
                     allowInTeamImplement: true,
-                    failOpenWhenUnknown: false);
+                    failOpenWhenUnknown: false,
+                    allowedDepth: McpEndpoints.RunExecutorAllowedDepth);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
 
                 var taskId = StringArg(arguments, "taskId");

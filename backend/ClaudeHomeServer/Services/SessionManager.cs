@@ -4505,7 +4505,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4636,7 +4636,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause, agentDepth: agentDepth);
         return SendUserOutcome.Started;
     }
 
@@ -4659,7 +4659,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
-        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
+        int agentDepth = 0)
     {
         // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
         if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
@@ -4686,7 +4687,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
                 Guid.NewGuid().ToString("N"), text,
                 fromQueue && !auto ? DeviceWaitMessage.RouteUser : DeviceWaitMessage.RouteAuto,
-                DateTime.UtcNow, senderPersonaId, senderOrigin,
+                DateTime.UtcNow, senderPersonaId, senderOrigin, agentDepth,
                 SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
                 AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode));
             return;
@@ -4804,7 +4805,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, viaAgent: agentDepth >= 1, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
         // Сообщение пользователя = начало нового хода в основном дереве (зеркало
         // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
         entry.TurnInWorktree = false;
@@ -4883,7 +4884,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 voiceModel = null;
             }
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text, auto, systemDirective, senderPersonaId), attachedPaths,
-                suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
+                agentDepth, suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
         }
     }
 
@@ -5758,7 +5759,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
-                    cause: DeliveryCause.QueueAgent);
+                    cause: DeliveryCause.QueueAgent, agentDepth: next.AgentDepth);
             return true;
         }
         catch (Exception ex)

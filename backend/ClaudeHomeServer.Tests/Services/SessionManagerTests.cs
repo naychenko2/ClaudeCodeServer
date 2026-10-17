@@ -2888,6 +2888,43 @@ public class SessionManagerTests : IDisposable
             0, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent));
     }
 
+    // Дыра в очереди (решение владельца 17.10): chats_send в ЗАНЯТЫЙ чат кладёт QueuedMessage
+    // с правильной AgentDepth, но DeliverPendingAsync для агентского сообщения звал
+    // SendMessageAsync(…, auto: true, …) БЕЗ глубины — ход стартует с глубиной 0, и потолок
+    // глубины запуска (allowedDepth = 1) становится фиктивным: глубина 1, доставленная из
+    // очереди, проходила гейт как 0 (живой инцидент 17.10: второе сообщение Александра
+    // Софье пришло через очередь, и запуск прошёл, хотя первое, прямое, получило отказ).
+    // Регрессия: агентское сообщение глубины 1, доставленное из очереди, даёт ход с глубиной 1.
+    [Fact]
+    public async Task Очередь_ДоставкаАгентскогоГлубины1_ХодСГлубиной1()
+    {
+        var session = await MkBusySessionAsync("queue-depth", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+
+        // Мок-адаптер, фиксирующий глубину, которую ход реально получил (аргумент SendMessageAsync)
+        var adapter = new Mock<ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.Info).Returns(session);
+        int? capturedDepth = null;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()))
+            .Callback<string, IReadOnlyList<string>?, int, bool, string?>(
+                (_, _, depth, _, _) => capturedDepth = depth)
+            .Returns(Task.CompletedTask);
+        SetProcess(entry, adapter.Object);
+
+        // Агентское сообщение глубины 1 — как chats_send из другого чата
+        var next = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "сообщение глубины 1",
+            null, null, 1, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent);
+
+        var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task)method.Invoke(_sut, [session.Id, entry, next])!;
+        await task;
+
+        capturedDepth.Should().Be(1,
+            "доставка из очереди донесла глубину хода — потолок глубины запуска не фиктивный");
+    }
+
     [Fact]
     public async Task ContinueWorkLoop_ПользовательскоеСообщениеВОчереди_НеШлётДирективуПродолжения()
     {
@@ -6241,14 +6278,16 @@ public class SessionManagerTests : IDisposable
         context.Result.Should().BeNull("ход-реакция на доклад запуск задачи больше не запрещает");
     }
 
-    // Регресс: делегированный ход в чате с циклом — запрет как раньше.
+    // Регресс: ход ГЛУБЖЕ допустимой глубины запуска (2) в чате с циклом — запрет.
+    // Цикл «до готово» разрешает реакционный ход на доклад, но не ход, ушедший за потолок
+    // глубины: иначе автономный цикл бы запускал исполнителей по цепочке делегирования.
     [Fact]
     public async Task ГейтЗапуска_ДелегированныйХодВЧатеСЦиклом_ОтказКакРаньше()
     {
         var session = await MakeWorkLoopChatAsync("delegated");
         var entry = GetEntry(session.Id);
         var adapter = StubAdapter(entry);
-        adapter.SetupGet(a => a.CurrentTurnAgentDepth).Returns(1);
+        adapter.SetupGet(a => a.CurrentTurnAgentDepth).Returns(2);
         SetProcess(entry, adapter.Object);
         var context = MakeMcpCallContext(session.Id);
 
@@ -6501,6 +6540,16 @@ public class SessionManagerTests : IDisposable
 
         var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
         result.StatusCode.Should().Be(403);
+    }
+
+    // REST-путь запуска (атрибут [DenyOnDelegatedTurn] на TasksController.Execute) обязан
+    // держать ту же допустимую глубину, что http-тулсет: один литерал, иначе пути разъедутся
+    // (REST разрешил бы запуск на глубине, где http-тулсет ещё держит запрет, и наоборот).
+    [Fact]
+    public void ГейтЗапуска_Атрибут_ДопустимаяГлубина_СовпадаетСКонстантой()
+    {
+        ExecuteFilter().AllowedDepth.Should().Be(McpEndpoints.RunExecutorAllowedDepth,
+            "REST-путь и http-тулсет запуска читают одну и ту же допустимую глубину");
     }
 
     [Fact]

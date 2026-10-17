@@ -51,6 +51,15 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public bool AllowInTeamImplement { get; init; }
 
+    /// <summary>
+    /// Допустимая глубина хода: ход «делегированный» (и запрет действует) только когда
+    /// глубина её ПРЕВЫШАЕТ. По умолчанию 0 — прежнее поведение (любой делегированный ход,
+    /// depth >= 1, запрещён). Запуск исполнителя задачи ставит
+    /// <c>McpEndpoints.RunExecutorAllowedDepth</c> (1): на глубине 1 запуск разрешён, на 2+
+    /// анти-рекурсия. Остальные потребители атрибута свойство не трогают.
+    /// </summary>
+    public int AllowedDepth { get; init; }
+
     // Цикл «До готово» (work-loop) больше НЕ имеет квоты запусков: квота дырявилась вместе
     // с двумя лимитами по 20 и заменена инкрементом Iteration на возврате waiting→working в
     // ContinueWorkLoopAsync (SessionManager.cs). Запуск из обычного чата с включённым циклом
@@ -74,7 +83,8 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
             http.RequestServices.GetService<SessionManager>(),
             http.User.FindFirstValue(JwtRegisteredClaimNames.Sub),
             http.Request.Headers[CallerHeader].FirstOrDefault(),
-            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement);
+            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement,
+            allowedDepth: AllowedDepth);
         if (decision.Allowed)
         {
             // Списанную квоту запоминаем для возврата в OnActionExecuted при неудаче
@@ -154,7 +164,8 @@ internal static class DelegatedTurnGate
         SessionManager? sessions, string? ownerId, string? callerSessionId,
         string action, bool alsoWhenExecutorSuppressed,
         bool allowInTeamImplement,
-        bool failOpenWhenUnknown = true)
+        bool failOpenWhenUnknown = true,
+        int allowedDepth = 0)
     {
         if (string.IsNullOrEmpty(callerSessionId) || sessions is null || string.IsNullOrEmpty(ownerId))
             return failOpenWhenUnknown
@@ -167,7 +178,11 @@ internal static class DelegatedTurnGate
                 };
 
         var turn = sessions.GetActiveTurnDelegation(callerSessionId, ownerId);
-        var delegated = DenyOnDelegatedTurnAttribute.IsDelegated(turn);
+        // allowedDepth: допустимая глубина хода. По умолчанию 0 (прежнее поведение: любой
+        // делегированный ход, depth >= 1, запрещён). Запуск исполнителя задачи передаёт
+        // McpEndpoints.RunExecutorAllowedDepth (1): на глубине 1 запуск разрешён, на 2+ —
+        // анти-рекурсия. Ход «делегированный» только когда глубина ПРевышает потолок.
+        var delegated = turn.AgentDepth > allowedDepth;
 
         // Квота вместо запрета — на ЛЮБОМ неделегированном ходу штаба, а не только на
         // реакционном: обычный ход координатора запускает исполнителей той же кнопкой, и

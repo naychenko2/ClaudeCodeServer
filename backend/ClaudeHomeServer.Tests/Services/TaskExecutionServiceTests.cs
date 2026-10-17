@@ -305,7 +305,7 @@ public class TaskExecutionServiceTests
     public void ЗапретФоновыхСборок_ЕстьВШаблонеИВОбоихФолбэках()
     {
         const string rule = "- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests` " +
-            "(или обычный Bash на переднем плане); `run_in_background`, Monitor и фоновые " +
+            "; `run_in_background`, Monitor и фоновые " +
             "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.";
 
         TaskExecutionService.ReadRulesTemplate(projectRoot: null).Should().Contain(rule);

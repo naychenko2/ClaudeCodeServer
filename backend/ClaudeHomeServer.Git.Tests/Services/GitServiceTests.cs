@@ -199,6 +199,23 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
             .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
     }
 
+    // ---------- История файла: путь — не маска ----------
+
+    [Fact]
+    public async Task LastCommit_СкобкиВИмени_ПутьБуквальный_ЧужойФайлНеПодсовывается()
+    {
+        // «[ab].txt» маской совпадает и с a.txt: без --literal-pathspecs последним стал бы коммит a.txt
+        await File.WriteAllTextAsync(Path.Combine(_repo, "[ab].txt"), "скобки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "файл со скобками");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "правка a");
+
+        (await _git.LastCommitAsync(null, _repo, "[ab].txt"))!.Subject.Should().Be("файл со скобками");
+        (await _git.FileLogAsync(null, _repo, "[ab].txt")).Should().ContainSingle();
+    }
+
     // ---------- Метрика охвата паспортов: CountRecentCommitsAsync (GET /dossiers) ----------
 
     // Обе даты коммита в прошлом: --since фильтрует по committer date, поэтому сдвигаем

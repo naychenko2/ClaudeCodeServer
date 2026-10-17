@@ -351,13 +351,14 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return r.Ok ? ParseLog(r.Stdout) : null;
     }
 
-    // История одного файла (--follow: переживает переименования)
+    // История одного файла (--follow: переживает переименования). --literal-pathspecs: путь —
+    // имя файла, а не маска; иначе «*», «?» и «[…]» в имени подсовывали бы историю чужого файла
     public async Task<IReadOnlyList<GitLogEntry>> FileLogAsync(string? ownerId, string root, string relPath, int limit = 100, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
         ValidateRel(root, relPath);
         var r = await RunReadAsync(ownerId, root,
-            ["log", "--follow", "-n", limit.ToString(),
+            ["--literal-pathspecs", "log", "--follow", "-n", limit.ToString(),
              "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
     }

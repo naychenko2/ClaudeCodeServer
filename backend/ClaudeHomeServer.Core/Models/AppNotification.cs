@@ -74,6 +74,25 @@ public class CreateNotificationRequest
     public bool Sticky { get; set; }
 }
 
+// Диплинк уведомления, пришедшего снаружи (MCP notifications_create, REST POST): url пишет
+// модель, и абсолютный адрес под видом «Одобрите шаг» — фишинг (S7). Принимается только путь
+// приложения: «/x» или «#/x», не «//» (protocol-relative), без обратных слэшей и управляющих
+// символов (парсер URL вырезает таб и перевод строки: «/\t/evil» стал бы «//evil»).
+// Та же форма, что пропускает клик по уведомлению (frontend swPush.isAppRelativeUrl)
+public static class NotificationUrls
+{
+    public static bool IsAppRelative(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        var path = url.StartsWith('#') ? url[1..] : url;
+        return path.StartsWith('/') && !path.StartsWith("//")
+            && !url.Any(c => c == '\\' || char.IsControl(c));
+    }
+
+    public const string RejectReason =
+        "url должен быть путём приложения: «#/…» или «/…» без схемы и хоста (например #/chats/{id})";
+}
+
 // DTO для списка (без лишних деталей)
 public class NotificationListItem
 {

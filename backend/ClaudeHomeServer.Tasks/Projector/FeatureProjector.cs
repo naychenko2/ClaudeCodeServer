@@ -55,7 +55,10 @@ public sealed class FeatureProjector(TaskManager tasks)
         int decided = verdictBearing.Count(t => !string.IsNullOrEmpty(t.Verification?.Verdict));
         double progress = total == 0 ? 0 : Math.Round((double)decided / total, 4);
 
+        // Ready: финал ЗАКРЫТ (Done) и принят (accepted/accepted_with_remarks).
+        // Согласовано с Attention «мерж» (блок ниже в Build): и там, и тут «финал принят» = Done + accepted/awr.
         bool ready = final is not null
+            && final.Status == TaskItemStatus.Done
             && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
 
         // ─── Б2: цепочки шагов, источники возврата, линии ─────────────────────────────────
@@ -223,9 +226,10 @@ public sealed class FeatureProjector(TaskManager tasks)
         // ─── Б3: «Сейчас», тревоги, итог ───────────────────────────────────────────────────
 
         // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
+        // Эпик — контейнер фичи, не стадия конвейера: идущий эпик в «Сейчас» не показываем.
         // У закрытой фичи список пуст (ни одна задача не InProgress).
         var nowList = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress)
+            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic))
             .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
             .Select(t => new FeatureNow
             {
@@ -419,7 +423,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Роль задачи → ключ стадии конвейера (для блока «Сейчас»).
-    // step/rework → prod; feature/consult/прочее → prod (эпик — контейнер, стадия производства).
+    // step/rework → prod; consult/прочее → prod. Эпик (feature) сюда не доходит:
+    // он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
     private static string RoleToStage(string? role) => role switch
     {
         TaskRoles.Cut => "cut",

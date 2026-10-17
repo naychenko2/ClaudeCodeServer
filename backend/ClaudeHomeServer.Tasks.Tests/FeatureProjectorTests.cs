@@ -76,8 +76,8 @@ public class FeatureProjectorTests
         run.Ready.Should().Be(c.Ready);
     }
 
-    // Прогноз «готово»: финал с accepted/accepted_with_remarks → Ready=true, иначе false.
-    // Синтетический кейс (не из фикстур): финал есть и принят.
+    // Прогноз «готово»: финал ЗАКРЫТ (Done) и принят (accepted/accepted_with_remarks) → Ready=true.
+    // Контроль (M1): Done + accepted → Ready=true.
     [Fact]
     public void Build_ФиналПринят_Gотово()
     {
@@ -85,6 +85,7 @@ public class FeatureProjectorTests
         var final = new TaskItem
         {
             Id = "f1", FeatureId = "epic-x", Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
             Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
         };
         var run = FeatureProjector.Build(epic, [epic, final]);
@@ -92,6 +93,34 @@ public class FeatureProjectorTests
         run.Ready.Should().BeTrue();
         run.Final.Should().NotBeNull();
         run.Final!.Id.Should().Be("f1");
+    }
+
+    // M1: финал принят (accepted), но задача финала ещё НЕ закрыта (Todo/InProgress) → Ready=false.
+    // Контракт «Ready» — «финал ЗАКРЫТ с accepted/accepted_with_remarks».
+    [Fact]
+    public void Build_ФиналПринят_НоНезакрыт_ReadyFalse()
+    {
+        var epic = new TaskItem { Id = "epic-z", Role = TaskRoles.Feature };
+
+        // Todo: вердикт accepted, но статус не Done → не готов.
+        var finalTodo = new TaskItem
+        {
+            Id = "f1", FeatureId = "epic-z", Role = TaskRoles.Final,
+            Status = TaskItemStatus.Todo,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        FeatureProjector.Build(epic, [epic, finalTodo]).Ready.Should().BeFalse(
+            "финал принят, но задача финала ещё Todo — не закрыт");
+
+        // InProgress: тоже не Done → не готов.
+        var finalInProgress = new TaskItem
+        {
+            Id = "f2", FeatureId = "epic-z", Role = TaskRoles.Final,
+            Status = TaskItemStatus.InProgress,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        FeatureProjector.Build(epic, [epic, finalInProgress]).Ready.Should().BeFalse(
+            "финал принят, но задача финала InProgress — не закрыт");
     }
 
     // Финал с returned → не готов; без финала → не готов.
@@ -487,6 +516,34 @@ public class FeatureProjectorTests
         var run = FeatureProjector.Build(epic, [epic, step]);
 
         run.Now.Should().BeEmpty("у закрытой фичи ни одна задача не InProgress");
+    }
+
+    // m1: идущий эпик (контейнер) + идущая задача шага → Now содержит только задачу шага.
+    // Эпик — контейнер фичи, не стадия конвейера: в «Сейчас» не показывается.
+    [Fact]
+    public void Build_ИдущийЭпик_НеВNow()
+    {
+        const string epicId = "epic-epic-now";
+        // Эпик сам идёт (InProgress) — но это контейнер, в Now не попадает.
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+            PersonaId = "Денис", Title = "шаг 1",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.Now.Should().HaveCount(1, "идущий эпик — контейнер, в Now не попадает");
+        run.Now[0].TaskId.Should().Be("s1");
+        run.Now[0].Stage.Should().Be("prod");
     }
 
     // Финал accepted, merge-задачи нет → Attention = wait / "мерж", since = CompletedAt финала.

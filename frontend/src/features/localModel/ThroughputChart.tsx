@@ -978,14 +978,8 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
         + timeSharesSummary(hover.timeShares);
     }
   } else {
-    // Итог под графиком: всего по стенду (Δтокенов/Δвремя), пик на агента и кэш.
-    // Среднее на агента не дублируем — оно уже в подписи главной линии.
-    const parts: string[] = [];
-    if (issuedAvg != null) parts.push(`всего по стенду в среднем ${formatTps(issuedAvg)}`);
-    const peak = peakPerStreamOf(intervals);
-    if (avg != null && peak > 0) parts.push(`пик ${formatTps(peak)}`);
-    if (hitAvg != null) parts.push(`кэш ${formatPerc(hitAvg)}`);
-    summary = parts.length ? parts.join(' · ') : 'за период генерации не было';
+    // Без наведения строка пустая: среднее/пик/кэш уже в легенде и подписях полей.
+    summary = '';
   }
 
   // Вертикаль считывания: x на центре интервала (общая для всех полей).

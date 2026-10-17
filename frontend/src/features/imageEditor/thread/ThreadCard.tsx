@@ -16,7 +16,7 @@ import { enterScope, isPersonalScope } from '../scope';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { dismissJob, saveToProject, savedStepOf, takeVariant } from './actions';
 import { download } from './download';
-import { GpuQueueBlock } from './gpuCard';
+import { GpuQueueBlock, showQueueLine } from './gpuCard';
 import {
   chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isHiddenDraft, isLegacyThread, ORIGIN, saveFolder,
   stackSaveState, stepOf, threadName, versionLabel,
@@ -108,7 +108,8 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
           </span>
           <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
         </Acts>
-        <ProgressBar value={progress.percent} transition="width .5s linear" />
+        {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
+        {!showQueueLine(feature, status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
         <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
           feature={feature} count={count} />
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(count, 4)}, minmax(0, 1fr))`, gap: SP.xs }}>

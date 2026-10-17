@@ -23,7 +23,7 @@ import {
 import { recordOf, str } from './records';
 import { SaveAsDialog } from './SaveAsDialog';
 import { getJobsOf, useAudioThreads, type JobProgress } from './threadStore';
-import { GpuQueueBlock } from './gpuCard';
+import { GpuQueueBlock, showQueueLine } from './gpuCard';
 import { VersionBody } from './VersionBody';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -195,7 +195,8 @@ function RunningLine({ scope, sessionId, thread, jobId, op, mode, count }: {
           {job?.stage === 'queued' ? 'Убрать из очереди' : 'Отменить'}
         </Button>
       </div>
-      <ProgressBar value={percent} transition="width .5s linear" />
+      {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
+      {!showQueueLine(feature, job?.gpu ?? null) && <ProgressBar value={percent} transition="width .5s linear" />}
       <GpuQueueBlock scope={scope} sessionId={sessionId} thread={thread} job={job}
         feature={feature} op={op} mode={mode} count={count} />
       <Note>Варианты появятся здесь по мере готовности.</Note>

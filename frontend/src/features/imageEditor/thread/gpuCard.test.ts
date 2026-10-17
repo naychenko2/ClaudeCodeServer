@@ -503,6 +503,24 @@ describe('JobBlock: op котировки по меткам нити', () => {
   });
 });
 
+// ── Шаг 2: gpu есть → без собственной полосы (ровно одна полоса, не дубль) ──
+
+describe('JobBlock: gpu есть → без собственной полосы', () => {
+  it('running gpu: ровно одна полоса (собственная скрыта, остаётся строка GPU)', () => {
+    const runningGpu: LocalGpuQueueInfo = { running: true, steps: { step: 4, total: 10 } };
+    (useJobStatus as ReturnType<typeof vi.fn>).mockReturnValue({ status: { ...RUN_STATUS, gpu: runningGpu }, cancel: vi.fn() });
+    (useQuote as ReturnType<typeof vi.fn>).mockReturnValue({ quote: QUOTE, loading: false });
+    (useCatalog as ReturnType<typeof vi.fn>).mockReturnValue(CATALOG);
+    const html = renderToStaticMarkup(
+      createElement(JobBlock, { projectId: 'p1', sessionId: 's1', thread: EMPTY_THREAD }),
+    );
+    // Собственная полоса (transition width .5s) + полоса GPU-строки. gpu running → showQueueLine true →
+    // собственная скрыта, остаётся ровно одна (строка GPU). Без правки их было бы две.
+    const bars = (html.match(/role="progressbar"/g) ?? []).length;
+    expect(bars, 'ровно одна полоса, не дубль').toBe(1);
+  });
+});
+
 // ── Запуск только по клику: на монтировании launchThread не вызывается ──
 
 describe('GpuQueueBlock: запуск только по клику', () => {

@@ -152,6 +152,9 @@ describe('showQueueLine', () => {
   it('false: флаг выключен', () => expect(showQueueLine(false, QUEUED)).toBe(false));
   it('false: нет gpu', () => expect(showQueueLine(true, null)).toBe(false));
   it('true: флаг + gpu', () => expect(showQueueLine(true, QUEUED)).toBe(true));
+  // Шаг 2: gpu есть (running) → showQueueLine true → собственная полоса карточки прячется
+  it('gpu есть (running) → showQueueLine true → без собственной полосы', () =>
+    expect(showQueueLine(true, { running: true, steps: { step: 4, total: 10 } })).toBe(true));
 });
 
 describe('cloudQuoteRequest', () => {

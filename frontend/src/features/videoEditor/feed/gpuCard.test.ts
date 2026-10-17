@@ -6,7 +6,7 @@
 // (диалог, двойной клик) рендерим на минимальном фейк-DOM для createRoot.
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, createElement } from 'react';
+import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { setAllFlags } from '../../../lib/featureFlags';
@@ -25,6 +25,7 @@ import {
   GpuQueueBlock, cloudCandidate, cloudQuoteRequest, isCloudButtonEnabled, isStandDown,
   makeLaunchGuard, priceLabel, showCloudButton, showQueueLine,
 } from './gpuCard';
+import { SceneCardView as SceneCardViewCmp, type SceneCardView as SceneCardViewData, type SceneCardActions } from './SceneCard';
 import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 
 // ── Мок-данные ──
@@ -126,6 +127,33 @@ describe('showQueueLine', () => {
   it('false: флаг выключен', () => expect(showQueueLine(false, QUEUED)).toBe(false));
   it('false: нет gpu', () => expect(showQueueLine(true, null)).toBe(false));
   it('true: флаг + gpu', () => expect(showQueueLine(true, QUEUED)).toBe(true));
+});
+
+// ── Шаг 2: gpu есть → без собственной полосы (ровно одна полоса, не дубль) ──
+
+describe('SceneCardView: gpu есть → без собственной полосы', () => {
+  const makeView = (p: number | undefined): SceneCardViewData => ({
+    kind: 'scene', sceneId: 'sc1', name: 'Сцена', focused: false, byClaude: false,
+    progress: { label: 'Идёт', p }, stages: null, upscaleFail: null, upscaledCaption: null,
+    launchLine: null, failure: null, outcome: null, versions: [], index: 0, version: null,
+    versionModel: null, isCurrent: true, savedPath: null, canSave: false, canDownload: false,
+    canAddToFilm: false, stale: [], emptyText: null, film: null,
+  });
+  const actions: SceneCardActions = {
+    onPick: () => {}, onPrev: () => {}, onNext: () => {}, onTake: () => {}, onSave: () => {},
+    onDownload: () => {}, onAddToFilm: () => {}, onReshoot: () => {}, onWork: () => {}, onOpenFilm: () => {},
+  };
+  const bars = (n: ReactNode) => (renderToStaticMarkup(n as never).match(/role="progressbar"/g) ?? []).length;
+
+  it('gpuBlock есть → собственная полоса скрыта (0 полос)', () => {
+    expect(bars(createElement(SceneCardViewCmp, { v: makeView(40), src: null, busy: false, a: actions, gpuBlock: createElement('span', null, 'gpu') })),
+      'собственная полоса скрыта').toBe(0);
+  });
+
+  it('gpuBlock нет → собственная полоса видна (1 полоса)', () => {
+    expect(bars(createElement(SceneCardViewCmp, { v: makeView(40), src: null, busy: false, a: actions })),
+      'собственная полоса видна').toBe(1);
+  });
 });
 
 describe('cloudQuoteRequest', () => {

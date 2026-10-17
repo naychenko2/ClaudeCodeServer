@@ -408,7 +408,8 @@ stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
          "loops_truncated": 0, "loop_guard_errors": 0,
          "junk_aborts": 0, "junk_words_max_ratio": 0.0, "guard_dumps": 0,
-         "quarantine_retries": 0, "quarantine_failed": 0, "quarantine_salted": 0}
+         "quarantine_retries": 0, "quarantine_failed": 0, "quarantine_salted": 0,
+         "quarantine_loop_reused": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -2569,16 +2570,34 @@ class Handler(BaseHTTPRequestHandler):
         реле.закрыть_блок()
         # Повтор: петля — сдвиг сэмплинга (всегда, если LOOP_RETRY), мусор — только при
         # карантине. Соль карантина (q-<сессия>-<ns>) — обоим: повтор уходит в чистое
-        # пространство, а сессия и дальше ходит со своей солью.
+        # пространство, а сессия и дальше ходит со своей солью. Петля в уже засоленной
+        # сессии соль не меняет (берёт существующую); мусор — новую на каждый срыв.
         повтор_вкл = (LOOP_RETRY if петля else CACHE_QUARANTINE) == "on"
         тело = (retry_body(body) if петля else body) if повтор_вкл and body else None
         if CACHE_QUARANTINE == "on" and body and тело is not None:
-            соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
-            if сессия:
+            повтор_соль = None  # соль, которой сессия уже ходит (петля в засоленной сессии)
+            if петля and сессия:
+                # Петля: сессия уже ходит с солью — повтор берёт её, новую не выдаёт:
+                # ещё один полный префилл (~70 с на 95K) и брошенный KV прежней соли —
+                # то, чего избегали, убирая uuid4-соль.
                 with lock:
-                    _карантин[сессия] = соль
+                    соль = _карантин.get(сессия)
+                    if соль is None:
+                        соль = f"q-{сессия[:40]}-{time.time_ns()}"
+                        _карантин[сессия] = соль
+                    else:
+                        повтор_соль = соль
+                        stats["quarantine_loop_reused"] += 1
+            else:
+                # Мусор (или петля без заголовка сессии): новая соль на каждый срыв —
+                # испорченный кэш мог появиться и в уже засоленном пространстве.
+                соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
+                if сессия:
+                    with lock:
+                        _карантин[сессия] = соль
             тело = salted_body(тело, соль)
-            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша с солью",
+            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша "
+                  f"{'с прежней солью' if повтор_соль else 'с солью'}",
                   file=sys.stderr, flush=True)
         причина = "повтор выключен" if тело is None else None
         if тело is not None:

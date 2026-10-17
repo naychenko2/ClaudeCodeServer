@@ -317,6 +317,72 @@ public class TasksToolsetDefectTests : IClassFixture<TestWebApplicationFactory>
         warning.GetString().Should().Contain("вердикт");
     }
 
+    // ─── Негативные: warning НЕ появляется, когда условие не выполнено ─────────
+    // warning строит ТОЛЬКО CompleteResponse (tasks_complete) и ТОЛЬКО для review/qa/final
+    // фичи без вердикта. Три границы: tasks_update warning не строит; role вне review/qa/final
+    // warning не получает; вердикт заполнен — warning не появляется.
+
+    [Fact]
+    public async Task Complete_Update_РевьюБезВердикта_НетПредупреждения()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Эпик", projectId, role = "feature" });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+        var (reviewText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Ревью", projectId, featureId = epicId, role = "review" });
+        var reviewId = JsonSerializer.Deserialize<JsonElement>(reviewText).GetProperty("id").GetString()!;
+
+        // tasks_update (не tasks_complete) не строит CompleteResponse — warning не появляется
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new { id = reviewId, status = "done" });
+        isError.Should().BeFalse();
+        var updated = JsonSerializer.Deserialize<JsonElement>(text);
+        updated.GetProperty("status").GetString().Should().Be("done");
+        updated.TryGetProperty("warning", out _).Should().BeFalse(
+            "tasks_update не строит warning — только tasks_complete");
+    }
+
+    [Fact]
+    public async Task Complete_ФичиRoleCutStep_НетПредупреждения()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Эпик", projectId, role = "feature" });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+        var (stepText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Шаг", projectId, featureId = epicId, role = "step" });
+        var stepId = JsonSerializer.Deserialize<JsonElement>(stepText).GetProperty("id").GetString()!;
+
+        // role=step — не из {review,qa,final}: warning не появляется, даже без вердикта
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_complete", new { id = stepId });
+        isError.Should().BeFalse();
+        var done = JsonSerializer.Deserialize<JsonElement>(text);
+        done.GetProperty("status").GetString().Should().Be("done");
+        done.TryGetProperty("warning", out _).Should().BeFalse(
+            "role=step (не review/qa/final) не получает warning, даже без вердикта");
+    }
+
+    [Fact]
+    public async Task Complete_СВердиктом_НетПредупреждения()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Эпик", projectId, role = "feature" });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+        var (reviewText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "Ревью", projectId, featureId = epicId, role = "review" });
+        var reviewId = JsonSerializer.Deserialize<JsonElement>(reviewText).GetProperty("id").GetString()!;
+
+        // Ревью с вердиктом: warning не появляется (verdict заполнен)
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_complete",
+            new { id = reviewId, verification = new { verdict = "accepted" } });
+        isError.Should().BeFalse();
+        var done = JsonSerializer.Deserialize<JsonElement>(text);
+        done.GetProperty("status").GetString().Should().Be("done");
+        done.GetProperty("verification").GetProperty("verdict").GetString().Should().Be("accepted");
+        done.TryGetProperty("warning", out _).Should().BeFalse("ревью с вердиктом не получает warning");
+    }
+
     // ─── Гейт EnsureNotClosedAtCreate (tasks_create) ─────────────────────────
 
     [Fact]

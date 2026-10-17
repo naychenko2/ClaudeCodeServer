@@ -23,6 +23,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Devices.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- TestKit.Host (шаг 1.2): LoopbackRelayChannel поднимает настоящий
+         DeviceExecStream (internal) и соединяет его с ExecLink агента. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.TestKit.Host</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

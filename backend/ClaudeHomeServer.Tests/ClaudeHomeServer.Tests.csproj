@@ -101,6 +101,13 @@
          типы просто теперь резолвятся из TestKit. Internal-хелперы (TestLauncherFactory
          и др.) доступны через InternalsVisibleTo в TestKit. -->
     <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host (шаг 1.2): Main-зависимые хелперы (TestWebApplicationFactory,
+         DeviceWaitTestHost, FakeLlmSessionAdapter, LoopbackRelayChannel, AgentReleaseFixture,
+         LocalMediaFakes, TestSpecialtyStore, FakeFeatureFlagGate, FakeCodeGraphProvider,
+         SessionManagerTestAccess) переехали сюда из Helpers/. Namespace не менялся,
+         using'и монолита не тронуты — типы теперь резолвятся из TestKit.Host.
+         Internal-хелперы этой сборки доступны монолиту через InternalsVisibleTo в нём. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
     <!--
       Знание — отдельная сборка (этап 5). Нужен ProjectReference, чтобы тесты
       видели IKnowledgeIndex/IKnowledgeSyncParticipant/KnowledgeDtos из Core,

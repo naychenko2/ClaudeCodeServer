@@ -126,6 +126,10 @@
     <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />
     <!-- Сквозной тест сервер ↔ агент (задача 2.8) живёт в серверных тестах -->
     <InternalsVisibleTo Include="ClaudeHomeServer.Tests" />
+    <!-- TestKit.Host (шаг 1.2): LoopbackRelayChannel соединяет настоящий DeviceExecStream
+         с настоящим ExecLink (internal) поверх loopback WebSocket. Main DeviceAgent не
+         тянет, поэтому допуск нужен именно сюда, а не в Main. -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.TestKit.Host" />
   </ItemGroup>
 
 </Project>

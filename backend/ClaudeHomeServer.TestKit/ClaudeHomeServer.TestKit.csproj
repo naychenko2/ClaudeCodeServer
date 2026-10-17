@@ -34,6 +34,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Dossiers.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- TestKit.Host (шаг 1.2): DeviceWaitTestHost конструирует SessionManager через
+         TestLauncherFactory.Instance (internal) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.TestKit.Host</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

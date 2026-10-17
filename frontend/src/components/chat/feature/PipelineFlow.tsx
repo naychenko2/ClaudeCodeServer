@@ -20,9 +20,15 @@ const ROW_MIN_H = 34;
 // line-height 18px) — константы.
 const BADGE_PAD_X = 7;
 const BADGE_LH = 18;
-// X-центр сегмента рельсы (left + translateX(-50%)): 7 — в шкале SP значения 7 нет
-// (SP.xs=4, SP.sm=8), значение макета v2 (.cv > li::before left:8px минус рамка 1px).
-const RAIL_LEFT = 7;
+// X-центр сегмента рельсы (left + translateX(-50%)): отступ строки слева (padding-left
+// SP.xs) + половина колонки точки 16px. `left` считается от padding-box (внутренний край
+// рамки), поэтому рамку 1px не прибавляем: SP.xs + 16/2 = 4 + 8 = 12 — центр сегмента
+// совпадает с центром кольца. Дуги эта константа не задевает (они от правого края).
+const RAIL_LEFT = SP.xs + 16 / 2; // 12
+// Ширина SVG-оверлея дуг возврата (справа): 46px — в шкале SP значения нет
+// (SP.xxl=32, SP.xxxl=48), значение макета v2 (.arcsvg: width 46px).
+// Экспортируется: viewBox-строка svg строится из неё и должна оставаться числом (не "100%").
+export const ARCS_W = 46;
 
 // Конвейер фичи (режим «Исполнение фичи») — строго по макету v2
 // (docs/mockups/turn-plan-feature-mode-v2.html: conveyor() ~566, drawArcs() ~662,
@@ -326,9 +332,9 @@ function ArcsOverlay({ elements, height }: { elements: ArcElement[]; height: num
   if (!elements.length) return null;
   return (
     <svg
-      width="46"
+      width={ARCS_W}
       height="100%"
-      viewBox={`0 0 46 ${Math.max(height, 1)}`}
+      viewBox={`0 0 ${ARCS_W} ${Math.max(height, 1)}`}
       preserveAspectRatio="none"
       aria-hidden="true"
       style={{ position: 'absolute', top: 0, right: 0, pointerEvents: 'none', overflow: 'visible' }}
@@ -416,7 +422,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
       role="group"
       aria-label="Конвейер фичи: стадии, линии бэк/фронт, возврат"
       ref={containerRef}
-      style={{ position: 'relative', paddingRight: isMobile ? 0 : 46 }}
+      style={{ position: 'relative', paddingRight: isMobile ? 0 : ARCS_W }}
     >
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {STAGES.map((s, i) => {

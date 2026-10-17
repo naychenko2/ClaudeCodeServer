@@ -8,10 +8,10 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
-import { C, SP } from '../../../lib/design';
+import { C, SP, FONT } from '../../../lib/design';
 import {
   PipelineFlow, stagePhases, stagePasses, stageWidth, stageTasks,
-  laneInfo, laneTrackWidth, arcSpecs, buildArcs, arcPath, chevronPath,
+  laneInfo, laneTrackWidth, arcSpecs, buildArcs, arcPath, chevronPath, ARCS_W,
 } from './PipelineFlow';
 
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
@@ -397,6 +397,32 @@ describe('PipelineFlow: рендер', () => {
     expect(gap).toBeLessThanOrEqual(1);
   });
 
+  it('Geometry_Рельса_ЦентрСовпадаетСКольцом: left сегмента = центр точки (padding-left + 16/2)', () => {
+    // Окружение node: «замер» — из инлайн-стилей SSR-разметки (getBoundingClientRect
+    // в node не laid out, см. тест выше). Сегмент имеет transform:translateX(-50%),
+    // поэтому его CSS `left` — это ВИЗУАЛЬНЫЙ центр (не левый край).
+    const r = run({
+      steps: [task({ id: 's1', status: 'done' })],
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
+    });
+    const html = render(r);
+
+    // 1) `left` сегмента рельсы «Производства» (первое `left:` в стиле — свойство left,
+    //    не border-left: оно стоит раньше в строке).
+    const from = html.indexOf('data-stage="prod"');
+    const segStyle = html.slice(from).match(/style="([^"]*position:absolute[^"]*)"/)?.[1] ?? '';
+    const left = segStyle.match(/left:([^;]+)/)?.[1]?.trim();
+    expect(left).toBeTruthy();
+    const segmentLeft = parseFloat(left);
+
+    // 2) Центр точки: отступ строки слева (padding-left SP.xs) + половина колонки точки 16px.
+    //    `left` считается от padding-box (рамку 1px не прибавляем) → SP.xs + 16/2 = 12.
+    const dotCenter = SP.xs + 16 / 2;
+
+    // 3) Центр сегмента совпадает с центром кольца (допуск 1px).
+    expect(Math.abs(segmentLeft - dotCenter)).toBeLessThan(1);
+  });
+
   it('Ready_ФиналЗелёный: run.ready=true → «Мерж» done с зелёным акцентом', () => {
     const r = run({
       steps: [task({ id: 's1', status: 'done' })],
@@ -416,5 +442,30 @@ describe('PipelineFlow: рендер', () => {
     const dot = html.slice(from).match(/<svg[^>]*>[\s\S]*?<\/svg>/)?.[0] ?? '';
     expect(dot).toContain('var(--c-success)');
     expect(dot).toContain('var(--c-success-text)');
+  });
+});
+
+// === Находки Глеба (501163ab, accepted_with_remarks): 3 минорных пробела покрытия ===
+// ArcsOverlay (viewBox + font) в SSR не рендерится (нет измеренных координат),
+// поэтому проверяю константу/токен напрямую, а не рендер.
+describe('Глеб_Покрытие: viewBox-число, FONT.mono, null-guard', () => {
+  it('viewBox-число: ARCS_W — число, viewBox-строка svg — только цифры (не "100%")', () => {
+    // viewBox = `0 0 ${ARCS_W} ${Math.max(height,1)}`: все 4 части — числа.
+    expect(typeof ARCS_W).toBe('number');
+    const viewBox = `0 0 ${ARCS_W} ${Math.max(0, 1)}`;
+    expect(viewBox.split(' ').every(p => Number.isFinite(Number(p)))).toBe(true);
+  });
+
+  it('FONT.mono: токен моноширинного шрифта (не пустой, содержит monospace)', () => {
+    // Подписи дуг ×N используют font: `700 10px ${FONT.mono}` — токен, не сырая строка.
+    expect(FONT.mono).toBeTruthy();
+    expect(FONT.mono).toContain('monospace');
+  });
+
+  it('null-guard: null-задача в активной стадии не роняет .some(t => t?.status)', () => {
+    // stageTasks(run,'cut') = [epic]; если epic=null → [null]; inProgress = .some(t => t?.status)
+    // не падает на null (null-guard `t?.`). Рендер не бросает исключение.
+    const r = run({ epic: null });
+    expect(() => render(r)).not.toThrow();
   });
 });

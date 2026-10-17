@@ -15,6 +15,18 @@ public sealed class FeatureProjector(TaskManager tasks)
     // проверки сохраняют этот порядок, финал/мерж берутся как последние по этому порядку.
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks)
     {
+        ArgumentNullException.ThrowIfNull(epic);
+        ArgumentNullException.ThrowIfNull(featureTasks);
+
+        // Вход обещает «эпик + дочерние»: дочерние обязаны иметь FeatureId == epic.Id.
+        // Эпик сам — единственный, у кого FeatureId может отличаться (у него null: он и есть фича).
+        // Чужая задача (FeatureId ≠ epic.Id, и не сам эпик) — падаем явно, не фильтруем молча.
+        var foreign = featureTasks.FirstOrDefault(t => !ReferenceEquals(t, epic) && t.FeatureId != epic.Id);
+        if (foreign is not null)
+            throw new ArgumentException(
+                $"В Build попал чужой эпик: задача {foreign.Id} с FeatureId={foreign.FeatureId} ≠ {epic.Id}",
+                nameof(featureTasks));
+
         var children = featureTasks
             .Where(t => t.FeatureId == epic.Id)
             .ToList();

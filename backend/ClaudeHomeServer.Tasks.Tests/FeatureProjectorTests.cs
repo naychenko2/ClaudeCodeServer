@@ -107,4 +107,30 @@ public class FeatureProjectorTests
         FeatureProjector.Build(epic, [epic, final]).Ready.Should().BeFalse();
         FeatureProjector.Build(epic, [epic]).Ready.Should().BeFalse();
     }
+
+    // Минор 1: вход Build защищён. Пустой список → пустой конвейер (шагов/ревью/проверок/финала/мержа нет).
+    [Fact]
+    public void Build_ПустойВход_ПустыеШаги()
+    {
+        var epic = new TaskItem { Id = "epic-empty", Role = TaskRoles.Feature };
+        var run = FeatureProjector.Build(epic, []);
+
+        run.Steps.Should().BeEmpty();
+        run.Reviews.Should().BeEmpty();
+        run.Qa.Should().BeEmpty();
+        run.Final.Should().BeNull();
+        run.Merge.Should().BeNull();
+    }
+
+    // Минор 1: чужая задача (FeatureId ≠ epic.Id, и не сам эпик) → явный ArgumentException,
+    // а не молчаливая фильтрация. Эпик сам (FeatureId=null) чужим не считается.
+    [Fact]
+    public void Build_ЧужойЭпик_Бросает()
+    {
+        var epic = new TaskItem { Id = "epic-a", Role = TaskRoles.Feature };
+        var foreign = new TaskItem { Id = "f9", FeatureId = "epic-OTHER", Role = TaskRoles.Step };
+
+        ((Action)(() => FeatureProjector.Build(epic, [epic, foreign]))).Should()
+            .Throw<ArgumentException>("чужая задача обязана падать явно, а не фильтроваться молча");
+    }
 }

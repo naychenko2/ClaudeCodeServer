@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
-    // «Качественно» (25 шагов) и «быстро» (Turbo, 8 шагов); умолчание авто-выбора — Turbo
+    // «Качественно» (25 шагов) и «быстро» (Turbo, 8 шагов); умолчание авто-выбора — «качественно»
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
@@ -66,8 +66,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро"),
         QwenModel(QwenImage, "Qwen-Image 2.1 — качественно"),
+        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро"),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
@@ -80,7 +80,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
-    // Умолчание авто-выбора — Turbo; «качественно» только по явному выбору человека
+    // Умолчание авто-выбора — «качественно» (решение Андрея 2026-10-17); Turbo — по явному выбору человека
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
     {
         ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),

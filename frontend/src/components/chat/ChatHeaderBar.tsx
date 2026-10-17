@@ -739,6 +739,15 @@ function LocalModelPopoverBody({ live, isAdmin, sessionId }: {
     : '';
   const agentTypesText = lt?.agentTypes && lt.agentTypes.length > 0 ? lt.agentTypes.join(', ') : '';
 
+  // Утечки вызова инструмента в текст (vLLM qwen3_coder): одна строка, только когда в ходе
+  // были (иначе поповер засоряется). «целиком» — вызов ушёл текстом (tool_use не было),
+  // «хвост» — хвост после успешного tool_use (параметр мог потеряться).
+  const leakWhole = lt?.toolCallLeakWholeCall ?? 0;
+  const leakTail = lt?.toolCallLeakTail ?? 0;
+  const leakText = leakWhole > 0 || leakTail > 0
+    ? `${leakWhole} целиком · ${leakTail} хвост`
+    : '';
+
   return (
     <>
       <div style={badgeTitleStyle}>Локальная модель</div>
@@ -748,6 +757,7 @@ function LocalModelPopoverBody({ live, isAdmin, sessionId }: {
       <BadgeRow k={queueLabel} v={queueText} />
       {hasBreakdown && <BadgeRow k="Состав хода" v={breakdownText} />}
       {hasBreakdown && agentTypesText !== '' && <BadgeRow k="Сабагенты" v={agentTypesText} />}
+      {leakText !== '' && <BadgeRow k="Утечки вызова" v={leakText} />}
       {isAdmin && (
         <button
           type="button"

@@ -97,6 +97,17 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // агента не более двух раз (SessionManager.MaxSubagentNudges) — дальше молчать нельзя:
     // работа реально встала, и это уже случай «зовите человека».
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _truncations = new();
+    // Утечка вызова инструмента в текст (локальная модель) в ЗАВЕРШАЮЩЕМСЯ ходу: true, если
+    // ход нёс WholeCall-утечку (вызов целиком ушёл текстом). Tail-утечка ход не валит — сюда
+    // не попадает. Ключ живёт до result хода (TakeLeakState снимает его) либо до удаления чата.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _leakThisTurn = new();
+    // Сколько ходов подряд было WholeCall-утечкой по этой сессии-исполнителю. Ход без такой
+    // утечки обрывает серию; потолок попыток — SessionManager.MaxSubagentNudges (как у обрывов
+    // сабагентов): до него — восстановимый повтор, после — работа встала (терминальная причина).
+    // Счётчик живёт в памяти процесса: при рестарте сервера сбрасывается и потолок
+    // MaxSubagentNudges применяется заново — осознанно (дешевле, чем персистить; серия
+    // WholeCall-утечек на ровном месте редка).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _leakAttempts = new();
     // Сколько чат-исполнитель должен молчать, чтобы страховка сочла задачу брошенной
     // (Tasks:ExecutorStaleMinutes, дефолт 15). Тем же порогом меряется и второй шаг —
     // молчание ПОСЛЕ напоминания.
@@ -162,6 +173,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         {
             _turnErrors.TryRemove(s.Id, out _);
             _truncations.TryRemove(s.Id, out _);
+            _leakThisTurn.TryRemove(s.Id, out _);
+            _leakAttempts.TryRemove(s.Id, out _);
         };
         // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
@@ -871,7 +884,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // метод напрямую с синтетическими Session/ResultMessage вместо живого хода claude.exe.
     internal async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
-        if (msg is not (ResultMessage or ErrorMessage or PermissionRequestMessage or AskQuestionMessage)) return;
+        if (msg is not (ResultMessage or ErrorMessage or PermissionRequestMessage or AskQuestionMessage
+            or ToolCallLeakMessage)) return;
 
         // Ищем задачу этой сессии с незавершённым запуском исполнителя
         var task = FindTracked(session.Id);
@@ -879,6 +893,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
         switch (msg)
         {
+            // Утечка вызова инструмента в текст (локальная модель) приходит во время хода,
+            // ПЕРЕД result: помечаем ход, чтобы по result решить — повторить вызов (WholeCall)
+            // или просто посчитать (Tail). Копим на сессию, как NoteTurnError.
+            case ToolCallLeakMessage leak:
+                NoteLeak(session.Id, leak.Kind);
+                return;
             // Текст ошибки хода приезжает ОТДЕЛЬНЫМ сообщением перед result (CLI кладёт
             // API-ошибку в result-поле при subtype=success + is_error) — копим его до result,
             // иначе терминальный отказ не с чем распознавать (ResultMessage текста не несёт).
@@ -888,18 +908,35 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             case ResultMessage result:
                 {
                     var errorText = TakeTurnError(session.Id);
+                    // Судьба утечек вызова в тексте этого хода (снимаем пометку и серию):
+                    // None — ход чист, Leaked — WholeCall-утечка (повтор в пути), Stuck — исчерпано.
+                    var (leakState, leakAttempts) = TakeLeakState(session.Id);
                     // Терминальный отказ («дальше работать нечем») сильнее subtype: 401 у CLI
                     // регулярно приходит как формально успешный ход
                     var stopReason = ExecutorStopClassifier.Classify(result, errorText,
-                        TakeSubagentState(session.Id));
-                    // Восстановимая остановка (сабагент оборвался на середине): работа НЕ
-                    // закончена, но и человека звать рано — продолжение уже ушло добиванием.
+                        TakeSubagentState(session.Id), leakState);
+                    // Восстановимая остановка: работа НЕ закончена, но и человека звать рано.
+                    // Обрыв сабагента — продолжение уже ушло добиванием (SessionManager);
+                    // WholeCall-утечка — шлём директиву повторить вызов в ту же сессию.
                     // Молчим: ни итога задаче, ни уведомления, ход досчитается следующим result.
                     if (stopReason is not null && !ExecutorStopClassifier.IsTerminal(stopReason))
                     {
-                        _log.LogWarning("Ход исполнителя задачи {TaskId} оборван сабагентом ({Reason}) — " +
-                            "итог не принимаем, ждём продолжения (попытка {Attempt})",
-                            task.Id, stopReason, _truncations.GetValueOrDefault(session.Id));
+                        if (stopReason == ExecutorStopClassifier.ToolCallLeakedReason)
+                        {
+                            _log.LogWarning("Ход исполнителя задачи {TaskId}: вызов инструмента ушёл в текст " +
+                                "({Attempts}/{Max}) — директива повторить вызов, итог не принимаем",
+                                task.Id, leakAttempts, SessionManager.MaxSubagentNudges);
+                            var directive = Prompts.SubagentPrompts.ResumeToolCallLeak(
+                                leakAttempts, SessionManager.MaxSubagentNudges);
+                            await _sessions.SendMessageAsync(session.Id, directive, [],
+                                systemDirective: true, cause: SessionManager.DeliveryCause.ToolCallLeakNudge);
+                        }
+                        else
+                        {
+                            _log.LogWarning("Ход исполнителя задачи {TaskId} оборван сабагентом ({Reason}) — " +
+                                "итог не принимаем, ждём продолжения (попытка {Attempt})",
+                                task.Id, stopReason, _truncations.GetValueOrDefault(session.Id));
+                        }
                         break;
                     }
                     var ok = IsSuccess(result) && stopReason is null;
@@ -980,6 +1017,33 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         : consecutiveTruncations <= SessionManager.MaxSubagentNudges
             ? ExecutorStopClassifier.SubagentTurnState.Truncated
             : ExecutorStopClassifier.SubagentTurnState.Stuck;
+
+    // Пометка WholeCall-утечки в завершающемся ходу (ToolCallLeakMessage приходит до result).
+    // Tail-утечка ход не валит — сюда не попадает (считает её счётчик локальной модели).
+    internal void NoteLeak(string sessionId, string kind)
+    {
+        if (kind == "whole_call")
+            _leakThisTurn[sessionId] = true;
+    }
+
+    // Судьба утечек вызова в тексте только что закончившегося хода. По аналогии с
+    // TakeSubagentState: ход без WholeCall-утечки (чистый или только Tail) обрывает серию;
+    // пока повторы не исчерпаны (потолок SessionManager.MaxSubagentNudges) — утечка
+    // восстановима (Leaked), после — работа встала (Stuck). Возвращает состояние и номер
+    // текущей попытки (для директивы «повтор N из M»).
+    internal (ExecutorStopClassifier.ToolCallLeakTurnState State, int Attempts) TakeLeakState(string sessionId)
+    {
+        if (!_leakThisTurn.TryRemove(sessionId, out var had) || !had)
+        {
+            _leakAttempts.TryRemove(sessionId, out _);
+            return (ExecutorStopClassifier.ToolCallLeakTurnState.None, 0);
+        }
+        var attempts = _leakAttempts.AddOrUpdate(sessionId, 1, (_, n) => n + 1);
+        var state = attempts <= SessionManager.MaxSubagentNudges
+            ? ExecutorStopClassifier.ToolCallLeakTurnState.Leaked
+            : ExecutorStopClassifier.ToolCallLeakTurnState.Stuck;
+        return (state, attempts);
+    }
 
     // Копим текст ошибок хода до его result (их может быть несколько — напр. ошибка API
     // и следом обрыв потока)
@@ -1070,6 +1134,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         ExecutorStopClassifier.AuthFailedReason => "не удалось авторизоваться у провайдера модели",
         ExecutorStopClassifier.SubagentStuckReason =>
             "сабагент раз за разом обрывается посреди работы, добить его не удалось",
+        ExecutorStopClassifier.ToolCallLeakStuckReason =>
+            "вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось",
         ExecutorStopClassifier.DeviceWaitExpiredReason =>
             "устройство локального проекта так и не стало доступно — исполнитель не запускался",
         _ => "исполнение прервано",

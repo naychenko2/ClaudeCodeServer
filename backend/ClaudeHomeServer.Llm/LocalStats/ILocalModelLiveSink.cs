@@ -45,6 +45,14 @@ public sealed record LocalModelTurnSummary
 
     // Вид компакции (auto | manual | reactive), если ход её содержал; null — не было.
     public string? CompactionKind { get; init; }
+
+    // ── Утечки вызова инструмента в текст (локальная модель, vLLM qwen3_coder) ───────────
+    // Число text-блоков основного агента, в которых детектор нашёл маркеры XML-формата
+    // вызова. 0 — утечек не было (не null: 0 — честное «не было»).
+    // Tail — хвост после успешного tool_use (вызов был, параметр мог потеряться);
+    // WholeCall — вызов целиком ушёл текстом (tool_use в сообщении не было).
+    public int ToolCallLeakTail { get; init; }
+    public int ToolCallLeakWholeCall { get; init; }
 }
 
 // Шов живых событий локальной модели: счётчик хода (LocalModelTurnMeter) отдаёт сюда

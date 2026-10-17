@@ -130,6 +130,7 @@ export function useLocalModelLive(sessionId: string | null): LocalModelLiveState
           mainRequests: msg.mainRequests ?? 0, subagentRequests: msg.subagentRequests ?? 0,
           compactionRequests: msg.compactionRequests ?? 0, auxiliaryRequests: msg.auxiliaryRequests ?? 0,
           agentTypes: msg.agentTypes ?? null, compactionKind: msg.compactionKind ?? null,
+          toolCallLeakTail: msg.toolCallLeakTail ?? 0, toolCallLeakWholeCall: msg.toolCallLeakWholeCall ?? 0,
         }, now: Date.now() });
       }
     });

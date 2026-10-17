@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // живые чаты на движке (ActiveChats) и итог последнего хода (GetLastTurn) — для панели
 // «Локальные модели» и REST. Название/проект чата — через Core-шов ISessionDirectory
 // (SessionManager в Main): шов необязателен, без него поля null.
-public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTurnMeter
+public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTurnMeter, IToolCallLeakSink
 {
     private readonly TurnTokenService _tokens;
     private readonly ILocalModelStatsReader? _reader;
@@ -228,6 +228,22 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         }
     }
 
+    // IToolCallLeakSink: ClaudeSession детектировал утечку вызова инструмента в текст в ходе
+    // этой сессии. Копим в накопитель текущего хода; итог уходит в LocalModelTurnSummary.
+    // Сессия не в _sessions (не локальная, или ход ещё не стартовал) — no-op: счётчик не копит.
+    public void NoteLeak(string sessionId, string kind)
+    {
+        lock (_gate)
+        {
+            if (!_sessions.TryGetValue(sessionId, out var s)) return;
+            switch (kind)
+            {
+                case "tail": s.Acc.ToolCallLeakTail++; break;
+                case "whole_call": s.Acc.ToolCallLeakWholeCall++; break;
+            }
+        }
+    }
+
     // M5: живая скорость из скользящего окна: Δтокены / Δвремя. null — нет приращения
     // (окно пусто или одна точка). Не 0: нулевая скорость = «нет данных», не «0 ток/с».
     private double? ComputeLiveGenTps(string sessionId)
@@ -405,6 +421,8 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
             AuxiliaryRequests = acc.AuxiliaryRequests,
             AgentTypes = agentTypes,
             CompactionKind = acc.CompactionKind,
+            ToolCallLeakTail = acc.ToolCallLeakTail,
+            ToolCallLeakWholeCall = acc.ToolCallLeakWholeCall,
         };
     }
 
@@ -467,5 +485,9 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         public readonly List<string> AgentTypes = new();
         // Вид компакции (auto | manual | reactive): первый встреченный (compaction, иначе context-compacted).
         public string? CompactionKind;
+
+        // Утечки вызова инструмента в текст (IToolCallLeakSink.NoteLeak): по видам.
+        public int ToolCallLeakTail;
+        public int ToolCallLeakWholeCall;
     }
 }

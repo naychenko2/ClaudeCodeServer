@@ -272,6 +272,10 @@ export interface LocalModelTurnStats {
   auxiliaryRequests?: number;
   agentTypes?: string[] | null;
   compactionKind?: 'auto' | 'manual' | 'reactive' | null;
+  // Утечки вызова инструмента в текст (vLLM qwen3_coder): число text-блоков основного
+  // агента с маркерами XML-формата вызова. 0 — не было (не null).
+  toolCallLeakTail?: number;
+  toolCallLeakWholeCall?: number;
 }
 
 // Ответ GET /api/sessions/{id}/local-model: lastTurn — null, если ходов на

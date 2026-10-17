@@ -240,6 +240,19 @@ public record GlifCostMessage(string JobId, string? OutputType, int MediaCount, 
 // Ответ оборван по лимиту токенов (assistant stop_reason == max_tokens)
 public record TruncatedMessage() : ServerMessage("truncated");
 
+// Утечка вызова инструмента в текст (локальная модель): вызов пришёл text-блоком, а не
+// tool_use. Kind = "tail" (в том же сообщении есть tool_use — хвост после успешного вызова,
+// параметр мог потеряться) | "whole_call" (tool_use в сообщении нет — вызов целиком ушёл
+// текстом). AfterTool — имя последнего tool_use сообщения (для tail), Snippet — выдержка
+// текста с маркером.
+//
+// Snippet: ClaudeSession.BuildLeakSnippet режет до 200 символов (плашка на фронте —
+// человек читает, чуть больше контекста ок); тот же текст SubagentPrompts.TruncateSnippet
+// режет ещё до 120 для текста директивы (модель читает, не раздуваем инструкцию).
+// Два разных лимита — осознанно: у плашки и у директивы разная аудитория.
+public record ToolCallLeakMessage(string Kind, string? AfterTool, string Snippet)
+    : ServerMessage("tool_call_leak");
+
 // Скрытое (зашифрованное) размышление — блок redacted_thinking
 public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 
@@ -693,7 +706,8 @@ public record LocalModelLiveMessage(string Phase, double? GenTps, int? WaitingTo
 public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
     int? TtftMs, int? QueueMsApprox, double? CacheHitPerc, int? OutTokens,
     int MainRequests, int SubagentRequests, int CompactionRequests, int AuxiliaryRequests,
-    string[]? AgentTypes, string? CompactionKind)
+    string[]? AgentTypes, string? CompactionKind,
+    int ToolCallLeakTail = 0, int ToolCallLeakWholeCall = 0)
     : ServerMessage("local_model_turn_stats");
 
 // Сообщения от клиента к серверу

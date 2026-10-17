@@ -82,6 +82,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Тумблер статистики локальной модели (LocalModelStats:Enabled) — ход локальной модели
     // идёт через шлюз, когда метрики включены (счётчику хода нужна копия потока).
     private readonly IOptionsMonitor<LocalModelStatsOptions>? _localModelStats;
+    // Шов утечки вызова инструмента в текст: ClaudeSession сообщает о детекте, счётчик хода
+    // локальной модели (LocalModelTurnMeter) копит. null — тесты/без DI: счётчик не копит.
+    private readonly IToolCallLeakSink? _leakSink;
 
     public LlmSessionAdapterFactory(IConfiguration config, IAgentPromptSource agentPrompt,
         IWorkspaceDatasetLookup workspaceStore, LlmProviderRegistry providers,
@@ -98,10 +101,12 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ICommandExpansion? commandExpansion = null,
         ISkillSnapshotSource? skillSnapshot = null,
         Gateway.ServerTurnGateway? serverGateway = null,
-        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null)
+        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null,
+        IToolCallLeakSink? leakSink = null)
     {
         _serverGateway = serverGateway;
         _localModelStats = localModelStats;
+        _leakSink = leakSink;
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
         _fallbackSettings = fallbackSettings;
@@ -189,7 +194,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             _commandExpansion, _skillSnapshot, _workspaceStore, _disallowedTools, _providers,
             _subscriptionPool, _fileWatcherOptions, _bgLingerTimeout, _falMcpApiKey,
             _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog, _serverGateway,
-            _localModelStats);
+            _localModelStats, _leakSink);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,

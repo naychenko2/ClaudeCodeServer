@@ -32,6 +32,19 @@ public static class ExecutorStopClassifier
     public const string SubagentStuckReason = "subagent_stuck";
 
     /// <summary>
+    /// Вызов инструмента ушёл в текст (локальная модель, qwen3_coder/vLLM): ход не принял
+    /// вызов, но может повторить его штатным tool_use. НЕ терминальная причина (как
+    /// subagent_truncated): работа продолжается повтором, человека звать рано.
+    /// </summary>
+    public const string ToolCallLeakedReason = "tool_call_leaked";
+
+    /// <summary>
+    /// Утечки вызова инструмента в текст повторяются, а повторы исчерпаны (потолок —
+    /// две попытки). Терминальная причина: продолжение не помогает, дальше решает человек.
+    /// </summary>
+    public const string ToolCallLeakStuckReason = "tool_call_leak_stuck";
+
+    /// <summary>
     /// Человек нажал «Стоп» у исполнителя задачи. Терминальная причина: прерванный ход
     /// result не присылает, и без пометки задача висела бы «в работе» без исполнителя;
     /// продолжать сам исполнитель не должен — решает человек (перезапуск снимает пометку).
@@ -49,6 +62,12 @@ public static class ExecutorStopClassifier
     public enum SubagentTurnState { None, Truncated, Stuck }
 
     /// <summary>
+    /// Утечки вызова инструмента в текст (локальная модель): None — не было; Leaked —
+    /// вызов ушёл текстом, повтор в пути; Stuck — уходит раз за разом, попытки исчерпаны.
+    /// </summary>
+    public enum ToolCallLeakTurnState { None, Leaked, Stuck }
+
+    /// <summary>
     /// Причина остановки исполнителя либо null — обычный ход (успех или рабочая ошибка).
     /// errorText — текст ошибки хода (ErrorMessage перед result): у 401 CLI регулярно отдаёт
     /// subtype=success с пустым api_error_status, и текст оказывается единственным сигналом.
@@ -56,13 +75,19 @@ public static class ExecutorStopClassifier
     /// Отказ авторизации сильнее: не авторизовавшись, добивать нечего.
     /// </summary>
     public static string? Classify(ResultMessage result, string? errorText,
-        SubagentTurnState subagent = SubagentTurnState.None) =>
+        SubagentTurnState subagent = SubagentTurnState.None,
+        ToolCallLeakTurnState leak = ToolCallLeakTurnState.None) =>
         IsTerminalAuthFailure(result.ApiErrorStatus, errorText) ? AuthFailedReason
         : subagent switch
         {
             SubagentTurnState.Truncated => SubagentTruncatedReason,
             SubagentTurnState.Stuck => SubagentStuckReason,
-            _ => null,
+            _ => leak switch
+            {
+                ToolCallLeakTurnState.Leaked => ToolCallLeakedReason,
+                ToolCallLeakTurnState.Stuck => ToolCallLeakStuckReason,
+                _ => null,
+            },
         };
 
     /// <summary>
@@ -74,7 +99,7 @@ public static class ExecutorStopClassifier
     /// задаче решал бы «работа встала, зовите человека».
     /// </summary>
     public static bool IsTerminal(string? reason) =>
-        reason is not null && reason != SubagentTruncatedReason;
+        reason is not null && reason != SubagentTruncatedReason && reason != ToolCallLeakedReason;
 
     // Отказ авторизации у провайдера модели: 401 в статусе ЛИБО канонические формулировки
     // в тексте ошибки. Только по статусу проверять нельзя — на этом перекосе уже стояли

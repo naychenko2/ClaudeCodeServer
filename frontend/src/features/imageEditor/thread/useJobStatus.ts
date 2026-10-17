@@ -34,6 +34,9 @@ export interface JobStatus {
 
 const localStart = (elapsed: number | null | undefined) => (elapsed == null ? null : Date.now() - elapsed * 1000);
 
+// Повторные события по одной задаче могут дублировать варианты — схлопываем и сортируем
+export const dedupeVariants = (v: number[]) => [...new Set(v)].sort((a, b) => a - b);
+
 function statusOf(job: ImageEditJob): JobStatus {
   const base = {
     variants: job.variants, count: job.variants.length, cost: job.cost ?? null, charged: job.charged ?? null,
@@ -87,7 +90,8 @@ export function useJobStatus(projectId: string, jobId: string | null) {
           };
         });
       } else if (e.type === 'image_edit_completed') {
-        set(s => ({ ...(s ?? LOST), phase: 'done', variants: e.variants, count: e.variants.length, cost: e.cost ?? null }));
+        const variants = dedupeVariants(e.variants);
+        set(s => ({ ...(s ?? LOST), phase: 'done', variants, count: variants.length, cost: e.cost ?? null }));
       } else if (e.type === 'image_edit_failed') {
         set(s => ({ ...(s ?? LOST), phase: e.outcome === 'cancelled' ? 'cancel' : 'error', charged: e.charged ?? null, error: e.error ?? null }));
       }

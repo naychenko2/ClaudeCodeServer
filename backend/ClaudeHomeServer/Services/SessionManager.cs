@@ -3160,6 +3160,26 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public void EnsureHandoffAllowed(Session source) =>
         EnsureSuccessorAllowed(source, "переносить", "нового чата");
 
+    // Почему тёплый перенос (передачу пишет сам чат своим ходом) сейчас нельзя; null — можно.
+    // Любая причина — тихий уход на холодный путь. Ход передачи не должен ни ждать в очереди,
+    // ни прерывать чужое: идущий ход, очередь, ожидатель агента, цикл «до готово», живые
+    // фоновые агенты. Группа и штаб — ход ушёл бы спикерам/координатору. Архивный чат от хода
+    // вернулся бы из архива, а офлайн-устройство припарковало бы ход до своего возвращения.
+    public string? WarmHandoffBlocker(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return "чат не найден";
+        var s = entry.Info;
+        if (s.ClaudeSessionId is null) return "разговора в CLI ещё не было";
+        if (s.Status is SessionStatus.Working or SessionStatus.Waiting || HasTurnInFlight(entry))
+            return "идёт ход или ждёт очередь";
+        if (s.WorkLoop is not null) return "цикл «до готово»";
+        if (entry.Process is { } p && (p.HasLiveBgAgents || p.HasTrackedBg)) return "живые фоновые агенты";
+        if (s.Participants is { Count: > 0 } || s.TeamImplement is not null) return "групповой чат или штаб";
+        if (s.IsArchived) return "архивный чат";
+        if (DeviceWaitGate(entry) is not null) return "устройство проекта офлайн";
+        return null;
+    }
+
     // Новый чат для переноса: без resume (новый csid выдаст первый ход), с наследованием §11.
     // Источник не трогается — ни UpdatedAt, ни архив.
     public Task<Session> CreateHandoffChatAsync(Session source, string ownerId, string name)
@@ -9577,15 +9597,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             {
                 case ResultMessage rm:
                     waiter.TrySetResult(new TurnResult(
-                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd));
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd,
+                        rm is { Subtype: "success", ApiErrorStatus: null } ? TurnOutcome.Completed : TurnOutcome.Error));
                     break;
                 case ErrorMessage em:
-                    waiter.TrySetResult(new TurnResult(em.Text, 0, null));
+                    waiter.TrySetResult(new TurnResult(em.Text, 0, null, TurnOutcome.Error));
                     break;
                 case ExitedMessage:
                     // Прерван без result — отдаём то, что ассистент успел написать
                     waiter.TrySetResult(new TurnResult(
-                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null));
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null, TurnOutcome.Interrupted));
                     break;
             }
         }
@@ -10187,8 +10208,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 }
 
 // Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
-// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал)
-public record TurnResult(string Reply, long DurationMs, double? CostUsd);
+// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).
+// Outcome отличает штатный result от ошибки (Reply — текст ошибки) и прерывания (Reply —
+// что ассистент успел написать): тёплый перенос в новый чат не должен принять их за записку
+public record TurnResult(string Reply, long DurationMs, double? CostUsd,
+    TurnOutcome Outcome = TurnOutcome.Completed);
+
+public enum TurnOutcome { Completed, Error, Interrupted }
 
 // Результат отправки с ожиданием: Queued — сессия была занята, сообщение встало в очередь
 // и уйдёт после текущего хода; QueueFull — очередь переполнена, сообщение отброшено;

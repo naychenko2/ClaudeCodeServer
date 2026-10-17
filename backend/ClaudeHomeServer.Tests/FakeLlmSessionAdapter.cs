@@ -42,7 +42,9 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public bool HasQueuedTurn => false;
     public bool OrchestrationActive => false;
     public bool HasPendingBg => false;
-    public bool HasTrackedBg => false;
+    // Тест может «оживить» фоновых агентов прогона (гейты, которым они мешают)
+    public bool BgAlive { get; set; }
+    public bool HasTrackedBg => BgAlive;
     public bool HasTrackedCommandBg => false;
     public bool IsContinuationInFlight => false;
 

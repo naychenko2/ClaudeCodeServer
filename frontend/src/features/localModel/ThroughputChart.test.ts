@@ -360,17 +360,17 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «Скорость генерации, ток/с» обновляется на hover', () => {
+describe('tpChartAriaLabel: SVG «На одного агента, ток/с» обновляется на hover', () => {
   it('базовый: окно + среднее + кэш', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('Скорость генерации, ток/с за 15 минут');
-    expect(label).toContain('412 ток/с');
+    expect(label).toContain('На одного агента, ток/с за 15 минут');
+    expect(label).toContain('на агента в среднем 412 ток/с');
     expect(label).not.toContain('интервал');
   });
-  it('hover: интервал со скоростью генерации', () => {
+  it('hover: интервал со скоростью на одного агента', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('скорость генерации 250 ток/с');
+    expect(label).toContain('на одного агента 250 ток/с');
   });
   it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
     const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
@@ -733,13 +733,37 @@ describe('peakPerStreamOf: пик скорости генерации по ин�
   });
 });
 
-describe('buildIssuedSegments: линия «выдано стендом» рвётся на null', () => {
+describe('buildIssuedSegments: линия «всего по стенду» (genThroughput)', () => {
   it('null в throughput рвёт линию: два сегмента; perStream на неё не влияет', () => {
     const intervals = [mkIt(0, 30_000, 5, 100), mkIt(30_000, 60_000, 5, null), mkIt(60_000, 90_000, 5, 200)];
     const segs = buildIssuedSegments(intervals, 0, 90_000, 200, GEOM);
     expect(segs).toHaveLength(2);
     expect(segs[0]).toHaveLength(1);
     expect(segs[1]).toHaveLength(1);
+  });
+
+  it('непрерывный прогон: один сегмент, y выше (меньше) для большего значения', () => {
+    const intervals = [
+      mkIt(0, 30_000, 10, 50),
+      mkIt(30_000, 60_000, 10, 150),
+      mkIt(60_000, 90_000, 10, 100),
+    ];
+    const segs = buildIssuedSegments(intervals, 0, 90_000, 200, GEOM);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]).toHaveLength(3);
+    // 150 (выше) → меньший y (выше на экране), чем 50 и 100
+    expect(segs[0][1].y).toBeLessThan(segs[0][0].y);
+    expect(segs[0][1].y).toBeLessThan(segs[0][2].y);
+  });
+
+  it('null в perStream не рвёт вторую серию: непрерывный прогон', () => {
+    const intervals = [
+      mkIt(0, 30_000, null, 100),   // perStream null, throughput 100
+      mkIt(30_000, 60_000, 50, 100), // perStream 50, throughput 100
+    ];
+    const segs = buildIssuedSegments(intervals, 0, 60_000, 200, GEOM);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]).toHaveLength(2);
   });
 });
 

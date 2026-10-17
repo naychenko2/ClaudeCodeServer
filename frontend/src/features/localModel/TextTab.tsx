@@ -184,7 +184,7 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
         <Kpi
           value={formatTps(data.speed.genPerStream)}
-          label="генерация, ток/с на агента, за последнюю минуту"
+          label="генерация на одного агента, ток/с, за последнюю минуту"
         />
         <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, ток/с, за последнюю минуту" />
       </div>

@@ -240,7 +240,7 @@ C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs
 
 ## Плагины (ClaudeHomeServer.Plugins) — в работе
 
-Пакет владельца из существующих примитивов: навыки и команды — нативный формат CLI через `--plugin-dir`, панель — iframe без `allow-same-origin` с мостом v1, сеть — прокси `net:{host}`; флаги `plugins-mvp`, `plugins-build-yourself` ([ADR-031](docs/adr/ADR-031-plugins.md)). **Серверного кода плагина нет; пакеты — только в `data/plugins/{owner}`, не в общих каталогах CLI; ставит и выдаёт права только человек.** Устройство и правила правок — [docs/architecture/plugins.md](docs/architecture/plugins.md).
+Пакет владельца из существующих примитивов: навыки и команды — нативный формат CLI через `--plugin-dir`, панель — iframe без `allow-same-origin` с мостом v1, сеть — прокси `net:{host}`; флаги `plugins-mvp`, `plugins-build-yourself` ([ADR-031](docs/adr/ADR-031-plugins.md)). Пакеты — только в `data/plugins/{owner}`, не в общих каталогах CLI; ставит и выдаёт права только человек. Серверная вертикаль `ClaudeHomeServer.Plugins` (PluginStore, IPluginDirSource) — [CLAUDE.md](backend/ClaudeHomeServer.Plugins/CLAUDE.md); устройство и правила правок — [docs/architecture/plugins.md](docs/architecture/plugins.md).
 
 ## Внутренние подсистемы (Services/Composition)
 

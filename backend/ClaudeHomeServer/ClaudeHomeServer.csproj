@@ -287,6 +287,8 @@
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <!-- Notes и Spend — теперь динамические модули (см. CopyNotesModule/CopySpendModule выше), не прямые референсы -->
 <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
+    <!-- Plugins (ADR-031): вертикаль плагинов владельца; Program.cs подключает её в AddSubsystems -->
+    <ProjectReference Include="..\ClaudeHomeServer.Plugins\ClaudeHomeServer.Plugins.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />

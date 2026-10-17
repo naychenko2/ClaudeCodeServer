@@ -143,6 +143,13 @@
       сторожей форс-загружают сборку через typeof(LlmSubsystem).Assembly.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <!--
+      Plugins (ADR-031) — отдельная сборка. Нужен ProjectReference, чтобы статические
+      конструкторы сторожей (SubsystemBoundaryTests, SubsystemBoundaryCoverageTests) видели
+      тип `ClaudeHomeServer.Services.Plugins.PluginsSubsystem` для force-загрузки сборки,
+      и чтобы юниты PluginStoreTests резолвили PluginStore/PluginDirSource напрямую.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Plugins\ClaudeHomeServer.Plugins.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

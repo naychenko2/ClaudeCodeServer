@@ -986,7 +986,12 @@ builder.Services.AddSubsystems(builder.Configuration,
     // CLI «npx skills»). Регистрируется после Notes: порядок с Task/Notes не связан
     // (Skills — листовая, единственный шов `SessionManager → SkillsService` остаётся
     // до этапа 4 — расщепление SessionManager).
-    new ClaudeHomeServer.Services.Skills.SkillsSubsystem());
+    new ClaudeHomeServer.Services.Skills.SkillsSubsystem(),
+    // Plugins (ADR-031, шаг 1.2) — вертикаль плагинов владельца: хранилище
+    // (PluginStore) и IPluginDirSource (каталоги для --plugin-dir). Листовая:
+    // потребители (ClaudeSession, мост панели) берут IPluginDirSource/IPluginCapability
+    // опционально через Core-швы, порядок с остальными не связан.
+    new ClaudeHomeServer.Services.Plugins.PluginsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

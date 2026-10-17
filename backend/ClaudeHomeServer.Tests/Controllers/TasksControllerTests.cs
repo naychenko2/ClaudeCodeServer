@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -215,6 +218,88 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var get = await _client.GetAsync($"/api/tasks/{reviewId}");
         var got = await get.Content.ReadFromJsonAsync<JsonElement>();
         got.GetProperty("verification").GetProperty("verdict").GetString().Should().Be("accepted");
+    }
+
+    // ─── Мироринг MCP: warning в PUT, когда ревью/проверку/финал фичи закрыли без вердикта ──
+
+    [Fact]
+    public async Task Update_РевьюФичиБезВердикта_WarningВОтвете()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var review = await CreateTaskAsync(new { title = "ревью", featureId = epicId, role = "review" });
+        var reviewId = review.GetProperty("id").GetString();
+
+        // Закрытие без вердикта: status=done, verification не присылаем
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{reviewId}", new { status = "done" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("warning", out var warning).Should().BeTrue(
+            "PUT без вердикта обязан вернуть мягкое warning, как MCP tasks_complete");
+        warning.GetString().Should().Be(FeatureVerdict.WarningText);
+    }
+
+    [Fact]
+    public async Task Update_РевьюФичиСВердиктом_БезWarning()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var review = await CreateTaskAsync(new { title = "ревью", featureId = epicId, role = "review" });
+        var reviewId = review.GetProperty("id").GetString();
+
+        // Закрытие С вердиктом: warning не должен появляться (поле отсутствует, не null)
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{reviewId}", new
+        {
+            status = "done",
+            verification = new { verdict = "accepted" },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("warning", out _).Should().BeFalse(
+            "с вердиктом warning не нужен — поле отсутствует");
+    }
+
+    // ─── REST GET /api/tasks/features: агрегат фичи через FeatureProjector ─────────────────
+
+    [Fact]
+    public async Task GetFeatures_ПоСессии_ВозвращаетАгрегат()
+    {
+        const string sessionId = "sess-feature-test-1";
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+
+        var response = await _client.GetAsync($"/api/tasks/features?sessionId={sessionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var features = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Ответ — голой массив FeatureRun; фича чата в нём, агрегат: эпик + 1 шаг, вердиктов нет
+        features.GetArrayLength().Should().BeGreaterThanOrEqualTo(1);
+        var run = features.EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        run.GetProperty("epic").GetProperty("id").GetString().Should().Be(epicId);
+        run.GetProperty("steps").GetArrayLength().Should().Be(1);
+        run.GetProperty("verdicts").GetProperty("loops").GetInt32().Should().Be(0);
+        run.GetProperty("ready").GetBoolean().Should().BeFalse();
+    }
+
+    // Подсистема Tasks выключена (FeatureProjector не зарегистрирован) → честный 503, а не 500.
+    // Прямая сборка контроллера: GetFeatures проверяет features==null ДО обращения к задачам.
+    [Fact]
+    public void GetFeatures_ПодсистемаВыключена_503()
+    {
+        var controller = new TasksController(
+            tasks: null!, broadcaster: null!, ai: null!, projects: null!,
+            personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
+            noteSync: null, features: null);
+
+        var result = controller.GetFeatures(null);
+
+        // StatusCode(503, body) — ObjectResult (несёт тело), не StatusCodeResult
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>()
+            .Which.StatusCode.Should().Be(503);
     }
 
     [Fact]

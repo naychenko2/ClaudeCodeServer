@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { handoffAvailability } from '../chatHandoff';
+import { handoffAvailability, handoffWarm } from '../chatHandoff';
 
 // Кнопка «Перенести в новый чат» (docs/features/chat-handoff.md): зеркало серверных отказов
 describe('handoffAvailability', () => {
@@ -34,5 +34,18 @@ describe('handoffAvailability', () => {
     const a = handoffAvailability(plain, true);
     expect(a.enabled).toBe(false);
     expect(a.reason).toMatch(/конца хода/);
+  });
+});
+
+// Путь переноса по статусу кэша: пока кэш жив — записку пишет сам чат
+describe('handoffWarm', () => {
+  it('тёплый и остывающий кэш — тёплый путь', () => {
+    expect(handoffWarm('warm')).toBe(true);
+    expect(handoffWarm('expiring')).toBe(true);
+  });
+
+  it('остывший и неизвестный кэш — холодный путь', () => {
+    expect(handoffWarm('cold')).toBe(false);
+    expect(handoffWarm('unknown')).toBe(false);
   });
 });

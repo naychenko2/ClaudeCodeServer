@@ -1309,13 +1309,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [session.id, project]);
 
-  // Перенос в новый чат, холодный путь (docs/features/chat-handoff.md): сервер пишет
-  // передаточную записку и заводит чат-преемник без истории. Дальше — ровно как у ветки:
-  // записку в черновик нового чата (человек её поправит, автоотправки НЕТ) и навигация.
-  // Отказы 409/502 несут человеческий текст — показываем его тостом
-  const handleHandoff = useCallback(async () => {
+  // Перенос в новый чат (docs/features/chat-handoff.md): записку пишет сам чат (warm —
+  // путь выбрала шапка по статусу кэша) или дешёвая модель, сервер заводит чат-преемник без
+  // истории. Дальше — ровно как у ветки: записку в черновик нового чата (человек её
+  // поправит, автоотправки НЕТ) и навигация. Отказы 409/502 несут человеческий текст — тостом
+  const handleHandoff = useCallback(async (warm: boolean) => {
     try {
-      const result = await api.chats.handoff(session.id);
+      const result = await api.chats.handoff(session.id, warm);
       setDraft(result.chatId, result.draft);
       const navDest: NavSnapshot = result.projectId
         ? { screen: 'project', project: project!, chatId: result.chatId, view: 'chat', file: null }

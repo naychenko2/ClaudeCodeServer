@@ -3,7 +3,7 @@ import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { rewriteCostUsd, cacheLeftText, cacheNoteText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
-import { handoffAvailability } from '../../lib/chatHandoff';
+import { handoffAvailability, handoffWarm } from '../../lib/chatHandoff';
 import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
@@ -718,7 +718,8 @@ export interface HandoffControl {
   enabled: boolean;
   reason?: string;
   busy: boolean;
-  onClick: () => void;
+  // warm — тёплый путь (lib/chatHandoff.handoffWarm по статусу кэша)
+  onClick: (warm: boolean) => void;
 }
 const HANDOFF_LABEL = 'Перенести в новый чат';
 const HANDOFF_HINT = 'Новый чат начнётся с записки о разговоре — без перезаписи всей истории в кэш';
@@ -749,7 +750,7 @@ function CacheClockFace({ items, isWaiting, isCompact, toastSessionId, handoff }
     // Действие тоста — тот же перенос, что кнопка попапа; выключенного переноса в тосте нет
     showToast('Кэш промпта скоро остынет',
       `Осталось ${cacheLeftText(remainingMs ?? 0)}. Ход до остывания прочитает кэш в 10 раз дешевле, после — перепишет его заново.`,
-      'info', handoff?.enabled && !handoff.busy ? { label: HANDOFF_LABEL, onClick: handoff.onClick } : undefined);
+      'info', handoff?.enabled && !handoff.busy ? { label: HANDOFF_LABEL, onClick: () => handoff.onClick(handoffWarm(status)) } : undefined);
     // remainingMs в зависимостях не нужен: тост один на якорь, текст — на момент показа
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toastSessionId, status, anchorAtMs, isWaiting]);
@@ -811,7 +812,7 @@ function PromptCacheDetails({ items, state, billing, isWaiting, handoff }: { ite
       {handoff && (
         <>
           <Button size="sm" variant="ghostFilled" fullWidth style={{ marginTop: SP.sm }}
-            disabled={!handoff.enabled} loading={handoff.busy} onClick={handoff.onClick}
+            disabled={!handoff.enabled} loading={handoff.busy} onClick={() => handoff.onClick(handoffWarm(status))}
             title={handoff.enabled ? HANDOFF_HINT : handoff.reason}>
             {HANDOFF_LABEL}
           </Button>
@@ -1098,9 +1099,10 @@ interface ChatHeaderBarProps {
   // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
   // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
   contextBar?: ReactNode;
-  // Перенос в новый чат (холодный путь): владелец экрана создаёт чат и уходит в него.
+  // Перенос в новый чат: владелец экрана создаёт чат и уходит в него; warm — просить
+  // записку у самого чата (кэш тёплый, lib/chatHandoff.handoffWarm).
   // Не задан — кнопки в секции кэша и действия в тосте нет
-  onHandoff?: () => Promise<void>;
+  onHandoff?: (warm: boolean) => Promise<void>;
   // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
   // отделять нечего, и черта лежала бы поперёк пустого чата без причины
   scrolled?: boolean;
@@ -1221,17 +1223,18 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
   // Лента для индикатора кэша — замороженная до нового result или смены чата (см. usePromptCacheItems)
   const cacheItems = usePromptCacheItems(items, session.id);
-  // Перенос в новый чат: запрос идёт до минуты (модель пишет записку) — кнопка крутится,
-  // повторный клик гасит сама занятость, а не только 409 сервера
+  // Перенос в новый чат: запрос идёт до минуты и дольше (записку пишет модель или сам чат
+  // своим ходом) — кнопка крутится, повторный клик гасит сама занятость, а не только 409
+  // сервера. Путь (warm) выбирает место клика по статусу кэша, который оно и так знает
   const [handoffBusy, setHandoffBusy] = useState(false);
   const handoffAvail = handoffAvailability(session, isWaiting);
   const handoff: HandoffControl | undefined = onHandoff ? {
     ...handoffAvail,
     busy: handoffBusy,
-    onClick: () => {
+    onClick: (warm: boolean) => {
       if (handoffBusy || !handoffAvail.enabled) return;
       setHandoffBusy(true);
-      onHandoff().finally(() => setHandoffBusy(false));
+      onHandoff(warm).finally(() => setHandoffBusy(false));
     },
   } : undefined;
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,

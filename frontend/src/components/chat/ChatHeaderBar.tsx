@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { promptCacheState, rewriteCostUsd, cacheLeftText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { rewriteCostUsd, cacheLeftText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -145,13 +145,11 @@ function RateRow({ w, pip }: { w: RateWindow; pip?: ReactNode }) {
 // wide — более широкий поповер на узких раскладках (мобил/планшет: для объединённого
 // чипа с несколькими секциями — шире → меньше переносов → ниже по высоте, помещается на экран).
 // isCompact — планшет (использует мобильную механику поповера wide).
-function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact, tone, ring, wide, pulse, dot, resetKey, children }: {
+function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact, tone, ring, wide, pulse, resetKey, children }: {
   label?: string; amount: React.ReactNode; title: string; ariaLabel?: string; isMobile?: boolean; isCompact?: boolean;
   // Оформленная подсказка вместо нативного title (тот тогда не ставится — иначе две подсказки)
   tip?: React.ReactNode;
   tone?: 'warn' | 'danger'; ring?: boolean; wide?: boolean; pulse?: boolean;
-  // Точка-статус в нижнем правом углу (кэш промпта на мобильной пилюле)
-  dot?: React.ReactNode;
   // Попап показывает данные конкретного чата — при смене чата закрываем
   resetKey?: string;
   children: React.ReactNode;
@@ -174,9 +172,9 @@ function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact,
           display: 'flex', alignItems: 'center',
           gap: SP.xs,
           // Кольцевая — той же высоты, что соседние: вертикальный padding общий, высоту
-          // задаёт строка текста (иконка её не раздувает, см. RingIcon); слева 2 — иконка
-          // прижата к скруглению
-          padding: ring ? '3px 9px 3px 2px' : '3px 9px',
+          // задаёт строка текста (иконка её не раздувает, см. MeterIcon); слева поуже —
+          // полоски прижаты к скруглению
+          padding: ring ? '3px 9px 3px 7px' : '3px 9px',
           boxSizing: 'border-box',
           background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: ring ? R.max : R.lg,
           cursor: 'pointer', fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 700, color: C.accent,
@@ -196,7 +194,6 @@ function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact,
       {tip ? <Tooltip content={tip} align="end" disabled={open}>{button}</Tooltip> : button}
       {/* Пульс-индикатор «на бегу» — сигнал активного workflow без отдельного чипа в ряду */}
       {pulse && <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: `2px solid ${C.bgPanel}`, animation: 'pulsedot 1.2s ease-in-out infinite', pointerEvents: 'none' }} />}
-      {dot}
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -276,7 +273,7 @@ function ClaudeCostPopoverBody({ stats, billing, windows }: {
       {ratePillSegments(windows).map(s => windows.find(w => w.limitType === s.limitType)!)
         .map((w, i) => (
           <RateRow key={w.limitType} w={w}
-            pip={i < RING_WINDOWS ? <RingPip slot={(i + 1) as 1 | 2} level={w.level} /> : undefined} />
+            pip={i < RING_WINDOWS ? <MeterPip slot={(i + 1) as 1 | 2} level={w.level} /> : undefined} />
         ))}
       {/* Расход по API-тарифу — справка, свёрнута одной строкой под лимитами; расхода нет — нет и строки */}
       {stats.cost > 0 && <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
@@ -293,45 +290,31 @@ function ClaudeCostPopoverBody({ stats, billing, windows }: {
   );
 }
 
-// === Кольцевая пилюля шапки (вариант C2) ===
-// Спецификация — заметка «Шапка чата — пилюля «кольца» (C2), спецификация».
-// Три кольца снаружи внутрь: контекст, 1-е окно, 2-е окно. Слоты не сдвигаются: нет
-// окна — его кольца нет вовсе, нет оценки контекста — внешнее кольцо одной дорожкой,
-// поэтому кольца не прыгают, когда появляется оценка.
-interface RingSlot { pct: number | null; level: RateWindow['level'] }
+// === Пилюля шапки «полоски» ===
+// Три полоски сверху вниз: контекст, 1-е окно, 2-е окно. Слоты не сдвигаются: нет
+// окна — на его месте пусто, нет оценки контекста — верхняя полоска одной дорожкой,
+// поэтому полоски не прыгают, когда появляется оценка. Справа через разделитель —
+// циферблат кэша промпта (CacheClockFace). Полоски вместо колец: длина читается
+// точнее дуги, а внутреннее кольцо в иконке 20×20 было почти точкой.
+interface MeterSlot { pct: number | null; level: RateWindow['level'] }
 
-// Радиусы колец (outer, mid, inner) в viewBox 20×20: полоса 2, зазор 1px, дырка Ø4
-const RING_BOX = 20;
-const RING_C = RING_BOX / 2;
-const RING_GEOMETRY = [9, 6, 3].map(r => ({ r, L: 2 * Math.PI * r }));
-const RING_STROKE = 2;
-
-// Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся.
-// round — скруглённые концы дуги; animate — дуга плавно дорастает до нового значения
-function RingCircle({ r, stroke, dash, round, animate }: { r: number; stroke: string; dash?: string; round?: boolean; animate?: boolean }) {
-  return (
-    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap={round ? 'round' : 'butt'}
-      strokeDasharray={dash} style={{ stroke, transition: animate ? 'stroke-dasharray 600ms cubic-bezier(.2,.8,.2,1)' : undefined }} />
-  );
-}
-
-// Дуга со скруглёнными концами: каждый конец выступает на полтолщины, поэтому штрих
-// короче на толщину — видимая длина остаётся ровно arc (и минимум 3px из ringArcLength)
-const roundArcDash = (arc: number, L: number) => `${Math.max(arc - RING_STROKE, 0.01)} ${L}`;
+// Геометрия иконки: три полоски 22×3 с зазором 2 → 22×13
+const BAR_W = 22;
+const BAR_H = 3;
+const BAR_GAP = 2;
 
 const levelRank = (l: RateWindow['level']) => (l === 'danger' ? 2 : l === 'warn' ? 1 : 0);
 
-// Иконка пилюли 20×20. slots — [outer, mid, inner]; undefined — слота нет (не рисуется),
-// pct null — только дорожка. spinOuter — идёт сжатие: внешнее кольцо становится спиннером.
-// forceReducedMotion — только для витрины (5.2r), в продукте решает настройка ОС.
+// Иконка пилюли. slots — [контекст, 1-е окно, 2-е окно]; undefined — слота нет (место
+// пустое), pct null — только дорожка. runTop — идёт сжатие: по верхней полоске бежит
+// отрезок акцента. forceReducedMotion — только для витрины (5.2r), в продукте решает ОС.
 // Обёртка нулевой высоты: иконка центрируется по строке текста, но высоту пилюли не
 // задаёт — её задаёт текст, ровно как у соседних пилюль, и ряд стоит на одной высоте
-function RingIcon({ slots, spinOuter, forceReducedMotion, resetKey }: {
-  slots: [RingSlot, RingSlot | undefined, RingSlot | undefined]; spinOuter?: boolean; forceReducedMotion?: boolean;
+function MeterIcon({ slots, runTop, forceReducedMotion, resetKey }: {
+  slots: [MeterSlot, MeterSlot | undefined, MeterSlot | undefined]; runTop?: boolean; forceReducedMotion?: boolean;
   resetKey?: string;
 }) {
   const reducedMotion = usePrefersReducedMotion() || !!forceReducedMotion;
-  const outer = RING_GEOMETRY[0];
   // Толчок — только когда уровень вырос в ЭТОМ чате; смена чата лишь запоминает новый уровень
   const rank = Math.max(...slots.map(s => (s && s.pct !== null ? levelRank(s.level) : 0)));
   const prev = useRef({ rank, resetKey });
@@ -341,49 +324,51 @@ function RingIcon({ slots, spinOuter, forceReducedMotion, resetKey }: {
     prev.current = { rank, resetKey };
   }, [rank, resetKey, reducedMotion]);
   return (
-    <span style={{ display: 'flex', alignItems: 'center', width: RING_BOX, height: 0, flexShrink: 0 }}>
-    <svg width={RING_BOX} height={RING_BOX} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
-      onAnimationEnd={() => setBump(false)}
-      style={{ flexShrink: 0, display: 'block', transformOrigin: 'center', animation: bump ? 'cc-ring-bump 500ms ease-out' : undefined }}>
-      {/* Старт дуг сверху, по часовой */}
-      <g transform={`rotate(-90 ${RING_C} ${RING_C})`}>
+    <span style={{ display: 'flex', alignItems: 'center', width: BAR_W, height: 0, flexShrink: 0 }}>
+      <span aria-hidden onAnimationEnd={() => setBump(false)} style={{
+        display: 'flex', flexDirection: 'column', gap: BAR_GAP, width: BAR_W, flexShrink: 0,
+        animation: bump ? 'cc-ring-bump 500ms ease-out' : undefined,
+      }}>
         {slots.map((s, i) => {
-          if (!s || (i === 0 && spinOuter)) return null;
-          const { r, L } = RING_GEOMETRY[i];
-          const arc = ringArcLength(s.pct, L);
+          const run = i === 0 && runTop;
           return (
-            <g key={i}>
-              <RingCircle r={r} stroke={C.progressTrack} />
-              {arc > 0 && <RingCircle r={r} stroke={RATE_COLORS[s.level].fill} dash={roundArcDash(arc, L)} round animate={!reducedMotion} />}
-            </g>
+            <span key={i} style={{
+              position: 'relative', display: 'block', height: BAR_H, borderRadius: R.max, overflow: 'hidden',
+              background: s ? C.progressTrack : undefined,
+            }}>
+              {/* Длина заливки — ringArcLength по ширине полоски: 1% не короче 3px, 99% ≠ 100% */}
+              {s && !run && <span style={{
+                position: 'absolute', left: 0, top: 0, bottom: 0, width: ringArcLength(s.pct, BAR_W),
+                borderRadius: R.max, background: RATE_COLORS[s.level].fill,
+                transition: reducedMotion ? undefined : 'width 600ms cubic-bezier(.2,.8,.2,1)',
+              }} />}
+              {/* Сжатие: бегущий отрезок; при reduced-motion — неподвижный посередине */}
+              {run && <span style={{
+                position: 'absolute', top: 0, bottom: 0, left: reducedMotion ? (BAR_W - 8) / 2 : 0, width: 8,
+                borderRadius: R.max, background: C.accent,
+                animation: reducedMotion ? undefined : 'cc-bar-run 1.1s ease-in-out infinite',
+              }} />}
+            </span>
           );
         })}
-      </g>
-      {spinOuter && (
-        // Вращается только внешнее кольцо; при reduced-motion — неподвижная четверть
-        // поверх пунктирной дорожки, чтобы «идёт работа» читалось и без анимации
-        <g style={{ transformOrigin: `${RING_C}px ${RING_C}px`, animation: reducedMotion ? undefined : 'cc-spin 0.9s linear infinite' }}>
-          <RingCircle r={outer.r} stroke={C.progressTrack} dash={reducedMotion ? '2 2' : undefined} />
-          <RingCircle r={outer.r} stroke={C.accent} dash={roundArcDash(outer.L * 0.25, outer.L)} round />
-        </g>
-      )}
-    </svg>
+      </span>
     </span>
   );
 }
 
-// Пип строки поповера — мини-копия иконки 12×12 (та же геометрия в масштабе 0.6): все три
-// слота дорожками, слот этой строки залит целиком цветом уровня. Просто цветная точка не
-// годится: все окна в норме дали бы одинаковые серые точки, а по месту в мини-иконке
-// кольцо узнаётся всегда
-function RingPip({ slot, level }: { slot: 0 | 1 | 2; level: RateWindow['level'] }) {
+// Пип строки поповера — мини-копия иконки 12×8: все три полоски дорожками, полоска этой
+// строки залита целиком цветом уровня. Просто цветная точка не годится: все окна в норме
+// дали бы одинаковые серые точки, а по месту в мини-иконке полоска узнаётся всегда
+function MeterPip({ slot, level }: { slot: 0 | 1 | 2; level: RateWindow['level'] }) {
   return (
-    <svg width={12} height={12} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
-      style={{ flexShrink: 0, display: 'block' }}>
-      {RING_GEOMETRY.map(({ r }, i) => (
-        <RingCircle key={i} r={r} stroke={i === slot ? RATE_COLORS[level].fill : C.progressTrack} />
+    <span aria-hidden style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 12, flexShrink: 0 }}>
+      {[0, 1, 2].map(i => (
+        <span key={i} style={{
+          display: 'block', height: 2, borderRadius: R.max,
+          background: i === slot ? RATE_COLORS[level].fill : C.progressTrack,
+        }} />
       ))}
-    </svg>
+    </span>
   );
 }
 
@@ -482,7 +467,7 @@ function ContextRow({ estimate, assistantName = 'Ассистент' }: { estima
   const c = RATE_COLORS[estimate.level];
   const hasPct = estimate.pct !== undefined;
   return (
-    <MeterRow pip={<RingPip slot={0} level={estimate.level} />} label="Контекст"
+    <MeterRow pip={<MeterPip slot={0} level={estimate.level} />} label="Контекст"
       fill={c.fill} valueColor={hasPct ? c.text : C.textMuted}
       value={hasPct ? `${estimate.pct}%` : estimate.fresh ? 'сжат' : '—'}
       pct={estimate.pct}
@@ -686,25 +671,76 @@ export function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenSt
 // === Индикатор TTL prompt cache ===
 // Данные — lib/promptCache.ts, таймер — usePromptCache: тикает только сам индикатор.
 // unknown (сторонний провайдер, локальный движок, история до поля) — индикатора нет вовсе.
+// Отдельного чипа нет: кэш — циферблат справа в пилюле шапки, детали — секцией её поповера.
 type KnownCacheStatus = Exclude<PromptCacheStatus, 'unknown'>;
 const CACHE_STATUS_TEXT: Record<KnownCacheStatus, string> = { warm: 'тёплый', expiring: 'скоро остынет', cold: 'остыл' };
-// Тёплый — приглушённо, остывающий — тоном предупреждения, остывший — нейтрально
-const CACHE_FACE_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, expiring: RATE_COLORS.warn.text, cold: C.textSecondary };
-const CACHE_DOT_COLOR: Record<KnownCacheStatus, string> = { warm: C.success, expiring: C.warning, cold: C.textMuted };
+// Тёплый — зелёный, остывающий — тоном предупреждения, остывший — тревожным: следующий
+// ход перепишет весь кэш по полной цене записи
+const CACHE_CLOCK_COLOR: Record<KnownCacheStatus, string> = { warm: C.success, expiring: RATE_COLORS.warn.fill, cold: RATE_COLORS.danger.fill };
+const CACHE_TEXT_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, expiring: RATE_COLORS.warn.text, cold: RATE_COLORS.danger.text };
 
-// Есть ли в чате что показывать: сравнение со временем тут не нужно, только факт якоря
-function hasPromptCacheInfo(items: ChatItem[]): boolean {
-  return promptCacheState(items, 0).status !== 'unknown';
+// Циферблат 14×14 в viewBox 20: контур, тающий сектор остатка и стрелка на его кромке —
+// как кухонный таймер. frac — доля оставшегося срока (0…1); остывший — пунктирный контур
+// и стрелка на нуле; spin — идёт ход, остаток неизвестен: крутится одна стрелка
+const CLOCK_C = 10;
+const CLOCK_SECTOR_R = 7;
+const CLOCK_HAND_R = 6.5;
+function CacheClock({ frac, color, cold, spin }: { frac: number; color: string; cold?: boolean; spin?: boolean }) {
+  const reducedMotion = usePrefersReducedMotion();
+  const a = 2 * Math.PI * Math.min(1, Math.max(0, frac));
+  const pt = (r: number) => `${CLOCK_C + r * Math.sin(a)} ${CLOCK_C - r * Math.cos(a)}`;
+  const showSector = !cold && !spin && frac > 0;
+  const hand = spin || cold ? `${CLOCK_C} ${CLOCK_C - CLOCK_HAND_R}` : pt(CLOCK_HAND_R);
+  // Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся
+  return (
+    <svg width={14} height={14} viewBox="0 0 20 20" aria-hidden shapeRendering="geometricPrecision"
+      style={{ flexShrink: 0, display: 'block' }}>
+      <circle cx={CLOCK_C} cy={CLOCK_C} r={8.5} fill="none" strokeWidth={1.8}
+        strokeDasharray={cold ? '3 2.2' : undefined} style={{ stroke: color }} />
+      {showSector && (frac >= 0.999
+        ? <circle cx={CLOCK_C} cy={CLOCK_C} r={CLOCK_SECTOR_R} fillOpacity={0.35} style={{ fill: color }} />
+        : <path d={`M${CLOCK_C} ${CLOCK_C} L${CLOCK_C} ${CLOCK_C - CLOCK_SECTOR_R} A${CLOCK_SECTOR_R} ${CLOCK_SECTOR_R} 0 ${frac > 0.5 ? 1 : 0} 1 ${pt(CLOCK_SECTOR_R)} Z`}
+            fillOpacity={0.35} style={{ fill: color }} />)}
+      <g style={{ transformOrigin: `${CLOCK_C}px ${CLOCK_C}px`, animation: spin && !reducedMotion ? 'cc-spin 2.4s linear infinite' : undefined }}>
+        <path d={`M${CLOCK_C} ${CLOCK_C} L${hand}`} strokeWidth={1.8} strokeLinecap="round" style={{ stroke: color }} />
+      </g>
+      <circle cx={CLOCK_C} cy={CLOCK_C} r={1.3} style={{ fill: color }} />
+    </svg>
+  );
 }
 
-// Подпись чипа: во время хода якорь вот-вот сдвинется — остаток не показываем
-function cacheFaceText(state: PromptCacheState, isWaiting: boolean): string {
-  if (isWaiting) return 'в работе';
-  if (state.status === 'cold') return 'остыл';
-  return cacheLeftText(state.remainingMs ?? 0);
+// Доля оставшегося срока: от якоря до момента остывания
+function cacheFrac(state: PromptCacheState): number {
+  const { anchorAtMs, expiresAt, remainingMs } = state;
+  if (anchorAtMs === undefined || expiresAt === undefined || !remainingMs) return 0;
+  const life = expiresAt - anchorAtMs;
+  return life > 0 ? remainingMs / life : 0;
 }
 
-// Тело попапа: срок, остаток, префикс, последний промах и цена перезаписи остывшего кэша
+// Кэш на лице пилюли: разделитель, циферблат и подпись. Текст — только когда стоит
+// обратить внимание: остаток в минутах, пока остывает, и «остыл» (на узких раскладках —
+// без «остыл»: красного циферблата хватает, шапка мобилы не резиновая). Пока идёт ход,
+// якорь вот-вот сдвинется — остаток не показываем, крутится стрелка.
+// Свой компонент — чтобы по таймеру перерисовывался он один, а не вся пилюля
+function CacheClockFace({ items, isWaiting, isCompact }: { items: ChatItem[]; isWaiting: boolean; isCompact?: boolean }) {
+  const state = usePromptCache(items);
+  if (state.status === 'unknown') return null;
+  const { status } = state;
+  const text = isWaiting ? undefined
+    : status === 'expiring' ? cacheLeftText(state.remainingMs ?? 0)
+    : status === 'cold' && !isCompact ? 'остыл'
+    : undefined;
+  return (
+    <>
+      <span aria-hidden style={{ width: 1, height: 12, background: C.border, flexShrink: 0 }} />
+      <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
+        cold={!isWaiting && status === 'cold'} spin={isWaiting} />
+      {text && <span style={{ color: CACHE_TEXT_COLOR[status] }}>{text}</span>}
+    </>
+  );
+}
+
+// Тело попапа: срок, остаток, объём в кэше, последний промах и цена перезаписи остывшего кэша
 function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling }) {
   const { status, ttl, prefixTokens, lastMiss, remainingMs } = state;
   const cold = status === 'cold';
@@ -718,7 +754,8 @@ function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; stat
       <BadgeRow k="Состояние" v={CACHE_STATUS_TEXT[status]} />
       {!cold && remainingMs !== undefined && <BadgeRow k="Осталось" v={cacheLeftText(remainingMs)} />}
       {ttl && <BadgeRow k="Срок кэша" v={ttl === '1h' ? '1 час' : '5 минут'} />}
-      {prefixTokens !== undefined && <BadgeRow k="Префикс" v={`${fmtTokens(prefixTokens)} токенов`} />}
+      {/* prefixTokens — неизменное начало запроса: системный промпт, инструменты и история */}
+      {prefixTokens !== undefined && <BadgeRow k="В кэше" v={`${fmtTokens(prefixTokens)} токенов`} />}
       <div style={badgeSectionStyle}>Последний промах</div>
       <div style={{ ...meterSubStyle, color: lastMiss ? C.textSecondary : C.textMuted }}>
         {lastMiss
@@ -731,44 +768,13 @@ function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; stat
               {rewrite !== undefined ? `, ≈${fmtUsd(rewrite)}${billing === 'subscription' ? ' по API-тарифу' : ''}` : ''}.
               {/* База цены — стоимость прошлого хода целиком: сабагенты на других моделях её искажают */}
               {rewrite !== undefined ? ' Цена — ориентир: если в ходах работали сабагенты на других моделях, она может быть занижена.' : ''}</>
-          : 'Ход до конца срока читает префикс из кэша — в десять раз дешевле обычного входа. Каждый ход продлевает срок.'}
+          : 'В кэше — системный промпт, инструменты и история чата. Ход до конца срока читает их из кэша в десять раз дешевле обычного входа. Каждый ход продлевает срок.'}
       </div>
     </>
   );
 }
 
-// Десктопный чип рядом с кольцевой пилюлей: «кэш 42 мин», «кэш остыл», попап по клику
-function PromptCacheBadge({ items, isWaiting, billing, resetKey }: {
-  items: ChatItem[]; isWaiting: boolean; billing: ClaudeBilling; resetKey?: string;
-}) {
-  const state = usePromptCache(items);
-  if (state.status === 'unknown') return null;
-  const face = cacheFaceText(state, isWaiting);
-  const expiring = state.status === 'expiring' && !isWaiting;
-  const title = `Кэш промпта: ${isWaiting ? 'идёт ход' : CACHE_STATUS_TEXT[state.status]}`
-    + (state.status !== 'cold' && !isWaiting ? `, осталось ${face}` : '') + ' — нажмите для деталей';
-  return (
-    <BadgeShell label="кэш" title={title} ariaLabel={title} resetKey={resetKey}
-      tone={expiring ? 'warn' : undefined}
-      amount={<span style={{ color: isWaiting ? C.textMuted : CACHE_FACE_COLOR[state.status], fontWeight: state.status === 'warm' || isWaiting ? 600 : 700 }}>{face}</span>}>
-      <PromptCacheDetails items={items} state={state} billing={billing} />
-    </BadgeShell>
-  );
-}
-
-// Мобила: отдельного чипа нет — точка-статус на кольцевой пилюле
-function PromptCacheDot({ items }: { items: ChatItem[] }) {
-  const state = usePromptCache(items);
-  if (state.status === 'unknown') return null;
-  return (
-    <span aria-hidden style={{
-      position: 'absolute', bottom: -2, right: -2, width: 8, height: 8, borderRadius: '50%',
-      background: CACHE_DOT_COLOR[state.status], border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
-    }} />
-  );
-}
-
-// Мобила: детали кэша — секцией шторки кольцевой пилюли
+// Детали кэша — секцией поповера пилюли шапки
 function PromptCacheSection({ items, billing, style }: { items: ChatItem[]; billing: ClaudeBilling; style: React.CSSProperties }) {
   const state = usePromptCache(items);
   if (state.status === 'unknown') return null;
@@ -805,15 +811,14 @@ export function RingPillBadge(props: {
   resetKey?: string;
   // Только витрина: показать состояние 5.2r без смены настройки ОС
   forceReducedMotion?: boolean;
-  // Лента чата для индикатора кэша промпта (только мобила/планшет: точка на пилюле и
-  // секция в шторке; на десктопе у кэша свой чип)
+  // Лента чата для индикатора кэша промпта: циферблат справа на пилюле и секция поповера
   cacheItems?: ChatItem[];
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, isMobile, isCompact,
   } = props;
   const activeWorkflow = isCompact ? props.activeWorkflow : undefined;
-  const cacheItems = isCompact ? props.cacheItems : undefined;
+  const cacheItems = props.cacheItems;
   const wfActive = !!activeWorkflow;
 
   // Что доступно к показу в каждой секции
@@ -834,8 +839,8 @@ export function RingPillBadge(props: {
   const quotaPct = isQuota ? quotaUsedPct(balance) : null;
 
   const segs = isCliProvider ? [] : ratePillVisible(windows, RING_WINDOWS).segments;
-  const slot = (s?: RatePillSegment): RingSlot | undefined => s && { pct: s.pct, level: s.level };
-  const slots: [RingSlot, RingSlot | undefined, RingSlot | undefined] = [
+  const slot = (s?: RatePillSegment): MeterSlot | undefined => s && { pct: s.pct, level: s.level };
+  const slots: [MeterSlot, MeterSlot | undefined, MeterSlot | undefined] = [
     { pct: showCtx ? estimate.pct ?? null : null, level: estimate.level },
     isCliProvider ? (isQuota ? { pct: quotaPct, level: provLevel } : undefined) : slot(segs[0]),
     isCliProvider ? undefined : slot(segs[1]),
@@ -879,7 +884,7 @@ export function RingPillBadge(props: {
     // пилюлю на 1px — высоту пилюли задаёт строка основного шрифта
     <><span style={labelStyle}>Ctx</span> <span style={{ color: C.accent, lineHeight: 1 }}>✦</span></>
   ) : head.kind === 'calm' ? (
-    <span style={{ color: C.textSecondary }}>в норме</span>
+    <span style={{ color: C.textSecondary }}>норм</span>
   ) : head.kind === 'unknown' ? (
     <span style={{ color: C.textMuted }}>—</span>
   ) : (
@@ -914,7 +919,7 @@ export function RingPillBadge(props: {
       {parts.length > 0 ? parts.map(p => (
         <div key={p.text} style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
           {/* Строки без кольца — с пустым местом под пип, чтобы текст шёл одной колонкой */}
-          {p.pip ? <RingPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
+          {p.pip ? <MeterPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
           <span>{p.text}</span>
         </div>
       )) : <div>Контекст и расход сессии</div>}
@@ -930,7 +935,7 @@ export function RingPillBadge(props: {
     <BadgeShell
       ring
       amount={<>
-        <RingIcon slots={slots} spinOuter={isCompacting} forceReducedMotion={props.forceReducedMotion} resetKey={props.resetKey} />
+        <MeterIcon slots={slots} runTop={isCompacting} forceReducedMotion={props.forceReducedMotion} resetKey={props.resetKey} />
         <span>
           {apiCost && <>
             <span style={{ color: C.textSecondary }}>{fmtUsd(cost.cost)}</span>
@@ -938,13 +943,13 @@ export function RingPillBadge(props: {
           </>}
           {face}
         </span>
+        {cacheItems && <CacheClockFace items={cacheItems} isWaiting={props.isWaiting} isCompact={isCompact} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
       tone={tone}
       wide={isCompact}
       pulse={wfActive}
-      dot={cacheItems && <PromptCacheDot items={cacheItems} />}
       resetKey={props.resetKey}
       title={title}
       tip={tip}
@@ -969,7 +974,7 @@ export function RingPillBadge(props: {
         <div style={(wfActive || showCtx) ? sectionDivider : undefined}>
           {isCliProvider
             ? <ProviderCostPopoverBody providerName={providerName} stats={cost} balance={balance}
-                quotaPip={isQuota ? <RingPip slot={1} level={provLevel} /> : undefined} />
+                quotaPip={isQuota ? <MeterPip slot={1} level={provLevel} /> : undefined} />
             : <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} />}
         </div>
       )}
@@ -1579,9 +1584,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       cacheItems={cacheItems}
     />
   );
-  // Чип кэша промпта — только на десктопе: на узких раскладках кэш живёт точкой на
-  // кольцевой пилюле и секцией её шторки. Таймер внутри чипа, шапка по нему не перерисовывается
-  const cacheBadge = <PromptCacheBadge items={cacheItems} isWaiting={isWaiting} billing={billing} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
   const spendBadge = spendBadgeSlot?.render?.({ sessionId: session.id, chatName: session.name, resultCount: cost.results, isMobile: isCompact });
@@ -1600,7 +1602,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // fal/glif/расход, каждую можно убрать глазиком
     <>
       {badgeVisible('cost') && ringPill()}
-      {badgeVisible('cache') && cacheBadge}
       {badgeVisible('fal') && <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />}
       {badgeVisible('glif') && <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />}
       {badgeVisible('spend') && spendBadge}
@@ -1787,15 +1788,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // идёт прогон, fal/glif — если были генерации), и полный каталог в списке врал
   // бы про состав шапки. Скрытая глазиком пилюля из списка не исчезает — её
   // доступность считается по данным, а не по видимости
-  // Чип кэша доступен только у родного Claude с якорем — у сторонних провайдеров его нет
-  const cacheAvailable = useMemo(() => hasPromptCacheInfo(cacheItems), [cacheItems]);
   const badgeAvailable: Record<ChatBadgeKey, boolean> = {
     mechanic: !!lastMechanic,
     workflow: !!activeWorkflow,
     // Контекст живёт в кольцевой пилюле вместе с лимитами — её ключ cost
     cost: hasContextInfo(ctxEstimate)
       || (isCliProvider ? hasProviderCostInfo(cost, provBalance) : hasClaudeCostInfo(cost, limitWindows)),
-    cache: cacheAvailable,
     fal: falCost.total > 0,
     glif: glifCost.count > 0,
     // У расхода собственный источник (SpendBadge грузит его сам), снаружи виден
@@ -1813,7 +1811,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'mechanic': return mechanicBadge;
       case 'workflow': return workflowBadge;
       case 'cost': return ringPill(true);
-      case 'cache': return cacheBadge;
       case 'fal': return <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />;
       case 'glif': return <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />;
       case 'spend': return spendBadge;

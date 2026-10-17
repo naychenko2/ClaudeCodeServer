@@ -77,20 +77,19 @@ export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 //
 // Контекст и лимиты — одна кольцевая пилюля под ключом cost; прежнего отдельного ключа
 // context больше нет, сохранённые наборы переводит migrateRingPillHidden.
-// Кэш промпта (cache) — отдельный чип только на десктопе; на мобиле он точкой в кольцевой.
-export type ChatBadgeKey = 'mechanic' | 'workflow' | 'cost' | 'cache' | 'fal' | 'glif' | 'spend'
+// Кэш промпта живёт в той же пилюле (циферблат справа) — своего ключа у него нет.
+export type ChatBadgeKey = 'mechanic' | 'workflow' | 'cost' | 'fal' | 'glif' | 'spend'
   // мобильная кольцевая пилюля (RingPillBadge): тем же глазиком, но целиком
   | 'mobile-pills';
 
 export const CHAT_BADGE_ORDER: ChatBadgeKey[] = [
-  'mechanic', 'workflow', 'cost', 'cache', 'fal', 'glif', 'spend',
+  'mechanic', 'workflow', 'cost', 'fal', 'glif', 'spend',
 ];
 
 export const CHAT_BADGE_LABELS: Record<ChatBadgeKey, string> = {
   mechanic: 'Механика команды',
   workflow: 'Прогресс workflow',
-  cost: 'Контекст и лимиты',
-  cache: 'Кэш промпта',
+  cost: 'Контекст, лимиты и кэш',
   fal: 'Траты fal.ai',
   glif: 'Генерации glif',
   spend: 'Расход токенов',

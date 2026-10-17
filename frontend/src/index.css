@@ -327,13 +327,19 @@ body {
   .cc-live-dot { animation: none; opacity: .7; }
 }
 
-/* Кольцевая пилюля шапки чата: одиночный толчок иконки, когда уровень лимита
-   вырос (норма → предупреждение → тревога). Запускается инлайном из RingIcon,
+/* Пилюля шапки чата: одиночный толчок иконки, когда уровень лимита вырос
+   (норма → предупреждение → тревога). Запускается инлайном из MeterIcon,
    при reduced-motion не ставится вовсе */
 @keyframes cc-ring-bump {
   0%   { transform: scale(1); }
   40%  { transform: scale(1.18); }
   100% { transform: scale(1); }
+}
+
+/* Пилюля шапки чата: идёт сжатие — по верхней полоске (контекст) бежит отрезок */
+@keyframes cc-bar-run {
+  from { transform: translateX(-8px); }
+  to   { transform: translateX(22px); }
 }
 
 /* === Индикатор ожидания ответа (WaitingIndicator) === */

@@ -96,4 +96,21 @@ public class PluginStore
             return result;
         }
     }
+
+    // Load → mutate → save под одной блокировкой, возвращает произвольный результат
+    // <typeparamref name="T"/> (minor 1: grant/enable проверяют и мутируют запись, результат —
+    // не список, а исход операции). <paramref name="mutate"/> мутирует <paramref name="records"/>
+    // на месте и возвращает результат; метод сохраняет (мутированный) <paramref name="records"/>
+    // и отдаёт результат.
+    public T Update<T>(string ownerId, Func<List<PluginInstall>, T> mutate)
+    {
+        lock (_lock)
+        {
+            var path = InstalledFile(ownerId);
+            var records = (JsonFileStore.Load<List<PluginInstall>>(path) ?? []).ToList();
+            var result = mutate(records);
+            JsonFileStore.Save(path, records);
+            return result;
+        }
+    }
 }

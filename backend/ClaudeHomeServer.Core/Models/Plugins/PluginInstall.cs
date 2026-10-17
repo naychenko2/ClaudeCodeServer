@@ -30,10 +30,10 @@ public sealed class PluginInstall
     /// <summary>Включён ли плагин (выключенный не даёт <c>--plugin-dir</c> и не монтирует панели).</summary>
     [JsonPropertyName("enabled")] public bool Enabled { get; set; } = true;
     /// <summary>
-    /// Источник установки — строка, а не enum (урок <see cref="McpCatalogRef"/>):
-    /// <c>"draft"</c>, <c>"upload"</c>, позже <c>"catalog:{ref}"</c>. Неизвестные значения при
-    /// разборе терпимы: откат кода на старую версию не должен уносить файл владельца в
-    /// <c>.corrupt</c>.
+    /// Источник установки — метка-строка, а не enum (урок <see cref="McpCatalogRef"/>):
+    /// <c>"draft:{slug}"</c>, <c>"upload:{uploadId}"</c>, позже <c>"catalog:{ref}"</c>.
+    /// Неизвестные значения при разборе терпимы: откат кода на старую версию не должен
+    /// уносить файл владельца в <c>.corrupt</c>.
     /// </summary>
     [JsonPropertyName("source")] public string Source { get; set; } = "";
     /// <summary>

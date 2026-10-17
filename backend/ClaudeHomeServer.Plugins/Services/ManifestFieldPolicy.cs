@@ -7,9 +7,11 @@ namespace ClaudeHomeServer.Services.Plugins;
 // исполняют код или обходят allow-list (спайк docs/research/plugin-dir-spike-2026-10.md),
 // а наш manifest-model (PluginManifest) их молча игнорирует как forward-compat.
 //
-// Список = ровно поля, которые хост сам читает/использует; «id» не входит намеренно:
-// глобальный id пакета — из записи установки (PluginInstall.Id), а не из топ-уровня
-// нативного plugin.json (у того id = name).
+// Список = ровно поля, которые хост сам читает/использует. «id» входит (сверх исходного
+// списка C3): глобальный идентификатор пакета {publisher}/{slug} в ccs-plugin.json —
+// безопасное поле (не исполняет код, в отличие от hooks/mcpServers/agents). Топ-уровневое
+// «requires» разрешено для forward-compat, хотя модель держит requires в contributes
+// (minor: см. отчёт rework пакета 4).
 public static class ManifestFieldPolicy
 {
     // Разрешённые топ-уровневые ключи манифеста (rework C3). `id` — добавлен сверх списка

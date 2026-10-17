@@ -157,7 +157,8 @@ public class PluginsControllerTests : IDisposable
     public void List_ОтветНеНесётЗначенийСекретов()
     {
         // Установить + выдать секрет с значением; GET /api/plugins не должен нести "value".
-        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"], secrets: [("LINEAR_TOKEN", true)]);
+        // requested включает secret:LINEAR_TOKEN (minor 4: выданный секрет покрывается правом).
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
         ctl.Grant("local-a~pkg", new PluginGrantRequest
         {
@@ -239,7 +240,8 @@ public class PluginsControllerTests : IDisposable
     [Fact]
     public void Install_Повтор_СовпалSha_NoOp_СохраняетGrantedИСекреты()
     {
-        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"],
+        // requested включает secret:LINEAR_TOKEN (minor 4: выданный секрет покрывается правом).
+        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
 
@@ -367,9 +369,10 @@ public class PluginsControllerTests : IDisposable
     [Fact]
     public void Grant_Успех_ЗаписываетGrantedИСекреты()
     {
-        // requested: notes:read + net:* (net:* не авто-выдаётся). Grant одобряет notes:read.
+        // requested: notes:read + net:* + secret:LINEAR_TOKEN (minor 4: выданный секрет
+        // покрывается запрошенным правом secret:{name}). Grant одобряет notes:read.
         // Манифест декларирует LINEAR_TOKEN (non-required) — grant сверяет имя с requires.secrets.
-        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"],
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app", "secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", false)]);
         var ctl = NewController(OwnerA);
 
@@ -438,6 +441,31 @@ public class PluginsControllerTests : IDisposable
 
         ctl.Enable("local-a~pkg").Should().BeOfType<OkObjectResult>();
         _store.LoadInstalled(OwnerA).Single().Enabled.Should().BeTrue();
+    }
+
+    // --- minor 6: тумблер enable/disable — только пользовательский JWT (агент не включает
+    // обратно плагин, выключенный человеком) ---
+
+    [Fact]
+    public void Enable_СервисныйJwt_Отдаёт403()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+
+        var res = ctl.Enable("local-a~pkg");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public void Disable_СервисныйJwt_Отдаёт403()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+
+        var res = ctl.Disable("local-a~pkg");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
     }
 
     // --- Тестовые заглушки ---

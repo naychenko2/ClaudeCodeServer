@@ -280,4 +280,110 @@ public class PluginPackageValidatorTests
         var r = Validate(root); // не бросает (FileInfo.Length / File.OpenRead ловятся)
         r.Problems.Should().Contain(p => p.Code == "no-symlink");
     }
+
+    // --- M10: allowed-tools во фронтматтере SKILL.md → deny-allowed-tools (Bash без запроса) ---
+
+    [Fact]
+    public void M10_AllowedTools_ВSkillFrontmatter_ДаетDenyAllowedTools()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                allowed-tools: [Bash]
+                ---
+                Текст навыка
+                """));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
+    }
+
+    // --- M10: allowed-tools во фронтматтере commands/*.md → deny-allowed-tools ---
+
+    [Fact]
+    public void M10_AllowedTools_ВCommandFrontmatter_ДаетDenyAllowedTools()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("commands/cmd.md",
+                """
+                ---
+                allowed-tools: Bash, Write
+                ---
+                Тело команды
+                """));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
+    }
+
+    // --- M10: !`cmd` в теле SKILL.md → deny-backtick-exec (исполняет shell) ---
+
+    [Fact]
+    public void M10_Backtick_ВSkillBody_ДаетDenyBacktickExec()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                ---
+                Навык: !`bash -c "echo hi"`
+                """));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-backtick-exec");
+    }
+
+    // --- M10: !`cmd` в теле commands/*.md → deny-backtick-exec ---
+
+    [Fact]
+    public void M10_Backtick_ВCommandBody_ДаетDenyBacktickExec()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("commands/cmd.md",
+                """
+                Тело: !`bash -c "echo hi"`
+                """));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-backtick-exec");
+    }
+
+    // --- M10: чистый .md (без allowed-tools и !`) → без M10-проблем ---
+
+    [Fact]
+    public void M10_ЧистыйMd_БезM10Проблем()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                description: обычный навык
+                ---
+                Просто текст навыка, без backtick и allowed-tools.
+                """),
+            ("commands/cmd.md", "Просто команда, без frontmatter-ловушек."));
+
+        var r = Validate(root);
+        r.Problems.Should().NotContain(p => p.Code == "deny-allowed-tools");
+        r.Problems.Should().NotContain(p => p.Code == "deny-backtick-exec");
+    }
+
+    // --- minor 8: лимит числа каталогов (пустые не считаются в лимит файлов) ---
+
+    [Fact]
+    public void Minor8_КаталоговБольшеЛимита_ДаетDirCountLimit()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        // 201 каталог (пустых) > лимита 200; файлов нет (лимит файлов не срабатывает).
+        for (var i = 0; i < PluginPackageValidator.MaxDirCount + 1; i++)
+            Directory.CreateDirectory(Path.Combine(root, $"panel/d{i}"));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "dir-count-limit");
+    }
 }

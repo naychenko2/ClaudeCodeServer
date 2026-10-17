@@ -33,6 +33,8 @@ public class PluginPackageValidator
     public const long MaxTotalSizeBytes = 20 * 1024 * 1024;   // 20 МБ на пакет
     public const int MaxFileCount = 500;
     public const long MaxSingleFileSizeBytes = 5 * 1024 * 1024; // 5 МБ на файл
+    // minor 8: лимит числа каталогов (пустые каталоги не считаются в лимит файлов).
+    public const int MaxDirCount = 200;
 
     // Имена/каталоги allow-list.
     private static readonly string[] ManifestNames =
@@ -74,12 +76,14 @@ public class PluginPackageValidator
         var problems = new List<PluginPackageProblem>();
         var files = new List<PackageFile>();
         long totalSize = 0;
+        int dirCount = 0;
         bool limitHit = false;
 
-        // C4+M9: своя рекурсия — лимиты (число/размер) прерывают обход, symlink-каталог
-        // даёт no-symlink и внутрь не спускаемся. Directory.EnumerateFiles(AllDirectories)
-        // не годится: не помечает symlink-каталог как ReparsePoint и перечисляет всё до конца.
-        Walk(packageRoot, packageRoot, ref files, ref totalSize, problems, ref limitHit);
+        // C4+M9: своя рекурсия — лимиты (число/размер/каталоги) прерывают обход,
+        // symlink-каталог даёт no-symlink и внутрь не спускаемся. Directory.EnumerateFiles
+        // (AllDirectories) не годится: не помечает symlink-каталог как ReparsePoint и
+        // перечисляет всё до конца.
+        Walk(packageRoot, packageRoot, ref files, ref totalSize, ref dirCount, problems, ref limitHit);
 
         // C3: поля манифеста (plugin.json/ccs-plugin.json) — deny-manifest-field.
         var (_, manifestProblems) = _manifestReader.Read(packageRoot);
@@ -92,9 +96,10 @@ public class PluginPackageValidator
             problems.Count == 0, problems, sha256, files.Count);
     }
 
-    // Своя рекурсия (C4+M9): <paramref name="current"/> — текущий каталог,
+    // Своя рекурсия (C4+M9+minor8): <paramref name="current"/> — текущий каталог,
     // <paramref name="root"/> — корень пакета (для относительных путей).
     //   * symlink-каталог (ReparsePoint) → no-symlink, внутрь не спускаемся;
+    //   * каталог: лимит числа каталогов (minor 8, прерывает обход);
     //   * файл: лимиты (прерывают обход) + size + IsSymlink + EscapesRoot + deny + allow + size;
     //   * обычные подкаталоги — рекурсия.
     private void Walk(
@@ -102,6 +107,7 @@ public class PluginPackageValidator
         string root,
         ref List<PackageFile> files,
         ref long totalSize,
+        ref int dirCount,
         List<PluginPackageProblem> problems,
         ref bool limitHit)
     {
@@ -112,6 +118,15 @@ public class PluginPackageValidator
             // Каталог: symlink-каталог → no-symlink, внутрь не заходить (C4).
             if (Directory.Exists(entry))
             {
+                // minor 8: лимит числа каталогов (пустые не считаются в лимит файлов).
+                dirCount++;
+                if (dirCount > MaxDirCount)
+                {
+                    problems.Add(new PluginPackageProblem(
+                        "dir-count-limit", $"Каталогов в пакете {dirCount}, лимит {MaxDirCount}"));
+                    limitHit = true;
+                    return;
+                }
                 if (IsReparsePoint(entry))
                     problems.Add(new PluginPackageProblem("no-symlink", $"Символическая ссылка (каталог): {rel}"));
                 continue; // обычный каталог — в цикле рекурсии ниже
@@ -160,7 +175,12 @@ public class PluginPackageValidator
             if (!IsAllowed(file.RelativePath))
                 problems.Add(new PluginPackageProblem("not-allowed", $"Файл не в allow-list пакета: {file.RelativePath}"));
 
-            // 5) Лимит размера отдельного файла.
+            // 5) M10: исполняемые .md (skills/**/SKILL.md, commands/*.md) — frontmatter
+            //    allowed-tools и !`cmd` в теле дают Bash без запроса (спайк 82fecb37).
+            if (IsExecutableMd(file.RelativePath))
+                CheckExecutableMd(file, problems);
+
+            // 6) Лимит размера отдельного файла.
             if (file.Size > MaxSingleFileSizeBytes)
                 problems.Add(new PluginPackageProblem(
                     "file-size-limit", $"Файл больше {MaxSingleFileSizeBytes / 1024 / 1024} МБ: {file.RelativePath}"));
@@ -171,7 +191,7 @@ public class PluginPackageValidator
         {
             if (limitHit) return;
             if (IsReparsePoint(dir)) continue;
-            Walk(dir, root, ref files, ref totalSize, problems, ref limitHit);
+            Walk(dir, root, ref files, ref totalSize, ref dirCount, problems, ref limitHit);
         }
     }
 
@@ -224,6 +244,84 @@ public class PluginPackageValidator
         // Панель: panel/** (статика, любые расширения).
         if (rel.StartsWith("panel/", StringComparison.Ordinal)) return true;
 
+        return false;
+    }
+
+    // M10: .md, который CLI исполняет: skills/**/SKILL.md (навык) и commands/*.md
+    // (slash-команда, прямой уровень). Вспомогательные .md под skills/ не исполняются.
+    private static bool IsExecutableMd(string rel)
+    {
+        if (rel.StartsWith("skills/", StringComparison.Ordinal)
+            && Path.GetFileName(rel) == SkillFileName)
+            return true;
+        if (rel.StartsWith("commands/", StringComparison.Ordinal)
+            && !rel["commands/".Length..].Contains('/')
+            && rel.EndsWith(".md", StringComparison.Ordinal))
+            return true;
+        return false;
+    }
+
+    // M10: исполняемый .md — frontmatter `allowed-tools` (Bash без запроса) и
+    // `!`cmd`` в теле (shell-исполнение при вызове). Спайк plugin-dir-allowed-tools:
+    // оба механизма дают агенту Bash, нарушая «навык не даёт новых возможностей» (ADR §4).
+    private static void CheckExecutableMd(PackageFile file, List<PluginPackageProblem> problems)
+    {
+        string content;
+        try { content = File.ReadAllText(file.FullPath); }
+        catch (IOException) { return; } // битая symlink — уже no-symlink
+
+        var (frontmatter, body) = SplitFrontmatter(content);
+
+        if (HasFrontmatterKey(frontmatter, "allowed-tools"))
+            problems.Add(new PluginPackageProblem("deny-allowed-tools",
+                $"Фронтматтер allowed-tools (Bash без запроса): {file.RelativePath}"));
+
+        if (body.Contains("!`", StringComparison.Ordinal))
+            problems.Add(new PluginPackageProblem("deny-backtick-exec",
+                $"Backtick-команда !`…` (исполняет shell): {file.RelativePath}"));
+    }
+
+    // Разделить файл на (frontmatter, тело). Frontmatter — между первой строкой `---`
+    // (в самом начале файла) и следующей строкой `---`. Нет фронтматтера → ("", content).
+    private static (string Frontmatter, string Body) SplitFrontmatter(string content)
+    {
+        var firstNewline = content.IndexOf('\n');
+        if (firstNewline < 0) return ("", content);
+        var firstLine = content[..firstNewline].TrimEnd('\r');
+        if (firstLine != "---") return ("", content);
+
+        // Ищем закрывающую строку `---` после первой.
+        var rest = content[(firstNewline + 1)..];
+        var lines = rest.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].TrimEnd('\r') == "---")
+            {
+                var fm = string.Join("\n", lines, 0, i);
+                var body = string.Join("\n", lines, i + 1, lines.Length - i - 1);
+                return (fm, body);
+            }
+        }
+        // Открытый фронтматтер (нет закрывающего ---) — весь остаток считаем телом.
+        return ("", content);
+    }
+
+    // Ключ в YAML-фронтматтере? Строка вида `key: ...` в начале строки (без отступа).
+    // Любое значение (скаляр, список, объект) — ключ присутствует.
+    private static bool HasFrontmatterKey(string frontmatter, string key)
+    {
+        var prefix = key + ":";
+        foreach (var line in frontmatter.Split('\n'))
+        {
+            var trimmed = line.TrimEnd('\r');
+            if (trimmed.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                // Ключ, а не подстрока в значении: после `key:` — пробел/конец/значение.
+                var after = trimmed[prefix.Length..];
+                if (after.Length == 0 || after[0] == ' ' || after[0] == '\t')
+                    return true;
+            }
+        }
         return false;
     }
 

@@ -36,7 +36,7 @@ public class PluginSecretsStore
                 ? value : null;
     }
 
-    /// <summary>Задить значение секрета (создаёт запись per-owner → plugin → name).</summary>
+    /// <summary>Задать значение секрета (создаёт запись per-owner → plugin → name).</summary>
     public void Set(string ownerId, string pluginId, string secretName, string value)
     {
         lock (_lock)
@@ -45,6 +45,19 @@ public class PluginSecretsStore
             var byName = byPlugin.TryGetValue(pluginId, out var n) ? n : byPlugin[pluginId] = new();
             byName[secretName] = value;
             Save();
+        }
+    }
+
+    /// <summary>Удалить одно значение секрета (minor 5: grant перезаписывает record.Secrets,
+    /// невключённые секреты не должны оставаться в plugin-secrets.json).</summary>
+    public void RemoveSecret(string ownerId, string pluginId, string secretName)
+    {
+        lock (_lock)
+        {
+            if (_byOwner.TryGetValue(ownerId, out var byPlugin)
+                && byPlugin.TryGetValue(pluginId, out var byName)
+                && byName.Remove(secretName))
+                Save();
         }
     }
 

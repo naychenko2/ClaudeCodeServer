@@ -51,6 +51,9 @@ public class PluginDirSource : IPluginDirSource
             if (hasPersonaFilter
                 && (personaTargets is null || !personaTargets.Contains($"plugin:{record.Id}")))
                 continue;
+            // minor 13: запись с битым id/version (не по формату) — пропустить, а не бросать
+            // ArgumentException из PackageDir и ронять всю сборку --plugin-dir.
+            if (!PluginId.IsValid(record.Id) || !PluginVersion.IsValid(record.Version)) continue;
             // Каталог пакета обязан существовать: иначе --plugin-dir укажет на пустоту (minor).
             var dir = _store.PackageDir(ownerId, record.Id, record.Version);
             if (Directory.Exists(dir)) dirs.Add(dir);

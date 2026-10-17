@@ -170,4 +170,80 @@ public class PluginInstallerTests : IDisposable
         record.Requested.Should().Equal("notes:read");
         record.Enabled.Should().BeTrue();
     }
+
+    // --- M5: symlink в пакете — CopyDirectoryNoSymlinks сохраняет ссылку, валидация КОПИИ
+    // (staging) видит no-symlink → установка не проходит (старый CopyDirectory следовал в
+    // target и копировал его содержимое как обычный файл). ---
+
+    [Fact]
+    public void Install_СсылкаВПакете_ВалидацияКопии_ОтбиваетNoSymlink()
+    {
+        var slug = "pkg";
+        var root = _store.DraftDir(Owner, slug);
+        Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+        Directory.CreateDirectory(Path.Combine(root, "panel"));
+        File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+        // Реальный файл вне пакета + symlink-файл на него внутри пакета (panel/** — allow-list).
+        var outside = Path.Combine(Path.GetDirectoryName(root)!, "outside-" + Path.GetRandomFileName() + ".txt");
+        File.WriteAllText(outside, "outside content");
+        File.CreateSymbolicLink(Path.Combine(root, "panel", "link.txt"), outside);
+        var manifest = new
+        {
+            id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+            contributes = new { skills = new[] { "skills/a" } },
+            permissions = new { requested = new[] { "notes:read" } },
+        };
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+
+        var result = _sut.Install(Owner, "draft:" + slug);
+        result.Status.Should().Be(InstallStatus.Fail, "symlink в копии → no-symlink");
+        result.Problems.Should().Contain(p => p.Code == "no-symlink");
+    }
+
+    // --- manifest.Validate() при установке: неизвестное право → 400 (Fail) ---
+
+    [Fact]
+    public void Install_НеизвестноеПравоВМанифесте_ОтдаётFail()
+    {
+        var slug = "pkg";
+        var root = _store.DraftDir(Owner, slug);
+        Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+        File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+        var manifest = new
+        {
+            id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+            contributes = new { skills = new[] { "skills/a" } },
+            permissions = new { requested = new[] { "unknown:perm" } },
+        };
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+
+        var result = _sut.Install(Owner, "draft:" + slug);
+        result.Status.Should().Be(InstallStatus.Fail, "manifest.Validate(): неизвестное право");
+        result.Problems.Should().Contain(p => p.Code == "unknown-permission");
+    }
+
+    // --- manifest.Validate() при установке: net:bad/host (слэш вне класса хоста) → 400 ---
+
+    [Fact]
+    public void Install_NetBadHostВМанифесте_ОтдаётFail()
+    {
+        var slug = "pkg";
+        var root = _store.DraftDir(Owner, slug);
+        Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+        File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+        var manifest = new
+        {
+            id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+            contributes = new { skills = new[] { "skills/a" } },
+            permissions = new { requested = new[] { "net:bad/host" } },
+        };
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+
+        var result = _sut.Install(Owner, "draft:" + slug);
+        result.Status.Should().Be(InstallStatus.Fail, "manifest.Validate(): net:bad/host — битый хост");
+        result.Problems.Should().Contain(p => p.Code == "unknown-permission");
+    }
 }

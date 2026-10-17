@@ -99,10 +99,10 @@ public class PluginManifestReaderTests
         problems.Should().Contain(p => p.Code == "deny-manifest-field" && p.Message.Contains("mcpServers"));
     }
 
-    // --- Read: приоритет ccs-plugin.json над plugin.json (читается первым) ---
+    // --- Read: C3 — КАЖДЫЙ найденный манифест проверяется (цикл без раннего return) ---
 
     [Fact]
-    public void Read_ПриоритетCcsPluginJson()
+    public void Read_ОбаМанифеста_Проверяются()
     {
         var root = NewPackage(
             ("ccs-plugin.json", """{"name":"P","version":"0.1.0","hooks":{}}"""),
@@ -110,9 +110,24 @@ public class PluginManifestReaderTests
 
         var (_, problems) = Reader().Read(root);
 
-        // Только ccs-plugin.json читается: его поле (hooks) проверяется, mcpServers не виден.
+        // C3: оба манифеста проверяются: hooks (ccs) и mcpServers (plugin.json) оба видны.
         problems.Should().Contain(p => p.Message.Contains("hooks"));
-        problems.Should().NotContain(p => p.Message.Contains("mcpServers"));
+        problems.Should().Contain(p => p.Message.Contains("mcpServers"));
+    }
+
+    // --- C3: чистый ccs-plugin.json + hooks в .claude-plugin/plugin.json → deny-manifest-field ---
+    // CLI читает именно .claude-plugin/plugin.json: «чистый» ccs-plugin.json не спасает.
+
+    [Fact]
+    public void C3_ЧистыйCcsИ_ХукиВClaudePlugin_ДаетDenyManifestField()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"name":"P","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"P","version":"0.1.0","hooks":{}}"""));
+
+        var (_, problems) = Reader().Read(root);
+
+        problems.Should().Contain(p => p.Code == "deny-manifest-field" && p.Message.Contains("hooks"));
     }
 
     // --- Read: нет манифеста → (null, []) ---

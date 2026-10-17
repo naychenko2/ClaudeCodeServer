@@ -34,6 +34,11 @@ public class PluginInstaller
         if (kind is null)
             return InstallResult.Fail("Source — метка из белого списка (draft:/upload:/catalog:)");
 
+        // minor 2: параметр метки — по грамматике slug (не путь): «draft:../../x» → 400,
+        // а не UnauthorizedAccessException (500) от SafePath.Join; пустой «draft:» → 400.
+        if (!IsLabelParamValid(param))
+            return InstallResult.Fail($"Недопустимый параметр метки источника: {sourceLabel}");
+
         // Каталог для чтения — из метки через SafePath.Join (не путь из тела).
         string? sourceDir = kind switch
         {
@@ -61,36 +66,46 @@ public class PluginInstaller
         if (!PluginVersion.IsValid(manifest.Version))
             return InstallResult.Fail($"Недопустимый формат version пакета: {manifest.Version}");
 
-        // 2) Валидация файлов пакета (allow-list + sha256).
-        var validation = _validator.Validate(sourceDir);
-        if (!validation.IsValid)
-            return InstallResult.FailValidation(validation.Problems);
-
         var id = manifest.Id;
         var version = manifest.Version;
-        var sha256 = validation.Sha256!;
 
-        // C2: запрошенные права (потолок) — только из манифеста, не из тела.
-        var requested = manifest.Permissions?.Requested ?? [];
+        // manifest.Validate() ДО копирования: неизвестное право / нет вклада → 400, и пакет
+        // ещё не перемещён (раньше валидировался только в grant; установка могла принять
+        // битый манифест, а проверка после Move дала бы «половинную» установку).
+        var manifestValidation = manifest.Validate();
+        if (!manifestValidation.IsValid)
+            return InstallResult.FailValidation(manifestValidation.Problems
+                .Select(p => new PluginPackageProblem(p.Code, p.Message)).ToList());
 
-        // M6: повторная установка того же пакета (совпал sha) — no-op: вернуть существующую
-        // запись, Granted/Secrets не сбрасываем.
-        var existing = _store.LoadInstalled(ownerId).FirstOrDefault(r => r.Id == id);
-        if (existing is not null && existing.Sha256 == sha256)
-            return InstallResult.NoOp(existing);
-
-        // 409: запись с тем же id, но sha256 пакета изменился → «обновить».
-        if (existing is not null && existing.Sha256 != sha256)
-            return InstallResult.Conflict(id, version);
-
-        // M5: атомарная установка — копирование во временный .staging-{guid}, затем
+        // M5: атомарная установка — сначала копирование во временный .staging-{guid}
+        // (своя рекурсия, не заходит в reparse-point'ы), затем валидация и хеш КОПИИ
+        // (TOCTOU: источник мог измениться между валидацией и копированием), затем
         // Directory.Move поверх старого каталога (нет «половинного» пакета на диске).
         var targetDir = _store.PackageDir(ownerId, id, version);
         var stagingDir = Path.Combine(Path.GetDirectoryName(targetDir)!, $".staging-{Guid.NewGuid():N}");
+        string? sha256 = null;
         try
         {
             Directory.CreateDirectory(stagingDir);
-            CopyDirectory(sourceDir, stagingDir);
+            CopyDirectoryNoSymlinks(sourceDir, stagingDir);
+
+            // Валидация копии (не источника): sha256 — того, что будет перемещено.
+            var validation = _validator.Validate(stagingDir);
+            if (!validation.IsValid)
+                return InstallResult.FailValidation(validation.Problems);
+            sha256 = validation.Sha256!;
+
+            // M6: повторная установка того же пакета (совпал sha) — no-op: вернуть
+            // существующую запись, Granted/Secrets не сбрасываем.
+            var existing = _store.LoadInstalled(ownerId).FirstOrDefault(r => r.Id == id);
+            if (existing is not null && existing.Sha256 == sha256)
+                return InstallResult.NoOp(existing);
+
+            // 409: запись с тем же id, но sha256 пакета изменился → «обновить».
+            if (existing is not null && existing.Sha256 != sha256)
+                return InstallResult.Conflict(id, version);
+
+            // Атомарная замена: удалить старый, переместить копию.
             if (Directory.Exists(targetDir)) Directory.Delete(targetDir, recursive: true);
             Directory.Move(stagingDir, targetDir);
         }
@@ -100,20 +115,24 @@ public class PluginInstaller
         }
 
         // Запись PluginInstall: requested из манифеста, granted = [] (C2), source = метка (C1).
+        // sha256 здесь не null: валидация копии прошла (иначе return FailValidation внутри try).
         var record = new PluginInstall
         {
             Id = id,
             Version = version,
-            Sha256 = sha256,
-            Requested = requested,
+            Sha256 = sha256!,
+            Requested = manifest.Permissions?.Requested ?? [],
             Granted = [],
             Enabled = true,
             Source = sourceLabel,
         };
-        var records = _store.LoadInstalled(ownerId).ToList();
-        records.RemoveAll(r => r.Id == id);
-        records.Add(record);
-        _store.SaveInstalled(ownerId, records);
+        // minor 1: load→save под одной блокировкой (PluginStore.Update), не два отдельных вызова.
+        _store.Update(ownerId, records =>
+        {
+            records.RemoveAll(r => r.Id == id);
+            records.Add(record);
+            return records;
+        });
 
         return InstallResult.Ok(record);
     }
@@ -128,6 +147,17 @@ public class PluginInstaller
         if (source.StartsWith(CatalogPrefix, StringComparison.Ordinal))
             return ("catalog", source[CatalogPrefix.Length..].Trim());
         return (null, source);
+    }
+
+    // minor 2: параметр метки (slug после «draft:»/«upload:») — по грамматике slug:
+    // непустой, без разделителей пути и не «..» (иначе SafePath.Join даст 500, а не 400).
+    private static bool IsLabelParamValid(string? param)
+    {
+        if (string.IsNullOrWhiteSpace(param)) return false;
+        if (param.Contains('/', StringComparison.Ordinal)) return false;
+        if (param.Contains('\\', StringComparison.Ordinal)) return false;
+        if (param == "..") return false;
+        return true;
     }
 
     // Манифест пакета: ccs-plugin.json → plugin.json → .claude-plugin/plugin.json (порядок
@@ -154,17 +184,56 @@ public class PluginInstaller
         return (null, null);
     }
 
-    // Рекурсивное копирование файлов пакета (source → target). Каталоги создаёт по мере
-    // необходимости; существующие файлы перезаписывает (пакет неизменяем после записи).
-    private static void CopyDirectory(string source, string target)
+    // M5: рекурсивное копирование пакета (source → target), которое НЕ заходит в
+    // reparse-point'ы (symlink'и): обычный файл копируется, обычный каталог — рекурсия,
+    // symlink (файл или каталог) воссоздаётся как ссылка (валидатор копии видит и отбивает
+    // его как no-symlink), внутрь symlink-каталога не спускаемся. Старый
+    // Directory.EnumerateFiles(AllDirectories) заходил в symlink-каталоги и копировал
+    // содержимое target'а как файлы пакета (TOCTOU + обход).
+    private static void CopyDirectoryNoSymlinks(string source, string target)
     {
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        foreach (var entry in Directory.EnumerateFileSystemEntries(source))
         {
-            var rel = Path.GetRelativePath(source, file);
+            var rel = Path.GetRelativePath(source, entry);
             var dest = Path.Combine(target, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            System.IO.File.Copy(file, dest, overwrite: true);
+            var isLink = (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0;
+
+            if (Directory.Exists(entry))
+            {
+                if (isLink)
+                {
+                    // Symlink-каталог: воссоздать ссылку, внутрь не спускаться.
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    CreateSymlink(entry, dest);
+                }
+                else
+                {
+                    Directory.CreateDirectory(dest);
+                    CopyDirectoryNoSymlinks(entry, dest);
+                }
+            }
+            else
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                if (isLink)
+                    CreateSymlink(entry, dest); // symlink-файл: воссоздать, не следовать
+                else
+                    System.IO.File.Copy(entry, dest, overwrite: true);
+            }
         }
+    }
+
+    // Воссоздать symlink <paramref name="link"/> → target'у <paramref name="entry"/>
+    // (target берём как он задан, resolveFinalComponent=false). Битая/непубличная ссылка —
+    // не фатально: просто не создаём (валидатор и так отбьёт no-symlink по исходнику).
+    private static void CreateSymlink(string entry, string dest)
+    {
+        try
+        {
+            var target = new FileInfo(entry).ResolveLinkTarget(false)?.FullName;
+            if (target is not null) File.CreateSymbolicLink(dest, target);
+        }
+        catch (IOException) { /* битая ссылка — см. выше */ }
     }
 }
 

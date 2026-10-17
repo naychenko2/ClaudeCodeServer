@@ -4,6 +4,7 @@ import { useIsMobile } from '../../../lib/breakpoints';
 import { Button, ConfirmDialog } from '../../ui';
 import type { FeatureRun, FeatureTask, FeatureRound } from '../../../types/featureRun';
 import { Rounds } from './Rounds';
+import { PipelineStages } from './PipelineStages';
 
 // Карточка фичи в режиме «Исполнение фичи»: сводка по агрегату `FeatureRun`.
 //
@@ -115,8 +116,18 @@ function Steps({ steps }: { steps: FeatureTask[] }) {
 }
 
 // «Пружина» всех витков (ревью/проверка/финал) + счётчик возвратов.
+// Пустая — плейсхолдер «витков нет» (по макету v2 пружина видна всегда, не только когда есть).
 function RoundsSection({ rounds }: { rounds: FeatureRound[] }) {
-  if (!rounds.length) return null;
+  if (!rounds.length) {
+    return (
+      <div style={{
+        fontSize: 12.5, color: C.textSecondary, background: C.bgCard,
+        border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '10px 12px',
+      }}>
+        Витков нет
+      </div>
+    );
+  }
   return <Rounds rounds={rounds} />;
 }
 
@@ -274,13 +285,13 @@ export function FeatureRunView({ run }: { run: FeatureRun }) {
       <SectionLabel>Шаги</SectionLabel>
       <Steps steps={run.steps} />
 
-      {/* «Пружина» витков */}
-      {allRounds.length > 0 && (
-        <>
-          <SectionLabel>Витки</SectionLabel>
-          <RoundsSection rounds={allRounds} />
-        </>
-      )}
+      {/* Конвейер: линейка 7 стадий жизненного цикла фичи (рез → … → мерж) */}
+      <SectionLabel>Конвейер</SectionLabel>
+      <PipelineStages run={run} />
+
+      {/* «Пружина» витков: видна всегда, пустая — с плейсхолдером «витков нет» */}
+      <SectionLabel>Витки</SectionLabel>
+      <RoundsSection rounds={allRounds} />
     </div>
   );
 }

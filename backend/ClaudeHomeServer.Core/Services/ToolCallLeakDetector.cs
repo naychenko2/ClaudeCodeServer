@@ -1,3 +1,6 @@
+using System.Text;
+using System.Text.RegularExpressions;
+
 namespace ClaudeHomeServer.Services;
 
 // Детектор утечки вызова инструмента в текст (чистая функция, тестируется без сессии).
@@ -10,6 +13,10 @@ namespace ClaudeHomeServer.Services;
 //
 // Закрытый набор маркеров: в обычном тексте модели они не встречаются (проверено по
 // транскриптам 16–17.10: 9 утечек на 3696 текстовых сообщений). Любое вхождение — утечка.
+//
+// Мера A — только основной агент (parentId == null): сабагенту text-блоки CLI в stdout
+// не транслирует (полный поток эмитит SubagentStreamWatcher из транскрипта), поэтому
+// утечка вызова у сабагента мимо детектора проходит — осознанное ограничение.
 public static class ToolCallLeakDetector
 {
     // Маркеры XML-формата вызова инструмента.
@@ -22,12 +29,42 @@ public static class ToolCallLeakDetector
         "<" + "function=",
     };
 
+    // Инлайн-код в markdown: `…` (в одной строке; незакрытый — до конца строки).
+    private static readonly Regex InlineCode = new(@"`[^`\n]+`", RegexOptions.Compiled);
+
     // Первый найденный маркер или null (утечки нет).
     public static string? Detect(string? text)
     {
         if (string.IsNullOrEmpty(text)) return null;
+        var stripped = StripCodeSpans(text);
         foreach (var sig in Signatures)
-            if (text.Contains(sig, StringComparison.Ordinal)) return sig;
+            if (stripped.Contains(sig, StringComparison.Ordinal)) return sig;
         return null;
+    }
+
+    // Вырезает содержимое markdown-код-блоков и инлайн-кода: маркеры XML-формата
+    // вызова внутри кода — цитата (модель объясняет формат), а не утечка.
+    //   • fenced-блок ```…``` (с любым языком после открывающих бэктиков; незакрытый
+    //     блок — до конца текста);
+    //   • инлайн-код `…`.
+    private static string StripCodeSpans(string text)
+    {
+        // 1) Fenced-блоки: строка, начинающаяся с ``` (после неё — язык), до
+        //    закрывающей строки ```; незакрытый блок — до конца текста.
+        var sb = new StringBuilder();
+        var inFence = false;
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.TrimStart().StartsWith("```"))
+            {
+                inFence = !inFence;
+                continue; // и открывающая (с языком), и закрывающая строка — код
+            }
+            if (inFence) continue;
+            sb.Append(line).Append('\n');
+        }
+
+        // 2) Инлайн-код `…` (в одной строке).
+        return InlineCode.Replace(sb.ToString(), " ");
     }
 }

@@ -60,6 +60,10 @@ public static class SubagentPrompts
     /// повторить вызов штатным tool_use. Номер попытки — по потолку MaxSubagentNudges (тот же
     /// протокол повторов, что у обрывов сабагентов). Snippet — выдержка ушедшего в текст
     /// вызова, чтобы модель знала, что именно повторять.
+    ///
+    /// Формат вызова в директиве — дословный Qwen3-Coder (<function=...></parameter><parameter=...></invoke>),
+    /// а не Anthropic (<invoke>...</invoke>): именно Anthropic-синтаксис мы считаем
+    /// слипом модели, который ToolCallLeakDetector ловит, — не показываем его как образец.
     /// </summary>
     public static string ResumeToolCallLeak(int attempt, int max, string? snippet = null)
     {
@@ -69,12 +73,13 @@ public static class SubagentPrompts
         return $"""
             [СИСТЕМНАЯ ДИРЕКТИВА — ВЫЗОВ УШЁЛ В ТЕКСТ {attempt}/{max}]
             Последний вызов инструмента ушёл в текст и НЕ выполнен{tail}: модель выдала его
-            как обычный текст, а не tool_use. Повтори вызов в штатном формате
-             <function=...>
-              ...
+            как обычный текст, а не tool_use. Повтори вызов в штатном формате:
+
+            <function=ИМЯ>
+            <parameter=ИМЯ_ПАРАМЕТРА>
+            ЗНАЧЕНИЕ
+            </parameter>
             </function>
-              ...
-            </invoke>
             (попытка {attempt} из {max}).
             """;
     }

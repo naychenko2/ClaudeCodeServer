@@ -104,6 +104,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // Сколько ходов подряд было WholeCall-утечкой по этой сессии-исполнителю. Ход без такой
     // утечки обрывает серию; потолок попыток — SessionManager.MaxSubagentNudges (как у обрывов
     // сабагентов): до него — восстановимый повтор, после — работа встала (терминальная причина).
+    // Счётчик живёт в памяти процесса: при рестарте сервера сбрасывается и потолок
+    // MaxSubagentNudges применяется заново — осознанно (дешевле, чем персистить; серия
+    // WholeCall-утечек на ровном месте редка).
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _leakAttempts = new();
     // Сколько чат-исполнитель должен молчать, чтобы страховка сочла задачу брошенной
     // (Tasks:ExecutorStaleMinutes, дефолт 15). Тем же порогом меряется и второй шаг —

@@ -6782,20 +6782,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // Утечка вызова инструмента в текст (локальная модель): маркеры XML-формата вызова в
         // text-блоках ОСНОВНОГО агента. Вид зависит от состава сообщения: есть tool_use — хвост
         // (Tail, вызов после успешного tool_use, параметр мог потеряться), нет — вызов целиком
-        // ушёл текстом (WholeCall).
+        // ушёл текстом (WholeCall). hasToolUse/lastToolName ведём в основном цикле: хвост по
+        // определению идёт ПОСЛЕ успешного tool_use (tool_use раньше text-блока), а в
+        // whole_call tool_use в сообщении нет — поэтому один проход по content достаточен.
         var hasToolUse = false;
         string? lastToolName = null;
-        if (parentId is null)
-        {
-            foreach (var b in content.EnumerateArray())
-            {
-                if (b.TryGetProperty("type", out var bt2) && bt2.GetString() == "tool_use")
-                {
-                    hasToolUse = true;
-                    lastToolName = b.TryGetProperty("name", out var tn2) ? tn2.GetString() : null;
-                }
-            }
-        }
 
         foreach (var block in content.EnumerateArray())
         {
@@ -6808,6 +6799,14 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 if (parentId is null) await _onMessage(new RedactedThinkingMessage());
                 continue;
+            }
+
+            // tool_use: запоминаем, что в сообщении есть реальный вызов, и его имя (для tail).
+            // Обновляем ДО проверки text-блоков: хвост утечки идёт после успешного tool_use.
+            if (blockType == "tool_use")
+            {
+                hasToolUse = true;
+                lastToolName = block.TryGetProperty("name", out var tn2) ? tn2.GetString() : null;
             }
 
             // Текст ОСНОВНОГО агента: ищем утечку вызова инструмента в текст (локальная модель,

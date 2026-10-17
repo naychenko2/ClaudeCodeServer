@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
@@ -129,6 +130,30 @@ public class ToolCallLeakTests : IDisposable
         ToolCallLeakDetector.Detect("").Should().BeNull();
     }
 
+    // (а) Модель объясняет формат вызова, пример — в fenced-блоке: сигнатуры внутри кода — цитата.
+    [Fact]
+    public void Detect_КодБлокFenced_НеУтечка()
+    {
+        var text = "Вот так вызывается Read:\n```xml\n<function=Read>\n<parameter=file_path>/etc/passwd</parameter>\n</function>\n```\nГотово.";
+        ToolCallLeakDetector.Detect(text).Should().BeNull("сигнатуры внутри fenced-блока — цитата, не утечка");
+    }
+
+    // (б) Сигнатуры в инлайн-бэктиках (текст описания дефекта 47ffea78): цитата, не утечка.
+    [Fact]
+    public void Detect_ИнлайнКод_НеУтечка()
+    {
+        var text = "Первопричина — маркеры в бэктиках: `</function> </parameter><parameter=offset>27</parameter>`, `<parameter name=\"file_path\">…`, `</invoke>`.";
+        ToolCallLeakDetector.Detect(text).Should().BeNull("сигнатуры в инлайн-коде — цитата, не утечка");
+    }
+
+    // (г) Утечка ВНЕ код-блока, когда рядом есть код-блок: маркер за пределами блока — утечка.
+    [Fact]
+    public void Detect_УтечкаВнеКодБлока_Ловится()
+    {
+        var text = "```xml\n<function=Read>\n</function>\n```\nА вот ещё: <parameter=offset>27</parameter>";
+        ToolCallLeakDetector.Detect(text).Should().NotBeNull("маркер за пределами код-блока — утечка");
+    }
+
     // ─── Классификатор: терминальность ───────────────────────────────────────────
 
     [Fact]
@@ -239,5 +264,37 @@ public class ToolCallLeakTests : IDisposable
         var after = _tasks.GetById(task.Id)!;
         after.ExecutorStopReason.Should().BeNull("чистый ход сбросил серию — это новая попытка 1, не терминал");
         after.ClaudeResult.Should().Be("success", "чистый ход 3 успешен; ход 4 (повтор) итога не ставит");
+    }
+
+    // Находка 7 (порядок assistant → result в stream-json): result приходит БЕЗ предшествующей
+    // WholeCall-утечки (NoteLeak не вызывался) — ход принимается как обычный: итог success,
+    // директивы повтора нет, серии не копится. Фиксирует текущее поведение.
+    [Fact]
+    public async Task Result_БезУтечки_ПринятКакОбычный()
+    {
+        var (task, session) = await CreateExecutorAsync();
+
+        // Result без предшествующего ToolCallLeakMessage: TakeLeakState → (None, 0)
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ClaudeResult.Should().Be("success", "ход без утечки принимается как обычный");
+        after.ExecutorStopReason.Should().BeNull("утечки не было — человека не зовём");
+    }
+
+    // Находка 6: содержание директивы ResumeToolCallLeak. Формат вызова — Qwen3-Coder
+    // (<function=...></parameter><parameter=...></invoke>), а не Anthropic: директива
+    // не должна показывать модели Anthropic-синтаксис (</invoke>), который мы и считаем
+    // слипом, и не «parameter name=».
+    [Fact]
+    public void Directive_Содержание_ФорматQwen3Coder()
+    {
+        var text = SubagentPrompts.ResumeToolCallLeak(attempt: 1, max: 2, snippet: null);
+
+        text.Should().Contain("<function=", "формат Qwen3-Coder: <function=...>");
+        text.Should().Contain("<parameter=", "формат Qwen3-Coder: <parameter=...>");
+        text.Should().NotContain("invoke", "не показываем модели Anthropic-синтаксис </invoke>");
+        text.Should().NotContain("parameter name=", "не Anthropic-формат <parameter name=...>");
+        text.Should().Contain("попытка 1 из 2", "номер попытки N из M");
     }
 }

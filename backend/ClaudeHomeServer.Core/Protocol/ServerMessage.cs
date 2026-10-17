@@ -245,6 +245,11 @@ public record TruncatedMessage() : ServerMessage("truncated");
 // параметр мог потеряться) | "whole_call" (tool_use в сообщении нет — вызов целиком ушёл
 // текстом). AfterTool — имя последнего tool_use сообщения (для tail), Snippet — выдержка
 // текста с маркером.
+//
+// Snippet: ClaudeSession.BuildLeakSnippet режет до 200 символов (плашка на фронте —
+// человек читает, чуть больше контекста ок); тот же текст SubagentPrompts.TruncateSnippet
+// режет ещё до 120 для текста директивы (модель читает, не раздуваем инструкцию).
+// Два разных лимита — осознанно: у плашки и у директивы разная аудитория.
 public record ToolCallLeakMessage(string Kind, string? AfterTool, string Snippet)
     : ServerMessage("tool_call_leak");
 

@@ -9,6 +9,8 @@ import { useTurnPlanMode } from '../../lib/featureRuns';
 import type { FeatureRun } from '../../types/featureRun';
 import { TodoList } from './TodoList';
 import { FeatureModeBody } from './feature/FeatureModeBody';
+import { buildPillModel, type PillModel } from './feature/pillModel';
+import { FeatureGlyph } from './feature/FeatureGlyphs';
 
 // Пилюля прогресса «Плана хода» и, когда у чата есть фичи, режима «Исполнение фичи».
 //
@@ -20,22 +22,15 @@ import { FeatureModeBody } from './feature/FeatureModeBody';
 //
 // `runs` — агрегаты фич чата (из useFeatureRuns, бэковый FeatureRun); `todos` — план хода.
 // Пилюля показывается, когда есть хоть что-то: todos.length > 0 ИЛИ runs.length > 0.
+//
+// Вся логика 5 состояний (идёт/ждёт вас/исполнитель упал/закрыта/все закрыты) — в чистой
+// функции buildPillModel (feature/pillModel.ts): компонент только рисует модель.
 
-// Текущая стадия для подписи: по идущим задачам ролей (бэк уже сгруппировал).
-function activeStageName(run: FeatureRun): string {
-  if (run.steps.some(t => t.status === 'inProgress')) return 'Производство';
-  if (run.reviews.some(t => t.status === 'inProgress')) return 'Ревью';
-  if (run.qa.some(t => t.status === 'inProgress')) return 'Проверка';
-  if (run.final && run.final.status === 'inProgress') return 'Финальное ревью';
-  return 'План';
-}
-
-// Подпись пилюли в режиме фичи: состояние (ждёт вас / смержена / финал) или стадия.
-function featurePillLabel(run: FeatureRun): string {
-  if (run.awaitingHumanSince) return 'ждёт вас · мерж';
-  if (run.merge && run.merge.status === 'done') return 'Фича смержена';
-  if (run.ready) return 'Финал зелёный';
-  return activeStageName(run);
+// Значок пилюли в режиме фичи: ромб (wait) / квадрат (stopped) / Route (идёт/закрыта).
+function FeaturePillIcon({ model }: { model: PillModel }) {
+  if (model.icon === 'diamond') return <FeatureGlyph kind="wait" />;
+  if (model.icon === 'square') return <FeatureGlyph kind="stopped" />;
+  return <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={model.iconColor} />;
 }
 
 export function TurnPlanPill({ todos, runs = [], sessionId }: {
@@ -55,23 +50,31 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
   const planLabel = hint?.text ?? 'План выполнен';
 
   // Кнопка-пилюля: всегда runs[0] (порядок отсортировал бэк), выбор в теле не слушает.
-  const run0 = runs[0];
   const featureMode = hasFeatures && mode === 'feature';
+  const model = buildPillModel(runs);
 
-  // Счётчик кнопки: по режиму. Прогресс фичи — доля решённых витков (%), ↺ — возвраты.
-  const counter = featureMode && run0
-    ? `${Math.round(run0.progress * 100)}%${run0.verdicts.loops ? ` · ↺${run0.verdicts.loops}` : ''}`
-    : `${done}/${todos.length}`;
+  // Счётчик: по режиму. Фича — шаги принято/всего (8/9) + ↺ + +N; план — done/total.
+  const planCounter = `${done}/${todos.length}`;
+  const featureCounter = model && model.counter != null
+    ? `${model.counter}${model.loops > 0 ? ` ↺${model.loops}` : ''}`
+    : null;
+  const counter = featureMode && featureCounter != null ? featureCounter : planCounter;
 
-  // Текст кнопки-пилюли.
-  let label = planLabel;
-  let iconColor: string = C.accent;
-  if (featureMode && run0) {
-    label = featurePillLabel(run0);
-    iconColor = run0.awaitingHumanSince ? C.info : C.accent;
-  } else if (!hint) {
-    iconColor = C.textMuted;
-  }
+  // Текст/цвет/вес кнопки-пилюли: по модели (фича) или по плану.
+  const label = featureMode && model ? model.text : planLabel;
+  const iconColor = featureMode && model ? model.iconColor : (hint ? C.accent : C.textMuted);
+  const textColor = featureMode && model ? model.textColor : null;
+  const textWeight = featureMode && model ? model.textWeight : 400;
+  const loops = featureMode && model ? model.loops : 0;
+  const loopsHot = featureMode && model ? model.loopsHot : false;
+  const more = featureMode && model ? model.more : 0;
+  const word = featureMode && model ? model.word : null;
+
+  // Точка-сигнал: пилюля в режиме «План хода», а фича ждёт/упала — сигнал не теряется.
+  const showDot = !featureMode && model != null && (model.state === 'wait' || model.state === 'stopped');
+  const dotColor = model?.iconColor ?? C.info;
+  const ariaLabel = (featureMode ? 'Показать исполнение фичи' : 'Показать план хода')
+    + (showDot && model?.ariaExtra ? ` · ${model.ariaExtra}` : '');
 
   // Потолок меню: режим фичи выше (520 десктоп / 560 мобила, во всю ширину left/right 8),
   // план — как раньше (340, обычная ширина).
@@ -82,6 +85,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
       <button
         onClick={e => setMenu(menu ? null : e.currentTarget.getBoundingClientRect())}
         title={featureMode ? 'Показать исполнение фичи' : 'Показать план хода'}
+        aria-label={ariaLabel}
         style={{
           fontSize: 11, color: C.textMuted, fontFamily: FONT.mono,
           background: C.bgSelected, border: 'none', borderRadius: 8, padding: '4px 11px',
@@ -89,14 +93,47 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
           maxWidth: 300, minWidth: 0, flexShrink: 1,
         }}
       >
-        {featureMode ? (
-          <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={iconColor} style={{ flexShrink: 0 }} />
-        ) : (
-          <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={iconColor} style={{ flexShrink: 0 }} />
+        {/* Значок (+ точка-сигнал, когда пилюля в режиме плана, а фича ждёт/упала). */}
+        <span style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
+          {featureMode && model
+            ? <FeaturePillIcon model={model} />
+            : <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={iconColor} />}
+          {showDot && (
+            <span style={{
+              position: 'absolute', right: -3, top: -3, width: 6, height: 6,
+              borderRadius: '50%', background: dotColor, boxShadow: `0 0 0 1.5px ${C.bgSelected}`,
+            }} />
+          )}
+        </span>
+        {/* Слово-метка режима: на мобиле (360 px) скрыто — значок и так отличает режим. */}
+        {word && !isMobile && (
+          <>
+            <span style={{ flexShrink: 0 }}>{word}</span>
+            <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
+          </>
         )}
-        <span style={{ flexShrink: 0 }}>{counter}</span>
-        <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
-        <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {/* Счётчик шагов + ↺ + +N (без счётчика — «все закрыты», N>1). */}
+        {counter != null && (
+          <>
+            <span style={{ flexShrink: 0 }}>{counter}</span>
+            {loops > 0 && (
+              <span style={{
+                flexShrink: 0,
+                ...(loopsHot ? { color: C.warningText, fontWeight: 700 } : {}),
+              }}>↺{loops}</span>
+            )}
+            {more > 0 && (
+              <span style={{ fontFamily: FONT.mono, fontSize: 11, opacity: 0.8, flexShrink: 0 }}>+{more}</span>
+            )}
+            <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
+          </>
+        )}
+        {/* Текст состояния: обрезается многоточием, цвет/вес — по модели. */}
+        <span style={{
+          minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...(textColor ? { color: textColor } : {}),
+          fontWeight: textWeight,
+        }}>
           {label}
         </span>
       </button>
@@ -135,7 +172,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
                   План хода
                 </span>
                 <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
-                  {counter}
+                  {planCounter}
                 </span>
               </div>
               <TodoList todos={todos} />

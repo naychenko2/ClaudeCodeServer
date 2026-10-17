@@ -42,6 +42,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         // Пороги индикатора контекста: override юзера или null (фронт применит дефолты)
         var me = userId is null ? null : users.GetById(userId);
         var contextThresholds = me?.ContextThresholds;
+        var cacheWarnThresholds = me?.CacheWarnThresholds;
         var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
         // Дефолт-персона. Нормализация сироты на чтении:
         // DefaultPersonaId с несуществующей персоной отдаём как null — тогда онбординг-гейт
@@ -69,7 +70,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         return Ok(new
         {
             userId, username, displayName = me?.DisplayName, role, featureFlags,
-            contextThresholds, executionEnvironment,
+            contextThresholds, cacheWarnThresholds, executionEnvironment,
             defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
             subsystems = subsystems.ActiveKeys(),
         });
@@ -114,6 +115,31 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         return Ok(new { contextThresholds = thresholds });
     }
 
+    // Порог «кэш промпта скоро остынет» (per-user, секунды). body null/пустой → сброс к дефолтам
+    [Authorize]
+    [HttpPut("cache-thresholds")]
+    public IActionResult SetCacheWarnThresholds([FromBody] CacheWarnThresholdsRequest req)
+    {
+        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (userId is null) return Unauthorized();
+
+        CacheWarnThresholds? thresholds = null;
+        if (req.Warn1hSec is not null || req.Warn5mSec is not null)
+        {
+            if (req.Warn1hSec is not { } warn1h || req.Warn5mSec is not { } warn5m
+                || !CacheWarnThresholds.InRange(warn1h, warn5m))
+                return BadRequest(new
+                {
+                    error = $"Порог часового кэша — {CacheWarnThresholds.MinSec}–{CacheWarnThresholds.Max1hSec} с, " +
+                            $"5-минутного — {CacheWarnThresholds.MinSec}–{CacheWarnThresholds.Max5mSec} с",
+                });
+            thresholds = new CacheWarnThresholds(warn1h, warn5m);
+        }
+
+        if (!users.SetCacheWarnThresholds(userId, thresholds)) return Unauthorized();
+        return Ok(new { cacheWarnThresholds = thresholds });
+    }
+
     [Authorize]
     [HttpPut("password")]
     public IActionResult ChangePassword([FromBody] ChangePasswordRequest req)
@@ -139,4 +165,5 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
 public record LoginRequest(string? Username, string? Password);
 public record ChangePasswordRequest(string? CurrentPassword, string NewPassword);
 public record ContextThresholdsRequest(int? WarnPct, int? DangerPct);
+public record CacheWarnThresholdsRequest(int? Warn1hSec, int? Warn5mSec);
 public record TimeZoneRequest(string? TimeZone);

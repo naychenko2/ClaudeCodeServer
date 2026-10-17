@@ -136,6 +136,56 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
         restore.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+    [Fact]
+    public async Task CacheThresholds_SaveThenReset_RoundTripsThroughMe()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+
+        var save = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 600, warn5mSec = 90 });
+        save.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var saved = (await MeBody(authed)).GetProperty("cacheWarnThresholds");
+        saved.GetProperty("warn1hSec").GetInt32().Should().Be(600);
+        saved.GetProperty("warn5mSec").GetInt32().Should().Be(90);
+
+        // Пустое тело — сброс на дефолты фронта: в /me снова null
+        var reset = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
+        reset.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Theory]
+    [InlineData(29, 90)]    // ниже нижней границы
+    [InlineData(3541, 90)]  // часовой больше видимого срока (TTL − запас)
+    [InlineData(600, 271)]  // 5-минутный больше видимого срока
+    [InlineData(600, null)] // половина пары
+    public async Task CacheThresholds_OutOfRange_Returns400AndKeepsValue(int? warn1h, int? warn5m)
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
+
+        var response = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = warn1h, warn5mSec = warn5m });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task CacheThresholds_BoundaryValues_Accepted()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 3540, warn5mSec = 270 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 30, warn5mSec = 30 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
+    }
+
+    private static async Task<JsonElement> MeBody(HttpClient client) =>
+        JsonSerializer.Deserialize<JsonElement>(await (await client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
+
     private async Task<HttpResponseMessage> SendAs(
         string token, HttpMethod method, string url, object? body = null)
     {

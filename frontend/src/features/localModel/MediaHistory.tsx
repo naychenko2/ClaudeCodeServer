@@ -25,7 +25,7 @@ function totalOf(counters: { outcomes: Record<string, number> }): number {
   return Object.values(counters.outcomes ?? {}).reduce((a, b) => a + (b ?? 0), 0);
 }
 
-// Строка 3: «masha · очередь 1 мин 20 с · расчёт 42 с»; «вы» — акцент
+// Строка 3: «masha · очередь 1 мин 20 с»; «вы» — акцент
 function ownerPart(record: MediaHistoryRecord, meUsername: string | null): { text: string; me: boolean } {
   if (record.owner == null) return { text: '—', me: false };
   const me = meUsername != null && record.owner === meUsername;

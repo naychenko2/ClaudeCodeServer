@@ -1,3 +1,5 @@
+using Xunit;
+
 namespace ClaudeHomeServer.Tests;
 
 // Имена xunit-коллекций. Коллекция сериализует классы МЕЖДУ СОБОЙ, оставляя остальной

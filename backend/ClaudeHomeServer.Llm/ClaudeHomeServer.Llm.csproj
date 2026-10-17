@@ -14,11 +14,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- InternalsVisibleTo на ClaudeHomeServer.Tests: тесты вертикали остались в Main.Tests
-         (отдельная сборка ClaudeHomeServer.Llm.Tests не заводится), а на internal-члены
-         `ClaudeSession`/`CheapTextRunner` и пр. опираются десятки существующих тестов. -->
+    <!-- InternalsVisibleTo на ClaudeHomeServer.Tests: остаток тестов вертикали (вторая
+         половина ClaudeSession*Tests и Provider/Fallback/Subscription/Transcript) ещё живёт
+         в монолите и опирается на internal-члены `ClaudeSession`/`CheapTextRunner` и пр. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- InternalsVisibleTo на ClaudeHomeServer.Llm.Tests (шаг 3.1): первая половина
+         ClaudeSession*Tests переехала в отдельную тестовую сборку вертикали и тоже
+         опирается на те же internal-члены `ClaudeSession`/`CheapTextRunner` и пр. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

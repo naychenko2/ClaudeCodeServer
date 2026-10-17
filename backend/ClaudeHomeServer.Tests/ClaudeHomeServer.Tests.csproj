@@ -151,11 +151,19 @@
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
     <!--
-      Llm — отдельная сборка (Этап 5, финал линии). Тесты вертикали остались здесь
-      (отдельной ClaudeHomeServer.Llm.Tests нет), плюс статические конструкторы трёх
-      сторожей форс-загружают сборку через typeof(LlmSubsystem).Assembly.
+      Llm — отдельная сборка (Этап 5, финал линии). Остаток тестов вертикали (вторая
+      половина ClaudeSession*Tests и Provider/Fallback/Subscription/Transcript) ещё здесь,
+      плюс статические конструкторы трёх сторожей форс-загружают сборку через
+      typeof(LlmSubsystem).Assembly.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <!--
+      Llm.Tests (шаг 3.1): первая половина ClaudeSession*Tests переехала в отдельную
+      тестовую сборку вертикали. Монолит тянет её как ProjectReference, чтобы в переходный
+      период (до финальной чистки шага 3.3) обе копии перенесённых тестов компилировались
+      и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Llm.Tests\ClaudeHomeServer.Llm.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

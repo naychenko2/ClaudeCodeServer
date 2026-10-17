@@ -20,6 +20,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- xunit: TestCollections (шаг 3.1) — [CollectionDefinition]-маркеры xunit-коллекций.
+         Хелперы TestKit в целом без [Fact], но этот файл использует тест-раннер-атрибут,
+         поэтому xunit.core нужен как PackageReference (не делает TestKit тест-проектом:
+         IsTestProject=false выше). -->
+    <PackageReference Include="xunit" Version="2.9.2" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Internal-хелперы (TestLauncherFactory, InProcessExecStream, FakeDeviceAgent,
          DeviceSecretScanner, InotifyProbe, TestEnvironmentGuard, TestTelemetryGuard,
          FakeDeviceTurnGateway) видны только сборкам, которые реально их используют:

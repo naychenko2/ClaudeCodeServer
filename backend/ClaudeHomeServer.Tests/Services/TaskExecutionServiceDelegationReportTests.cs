@@ -310,7 +310,11 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
             CreatePersona(user.Id, "Денис"));
     }
 
-    // Задача, которую исполняет чат executorChat (планировщик/QA), поставленная из source и запущенная launchedBy
+    // Задача, которую исполняет чат executorChat (планировщик/QA), поставленная из source и запущенная launchedBy.
+    // finished: true — задача координатора ЗАКРЫТА (Status = Done): подъём по цепочке с неё продолжается
+    // (доклад идёт выше). finished: false — задача ещё открыта (Status = Todo): координатор ждёт доклад,
+    // подъём на нём останавливается. ClaudeResult проставляется в обоих случаях, т.к. ход координатора
+    // завершился — но адресат определяется по Status, а не по ClaudeResult (см. ResolveAddressee).
     private TaskItem MakeExecuting(Team team, Session executorChat, string? sourceId, string? launchedById,
         string? reportTo = null, bool finished = false)
     {
@@ -321,6 +325,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         var task = _tasks.GetById(t.Id)!;
         task.SourceSessionId = sourceId;
         task.ExecutorLaunchedBySessionId = launchedById;
+        if (finished) task.Status = TaskItemStatus.Done;
         return task;
     }
 
@@ -452,5 +457,59 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         await _sut.TryDeliverCompletionAsync(leaf).WaitAsync(TimeSpan.FromSeconds(10));
 
         (await CountAsync(team.Vera.Id)).Should().Be((1, 1), "цикл Егор → Вера → Егор останавливается на Вере");
+    }
+
+    // --- Сценарий бага 17.10: доклад шага уходит координатору, а не на уровень выше ---
+    // A (чат без задачи) запустил координатора S; S (своя задача ещё открыта) запускает
+    // исполнителя D. Доклад D обязан остаться у S: S — координатор, и пока его задача не
+    // закрыта, он сам ждёт результат. Старая эвристика (IsAwaitingResult) гасла после ПЕРВОГО
+    // хода S (ClaudeResult=success) и поднимала доклад к A, минуя S.
+
+    // sTaskDone: false — задача S ещё открыта (InProgress); true — S закрыл задачу (Done).
+    private async Task<(Session A, Session S, TaskItem Leaf)> ArrangeCoordinatorChainAsync(bool sTaskDone)
+    {
+        var team = await ArrangeTeamAsync();
+        // A — чат, из которого запущен координатор; задачи у него нет
+        var a = await _sessions.CreatePersonaChatAsync(team.OwnerId,
+            CreatePersona(team.OwnerId, "Оркестратор").Id, ClaudeMode.AcceptEdits, name: "Чат A");
+        StubProcess(a);
+        var s = team.Sofya;
+        // Задача координатора S: запущена из A, первый ход завершён (ClaudeResult=success)
+        var st = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("Оркестровка " + s.Name));
+        _tasks.MarkClaudeStarted(st.Id, s.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeResult(st.Id, "success");
+        var sTask = _tasks.GetById(st.Id)!;
+        sTask.SourceSessionId = a.Id;
+        sTask.ExecutorLaunchedBySessionId = a.Id;
+        sTask.Status = sTaskDone ? TaskItemStatus.Done : TaskItemStatus.InProgress;
+        // Лист: шаг, который S создала и сама запустила; Денис (D) его исполнил
+        var leaf = MakeLeaf(team, s, reportTo: null, launchedById: s.Id);
+        return (a, s, leaf);
+    }
+
+    [Fact]
+    public async Task Доклад_КоординаторСОткрытойЗадачей_АвтоХодКоординатору_НеНаУровеньВыше()
+    {
+        var (a, s, leaf) = await ArrangeCoordinatorChainAsync(sTaskDone: false);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        // S — координатор с открытой задачей: доклад (карточка + авто-ход) остаётся у него
+        (await CountAsync(s.Id)).Should().Be((1, 1), "координатор с открытой задачей получает карточку и авто-ход");
+        // A — запустивший координатора, но не адресат: авто-хода не получает
+        (await CountAsync(a.Id)).Should().Be((0, 0), "доклад не поднимается на уровень выше, минуя координатора");
+    }
+
+    [Fact]
+    public async Task Доклад_КоординаторСЗакрытойЗадачей_ПодъёмКЗапустившему()
+    {
+        var (a, s, leaf) = await ArrangeCoordinatorChainAsync(sTaskDone: true);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        // S закрыл задачу (Done) — подъём продолжается: авто-ход идёт A (запустившему)
+        (await CountAsync(a.Id)).Should().Be((1, 1), "задача координатора закрыта — доклад поднимается к запустившему");
+        // S — создатель листа, но не адресат: только карточка, без авто-хода
+        (await CountAsync(s.Id)).Should().Be((1, 0), "создателю листа — только карточка");
     }
 }

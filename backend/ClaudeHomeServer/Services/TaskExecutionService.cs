@@ -1633,8 +1633,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // (ReportToSessionId ?? запустивший ?? создатель). Идём, пока не упрёмся в сессию, не являющуюся
     // исполнителем; предохранители — глубина и защита от цикла. Звено мёртвое/чужое — остаёмся на
     // последней живой сессии цепочки.
-    // keepAwaitingStart: стартовая сессия — запустивший; пока её собственная задача ждёт результата,
-    // она координатор и сама ждёт доклад — выше не поднимаемся.
+    // keepAwaitingStart: стартовая сессия — запустивший; пока её собственная задача ещё открыта
+    // (Status != Done), она координатор и сама ждёт доклад — выше не поднимаемся. Сигнал «ход
+    // кончился» (ClaudeResult) здесь НЕ годится: он проставляется в конце ПЕРВОГО хода координатора,
+    // а его задача при этом ещё открыта — и доклад уходил бы на уровень выше, минуя координатора.
+    // Закрытая задача координатора (Status == Done) — подъём продолжается (планировщик закрыл план →
+    // доклад идёт оркестратору).
     private Session? ResolveAddressee(string? startSessionId, string? ownerId, bool keepAwaitingStart = false)
     {
         var current = OwnedSession(startSessionId, ownerId);
@@ -1642,7 +1646,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         for (var depth = 0; current is not null && depth < MaxReportChainDepth && visited.Add(current.Id); depth++)
         {
             if (_tasks.GetBySession(current.Id) is not { } t) break;
-            if (keepAwaitingStart && depth == 0 && IsAwaitingResult(t)) break;
+            if (keepAwaitingStart && depth == 0 && t.Status != TaskItemStatus.Done) break;
             var nextId = t.ReportToSessionId ?? t.ExecutorLaunchedBySessionId ?? t.SourceSessionId;
             if (OwnedSession(nextId, ownerId) is not { } next || visited.Contains(next.Id)) break;
             current = next;

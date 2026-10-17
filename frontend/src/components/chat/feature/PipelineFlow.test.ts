@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 import { C } from '../../../lib/design';
 import {
-  PipelineFlow, stagePhases, stagePasses, stageWidth,
+  PipelineFlow, stagePhases, stagePasses, stageWidth, stageTasks,
   laneInfo, laneTrackWidth, arcSpecs, buildArcs, arcPath, chevronPath,
 } from './PipelineFlow';
 
@@ -100,6 +100,32 @@ describe('stagePasses', () => {
     expect(stagePasses(r, 'cut')).toBe(1);
     expect(stagePasses(r, 'plan')).toBe(1);
     expect(stagePasses(r, 'merge')).toBe(1);
+  });
+});
+
+// === stageTasks: задачи стадии для расчёта «идёт сейчас» (inProgress) ===
+describe('stageTasks', () => {
+  it('prod→steps, review→reviews, check→qa, cut/plan→epic', () => {
+    const r = run({
+      steps: [task({ id: 's1' })],
+      reviews: [task({ id: 'r1' })],
+      qa: [task({ id: 'q1' })],
+    });
+    expect(stageTasks(r, 'cut')).toEqual([r.epic]);
+    expect(stageTasks(r, 'plan')).toEqual([r.epic]);
+    expect(stageTasks(r, 'prod')).toBe(r.steps);
+    expect(stageTasks(r, 'review')).toBe(r.reviews);
+    expect(stageTasks(r, 'check')).toBe(r.qa);
+  });
+
+  it('final/merge: null → пустой массив, иначе [задача]', () => {
+    expect(stageTasks(run(), 'final')).toEqual([]);
+    expect(stageTasks(run(), 'merge')).toEqual([]);
+    const f = task({ id: 'f1' });
+    const m = task({ id: 'm1' });
+    const r = run({ final: f, merge: m });
+    expect(stageTasks(r, 'final')).toEqual([f]);
+    expect(stageTasks(r, 'merge')).toEqual([m]);
   });
 });
 
@@ -285,6 +311,29 @@ describe('PipelineFlow: рендер', () => {
   it('inProgress → метка «стоит сейчас» + ▶', () => {
     const r = run({
       steps: [task({ id: 's1', status: 'inProgress' })],
+    });
+    const html = render(r);
+    expect(html).toContain('стоит сейчас');
+    expect(html).toContain('▶');
+  });
+
+  it('активная проверка (qa inProgress) → «стоит сейчас» + ▶', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done' })],
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
+      qa: [task({ id: 'q1', status: 'inProgress' })],
+    });
+    const html = render(r);
+    expect(html).toContain('стоит сейчас');
+    expect(html).toContain('▶');
+  });
+
+  it('активный финал (final inProgress) → «стоит сейчас» + ▶', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done' })],
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
+      qa: [task({ id: 'q1', status: 'done', verification: { verdict: 'accepted' } })],
+      final: task({ id: 'f1', status: 'inProgress' }),
     });
     const html = render(r);
     expect(html).toContain('стоит сейчас');

@@ -1,8 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
-import { C, FS, SP, R } from '../../../lib/design';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { C, FS, SP, R, FONT } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
-import { RING } from './Rounds';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
+
+// === Геометрия строки стадии (единый источник, чтобы рельса не рвалась) ===
+// Точка стадии — 14px (SVG). Строка несёт рамку 1px + паддинг SP.xs, поэтому
+// центр точки = SP.xs + 1 + 14/2 = 12px от верха строки (не зависит от высоты строки,
+// т.к. грид строки — align-items:start: точка всегда у верха, а не по центру).
+// Сегмент рельсы: top = низ текущей точки (SP.xs + 1 + 14 = 19), bottom = -(SP.xs + 1)
+// (до верха следующей точки: её рамка 1 + паддинг SP.xs = 5). Тогда рельса непрерывна.
+const DOT = 14;
+const DOT_CY = SP.xs + 1 + DOT / 2;   // 12 — центр точки, от верха строки
+const RAIL_TOP = SP.xs + 1 + DOT;     // 19 — низ текущей точки, от верха строки
+// Мин. высота строки стадии: 34 — в шкале SP подходящего значения нет (SP.lg=16, SP.xl=24,
+// SP.xxl=32), поэтому константа; 34 = 2·SP.xs + DOT + запас под мета-строку.
+const ROW_MIN_H = 34;
 
 // Конвейер фичи (режим «Исполнение фичи») — строго по макету v2
 // (docs/mockups/turn-plan-feature-mode-v2.html: conveyor() ~566, drawArcs() ~662,
@@ -18,8 +30,9 @@ import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 //   • под строкой «Производство» — горизонтальные полосы бэк/фронт (одна под другой):
 //     «бэк · N из M» + дорожка (заливка = доля принятых) + бейдж ↺r (hot при r ≥ 3);
 //   • дуги возврата (SVG-оверлей справа 46px) — по КАЖДОЙ стадии-источнику (ревью/
-//     проверка/финал), со сдвигом по x на 7px, цвет по исходу витка (RING), шеврон-
-//     стрелка в «Производство», подпись ×N.
+//     проверка/финал), со сдвигом по x на 7px, цвет по стадии-источнику (макет v2:
+//     review → textSecondary, check → info, final → accent), шеврон-стрелка в
+//     «Производство», подпись ×N.
 //
 // Компонент «глупый»: фазы/проходы/линии/дуги считают ЧИСТЫЕ функции (тестируются
 // отдельно), рендер только раскладывает. Координаты дуг — через замер строк (ref +
@@ -92,6 +105,20 @@ export function stagePasses(run: FeatureRun, key: StageKey): number {
   return 1; // cut, plan, merge
 }
 
+// Задачи стадии — единый массив для расчёта «идёт сейчас» (inProgress) активной стадии.
+// `plan` — отдельной plan-задачи в агрегате нет, за неё отвечает эпик.
+export function stageTasks(run: FeatureRun, key: StageKey): FeatureTask[] {
+  switch (key) {
+    case 'cut':    return [run.epic];
+    case 'plan':   return [run.epic];
+    case 'prod':   return run.steps;
+    case 'review': return run.reviews;
+    case 'check':  return run.qa;
+    case 'final':  return run.final ? [run.final] : [];
+    case 'merge':  return run.merge ? [run.merge] : [];
+  }
+}
+
 // Толщина сегмента рельсы: pending (todo) → 2 (пунктир), иначе формула макета.
 export function stageWidth(passes: number, phase: Phase): number {
   if (phase === 'pending') return 2;
@@ -122,8 +149,17 @@ export function laneTrackWidth(returns: number): number {
 }
 
 // Стадия-источник возврата: число возвратов (verdict returned/accepted_with_remarks) +
-// цвет по исходу витка (RING): возврат/правки → warning, принят → success, иначе → textHeading.
+// цвет. Цвет — по ИСТОЧНИКУ (макет v2, drawArcs: COL = { review: textSecondary,
+// check: info, final: accent }), а не по исходу витка: все три стадии-источника
+// должны читаться как разные.
 export interface ArcSource { key: 'review' | 'check' | 'final'; count: number; color: string }
+
+// Цвет дуги по стадии-источнику (макет v2, drawArcs: COL).
+const SOURCE_TINT: Record<ArcSource['key'], string> = {
+  review: C.textSecondary,
+  check: C.info,
+  final: C.accent,
+};
 
 export function arcSpecs(run: FeatureRun): ArcSource[] {
   const out: ArcSource[] = [];
@@ -133,15 +169,7 @@ export function arcSpecs(run: FeatureRun): ArcSource[] {
       return v === 'returned' || v === 'accepted_with_remarks';
     }).length;
     if (returns <= 0) return;
-    // Исход источника: есть возврат/правки → 'returned' (warning); только принят → 'accepted'
-    // (success); иначе → 'running'. Цвет — stroke из RING (тот же кодировщик, что в Rounds.tsx).
-    let verdict: string = 'running';
-    for (const t of list) {
-      const v = t.verification?.verdict;
-      if (v === 'returned' || v === 'accepted_with_remarks') { verdict = 'returned'; break; }
-      if (v === 'accepted') verdict = 'accepted';
-    }
-    out.push({ key, count: returns, color: RING[verdict]?.stroke ?? C.textHeading });
+    out.push({ key, count: returns, color: SOURCE_TINT[key] });
   };
   add('review', run.reviews);
   add('check', run.qa);
@@ -278,13 +306,15 @@ function LaneBar({ info }: { info: LaneInfo }) {
 }
 
 // SVG-оверлей дуг возврата (справа, 46px). elements — из buildArcs (по измеренным y).
-function ArcsOverlay({ elements }: { elements: ArcElement[] }) {
+// height — реальная высота контейнера в px: viewBox 1:1 с пикселем (preserveAspectRatio="none"),
+// чтобы дуги совпадали со строками.
+function ArcsOverlay({ elements, height }: { elements: ArcElement[]; height: number }) {
   if (!elements.length) return null;
   return (
     <svg
       width="46"
       height="100%"
-      viewBox="0 0 46 100%"
+      viewBox={`0 0 46 ${Math.max(height, 1)}`}
       preserveAspectRatio="none"
       aria-hidden="true"
       style={{ position: 'absolute', top: 0, right: 0, pointerEvents: 'none', overflow: 'visible' }}
@@ -298,7 +328,7 @@ function ArcsOverlay({ elements }: { elements: ArcElement[] }) {
               x={el.labelX}
               y={el.labelY}
               textAnchor="end"
-              style={{ font: `700 10px ${'JetBrains Mono, monospace'}`, fill: el.color }}
+              style={{ font: `700 10px ${FONT.mono}`, fill: el.color }}
             >
               {el.label}
             </text>
@@ -319,8 +349,10 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
   // Координаты строк (относительно контейнера) — через ref + ResizeObserver, не ROW_H.
   const containerRef = useRef<HTMLDivElement>(null);
   const [rowY, setRowY] = useState<Record<string, number>>({});
+  // Высота контейнера в px — для viewBox дуг: 1 user unit = 1 px (preserveAspectRatio="none").
+  const [svgH, setSvgH] = useState(0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el || typeof window === 'undefined' || typeof ResizeObserver === 'undefined') return;
     const measure = () => {
@@ -329,14 +361,17 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
       el.querySelectorAll<HTMLElement>('[data-stage]').forEach(node => {
         const key = node.getAttribute('data-stage');
         if (!key) return;
-        // +14 — смещение к центру содержимого строки (как rowY в drawArcs макета).
-        next[key] = node.getBoundingClientRect().top - box.top + 14;
+        // +DOT_CY — смещение к центру точки стадии (12px: рамка+паддинг+14/2).
+        // В макете было +14, но его точка 16px; у нас 14px → центр 12, не 14.
+        next[key] = node.getBoundingClientRect().top - box.top + DOT_CY;
       });
       setRowY(prev => {
         const keys = Object.keys(next);
         if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] === next[k])) return prev;
         return next;
       });
+      // React bail-out: равная высота не даёт лишнего рендера.
+      setSvgH(Math.round(box.height));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -379,8 +414,8 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
 
           // Состояния активной стадии: ожидание человека (wait) / идёт сейчас (inProgress).
           const waiting = active && !!run.awaitingHumanSince;
-          const inProgress = active && run.steps.some(t => t.status === 'inProgress')
-            || (s.key === 'review' && active && run.reviews.some(t => t.status === 'inProgress'));
+          // «Идёт сейчас» — по задачам ЭТОЙ стадии (stageTasks): prod/review/check/final/merge/cut/plan.
+          const inProgress = active && stageTasks(run, s.key).some(t => t?.status === 'inProgress');
 
           return (
             <div
@@ -392,8 +427,11 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 display: 'grid',
                 gridTemplateColumns: '16px 1fr',
                 gap: SP.sm,
-                alignItems: 'center',
-                minHeight: 34,
+                // 'start' (не 'center'): точка всегда у верха строки, центр = DOT_CY,
+                // независимо от высоты строки (иначе в высокой «Производство» точка
+                // центрировалась вниз и рельса рвалась над ней).
+                alignItems: 'start',
+                minHeight: ROW_MIN_H,
                 padding: `${SP.xs}px ${SP.xs}px`,
                 borderRadius: R.lg,
                 background: active ? C.accentLight : 'transparent',
@@ -408,12 +446,15 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                   style={{
                     position: 'absolute',
                     left: 7,
-                    top: 20,
-                    bottom: -SP.xs,
+                    // top = низ текущей точки (RAIL_TOP), bottom = до верха следующей
+                    // (-(SP.xs + 1): рамка+паддинг следующей строки) — рельса непрерывна.
+                    top: RAIL_TOP,
+                    bottom: -(SP.xs + 1),
                     width: phase === 'pending' ? 0 : width,
                     background: phase === 'pending' ? 'none' : C.progressTrack,
                     borderLeft: phase === 'pending' ? `2px dashed ${C.dashed}` : 'none',
                     transform: 'translateX(-50%)',
+                    // 2px — скругление сегмента: в шкале R значения 2 нет (R.sm=6).
                     borderRadius: 2,
                   }}
                 />
@@ -478,7 +519,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
       </div>
 
       {/* Дуги возврата: SVG-оверлей справа (десктоп, когда места хватает). */}
-      {!isMobile && <ArcsOverlay elements={arcElements} />}
+      {!isMobile && <ArcsOverlay elements={arcElements} height={svgH} />}
     </div>
   );
 }

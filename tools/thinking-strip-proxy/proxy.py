@@ -2593,14 +2593,18 @@ class Handler(BaseHTTPRequestHandler):
                 r2 = c2.getresponse()
             except OSError as e:
                 r2, причина = None, f"upstream недоступен: {e!r}"
+                if not петля:
+                    # Мусор: текст master — оператор видит, почему повтор не ушёл.
+                    print(f"карантин: повтор не ушёл ({e!r})", file=sys.stderr, flush=True)
             if r2 is not None and r2.status != 200:
                 причина = f"повтор ответил HTTP {r2.status}"
+                if not петля:
+                    print(f"карантин: повтор ответил HTTP {r2.status}", file=sys.stderr, flush=True)
             elif r2 is not None:
                 if петля:
                     итог["повторён"] = True
                     with lock:
                         stats["loops_retried"] += 1
-                if петля:
                     реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
                 else:
                     реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True,
@@ -2625,6 +2629,9 @@ class Handler(BaseHTTPRequestHandler):
                     with lock:
                         stats["loops_detected"] += 1
                     print(f"петля и в повторе ({реле2.детектор.всего} слов) — ответ усечён",
+                          file=sys.stderr, flush=True)
+                else:
+                    print("карантин: мусор или петля и в повторе — ответ оборван",
                           file=sys.stderr, flush=True)
                 реле2.закрыть_блок()
                 реле = реле2

@@ -7,7 +7,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 import { C, SP, FONT } from '../../../lib/design';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
@@ -15,6 +15,15 @@ import {
   PipelineFlow, stagePhases, stagePasses, stageWidth, stageTasks,
   laneInfo, laneTrackWidth, arcSpecs, buildArcs, arcPath, chevronPath, ARCS_W,
 } from './PipelineFlow';
+
+// Стор персон (lib/personas) — мок: hoisted-карта id→имя. Исполнитель резолвится по имени
+// (блокер 2.16.2); тесты подставляют нужных персон. Компоненту нужен только .name.
+const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+vi.mock('../../../lib/personas', () => ({
+  getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
+}));
+// Карта общая на весь файл — сбрасываю перед каждым тестом (изоляция).
+beforeEach(() => { personaMap.clear(); });
 
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
   return { id: 't', title: 'Задача', status: 'todo', ...over };
@@ -495,17 +504,20 @@ describe('PipelineFlow: раскрытие строк (2.15)', () => {
 
   // SSR: «Производство» раскрыто по умолчанию → список шагов в разметке.
   // Мутация «закомментировать <StageDetails/>» обязана покрасить этот кейс (шаги исчезнут).
-  it('Prod_СодержитШаги_РаскрытПоУмолчанию: шаги показаны (stepRef, lane, personaId, ожидание)', () => {
+  it('Prod_СодержитШаги_РаскрытПоУмолчанию: шаги показаны (stepRef, lane, имя исполнителя, ожидание)', () => {
+    // Исполнители — ИМЕНА персон (2.16.2), не сырые id: подставляем персон в мок-стор.
+    personaMap.set('denis', 'Денис');
+    personaMap.set('kira', 'Кира');
     const html = render(runWithSteps());
     // prod раскрыт по умолчанию → StageDetails рендерит список шагов (id stage-details-prod).
     expect(html).toContain('stage-details-prod');
-    // Шаги: stepRef, заголовок, исполнитель (personaId).
+    // Шаги: stepRef, заголовок, исполнитель — имя персоны (не GUID).
     expect(html).toContain('Ш1');
     expect(html).toContain('Бэк-шаг');
     expect(html).toContain('Ш2');
     expect(html).toContain('Фронт-шаг');
-    expect(html).toContain('denis');
-    expect(html).toContain('kira');
+    expect(html).toContain('Денис');
+    expect(html).toContain('Кира');
     // Ожидание человека: reason + отметка времени «с ЧЧ:ММ» (локальное время, TZ-независимо).
     expect(html).toContain('нужен выбор');
     expect(html).toMatch(/с \d{2}:\d{2}/);
@@ -541,5 +553,99 @@ describe('PipelineFlow: раскрытие строк (2.15)', () => {
     act(() => (reactProps(btn!)!.onClick as () => void)());
     expect(btn!.getAttribute('aria-expanded')).toBe('true');
     root.unmount();
+  });
+
+  // Одиночное раскрытие (2.16.5): открыть одну стадию — закрыть предыдущую.
+  // Мутация «Set<StageKey> (несколько открыто сразу)» обязана покрасить: с Set клик по
+  // «Ревью» добавил бы его, не закрыв «Производство» (prod aria-expanded остался бы true).
+  it('StageRows_КликОткрываетТолькоОдну: клик по другой стадии закрывает «Производство», повторный — сворачивает', () => {
+    const { root, container } = mount(createElement(PipelineFlow, { run: runWithSteps() }));
+    const prod = findNodeByAttr(container, 'data-testid', 'stage-row-prod');
+    const review = findNodeByAttr(container, 'data-testid', 'stage-row-review');
+    expect(prod, 'кнопка «Производство» не найдена').not.toBeNull();
+    expect(review, 'кнопка «Ревью» не найдена').not.toBeNull();
+    // По умолчанию prod раскрыт.
+    expect(prod!.getAttribute('aria-expanded')).toBe('true');
+    // Первый клик по «Ревью» (другая стадия): одиночное раскрытие закрывает «Производство».
+    act(() => (reactProps(review!)!.onClick as () => void)());
+    expect(prod!.getAttribute('aria-expanded'), '«Производство» должно закрыться при открытии «Ревью»').toBe('false');
+    // Повторный клик по «Ревью» (toggle) → expanded=null: «Производство» по-прежнему закрыто.
+    act(() => (reactProps(review!)!.onClick as () => void)());
+    expect(prod!.getAttribute('aria-expanded')).toBe('false');
+    root.unmount();
+  });
+
+  // «Ревью» не имеет деталей (только «Производство» их рендерит, 2.16.1): после клика
+  // aria-expanded=false и контейнера <div id="stage-details-review"> нет.
+  // Мутация 1 («StageDetails рендерит для всех стадий») обязана покрасить: details-review появился бы.
+  it('Review_КликНетШагов_НетStageDetails: клик по «Ревью» — деталей (шагов) нет', () => {
+    const { root, container } = mount(createElement(PipelineFlow, { run: runWithSteps() }));
+    const review = findNodeByAttr(container, 'data-testid', 'stage-row-review');
+    expect(review, 'кнопка «Ревью» не найдена').not.toBeNull();
+    act(() => (reactProps(review!)!.onClick as () => void)());
+    // «Ревью» — не «Производство» → деталей нет: aria-expanded=false (стадия без деталей не «раскрыта»).
+    expect(review!.getAttribute('aria-expanded')).toBe('false');
+    // Контейнера деталей «Ревью» в дереве нет (id — атрибут; ищем по нему).
+    expect(findNodeByAttr(container, 'id', 'stage-details-review'), 'у «Ревью» не должно быть деталей').toBeNull();
+    root.unmount();
+  });
+});
+
+// === Исполнитель, поверхность деталей, глифы статуса (2.16.2–2.16.4) ===
+describe('PipelineFlow: исполнитель / поверхность / глифы (2.16)', () => {
+  // Исполнитель = имя персоны (2.16.2): personaId → имя из стора, не сырой GUID.
+  // Мутация 2 («исполнитель = GUID») обязана покрасить: 'Кирилл' исчезнет, вернётся id.
+  it('Step_Who_ОтображаетИмяПерсоны: personaId → имя (не GUID)', () => {
+    personaMap.set('fake-id', 'Кирилл');
+    const r = run({
+      steps: [task({ id: 's1', title: 'Шаг', lane: 'back', status: 'inProgress', personaId: 'fake-id' })],
+    });
+    const html = render(r);
+    expect(html, 'исполнитель — имя персоны').toContain('Кирилл');
+    expect(html, 'сырой id не выводится').not.toContain('fake-id');
+  });
+
+  // Персона не найдена → fallback на имя статуса, не на id (2.16.2).
+  it('Step_Who_ПерсонаНеНайдена_FallbackНаСтатус: нет id в выводе', () => {
+    // personaMap пуст (beforeEach) → personaName=null → who = statusLabel('todo') = 'ожидает'.
+    const r = run({
+      steps: [task({ id: 's1', title: 'Шаг', lane: 'back', status: 'todo', personaId: 'ghost-id' })],
+    });
+    const html = render(r);
+    expect(html).not.toContain('ghost-id');
+    expect(html).toContain('ожидает');
+  });
+
+  // Поверхность деталей (2.16.4): class с токеном bgCard + фон/рамка из design-токенов.
+  // Мутация «убрать обёртку-поверхность» обязана покрасить: class/фон/рамка исчезнут.
+  it('Stage_Детали_ИмеютПоверхность: детали в поверхности (bgCard/borderLight/R.md)', () => {
+    const r = run({
+      steps: [task({ id: 's1', title: 'Шаг', lane: 'back', status: 'done' })],
+    });
+    const html = render(r);
+    expect(html, 'class поверхности с токеном bgCard').toContain('stage-details-bgCard');
+    expect(html, 'фон — токен bgCard').toContain('var(--c-bg-card)');
+    expect(html, 'рамка — токен borderLight').toContain('var(--c-border-light)');
+  });
+
+  // Глиф статуса шага (2.16.3): для каждого статуса свой глиф.
+  //   todo — пунктирный кружок, inProgress — ▶, done — галочка.
+  it('Step_Глиф_Присутствует_ДляКаждогоСтатуса: todo/inProgress/done → глиф', () => {
+    const r = run({
+      steps: [
+        task({ id: 's1', title: 'Т1', lane: 'back', status: 'todo' }),
+        task({ id: 's2', title: 'Т2', lane: 'front', status: 'inProgress' }),
+        task({ id: 's3', title: 'Т3', lane: 'back', status: 'done' }),
+      ],
+    });
+    const html = render(r);
+    // todo — пунктирный кружок (рамка dashed, токен C.dashed).
+    expect(html, 'todo — пунктирный кружок').toContain('1.5px dashed var(--c-dashed)');
+    // done — галочка (path со специфичной геометрией, stroke C.textMuted).
+    expect(html, 'done — галочка').toContain('M3.5 8.5 6.5 11.5 12.5 5');
+    // inProgress — ▶ (акцент). Строка «Производство» тоже рисует ▶ при inProgress-шаге,
+    // поэтому ▶ встречается ≥2 раз: метка стадии + глиф шага. Если глиф шага убрать — останется 1.
+    const playCount = (html.match(/▶/g) ?? []).length;
+    expect(playCount, 'inProgress — глиф ▶ (шаг + метка стадии)').toBeGreaterThanOrEqual(2);
   });
 });

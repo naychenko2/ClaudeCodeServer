@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { C, FS, SP, R, FONT } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
+import { getPersonaById } from '../../../lib/personas';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 
 // === Геометрия строки стадии (единый источник, чтобы рельса не рвалась) ===
@@ -134,13 +135,11 @@ export function stageTasks(run: FeatureRun, key: StageKey): FeatureTask[] {
   }
 }
 
-// Переключение раскрытия стадии: новый Set (иммутабельно, чтобы React видел смену состояния).
-// Клик по строке стадии раскрывает/сворачивает её детали (список шагов «Производства»).
-export function toggleExpanded(prev: Set<StageKey>, key: StageKey): Set<StageKey> {
-  const next = new Set(prev);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  return next;
+// Переключение раскрытия стадии — ОДИНОЧНОЕ (2.16.5, макет v2: S.open = S.open === v ? null : v):
+// открыть одну стадию — закрыть предыдущую. Клик по уже раскрытой стадии сворачивает её (null).
+// Возвращает новый ключ (иммутабельно, чтобы React видел смену состояния).
+export function toggleExpanded(prev: StageKey | null, key: StageKey): StageKey | null {
+  return prev === key ? null : key;
 }
 
 // Толщина сегмента рельсы: pending (todo) → 2 (пунктир), иначе формула макета.
@@ -389,6 +388,13 @@ function statusLabel(status?: FeatureTask['status']): string {
   }
 }
 
+// Исполнитель: имя персоны из стора персон (lib/personas), или null, если персона не найдена
+// (вызывающий тогда падает на имя статуса, а не на сырой id — блокер 2.16.2).
+function personaName(id?: string | null): string | null {
+  if (!id) return null;
+  return getPersonaById(id)?.name ?? null;
+}
+
 // Шеврон раскрытия: поворачивается на 180° при раскрытии. reduced-motion — без плавного перехода.
 function Chevron({ expanded, reduced }: { expanded: boolean; reduced: boolean }) {
   return (
@@ -408,40 +414,68 @@ function Chevron({ expanded, reduced }: { expanded: boolean; reduced: boolean })
   );
 }
 
-// Строка шага в раскрытии «Производства»: линия, stepRef, заголовок, исполнитель, ожидание человека.
+// Глиф статуса шага (макет v2 .step: grid 14px 1fr auto, глиф слева, 2.16.3):
+//   todo — приглушённый кружок (пунктирная рамка), inProgress — ▶ (accent), done — галочка (muted).
+function StepGlyph({ status }: { status?: FeatureTask['status'] }) {
+  if (status === 'inProgress') {
+    return (
+      <span aria-hidden="true" style={{ width: 14, display: 'inline-flex', justifyContent: 'center', color: C.accent, fontSize: FS.xs, lineHeight: 1 }}>▶</span>
+    );
+  }
+  if (status === 'done') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M3.5 8.5 6.5 11.5 12.5 5" fill="none" stroke={C.textMuted} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  // todo (и дефолт, когда статуса нет): приглушённый кружок с пунктирной рамкой.
+  return (
+    <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: '50%', border: `1.5px dashed ${C.dashed}`, display: 'inline-block', flexShrink: 0 }} />
+  );
+}
+
+// Строка шага в раскрытии «Производства»: глиф статуса, линия, stepRef, заголовок, исполнитель, ожидание человека.
 function StepRow({ t }: { t: FeatureTask }) {
   const lane = laneOf(t);
   const laneLabel = lane === 'back' ? 'бэк' : lane === 'front' ? 'фронт' : (t.lane?.trim() || '—');
-  // Исполнитель: personaId (id персоны-исполнителя) или, если нет, — имя статуса.
-  const who = t.personaId ?? statusLabel(t.status);
+  // Исполнитель: имя персоны (lib/personas); если персона не найдена — имя статуса, не сырой id (2.16.2).
+  const who = personaName(t.personaId) ?? statusLabel(t.status);
   const waiting = !!t.awaitingHumanSince;
   const when = formatWhen(t.awaitingHumanSince);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: FS.sm }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap' }}>
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{t.stepRef ?? '—'}</span>
-        <span style={{ color: C.textPrimary }}>{t.title || 'Без заголовка'}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
-        <span>{laneLabel}</span>
-        <span>·</span>
-        <span>{who}</span>
-        {waiting && (
-          <>
-            <span>·</span>
-            <span style={{ color: C.info }} title={t.awaitingHumanReason ?? undefined}>
-              {t.awaitingHumanReason ?? 'ждёт человека'}{when ? ` · с ${when}` : ''}
-            </span>
-          </>
-        )}
+    <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr', gap: SP.xs, alignItems: 'start', fontSize: FS.sm }}>
+      <StepGlyph status={t.status} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{t.stepRef ?? '—'}</span>
+          <span style={{ color: C.textPrimary }}>{t.title || 'Без заголовка'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
+          <span>{laneLabel}</span>
+          <span>·</span>
+          <span>{who}</span>
+          {waiting && (
+            <>
+              <span>·</span>
+              <span style={{ color: C.info }} title={t.awaitingHumanReason ?? undefined}>
+                {t.awaitingHumanReason ?? 'ждёт человека'}{when ? ` · с ${when}` : ''}
+              </span>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
 // Раскрытие стадии: список шагов «Производства», сгруппированный по линии (бэк/фронт/прочее).
+// `stageKey` — ключ стадии: детали рендерятся ТОЛЬКО для «Производства» (2.16.1), для остальных — null.
+// (Имя не `key`: `key` — спец-проп React для реконсиляции, в props компонента не попадает.)
 // `id` — цель aria-controls кнопки-строки. Пустой набор шагов → null (раскрытия нет).
-function StageDetails({ id, run }: { id: string; run: FeatureRun }) {
+// Поверхность (2.16.4, макет .det): фон C.bgCard, рамка C.borderLight, радиус R.md, паддинг SP.sm.
+function StageDetails({ id, stageKey, run }: { id: string; stageKey: StageKey; run: FeatureRun }) {
+  if (stageKey !== 'prod') return null;
   const steps = run.steps;
   if (!steps.length) return null;
   const back = steps.filter(s => laneOf(s) === 'back');
@@ -457,9 +491,13 @@ function StageDetails({ id, run }: { id: string; run: FeatureRun }) {
   return (
     <div
       id={id}
+      className="stage-details-bgCard"
       style={{
         display: 'flex', flexDirection: 'column', gap: SP.xs,
-        padding: `${SP.xs}px ${SP.xs}px ${SP.xs}px ${indent}px`,
+        background: C.bgCard,
+        border: `1px solid ${C.borderLight}`,
+        borderRadius: R.md,
+        padding: `${SP.sm}px ${SP.sm}px ${SP.sm}px ${indent}px`,
       }}
     >
       {groups.map(g => (
@@ -474,6 +512,12 @@ function StageDetails({ id, run }: { id: string; run: FeatureRun }) {
   );
 }
 
+// Есть ли у стадии раскрытие (детали): только «Производство» с хотя бы одним шагом (2.16.1).
+// Для aria-expanded: стадия без деталей не считается «раскрытой», даже если она — текущая expanded.
+function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
+  return key === 'prod' && run.steps.length > 0;
+}
+
 // Главная диаграмма конвейера: одна вертикальная рельса 7 стадий + полосы бэк/фронт + дуги.
 export function PipelineFlow({ run }: { run: FeatureRun }) {
   const isMobile = useIsMobile();
@@ -481,11 +525,12 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
   const phases = stagePhases(run);
   const lanes = laneInfo(run);
   const specs = arcSpecs(run);
-  // Раскрытые стадии (2.15.3): «Производство» открыто по умолчанию, остальные свёрнуты.
+  // Раскрытая стадия (2.16.5) — ОДИНОЧНАЯ: «Производство» открыто по умолчанию, остальные свёрнуты.
   // В макете v2 по умолчанию S.open=null, но prod раскрывается при переходе на карточку
   // (a==='tocard' → S.open='prod'); делаем prod открытым сразу, чтобы шаги были видны
-  // без лишнего клика (главная претензия v4: «не вижу шаги»). Клик переключает (toggleExpanded).
-  const [expanded, setExpanded] = useState<Set<StageKey>>(() => new Set(['prod']));
+  // без лишнего клика (главная претензия v4: «не вижу шаги»). Клик переключает:
+  // открыть одну стадию — закрыть предыдущую (toggleExpanded).
+  const [expanded, setExpanded] = useState<StageKey | null>('prod');
 
   // Координаты строк (относительно контейнера) — через ref + ResizeObserver, не ROW_H.
   const containerRef = useRef<HTMLDivElement>(null);
@@ -601,7 +646,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                   теперь кликабельная. padding:0, чтобы точка осталась на месте (геометрия рельсы). */}
               <button
                 data-testid={`stage-row-${s.key}`}
-                aria-expanded={expanded.has(s.key)}
+                aria-expanded={expanded === s.key && stageHasDetails(s.key, run)}
                 aria-controls={`stage-details-${s.key}`}
                 onClick={() => setExpanded(prev => toggleExpanded(prev, s.key))}
                 style={{
@@ -667,7 +712,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                   })}
                   {/* Шеврон раскрытия: справа в строке, поворот при раскрытии (reduced-motion — без перехода). */}
                   <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center' }}>
-                    <Chevron expanded={expanded.has(s.key)} reduced={reduced} />
+                    <Chevron expanded={expanded === s.key} reduced={reduced} />
                   </span>
                 </span>
                 {/* Мета под именем: «ещё не начат» (todo) / «стоит сейчас» (inProgress) / reason (wait). */}
@@ -690,8 +735,12 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 )}
               </span>
               </button>
-              {/* Раскрытие: список шагов «Производства» (2.15.2). Только когда стадия раскрыта. */}
-              {expanded.has(s.key) && <StageDetails id={`stage-details-${s.key}`} run={run} />}
+              {/* Раскрытие: список шагов «Производства» (2.15.2/2.16.1). Только когда стадия раскрыта;
+                  StageDetails сам отдаёт null для стадий без деталей (только «Производство» их имеет).
+                  `key` — React-реконсиляция, `stageKey` — данные (см. StageDetails). */}
+              {expanded === s.key && (
+                <StageDetails key={s.key} id={`stage-details-${s.key}`} stageKey={s.key} run={run} />
+              )}
             </div>
           );
         })}

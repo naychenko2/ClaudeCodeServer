@@ -15,6 +15,17 @@
 // исполнители работают, вердикты/прогресс/подпись пилюли меняются: по событию (задача с
 // featureId или role=feature) перезапрашиваем агрегат затронутого чата с дебаунсом ~500 мс.
 // Событие игнорируем, если фич-флаг выключен или чат не «активен» (никто его не смотрит).
+//
+// F1: в памяти ВКЛАДКИ (не localStorage — постоянное хранение режима вынесено за волну)
+// живёт ещё три среза на чат, все в том же сторе и на тех же подписках:
+//   • режим «План хода»/«Исполнение фичи» (getTurnPlanMode/setTurnPlanMode) — один выбор
+//     видят и пилюля, и карточка; умолчание: есть хотя бы одна фича → feature, нет → plan;
+//   • выбранная фича (getSelectedFeatureId/setSelectedFeatureId) — влияет только на тело
+//     в меню/карточке; пилюля её НЕ слушает (всегда runs[0], порядок отсортировал бэк);
+//   • сигнал фокуса (focusFeatureStep/useFeatureStepFocus) — чип «Шаг N фичи» (Ф9)
+//     открывает нужную фичу и шаг.
+// Все три — per-session (Map<sessionId, …>): смена чата показывает срез того чата,
+// и ни режим, ни выбор, ни фокус не текут между чатами.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
@@ -38,6 +49,25 @@ const _active = new Set<string>();
 // Дебаунс-таймеры по сессии: серия task_changed → один перезапрос.
 const _pending = new Map<string, ReturnType<typeof setTimeout>>();
 let _realtimeWired = false;
+
+// F1: режим «План хода»/«Исполнение фичи» на чат, в памяти вкладки.
+// Явный выбор пользователя (setTurnPlanMode); без выбора — умолчание по наличию фич.
+export type TurnPlanMode = 'plan' | 'feature';
+let _modeBySession = new Map<string, TurnPlanMode>();
+
+// F1: выбранная фича на чат (id эпика), в памяти вкладки, живёт до смены чата.
+let _selectedFeatureBySession = new Map<string, string>();
+
+// F1: сигнал фокуса шага на чат: по нему чип «Шаг N фичи» (Ф9) открывает фичу и шаг.
+// `seq` — монотонный счётчик: повторный фокус на тот же (featureId, taskId) всё равно
+// даёт новую ссылку → подписчик срабатывает заново.
+export interface FeatureStepFocus {
+  featureId: string;
+  taskId: string;
+  seq: number;
+}
+let _focusBySession = new Map<string, FeatureStepFocus>();
+let _focusSeq = 0;
 
 // M1: обновить ТОЛЬКО срез под sessionId (не весь стор). Копия Map — стабильные ссылки
 // на срезы других сессий не меняются (useSyncExternalStore их не «видит» как новые).
@@ -63,6 +93,99 @@ function subscribeRuns(fn: () => void): () => void {
 function snapshotFor(sessionId: string | null): FeatureRun[] {
   if (!sessionId) return EMPTY;
   return _runsBySession.get(sessionId) ?? EMPTY;
+}
+
+// F1: режим чата. Явный выбор (setTurnPlanMode) — в приоритете; иначе умолчание:
+// есть хотя бы одна фича у этого чата → feature, нет → plan (макет v1, решение 1).
+// Умолчание пересчитывается, когда меняется срез фич (setRuns → emit → re-snapshot).
+function modeFor(sessionId: string | null): TurnPlanMode {
+  if (!sessionId) return 'plan';
+  const explicit = _modeBySession.get(sessionId);
+  if (explicit) return explicit;
+  return snapshotFor(sessionId).length > 0 ? 'feature' : 'plan';
+}
+
+export function getTurnPlanMode(sessionId: string | null): TurnPlanMode {
+  return modeFor(sessionId);
+}
+
+export function setTurnPlanMode(sessionId: string, mode: TurnPlanMode) {
+  if (!sessionId) return;
+  _modeBySession = new Map(_modeBySession);
+  _modeBySession.set(sessionId, mode);
+  emit();
+}
+
+// Хук: режим чата. Пилюля и карточка видят один выбор (тот же getSnapshot).
+export function useTurnPlanMode(sessionId: string | null): TurnPlanMode {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => modeFor(sessionId),
+    () => modeFor(sessionId),
+  );
+}
+
+// F1: выбранная фича (id эпика) на чат. Влияет только на тело в меню/карточке;
+// пилюля её не слушает (всегда runs[0]).
+function selectedFeatureIdFor(sessionId: string | null): string | undefined {
+  if (!sessionId) return undefined;
+  return _selectedFeatureBySession.get(sessionId);
+}
+
+export function getSelectedFeatureId(sessionId: string | null): string | undefined {
+  return selectedFeatureIdFor(sessionId);
+}
+
+export function setSelectedFeatureId(sessionId: string, featureId: string) {
+  if (!sessionId) return;
+  _selectedFeatureBySession = new Map(_selectedFeatureBySession);
+  _selectedFeatureBySession.set(sessionId, featureId);
+  emit();
+}
+
+// Хук: выбранная фича чата (id эпика) или undefined, если выбор ещё не сделан.
+export function useSelectedFeatureId(sessionId: string | null): string | undefined {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => selectedFeatureIdFor(sessionId),
+    () => selectedFeatureIdFor(sessionId),
+  );
+}
+
+// F1: сигнал фокуса шага. focusFeatureStep ставит новый сигнал (с новым seq) и будит
+// подписчиков; useFeatureStepFocus возвращает текущий сигнал чата (стабильная ссылка,
+// пока не пришёл новый) или null.
+function focusFor(sessionId: string | null): FeatureStepFocus | null {
+  if (!sessionId) return null;
+  return _focusBySession.get(sessionId) ?? null;
+}
+
+export function focusFeatureStep(sessionId: string, featureId: string, taskId: string) {
+  if (!sessionId) return;
+  _focusSeq += 1;
+  _focusBySession = new Map(_focusBySession);
+  _focusBySession.set(sessionId, { featureId, taskId, seq: _focusSeq });
+  emit();
+}
+
+// Хук: сигнал фокуса шага чата (null, пока фокуса не было).
+export function useFeatureStepFocus(sessionId: string | null): FeatureStepFocus | null {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => focusFor(sessionId),
+    () => focusFor(sessionId),
+  );
+}
+
+// F1: ТОЛЬКО ЧИТАЕТ стор агрегатов, без fetch (запрос уже делает ChatPanel через
+// useFeatureRuns). Нужен карточке плана в ленте: она видит те же агрегаты, что и
+// пилюля, но не дублирует сетевой запрос.
+export function useFeatureRunsSnapshot(sessionId: string | null): FeatureRun[] {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => snapshotFor(sessionId),
+    () => snapshotFor(sessionId),
+  );
 }
 
 // M2: дебаунс ~500 мс на сессию.
@@ -143,6 +266,10 @@ export function useFeatureRuns(sessionId: string | null, enabled: boolean): Feat
 export const __test = {
   reset() {
     _runsBySession = new Map();
+    _modeBySession = new Map();
+    _selectedFeatureBySession = new Map();
+    _focusBySession = new Map();
+    _focusSeq = 0;
     _active.clear();
     _pending.forEach(t => clearTimeout(t));
     _pending.clear();
@@ -157,4 +284,8 @@ export const __test = {
   setActive: (s: string) => _active.add(s),
   active: () => new Set(_active),
   pending: () => new Set(_pending.keys()),
+  // F1: прямой доступ к срезам режима/выбора/фокуса для тестов.
+  modeFor,
+  selectedFeatureIdFor,
+  focusFor,
 };

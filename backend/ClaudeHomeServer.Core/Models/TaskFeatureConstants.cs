@@ -39,3 +39,22 @@ public static class TaskVerdicts
     public static readonly IReadOnlyList<string> All =
         [Accepted, AcceptedWithRemarks, Returned, Withdrawn];
 }
+
+// Мягкое предупреждение «ревью/проверку/финал фичи закрыли без вердикта» (разрез §5):
+// карточка фичи вердикт не покажет, а блокировать закрытие ради UI нельзя. Единая строка
+// и условие — для MCP (TasksToolset.CompleteResponse) и REST (TasksController.Update):
+// мироринг поведения, одна точка правды. null — предупреждения нет.
+public static class FeatureVerdict
+{
+    public const string WarningText =
+        "У ревью/проверки/финала фичи нет вердикта — карточка его не покажет. "
+        + "Задайте verification.verdict (accepted · accepted_with_remarks · returned · withdrawn).";
+
+    // Условие: задача фичи (featureId != null) с ролью review/qa/final, закрытая без вердикта.
+    public static string? Warning(TaskItem task) =>
+        task.FeatureId is not null
+            && task.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final
+            && string.IsNullOrEmpty(task.Verification?.Verdict)
+            ? WarningText
+            : null;
+}

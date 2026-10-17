@@ -78,6 +78,8 @@ Thumbs.db
 !frontend/public/maskable-icon-*.png
 !frontend/public/apple-touch-icon-*.png
 !docs/assets/screenshots/*.png
+# Макеты фичи «Плагины» — эталонные экраны, нужны в репозитории (Кира, шаги 2.3/4.4)
+!docs/mockups/plugins/*.png
 *.jpg
 # Аватарки ролей раздела «Специальности» — комплект лежит в репозитории,
 # без него RoleAvatar уходит в фолбэк с глифом

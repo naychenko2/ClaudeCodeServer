@@ -1714,6 +1714,11 @@ class РелеПотока:
                     self.буфер = b""
                     return True
                 событие = b""
+        except (BrokenPipeError, ConnectionResetError):
+            # клиент ушёл (прерывание хода) — не считать ошибкой предохранителя:
+            # исключение пролетит мимо инкремента loop_guard_errors и будет поймано
+            # общим обработчиком выше, который просто фиксирует обрыв
+            raise
         except Exception as e:
             with lock:
                 stats["loop_guard_errors"] += 1
@@ -1854,6 +1859,10 @@ class ВставкаБлока:
                 событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
                 self._событие(событие)
                 событие = b""
+        except (BrokenPipeError, ConnectionResetError):
+            # клиент ушёл — не считать ошибкой вставки: исключение пролетит мимо
+            # _preserve_failed и будет поймано общим обработчиком выше
+            raise
         except Exception as e:
             _preserve_failed("вставка в поток", e)
             self.сквозной = True

@@ -20,8 +20,10 @@
          ReferenceOutputAssembly="false"), поэтому транзитом не виден — ссылка прямая,
          как в монолите. -->
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
-    <!-- ProjectReference на Main ради PromptSeamAdapters и прочего: тесты Turn поднимают
-         полный стек, чтобы воссоздать контрибьюторов и шину. Прецедент — Tasks.Tests. -->
+    <!-- Main (шаг 2.1, оставлен): PromptSectionContributorsDiTests конструирует полный
+         DI-стек контрибьюторов (UserStore/ProjectManager/ChatHistoryService/KnowledgeService/
+         PersonaManager/PersonaMemoryService/SkillsService/...), хост НЕ поднимается
+         (нет TestWebApplicationFactory) — прямая ссылка на Main обязательна. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
     <!-- TestKit (Core-only хелперы: FakeHostEnvironment/NoopPersonaEvents) — шаг 1.3. -->
     <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />

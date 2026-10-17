@@ -12,9 +12,17 @@ import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 const DOT = 14;
 const DOT_CY = SP.xs + 1 + DOT / 2;   // 12 — центр точки, от верха строки
 const RAIL_TOP = SP.xs + 1 + DOT;     // 19 — низ текущей точки, от верха строки
-// Мин. высота строки стадии: 34 — в шкале SP подходящего значения нет (SP.lg=16, SP.xl=24,
-// SP.xxl=32), поэтому константа; 34 = 2·SP.xs + DOT + запас под мета-строку.
+// Мин. высота строки стадии: 34 — текущего значения нет в шкале SP (ближайшее SP.xxl=32),
+// поэтому константа: 34 = DOT + 2·(SP.xs + 1) + 10 — точка + рамка/паддинг + запас под мета.
 const ROW_MIN_H = 34;
+// Бейджи возврата (↺N): паддинг 7px и line-height 18px — в шкалах SP/FS значений нет
+// (SP.xs=4, SP.sm=8; FS.xs=11, FS.sm=12), значения макета v2 (.badge: padding 0 7px,
+// line-height 18px) — константы.
+const BADGE_PAD_X = 7;
+const BADGE_LH = 18;
+// X-центр сегмента рельсы (left + translateX(-50%)): 7 — в шкале SP значения 7 нет
+// (SP.xs=4, SP.sm=8), значение макета v2 (.cv > li::before left:8px минус рамка 1px).
+const RAIL_LEFT = 7;
 
 // Конвейер фичи (режим «Исполнение фичи») — строго по макету v2
 // (docs/mockups/turn-plan-feature-mode-v2.html: conveyor() ~566, drawArcs() ~662,
@@ -225,7 +233,9 @@ export function buildArcs(sources: { key: string; y: number; count: number; colo
 // === Рендер ===
 
 // Точка-индикатор стадии: active — акцент с пульсом, done — галочка, pending — пунктир.
-function StageDot({ phase }: { phase: Phase }) {
+// ready — «Мерж» при run.ready=true: done с зелёным акцентом (кольцо C.success,
+// галочка C.successText) — финал фичи зелёный, не просто серая галочка.
+function StageDot({ phase, ready = false }: { phase: Phase; ready?: boolean }) {
   if (phase === 'active') {
     return (
       <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" className="feature-pulse">
@@ -235,10 +245,12 @@ function StageDot({ phase }: { phase: Phase }) {
     );
   }
   if (phase === 'done') {
+    const ring = ready ? C.success : C.textMuted;
+    const check = ready ? C.successText : C.textMuted;
     return (
       <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="7" fill="none" stroke={C.textMuted} strokeWidth="1.4" />
-        <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.textMuted} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="8" cy="8" r="7" fill="none" stroke={ring} strokeWidth="1.4" />
+        <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={check} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
   }
@@ -290,8 +302,10 @@ function LaneBar({ info }: { info: LaneInfo }) {
       {info.returns > 0 ? (
         <span
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: FS.xs, fontWeight: 700,
-            borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap',
+            display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.xs, fontWeight: 700,
+            borderRadius: R.max, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
+            // «Холодный» (r < 3) — textSecondary на bgSelected; «горячий» (r ≥ 3) —
+            // warningText на warningBg (контраст по макету v2, .badge.hot).
             background: hot ? C.warningBg : C.bgSelected,
             color: hot ? C.warningText : C.textSecondary,
           }}
@@ -416,6 +430,8 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
           const waiting = active && !!run.awaitingHumanSince;
           // «Идёт сейчас» — по задачам ЭТОЙ стадии (stageTasks): prod/review/check/final/merge/cut/plan.
           const inProgress = active && stageTasks(run, s.key).some(t => t?.status === 'inProgress');
+          // run.ready=true → «Мерж» завершён с зелёным акцентом (подсветка строки + точка).
+          const readyMerge = s.key === 'merge' && run.ready;
 
           return (
             <div
@@ -434,7 +450,8 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 minHeight: ROW_MIN_H,
                 padding: `${SP.xs}px ${SP.xs}px`,
                 borderRadius: R.lg,
-                background: active ? C.accentLight : 'transparent',
+                // run.ready → «Мерж» завершён: зелёная подсветка строки (C.successBg).
+                background: active ? C.accentLight : readyMerge ? C.successBg : 'transparent',
                 // Состояние ожидания: поверх подсветки — C.wait border (C.info) + иконка «часы».
                 border: waiting ? `1px solid ${C.info}` : '1px solid transparent',
               }}
@@ -445,7 +462,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                   aria-hidden="true"
                   style={{
                     position: 'absolute',
-                    left: 7,
+                    left: RAIL_LEFT,
                     // top = низ текущей точки (RAIL_TOP), bottom = до верха следующей
                     // (-(SP.xs + 1): рамка+паддинг следующей строки) — рельса непрерывна.
                     top: RAIL_TOP,
@@ -460,7 +477,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 />
               )}
               <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
-                <StageDot phase={phase} />
+                <StageDot phase={phase} ready={readyMerge} />
               </span>
               <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
@@ -483,19 +500,25 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                       <ClockIcon />
                     </span>
                   )}
-                  {/* Fallback-бейджи возврата (мобила): в строке «Производство». */}
-                  {s.key === 'prod' && isMobile && fallbackBadges.map(b => (
-                    <span
-                      key={b.label}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: FS.xs, fontWeight: 700,
-                        borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap',
-                        background: C.bgSelected, color: b.color,
-                      }}
-                    >
-                      ↺{b.n} {b.label}
-                    </span>
-                  ))}
+                  {/* Fallback-бейджи возврата (мобила): в строке «Производство».
+                      «Холодные» (n < 3) — textSecondary на bgSelected; «горячие» (n ≥ 3) —
+                      warningText на warningBg (контраст по макету v2, .badge.hot). */}
+                  {s.key === 'prod' && isMobile && fallbackBadges.map(b => {
+                    const hot = b.n >= 3;
+                    return (
+                      <span
+                        key={b.label}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.xs, fontWeight: 700,
+                          borderRadius: R.max, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
+                          background: hot ? C.warningBg : C.bgSelected,
+                          color: hot ? C.warningText : C.textSecondary,
+                        }}
+                      >
+                        ↺{b.n} {b.label}
+                      </span>
+                    );
+                  })}
                 </span>
                 {/* Мета под именем: «ещё не начат» (todo) / «стоит сейчас» (inProgress) / reason (wait). */}
                 {phase === 'pending' ? (
@@ -505,9 +528,12 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 ) : waiting ? (
                   <span style={{ fontSize: FS.xs, color: C.textMuted }}>{run.awaitingHumanReason ?? 'ждёт вашего решения'}</span>
                 ) : null}
-                {/* Полосы бэк/фронт под «Производством» (одна под другой, строки). */}
+                {/* Полосы бэк/фронт под «Производством» (одна под другой, строки).
+                    Без margin-left: в макете v2 .lanes — sibling строки (margin-left 25px =
+                    16+9 до колонки текста), а здесь полосы уже ВНУТРИ колонки текста, поэтому
+                    доп. сдвиг не нужен — начало полосы по имени стадии. */}
                 {s.key === 'prod' && (
-                  <span style={{ display: 'flex', flexDirection: 'column', gap: 5, margin: '2px 0 4px 25px' }}>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, margin: `${SP.xxs}px 0 ${SP.xs}px 0` }}>
                     <LaneBar info={lanes.back} />
                     <LaneBar info={lanes.front} />
                   </span>

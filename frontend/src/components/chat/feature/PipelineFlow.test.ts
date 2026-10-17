@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
-import { C } from '../../../lib/design';
+import { C, SP } from '../../../lib/design';
 import {
   PipelineFlow, stagePhases, stagePasses, stageWidth, stageTasks,
   laneInfo, laneTrackWidth, arcSpecs, buildArcs, arcPath, chevronPath,
@@ -191,7 +191,7 @@ describe('laneTrackWidth', () => {
 
 // === arcSpecs: стадии-источники возврата ===
 describe('arcSpecs', () => {
-  it('3 возврата от ревью → { key: review, count: 3, color: warning }', () => {
+  it('3 возврата от ревью → { key: review, count: 3, color: textSecondary }', () => {
     const r = run({
       reviews: [
         task({ id: 'r1', status: 'done', verification: { verdict: 'returned' } }),
@@ -203,6 +203,8 @@ describe('arcSpecs', () => {
     expect(specs).toHaveLength(1);
     expect(specs[0].key).toBe('review');
     expect(specs[0].count).toBe(3);
+    // Цвет — по стадии-источнику (макет v2): ревью → textSecondary (не warning по исходу).
+    expect(specs[0].color).toBe(C.textSecondary);
   });
 
   it('только принятые (без возвратов) → источников нет', () => {
@@ -220,6 +222,19 @@ describe('arcSpecs', () => {
     });
     const specs = arcSpecs(r);
     expect(specs.map(s => s.key)).toEqual(['review', 'check', 'final']);
+  });
+
+  it('Arcs_РевьюОдинЦвет_ПроверкаДругой_ФиналТретий: 3 источника → 3 разных stroke', () => {
+    const r = run({
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'returned' } })],
+      qa: [task({ id: 'q1', status: 'done', verification: { verdict: 'returned' } })],
+      final: task({ id: 'f1', status: 'done', verification: { verdict: 'returned' } }),
+    });
+    const specs = arcSpecs(r);
+    // Цвет по стадии-источнику (макет v2, drawArcs: COL): review → textSecondary,
+    // check → info, final → accent. Все три — РАЗНЫЕ (раньше все были C.warning).
+    expect(specs.map(s => s.color)).toEqual([C.textSecondary, C.info, C.accent]);
+    expect(new Set(specs.map(s => s.color)).size).toBe(3);
   });
 });
 
@@ -350,5 +365,56 @@ describe('PipelineFlow: рендер', () => {
     const html = render(r);
     // wait-обводка: border 1px solid C.info (var(--c-info))
     expect(html).toContain('var(--c-info)');
+  });
+
+  it('Stages_РельсаНепрерывна_МеждуТочкамиНетПросветов: align-start, top=низ точки, bottom=верх следующей', () => {
+    // Окружение node: «замер» — из инлайн-стилей SSR-разметки (getBoundingClientRect
+    // в node не laid out). Строка: рамка 1px + паддинг SP.xs(4) → верх точки = 5,
+    // центр = 5 + 14/2 = 12 (DOT_CY). Сегмент: top = 5 + 14 = 19 (низ текущей точки),
+    // bottom = -(SP.xs + 1) = -5 → низ сегмента = верх следующей точки (5) — без просвета.
+    const r = run({
+      steps: [task({ id: 's1', status: 'done' })],
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
+    });
+    const html = render(r);
+
+    // 1) Грид строки — align-items:start (точка у верха, центр = 12 в любой строке).
+    const rowTag = html.match(/<div[^>]*data-stage="prod"[^>]*>/)?.[0] ?? '';
+    const rowStyle = rowTag.match(/style="([^"]*)"/)?.[1] ?? '';
+    expect(rowStyle).toContain('align-items:start');
+
+    // 2) Сегмент «Производства»: top = низ текущей точки, bottom = до верха следующей.
+    const from = html.indexOf('data-stage="prod"');
+    const segStyle = html.slice(from).match(/style="([^"]*position:absolute[^"]*)"/)?.[1] ?? '';
+    const top = segStyle.match(/top:([^;]+)/)?.[1]?.trim();
+    const bottom = segStyle.match(/bottom:([^;]+)/)?.[1]?.trim();
+    const pad = SP.xs + 1; // рамка 1px + паддинг SP.xs = 5 — смещение верха точки
+    expect(top).toBe(`${pad + 14}px`);        // 19 = верх точки (5) + 14 (низ точки)
+    expect(bottom).toBe(`-${pad}px`);         // -5 = до верха следующей точки (5)
+    // Просвет между низом сегмента и верхом следующей точки: 0 (≤ 1 по допуску).
+    // |bottom| = на сколько сегмент уходит НИЖЕ низа строки; pad = верх следующей точки.
+    const gap = Math.abs(Math.abs(parseFloat(bottom)) - pad);
+    expect(gap).toBeLessThanOrEqual(1);
+  });
+
+  it('Ready_ФиналЗелёный: run.ready=true → «Мерж» done с зелёным акцентом', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done' })],
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
+      qa: [task({ id: 'q1', status: 'done', verification: { verdict: 'accepted' } })],
+      final: task({ id: 'f1', status: 'done', verification: { verdict: 'accepted' } }),
+      ready: true,
+    });
+    const html = render(r);
+    // Строка «Мерж» — зелёная подсветка (C.successBg) и зелёная точка (C.success/C.successText).
+    const from = html.indexOf('data-stage="merge"');
+    expect(from).toBeGreaterThan(-1);
+    const tag = html.match(/<div[^>]*data-stage="merge"[^>]*>/)?.[0] ?? '';
+    expect(tag).toContain('var(--c-success-bg)');
+    // Точка «Мерж»: зелёное кольцо (C.success) и зелёная галочка (C.successText),
+    // а не серые (C.textMuted) как у остальных done-стадий.
+    const dot = html.slice(from).match(/<svg[^>]*>[\s\S]*?<\/svg>/)?.[0] ?? '';
+    expect(dot).toContain('var(--c-success)');
+    expect(dot).toContain('var(--c-success-text)');
   });
 });

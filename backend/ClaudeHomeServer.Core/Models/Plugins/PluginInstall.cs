@@ -36,4 +36,19 @@ public sealed class PluginInstall
     /// <c>.corrupt</c>.
     /// </summary>
     [JsonPropertyName("source")] public string Source { get; set; } = "";
+    /// <summary>
+    /// Секреты, введённые владельцем при выдаче прав (ADR-031 §4, шаг 1.4). MVP хранит их
+    /// прямо в записи установки (<c>installed.json</c>); отдельный локальный архив секретов —
+    /// после 3.3. Ключ — имя секрета из манифеста (<c>requires.secrets[].name</c>).
+    /// </summary>
+    [JsonPropertyName("secrets")] public List<PluginInstallSecret> Secrets { get; set; } = [];
+}
+
+/// <summary>
+/// Значение секрета плагина, введённое владельцем: имя (из манифеста) + значение.
+/// </summary>
+public sealed class PluginInstallSecret
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("value")] public string Value { get; set; } = "";
 }

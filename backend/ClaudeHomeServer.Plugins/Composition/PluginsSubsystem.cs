@@ -33,5 +33,13 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // DI порядок регистраций при резолве не учитывает.
         services.AddSingleton<PluginStore>();
         services.AddSingleton<IPluginDirSource, PluginDirSource>();
+        // Валидатор пакета (ADR-031 §2.3, шаг 1.3): allow-list файлов + sha256.
+        // Stateless — singleton; вызывается PluginsController при установке.
+        services.AddSingleton<PluginPackageValidator>();
+        // Каскад удаления установки (пакет, запись, черновики, granted, секреты + шов).
+        services.AddSingleton<PluginUninstall>();
+        // Каскад «внешних» ссылок (привязки персон, слоты). MVP — no-op: реальный
+        // адаптер, снимающий биндинги/слоты, приходит с UI-шагом 2.x (ADR-031 §4).
+        services.AddSingleton<IPluginInstallCascade, NoOpPluginInstallCascade>();
     }
 }

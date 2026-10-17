@@ -370,6 +370,41 @@ public class ComfyQueueMonitorTests
         h.Monitor.Snapshot!.Running.Should().HaveCount(1, "после сбоя цикл продолжил работу");
     }
 
+    // ─── Touch будит монитор, не досиживая текущую паузу (фантомная очередь) ───────────────
+
+    // В простое монитор досиживает паузу 15с; Touch (опрос вкладки «Медиа») будит его сразу,
+    // иначе снимок устаревает до 15с после открытия панели. ManualTime не двигает Task.Delay,
+    // поэтому второй тик возможен ТОЛЬКО через отмену wake-токена. Мутация: убрать
+    // _wakeCts?.Cancel() в Touch — монитор досиживает паузу, второй тик не происходит, тест краснеет.
+    [Fact]
+    public async Task Touch_БудитМонитор_НеДосиживаяТекущуюПаузу()
+    {
+        var h = Build();
+        var cts = new CancellationTokenSource();
+        await h.Monitor.StartAsync(cts.Token);
+
+        // Первый тик прошёл (QueueCalls=1), монитор вошёл в паузу 15с (Task.Delay висит на ManualTime)
+        await WaitUntil(() => h.Fake.QueueCalls >= 1);
+        await Task.Delay(50);   // дать циклу войти в DelayAsync (wake-токен создан)
+
+        // Touch будит монитор: второй тик происходит, не дожидаясь 15с
+        h.Monitor.Touch();
+        await WaitUntil(() => h.Fake.QueueCalls >= 2);
+
+        cts.Cancel();
+        await h.Monitor.StopAsync(CancellationToken.None);
+
+        h.Fake.QueueCalls.Should().BeGreaterThanOrEqualTo(2, "Touch будит монитор — второй тик без ожидания 15с");
+    }
+
+    // Хелпер: ждать условие (реальное время, с потолком) — для асинхронного цикла монитора
+    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 2000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!cond() && sw.ElapsedMilliseconds < timeoutMs)
+            await Task.Delay(5);
+    }
+
     // Хелпер: классификация по prompt_id из снимка
     private static ComfyForeignKind Forefirst(ComfyQueueMonitorSnapshot snapshot, string promptId) =>
         snapshot.Foreign.First(f => f.PromptId == promptId).Kind;

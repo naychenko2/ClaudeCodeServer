@@ -48,6 +48,8 @@ public sealed class ComfyQueueMonitor(
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private DateTimeOffset? _lastTouch;
+    // Wake-токен: Touch() будит монитор, не досиживая текущую паузу (иначе снимок устаревает)
+    private CancellationTokenSource? _wakeCts;
     private readonly object _touchLock = new();
 
     // Последний вычисленный период: тесты проверяют переключение 2с ↔ 15с
@@ -76,10 +78,15 @@ public sealed class ComfyQueueMonitor(
     private const int MaxNullHistoryTicks = 20;
     private readonly Dictionary<string, int> _nullTicks = new(StringComparer.Ordinal);
 
-    // Панель запросила снимок: следующий опрос в 2с, а не 15
+    // Панель запросила снимок: следующий опрос в 2с, а не 15; и будит монитор, если он
+    // досиживает текущую паузу (Touch после простоя не должен ждать 15с, иначе снимок устаревает)
     public void Touch()
     {
-        lock (_touchLock) _lastTouch = _time.GetUtcNow();
+        lock (_touchLock)
+        {
+            _lastTouch = _time.GetUtcNow();
+            _wakeCts?.Cancel();
+        }
     }
 
     private bool RecentlyTouched()
@@ -287,16 +294,26 @@ public sealed class ComfyQueueMonitor(
         }
     }
 
-    private static async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
+    // Пауза между тиками: Task.Delay(delay) с объединением stoppingToken и wake-токена.
+    // Touch() будит монитор, не досиживая текущую паузу (иначе снимок простоял бы до 15с);
+    // stop (stoppingToken) — выход из цикла.
+    private async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
     {
+        CancellationTokenSource wake;
+        lock (_touchLock)
+        {
+            wake = _wakeCts = new CancellationTokenSource();
+        }
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, wake.Token);
         try
         {
-            await Task.Delay(delay, ct);
-            return true;
+            await Task.Delay(delay, linked.Token);
+            return true;   // проспали полностью — цикл продолжается
         }
         catch (OperationCanceledException)
         {
-            return false;
+            // ct (stop) — выход из цикла; wake (Touch) — цикл продолжается
+            return !ct.IsCancellationRequested;
         }
     }
 }

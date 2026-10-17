@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
-    ChatDigestService digest, ChatArchiveService autoArchive,
+    ChatDigestService digest, ChatHandoffService handoff, ChatArchiveService autoArchive,
     UserStore users, FeatureFlagService flags,
     ILogger<ChatsController> logger) : ControllerBase
 {
@@ -573,6 +573,32 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Перенос в новый чат, холодный путь (docs/features/chat-handoff.md): передаточная
+    // записка по транскрипту (место chat-handoff) + чат-преемник без истории. Ответ — той же
+    // формы, что у /branch: фронт кладёт draft в черновик нового чата, НЕ отправляет его.
+    // Как /branch, работает и для проектной сессии: владение — GetOwned (OwnedChat отсёк бы
+    // проектные). Коды: 404 — чужой/нет; 409 — отказ (группа, штаб, worktree, пустой чат,
+    // место на локали) или перенос уже идёт; 502 — модель не собрала записку.
+    [HttpPost("{id}/handoff")]
+    public async Task<IActionResult> Handoff(string id, CancellationToken ct)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            var result = await handoff.HandoffAsync(UserId, id, ct);
+            return Ok(new
+            {
+                chatId = result.Session.Id,
+                projectId = result.Session.ProjectId,
+                draft = result.Draft,
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (HandoffInProgressException ex) { return Conflict(new { error = ex.Message }); }
+        catch (HandoffGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 

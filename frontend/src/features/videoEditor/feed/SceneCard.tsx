@@ -232,7 +232,8 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
       {v.progress && (
         <div data-video-card-progress="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
           {!v.stages && <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.progress.label}</span>}
-          {v.progress.p !== undefined && <ProgressBar value={v.progress.p} />}
+          {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
+          {v.progress.p !== undefined && gpuBlock == null && <ProgressBar value={v.progress.p} />}
         </div>
       )}
       {gpuBlock}

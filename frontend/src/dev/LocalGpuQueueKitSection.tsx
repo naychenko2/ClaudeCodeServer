@@ -50,7 +50,7 @@ const DEMO: { label: string; long: LocalGpuQueueInfo; short: LocalGpuQueueInfo }
     short: { steps: { step: 3, total: 8, stage: 2 }, remainingSeconds: 15, percent: 38, percentExact: true },
   },
   {
-    label: '4. Считается, ETA не замерено (шаги есть)',
+    label: '4. Считается, шаги без ETA (без суффикса)',
     long: { steps: { step: 12, total: 25 }, remainingSeconds: null, percent: 48, percentExact: true },
     short: { steps: { step: 12, total: 25 }, remainingSeconds: null, percent: 48, percentExact: true },
   },

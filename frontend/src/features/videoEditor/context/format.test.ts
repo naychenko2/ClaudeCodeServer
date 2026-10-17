@@ -118,9 +118,9 @@ describe('tierOptions: ступени чипа «Формат» видео', () 
     expect(o.size).toBeNull();
     expect(o.caption).toBe('768p');
   });
-  it('время не замерено: у «Макс» так и пишем, у обычной ступени — пусто; пока котировки нет — пусто', () => {
+  it('время не замерено: у «Макс» — «время уточнится», у обычной ступени — пусто; пока котировки нет — пусто', () => {
     const t = tierOptions(H3_FORMAT, '16:9', quotes({ max: quoteOf({ postStep: 'upscale' }), high: quoteOf({}) }));
-    expect(t.find(x => x.tier === 'max')!.extra).toBe('время не замерено');
+    expect(t.find(x => x.tier === 'max')!.extra).toBe('время уточнится');
     expect(t.find(x => x.tier === 'high')!.extra).toBeNull();
     expect(t.find(x => x.tier === 'standard')!.extra).toBeNull();
   });

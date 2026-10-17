@@ -54,7 +54,8 @@ describe('busy', () => {
     const r = fmt({ busy: { kind: 'video', heavy: true, remainingSeconds: 720 } });
     expect(r.kind).toBe('busy');
     expect(r.text).toBe('Карта занята видео · ≈ 12 мин');
-    expect(r.progress?.mode).toBe('estimate');
+    // busy — без полосы (progress undefined)
+    expect(r.progress).toBeUndefined();
   });
 
   it('короткая: «Карта занята видео · ≈ 12 мин» (единая форма, без двоеточия)', () => {
@@ -116,7 +117,8 @@ describe('queued', () => {
     const r = fmt({ ahead: 1, startInSeconds: 240 });
     expect(r.kind).toBe('queued');
     expect(r.text).toBe('В очереди · 2-я · старт ≈ через 4 мин');
-    expect(r.progress?.mode).toBe('estimate');
+    // queued — без полосы (progress undefined)
+    expect(r.progress).toBeUndefined();
   });
 
   it('короткая: «В очереди · 2-я · ≈ 4 мин»', () => {
@@ -210,30 +212,30 @@ describe('running', () => {
     expect(r.text).toContain('2 · 3/8');
   });
 
-  it('ETA не замерено (шаги есть): «Шаг 12 из 25 · время не замерено»', () => {
+  it('шаги есть, ETA нет: «Шаг 12 из 25» (без суффикса)', () => {
     const r = fmt({ steps: { step: 12, total: 25 }, remainingSeconds: null, percent: 48, percentExact: true });
-    expect(r.text).toBe('Шаг 12 из 25 · время не замерено');
+    expect(r.text).toBe('Шаг 12 из 25');
     expect(r.progress?.mode).toBe('exact');
   });
 
-  it('ETA не замерено, короткая: «12 из 25 · без оценки»', () => {
+  it('шаги есть, ETA нет, короткая: «12 из 25» (без суффикса)', () => {
     const r = fmt({ steps: { step: 12, total: 25 }, remainingSeconds: null, percent: 48, percentExact: true }, true);
-    expect(r.text).toBe('12 из 25 · без оценки');
+    expect(r.text).toBe('12 из 25');
   });
 
-  it('нет ни шагов, ни ETA: ровно «Идёт · время не замерено» (percent=40, percentExact=false)', () => {
+  it('нет ни шагов, ни ETA: «Идёт · оценка появится после первого шага» (percent=40, percentExact=false)', () => {
     // percent=40 — это 40% ноды, НЕ «40 мин»: точный текст ловит ложный elapsed (мутация п.1)
     const r = fmt({ steps: null, remainingSeconds: null, percent: 40, percentExact: false });
     expect(r.kind).toBe('running');
-    expect(r.text).toBe('Идёт · время не замерено');
+    expect(r.text).toBe('Идёт · оценка появится после первого шага');
     // percent есть, percentExact=false → estimate, fraction=40
     expect(r.progress?.mode).toBe('estimate');
     expect(r.progress?.fraction).toBe(40);
   });
 
-  it('нет ни шагов, ни ETA, короткая: ровно «Идёт · без оценки»', () => {
+  it('нет ни шагов, ни ETA, короткая: «Идёт»', () => {
     const r = fmt({ steps: null, remainingSeconds: null, percent: 40, percentExact: false }, true);
-    expect(r.text).toBe('Идёт · без оценки');
+    expect(r.text).toBe('Идёт');
   });
 
   it('percent=40, percentExact=true, без шагов → mode=exact, fraction=40', () => {
@@ -248,10 +250,16 @@ describe('running', () => {
     expect(r.progress?.fraction).toBe(99);
   });
 
-  it('remainingSeconds=0: не пишет «0 с»', () => {
+  it('remainingSeconds=0 → «Почти готово» (не «0 с»)', () => {
     const r = fmt({ steps: { step: 24, total: 25 }, remainingSeconds: 0, percent: 96, percentExact: true });
-    // 24/25 = 96%, но текст не должен содержать «0 с»
-    expect(r.text).not.toContain('0 с');
+    expect(r.text).toBe('Почти готово');
+    expect(r.progress?.fraction).toBe(96);
+  });
+
+  it('fraction ≥ 95 (steps 24/25, remaining>0) → «Почти готово»', () => {
+    const r = fmt({ steps: { step: 24, total: 25 }, remainingSeconds: 10, percent: 96, percentExact: true });
+    // fraction = 96 ≥ 95 → почти готово, даже если remaining > 0
+    expect(r.text).toBe('Почти готово');
   });
 
   it('отрицательные значения: steps.step=-1 → clamp', () => {
@@ -275,15 +283,15 @@ describe('M2: running', () => {
     expect(r.kind).toBe('running');
   });
 
-  it('running=true, без шагов и ETA → «Идёт · время не замерено»', () => {
+  it('running=true, без шагов и ETA → «Идёт · оценка появится после первого шага»', () => {
     const r = fmt({ running: true, steps: null, remainingSeconds: null, percent: null, percentExact: null });
     expect(r.kind).toBe('running');
-    expect(r.text).toBe('Идёт · время не замерено');
+    expect(r.text).toBe('Идёт · оценка появится после первого шага');
   });
 
-  it('running=true, без шагов и ETA, короткая → «Идёт · без оценки»', () => {
+  it('running=true, без шагов и ETA, короткая → «Идёт»', () => {
     const r = fmt({ running: true, steps: null, remainingSeconds: null, percent: null, percentExact: null }, true);
-    expect(r.text).toBe('Идёт · без оценки');
+    expect(r.text).toBe('Идёт');
   });
 
   it('running=true + шаги → «Шаг 12 из 25 · осталось ≈ 30 с»', () => {
@@ -332,5 +340,16 @@ describe('мутации', () => {
     // При startInSeconds=null текст НЕ должен содержать «старт ≈ 0 с»
     const r = fmt({ ahead: 1, startInSeconds: null });
     expect(r.text).not.toMatch(/старт ≈ 0 с/);
+  });
+
+  it('queued: progress undefined (мутация: вернуть progress в formatQueued → краснеет)', () => {
+    // Если кто-то вернёт progress в formatQueued, этот тест поймает
+    const r = fmt({ ahead: 1, startInSeconds: 240 });
+    expect(r.progress).toBeUndefined();
+  });
+
+  it('busy: progress undefined (мутация: вернуть progress в formatBusy → краснеет)', () => {
+    const r = fmt({ busy: { kind: 'video', heavy: true, remainingSeconds: 720 } });
+    expect(r.progress).toBeUndefined();
   });
 });

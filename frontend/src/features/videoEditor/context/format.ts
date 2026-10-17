@@ -153,8 +153,8 @@ export function tierOptions(
     const q = quotes.get(t) ?? null;
     const upscale = !!spec.postStep;
     const size = spec.sizes[aspect] ?? null;
-    // «Макс» с увеличением: время обоих прогонов в одной подписи; не замерено — так и пишем, число не выдумываем
-    const extra = q ? (etaText(q.price.eta) ?? (upscale ? 'время не замерено' : null)) : null;
+    // «Макс» с увеличением: время обоих прогонов в одной подписи; не замерено — «время уточнится», число не выдумываем
+    const extra = q ? (etaText(q.price.eta) ?? (upscale ? 'время уточнится' : null)) : null;
     return {
       tier: t, label: spec.label, size, caption: size ? `${spec.label} · ${size.w}×${size.h}` : spec.label, wireValue: spec.wireValue, postStep: spec.postStep, price: priceOf(q), extra,
       ...(upscale ? { note: upscaleNote(caps, spec.label, aspect, q) } : null),

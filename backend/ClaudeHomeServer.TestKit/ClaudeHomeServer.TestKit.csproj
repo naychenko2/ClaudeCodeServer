@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Библиотека тестовых хелперов, а НЕ тест-проект: vstest её не поднимает,
+         хелперы здесь без [Fact]. IsTestProject=false явный, чтобы slnx/CI не
+         пытались «прогнать» её как набор тестов. -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Спинка: TestKit компилируется ТОЛЬКО против Core (никакого Main/ClaudeHomeServer).
+         Microsoft.Extensions.* (Configuration/Hosting/FileProviders/Http) приходят
+         транзитивно через FrameworkReference AspNetCore, который Core тянет как Web SDK.
+         Это и есть цель шага 1.1: хелперы, которые раньше тащили ссылку на монолит,
+         теперь стоят на Core. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Internal-хелперы (TestLauncherFactory, InProcessExecStream, FakeDeviceAgent,
+         DeviceSecretScanner, InotifyProbe, TestEnvironmentGuard, TestTelemetryGuard,
+         FakeDeviceTurnGateway) видны только сборкам, которые реально их используют:
+         монолит + Spend.Tests/Dossiers.Tests (TestLauncherFactory). Остальные модульные
+         тест-проекты получают из TestKit только public-хелперы через транзитивную ссылку. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Dossiers.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

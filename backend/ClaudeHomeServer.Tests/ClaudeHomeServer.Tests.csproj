@@ -95,6 +95,12 @@
          через Main типы в bin попадают, но для компиляции C#-файлов нужна явная
          ссылка на сборку. -->
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- TestKit — общие тестовые хелперы (шаг 1.1): вынесены из Helpers/ в отдельную
+         библиотеку, компилируемую только против Core. Namespace не менялся
+         (ClaudeHomeServer.Tests.Helpers.*), поэтому using'и монолита не тронуты —
+         типы просто теперь резолвятся из TestKit. Internal-хелперы (TestLauncherFactory
+         и др.) доступны через InternalsVisibleTo в TestKit. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
     <!--
       Знание — отдельная сборка (этап 5). Нужен ProjectReference, чтобы тесты
       видели IKnowledgeIndex/IKnowledgeSyncParticipant/KnowledgeDtos из Core,

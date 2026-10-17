@@ -1309,6 +1309,23 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [session.id, project]);
 
+  // Перенос в новый чат, холодный путь (docs/features/chat-handoff.md): сервер пишет
+  // передаточную записку и заводит чат-преемник без истории. Дальше — ровно как у ветки:
+  // записку в черновик нового чата (человек её поправит, автоотправки НЕТ) и навигация.
+  // Отказы 409/502 несут человеческий текст — показываем его тостом
+  const handleHandoff = useCallback(async () => {
+    try {
+      const result = await api.chats.handoff(session.id);
+      setDraft(result.chatId, result.draft);
+      const navDest: NavSnapshot = result.projectId
+        ? { screen: 'project', project: project!, chatId: result.chatId, view: 'chat', file: null }
+        : { screen: 'chats', chatId: result.chatId };
+      navPush(navDest);
+    } catch (err) {
+      showToast('Перенос в новый чат', err instanceof Error ? err.message : 'Не удалось перенести разговор');
+    }
+  }, [session.id, project]);
+
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
   // серверный текст под кнопкой (не молчит). request() бросает Error с прикреплёнными
@@ -2620,6 +2637,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
       contextBar={contextBar}
+      onHandoff={handleHandoff}
     />
   );
 

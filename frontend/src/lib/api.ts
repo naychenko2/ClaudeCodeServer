@@ -1781,6 +1781,15 @@ export const api = {
         `/chats/${id}/branch`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
+    // Перенос в новый чат (холодный путь, docs/features/chat-handoff.md): сервер пишет
+    // передаточную записку дешёвой моделью и заводит чат-преемник без истории; draft —
+    // записка для композера нового чата (НЕ отправляется сама). 409 — отказ с человеческим
+    // текстом (группа, штаб, worktree, пустой чат, место на локали), 502 — модель не ответила.
+    handoff: (id: string) =>
+      request<{ chatId: string; projectId: string | null; draft: string }>(
+        `/chats/${id}/handoff`,
+        { method: 'POST' },
+      ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы
     setMode: (id: string, mode: string) =>

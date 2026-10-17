@@ -3,6 +3,7 @@ import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { rewriteCostUsd, cacheLeftText, cacheNoteText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { handoffAvailability } from '../../lib/chatHandoff';
 import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
@@ -710,6 +711,18 @@ function CacheClock({ frac, color, cold, spin }: { frac: number; color: string; 
   );
 }
 
+// Перенос в новый чат (docs/features/chat-handoff.md): кнопка в секции кэша поповера и
+// действие тоста «скоро остынет». Доступность считает lib/chatHandoff, сам перенос —
+// владелец экрана (ChatPanel), шапка лишь зовёт onClick
+export interface HandoffControl {
+  enabled: boolean;
+  reason?: string;
+  busy: boolean;
+  onClick: () => void;
+}
+const HANDOFF_LABEL = 'Перенести в новый чат';
+const HANDOFF_HINT = 'Новый чат начнётся с записки о разговоре — без перезаписи всей истории в кэш';
+
 // Доля оставшегося срока: от якоря до момента остывания
 function cacheFrac(state: PromptCacheState): number {
   const { anchorAtMs, expiresAt, remainingMs } = state;
@@ -725,16 +738,18 @@ function cacheFrac(state: PromptCacheState): number {
 // Свой компонент — чтобы по таймеру перерисовывался он один, а не вся пилюля.
 // Остывающий кэш пульсирует (кроме «уменьшить движение» в ОС) и один раз на якорь
 // напоминает тостом — только у шапки открытого чата (toastSessionId) и не во время хода
-function CacheClockFace({ items, isWaiting, isCompact, toastSessionId }: {
-  items: ChatItem[]; isWaiting: boolean; isCompact?: boolean; toastSessionId?: string;
+function CacheClockFace({ items, isWaiting, isCompact, toastSessionId, handoff }: {
+  items: ChatItem[]; isWaiting: boolean; isCompact?: boolean; toastSessionId?: string; handoff?: HandoffControl;
 }) {
   const state = usePromptCache(items);
   const reducedMotion = usePrefersReducedMotion();
   const { status, anchorAtMs, remainingMs } = state;
   useEffect(() => {
     if (!takeExpiringCacheToast(toastSessionId, { status, anchorAtMs }, isWaiting)) return;
+    // Действие тоста — тот же перенос, что кнопка попапа; выключенного переноса в тосте нет
     showToast('Кэш промпта скоро остынет',
-      `Осталось ${cacheLeftText(remainingMs ?? 0)}. Ход до остывания прочитает кэш в 10 раз дешевле, после — перепишет его заново.`);
+      `Осталось ${cacheLeftText(remainingMs ?? 0)}. Ход до остывания прочитает кэш в 10 раз дешевле, после — перепишет его заново.`,
+      'info', handoff?.enabled && !handoff.busy ? { label: HANDOFF_LABEL, onClick: handoff.onClick } : undefined);
     // remainingMs в зависимостях не нужен: тост один на якорь, текст — на момент показа
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toastSessionId, status, anchorAtMs, isWaiting]);
@@ -759,7 +774,7 @@ function CacheClockFace({ items, isWaiting, isCompact, toastSessionId }: {
 // Тело попапа: срок, остаток, объём в кэше, последний промах и цена перезаписи остывшего кэша.
 // Пока идёт ход (isWaiting), остаток и прогноз перезаписи скрыты — как на лице пилюли:
 // они считаются от якоря прошлого хода и к начатому ходу уже не относятся
-function PromptCacheDetails({ items, state, billing, isWaiting }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling; isWaiting: boolean }) {
+function PromptCacheDetails({ items, state, billing, isWaiting, handoff }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling; isWaiting: boolean; handoff?: HandoffControl }) {
   const { status, ttl, prefixTokens, lastMiss, remainingMs } = state;
   const cold = status === 'cold';
   const rewrite = useMemo(
@@ -791,15 +806,30 @@ function PromptCacheDetails({ items, state, billing, isWaiting }: { items: ChatI
         style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
         {note}
       </div>
+      {/* Перенос: новый чат стартует с записки о разговоре и не переписывает историю в кэш.
+          Выключенная кнопка объясняет причину подсказкой */}
+      {handoff && (
+        <>
+          <Button size="sm" variant="ghostFilled" fullWidth style={{ marginTop: SP.sm }}
+            disabled={!handoff.enabled} loading={handoff.busy} onClick={handoff.onClick}
+            title={handoff.enabled ? HANDOFF_HINT : handoff.reason}>
+            {HANDOFF_LABEL}
+          </Button>
+          {/* Причину пишем и текстом: на мобиле подсказки по наведению нет */}
+          {!handoff.enabled && handoff.reason && (
+            <div style={{ ...meterSubStyle, marginTop: SP.xs, color: C.textMuted }}>{handoff.reason}</div>
+          )}
+        </>
+      )}
     </>
   );
 }
 
 // Детали кэша — секцией поповера пилюли шапки
-function PromptCacheSection({ items, billing, isWaiting, style }: { items: ChatItem[]; billing: ClaudeBilling; isWaiting: boolean; style: React.CSSProperties }) {
+function PromptCacheSection({ items, billing, isWaiting, style, handoff }: { items: ChatItem[]; billing: ClaudeBilling; isWaiting: boolean; style: React.CSSProperties; handoff?: HandoffControl }) {
   const state = usePromptCache(items);
   if (state.status === 'unknown') return null;
-  return <div style={style}><PromptCacheDetails items={items} state={state} billing={billing} isWaiting={isWaiting} /></div>;
+  return <div style={style}><PromptCacheDetails items={items} state={state} billing={billing} isWaiting={isWaiting} handoff={handoff} /></div>;
 }
 
 // Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
@@ -836,6 +866,8 @@ export function RingPillBadge(props: {
   cacheItems?: ChatItem[];
   // Чат, которому напоминать тостом «кэш скоро остынет»; нет — без тоста (превью, витрина)
   cacheToastSessionId?: string;
+  // Перенос в новый чат: кнопка секции кэша и действие тоста; нет — ни того ни другого
+  handoff?: HandoffControl;
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, isMobile, isCompact,
@@ -967,7 +999,7 @@ export function RingPillBadge(props: {
           {face}
         </span>
         {cacheItems && <CacheClockFace items={cacheItems} isWaiting={props.isWaiting} isCompact={isCompact}
-          toastSessionId={props.cacheToastSessionId} />}
+          toastSessionId={props.cacheToastSessionId} handoff={props.handoff} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1003,7 +1035,7 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {cacheItems && <PromptCacheSection items={cacheItems} billing={billing} isWaiting={props.isWaiting} style={sectionDivider} />}
+      {cacheItems && <PromptCacheSection items={cacheItems} billing={billing} isWaiting={props.isWaiting} style={sectionDivider} handoff={props.handoff} />}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />
@@ -1066,6 +1098,9 @@ interface ChatHeaderBarProps {
   // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
   // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
   contextBar?: ReactNode;
+  // Перенос в новый чат (холодный путь): владелец экрана создаёт чат и уходит в него.
+  // Не задан — кнопки в секции кэша и действия в тосте нет
+  onHandoff?: () => Promise<void>;
   // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
   // отделять нечего, и черта лежала бы поперёк пустого чата без причины
   scrolled?: boolean;
@@ -1177,7 +1212,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, items, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, items, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled, onHandoff }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1186,6 +1221,19 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
   // Лента для индикатора кэша — замороженная до нового result или смены чата (см. usePromptCacheItems)
   const cacheItems = usePromptCacheItems(items, session.id);
+  // Перенос в новый чат: запрос идёт до минуты (модель пишет записку) — кнопка крутится,
+  // повторный клик гасит сама занятость, а не только 409 сервера
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const handoffAvail = handoffAvailability(session, isWaiting);
+  const handoff: HandoffControl | undefined = onHandoff ? {
+    ...handoffAvail,
+    busy: handoffBusy,
+    onClick: () => {
+      if (handoffBusy || !handoffAvail.enabled) return;
+      setHandoffBusy(true);
+      onHandoff().finally(() => setHandoffBusy(false));
+    },
+  } : undefined;
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1607,6 +1655,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       resetKey={preview ? `menu-${session.id}` : session.id}
       cacheItems={cacheItems}
       cacheToastSessionId={preview ? undefined : session.id}
+      handoff={preview ? undefined : handoff}
     />
   );
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —

@@ -3,6 +3,7 @@ import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { rewriteCostUsd, cacheLeftText, cacheNoteText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -721,21 +722,36 @@ function cacheFrac(state: PromptCacheState): number {
 // обратить внимание: остаток в минутах, пока остывает, и «остыл» (на узких раскладках —
 // без «остыл»: красного циферблата хватает, шапка мобилы не резиновая). Пока идёт ход,
 // якорь вот-вот сдвинется — остаток не показываем, крутится стрелка.
-// Свой компонент — чтобы по таймеру перерисовывался он один, а не вся пилюля
-function CacheClockFace({ items, isWaiting, isCompact }: { items: ChatItem[]; isWaiting: boolean; isCompact?: boolean }) {
+// Свой компонент — чтобы по таймеру перерисовывался он один, а не вся пилюля.
+// Остывающий кэш пульсирует (кроме «уменьшить движение» в ОС) и один раз на якорь
+// напоминает тостом — только у шапки открытого чата (toastSessionId) и не во время хода
+function CacheClockFace({ items, isWaiting, isCompact, toastSessionId }: {
+  items: ChatItem[]; isWaiting: boolean; isCompact?: boolean; toastSessionId?: string;
+}) {
   const state = usePromptCache(items);
-  if (state.status === 'unknown') return null;
-  const { status } = state;
+  const reducedMotion = usePrefersReducedMotion();
+  const { status, anchorAtMs, remainingMs } = state;
+  useEffect(() => {
+    if (!takeExpiringCacheToast(toastSessionId, { status, anchorAtMs }, isWaiting)) return;
+    showToast('Кэш промпта скоро остынет',
+      `Осталось ${cacheLeftText(remainingMs ?? 0)}. Ход до остывания прочитает кэш в 10 раз дешевле, после — перепишет его заново.`);
+    // remainingMs в зависимостях не нужен: тост один на якорь, текст — на момент показа
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toastSessionId, status, anchorAtMs, isWaiting]);
+  if (status === 'unknown') return null;
   const text = isWaiting ? undefined
-    : status === 'expiring' ? cacheLeftText(state.remainingMs ?? 0)
+    : status === 'expiring' ? cacheLeftText(remainingMs ?? 0)
     : status === 'cold' && !isCompact ? 'остыл'
     : undefined;
+  const pulse = !isWaiting && status === 'expiring' && !reducedMotion;
   return (
     <>
       <span aria-hidden style={{ width: 1, height: 12, background: C.border, flexShrink: 0 }} />
-      <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
-        cold={!isWaiting && status === 'cold'} spin={isWaiting} />
-      {text && <span style={{ color: CACHE_TEXT_COLOR[status] }}>{text}</span>}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'inherit', animation: pulse ? 'cc-cache-pulse 1.6s ease-in-out infinite' : undefined }}>
+        <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
+          cold={!isWaiting && status === 'cold'} spin={isWaiting} />
+        {text && <span style={{ color: CACHE_TEXT_COLOR[status] }}>{text}</span>}
+      </span>
     </>
   );
 }
@@ -818,6 +834,8 @@ export function RingPillBadge(props: {
   forceReducedMotion?: boolean;
   // Лента чата для индикатора кэша промпта: циферблат справа на пилюле и секция поповера
   cacheItems?: ChatItem[];
+  // Чат, которому напоминать тостом «кэш скоро остынет»; нет — без тоста (превью, витрина)
+  cacheToastSessionId?: string;
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, isMobile, isCompact,
@@ -948,7 +966,8 @@ export function RingPillBadge(props: {
           </>}
           {face}
         </span>
-        {cacheItems && <CacheClockFace items={cacheItems} isWaiting={props.isWaiting} isCompact={isCompact} />}
+        {cacheItems && <CacheClockFace items={cacheItems} isWaiting={props.isWaiting} isCompact={isCompact}
+          toastSessionId={props.cacheToastSessionId} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1587,6 +1606,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
       cacheItems={cacheItems}
+      cacheToastSessionId={preview ? undefined : session.id}
     />
   );
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —

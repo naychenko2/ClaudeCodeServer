@@ -960,6 +960,22 @@ public class TaskManagerTests : IDisposable
             .WithMessage("*" + TaskRoles.Feature + "*");
     }
 
+    // Минор 2: пара к Create_RoleНеИзСписка. Валидация role ловит НЕВАЛИДНОЕ значение и при
+    // UPDATE — через effective-state (req ?? task) в ValidateFeatureFields, а не только при
+    // создании. Создаём валидную задачу (без роли), обновляем с role="banana" (вне TaskRoles.All)
+    // → отказ с тем же сообщением, что и Create.
+    [Fact]
+    public void Update_RoleНеИзСписка_ОтказСоСписком()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Role: "banana"));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Недопустимая роль*")
+            .WithMessage("*" + TaskRoles.Feature + "*");
+    }
+
     [Fact]
     public void Create_VerdictНеИзСписка_Отказ()
     {

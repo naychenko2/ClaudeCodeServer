@@ -158,9 +158,14 @@ public class TasksToolsetParityTests
         var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
         var stdioByName = stdio.ToDictionary(t => t.Name);
 
-        foreach (var toolName in new[] { "tasks_create", "tasks_update", "tasks_complete" })
+        // Минор 3: не хардкод create/update/complete, а ВСЕ инструменты, у которых есть enum,
+        // без исключений. tasks_list (status/priority/assignee/scope) раньше был мимо; паритет
+        // обязан ловиться на любом БУДУЩЕМ enum'е, а не на заведённом.
+        foreach (var (toolName, csharpTool) in byName)
         {
-            var csharpEnums = EnumValues(byName[toolName].InputSchema);
+            var csharpEnums = EnumValues(csharpTool.InputSchema);
+            if (csharpEnums.Count == 0) continue; // без enum'ов — сравнивать нечего
+            stdioByName.Should().ContainKey(toolName, $"stdio-ветка обязана иметь {toolName}");
             var stdioEnums = EnumValues(JsonNode.Parse(stdioByName[toolName].Schema.GetRawText()));
 
             csharpEnums.Keys.Should().BeEquivalentTo(stdioEnums.Keys,

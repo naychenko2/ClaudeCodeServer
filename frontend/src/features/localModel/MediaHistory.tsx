@@ -54,75 +54,90 @@ function HistoryRow({ record, isMobile, selected, meUsername, onOpen }: {
 
   const aria = `${title}, ${badge ? badge.label : 'в процессе'}, ${who.text}, ${time}. Открыть детали`;
 
-  return (
-    <button
-      onClick={onOpen}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      aria-label={aria}
-      style={{
-        display: 'flex', gap: SP.sm, width: '100%', textAlign: 'left',
-        padding: SP.sm, borderRadius: R.md, border: 'none', cursor: 'pointer',
-        minHeight: isMobile ? 64 : 56, alignItems: 'flex-start',
-        background: selected ? C.accentLight : (hover ? C.bgInset : 'transparent'),
-        color: 'inherit', fontFamily: 'inherit',
-      }}
-    >
-      {/* Миниатюра / плитка вида */}
-      <span style={{
-        width: 40, height: 40, flexShrink: 0, borderRadius: R.md, overflow: 'hidden',
-        position: 'relative', background: C.bgInset,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: C.textSecondary,
-      }}>
-        {thumb
-          ? <img src={thumb} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-          : record.kind === 'audio'
-            ? <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            : record.kind === 'video'
-              ? <Clapperboard size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              : <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-      </span>
+  // Плеер прямо в ленте: у завершённого звука. preload="none" — иначе лента в 50
+  // записей закачает 50 файлов. Плеер — сосед кнопки, не внутри (клик по «play»
+  // не должен открывать карточку).
+  const showAudio = record.kind === 'audio' && record.status === 'completed';
 
-      {/* Тело: 3 строки */}
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          <b style={{
-            fontSize: FS.sm, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {title}
-          </b>
-          {badge && (
-            <span style={{
-              flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3,
-              borderRadius: R.max, padding: '2px 8px', fontSize: FS.xs, fontWeight: 700, whiteSpace: 'nowrap',
-              background: badge.tone === 'ok' ? C.successBg : badge.tone === 'fail' ? C.dangerBg : badge.tone === 'int' ? C.warningBg : C.bgInset,
-              color: badge.tone === 'ok' ? C.successText : badge.tone === 'fail' ? C.dangerText : badge.tone === 'int' ? C.warningText : C.textSecondary,
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+      <button
+        onClick={onOpen}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        aria-label={aria}
+        style={{
+          display: 'flex', gap: SP.sm, width: '100%', textAlign: 'left',
+          padding: SP.sm, borderRadius: R.md, border: 'none', cursor: 'pointer',
+          minHeight: isMobile ? 64 : 56, alignItems: 'flex-start',
+          background: selected ? C.accentLight : (hover ? C.bgInset : 'transparent'),
+          color: 'inherit', fontFamily: 'inherit',
+        }}
+      >
+        {/* Миниатюра / плитка вида */}
+        <span style={{
+          width: 40, height: 40, flexShrink: 0, borderRadius: R.md, overflow: 'hidden',
+          position: 'relative', background: C.bgInset,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: C.textSecondary,
+        }}>
+          {thumb
+            ? <img src={thumb} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+            : record.kind === 'audio'
+              ? <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+              : record.kind === 'video'
+                ? <Clapperboard size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                : <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+        </span>
+
+        {/* Тело: 3 строки */}
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <b style={{
+              fontSize: FS.sm, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {badge.label}
+              {title}
+            </b>
+            {badge && (
+              <span style={{
+                flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3,
+                borderRadius: R.max, padding: '2px 8px', fontSize: FS.xs, fontWeight: 700, whiteSpace: 'nowrap',
+                background: badge.tone === 'ok' ? C.successBg : badge.tone === 'fail' ? C.dangerBg : badge.tone === 'int' ? C.warningBg : C.bgInset,
+                color: badge.tone === 'ok' ? C.successText : badge.tone === 'fail' ? C.dangerText : badge.tone === 'int' ? C.warningText : C.textSecondary,
+              }}>
+                {badge.label}
+              </span>
+            )}
+          </span>
+          <span style={{
+            fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono,
+            display: 'flex', gap: SP.sm, overflow: 'hidden',
+          }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {record.model ?? '—'}
             </span>
-          )}
-        </span>
-        <span style={{
-          fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono,
-          display: 'flex', gap: SP.sm, overflow: 'hidden',
-        }}>
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {record.model ?? '—'}
+            <span style={{ flexShrink: 0, color: C.textMuted }}>{time}</span>
           </span>
-          <span style={{ flexShrink: 0, color: C.textMuted }}>{time}</span>
-        </span>
-        <span style={{
-          fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>
-          <span style={who.me ? { color: C.textHeading, fontWeight: 600 } : { color: C.textSecondary }}>
-            {who.me ? 'вы' : who.text}
+          <span style={{
+            fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            <span style={who.me ? { color: C.textHeading, fontWeight: 600 } : { color: C.textSecondary }}>
+              {who.me ? 'вы' : who.text}
+            </span>
+            {' · '}{wait}
           </span>
-          {' · '}{wait}
         </span>
-      </span>
-    </button>
+      </button>
+      {showAudio && (
+        <audio
+          controls
+          preload="none"
+          src={historyFileUrl(record.id, 0, 'full')}
+          style={{ width: '100%', height: 32, marginTop: SP.xs }}
+        />
+      )}
+    </div>
   );
 }
 

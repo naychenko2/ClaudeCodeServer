@@ -13,15 +13,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AudioLines, Check, ChevronLeft, ChevronRight, Clapperboard, Copy, Image as ImageIcon, ImageOff, Maximize2, User, X } from 'lucide-react';
 import { C, FONT, FS, ICON_SIZE, ICON_STROKE, MODAL_W, R, SP } from 'aihome_shell/kit';
 import { IconButton, ImageLightbox, Modal, WaitingIndicator } from '../../components/ui';
+import { readStoredToken } from '../../lib/offline';
 import type { MediaHistoryRecord } from './api';
 import {
   formatDayTimeFromIso, goneReasonText, historyParamsRows,
   historyRowTitle, historyTimeRows, humanErrorPhrase, historyVariantCount,
 } from './mediaFormat';
 
-// URL файла результата: n — индекс варианта, size — thumb (webp) | full (оригинал)
+// URL файла результата: n — индекс варианта, size — thumb (webp) | full (оригинал).
+// Токен через ?access_token= (заголовок <img>/fetch не поставит) — иначе 401 и битая картинка.
 export function historyFileUrl(id: string, n: number, size: 'thumb' | 'full'): string {
-  return `/api/local-model/history/${encodeURIComponent(id)}/file?n=${n}&size=${size}`;
+  const params = new URLSearchParams();
+  const token = readStoredToken();
+  if (token) params.set('access_token', token);
+  params.set('n', String(n));
+  params.set('size', size);
+  return `/api/local-model/history/${encodeURIComponent(id)}/file?${params}`;
 }
 
 // Состояние просмотра результата

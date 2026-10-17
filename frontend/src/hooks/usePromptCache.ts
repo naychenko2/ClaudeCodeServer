@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChatItem } from '../types';
 import { promptCacheState, type PromptCacheState } from '../lib/promptCache';
+import { useCacheThresholds } from '../lib/contextPrefs';
 
 // Состояние prompt cache чата со своим таймером. Тикает только компонент-подписчик (чип,
 // точка на мобильной пилюле, секция шторки), а не весь чат: ChatPanel о времени не знает.
@@ -8,12 +9,13 @@ import { promptCacheState, type PromptCacheState } from '../lib/promptCache';
 // перерисовок раз в минуту и не чаще; у остывшего и неизвестного кэша таймера нет вовсе.
 export function usePromptCache(items: ChatItem[]): PromptCacheState {
   const [now, setNow] = useState(() => Date.now());
+  const warn = useCacheThresholds();
   const state = useMemo(() => {
-    const s = promptCacheState(items, now);
+    const s = promptCacheState(items, now, warn);
     // «Сейчас» из стейта отстаёт до ближайшего тика, а у остывшего кэша застывает совсем.
     // Новый ход приносит якорь позже этого «сейчас» — без зажима остаток вышел бы больше TTL
-    return s.anchorAtMs !== undefined && s.anchorAtMs > now ? promptCacheState(items, s.anchorAtMs) : s;
-  }, [items, now]);
+    return s.anchorAtMs !== undefined && s.anchorAtMs > now ? promptCacheState(items, s.anchorAtMs, warn) : s;
+  }, [items, now, warn]);
   const remaining = state.remainingMs;
 
   // Новая лента (ход, загрузка истории) — сверяем часы сразу, не дожидаясь тика

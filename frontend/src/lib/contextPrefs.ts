@@ -6,6 +6,7 @@
 import { useSyncExternalStore } from 'react';
 import { api } from './api';
 import { DEFAULT_CTX_WARN, DEFAULT_CTX_DANGER, type CtxThresholds } from './context';
+import type { CacheWarnThresholds } from '../types';
 
 const DEFAULTS: CtxThresholds = { warnPct: DEFAULT_CTX_WARN, dangerPct: DEFAULT_CTX_DANGER };
 
@@ -52,4 +53,35 @@ function subscribe(fn: () => void): () => void {
 // Подписка компонента на пороги
 export function useCtxThresholds(): CtxThresholds {
   return useSyncExternalStore(subscribe, getCtxThresholds, getCtxThresholds);
+}
+
+// === Порог «кэш промпта скоро остынет» ===
+// Тот же путь: /api/auth/me → стор, PUT /api/auth/cache-thresholds. null — дефолты
+// (expiringThresholdMs без префа), поэтому значения дефолтов здесь не дублируются.
+
+let _cacheWarn: CacheWarnThresholds | null = null;
+
+export function setCacheThresholdsFromServer(t?: CacheWarnThresholds | null) {
+  _cacheWarn = t ? { warn1hSec: t.warn1hSec, warn5mSec: t.warn5mSec } : null;
+  emit();
+}
+
+export async function saveCacheThresholds(warn1hSec: number, warn5mSec: number): Promise<void> {
+  await api.auth.setCacheThresholds({ warn1hSec, warn5mSec });
+  _cacheWarn = { warn1hSec, warn5mSec };
+  emit();
+}
+
+export async function resetCacheThresholds(): Promise<void> {
+  await api.auth.setCacheThresholds({});
+  _cacheWarn = null;
+  emit();
+}
+
+export function getCacheThresholds(): CacheWarnThresholds | null {
+  return _cacheWarn;
+}
+
+export function useCacheThresholds(): CacheWarnThresholds | null {
+  return useSyncExternalStore(subscribe, getCacheThresholds, getCacheThresholds);
 }

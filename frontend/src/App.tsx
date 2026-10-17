@@ -47,7 +47,7 @@ import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject } from './features/wall/wallStore'
-import { setCtxThresholdsFromServer } from './lib/contextPrefs'
+import { setCtxThresholdsFromServer, setCacheThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -495,6 +495,7 @@ export default function App() {
         // стор пуст и useSubsystem возвращает false (fail-closed по умолчанию).
         if (me.subsystems) setAllSubsystems(me.subsystems)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        setCacheThresholdsFromServer(me?.cacheWarnThresholds)
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров
         if (me) setMeFromServer(me)

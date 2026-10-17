@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, PromptCacheInfo } from '../../types';
-import { cacheNoteText, promptCacheState, rewriteCostUsd } from '../promptCache';
+import { cacheNoteText, cacheWarnMaxSec, expiringThresholdMs, promptCacheState, rewriteCostUsd } from '../promptCache';
 
 describe('cacheNoteText', () => {
   const rewrite = { tokens: '120.0k', usd: '$1.80', apiTariff: true };
@@ -95,6 +95,40 @@ describe('promptCacheState', () => {
     ];
     const s = promptCacheState(items, T0 + 2 * MIN);
     expect(s.lastMiss).toEqual({ reason: 'model_changed', tokens: 90_000, label: 'смена модели' });
+  });
+
+  it('личный порог: 1h с порогом 20 мин остывает уже на 45-й минуте, 5m — по своему порогу', () => {
+    const warn = { warn1hSec: 20 * 60, warn5mSec: 150 };
+    const h = [result(pc({ ttl: '1h', anchorAtMs: T0 }), 120_000)];
+    expect(promptCacheState(h, T0 + 45 * MIN).status).toBe('warm');           // без префа — тёплый
+    expect(promptCacheState(h, T0 + 45 * MIN, warn).status).toBe('expiring'); // осталось 14 мин < 20
+    const m = [result(pc({ ttl: '5m', anchorAtMs: T0 }), 9_000)];
+    // Видимый срок 5m — 270 с: на 150-й секунде осталось 120 с
+    expect(promptCacheState(m, T0 + 150_000).status).toBe('warm');           // дефолт 60 с
+    expect(promptCacheState(m, T0 + 150_000, warn).status).toBe('expiring'); // 120 с < 150
+    // null — как без префа
+    expect(promptCacheState(h, T0 + 45 * MIN, null).status).toBe('warm');
+  });
+});
+
+describe('expiringThresholdMs', () => {
+  it('без префа — прежнее поведение: 5 мин у часового, пятая доля у 5-минутного', () => {
+    expect(expiringThresholdMs(60 * MIN)).toBe(5 * MIN);
+    expect(expiringThresholdMs(5 * MIN)).toBe(MIN);
+    expect(expiringThresholdMs(60 * MIN, undefined)).toBe(5 * MIN);
+  });
+
+  it('с префом — секунды в миллисекунды', () => {
+    expect(expiringThresholdMs(60 * MIN, 600)).toBe(600_000);
+    expect(expiringThresholdMs(5 * MIN, 90)).toBe(90_000);
+  });
+
+  it('зажим границ: не меньше 30 с и не больше видимого срока (TTL − запас)', () => {
+    expect(expiringThresholdMs(60 * MIN, 5)).toBe(30_000);
+    expect(expiringThresholdMs(60 * MIN, 99_999)).toBe(3540_000);
+    expect(expiringThresholdMs(5 * MIN, 999)).toBe(270_000);
+    expect(cacheWarnMaxSec(60 * MIN)).toBe(3540);
+    expect(cacheWarnMaxSec(5 * MIN)).toBe(270);
   });
 });
 

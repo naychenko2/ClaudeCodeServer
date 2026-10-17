@@ -2311,6 +2311,9 @@ export interface GeneratedSkill {
 // Поля онбординга: defaultPersonaId — личная дефолт-персона
 // (null — онбординг не пройден), needsOnboarding — обязательный гейт
 // онбординга при входе, onboardingSessionId — живая сессия интервью для резюма.
+// Порог «кэш промпта скоро остынет» (per-user, секунды до остывания) — PUT /api/auth/cache-thresholds
+export interface CacheWarnThresholds { warn1hSec: number; warn5mSec: number }
+
 export interface Me {
   userId: string;
   username: string;
@@ -2329,6 +2332,8 @@ export interface Me {
   // пришло в me-ответе. Контрактный сторож — subsystems.contract.test.ts.
   subsystems?: string[];
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
+  // Порог «кэш скоро остынет», секунды до остывания; null — дефолты фронта
+  cacheWarnThresholds?: CacheWarnThresholds | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;
   onboardingSessionId?: string | null;

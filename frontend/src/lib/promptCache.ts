@@ -1,4 +1,4 @@
-import type { ChatItem, PromptCacheInfo } from '../types';
+import type { CacheWarnThresholds, ChatItem, PromptCacheInfo } from '../types';
 
 // Модель индикатора TTL prompt cache (шаг 2 плана «индикатор TTL prompt cache»).
 // Источник — result.promptCache: бэкенд кладёт его только для родного Claude (TTL из
@@ -42,9 +42,17 @@ export function marginMs(ttlMs: number): number {
 }
 
 // Порог «остывает»: 5 минут у часового кэша, пятая доля TTL у короткого (иначе 5m был бы
-// «остывающим» всю жизнь).
-export function expiringThresholdMs(ttlMs: number): number {
-  return Math.min(5 * 60_000, ttlMs / 5);
+// «остывающим» всю жизнь). prefSec — личная настройка (секунды до остывания), зажимается
+// в [30 с, весь видимый срок TTL − marginMs] — те же границы держит бэкенд
+// (CacheWarnThresholds в Core/Models/User.cs). Порог больше остатка после хода — чат
+// «остывающий» сразу, это осознанно.
+export const CACHE_WARN_MIN_SEC = 30;
+export function cacheWarnMaxSec(ttlMs: number): number {
+  return Math.round((ttlMs - marginMs(ttlMs)) / 1000);
+}
+export function expiringThresholdMs(ttlMs: number, prefSec?: number): number {
+  if (prefSec === undefined || !Number.isFinite(prefSec)) return Math.min(5 * 60_000, ttlMs / 5);
+  return Math.min(cacheWarnMaxSec(ttlMs), Math.max(CACHE_WARN_MIN_SEC, prefSec)) * 1000;
 }
 
 // Причины промаха из diagnostics.cache_miss_reason.type. Незнакомая причина показывается как есть.
@@ -108,7 +116,8 @@ function normTtl(ttl: PromptCacheInfo['ttl']): '1h' | '5m' | undefined {
   return ttl === '1h' || ttl === '5m' ? ttl : undefined;
 }
 
-export function promptCacheState(items: ChatItem[], now: number): PromptCacheState {
+// warn — личный порог «скоро остынет» (null/undefined — дефолт)
+export function promptCacheState(items: ChatItem[], now: number, warn?: CacheWarnThresholds | null): PromptCacheState {
   let anchor: PromptCacheInfo | undefined;
   let ttl: '1h' | '5m' | undefined;
   let lastMiss: PromptCacheMiss | undefined;
@@ -141,7 +150,7 @@ export function promptCacheState(items: ChatItem[], now: number): PromptCacheSta
   const remainingMs = Math.max(0, expiresAt - now);
   const status: PromptCacheStatus =
     remainingMs <= 0 ? 'cold'
-    : remainingMs < expiringThresholdMs(ttlMs) ? 'expiring'
+    : remainingMs < expiringThresholdMs(ttlMs, warn ? (ttl === '1h' ? warn.warn1hSec : warn.warn5mSec) : undefined) ? 'expiring'
     : 'warm';
 
   return {

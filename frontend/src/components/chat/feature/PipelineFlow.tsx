@@ -1,17 +1,29 @@
+import { useEffect, useRef, useState } from 'react';
 import { C, FS, SP, R } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { RING } from './Rounds';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 
-// Вертикальная диаграмма конвейера фичи (режим «Исполнение фичи»).
+// Конвейер фичи (режим «Исполнение фичи») — строго по макету v2
+// (docs/mockups/turn-plan-feature-mode-v2.html: conveyor() ~566, drawArcs() ~662,
+// CSS .cv/.lanes/.arcsvg ~200–290).
 //
-// Заменяет горизонтальную линейку PipelineStages: конвейер развёрнут В ВЕРТИКАЛЬ —
-// временная шкала сверху вниз (рез → план → производство → ревью → проверка → финал →
-// мерж). Две линии — бэк и фронт: толщина (ширина) каждой = число проходов (steps в
-// линии). Петля возврата (ревью/проверка → производство) — отдельная дуга, цвет по
-// исходу витка (RING). На мобиле линии бэк/фронт складываются в колонку (stacked).
-// Компонент «глупый»: фазы/проходы/исход считает чистые функции (тестируются отдельно),
-// рендер только раскладывает.
+// Структура (ОДНА вертикальная рельса, не две колонки):
+//   • 7 стадий (рез → план → производство → ревью → проверка → финал → мерж), у каждого
+//     СЕГМЕНТА рельсы — СВОЯ толщина: `min(2 + (min(passes,5) − 1)·1.5, 8)` px, где
+//     `passes` — ЧИСЛО ПРОХОДОВ через стадию (не «число задач»): у «Производства» =
+//     1 + возвраты (ревью/проверка/финал), у остальных — число их задач;
+//   • стадии `todo` — пунктирный сегмент (2px dashed);
+//   • активная стадия — фон C.accentLight + жирная подпись + пульсирующая точка;
+//   • под строкой «Производство» — горизонтальные полосы бэк/фронт (одна под другой):
+//     «бэк · N из M» + дорожка (заливка = доля принятых) + бейдж ↺r (hot при r ≥ 3);
+//   • дуги возврата (SVG-оверлей справа 46px) — по КАЖДОЙ стадии-источнику (ревью/
+//     проверка/финал), со сдвигом по x на 7px, цвет по исходу витка (RING), шеврон-
+//     стрелка в «Производство», подпись ×N.
+//
+// Компонент «глупый»: фазы/проходы/линии/дуги считают ЧИСТЫЕ функции (тестируются
+// отдельно), рендер только раскладывает. Координаты дуг — через замер строк (ref +
+// ResizeObserver), а не фиксированный ROW_H.
 
 type StageKey = 'cut' | 'plan' | 'prod' | 'review' | 'check' | 'final' | 'merge';
 type Phase = 'done' | 'active' | 'pending';
@@ -26,6 +38,8 @@ const STAGES: { key: StageKey; label: string }[] = [
   { key: 'final',  label: 'Финал' },
   { key: 'merge',  label: 'Мерж' },
 ];
+
+// === Чистая логика (тестируется в node, без DOM) ===
 
 // Все задачи роли завершены (done)? Пустой набор — false (стадия ещё не начата).
 function allDone(list: FeatureTask[]): boolean {
@@ -61,42 +75,126 @@ function laneOf(t: FeatureTask): 'back' | 'front' | null {
   return null;
 }
 
-// Число проходов по линиям: сколько steps в бэке и в фронте. Толщина линии = count.
-export function lanePasses(run: FeatureRun): { back: number; front: number } {
-  let back = 0;
-  let front = 0;
-  for (const s of run.steps) {
-    const lane = laneOf(s);
-    if (lane === 'back') back++;
-    else if (lane === 'front') front++;
+// Число ПРОХОДОВ через стадию (не «число задач» — ошибка 2.9).
+//   «Производство» = 1 + возвраты (ревью/проверка/финал) — по verdict returned/accepted_with_remarks;
+//   «Ревью»/«Проверка»/«Финал» = число их задач; остальные (рез/план/мерж) = 1.
+export function stagePasses(run: FeatureRun, key: StageKey): number {
+  if (key === 'prod') {
+    const ret = (list: FeatureTask[]) => list.filter(t => {
+      const v = t.verification?.verdict;
+      return v === 'returned' || v === 'accepted_with_remarks';
+    }).length;
+    return 1 + ret(run.reviews) + ret(run.qa) + ret(run.final ? [run.final] : []);
   }
-  return { back, front };
+  if (key === 'review') return run.reviews.length;
+  if (key === 'check') return run.qa.length;
+  if (key === 'final') return run.final ? 1 : 0;
+  return 1; // cut, plan, merge
 }
 
-// Исход петли возврата по счётчикам бэка (run.verdicts): возврат (amber) > принят с
-// правками (amber, dashed) > принят (green) > нет петли. Цвет дуги — RING[verdict].stroke.
-export function returnVerdict(run: FeatureRun): 'returned' | 'accepted_with_remarks' | 'accepted' | null {
-  const v = run.verdicts;
-  if (v.returned > 0) return 'returned';
-  if (v.acceptedWithRemarks > 0) return 'accepted_with_remarks';
-  if (v.accepted > 0) return 'accepted';
-  return null;
+// Толщина сегмента рельсы: pending (todo) → 2 (пунктир), иначе формула макета.
+export function stageWidth(passes: number, phase: Phase): number {
+  if (phase === 'pending') return 2;
+  return Math.min(2 + (Math.min(passes, 5) - 1) * 1.5, 8);
 }
 
-// === Геометрия ===
-// Высота строки стадии на вертикальной шкале.
-const ROW_H = 34;
-// Ширина (толщина) линии бэк/фронт: базовая + шаг на каждый лишний проход, с потолком.
-const LANE_MIN_W = 4;
-const LANE_W_STEP = 5;
-const LANE_MAX_W = 30;
-const LANE_H = 30;
+// Линия бэк/фронт: total (все шаги), accepted (done), returns (шаги с возвратом).
+export interface LaneInfo { label: string; total: number; accepted: number; returns: number }
 
-// Толщина линии по числу проходов: 0 → нет линии, 1 → минимальная, дальше растёт.
-function laneWidth(count: number): number {
-  if (count <= 0) return 0;
-  return Math.min(LANE_MIN_W + (count - 1) * LANE_W_STEP, LANE_MAX_W);
+// Линии бэк/фронт по шагам. total=0 → строка линии не выводится (решает рендер).
+export function laneInfo(run: FeatureRun): { back: LaneInfo; front: LaneInfo } {
+  const build = (lane: 'back' | 'front'): LaneInfo => {
+    const list = run.steps.filter(s => laneOf(s) === lane);
+    const total = list.length;
+    const accepted = list.filter(s => s.status === 'done').length;
+    const returns = list.filter(s => {
+      const v = s.verification?.verdict;
+      return v === 'returned' || v === 'accepted_with_remarks';
+    }).length;
+    return { label: lane === 'back' ? 'бэк' : 'фронт', total, accepted, returns };
+  };
+  return { back: build('back'), front: build('front') };
 }
+
+// Толщина дорожки линии: min(2 + r·0.5, 8), r = число шагов с возвратом.
+export function laneTrackWidth(returns: number): number {
+  return Math.min(2 + returns * 0.5, 8);
+}
+
+// Стадия-источник возврата: число возвратов (verdict returned/accepted_with_remarks) +
+// цвет по исходу витка (RING): возврат/правки → warning, принят → success, иначе → textHeading.
+export interface ArcSource { key: 'review' | 'check' | 'final'; count: number; color: string }
+
+export function arcSpecs(run: FeatureRun): ArcSource[] {
+  const out: ArcSource[] = [];
+  const add = (key: ArcSource['key'], list: FeatureTask[]) => {
+    const returns = list.filter(t => {
+      const v = t.verification?.verdict;
+      return v === 'returned' || v === 'accepted_with_remarks';
+    }).length;
+    if (returns <= 0) return;
+    // Исход источника: есть возврат/правки → 'returned' (warning); только принят → 'accepted'
+    // (success); иначе → 'running'. Цвет — stroke из RING (тот же кодировщик, что в Rounds.tsx).
+    let verdict: string = 'running';
+    for (const t of list) {
+      const v = t.verification?.verdict;
+      if (v === 'returned' || v === 'accepted_with_remarks') { verdict = 'returned'; break; }
+      if (v === 'accepted') verdict = 'accepted';
+    }
+    out.push({ key, count: returns, color: RING[verdict]?.stroke ?? C.textHeading });
+  };
+  add('review', run.reviews);
+  add('check', run.qa);
+  if (run.final) add('final', [run.final]);
+  return out;
+}
+
+// === Геометрия дуг (чистые, тестируются) ===
+// Одна дуга: от стадии-источника (y) к производству (yProd). lane — смещение по x (7px),
+// i — номер дуги (сдвиг по y на 2.2px, чтобы несколько дуг не сливались).
+export function arcPath(y: number, yProd: number, lane: number, i: number): string {
+  const x = 8 + lane * 7;
+  const yy = y - i * 2.2;
+  return `M2 ${yy} H${x - 3} Q${x} ${yy} ${x} ${yy - 3} V${yProd + 3} Q${x} ${yProd} ${x - 3} ${yProd} H6`;
+}
+
+// Шеврон-стрелка «приземления» на производстве.
+export function chevronPath(yProd: number): string {
+  return `M8 ${yProd - 3} 4 ${yProd} 8 ${yProd + 3}`;
+}
+
+// Элемент SVG-оверлея дуг: path + chevron + подпись ×N.
+export interface ArcElement { d: string; chevron: string; color: string; label: string; labelX: number; labelY: number; opacity: number }
+
+// Дуги возврата по стадиям-источникам. sources — с измеренными y (относительно контейнера),
+// yProd — y производства. Возвращает элементы (path + chevron + label ×N, cap 4 дуги).
+export function buildArcs(sources: { key: string; y: number; count: number; color: string }[], yProd: number): ArcElement[] {
+  const out: ArcElement[] = [];
+  let lane = 0;
+  for (const s of sources) {
+    if (s.count <= 0) continue;
+    const cap = Math.min(s.count, 4);
+    for (let i = 0; i < cap; i++) {
+      out.push({
+        d: arcPath(s.y, yProd, lane, i),
+        chevron: chevronPath(yProd),
+        color: s.color,
+        label: '', labelX: 0, labelY: 0,
+        opacity: 1 - i * 0.15,
+      });
+      lane++;
+    }
+    out.push({
+      d: '', chevron: '', color: s.color,
+      label: s.count > cap ? String(s.count) : `×${s.count}`,
+      labelX: 8 + lane * 7 - 3, labelY: s.y + 13,
+      opacity: 1,
+    });
+  }
+  return out;
+}
+
+// === Рендер ===
 
 // Точка-индикатор стадии: active — акцент с пульсом, done — галочка, pending — пунктир.
 function StageDot({ phase }: { phase: Phase }) {
@@ -123,96 +221,171 @@ function StageDot({ phase }: { phase: Phase }) {
   );
 }
 
-// Линия бэк/фронт: вертикальная полоса, ширина = число проходов. Под ней — подпись
-// «бэк ×N» / «фронт ×N». count=0 → линия-плейсхолдер (тонкая, track) + «—».
-function LaneBar({ label, count, color }: { label: string; count: number; color: string }) {
-  const w = laneWidth(count);
+// Иконка «часы» (ожидание человека).
+function ClockIcon() {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs }}>
-      <div
-        role="img"
-        aria-label={`${label}: ${count} ${plural(count, 'проход', 'прохода', 'проходов')}`}
-        style={{
-          width: w || 2,
-          height: LANE_H,
-          background: count ? color : C.track,
-          borderRadius: R.sm,
-          opacity: count ? 1 : 0.5,
-        }}
-      />
-      <span style={{ fontSize: FS.xs, color: count ? C.textSecondary : C.textMuted, whiteSpace: 'nowrap' }}>
-        {label} {count ? `×${count}` : '—'}
-      </span>
-    </div>
-  );
-}
-
-// Дуга возврата: от ревью (строка 3) обратно к производству (строка 2), выгиб вправо.
-// Цвет — по исходу витка (RING). Рисуется SVG-оверлеем справа от шкалы.
-function ReturnArc({ verdict }: { verdict: 'returned' | 'accepted_with_remarks' | 'accepted' | null }) {
-  if (!verdict) return null;
-  const cfg = RING[verdict] ?? RING.running;
-  const x = 8;                 // x-точка у кромки шкалы (внутри 48px-оверлея)
-  const bulge = 30;           // выгиб вправо
-  const yProd = 2 * ROW_H + ROW_H / 2;
-  const yReview = 3 * ROW_H + ROW_H / 2;
-  const d = `M ${x} ${yReview} C ${x + bulge} ${yReview}, ${x + bulge} ${yProd}, ${x} ${yProd}`;
-  return (
-    <svg
-      width="48"
-      height={7 * ROW_H}
-      viewBox={`0 0 48 ${7 * ROW_H}`}
-      aria-hidden="true"
-      style={{ position: 'absolute', top: 0, right: 0, pointerEvents: 'none', overflow: 'visible' }}
-    >
-      <path d={d} fill="none" stroke={cfg.stroke} strokeWidth={cfg.width} strokeDasharray={cfg.dash} strokeLinecap="round" />
-      {/* Точка «приземления» на производстве */}
-      <circle cx={x} cy={yProd} r={2.5} fill={cfg.stroke} />
-      <title>{`Возврат: ${roundVerdictLabel(verdict)}`}</title>
+    <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.info} strokeWidth="1.4" />
+      <path d="M8 4.5V8l2.5 1.5" fill="none" stroke={C.info} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-// Подпись исхода витка (для title дуги): вернул / принял с правками / принял.
-function roundVerdictLabel(v: string): string {
-  switch (v) {
-    case 'returned': return 'вернул';
-    case 'accepted_with_remarks': return 'принял с правками';
-    case 'accepted': return 'принял';
-    default: return 'идёт';
-  }
+// Горизонтальная полоса линии (бэк/фронт) под «Производством»:
+//   «бэк · N из M» + дорожка (заливка = доля принятых) + бейдж ↺r (hot при r ≥ 3).
+// Сетка auto 1fr auto (строки, не колонки — на мобиле и десктопе).
+function LaneBar({ info }: { info: LaneInfo }) {
+  if (info.total === 0) return null; // 0 шагов в линии → строка не выводится
+  const pct = info.total ? Math.round((info.accepted / info.total) * 100) : 0;
+  const trackH = laneTrackWidth(info.returns);
+  const hot = info.returns >= 3;
+  return (
+    <div
+      style={{
+        display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: SP.sm,
+        alignItems: 'center', fontSize: FS.sm, color: C.textSecondary,
+      }}
+    >
+      <span style={{ whiteSpace: 'nowrap' }}>{info.label} · {info.accepted} из {info.total}</span>
+      <span
+        role="progressbar"
+        aria-label={`${info.label}: принято ${info.accepted} из ${info.total}`}
+        aria-valuenow={info.accepted}
+        aria-valuemax={info.total}
+        style={{
+          height: trackH, minHeight: 2, background: C.progressTrack,
+          borderRadius: R.max, overflow: 'hidden', display: 'block',
+        }}
+      >
+        <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: C.textMuted }} />
+      </span>
+      {info.returns > 0 ? (
+        <span
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: FS.xs, fontWeight: 700,
+            borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap',
+            background: hot ? C.warningBg : C.bgSelected,
+            color: hot ? C.warningText : C.textSecondary,
+          }}
+        >
+          ↺{info.returns}
+        </span>
+      ) : (
+        <span />
+      )}
+    </div>
+  );
 }
 
-// Русские формы: проход/прохода/проходов.
-function plural(n: number, one: string, few: string, many: string): string {
-  const n10 = n % 10, n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return one;
-  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return few;
-  return many;
+// SVG-оверлей дуг возврата (справа, 46px). elements — из buildArcs (по измеренным y).
+function ArcsOverlay({ elements }: { elements: ArcElement[] }) {
+  if (!elements.length) return null;
+  return (
+    <svg
+      width="46"
+      height="100%"
+      viewBox="0 0 46 100%"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      style={{ position: 'absolute', top: 0, right: 0, pointerEvents: 'none', overflow: 'visible' }}
+    >
+      {elements.map((el, i) => (
+        <g key={i} opacity={el.opacity}>
+          {el.d && <path d={el.d} fill="none" stroke={el.color} strokeWidth={1.5} />}
+          {el.chevron && <path d={el.chevron} fill="none" stroke={el.color} strokeWidth={1.5} strokeLinecap="round" />}
+          {el.label && (
+            <text
+              x={el.labelX}
+              y={el.labelY}
+              textAnchor="end"
+              style={{ font: `700 10px ${'JetBrains Mono, monospace'}`, fill: el.color }}
+            >
+              {el.label}
+            </text>
+          )}
+        </g>
+      ))}
+    </svg>
+  );
 }
 
-// Вертикальная диаграмма конвейера: шкала 7 стадий + линии бэк/фронт + дуга возврата.
+// Главная диаграмма конвейера: одна вертикальная рельса 7 стадий + полосы бэк/фронт + дуги.
 export function PipelineFlow({ run }: { run: FeatureRun }) {
   const isMobile = useIsMobile();
   const phases = stagePhases(run);
-  const passes = lanePasses(run);
-  const verdict = returnVerdict(run);
+  const lanes = laneInfo(run);
+  const specs = arcSpecs(run);
+
+  // Координаты строк (относительно контейнера) — через ref + ResizeObserver, не ROW_H.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [rowY, setRowY] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof window === 'undefined' || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      const next: Record<string, number> = {};
+      el.querySelectorAll<HTMLElement>('[data-stage]').forEach(node => {
+        const key = node.getAttribute('data-stage');
+        if (!key) return;
+        // +14 — смещение к центру содержимого строки (как rowY в drawArcs макета).
+        next[key] = node.getBoundingClientRect().top - box.top + 14;
+      });
+      setRowY(prev => {
+        const keys = Object.keys(next);
+        if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] === next[k])) return prev;
+        return next;
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Дуги: только когда есть источники возврата И координаты измерены (десктоп).
+  // На мобиле (нет места) — fallback-бейджи в строке «Производство» (см. StageRow).
+  let arcElements: ArcElement[] = [];
+  if (!isMobile && rowY.prod != null) {
+    const sources = specs
+      .filter(s => rowY[s.key] != null)
+      .map(s => ({ key: s.key, y: rowY[s.key], count: s.count, color: s.color }));
+    arcElements = buildArcs(sources, rowY.prod);
+  }
+
+  // Fallback-бейджи возврата (мобила / нет дуг): «↺N ревью/проверка/финал» в строке «Производство».
+  const fallbackBadges = specs
+    .map(s => ({
+      n: s.count,
+      label: s.key === 'review' ? 'ревью' : s.key === 'check' ? 'проверка' : 'финал',
+      color: s.color,
+    }));
 
   return (
     <div
       role="group"
       aria-label="Конвейер фичи: стадии, линии бэк/фронт, возврат"
-      style={{ position: 'relative', paddingRight: isMobile ? 0 : 48 }}
+      ref={containerRef}
+      style={{ position: 'relative', paddingRight: isMobile ? 0 : 46 }}
     >
-      {/* Вертикальная шкала стадий (сверху вниз) */}
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {STAGES.map((s, i) => {
           const phase = phases[i];
           const active = phase === 'active';
           const isLast = i === STAGES.length - 1;
+          const passes = stagePasses(run, s.key);
+          const width = stageWidth(passes, phase);
+
+          // Состояния активной стадии: ожидание человека (wait) / идёт сейчас (inProgress).
+          const waiting = active && !!run.awaitingHumanSince;
+          const inProgress = active && run.steps.some(t => t.status === 'inProgress')
+            || (s.key === 'review' && active && run.reviews.some(t => t.status === 'inProgress'));
+
           return (
             <div
               key={s.key}
+              data-stage={s.key}
               aria-current={active ? 'step' : undefined}
               style={{
                 position: 'relative',
@@ -220,13 +393,15 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 gridTemplateColumns: '16px 1fr',
                 gap: SP.sm,
                 alignItems: 'center',
-                minHeight: ROW_H,
+                minHeight: 34,
                 padding: `${SP.xs}px ${SP.xs}px`,
                 borderRadius: R.lg,
                 background: active ? C.accentLight : 'transparent',
+                // Состояние ожидания: поверх подсветки — C.wait border (C.info) + иконка «часы».
+                border: waiting ? `1px solid ${C.info}` : '1px solid transparent',
               }}
             >
-              {/* Рельса: вертикальная линия от точки вниз (кроме последней стадии) */}
+              {/* Сегмент рельсы: своя толщина (width) или пунктир (pending). */}
               {!isLast && (
                 <span
                   aria-hidden="true"
@@ -235,8 +410,10 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                     left: 7,
                     top: 20,
                     bottom: -SP.xs,
-                    width: 2,
-                    background: C.progressTrack,
+                    width: phase === 'pending' ? 0 : width,
+                    background: phase === 'pending' ? 'none' : C.progressTrack,
+                    borderLeft: phase === 'pending' ? `2px dashed ${C.dashed}` : 'none',
+                    transform: 'translateX(-50%)',
                     borderRadius: 2,
                   }}
                 />
@@ -244,21 +421,54 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
               <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
                 <StageDot phase={phase} />
               </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: SP.md, minWidth: 0 }}>
-                <span
-                  style={{
-                    fontSize: FS.sm,
-                    fontWeight: active ? 700 : 400,
-                    color: active ? C.textHeading : phase === 'done' ? C.textSecondary : C.textMuted,
-                  }}
-                >
-                  {s.label}
+              <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
+                  {/* Метка «стоит сейчас»: ▶ (accent) слева от имени, когда стадия inProgress. */}
+                  {inProgress && (
+                    <span aria-hidden="true" style={{ color: C.accent, fontSize: FS.xs, lineHeight: 1 }}>▶</span>
+                  )}
+                  <span
+                    style={{
+                      fontSize: FS.sm,
+                      fontWeight: active ? 700 : 400,
+                      color: active ? C.textHeading : phase === 'done' ? C.textSecondary : C.textMuted,
+                    }}
+                  >
+                    {s.label}
+                  </span>
+                  {/* Ожидание человека: иконка «часы» (встроена в стадию, не отдельный StatusAlert). */}
+                  {waiting && (
+                    <span title={run.awaitingHumanReason ?? 'Ждёт вашего решения'} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      <ClockIcon />
+                    </span>
+                  )}
+                  {/* Fallback-бейджи возврата (мобила): в строке «Производство». */}
+                  {s.key === 'prod' && isMobile && fallbackBadges.map(b => (
+                    <span
+                      key={b.label}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: FS.xs, fontWeight: 700,
+                        borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap',
+                        background: C.bgSelected, color: b.color,
+                      }}
+                    >
+                      ↺{b.n} {b.label}
+                    </span>
+                  ))}
                 </span>
+                {/* Мета под именем: «ещё не начат» (todo) / «стоит сейчас» (inProgress) / reason (wait). */}
+                {phase === 'pending' ? (
+                  <span style={{ fontSize: FS.sm, color: C.textMuted }}>ещё не начат</span>
+                ) : inProgress ? (
+                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>стоит сейчас</span>
+                ) : waiting ? (
+                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>{run.awaitingHumanReason ?? 'ждёт вашего решения'}</span>
+                ) : null}
+                {/* Полосы бэк/фронт под «Производством» (одна под другой, строки). */}
                 {s.key === 'prod' && (
-                  // Линии бэк/фронт: толщина (ширина) = число проходов. На мобиле — в колонку.
-                  <span style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: 'flex-end', gap: SP.md }}>
-                    <LaneBar label="бэк" count={passes.back} color={C.accent} />
-                    <LaneBar label="фронт" count={passes.front} color={C.plan} />
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 5, margin: '2px 0 4px 25px' }}>
+                    <LaneBar info={lanes.back} />
+                    <LaneBar info={lanes.front} />
                   </span>
                 )}
               </span>
@@ -267,8 +477,8 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
         })}
       </div>
 
-      {/* Дуга возврата: оверлей справа (десктоп) */}
-      {!isMobile && <ReturnArc verdict={verdict} />}
+      {/* Дуги возврата: SVG-оверлей справа (десктоп, когда места хватает). */}
+      {!isMobile && <ArcsOverlay elements={arcElements} />}
     </div>
   );
 }

@@ -2018,6 +2018,19 @@ class РелеПотокаTests(unittest.TestCase):
         self.assertEqual(doc["temperature"], 1.1, "без поля — от дефолта vLLM")
         self.assertIsNone(proxy.retry_body(b"not json"))
 
+    def test_повтор_несёт_соль_а_исходное_тело_нет(self):
+        тело = json.dumps({"model": "m", "messages": []}).encode()
+        self.assertNotIn("cache_salt", json.loads(тело), "исходное тело — как есть")
+        doc = json.loads(proxy.retry_body(тело))
+        self.assertIsInstance(doc.get("cache_salt"), str, "повтор несёт соль")
+        self.assertTrue(doc["cache_salt"], "соль не пустая")
+        # Два последовательных повтора — разные соли: uuid4 не повторяется,
+        # а повтор с той же солью упал бы в тот же prefix cache.
+        doc2 = json.loads(proxy.retry_body(тело))
+        self.assertNotEqual(doc["cache_salt"], doc2["cache_salt"])
+        # Тело не JSON — старый путь: повтор не строится, соль не добавляется.
+        self.assertIsNone(proxy.retry_body(b"not json"))
+
 
 class ПетляЗаглушка(BaseHTTPRequestHandler):
     """vLLM-заглушка: отдаёт по очереди заготовленные потоки (петля, нормальный ответ...)."""
@@ -2127,6 +2140,29 @@ class ПетляСквознаяTests(unittest.TestCase):
         self.assertEqual((событие["kind"], событие["sessionId"], событие["blocks"],
                           событие["resultBlocks"], событие["thinkingBlocks"]),
                          ("loop_guard", "sess-loop", 1, 1, 0))
+
+    def test_повтор_несёт_соль_а_исходное_тело_нет(self):
+        # Две последовательные петли: каждый повтор получает новую соль,
+        # исходные тела уходят на upstream как есть.
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")]),
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Готово.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+            self.спросить()
+        проверить_целостность(self, список)
+        принятые = self.Модель.принятые
+        self.assertEqual(len(принятые), 4, "два запроса, каждый с повтором")
+        for i, (тело, соль) in enumerate(zip(принятые, (False, True, False, True))):
+            if соль:
+                self.assertIsInstance(тело.get("cache_salt"), str, f"повтор #{i} несёт соль")
+                self.assertTrue(тело["cache_salt"])
+            else:
+                self.assertNotIn("cache_salt", тело, f"исходное тело #{i} — как есть")
+        self.assertNotEqual(принятые[1]["cache_salt"], принятые[3]["cache_salt"],
+                            "два последовательных повтора — разные соли")
 
     def test_петля_в_размышлениях_закрыта_с_подписью(self):
         self.Модель.ответы = [поток_ответа([("thinking", ВСТУПЛЕНИЕ + ПЛАН * 30)]),

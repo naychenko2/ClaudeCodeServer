@@ -45,6 +45,10 @@ public static class FeatureFlagKeys
     // Статистика локальных моделей: живые метрики в чипе Ctx для чатов на локальной модели
     // (скорость генерации, очередь GPU) + панель админа по медиа-стенду ComfyUI. Dark launch.
     public const string LocalModelStats = "local-model-stats";
+
+    // Режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»): карточка фичи в
+    // чате + режим исполнения. Dark launch, выключено по умолчанию.
+    public const string TurnPlanFeatureMode = "turn-plan-feature-mode";
 }
 
 /// <summary>
@@ -105,6 +109,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.LocalModelStats,
             Title: "Статистика локальных моделей",
             Description: "Для чатов на локальной модели: живые метрики генерации и очередь GPU прямо в чате, плюс панель админа по медиа-стенду ComfyUI.",
+            Default: false,
+            Stage: "dev"),
+
+        // Режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»): карточка фичи в
+        // чате + режим исполнения. Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TurnPlanFeatureMode,
+            Title: "Режим «Исполнение фичи» в «Плане хода»",
+            Description: "Включает карточку фичи в чате и режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»).",
             Default: false,
             Stage: "dev"),
     ];

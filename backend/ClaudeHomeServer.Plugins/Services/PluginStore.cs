@@ -21,6 +21,7 @@ public class PluginStore
     public const string RootDirName = "plugins";
     public const string PackagesDirName = "packages";
     public const string DraftsDirName = "_drafts";
+    public const string UploadsDirName = "_uploads";
     public const string InstalledFileName = "installed.json";
 
     private readonly string _dataDir;
@@ -44,6 +45,10 @@ public class PluginStore
     public string DraftDir(string ownerId, string slug) =>
         SafePath.Join(OwnerRoot(ownerId), $"{DraftsDirName}/{slug}");
 
+    // Каталог загруженного пакета: data/plugins/{owner}/_uploads/{uploadId}.
+    public string UploadDir(string ownerId, string uploadId) =>
+        SafePath.Join(OwnerRoot(ownerId), $"{UploadsDirName}/{uploadId}");
+
     // Файл записей установки: data/plugins/{owner}/installed.json.
     public string InstalledFile(string ownerId) =>
         SafePath.Join(OwnerRoot(ownerId), InstalledFileName);
@@ -65,6 +70,21 @@ public class PluginStore
         {
             var path = InstalledFile(ownerId);
             JsonFileStore.Save(path, records.ToList());
+        }
+    }
+
+    // Load → modify → save под одной блокировкой: атомарное изменение записей владельца.
+    // <paramref name="mutate"/> получает текущий список (мутабельный) и возвращает новый;
+    // результат пишется в installed.json. Возвращает итоговый список.
+    public List<PluginInstall> Update(string ownerId, Func<List<PluginInstall>, List<PluginInstall>> mutate)
+    {
+        lock (_lock)
+        {
+            var path = InstalledFile(ownerId);
+            var records = (JsonFileStore.Load<List<PluginInstall>>(path) ?? []).ToList();
+            var result = mutate(records);
+            JsonFileStore.Save(path, result);
+            return result;
         }
     }
 }

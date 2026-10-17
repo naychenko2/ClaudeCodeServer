@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
@@ -8,18 +7,22 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Services.Plugins.Controllers;
 
 // REST установки и согласия человека (ADR-031 §2.3, §4, шаг 1.4). Всё под [Authorize];
-// владелец — claim sub. Два гейта, оба → 403 с читаемой причиной:
-//   1) подсистема выключена (Subsystems:plugins:Enabled=false) — SubsystemGate;
-//   2) флаг plugins-mvp выключен для владельца — IFeatureFlagGate.
+// владелец — claim sub. Гейты:
+//   1) подсистема выключена (Subsystems:plugins:Enabled=false) → 503 (M2: сервис не активен);
+//   2) флаг plugins-mvp выключен для владельца → 403 (пользовательский гейт).
 //
-// Чужой пакет (нет записи с таким id у владельца) → 404, не 403: не подтверждаем
-// существование (per-owner изоляция, инвариант 1). Сервисный JWT (токен MCP, typ=svc)
-// на grant/uninstall → 403: права и удаление выдаёт только пользовательский токен.
+// Id пакета {publisher}/{slug} в URL — один сегмент publisher~slug (M1): {id} не
+// разбивается по '/', в экшене декодируем '~' → '/'.
 //
-// Вертикаль — статическая (ApplicationPart добавляет MSBuild), поэтому при выключенной
-// подсистеме контроллер MVC находит, но его зависимости (PluginStore/PluginPackageValidator/
-// PluginUninstall) в контейнер не попали — все три опциональные (nullable), гейт срабатывает
-// раньше, чем они нужны (иначе 500 вместо 403, см. грабли Program.cs по Notes/Spend).
+// Сервисный JWT (typ=svc) на install/grant/uninstall → 403: установка, права и удаление
+// выдаёт только пользовательский токен (C2).
+//
+// Контроллер тонкий: гейты + маппинг на HTTP. Ядро установки (C1/C2/M5/M6) — в
+// PluginInstaller; чтение/выдача прав и каскад удаления — в PluginUninstall.
+//
+// Вертикаль статическая (ApplicationPart добавляет MSBuild): при выключенной подсистеме
+// контроллер MVC находит, но зависимости (PluginStore/PluginInstaller/PluginUninstall)
+// в контейнер не попали — все опциональные (nullable), гейт 503 срабатывает раньше (M2).
 [ApiController]
 [Authorize]
 [Route("api/plugins")]
@@ -27,7 +30,7 @@ public class PluginsController(
     IConfiguration config,
     IFeatureFlagGate flags,
     PluginStore? store,
-    PluginPackageValidator? validator,
+    PluginInstaller? installer,
     PluginUninstall? uninstall) : ControllerBase
 {
     // Claim'ы — литералы: вертикаль не тянет JwtBearer-пакет, а MapInboundClaims=false
@@ -40,89 +43,53 @@ public class PluginsController(
     private string UserId => User.FindFirstValue(SubClaim)!;
     private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
 
-    // Гейт: null — прошёл; иначе 403 с читаемой причиной.
+    // Гейт: null — прошёл; иначе отказ. Подсистема выключена → 503 (M2), флаг off → 403.
     private IActionResult? Gate()
     {
         if (!SubsystemGate.IsEnabled(config, "plugins"))
-            return StatusCode(403, new { error = "Подсистема плагинов выключена (Subsystems:plugins:Enabled=false)" });
+            return StatusCode(503, new { error = "Подсистема плагинов выключена (Subsystems:plugins:Enabled=false)" });
         if (!flags.IsEnabled(UserId, FeatureFlagKeys.PluginsMvp))
             return StatusCode(403, new { error = "Флаг plugins-mvp выключен" });
         return null;
     }
 
-    // --- GET /api/plugins — список установленных плагинов владельца ---
+    // Id пакета в URL — один сегмент publisher~slug; декодируем в publisher/slug (M1).
+    private static string DecodeId(string id) => id.Replace('~', '/');
+
+    // --- GET /api/plugins — список установленных (DTO без значений секретов, C5) ---
 
     [HttpGet]
     public IActionResult List()
     {
         var gate = Gate(); if (gate is not null) return gate;
-        return Ok(store!.LoadInstalled(UserId));
+        return Ok(store!.LoadInstalled(UserId).Select(PluginResponse.From));
     }
 
-    // --- POST /api/plugins/install — принять пакет из папки ---
+    // --- POST /api/plugins/install — принять пакет по метке источника (C1/C2) ---
 
     [HttpPost("install")]
     public IActionResult Install([FromBody] PluginInstallRequest req)
     {
         var gate = Gate(); if (gate is not null) return gate;
+
+        // C2: установка — только пользовательский токен (сервисный → 403).
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: установку делает только пользовательский токен" });
+
         if (string.IsNullOrWhiteSpace(req.Source))
-            return BadRequest(new { error = "Не задан source (путь к папке пакета)" });
-        if (!Directory.Exists(req.Source))
-            return BadRequest(new { error = $"Папка пакета не найдена: {req.Source}" });
+            return BadRequest(new { error = "Не задан source (метка источника: draft:/upload:/catalog:)" });
 
-        // 1) Манифест из папки: id + version (источник правды о пакете).
-        var manifest = ReadManifest(req.Source);
-        if (manifest is null || string.IsNullOrWhiteSpace(manifest.Id) || string.IsNullOrWhiteSpace(manifest.Version))
-            return BadRequest(new { error = "Манифест пакета не найден или без id/version" });
-
-        // 2) Валидация файлов пакета (allow-list + sha256).
-        var validation = validator!.Validate(req.Source);
-        if (!validation.IsValid)
-            return BadRequest(new { error = "Пакет не прошёл валидацию", problems = validation.Problems });
-
-        var id = manifest.Id;
-        var version = manifest.Version;
-        var sha256 = validation.Sha256!;
-
-        // 3) Запрошенные права (потолок): из тела; fallback на манифест.
-        var requested = req.RequestedPermissions.Count > 0
-            ? req.RequestedPermissions
-            : manifest.Permissions?.Requested ?? [];
-
-        // 4) 409: запись с тем же id, но sha256 пакета изменился → «обновить».
-        var records = store!.LoadInstalled(UserId).ToList();
-        var existing = records.FirstOrDefault(r => r.Id == id);
-        if (existing is not null && existing.Sha256 != sha256)
-            return Conflict(new { error = "Пакет изменился (sha256 не совпадает с записью) — обновите", id, version });
-
-        // 5) Копирование в packages/{id}/{version}/ (идемпотентно: есть — не трогаем).
-        var targetDir = store.PackageDir(UserId, id, version);
-        if (!Directory.Exists(targetDir))
+        var result = installer!.Install(UserId, req.Source);
+        return result.Status switch
         {
-            Directory.CreateDirectory(targetDir);
-            CopyDirectory(req.Source, targetDir);
-        }
-
-        // 6) Запись PluginInstall: requested + granted (MVP: requested минус net:* —
-        //    net:* выдаёт человек явно через grant; остальные отмечены автоматически).
-        var record = new PluginInstall
-        {
-            Id = id,
-            Version = version,
-            Sha256 = sha256,
-            Requested = requested,
-            Granted = AutoGrant(requested),
-            Enabled = true,
-            Source = req.Source,
+            InstallStatus.Ok => Ok(PluginResponse.From(result.Record!)),
+            InstallStatus.NoOp => Ok(PluginResponse.From(result.Record!)),
+            InstallStatus.Conflict => Conflict(new { error = result.Error }),
+            _ => BadRequest(new { error = result.Error, problems = result.Problems }),
         };
-        records.RemoveAll(r => r.Id == id);
-        records.Add(record);
-        store.SaveInstalled(UserId, records);
-
-        return Ok(record);
     }
 
-    // --- POST /api/plugins/{id}/grant — выдать права/секреты ---
+    // --- POST /api/plugins/{id}/grant — выдать права/секреты (id = publisher~slug, M1) ---
 
     [HttpPost("{id}/grant")]
     public IActionResult Grant(string id, [FromBody] PluginGrantRequest req)
@@ -131,8 +98,9 @@ public class PluginsController(
         if (IsServiceToken)
             return StatusCode(403, new { error = "Сервисный JWT: права выдаёт только пользовательский токен" });
 
+        var pluginId = DecodeId(id);
         var records = store!.LoadInstalled(UserId).ToList();
-        var record = records.FirstOrDefault(r => r.Id == id);
+        var record = records.FirstOrDefault(r => r.Id == pluginId);
         if (record is null) return NotFound();
 
         // permissions ⊆ requested: выдать право, которого нет в requested, — 400.
@@ -140,20 +108,28 @@ public class PluginsController(
         if (notInRequested.Count > 0)
             return BadRequest(new { error = "Право не входит в запрошенные (requested)", permissions = notInRequested });
 
+        // grant секретов сверяет имена с requires.secrets (minor): незнакомый → 400.
+        var (manifest, _) = PluginInstaller.ReadManifest(store.PackageDir(UserId, pluginId, record.Version));
+        var declaredSecrets = manifest?.Contributes?.Requires?.Secrets?.Select(s => s.Name).ToHashSet(StringComparer.Ordinal) ?? [];
+        var unknownSecrets = req.Secrets.Select(s => s.Name)
+            .Where(n => !declaredSecrets.Contains(n))
+            .ToList();
+        if (unknownSecrets.Count > 0)
+            return BadRequest(new { error = "Секрет не заявлен в манифесте (requires.secrets)", secrets = unknownSecrets });
+
         // Обязательные секреты манифеста (requires.secrets[].required=true) обязаны быть заданы.
-        var manifest = ReadManifest(store.PackageDir(UserId, id, record.Version));
         var requiredSecrets = manifest?.Validate().RequiredSecrets ?? [];
         var provided = req.Secrets.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
         var missingRequired = requiredSecrets.Where(n => !provided.Contains(n)).ToList();
         if (missingRequired.Count > 0)
             return BadRequest(new { error = "Не заданы обязательные секреты", secrets = missingRequired });
 
-        // Выдать: granted = одобренные права, секреты — в запись, плагин включается.
+        // Выдать: granted = одобренные права, секреты — в запись. grant НЕ включает
+        // выключенный плагин (minor): Enabled не трогаем.
         record.Granted = req.Permissions;
         record.Secrets = req.Secrets
             .Select(s => new PluginInstallSecret { Name = s.Name, Value = s.Value })
             .ToList();
-        record.Enabled = true;
         store.SaveInstalled(UserId, records);
 
         return Ok(new { requested = record.Requested, granted = record.Granted });
@@ -168,9 +144,10 @@ public class PluginsController(
         if (IsServiceToken)
             return StatusCode(403, new { error = "Сервисный JWT: удаление выдаёт только пользовательский токен" });
 
-        if (!uninstall!.Uninstall(UserId, id))
+        var pluginId = DecodeId(id);
+        if (!uninstall!.Uninstall(UserId, pluginId))
             return NotFound();
-        return Ok(new { id, removed = true });
+        return Ok(new { id = pluginId, removed = true });
     }
 
     // --- GET /api/plugins/{id}/permissions — requested + granted для диалога согласия ---
@@ -179,7 +156,7 @@ public class PluginsController(
     public IActionResult Permissions(string id)
     {
         var gate = Gate(); if (gate is not null) return gate;
-        var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == id);
+        var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == DecodeId(id));
         if (record is null) return NotFound();
         return Ok(new { requested = record.Requested, granted = record.Granted });
     }
@@ -195,52 +172,12 @@ public class PluginsController(
     private IActionResult SetEnabled(string id, bool enabled)
     {
         var gate = Gate(); if (gate is not null) return gate;
+        var pluginId = DecodeId(id);
         var records = store!.LoadInstalled(UserId).ToList();
-        var record = records.FirstOrDefault(r => r.Id == id);
+        var record = records.FirstOrDefault(r => r.Id == pluginId);
         if (record is null) return NotFound();
         record.Enabled = enabled;
         store.SaveInstalled(UserId, records);
-        return Ok(new { id, enabled });
-    }
-
-    // --- Вспомогательное ---
-
-    // MVP: granted = requested минус net:* (net:* — серверный прокси, выдаёт человек явно).
-    private static List<string> AutoGrant(List<string> requested) =>
-        requested.Where(p => !p.StartsWith("net:", StringComparison.Ordinal)).ToList();
-
-    // Манифест пакета: ccs-plugin.json → plugin.json → .claude-plugin/plugin.json (порядок
-    // allow-list валидатора). null — манифеста нет.
-    private static PluginManifest? ReadManifest(string packageRoot)
-    {
-        foreach (var name in new[] { "ccs-plugin.json", "plugin.json", ".claude-plugin/plugin.json" })
-        {
-            var path = Path.Combine(packageRoot, name);
-            if (!System.IO.File.Exists(path)) continue;
-            try
-            {
-                return JsonSerializer.Deserialize<PluginManifest>(
-                    System.IO.File.ReadAllText(path),
-                    new JsonSerializerOptions { ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            }
-            catch
-            {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    // Рекурсивное копирование файлов пакета (source → target). Каталоги создаёт по мере
-    // необходимости; существующие файлы перезаписывает (пакет неизменяем после записи).
-    private static void CopyDirectory(string source, string target)
-    {
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-        {
-            var rel = Path.GetRelativePath(source, file);
-            var dest = Path.Combine(target, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            System.IO.File.Copy(file, dest, overwrite: true);
-        }
+        return Ok(new { id = pluginId, enabled });
     }
 }

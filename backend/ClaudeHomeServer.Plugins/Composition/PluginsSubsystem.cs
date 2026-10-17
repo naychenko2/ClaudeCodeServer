@@ -34,8 +34,11 @@ public sealed class PluginsSubsystem : IAppSubsystem
         services.AddSingleton<PluginStore>();
         services.AddSingleton<IPluginDirSource, PluginDirSource>();
         // Валидатор пакета (ADR-031 §2.3, шаг 1.3): allow-list файлов + sha256.
-        // Stateless — singleton; вызывается PluginsController при установке.
+        // Stateless — singleton; вызывается PluginInstaller при установке.
         services.AddSingleton<PluginPackageValidator>();
+        // Ядро установки (шаг 1.4, C1/C2/M5/M6): метка источника, атомарное копирование,
+        // no-op повтора. Stateless-логика поверх PluginStore + валидатора.
+        services.AddSingleton<PluginInstaller>();
         // Каскад удаления установки (пакет, запись, черновики, granted, секреты + шов).
         services.AddSingleton<PluginUninstall>();
         // Каскад «внешних» ссылок (привязки персон, слоты). MVP — no-op: реальный

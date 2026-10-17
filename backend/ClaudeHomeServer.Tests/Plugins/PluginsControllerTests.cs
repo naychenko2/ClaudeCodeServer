@@ -13,14 +13,14 @@ using Microsoft.Extensions.Configuration;
 namespace ClaudeHomeServer.Tests.Plugins;
 
 // REST установки и согласия (ADR-031 §2.3, §4, шаг 1.4) — unit-тесты контроллера
-// (паттерн SpendControllerTests: контроллер конструируется напрямую, ControllerContext
-// несёт ClaimsPrincipal). Каждый сценарий «Поведения» — свой тест с ожидаемым кодом
-// и телом ответа.
+// (контроллер конструируется напрямую, ControllerContext несёт ClaimsPrincipal).
 //
-// Гейты: Subsystems:plugins:Enabled (SubsystemGate) и флаг plugins-mvp (IFeatureFlagGate)
-// — оба → 403 с читаемой причиной. Чужой пакет → 404. Сервисный JWT (typ=svc) на
-// grant/uninstall → 403. Право вне requested → 400. Обязательный секрет не задан → 400.
-// Пакет изменился (sha256) → 409.
+// Гейты: Subsystems:plugins:Enabled (SubsystemGate) → 503 (M2: сервис не активен);
+// флаг plugins-mvp (IFeatureFlagGate) → 403 (пользовательский гейт).
+// C1: source — метка из белого списка (draft:/upload:/catalog:), не путь → 400.
+// C2: install — только user JWT (сервисный → 403), granted = [] при установке.
+// C5: ответы — DTO без значений секретов.
+// M6: повторная установка (совпал sha) — no-op, Granted/Secrets не сбрасываются.
 public class PluginsControllerTests : IDisposable
 {
     private const string OwnerA = "owner-a";
@@ -28,7 +28,7 @@ public class PluginsControllerTests : IDisposable
 
     private readonly string _dir;
     private readonly PluginStore _store;
-    private readonly PluginPackageValidator _validator;
+    private readonly PluginInstaller _installer;
     private readonly StubCascade _cascade;
     private readonly PluginUninstall _uninstall;
 
@@ -37,7 +37,7 @@ public class PluginsControllerTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "ccs_plugins_ctl_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _store = new PluginStore(BuildConfig(_dir));
-        _validator = new PluginPackageValidator();
+        _installer = new PluginInstaller(_store, new PluginPackageValidator());
         _cascade = new StubCascade();
         _uninstall = new PluginUninstall(_store, _cascade);
     }
@@ -69,7 +69,7 @@ public class PluginsControllerTests : IDisposable
             })
             .Build();
         var gate = new StubFlagGate { PluginsMvp = flagOn };
-        var ctl = new PluginsController(config, gate, _store, _validator, _uninstall);
+        var ctl = new PluginsController(config, gate, _store, _installer, _uninstall);
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },
@@ -84,12 +84,14 @@ public class PluginsControllerTests : IDisposable
         return new(new ClaimsIdentity(claims, "test"));
     }
 
-    // Пакет на диске: манифест ccs-plugin.json (id/version/permissions) + один навык
-    // (skills/a/SKILL.md — в allow-list валидатора). Возвращает путь к папке (source).
-    private string CreatePackage(string id, string version, List<string> requested,
+    // Пакет в каталоге черновика владельца (draft:<slug>): манифест ccs-plugin.json
+    // (id/version/permissions) + один навык (skills/a/SKILL.md — в allow-list валидатора).
+    // Возвращает метку источника (draft:<slug>).
+    private string CreateDraftPackage(string ownerId, string id, string version, List<string> requested,
         List<(string Name, bool Required)>? secrets = null)
     {
-        var root = Path.Combine(_dir, "pkg-" + Guid.NewGuid().ToString("N"));
+        var slug = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
+        var root = _store.DraftDir(ownerId, slug);
         Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
 
@@ -110,21 +112,20 @@ public class PluginsControllerTests : IDisposable
         };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
-        return root;
+        return "draft:" + slug;
     }
 
-    // Установить пакет (user-токен, флаг вкл) и вернуть запись.
+    // Установить пакет (user-токен, флаг вкл) по метке источника и вернуть запись из стора.
     private PluginInstall Install(string ownerId, string id, string version, List<string> requested,
         List<(string Name, bool Required)>? secrets = null)
     {
-        var source = CreatePackage(id, version, requested, secrets);
+        var source = CreateDraftPackage(ownerId, id, version, requested, secrets);
         var ctl = NewController(ownerId);
-        var res = ctl.Install(new PluginInstallRequest { Source = source, RequestedPermissions = requested });
-        var ok = (OkObjectResult)res;
-        return (PluginInstall)ok.Value!;
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        return _store.LoadInstalled(ownerId).Single(r => r.Id == id);
     }
 
-    // --- Гейты: 403 ---
+    // --- Гейты: 503 (подсистема) и 403 (флаг) ---
 
     [Fact]
     public void ФлагВыключен_Отдаёт403СПричиной()
@@ -138,37 +139,142 @@ public class PluginsControllerTests : IDisposable
     }
 
     [Fact]
-    public void ПодсистемаВыключена_Отдаёт403СПричиной()
+    public void ПодсистемаВыключена_Отдаёт503СПричиной()
     {
         var ctl = NewController(OwnerA, subsystemEnabled: false);
         var res = ctl.List();
 
         var obj = (ObjectResult)res;
-        obj.StatusCode.Should().Be(403);
+        obj.StatusCode.Should().Be(503);
         obj.Value!.ToString().Should().Contain("Подсистема плагинов выключена");
     }
 
-    // --- Список и 404 (чужой пакет) ---
+    // --- C5: список — DTO без значений секретов ---
 
     [Fact]
-    public void List_ВозвращаетУстановленныеВладельца()
+    public void List_ОтветНеНесётЗначенийСекретов()
     {
-        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        // Установить + выдать секрет с значением; GET /api/plugins не должен нести "value".
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"], secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
+        ctl.Grant("local-a~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "super-secret-value" }],
+        }).Should().BeOfType<OkObjectResult>();
 
-        var list = (List<PluginInstall>)((OkObjectResult)ctl.List()).Value!;
-        list.Should().HaveCount(1);
-        list[0].Id.Should().Be("local-a/pkg");
+        var ok = (OkObjectResult)ctl.List();
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("LINEAR_TOKEN", "имя секрета присутствует");
+        json.Should().NotContain("super-secret-value", "значение секрета наружу не уходит");
+        json.Should().NotContain("\"value\"", "ключ value в ответе отсутствует");
+    }
+
+    // --- C1: source — метка из белого списка, не путь ---
+
+    [Fact]
+    public void Install_ПроизвольныйПуть_Отдаёт400()
+    {
+        // Реальный пакет в standalone-каталоге, но Source — его ПУТЬ (без префикса белого
+        // списка). C1: source — метка, не путь → 400. (Мутация «source как путь» → 200.)
+        var realDir = Path.Combine(_dir, "rawpath-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(realDir, "skills", "a"));
+        File.WriteAllText(Path.Combine(realDir, "skills", "a", "SKILL.md"), "# A\n");
+        File.WriteAllText(Path.Combine(realDir, "ccs-plugin.json"),
+            JsonSerializer.Serialize(new
+            {
+                id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+                contributes = new { skills = new[] { "skills/a" } },
+                permissions = new { requested = new[] { "notes:read" } },
+            }, new JsonSerializerOptions { WriteIndented = true }));
+
+        var ctl = NewController(OwnerA);
+        var res = ctl.Install(new PluginInstallRequest { Source = realDir });
+
+        var bad = (BadRequestObjectResult)res;
+        bad.StatusCode.Should().Be(400);
     }
 
     [Fact]
-    public void ЧужойПакет_Permissions_Отдаёт404()
+    public void Install_МеткаDraft_УстанавливаетПакет()
     {
-        // Установлен у owner-a; owner-b спрашивает → 404 (не подтверждаем существование).
-        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        var ctl = NewController(OwnerB);
+        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
 
-        ctl.Permissions("local-a/pkg").Should().BeOfType<NotFoundResult>();
+        var res = ctl.Install(new PluginInstallRequest { Source = source });
+        res.Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Source.Should().Be("draft:pkg", "source пишется как метка, не путь");
+    }
+
+    // --- C2: install — только user JWT, granted = [] ---
+
+    [Fact]
+    public void Install_СервисныйJwt_Отдаёт403()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+
+        var res = ctl.Install(new PluginInstallRequest { Source = "draft:pkg" });
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public void Install_GrantedПусто_ЗапрошенныеИзМанифеста()
+    {
+        // C2: granted при установке = [] (человек выдаёт через grant), requested — из манифеста.
+        var record = Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"]);
+
+        record.Granted.Should().BeEmpty("granted при установке пуст");
+        record.Requested.Should().Equal("notes:read", "net:api.linear.app");
+        record.Enabled.Should().BeTrue();
+    }
+
+    // --- M6: повторная установка (совпал sha) — no-op, Granted/Secrets не сбрасываются ---
+
+    [Fact]
+    public void Install_Повтор_СовпалSha_NoOp_СохраняетGrantedИСекреты()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"],
+            secrets: [("LINEAR_TOKEN", true)]);
+        var ctl = NewController(OwnerA);
+
+        // Первая установка + выдача прав и секрета.
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-a~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Повторная установка того же пакета (sha не изменился) — no-op.
+        var second = ctl.Install(new PluginInstallRequest { Source = source });
+        second.Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Granted.Should().Equal(new[] { "notes:read" }, "granted не сброшен повторной установкой");
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Value == "tok",
+            "секреты не сброшены повторной установкой");
+    }
+
+    // --- M5: атомарность — копирование во временный .staging-{guid} ---
+
+    [Fact]
+    public void Install_Атомарность_КопируетВStaging_ИПеремещает()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+
+        // Пакет на месте, временного .staging-* не осталось.
+        var targetDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        Directory.Exists(targetDir).Should().BeTrue("пакет перемещён в packages/{id}/{version}");
+        var packagesRoot = Path.GetDirectoryName(targetDir)!;
+        Directory.EnumerateDirectories(packagesRoot, ".staging-*").Should().BeEmpty(
+            "временный каталог .staging-{guid} убран после Directory.Move");
     }
 
     // --- Grant: сервисный JWT → 403 ---
@@ -179,7 +285,7 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA, serviceToken: true);
 
-        var res = ctl.Grant("local-a/pkg", new PluginGrantRequest { Permissions = ["notes:read"] });
+        var res = ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["notes:read"] });
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(403);
     }
@@ -193,9 +299,27 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
-        var res = ctl.Grant("local-a/pkg", new PluginGrantRequest { Permissions = ["tasks:read"] });
+        var res = ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["tasks:read"] });
         var bad = (BadRequestObjectResult)res;
         JsonSerializer.Serialize(bad.Value).Should().Contain("tasks:read");
+    }
+
+    // --- Grant: секрет не заявлен в манифесте → 400 (minor) ---
+
+    [Fact]
+    public void Grant_СекретНеЗаявленВМанифесте_Отдаёт400()
+    {
+        // Манифест не declares секреты; grant с незнакомым именем → 400.
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var res = ctl.Grant("local-a~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read"],
+            Secrets = [new PluginGrantSecret { Name = "GHOST_SECRET", Value = "x" }],
+        });
+        var bad = (BadRequestObjectResult)res;
+        JsonSerializer.Serialize(bad.Value).Should().Contain("GHOST_SECRET");
     }
 
     // --- Grant: обязательный секрет не задан → 400 ---
@@ -208,7 +332,7 @@ public class PluginsControllerTests : IDisposable
             secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
 
-        var res = ctl.Grant("local-a/pkg", new PluginGrantRequest
+        var res = ctl.Grant("local-a~pkg", new PluginGrantRequest
         {
             Permissions = ["notes:read"],
             Secrets = [],
@@ -217,16 +341,37 @@ public class PluginsControllerTests : IDisposable
         JsonSerializer.Serialize(bad.Value).Should().Contain("LINEAR_TOKEN");
     }
 
+    // --- Grant: не включает выключенный плагин (minor) ---
+
+    [Fact]
+    public void Grant_НеВключаетВыключенныйПлагин()
+    {
+        var record = Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        // Выключаем, затем grant: Enabled должен остаться false.
+        ctl.Disable("local-a~pkg").Should().BeOfType<OkObjectResult>();
+        _store.LoadInstalled(OwnerA).Single().Enabled.Should().BeFalse();
+
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["notes:read"] })
+            .Should().BeOfType<OkObjectResult>();
+
+        _store.LoadInstalled(OwnerA).Single().Enabled.Should().BeFalse(
+            "grant не включает выключенный плагин");
+        _ = record;
+    }
+
     // --- Grant: happy path — granted = одобренные, секреты записаны ---
 
     [Fact]
     public void Grant_Успех_ЗаписываетGrantedИСекреты()
     {
         // requested: notes:read + net:* (net:* не авто-выдаётся). Grant одобряет notes:read.
-        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"]);
+        // Манифест декларирует LINEAR_TOKEN (non-required) — grant сверяет имя с requires.secrets.
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"],
+            secrets: [("LINEAR_TOKEN", false)]);
         var ctl = NewController(OwnerA);
 
-        ctl.Grant("local-a/pkg", new PluginGrantRequest
+        ctl.Grant("local-a~pkg", new PluginGrantRequest
         {
             Permissions = ["notes:read"],
             Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
@@ -243,30 +388,18 @@ public class PluginsControllerTests : IDisposable
     [Fact]
     public void Install_ПакетИзменилсяSha256_Отдаёт409()
     {
-        var source = CreatePackage("local-a/pkg", "1.0.0", ["notes:read"]);
+        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
         // Первая установка — ок.
-        ctl.Install(new PluginInstallRequest { Source = source, RequestedPermissions = ["notes:read"] })
-            .Should().BeOfType<OkObjectResult>();
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
 
-        // Меняем файл пакета → новый sha256, тот же id → 409 «обновить».
-        File.WriteAllText(Path.Combine(source, "skills", "a", "SKILL.md"), "# Skill A changed\n");
-        var second = ctl.Install(new PluginInstallRequest { Source = source, RequestedPermissions = ["notes:read"] });
+        // Меняем файл пакета в каталоге источника → новый sha256, тот же id → 409 «обновить».
+        var draftDir = _store.DraftDir(OwnerA, "pkg");
+        File.WriteAllText(Path.Combine(draftDir, "skills", "a", "SKILL.md"), "# Skill A changed\n");
+        var second = ctl.Install(new PluginInstallRequest { Source = source });
         var conflict = (ConflictObjectResult)second;
         conflict.StatusCode.Should().Be(409);
-    }
-
-    // --- Install: net:* не авто-выдаётся (granted = requested минус net:*) ---
-
-    [Fact]
-    public void Install_AutoGrant_НеВыдаётNet()
-    {
-        var record = Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"]);
-
-        // notes:read авто-выдан, net:* — нет (ждёт явного grant).
-        record.Granted.Should().Equal("notes:read");
-        record.Requested.Should().Equal("notes:read", "net:api.linear.app");
     }
 
     // --- Uninstall: каскад через контроллер ---
@@ -277,7 +410,7 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
-        ctl.Uninstall("local-a/pkg").Should().BeOfType<OkObjectResult>();
+        ctl.Uninstall("local-a~pkg").Should().BeOfType<OkObjectResult>();
         _store.LoadInstalled(OwnerA).Should().BeEmpty();
     }
 
@@ -287,7 +420,7 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerB);
 
-        ctl.Uninstall("local-a/pkg").Should().BeOfType<NotFoundResult>();
+        ctl.Uninstall("local-a~pkg").Should().BeOfType<NotFoundResult>();
     }
 
     // --- Disable / Enable ---
@@ -298,10 +431,10 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
-        ctl.Disable("local-a/pkg").Should().BeOfType<OkObjectResult>();
+        ctl.Disable("local-a~pkg").Should().BeOfType<OkObjectResult>();
         _store.LoadInstalled(OwnerA).Single().Enabled.Should().BeFalse();
 
-        ctl.Enable("local-a/pkg").Should().BeOfType<OkObjectResult>();
+        ctl.Enable("local-a~pkg").Should().BeOfType<OkObjectResult>();
         _store.LoadInstalled(OwnerA).Single().Enabled.Should().BeTrue();
     }
 

@@ -49,6 +49,18 @@ describe('FeatureRunView (бэковый FeatureRun)', () => {
     expect(html).toContain('Финал зелёный');
   });
 
+  it('M1: одна секция «Конвейер» (PipelineFlow) — стадии на месте, отдельных «Шаги»/«Витки» нет', () => {
+    const html = render(run());
+    // Секция «Конвейер» + стадии PipelineFlow (7) рендерятся — это и есть конвейер.
+    expect(html).toContain('Конвейер');
+    expect(html).toContain('Производство');
+    expect(html).toContain('Ревью');
+    // Отдельных секций «Шаги» и «Витки» больше нет: шаги/витки встроены в конвейер.
+    // SectionLabel рендерит метку как `>Метка<` (содержимое div), поэтому ищем ровно её.
+    expect(html).not.toContain('>Шаги<');
+    expect(html).not.toContain('>Витки<');
+  });
+
   it('M3: «Принять» — заглушка до эндпоинта (secondary, «с релизом 2.6»)', () => {
     const html = render(run());
     expect(html).toContain('Принять');

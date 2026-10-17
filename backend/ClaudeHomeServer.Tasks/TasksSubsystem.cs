@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
@@ -61,6 +62,9 @@ public sealed class TasksSubsystem : IAppSubsystem
         services.AddSingleton<ITaskStatusReader>(sp => sp.GetRequiredService<TaskManager>());
         services.AddSingleton<TaskAiService>();
         services.AddSingleton<BoardService>();
+        // Агрегат фичи (режим «Исполнение фичи»): чистая проекция TaskItem'ов в FeatureRun.
+        // Зависимость только на TaskManager (тот же singleton, что выше) — нового шва нет.
+        services.AddSingleton<FeatureProjector>();
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

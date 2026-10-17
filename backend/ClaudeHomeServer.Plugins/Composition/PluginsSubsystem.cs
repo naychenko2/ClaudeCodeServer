@@ -32,6 +32,8 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // Singleton-ы без внутреннего порядка: PluginDirSource зависит от PluginStore,
         // DI порядок регистраций при резолве не учитывает.
         services.AddSingleton<PluginStore>();
+        // Секреты плагинов (M7): per-owner архив plugin-secrets.json, отдельно от installed.json.
+        services.AddSingleton<PluginSecretsStore>();
         services.AddSingleton<IPluginDirSource, PluginDirSource>();
         // Валидатор пакета (ADR-031 §2.3, шаг 1.3): allow-list файлов + sha256.
         // Stateless — singleton; вызывается PluginInstaller при установке.

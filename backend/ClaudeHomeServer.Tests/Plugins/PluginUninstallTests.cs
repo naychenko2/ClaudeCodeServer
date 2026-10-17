@@ -19,6 +19,7 @@ public class PluginUninstallTests : IDisposable
 
     private readonly string _dir;
     private readonly PluginStore _store;
+    private readonly PluginSecretsStore _secrets;
     private readonly StubCascade _cascade;
     private readonly PluginUninstall _sut;
 
@@ -27,8 +28,9 @@ public class PluginUninstallTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "ccs_plugins_uninst_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _store = new PluginStore(BuildConfig(_dir));
+        _secrets = new PluginSecretsStore(BuildConfig(_dir));
         _cascade = new StubCascade();
-        _sut = new PluginUninstall(_store, _cascade);
+        _sut = new PluginUninstall(_store, _secrets, _cascade);
     }
 
     public void Dispose()
@@ -70,7 +72,7 @@ public class PluginUninstallTests : IDisposable
                 Granted = ["notes:read"],
                 Enabled = true,
                 Source = "draft",
-                Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
+                Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }],
             },
         ]);
     }
@@ -160,10 +162,70 @@ public class PluginUninstallTests : IDisposable
         _sut.Uninstall(Owner, Id).Should().BeFalse();
     }
 
+    // --- Publisher check (minor): черновик _drafts/{slug} общий для всех publisher'ов,
+    //     поэтому удаляется ТОЛЬКО если id из его манифеста совпадает с uninstall-имым id. ---
+
+    [Fact]
+    public void Uninstall_ЧерновикЧужогоPublisher_НеУдаляется()
+    {
+        // Запись local-b/pkg; черновик _drafts/pkg с манифестом id=local-a/pkg (чужой publisher).
+        var draft = _store.DraftDir(Owner, "pkg");
+        Directory.CreateDirectory(draft);
+        File.WriteAllText(Path.Combine(draft, "ccs-plugin.json"),
+            """{ "id": "local-a/pkg", "name": "P", "version": "1.0.0" }""");
+        _store.SaveInstalled(Owner,
+        [
+            new PluginInstall { Id = "local-b/pkg", Version = "1.0.0", Sha256 = "b", Enabled = true, Source = "draft" },
+        ]);
+
+        _sut.Uninstall(Owner, "local-b/pkg").Should().BeTrue();
+
+        Directory.Exists(draft).Should().BeTrue("черновик чужого publisher (manifest id ≠ uninstall id) не тронут");
+    }
+
+    [Fact]
+    public void Uninstall_ЧерновикСвоегоPublisher_Удаляется()
+    {
+        // Запись local-a/pkg; черновик _drafts/pkg с манифестом id=local-a/pkg (свой publisher).
+        var draft = _store.DraftDir(Owner, "pkg");
+        Directory.CreateDirectory(draft);
+        File.WriteAllText(Path.Combine(draft, "ccs-plugin.json"),
+            """{ "id": "local-a/pkg", "name": "P", "version": "1.0.0" }""");
+        _store.SaveInstalled(Owner,
+        [
+            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        _sut.Uninstall(Owner, "local-a/pkg").Should().BeTrue();
+
+        Directory.Exists(draft).Should().BeFalse("черновик своего publisher (manifest id = uninstall id) удалён");
+    }
+
+    // --- Каскад (minor): шов бросил → запись installed.json ещё на месте (откат, «коммит» после шова). ---
+
+    [Fact]
+    public void Uninstall_ШовБросил_ЗаписьНеУдалена()
+    {
+        Setup();
+        var sut = new PluginUninstall(_store, _secrets, new ThrowingCascade());
+
+        Action act = () => sut.Uninstall(Owner, Id);
+        act.Should().Throw<InvalidOperationException>("шов IPluginInstallCascade бросил");
+
+        // «Коммит» (удаление записи) — ПОСЛЕ шова: шов упал → запись осталась (идемпотентный повтор).
+        _store.LoadInstalled(Owner).Should().Contain(r => r.Id == Id, "запись не удалена: шов упал до коммита");
+    }
+
     // IPluginInstallCascade: фиксирует вызовы.
     private sealed class StubCascade : IPluginInstallCascade
     {
         public List<(string Owner, string Id)> Calls { get; } = [];
         public void OnUninstalled(string ownerId, string pluginId) => Calls.Add((ownerId, pluginId));
+    }
+
+    // IPluginInstallCascade: бросает (сбой каскада → откат записи).
+    private sealed class ThrowingCascade : IPluginInstallCascade
+    {
+        public void OnUninstalled(string ownerId, string pluginId) => throw new InvalidOperationException("шов упал");
     }
 }

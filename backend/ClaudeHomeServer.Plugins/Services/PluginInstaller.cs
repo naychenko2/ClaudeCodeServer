@@ -54,6 +54,13 @@ public class PluginInstaller
         if (manifest is null || string.IsNullOrWhiteSpace(manifest.Id) || string.IsNullOrWhiteSpace(manifest.Version))
             return InstallResult.Fail("Манифест пакета не найден или без id/version");
 
+        // M3: формат id/version из манифеста — 400 ДО SafePath.Join (иначе «..» в id/version
+        // дал бы UnauthorizedAccessException = 500, а не 400). Единый метод PluginId/PluginVersion.
+        if (!PluginId.IsValid(manifest.Id))
+            return InstallResult.Fail($"Недопустимый формат id пакета: {manifest.Id}");
+        if (!PluginVersion.IsValid(manifest.Version))
+            return InstallResult.Fail($"Недопустимый формат version пакета: {manifest.Version}");
+
         // 2) Валидация файлов пакета (allow-list + sha256).
         var validation = _validator.Validate(sourceDir);
         if (!validation.IsValid)

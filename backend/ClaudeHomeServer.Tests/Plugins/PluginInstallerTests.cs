@@ -114,7 +114,7 @@ public class PluginInstallerTests : IDisposable
         {
             var r = records.Single(x => x.Id == "local-a/pkg");
             r.Granted = ["notes:read"];
-            r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Value = "tok" }];
+            r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }];
             return records;
         });
 
@@ -124,7 +124,7 @@ public class PluginInstallerTests : IDisposable
 
         var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted не сброшен повторной установкой");
-        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Value == "tok",
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "секреты не сброшены повторной установкой");
     }
 

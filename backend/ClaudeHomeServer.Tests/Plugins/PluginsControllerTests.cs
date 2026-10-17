@@ -28,6 +28,7 @@ public class PluginsControllerTests : IDisposable
 
     private readonly string _dir;
     private readonly PluginStore _store;
+    private readonly PluginSecretsStore _secrets;
     private readonly PluginInstaller _installer;
     private readonly StubCascade _cascade;
     private readonly PluginUninstall _uninstall;
@@ -37,9 +38,10 @@ public class PluginsControllerTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "ccs_plugins_ctl_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _store = new PluginStore(BuildConfig(_dir));
+        _secrets = new PluginSecretsStore(BuildConfig(_dir));
         _installer = new PluginInstaller(_store, new PluginPackageValidator());
         _cascade = new StubCascade();
-        _uninstall = new PluginUninstall(_store, _cascade);
+        _uninstall = new PluginUninstall(_store, _secrets, _cascade);
     }
 
     public void Dispose()
@@ -69,7 +71,7 @@ public class PluginsControllerTests : IDisposable
             })
             .Build();
         var gate = new StubFlagGate { PluginsMvp = flagOn };
-        var ctl = new PluginsController(config, gate, _store, _installer, _uninstall);
+        var ctl = new PluginsController(config, gate, _store, _installer, _uninstall, _secrets);
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },
@@ -255,7 +257,7 @@ public class PluginsControllerTests : IDisposable
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted не сброшен повторной установкой");
-        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Value == "tok",
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "секреты не сброшены повторной установкой");
     }
 
@@ -379,7 +381,7 @@ public class PluginsControllerTests : IDisposable
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
         record.Granted.Should().Equal("notes:read");
-        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Value == "tok");
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set);
         record.Enabled.Should().BeTrue();
     }
 

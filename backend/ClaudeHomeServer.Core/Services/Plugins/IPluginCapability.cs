@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ClaudeHomeServer.Services.Plugins;
 
 // Шов «обработчик операций одного права» (ADR-031 §2.4, §3.4, §4).
@@ -15,16 +17,18 @@ public interface IPluginCapability
     string Permission { get; }
 
     // Обработать операцию моста {область}.{глагол}, требующую этого права.
-    // context — контекст слота (projectId, id объекта); op — имя операции; args — аргументы.
-    Task<PluginCapabilityResult> HandleAsync(PluginCallContext context, string op, object? args, CancellationToken ct);
+    // context — владелец + id плагина (из JWT) + контекст слота; op — имя операции;
+    // args — аргументы операции (сырой JSON из моста, M8).
+    Task<PluginCapabilityResult> HandleAsync(PluginCallContext context, string op, JsonElement args, CancellationToken ct);
 }
 
 /// <summary>
-/// Контекст слота, который хост добавляет к вызову (ADR-031 §3.3): только то, что слот
-/// явно отдаёт — id проекта и id выбранного объекта, если он есть. Стор, JWT и данные
-/// других владельцев сюда не попадают.
+/// Контекст вызова моста (ADR-031 §3.3, M8): <see cref="OwnerId"/> и <see cref="PluginId"/>
+/// — из JWT (владелец, чей плагин, и сам плагин), <see cref="ProjectId"/>/<see cref="ObjectId"/>
+/// — контекст слота (проект и выбранный объект, если есть). Стор, JWT и данные других
+/// владельцев сюда не попадают.
 /// </summary>
-public sealed record PluginCallContext(string ProjectId, string? ObjectId);
+public sealed record PluginCallContext(string OwnerId, string PluginId, string? ProjectId, string? ObjectId);
 
 /// <summary>
 /// Итог операции для моста: <see cref="Ok"/> + <see cref="Data"/> (успех) либо

@@ -157,6 +157,18 @@ public sealed record ProjectCapabilities(
     /// <summary>Файлы проекта лежат на диске сервера — вход серверной файловой подсистемы допустим.</summary>
     public static bool FilesOnServer(Project project) => !IsDeviceBound(project);
 
+    /// <summary>
+    /// Доступны ли плагины проекта (ADR-031 §5.8, M8/minor) — ЕДИНАЯ точка для
+    /// <c>PluginDirSource</c> и тестов: серверный проект (и ход без привязки, <c>project == null</c>)
+    /// — да; локальный (<c>DeviceId != null</c>) в MVP — нет (каталог пакетов и секреты на
+    /// устройство не едут). Устраняет дубль прямой проверки <see cref="IsDeviceBound"/> в
+    /// <c>PluginDirSource</c>.
+    /// </summary>
+    public static ProjectPluginsCapability PluginsFor(Project? project) =>
+        project is null || !IsDeviceBound(project)
+            ? new ProjectPluginsCapability(true, null)
+            : new ProjectPluginsCapability(false, PluginsLocalOffReason);
+
     /// <summary>Работает ли у проекта группа «нужен контент на сервере» (Dify, CodeGraph, досье, Docs, уборка карты).</summary>
     public static bool ServerContentEnabled(Project project) => !IsDeviceBound(project);
 
@@ -303,7 +315,7 @@ public sealed record ProjectCapabilities(
                 new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.ServerContent),
                 new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.Transcript),
                 new ProjectExecCapability(true, null),
-                new ProjectPluginsCapability(true, null));
+                PluginsFor(project));
 
         string? filesReason =
             device is null ? DeviceMissingReason
@@ -326,6 +338,6 @@ public sealed record ProjectCapabilities(
             new ProjectCapabilityGroup(CapabilityHost.Off, false, ServerContentOffReason, ProjectFeatures.ServerContent),
             new ProjectCapabilityGroup(CapabilityHost.Off, false, TranscriptOnDeviceReason, ProjectFeatures.Transcript),
             new ProjectExecCapability(execReason is null, execReason),
-            new ProjectPluginsCapability(false, PluginsLocalOffReason));
+            PluginsFor(project));
     }
 }

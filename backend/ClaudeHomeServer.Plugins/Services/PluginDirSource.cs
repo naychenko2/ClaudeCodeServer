@@ -26,11 +26,12 @@ public class PluginDirSource : IPluginDirSource
         _personaBindings = personaBindings;
     }
 
-    public IReadOnlyList<string> GetPluginDirs(string ownerId, string? personaId, Project project)
+    public IReadOnlyList<string> GetPluginDirs(string ownerId, string? personaId, Project? project)
     {
-        // Единственная проверка локальности — через ProjectCapabilities (инвариант 8):
-        // у локального проекта в MVP плагины выключены, каталог на устройство не едет.
-        if (ProjectCapabilities.IsDeviceBound(project)) return [];
+        // Единая проверка локальности — через ProjectCapabilities.PluginsFor (инвариант 8, M8):
+        // у локального проекта в MVP плагины выключены, каталог на устройство не едет;
+        // project null (ход без привязки) — все включённые пакеты владельца.
+        if (!ProjectCapabilities.PluginsFor(project).Available) return [];
 
         var records = _store.LoadInstalled(ownerId);
         if (records.Count == 0) return [];
@@ -50,7 +51,9 @@ public class PluginDirSource : IPluginDirSource
             if (hasPersonaFilter
                 && (personaTargets is null || !personaTargets.Contains($"plugin:{record.Id}")))
                 continue;
-            dirs.Add(_store.PackageDir(ownerId, record.Id, record.Version));
+            // Каталог пакета обязан существовать: иначе --plugin-dir укажет на пустоту (minor).
+            var dir = _store.PackageDir(ownerId, record.Id, record.Version);
+            if (Directory.Exists(dir)) dirs.Add(dir);
         }
         return dirs;
     }

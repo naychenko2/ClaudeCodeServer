@@ -31,7 +31,8 @@ public class PluginsController(
     IFeatureFlagGate flags,
     PluginStore? store,
     PluginInstaller? installer,
-    PluginUninstall? uninstall) : ControllerBase
+    PluginUninstall? uninstall,
+    PluginSecretsStore? secrets) : ControllerBase
 {
     // Claim'ы — литералы: вертикаль не тянет JwtBearer-пакет, а MapInboundClaims=false
     // (Program.cs) оставляет raw-имена. Смысл 1:1 с JwtService (sub = id владельца,
@@ -127,9 +128,13 @@ public class PluginsController(
         // Выдать: granted = одобренные права, секреты — в запись. grant НЕ включает
         // выключенный плагин (minor): Enabled не трогаем.
         record.Granted = req.Permissions;
+        // M7: значения секретов — в per-owner архиве plugin-secrets.json, в installed.json
+        // остаётся только имя + признак «заполнен» (Set), без значения.
         record.Secrets = req.Secrets
-            .Select(s => new PluginInstallSecret { Name = s.Name, Value = s.Value })
+            .Select(s => new PluginInstallSecret { Name = s.Name, Set = true })
             .ToList();
+        foreach (var s in req.Secrets)
+            secrets!.Set(UserId, pluginId, s.Name, s.Value);
         store.SaveInstalled(UserId, records);
 
         return Ok(new { requested = record.Requested, granted = record.Granted });

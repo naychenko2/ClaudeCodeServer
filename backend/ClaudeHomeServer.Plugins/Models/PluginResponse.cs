@@ -28,7 +28,7 @@ public class PluginResponse
         Enabled = record.Enabled,
         Source = record.Source,
         Secrets = record.Secrets
-            .Select(s => new PluginSecretView { Name = s.Name, Set = !string.IsNullOrEmpty(s.Value) })
+            .Select(s => new PluginSecretView { Name = s.Name, Set = s.Set })
             .ToList(),
     };
 }

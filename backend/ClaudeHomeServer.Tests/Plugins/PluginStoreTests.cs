@@ -94,9 +94,10 @@ public class PluginStoreTests
     {
         var store = NewStore(out _);
 
-        // id «../..» выносит каталог пакета (packages/{id}/{version}) выше корня владельца.
+        // M3: id «../..» — не по формату {publisher}/{slug} ([a-z0-9-]+), поэтому отклоняется
+        // формат-валидацией (ArgumentException) ДО SafePath.Join, а не как UnauthorizedAccessException.
         Action act = () => store.PackageDir("owner-a", "../..", "1.0.0");
-        act.Should().Throw<UnauthorizedAccessException>();
+        act.Should().Throw<ArgumentException>();
     }
 
     // --- IPluginDirSource: фильтры ---
@@ -110,6 +111,8 @@ public class PluginStoreTests
             new PluginInstall { Id = "local-a/on", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
             new PluginInstall { Id = "local-a/off", Version = "1.0.0", Sha256 = "b", Enabled = false, Source = "draft" },
         ]);
+        // Minor: каталог включённого пакета обязан существовать, иначе --plugin-dir не отдаётся.
+        Directory.CreateDirectory(store.PackageDir("owner-a", "local-a/on", "1.0.0"));
 
         var source = new PluginDirSource(store, Mock.Of<IPersonaSkillBindingLookup>());
         var dirs = source.GetPluginDirs("owner-a", null, ServerProject());
@@ -149,6 +152,9 @@ public class PluginStoreTests
             .Returns(new PersonaForSkillSuggestion(
                 Name: "Персона", Role: null, Description: null, Character: null,
                 MustDo: null, SkillBindingTargets: ["plugin:local-a/open"]));
+
+        // Minor: каталог открытого пакета обязан существовать, иначе --plugin-dir не отдаётся.
+        Directory.CreateDirectory(store.PackageDir("owner-a", "local-a/open", "1.0.0"));
 
         var source = new PluginDirSource(store, bindings.Object);
         var dirs = source.GetPluginDirs("owner-a", "persona-1", ServerProject());

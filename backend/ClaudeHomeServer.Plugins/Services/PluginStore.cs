@@ -38,8 +38,17 @@ public class PluginStore
         SafePath.Join(_dataDir, $"{RootDirName}/{ownerId}");
 
     // Каталог пакета: data/plugins/{owner}/packages/{id}/{version}.
-    public string PackageDir(string ownerId, string id, string version) =>
-        SafePath.Join(OwnerRoot(ownerId), $"{PackagesDirName}/{id}/{version}");
+    // M3: формат id/version проверяется ДО SafePath.Join (единый метод PluginId/PluginVersion):
+    // «..» в id или version отклоняется как 400-валидация, а не как UnauthorizedAccessException
+    // (500) от SafePath.Join.
+    public string PackageDir(string ownerId, string id, string version)
+    {
+        if (!PluginId.IsValid(id))
+            throw new ArgumentException($"Недопустимый формат id пакета: {id}", nameof(id));
+        if (!PluginVersion.IsValid(version))
+            throw new ArgumentException($"Недопустимый формат version пакета: {version}", nameof(version));
+        return SafePath.Join(OwnerRoot(ownerId), $"{PackagesDirName}/{id}/{version}");
+    }
 
     // Каталог черновика: data/plugins/{owner}/_drafts/{slug}.
     public string DraftDir(string ownerId, string slug) =>

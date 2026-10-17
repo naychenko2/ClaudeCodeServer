@@ -17,5 +17,7 @@ public interface IPluginDirSource
 {
     // Каталоги включённых пакетов владельца для запуска CLI. Пустой список — пакетов нет
     // или подсистема выключена. personaId null — без привязки персоны (все включённые).
-    IReadOnlyList<string> GetPluginDirs(string ownerId, string? personaId, Project project);
+    // project null (M8) — ход без привязки к проекту (например, персональный чат):
+    // локальности не проверяем, все включённые пакеты владельца.
+    IReadOnlyList<string> GetPluginDirs(string ownerId, string? personaId, Project? project);
 }

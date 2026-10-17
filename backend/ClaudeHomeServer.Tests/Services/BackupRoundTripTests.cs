@@ -46,6 +46,9 @@ public class BackupRoundTripTests : IDisposable
         // Секреты — их не должно быть в основном архиве, но они обязаны пережить restore
         File.WriteAllText(Path.Combine(DataDir, "jwt-secret.txt"), "секрет-инстанса");
         File.WriteAllText(Path.Combine(DataDir, "vapid-keys.json"), "{\"pub\":\"x\"}");
+        // M7: секреты плагинов — per-owner архив; в основной (облачный) архив не едет.
+        File.WriteAllText(Path.Combine(DataDir, "plugin-secrets.json"),
+            """{ "owner-a": { "local-a/pkg": { "LINEAR_TOKEN": "секрет-плагина" } } }""");
         // Транскрипт стороннего провайдера — единственный источник --resume для таких чатов
         var transcripts = Path.Combine(DataDir, "claude-profiles", "glm", "projects", "C--repo");
         Directory.CreateDirectory(transcripts);
@@ -123,6 +126,39 @@ public class BackupRoundTripTests : IDisposable
 
         var secrets = Directory.GetFiles(SecretsDir, "*.zip").Should().ContainSingle().Subject;
         EntriesOf(secrets).Should().Contain("data/jwt-secret.txt");
+    }
+
+    // M7: файл секретов плагинов (plugin-secrets.json) — в основной (облачный) архив не
+    // уезжает открытым, только в зашифрованный архив секретов; значение секрета не
+    // просачивается ни в один файл основного архива (в т.ч. installed.json).
+    // Мутация: вернём значение секрета в installed.json → тест красный.
+    [Fact]
+    public void BackupRoundTrip_СекретыНеУтеклиВАрхив()
+    {
+        var result = BackupCore.Snapshot(Context());
+        result.Ok.Should().BeTrue(result.Error);
+
+        var main = EntriesOf(result.ArchivePath!);
+        main.Should().NotContain("plugin-secrets.json",
+            "plugin-secrets.json не в основном (облачном) архиве (M7)");
+
+        // Значение секрета плагина не должно попасть ни в один файл основного архива.
+        using (var zip = ZipFile.OpenRead(result.ArchivePath!))
+        {
+            foreach (var entry in zip.Entries)
+            {
+                if (string.IsNullOrEmpty(entry.FullName) || entry.FullName.EndsWith('/')) continue;
+                using var stream = entry.Open();
+                using var reader = new StreamReader(stream);
+                reader.ReadToEnd().Should().NotContain("секрет-плагина",
+                    $"значение секрета плагина не в основном архиве (M7): {entry.FullName}");
+            }
+        }
+
+        // plugin-secrets.json — в зашифрованном архиве секретов.
+        var secrets = Directory.GetFiles(SecretsDir, "*.zip").Should().ContainSingle().Subject;
+        EntriesOf(secrets).Should().Contain("data/plugin-secrets.json",
+            "plugin-secrets.json — в зашифрованном архиве секретов (M7)");
     }
 
     [Fact]

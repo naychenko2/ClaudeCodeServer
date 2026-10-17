@@ -42,9 +42,10 @@ public class PluginsRouteTests : IAsyncLifetime
             .Build();
 
         _store = new PluginStore(config);
+        var secrets = new PluginSecretsStore(config);
         var validator = new PluginPackageValidator();
         var installer = new PluginInstaller(_store, validator);
-        var uninstall = new PluginUninstall(_store, new StubCascade());
+        var uninstall = new PluginUninstall(_store, secrets, new StubCascade());
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -52,6 +53,7 @@ public class PluginsRouteTests : IAsyncLifetime
         // IConfiguration контроллера — наш (DataPath + гейт); дефолт гейта true.
         builder.Services.AddSingleton<IConfiguration>(config);
         builder.Services.AddSingleton(_store);
+        builder.Services.AddSingleton(secrets);
         builder.Services.AddSingleton(installer);
         builder.Services.AddSingleton(uninstall);
         builder.Services.AddSingleton<IFeatureFlagGate>(new StubFlagGate());

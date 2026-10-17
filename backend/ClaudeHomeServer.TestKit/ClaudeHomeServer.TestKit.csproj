@@ -34,6 +34,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Dossiers.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- ImageEditor.Tests (шаг 1.3): ImageEditorFakes (FakeHttp/FakeHiggsfieldAccess/
+         RecordingBroadcaster/MemorySpendStore/TestImages) — internal, перенесены сюда из
+         монолита (Core-only). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
+    </AssemblyAttribute>
     <!-- TestKit.Host (шаг 1.2): DeviceWaitTestHost конструирует SessionManager через
          TestLauncherFactory.Instance (internal) — тот же шов, что у монолита. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">

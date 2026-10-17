@@ -25,10 +25,10 @@
          Цикла нет: Main → Notes → Notes.Tests → Main не возникает, Main не
          ссылается на Tests. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <!-- ProjectReference на Main.Tests ради ClaudeHomeServer.Tests.Helpers (FakeHostEnvironment)
-         — используется в NotesServiceTests/NotesAiConsumerTests/NoteAnnotationTests для
-         конструирования UserStore в тестах. Без этого пришлось бы дублировать хелперы. -->
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit ради FakeHostEnvironment (Core-only хелпер) — используется в
+         NotesServiceTests/NotesAiConsumerTests/NoteAnnotationTests для конструирования
+         UserStore в тестах. Без этого пришлось бы дублировать хелперы. Шаг 1.3. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
   </ItemGroup>
 
   <ItemGroup>

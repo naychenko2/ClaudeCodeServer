@@ -31,12 +31,16 @@
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Images\ClaudeHomeServer.Images.csproj" />
+    <!-- ImageEditor (шаг 1.3): FakeImageEditor (IImageEditor/ImageEditModelInfo) — Main
+         тянет эту вертикаль с ReferenceOutputAssembly="false", поэтому транзитом не видна;
+         ссылка прямая. -->
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent\ClaudeHomeServer.DeviceAgent.csproj" />
     <!-- Notes — динамический модуль: Main тянет его с ReferenceOutputAssembly="false"
          (только порядок сборки и копирование dll в modules/), поэтому типы Notes
          (NotesService/NotesKnowledgeService для DeviceWaitTestHost) Main-транзитом
-         не видны — ссылка прямая, как в ClaudeHomeServer.Tests.csproj. -->
+         не видны — ссылка прямая, как в монолите (ClaudeHomeServer.Tests). -->
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
   </ItemGroup>
@@ -46,7 +50,7 @@
          Mvc.Testing (WebApplicationFactory) и Data.Sqlite (ClearAllPools при Dispose),
          DeviceWaitTestHost — на Moq (Mock&lt;IHttpClientFactory&gt;/Mock&lt;IServer&gt;/
          Mock&lt;ILlmSessionAdapter&gt;) и FluentAssertions (using в файле).
-         Версии — те же, что в ClaudeHomeServer.Tests.csproj. -->
+         Версии — те же, что в монолите (ClaudeHomeServer.Tests). -->
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
@@ -59,6 +63,11 @@
          используют тесты монолита: допуск ровно тому, кто их потребляет. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- ImageEditor.Tests (шаг 1.3): FakeImageEditor (internal, зависит от вертикали
+         ImageEditor) перенесён сюда из монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

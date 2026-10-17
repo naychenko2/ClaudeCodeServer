@@ -15,11 +15,14 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main и Main.Tests: тесты грани поднимают общий стек
-         (JwtService и UserStore для capability-токенов, хелперы фейков).
+    <!-- ProjectReference на Main: тесты грани поднимают общий стек
+         (JwtService и UserStore для capability-токенов).
          Прецедент — Dossiers.Tests/Turn.Tests. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit (Core-only хелперы: FakeHostEnvironment/TestFs) + TestKit.Host
+         (AgentReleaseFixture/TestWebApplicationFactory) — шаг 1.3. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>

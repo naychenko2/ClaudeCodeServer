@@ -18,9 +18,10 @@
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <!-- ProjectReference на Main ради SessionManager/PersonaManager/UserStore/ProjectManager
          и пр. — тесты Tasks резолвят полный стек для воссоздания сессии и её истории.
-         Прецедент — Knowledge.Tests/Notes.Tests/Spend.Tests. -->
+         Прецедент — Knowledge.Tests/Notes.Tests/Spend.Tests.
+         Ссылка на монолит (ClaudeHomeServer.Tests) убрана в шаге 1.3: тесты Tasks не
+         используют его хелперы, только Main-типы. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
   </ItemGroup>
 
   <ItemGroup>

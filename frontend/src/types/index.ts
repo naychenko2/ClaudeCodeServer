@@ -1276,6 +1276,10 @@ export type ServerMessage = { sessionId: string } & (
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
+  // «Продолжить в новом чате»: исходный чат (sessionId) продолжён в newSessionId.
+  // Живое событие: если открыт именно исходный чат, фронт сам переходит в новый (тост).
+  // projectId — для построения навигации (проектный чат); null — чат вне проекта.
+  | { type: 'chat_continued'; newSessionId: string; projectId?: string | null }
   // Сторожа чатов: ПОЛНЫЙ состав id чатов и проектов владельца с активными
   // сторожами. Событие глобальное (не про один чат) и заменяет состояние стора целиком —
   // диффы потребитель не считает

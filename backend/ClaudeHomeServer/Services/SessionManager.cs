@@ -3200,6 +3200,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await TurnEvents.PublishAsync(new SessionContinued(
             new TurnContext(n.Id, ownerId, 0, 0, n.ProjectId), sessionId));
+        // Живое событие для владельца: человек, смотрящий исходный чат, перейдёт в новый
+        // (фронт решает по открытому чату). Рассылка в session- + project/user-группу
+        // исходного чата — тем же каналом, что и прочие уведомления сессии.
+        await BroadcastSessionMessageAsync(sessionId, new ChatContinuedMessage(n.Id, n.ProjectId));
         return n;
     }
 

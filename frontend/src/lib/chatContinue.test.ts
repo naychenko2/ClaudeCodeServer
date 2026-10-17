@@ -1,10 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ChatItem } from '../types';
 import {
   lastAssistantTextIndex, continueHintThreshold, shouldShowContinueHint,
   continuationLinks, submitContinue, formatContextK,
-  continueButtonGate, continuedLinkFromError,
+  continueButtonGate, continuedLinkFromError, autoNavigateToContinued,
 } from './chatContinue';
+
+// autoNavigateToContinued опирается на nav/openChat/toast — в юните подменяем все три:
+// getNav управляем через mock (вместо window.history.state), openChatById/showToast — шпионы.
+const { mockGetNav, mockOpenChatById, mockShowToast } = vi.hoisted(() => ({
+  mockGetNav: vi.fn(),
+  mockOpenChatById: vi.fn(),
+  mockShowToast: vi.fn(),
+}));
+vi.mock('./nav', () => ({ getNav: (...a: unknown[]) => mockGetNav(...a) }));
+vi.mock('./openChat', () => ({ openChatById: (...a: unknown[]) => mockOpenChatById(...a) }));
+vi.mock('./toast', () => ({ showToast: (...a: unknown[]) => mockShowToast(...a) }));
+beforeEach(() => {
+  mockGetNav.mockReset();
+  mockOpenChatById.mockReset();
+  mockShowToast.mockReset();
+});
 
 const user = (text: string): ChatItem => ({ kind: 'user_message', text } as ChatItem);
 const text = (t: string, extra: object = {}): ChatItem => ({ kind: 'text', text: t, ...extra } as ChatItem);
@@ -115,5 +131,30 @@ describe('continuedLinkFromError — ссылка на новый чат в от
     const err = new Error('Чат уже продолжен') as Error & { status?: number };
     err.status = 409;
     expect(continuedLinkFromError(err)).toBeNull();
+  });
+});
+
+describe('autoNavigateToContinued — авто-переход в новый чат по chat_continued', () => {
+  it('исходный чат открыт — переход (openChatById + тост), true', () => {
+    mockGetNav.mockReturnValue({ screen: 'chats', chatId: 'source' });
+    expect(autoNavigateToContinued({ sessionId: 'source', newSessionId: 'new' })).toBe(true);
+    expect(mockOpenChatById).toHaveBeenCalledWith('new');
+    expect(mockShowToast).toHaveBeenCalledWith('Продолжение чата', 'Продолжили в новом чате', 'info');
+  });
+  it('открыт другой чат — без перехода, false (стор обновит обработчик списка)', () => {
+    mockGetNav.mockReturnValue({ screen: 'chats', chatId: 'other' });
+    expect(autoNavigateToContinued({ sessionId: 'source', newSessionId: 'new' })).toBe(false);
+    expect(mockOpenChatById).not.toHaveBeenCalled();
+    expect(mockShowToast).not.toHaveBeenCalled();
+  });
+  it('уже в новом чате (ручной «Продолжить» ушёл первым) — без повторного перехода, false', () => {
+    mockGetNav.mockReturnValue({ screen: 'chats', chatId: 'new' });
+    expect(autoNavigateToContinued({ sessionId: 'source', newSessionId: 'new' })).toBe(false);
+    expect(mockOpenChatById).not.toHaveBeenCalled();
+  });
+  it('другой экран (nav null) — без перехода, false', () => {
+    mockGetNav.mockReturnValue(null);
+    expect(autoNavigateToContinued({ sessionId: 'source', newSessionId: 'new' })).toBe(false);
+    expect(mockOpenChatById).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,7 @@
 import type { ChatItem, Session } from '../types';
+import { getNav } from './nav';
+import { openChatById } from './openChat';
+import { showToast } from './toast';
 
 // «Продолжить в новом чате»: чистая логика без React — показ кнопки, порог подсказки.
 
@@ -101,4 +104,18 @@ export function continuedLinkFromError(err: unknown): string | null {
   }
   const m = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(e.message ?? '');
   return m ? m[0] : null;
+}
+
+// Авто-переход в новый чат по событию «продолжено» (chat_continued): если открыт именно
+// исходный чат (sessionId) и мы ещё не в новом — переходим (openChatById) и показываем
+// короткий тост. Возвращает true, если переход совершён (вызывающий может пропустить свой
+// navPush, чтобы не дублировать). Если открыт другой чат/экран — не трогаем (стор обновит
+// обработчик списка), возвращаем false.
+export function autoNavigateToContinued(msg: { sessionId: string; newSessionId: string }): boolean {
+  const nav = getNav();
+  if (nav?.chatId === msg.newSessionId) return false; // уже в новом (ручной «Продолжить» ушёл первым)
+  if (nav?.chatId !== msg.sessionId) return false; // смотрит другой чат или другой экран
+  void openChatById(msg.newSessionId);
+  showToast('Продолжение чата', 'Продолжили в новом чате', 'info');
+  return true;
 }

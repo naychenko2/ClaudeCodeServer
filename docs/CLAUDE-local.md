@@ -60,11 +60,9 @@
 
 ## Команды
 
-```bash
-dotnet build backend/ClaudeHomeServer -m:4
-dotnet test backend/ClaudeHomeServer.Tests -m:4 --filter "FullyQualifiedName~ИмяНабора" > /tmp/t.log 2>&1; echo "exit=$?"; grep -E "Пройден!|Не пройден!|error" /tmp/t.log | tail -5
-cd frontend && npx tsc -b && npx vitest run src/путь/к/файлу.test.ts
-```
+- сборка — `mcp__dev__build` (target `backend/<Проект>`), тесты — `mcp__tests__run_tests` (target `backend/<Проект>.Tests`, `filter`, `no_build`); не Bash, без `run_in_background` и `sleep`: инструмент ждёт сам, показывает прогресс, держит общую очередь; если инструмента нет в наборе — Bash на переднем плане с `timeout: 600000`;
+- фронт: `run_tests` kind vitest, `npx tsc -b`;
+- **`git stash` — никогда**: стек общий для всех worktree, `drop` снесёт чужое. «Моё ли падение» — прогон того же набора на master или вопрос в отчёте, а не откат своих правок.
 
 **`dotnet test` — всегда с путём к ОДНОМУ тестовому проекту** (`backend/<Проект>.Tests`).
 Без пути, из `backend/`, он собирает и гоняет ВСЕ тестовые проекты решения:
@@ -72,14 +70,6 @@ cd frontend && npx tsc -b && npx vitest run src/путь/к/файлу.test.ts
 сбоем CLR. Имя тестового проекта выводится из имени вертикали:
 `ClaudeHomeServer.X` → `ClaudeHomeServer.X.Tests`. Список вертикалей —
 `ls -d backend/ClaudeHomeServer.*`, а не по памяти.
-
-**Не прячь код возврата.** `команда | tail` возвращает код `tail`, то есть 0, —
-упавший прогон выглядит успешным. Пиши вывод в файл, печатай `exit=$?`, потом
-`grep`/`tail` по файлу.
-
-**Собирай один раз, тесты — от готовой сборки.** `dotnet test` без `--no-build`
-пересобирает перед каждым прогоном (минуты на холодном дереве). Порядок: одна
-`dotnet build <проект> -m:4` → все `dotnet test … --no-build --filter …` от неё.
 
 **Перед сдачей — одна связка, не только точечные фильтры.** Точечный фильтр
 экономит время по ходу, но прячет дефекты совместного прогона (общее состояние,

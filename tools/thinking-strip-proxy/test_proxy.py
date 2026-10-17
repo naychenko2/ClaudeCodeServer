@@ -3291,12 +3291,15 @@ class КарантинСессииTests(unittest.TestCase):
 
     def test_мусор_и_в_повторе_обрыв(self):
         self.Модель.ответы = [self.мусорный_поток(), self.мусорный_поток()]
-        with contextlib.redirect_stderr(io.StringIO()):
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
             список = self.спросить(ждать_карточку=False)
         проверить_целостность(self, список)
         текст = self.текст(список)
         self.assertIn("ответ пересчитывается заново", текст)
         self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        # Оператор видит в журнале, что повтор тоже не ушёл: строка master.
+        self.assertIn("карантин: мусор или петля и в повторе — ответ оборван", журнал.getvalue())
         self.assertEqual(len(self.Модель.принятые), 2, "повтор один")
         self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"]), (0, 1))
 

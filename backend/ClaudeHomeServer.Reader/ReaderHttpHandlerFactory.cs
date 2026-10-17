@@ -3,7 +3,7 @@ using System.Net;
 namespace ClaudeHomeServer.Services.Reader;
 
 /// <summary>
-/// Строит <see cref="SocketsHttpHandler"/> клиента "link-reader" (ADR-005, раздел 2) — общий
+/// Строит транспорт клиента "link-reader" (ADR-005, раздел 2) — общий
 /// SSRF-примитив Core <see cref="SsrfSafeHandler"/> с настройками ридера: без кук, креденшалов,
 /// авто-редиректов и системного egress-прокси, с <c>ConnectCallback</c>, который сам резолвит хост
 /// прямо перед подключением и режет не публичные адреса — вторая, TOCTOU-safe линия обороны поверх
@@ -20,7 +20,7 @@ namespace ClaudeHomeServer.Services.Reader;
 public static class ReaderHttpHandlerFactory
 {
     /// <param name="resolve">Резолвер имени для тестов; null — системный DNS.</param>
-    public static SocketsHttpHandler Create(Func<string, CancellationToken, Task<IPAddress[]>>? resolve) =>
+    public static SsrfSafeHttpHandler Create(Func<string, CancellationToken, Task<IPAddress[]>>? resolve) =>
         SsrfSafeHandler.Create(new SsrfSafeHandlerOptions
         {
             ConnectTimeout = TimeSpan.FromSeconds(5),
@@ -28,5 +28,5 @@ public static class ReaderHttpHandlerFactory
             Resolve = resolve,
         });
 
-    public static SocketsHttpHandler Create() => Create(null);
+    public static SsrfSafeHttpHandler Create() => Create(null);
 }

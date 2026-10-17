@@ -35,6 +35,39 @@ public sealed record SsrfSafeHandlerOptions
 }
 
 /// <summary>
+/// Обёртка транспорта <see cref="SsrfSafeHandler"/>: не пускает запрос, которому разрешён HTTP/3 —
+/// версия выше 2.0 или политика <see cref="HttpVersionPolicy.RequestVersionOrHigher"/> (с ней
+/// <see cref="SocketsHttpHandler"/> переходит на HTTP/3 по Alt-Svc ответа). QUIC открывает соединение
+/// мимо <c>ConnectCallback</c>, то есть без проверки адреса — поэтому отказ, а не тихое понижение.
+/// </summary>
+public sealed class SsrfSafeHttpHandler : DelegatingHandler
+{
+    internal SsrfSafeHttpHandler(SocketsHttpHandler transport) : base(transport) => Transport = transport;
+
+    /// <summary>Внутренний транспорт — для проверки настроек; менять их вне Core запрещает сторож-тест.</summary>
+    public SocketsHttpHandler Transport { get; }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RefuseHttp3(request);
+        return base.SendAsync(request, cancellationToken);
+    }
+
+    protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RefuseHttp3(request);
+        return base.Send(request, cancellationToken);
+    }
+
+    private static void RefuseHttp3(HttpRequestMessage request)
+    {
+        if (request.Version > HttpVersion.Version20 || request.VersionPolicy == HttpVersionPolicy.RequestVersionOrHigher)
+            throw new NotSupportedException(
+                $"HTTP/3 запрещён: QUIC соединяется мимо SSRF-проверки адреса (версия {request.Version}, политика {request.VersionPolicy})");
+    }
+}
+
+/// <summary>
 /// Единственный транспорт к адресам, пришедшим извне (ADR-025, «Фаза 3», S2; ADR-005 §2): ридер ссылок,
 /// <see cref="SafeMediaDownloader"/> и блоки <c>http.*</c> процессов. Своих <c>ConnectCallback</c> у
 /// потребителей нет — копии расходились (ридер брал первый публичный адрес, загрузчик требовал все), и
@@ -46,12 +79,14 @@ public sealed record SsrfSafeHandlerOptions
 /// ВСЕ адреса имени (fail-closed): проверка до запроса не в счёт — между ней и connect имя могут
 /// перерезолвить (DNS rebinding). Соединение идёт только с проверенным адресом;</item>
 /// <item>без авто-редиректов и кук: следующий адрес потребитель проверяет сам или не ходит туда вовсе;</item>
-/// <item>проверку TLS-сертификата не трогаем — отключить её настройками нельзя.</item>
+/// <item>проверку TLS-сертификата не трогаем — отключить её настройками нельзя;</item>
+/// <item>только HTTP/1.1 и HTTP/2 (<see cref="SsrfSafeHttpHandler"/>): HTTP/3 ходит по QUIC мимо
+/// <c>ConnectCallback</c>, и правило адресов не сработало бы вовсе.</item>
 /// </list>
 /// </summary>
 public static class SsrfSafeHandler
 {
-    public static SocketsHttpHandler Create(SsrfSafeHandlerOptions? options = null)
+    public static SsrfSafeHttpHandler Create(SsrfSafeHandlerOptions? options = null)
     {
         options ??= new SsrfSafeHandlerOptions();
         var resolve = options.Resolve ?? ((host, ct) => Dns.GetHostAddressesAsync(host, ct));
@@ -66,7 +101,7 @@ public static class SsrfSafeHandler
             ConnectCallback = (context, ct) => ConnectAsync(context, resolve, ct),
         };
         if (options.PooledConnectionLifetime is { } lifetime) handler.PooledConnectionLifetime = lifetime;
-        return handler;
+        return new SsrfSafeHttpHandler(handler);
     }
 
     /// <summary>

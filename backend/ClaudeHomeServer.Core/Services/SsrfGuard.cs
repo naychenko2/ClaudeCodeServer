@@ -67,6 +67,10 @@ public static class SsrfGuard
             if (b[0] >= 240) return false;
             // 198.18.0.0/15 benchmark
             if (b[0] == 198 && b[1] is 18 or 19) return false;
+            // 192.0.0.0/24 IETF-назначения, 192.0.2.0/24 TEST-NET-1, 192.88.99.0/24 бывший 6to4-relay anycast
+            if (b[0] == 192 && (b[1], b[2]) is (0, 0) or (0, 2) or (88, 99)) return false;
+            // 198.51.100.0/24 TEST-NET-2, 203.0.113.0/24 TEST-NET-3 — документационные
+            if ((b[0], b[1], b[2]) is (198, 51, 100) or (203, 0, 113)) return false;
             return true;
         }
 
@@ -80,6 +84,10 @@ public static class SsrfGuard
         if (Zero(v6, 0, 12)) return false;
         // Discard-only 100::/64
         if (v6[0] == 0x01 && v6[1] == 0x00 && Zero(v6, 2, 6)) return false;
+        // SIIT ::ffff:0:0:0/96 (IPv4-translated) — как IPv4-mapped, но транслятор сам решает, куда вести
+        if (Zero(v6, 0, 8) && v6[8] == 0xFF && v6[9] == 0xFF && v6[10] == 0x00 && v6[11] == 0x00) return false;
+        // Документационный 2001:db8::/32
+        if (v6[0] == 0x20 && v6[1] == 0x01 && v6[2] == 0x0D && v6[3] == 0xB8) return false;
         // Teredo 2001::/32 — туннель, адрес сервера и клиента зашит в адрес, цель не проверить
         if (v6[0] == 0x20 && v6[1] == 0x01 && v6[2] == 0x00 && v6[3] == 0x00) return false;
         // 6to4 2002::/16 — встраивает IPv4 в байты 2–5 (2002:7f00:1:: = 127.0.0.1)

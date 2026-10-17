@@ -26,7 +26,9 @@ public class SsrfGuardTests
 
     [Theory]
     [InlineData("2002:808:808::1")]        // 6to4 с публичным 8.8.8.8
-    [InlineData("2001:db8::1")]            // соседний 2001:db8::/32 — не Teredo
+    [InlineData("2001:1::1")]              // сосед Teredo 2001::/32
+    [InlineData("2001:db9::1")]            // сразу за документационным 2001:db8::/32
+    [InlineData("::ffff:1:808:808")]       // рядом с SIIT ::ffff:0:0:0/96
     [InlineData("2001:4860:4860::8888")]   // Google DNS
     [InlineData("64:ff9b::808:808")]       // NAT64 well-known с публичным IPv4
     [InlineData("100:0:0:1::1")]           // за пределами 100::/64
@@ -107,7 +109,14 @@ public class SsrfGuardTests
     [InlineData("255.255.255.255")] // broadcast
     [InlineData("198.18.0.1")]     // benchmark 198.18/15
     [InlineData("198.19.255.255")]
-    public void IsPublic_ДопДиапазоныIPv4_False(string ip)
+    [InlineData("192.0.0.8")]      // IETF-назначения 192.0.0.0/24
+    [InlineData("192.0.2.1")]      // TEST-NET-1
+    [InlineData("198.51.100.7")]   // TEST-NET-2
+    [InlineData("203.0.113.255")]  // TEST-NET-3
+    [InlineData("192.88.99.1")]    // бывший 6to4-relay anycast
+    [InlineData("2001:db8::1")]    // документационный v6
+    [InlineData("::ffff:0:808:808")] // SIIT ::ffff:0:0:0/96, даже с публичным IPv4
+    public void IsPublic_ДопДиапазоны_False(string ip)
     {
         SsrfGuard.IsPublic(IPAddress.Parse(ip)).Should().BeFalse();
     }
@@ -116,6 +125,11 @@ public class SsrfGuardTests
     [InlineData("198.17.255.255")] // сразу перед benchmark
     [InlineData("198.20.0.1")]     // сразу за benchmark
     [InlineData("223.255.255.255")] // сразу перед multicast
+    [InlineData("192.0.1.1")]      // между 192.0.0.0/24 и TEST-NET-1
+    [InlineData("192.0.3.1")]      // сразу за TEST-NET-1
+    [InlineData("198.51.101.1")]   // сразу за TEST-NET-2
+    [InlineData("203.0.112.255")]  // сразу перед TEST-NET-3
+    [InlineData("192.88.98.1")]    // сразу перед 192.88.99.0/24
     public void IsPublic_ДопДиапазоныГраницыIPv4_True(string ip)
     {
         SsrfGuard.IsPublic(IPAddress.Parse(ip)).Should().BeTrue();

@@ -13,6 +13,7 @@ import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
+import { __test } from '../../../lib/featureRuns';
 
 // Задача-заглушка (подмножество TaskItem, как несёт GET /api/tasks/features).
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
@@ -104,15 +105,20 @@ describe('FeatureRunView (бэковый FeatureRun)', () => {
 
 describe('Гейт фич-флага (M2)', () => {
   const todo: TodoItem = { content: 'Шаг плана', status: 'pending' };
+  const sid = 's1';
 
   it('runs=[] → пилюля в режиме плана (нет «исполнение фичи»)', () => {
-    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [todo], runs: [] }));
+    __test.reset();
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [todo], runs: [], sessionId: sid }));
     expect(html).toContain('Показать план хода');
     expect(html).not.toContain('Показать исполнение фичи');
   });
 
   it('runs=[run] → пилюля в режиме фичи', () => {
-    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs: [run()] }));
+    // Режим по умолчанию — из стора Ф1: есть хотя бы одна фича у сессии → «фича».
+    __test.reset();
+    __test.setRuns(sid, [run()]);
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs: [run()], sessionId: sid }));
     expect(html).toContain('Показать исполнение фичи');
   });
 });

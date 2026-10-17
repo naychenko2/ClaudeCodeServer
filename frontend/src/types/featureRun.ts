@@ -16,6 +16,8 @@
 export interface FeatureTask {
   id: string;
   title: string;
+  // Проект задачи (бэк шлёт полный TaskItem): нужен футеру карточки для openTaskInSection.
+  projectId?: string | null;
   status?: 'todo' | 'inProgress' | 'done' | null;
   kind?: 'task' | 'defect' | null;
   // Роль в конвейере: feature · cut · plan · step · rework · review · qa · final · merge · consult.

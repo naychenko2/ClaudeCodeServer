@@ -82,7 +82,7 @@ function determineKind(info: LocalGpuQueueInfo): QueueKind {
 // ahead>0 → «В очереди · 2-я · старт ≈ через 4 мин»
 // startInSeconds=null → «В очереди · 2-я» (без обещания времени)
 // ahead=null → «В очереди» (без номеров)
-function formatQueued(info: LocalGpuQueueInfo, compact: boolean): { text: string; progress: QueueProgress } {
+function formatQueued(info: LocalGpuQueueInfo, compact: boolean): { text: string; progress?: QueueProgress } {
   const ahead = info.ahead;
   const eta = info.startInSeconds;
 
@@ -112,16 +112,16 @@ function formatQueued(info: LocalGpuQueueInfo, compact: boolean): { text: string
     }
   }
 
-  // Полоса: muted estimate, всегда 0 — «прошло / (прошло + ETA)», без elapsed считаем 0
-  const fraction = 0;
-  return { text, progress: { mode: 'estimate', fraction } };
+  // Полосы нет: queued — ждёт, прогресс не наш
+  return { text, progress: undefined };
 }
 
 // Состояние 2/4: считается (running).
-// Шаги: «Шаг 12 из 25 · осталось ≈ 30 с» / «12 из 25 · ≈ 30 с»
+// Шаги + ETA: «Шаг 12 из 25 · осталось ≈ 30 с» / «12 из 25 · ≈ 30 с»
+// Шаги, без ETA: «Шаг 12 из 25» / «12 из 25»
 // stage: «этап 2 · шаг 3 из 8»
-// Без ETA: «Шаг 12 из 25 · время не замерено» / «12 из 25 · без оценки»
-// Без шагов: «Идёт · время не замерено»
+// Без шагов и без ETA: «Идёт · оценка появится после первого шага» / «Идёт»
+// Почти готово (remaining=0 или fraction≥95): «Почти готово»
 function formatRunning(info: LocalGpuQueueInfo, compact: boolean): { text: string; progress: QueueProgress } {
   const steps = info.steps;
   const remaining = info.remainingSeconds;
@@ -142,38 +142,7 @@ function formatRunning(info: LocalGpuQueueInfo, compact: boolean): { text: strin
     }
   }
 
-  // Время
-  let timeText = '';
-  if (remaining != null && remaining > 0) {
-    timeText = compact ? `≈ ${fmtDuration(remaining)}` : `осталось ≈ ${fmtDuration(remaining)}`;
-  } else if (remaining != null && remaining === 0) {
-    // remainingSeconds=0 — почти готово, не пишем «0 с»
-    timeText = '';
-  } else {
-    // Нет ETA
-    if (steps != null && steps.total > 0) {
-      timeText = compact ? 'без оценки' : 'время не замерено';
-    } else {
-      // Нет ни шагов, ни ETA: «Идёт · время не замерено».
-      // percent — это процент текущей ноды, НЕ минуты: elapsed из него не выводим.
-      // (В эту ветку stepText уже пуст — шаги null/total=0, строка 131.)
-      timeText = compact ? 'Идёт · без оценки' : 'Идёт · время не замерено';
-    }
-  }
-
-  // Собираем текст
-  let text: string;
-  if (stepText && timeText) {
-    text = `${stepText} · ${timeText}`;
-  } else if (stepText) {
-    text = stepText;
-  } else if (timeText) {
-    text = timeText;
-  } else {
-    text = 'Идёт';
-  }
-
-  // Полоса:
+  // === Полоса (сначала: «почти готово» зависит от fraction) ===
   // Точные шаги → exact, fraction = step/total, предел 99
   // Нет шагов, но percent с percentExact=true → exact, fraction = percent, предел 99
   // Нет шагов и percentExact=false/null, но есть percent или ETA → estimate, предел 95
@@ -199,6 +168,42 @@ function formatRunning(info: LocalGpuQueueInfo, compact: boolean): { text: strin
     progress = { mode: 'indeterminate' };
   }
 
+  // === Почти готово: remaining === 0 или fraction ≥ 95 ===
+  const fraction = progress.fraction ?? 0;
+  if (remaining === 0 || fraction >= 95) {
+    return { text: 'Почти готово', progress };
+  }
+
+  // === Время ===
+  let timeText = '';
+  if (remaining != null && remaining > 0) {
+    timeText = compact ? `≈ ${fmtDuration(remaining)}` : `осталось ≈ ${fmtDuration(remaining)}`;
+  } else if (remaining == null) {
+    // Нет ETA
+    if (steps != null && steps.total > 0) {
+      // Шаги есть, ETA нет — просто шаги, без суффикса
+      timeText = '';
+    } else {
+      // Нет ни шагов, ни ETA: «Идёт · оценка появится после первого шага».
+      // percent — это процент текущей ноды, НЕ минуты: elapsed из него не выводим.
+      // (В эту ветку stepText уже пуст — шаги null/total=0, строка 131.)
+      timeText = compact ? 'Идёт' : 'Идёт · оценка появится после первого шага';
+    }
+  }
+  // remaining === 0 уже обработано выше (почти готово)
+
+  // === Собираем текст ===
+  let text: string;
+  if (stepText && timeText) {
+    text = `${stepText} · ${timeText}`;
+  } else if (stepText) {
+    text = stepText;
+  } else if (timeText) {
+    text = timeText;
+  } else {
+    text = 'Идёт';
+  }
+
   return { text, progress };
 }
 
@@ -206,7 +211,7 @@ function formatRunning(info: LocalGpuQueueInfo, compact: boolean): { text: strin
 // Единая форма без двоеточия для вида задачи (обе формы):
 // «Карта занята видео · ≈ 12 мин».
 // Без ETA: «Карта занята долгой задачей: видео» (двоеточие — как в макете).
-function formatBusy(info: LocalGpuQueueInfo, _compact: boolean): { text: string; progress: QueueProgress } {
+function formatBusy(info: LocalGpuQueueInfo, _compact: boolean): { text: string; progress?: QueueProgress } {
   const busy = info.busy!;
   const label = busyKindLabel(busy.kind);
   const remaining = busy.remainingSeconds;
@@ -223,9 +228,8 @@ function formatBusy(info: LocalGpuQueueInfo, _compact: boolean): { text: string;
     text = `Карта занята долгой задачей: ${label}`;
   }
 
-  // Полоса: как в очереди (muted estimate)
-  const fraction = 0;
-  return { text, progress: { mode: 'estimate', fraction } };
+  // Полосы нет: busy — карта занята, прогресс не наш
+  return { text, progress: undefined };
 }
 
 // Состояние 5: стенд недоступен.

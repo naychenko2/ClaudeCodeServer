@@ -1012,6 +1012,63 @@ public class TaskManagerTests : IDisposable
         review.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
     }
 
+    // Роли, привязанные к фиче (featureId обязателен): всё, кроме feature/cut/plan.
+    // Выводим из TaskRoles, чтобы при добавлении роли список не расползался по тестам.
+    private static string[] BoundRoles =>
+        TaskRoles.All.Where(r => !TaskRoles.FeatureIdOptional.Contains(r)).ToArray();
+
+    // ─── Дефект d0b2ff78: привязанная к фиче роль без featureId = «висяк» ─────────
+    // Каждая роль из {step, rework, review, qa, final, merge, consult} требует featureId
+    // (live эпик); featureId=null для не-привязанных ролей (feature/cut/plan) — валидно.
+
+    [Fact]
+    public void Create_ПривязаннаяРольБезFeatureId_Отказ()
+    {
+        foreach (var role in BoundRoles)
+        {
+            var act = () => _sut.Create(null, "u", new CreateTaskRequest("t", Role: role));
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage($"*Роль {role} требует featureId*",
+                    $"роль {role} без featureId обязана быть отклонена fail-closed");
+        }
+    }
+
+    [Fact]
+    public void Create_ПривязаннаяРольСFeatureId_Принята()
+    {
+        var epic = CreateEpic("u");
+        foreach (var role in BoundRoles)
+        {
+            var task = _sut.Create(null, "u", new CreateTaskRequest("t", FeatureId: epic.Id, Role: role));
+            task.FeatureId.Should().Be(epic.Id);
+            task.Role.Should().Be(role);
+        }
+    }
+
+    [Fact]
+    public void Create_ПривязаннаяРольСНесуществующимFeatureId_Отказ()
+    {
+        foreach (var role in BoundRoles)
+        {
+            var act = () => _sut.Create(null, "u",
+                new CreateTaskRequest("t", FeatureId: "ghost-epic", Role: role));
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*Фича не найдена*",
+                    $"роль {role} с несуществующим featureId — эпик не найден");
+        }
+    }
+
+    [Fact]
+    public void Create_НеПривязаннаяРольБезFeatureId_Принята()
+    {
+        foreach (var role in TaskRoles.FeatureIdOptional)
+        {
+            var task = _sut.Create(null, "u", new CreateTaskRequest("t", Role: role));
+            task.Role.Should().Be(role);
+            task.FeatureId.Should().BeNull();
+        }
+    }
+
     [Fact]
     public void Update_ПоляФичи_ПрименяютсяИСбрасываются()
     {
@@ -1079,9 +1136,11 @@ public class TaskManagerTests : IDisposable
     [Fact]
     public void Create_ИзЧатаГдеИсполнительИмеетЗадачуНеFeature_НаследованияНет()
     {
-        // Родитель — обычный шаг (Role=step), не эпик фичи
+        // Родитель — обычный шаг (Role=step), не эпик фичи. featureId обязателен у step
+        // (fail-closed, дефект d0b2ff78), но на наследование не влияет: оно смотрит Role.
+        var epic = CreateEpic("u");
         var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
-            Role: TaskRoles.Step));
+            FeatureId: epic.Id, Role: TaskRoles.Step));
         _sut.MarkClaudeStarted(step.Id, "sess-step", DateTime.UtcNow);
 
         var child = _sut.Create(null, "u", new CreateTaskRequest("ребёнок",

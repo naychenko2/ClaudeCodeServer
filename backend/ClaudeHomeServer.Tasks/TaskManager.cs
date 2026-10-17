@@ -276,6 +276,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             throw new InvalidOperationException(
                 $"Недопустимая роль фичи «{role}». Допустимые: {string.Join(", ", TaskRoles.All)}.");
 
+        // Привязанная к фиче роль (не feature/cut/plan) обязана указывать на живой эпик:
+        // иначе задача «висяк» — роль есть, а фичи нет (fail-closed, шаг 1.2). featureId
+        // null для не-привязанных ролей (feature/cut/plan) — валидно, как и раньше.
+        if (role is not null && !TaskRoles.FeatureIdOptional.Contains(role) && featureId is null)
+            throw new InvalidOperationException(
+                $"Роль {role} требует featureId — укажите id эпика фичи.");
+
         // verdict — только из списка TaskVerdicts
         if (verdict is not null && !TaskVerdicts.All.Contains(verdict))
             throw new InvalidOperationException(

@@ -21,6 +21,11 @@ public static class TaskRoles
 
     public static readonly IReadOnlyList<string> All =
         [Feature, Cut, Plan, Step, Rework, Review, Qa, Final, Merge, Consult];
+
+    // Роли, которым featureId НЕ обязателен: эпик фичи (сам эпик — FeatureId=null, он и
+    // есть фича) и cut/plan (семантика без привязки к эпика). Прочие роли (step/rework/
+    // review/qa/final/merge/consult) — «висяк» без эпика, fail-closed требует featureId.
+    public static readonly IReadOnlyList<string> FeatureIdOptional = [Feature, Cut, Plan];
 }
 
 // Исход витка (вердикт) ревью/проверки/финала.

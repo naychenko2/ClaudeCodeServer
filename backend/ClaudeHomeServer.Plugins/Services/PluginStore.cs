@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 
@@ -102,14 +103,18 @@ public class PluginStore
     // не список, а исход операции). <paramref name="mutate"/> мутирует <paramref name="records"/>
     // на месте и возвращает результат; метод сохраняет (мутированный) <paramref name="records"/>
     // и отдаёт результат.
+    // minor: сохранять ТОЛЬКО при изменении (сравнение старого и нового): no-op операция
+    // (NotFound/BadRequest) не должна переписывать файл лишний раз.
     public T Update<T>(string ownerId, Func<List<PluginInstall>, T> mutate)
     {
         lock (_lock)
         {
             var path = InstalledFile(ownerId);
             var records = (JsonFileStore.Load<List<PluginInstall>>(path) ?? []).ToList();
+            var before = JsonSerializer.Serialize(records);
             var result = mutate(records);
-            JsonFileStore.Save(path, records);
+            if (JsonSerializer.Serialize(records) != before)
+                JsonFileStore.Save(path, records);
             return result;
         }
     }

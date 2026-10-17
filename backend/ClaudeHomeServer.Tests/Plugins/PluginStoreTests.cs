@@ -100,6 +100,54 @@ public class PluginStoreTests
         act.Should().Throw<ArgumentException>();
     }
 
+    // --- minor: Update<T> — без записи при неизменности (no-op операция, напр. NotFound,
+    // не переписывает installed.json лишний раз) ---
+
+    [Fact]
+    public void Update_T_NoOp_НеПереписываетФайл()
+    {
+        var store = NewStore(out _);
+        store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        var path = store.InstalledFile("owner-a");
+        var t1 = File.GetLastWriteTimeUtc(path);
+
+        // no-op: записи «ghost» нет → список не мутируется → файл не переписывается.
+        Thread.Sleep(20); // чтобы отметка времени отличалась, если запись всё же произойдёт
+        var found = store.Update<bool>("owner-a", records => records.Any(r => r.Id == "ghost"));
+
+        found.Should().BeFalse("записи с id ghost нет");
+        File.GetLastWriteTimeUtc(path).Should().Be(t1, "no-op Update<T> не переписывает installed.json");
+    }
+
+    [Fact]
+    public void Update_T_СИзменением_ПереписываетФайл()
+    {
+        var store = NewStore(out _);
+        store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        var path = store.InstalledFile("owner-a");
+        var t1 = File.GetLastWriteTimeUtc(path);
+
+        // мутация: меняем Enabled → список изменился → файл переписывается.
+        Thread.Sleep(20);
+        store.Update<bool>("owner-a", records =>
+        {
+            var r = records.Single(x => x.Id == "local-a/pkg");
+            r.Enabled = false;
+            return true;
+        });
+
+        File.GetLastWriteTimeUtc(path).Should().NotBe(t1, "Update<T> с изменением переписывает installed.json");
+        store.LoadInstalled("owner-a").Single().Enabled.Should().BeFalse();
+    }
+
     // --- IPluginDirSource: фильтры ---
 
     [Fact]

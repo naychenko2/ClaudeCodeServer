@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -64,6 +65,13 @@ public class PluginPackageValidator
 
     // Единая точка разбора манифеста (rework C3): поля plugin.json/ccs-plugin.json.
     private readonly PluginManifestReader _manifestReader = new();
+
+    // M10: allowed-tools как КЛЮЧ (не подстрока в описании): `allowed-tools:` /
+    // `"allowed-tools":` (в кавычках и без, любой регистр) + двоеточие.
+    // `description: uses allowed-tools for X` (описание) — без двоеточия после ключа →
+    // не отбивается.
+    private static readonly Regex AllowedToolsKeyRegex =
+        new(@"[""']?allowed-tools[""']?\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
     /// Валидирует пакет по корневому каталогу <paramref name="packageRoot"/>.
@@ -261,68 +269,24 @@ public class PluginPackageValidator
         return false;
     }
 
-    // M10: исполняемый .md — frontmatter `allowed-tools` (Bash без запроса) и
-    // `!`cmd`` в теле (shell-исполнение при вызове). Спайк plugin-dir-allowed-tools:
-    // оба механизма дают агенту Bash, нарушая «навык не даёт новых возможностей» (ADR §4).
+    // M10: исполняемый .md — проверка ВСЕГО текста, без разбора фронтматтера: парсер
+    // CLI 2.1.301 расходится с нашим (fenced ```!, `--- ` с пробелом, кавычечные ключи,
+    // `---` посреди строки), и ключ может спрятаться в любой части файла. Спайк
+    // plugin-dir-allowed-tools: оба механизма дают агенту Bash, нарушая «навык не даёт
+    // новых возможностей» (ADR §4).
     private static void CheckExecutableMd(PackageFile file, List<PluginPackageProblem> problems)
     {
         string content;
         try { content = File.ReadAllText(file.FullPath); }
         catch (IOException) { return; } // битая symlink — уже no-symlink
 
-        var (frontmatter, body) = SplitFrontmatter(content);
-
-        if (HasFrontmatterKey(frontmatter, "allowed-tools"))
+        if (AllowedToolsKeyRegex.IsMatch(content))
             problems.Add(new PluginPackageProblem("deny-allowed-tools",
-                $"Фронтматтер allowed-tools (Bash без запроса): {file.RelativePath}"));
+                $"Ключ allowed-tools (Bash без запроса): {file.RelativePath}"));
 
-        if (body.Contains("!`", StringComparison.Ordinal))
+        if (content.Contains("!`", StringComparison.Ordinal) || content.Contains("```!", StringComparison.Ordinal))
             problems.Add(new PluginPackageProblem("deny-backtick-exec",
                 $"Backtick-команда !`…` (исполняет shell): {file.RelativePath}"));
-    }
-
-    // Разделить файл на (frontmatter, тело). Frontmatter — между первой строкой `---`
-    // (в самом начале файла) и следующей строкой `---`. Нет фронтматтера → ("", content).
-    private static (string Frontmatter, string Body) SplitFrontmatter(string content)
-    {
-        var firstNewline = content.IndexOf('\n');
-        if (firstNewline < 0) return ("", content);
-        var firstLine = content[..firstNewline].TrimEnd('\r');
-        if (firstLine != "---") return ("", content);
-
-        // Ищем закрывающую строку `---` после первой.
-        var rest = content[(firstNewline + 1)..];
-        var lines = rest.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-        {
-            if (lines[i].TrimEnd('\r') == "---")
-            {
-                var fm = string.Join("\n", lines, 0, i);
-                var body = string.Join("\n", lines, i + 1, lines.Length - i - 1);
-                return (fm, body);
-            }
-        }
-        // Открытый фронтматтер (нет закрывающего ---) — весь остаток считаем телом.
-        return ("", content);
-    }
-
-    // Ключ в YAML-фронтматтере? Строка вида `key: ...` в начале строки (без отступа).
-    // Любое значение (скаляр, список, объект) — ключ присутствует.
-    private static bool HasFrontmatterKey(string frontmatter, string key)
-    {
-        var prefix = key + ":";
-        foreach (var line in frontmatter.Split('\n'))
-        {
-            var trimmed = line.TrimEnd('\r');
-            if (trimmed.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                // Ключ, а не подстрока в значении: после `key:` — пробел/конец/значение.
-                var after = trimmed[prefix.Length..];
-                if (after.Length == 0 || after[0] == ' ' || after[0] == '\t')
-                    return true;
-            }
-        }
-        return false;
     }
 
     // Выход за корень: «..» как компонент пути (любым разделителем) или ведущий разделитель

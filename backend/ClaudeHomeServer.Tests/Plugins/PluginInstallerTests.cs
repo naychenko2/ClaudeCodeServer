@@ -147,6 +147,98 @@ public class PluginInstallerTests : IDisposable
         result.Error!.Should().Contain("не найден");
     }
 
+    // --- minor 2: draft:«.» — slug-грамматика (как у PluginId) отбивает «.» → 400 с
+    // понятной причиной (раньше «.» проходила и резолвилась в сам каталог _drafts) ---
+
+    [Fact]
+    public void Install_MetkaDraftTochka_ОтдаётFail()
+    {
+        // «draft:.» — параметр «.» не по грамматике slug [a-z0-9-]+ → 400 (Fail),
+        // а не 500 от SafePath.Join (Path.GetFullPath нормализует «.» в сам каталог).
+        var result = _sut.Install(Owner, "draft:.");
+        result.Status.Should().Be(InstallStatus.Fail);
+        result.Error!.Should().Contain("Недопустимый параметр метки источника");
+    }
+
+    // --- TOCTOU: запись (id) и пакет (файлы, sha256) не разходятся: манифест читается из
+    // staging-копии (того, что перемещается в target), не из источника.
+    //
+    // Детерминированная гонка: фон-поток меняет id в ccs-plugin.json источника на OtherId.
+    //   FIX  (copy → read из staging): staging — снапшот; запись и пакет берут id из одного
+    //         снапшота → совпадают (и запись, и пакет имеют тот же id).
+    //   МУТАЦИЯ (read из source → copy): read и copy — по разные стороны изменения → запись
+    //         (id из read) и пакет (id из copy) разъехались → id в записи ≠ id в пакете.
+    // Т.е. мутация даёт расхождение id между записью и перемещённым пакетом → тест ловит. ---
+
+    [Fact]
+    public void TOCTOU_МанифестИзStaging_ЗаписьСовпадаетСПакетом()
+    {
+        const string OrigId = "local-a/pkg";
+        const string OtherId = "local-a/other";
+        var source = CreateDraft(OrigId, "1.0.0");
+        var manifestPath = Path.Combine(_store.DraftDir(Owner, "pkg"), "ccs-plugin.json");
+
+        // Фон-поток: в плотном цикле чередует id в манифесте источника (OrigId ↔ OtherId)
+        // атомарной записью (tmp + rename), чтобы изменение гарантированно попало в окно между
+        // read и copy (гонка TOCTOU): read и copy увидят разные значения.
+        // Два предсериализованных варианта манифеста (id=OrigId / id=OtherId): цикл
+        // просто чередует их запись (write + rename), без чтения — максимально быстро.
+        string MakeManifestJson(string id) => JsonSerializer.Serialize(new
+        {
+            id, name = "Pkg", version = "1.0.0",
+            contributes = new { skills = new[] { "skills/a" } },
+            permissions = new { requested = new[] { "notes:read" } },
+        }, new JsonSerializerOptions { WriteIndented = true });
+        var jsonOrig = MakeManifestJson(OrigId);
+        var jsonOther = MakeManifestJson(OtherId);
+
+        // .tmp-файл — в отдельном каталоге (не в source), чтобы CopyDirectoryNoSymlinks
+        // не увидел его при перечислении source (гонка: rename ещё не завершён).
+        var tmpDir = Path.Combine(Path.GetTempPath(), "ccs_toctou_tmp_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmpDir);
+        var stop = new ManualResetEvent(initialState: false);
+        var writer = new Thread(() =>
+        {
+            var toOther = true;
+            while (true)
+            {
+                // Плотный цикл: чередовать id как можно чаще (write + rename), чтобы
+                // изменение гарантированно попало в окно между copy и read (гонка TOCTOU).
+                // stop.WaitOne(0) — неблокирующая проверка (возвращает сразу), не замедляет цикл.
+                if (stop.WaitOne(0)) return;
+                try
+                {
+                    var tmp = Path.Combine(tmpDir, "ccs-plugin.json");
+                    File.WriteAllText(tmp, toOther ? jsonOther : jsonOrig);
+                    File.Move(tmp, manifestPath, overwrite: true); // замена (не атомарно между каталогами — ок для теста)
+                }
+                catch { return; }
+                toOther = !toOther;
+            }
+        }) { IsBackground = true };
+        writer.Start();
+
+        try
+        {
+            var result = _sut.Install(Owner, source);
+            result.Status.Should().Be(InstallStatus.Ok);
+        }
+        finally
+        {
+            stop.Set();
+            writer.Join(2000);
+            try { Directory.Delete(tmpDir, recursive: true); } catch { }
+        }
+
+        // Запись (id из манифеста) и пакет (файлы, sha256) не разойдутся.
+        var record = _store.LoadInstalled(Owner).Single();
+        var targetDir = _store.PackageDir(Owner, record.Id, record.Version);
+        var (targetManifest, _) = PluginInstaller.ReadManifest(targetDir);
+        targetManifest.Should().NotBeNull("манифест перемещён вместе с пакетом");
+        targetManifest!.Id.Should().Be(record.Id,
+            "id из перемещённого пакета = id в записи (TOCTOU: оба из одного снапшота)");
+    }
+
     [Fact]
     public void Install_SourceПисетсяКакМетка()
     {

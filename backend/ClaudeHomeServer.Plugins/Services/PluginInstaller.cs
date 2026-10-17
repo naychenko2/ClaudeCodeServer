@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Plugins;
@@ -52,48 +53,57 @@ public class PluginInstaller
         if (!Directory.Exists(sourceDir))
             return InstallResult.Fail($"Каталог источника не найден: {sourceLabel}");
 
-        // 1) Манифест: id + version (источник правды о пакете).
-        var (manifest, manifestError) = ReadManifest(sourceDir);
-        if (manifestError is not null)
-            return InstallResult.Fail(manifestError);
-        if (manifest is null || string.IsNullOrWhiteSpace(manifest.Id) || string.IsNullOrWhiteSpace(manifest.Version))
-            return InstallResult.Fail("Манифест пакета не найден или без id/version");
-
-        // M3: формат id/version из манифеста — 400 ДО SafePath.Join (иначе «..» в id/version
-        // дал бы UnauthorizedAccessException = 500, а не 400). Единый метод PluginId/PluginVersion.
-        if (!PluginId.IsValid(manifest.Id))
-            return InstallResult.Fail($"Недопустимый формат id пакета: {manifest.Id}");
-        if (!PluginVersion.IsValid(manifest.Version))
-            return InstallResult.Fail($"Недопустимый формат version пакета: {manifest.Version}");
-
-        var id = manifest.Id;
-        var version = manifest.Version;
-
-        // manifest.Validate() ДО копирования: неизвестное право / нет вклада → 400, и пакет
-        // ещё не перемещён (раньше валидировался только в grant; установка могла принять
-        // битый манифест, а проверка после Move дала бы «половинную» установку).
-        var manifestValidation = manifest.Validate();
-        if (!manifestValidation.IsValid)
-            return InstallResult.FailValidation(manifestValidation.Problems
-                .Select(p => new PluginPackageProblem(p.Code, p.Message)).ToList());
-
         // M5: атомарная установка — сначала копирование во временный .staging-{guid}
-        // (своя рекурсия, не заходит в reparse-point'ы), затем валидация и хеш КОПИИ
-        // (TOCTOU: источник мог измениться между валидацией и копированием), затем
-        // Directory.Move поверх старого каталога (нет «половинного» пакета на диске).
-        var targetDir = _store.PackageDir(ownerId, id, version);
-        var stagingDir = Path.Combine(Path.GetDirectoryName(targetDir)!, $".staging-{Guid.NewGuid():N}");
+        // (своя рекурсия, не заходит в reparse-point'ы), затем валидация и хеш КОПИИ,
+        // затем Directory.Move поверх старого каталога (нет «половинного» пакета на диске).
+        // TOCTOU: staging-каталог — в packages/ (сibling целевого), чтобы id/version из
+        // staging-манифеста не требовали PackageDir ДО копирования.
+        var packagesRoot = SafePath.Join(_store.OwnerRoot(ownerId), PluginStore.PackagesDirName);
+        var stagingDir = Path.Combine(packagesRoot, $".staging-{Guid.NewGuid():N}");
         string? sha256 = null;
+        PluginManifest? manifest = null;
+        string? id = null;
+        string? version = null;
         try
         {
             Directory.CreateDirectory(stagingDir);
             CopyDirectoryNoSymlinks(sourceDir, stagingDir);
+
+            // 1) Манифест — из STAGING-копии (не источника): запись и пакет не разойдутся
+            // (TOCTOU: источник мог измениться между чтением манифеста и копированием).
+            var (readManifest, manifestError) = ReadManifest(stagingDir);
+            if (manifestError is not null)
+                return InstallResult.Fail(manifestError);
+            if (readManifest is null || string.IsNullOrWhiteSpace(readManifest.Id) || string.IsNullOrWhiteSpace(readManifest.Version))
+                return InstallResult.Fail("Манифест пакета не найден или без id/version");
+            PluginManifest m = readManifest; // non-null после проверки выше
+
+            // M3: формат id/version из манифеста — 400 ДО PackageDir (иначе «..» в id/version
+            // дал бы UnauthorizedAccessException = 500, а не 400). Единый метод PluginId/PluginVersion.
+            if (!PluginId.IsValid(m.Id))
+                return InstallResult.Fail($"Недопустимый формат id пакета: {m.Id}");
+            if (!PluginVersion.IsValid(m.Version))
+                return InstallResult.Fail($"Недопустимый формат version пакета: {m.Version}");
+            id = m.Id;
+            version = m.Version;
+
+            // manifest.Validate(): неизвестное право / нет вклада → 400, и пакет ещё не
+            // перемещён (раньше валидировался только в grant; установка могла принять битый
+            // манифест, а проверка после Move дала бы «половинную» установку).
+            var manifestValidation = m.Validate();
+            if (!manifestValidation.IsValid)
+                return InstallResult.FailValidation(manifestValidation.Problems
+                    .Select(p => new PluginPackageProblem(p.Code, p.Message)).ToList());
 
             // Валидация копии (не источника): sha256 — того, что будет перемещено.
             var validation = _validator.Validate(stagingDir);
             if (!validation.IsValid)
                 return InstallResult.FailValidation(validation.Problems);
             sha256 = validation.Sha256!;
+
+            manifest = m;
+
+            var targetDir = _store.PackageDir(ownerId, id, version);
 
             // M6: повторная установка того же пакета (совпал sha) — no-op: вернуть
             // существующую запись, Granted/Secrets не сбрасываем.
@@ -105,8 +115,10 @@ public class PluginInstaller
             if (existing is not null && existing.Sha256 != sha256)
                 return InstallResult.Conflict(id, version);
 
-            // Атомарная замена: удалить старый, переместить копию.
+            // Атомарная замена: удалить старый, переместить копию. Родитель target
+            // (packages/{id}) создаём явно: staging лежит в packages/, а не в packages/{id}/.
             if (Directory.Exists(targetDir)) Directory.Delete(targetDir, recursive: true);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetDir)!);
             Directory.Move(stagingDir, targetDir);
         }
         finally
@@ -118,10 +130,10 @@ public class PluginInstaller
         // sha256 здесь не null: валидация копии прошла (иначе return FailValidation внутри try).
         var record = new PluginInstall
         {
-            Id = id,
-            Version = version,
+            Id = id!,
+            Version = version!,
             Sha256 = sha256!,
-            Requested = manifest.Permissions?.Requested ?? [],
+            Requested = manifest!.Permissions?.Requested ?? [],
             Granted = [],
             Enabled = true,
             Source = sourceLabel,
@@ -149,15 +161,15 @@ public class PluginInstaller
         return (null, source);
     }
 
-    // minor 2: параметр метки (slug после «draft:»/«upload:») — по грамматике slug:
-    // непустой, без разделителей пути и не «..» (иначе SafePath.Join даст 500, а не 400).
+    // minor 2: параметр метки (slug после «draft:»/«upload:») — по грамматике slug
+    // (как slug в PluginId, [a-z0-9-]+): непустой, без разделителей пути, без «..» и «.»
+    // (иначе SafePath.Join даст 500, а не 400).
+    private static readonly Regex SlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
+
     private static bool IsLabelParamValid(string? param)
     {
         if (string.IsNullOrWhiteSpace(param)) return false;
-        if (param.Contains('/', StringComparison.Ordinal)) return false;
-        if (param.Contains('\\', StringComparison.Ordinal)) return false;
-        if (param == "..") return false;
-        return true;
+        return SlugRegex.IsMatch(param);
     }
 
     // Манифест пакета: ccs-plugin.json → plugin.json → .claude-plugin/plugin.json (порядок
@@ -226,6 +238,8 @@ public class PluginInstaller
     // Воссоздать symlink <paramref name="link"/> → target'у <paramref name="entry"/>
     // (target берём как он задан, resolveFinalComponent=false). Битая/непубличная ссылка —
     // не фатально: просто не создаём (валидатор и так отбьёт no-symlink по исходнику).
+    // Ловим и UnauthorizedAccessException (noexec/ACL на staging-каталоге): иначе 500,
+    // а битая ссылка молча выпадала бы из копии.
     private static void CreateSymlink(string entry, string dest)
     {
         try
@@ -234,6 +248,7 @@ public class PluginInstaller
             if (target is not null) File.CreateSymbolicLink(dest, target);
         }
         catch (IOException) { /* битая ссылка — см. выше */ }
+        catch (UnauthorizedAccessException) { /* нет прав на создание ссылки — см. выше */ }
     }
 }
 

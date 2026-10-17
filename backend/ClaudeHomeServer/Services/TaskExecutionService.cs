@@ -612,8 +612,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         sb.AppendLine("- Статус веди через tasks_*: задача уже inProgress, подзадачи отмечай tasks_toggle_subtask.");
         sb.AppendLine("- Готово = проверено и закрыто через tasks_complete с resultMarkdown (итог) " +
                       "и linkedFiles (итоговые файлы, если есть).");
-        sb.AppendLine("- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests` " +
-                      "; `run_in_background`, Monitor и фоновые " +
+        sb.AppendLine("- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests`; " +
+                      "`run_in_background`, Monitor и фоновые " +
                       "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.");
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
@@ -673,8 +673,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         sb.AppendLine("- Делегировал часть работы субагенту — не доверяй его отчёту на слово, проверь результат сам.");
         sb.AppendLine("- ОСТАНОВИСЬ после первой успешной верификации: не полируй сделанное и не выдумывай " +
                       "дополнительную работу сверх постановки.");
-        sb.AppendLine("- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests` " +
-                      "; `run_in_background`, Monitor и фоновые " +
+        sb.AppendLine("- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests`; " +
+                      "`run_in_background`, Monitor и фоновые " +
                       "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.");
         sb.AppendLine("- Не выходи за рамки задачи и не трогай несвязанное.");
         sb.AppendLine("- Не заявляй завершение раньше времени: «почти готово» — это не готово.");

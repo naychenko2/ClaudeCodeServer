@@ -253,13 +253,14 @@ describe('buildIntervals: доля попаданий из СУММ приращ
     expect(intervals[0].kvUsage).toBe(0.8);
   });
 
-  it('выработка — среднее ненулевых; вытеснения — сумма', () => {
+  it('выработка = Σ genTokens / длина интервала; вытеснения — сумма', () => {
     const samples = [
-      sample({ t: 5_000, throughput: 100, running: 1, preemptions: 2 }),
-      sample({ t: 10_000, throughput: 200, running: 1, preemptions: 3 }),
+      sample({ t: 5_000, genTokens: 300, itlSeconds: 1, preemptions: 2 }),
+      sample({ t: 10_000, genTokens: 300, itlSeconds: 1, preemptions: 3 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].throughput).toBe(150);
+    // Σ genTokens = 600; интервал 30 с → 600/30 = 20
+    expect(intervals[0].throughput).toBeCloseTo(20, 6);
     expect(intervals[0].preemptions).toBe(5);
   });
 
@@ -276,9 +277,10 @@ describe('buildIntervals: доля попаданий из СУММ приращ
   });
 
   it('пустой интервал (точек нет) — null; интервалы не смешиваются', () => {
-    const samples = [sample({ t: 5_000, throughput: 100, running: 1, prefixHits: 10, prefixQueries: 20 })];
+    const samples = [sample({ t: 5_000, genTokens: 300, itlSeconds: 1, prefixHits: 10, prefixQueries: 20 })];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].throughput).toBe(100);
+    // interval 0 = 30 с; Σ genTokens = 300 → 300/30 = 10
+    expect(intervals[0].throughput).toBeCloseTo(10, 6);
     expect(intervals[0].prefix).toBeCloseTo(0.5, 6);
     // второй интервал пуст
     expect(intervals[1].throughput).toBeNull();
@@ -689,8 +691,22 @@ describe('buildIntervals: скорость генерации и «выдано 
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
     // скорость генерации = 200/2 = 100 — паузы в знаменатель не входят
     expect(intervals[0].perStream).toBeCloseTo(100, 6);
-    // выдано стендом = среднее (40+0+0)/3 — паузы размывают (так и задумано)
-    expect(intervals[0].throughput).toBeCloseTo(40 / 3, 6);
+    // выдано стендом = Σ genTokens / 15 с = 200/15 ≈ 13.3 — паузы размывают (так и задумано)
+    expect(intervals[0].throughput).toBeCloseTo(200 / 15, 6);
+  });
+
+  it('один агент в простое: throughput интервала ≤ perStream (часть времени в декодировании не тратилась)', () => {
+    const samples = [
+      sample({ t: 0, genTokens: 100, itlSeconds: 2 }),    // 100 токенов за 2 с декодирования
+      sample({ t: 5000, genTokens: 0, itlSeconds: 0 }),    // простой
+      sample({ t: 10000, genTokens: 0, itlSeconds: 0 }),  // простой
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    // perStream = 100/2 = 50 (скорость в декодировании); throughput = 100/15 ≈ 6.7 (за весь интервал)
+    expect(intervals[0].perStream).toBeCloseTo(50, 6);
+    expect(intervals[0].throughput).toBeCloseTo(100 / 15, 6);
+    // «всего по стенду» за 15 с не превышает скорость в декодировании: агент простаивал
+    expect(intervals[0].throughput as number).toBeLessThanOrEqual(intervals[0].perStream as number);
   });
 
   it('два агента параллельно: выдано стендом выше скорости генерации на поток', () => {
@@ -712,16 +728,17 @@ describe('buildIntervals: скорость генерации и «выдано 
   });
 });
 
-describe('avgIssuedOf: «выдано стендом» за окно — среднее с простоем', () => {
-  it('нули простоя входят в среднее; null пропускается', () => {
+describe('avgIssuedOf: «выдано стендом» за окно — Σ genTokens / длина окна', () => {
+  it('Σ genTokens / (tMax − tMin); простой (genTokens=0) размывает, null не входит в сумму', () => {
     const samples = [
-      sample({ t: 1, throughput: 100 }),
-      sample({ t: 2, throughput: 0 }),
-      sample({ t: 3, throughput: null }),
+      sample({ t: 0, genTokens: 300 }),
+      sample({ t: 10_000, genTokens: 0 }),     // простой
+      sample({ t: 20_000, genTokens: null }),   // разрыв — не в сумму, но в длину окна
     ];
-    expect(avgIssuedOf(samples)).toBeCloseTo(50, 6);
+    // span = 20_000 − 0 = 20 с; Σ genTokens = 300 → 300/20 = 15
+    expect(avgIssuedOf(samples)).toBeCloseTo(15, 6);
   });
-  it('нет данных → null', () => {
+  it('нет точек с genTokens → null', () => {
     expect(avgIssuedOf([sample({ t: 1 })])).toBeNull();
   });
 });

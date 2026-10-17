@@ -1,7 +1,6 @@
 // Вкладка «LLM» панели «Локальные модели»: сверху вниз — жива ли модель →
-// очередь → как быстро → нагрузка и кэш → чем забита память → что с картами →
-// кто на ней (макет docs/mockups/local-model-stats-panel.html, раздел
-// «Спецификация для Киры»).
+// очередь → как быстро → нагрузка и кэш → что с картами → кто на ней
+// (макет docs/mockups/local-model-stats-panel.html, раздел «Спецификация для Киры»).
 //
 // Состояния: notConnected — пустое состояние с кнопкой в «Поставщики моделей»;
 // down — баннер «не отвечает с HH:MM» + последние данные приглушённые (opacity .55,
@@ -15,7 +14,7 @@ import { Button, EmptyState } from '../../components/ui';
 import { requestOpenModelsSpend } from '../../lib/modelProvidersNav';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelStats } from './api';
-import { formatPerc, formatSince, formatTps, formatUpdatedAt, gpuCountLabel, whoRows, type WhoRow } from './format';
+import { formatSince, formatTps, formatUpdatedAt, gpuCountLabel, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
 import { GpuCard } from './GpuCard';
 import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
@@ -199,62 +198,6 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === Полосы памяти ===
-// Дорожка C.track 6 px; KV-кэш — C.accent (warning при переполнении), тир в RAM — C.info.
-function Meter({ perc, color }: { perc: number; color: string }) {
-  const w = Math.max(0, Math.min(100, perc));
-  return (
-    <div style={{ height: 6, background: C.track, borderRadius: R.max, overflow: 'hidden', margin: `${SP.xs}px 0 ${SP.xxs}px` }}>
-      <div style={{ width: `${w}%`, height: '100%', borderRadius: R.max, background: color }} />
-    </div>
-  );
-}
-
-function KvRow({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: SP.md, fontSize: FS.sm, padding: `${SP.xxs}px 0` }}>
-      <span style={{ color: danger ? C.dangerText : C.textSecondary }}>{k}</span>
-      <span style={{ fontFamily: FONT.mono, fontWeight: 600, color: danger ? C.dangerText : C.textPrimary, whiteSpace: 'nowrap' }}>{v}</span>
-    </div>
-  );
-}
-
-// === «Память» ===
-// Только то, чего НЕТ на графике «Кэш, %»: занятость тира в RAM (метр) и
-// «Вытеснения за 15 мин» (красным, только > 0). «Занято KV-кэша» / «попадания в
-// кэш» / «из RAM» — уже серии графика (но с окном графика, а не 60 с), поэтому
-// из карточки убраны, чтобы не дублировать под тем же именем. Пояснение «это не
-// заполненность памяти» перенесено в подсказку серии «занято» на графике.
-// Карточка выродилась (ни тира, ни вытеснений) — не рисуется вовсе.
-function MemoryCard({ data }: { data: LocalModelStats }) {
-  if (data.kv == null) {
-    return <Card title="Память"><NotReported data={data} /></Card>;
-  }
-  const kv = data.kv;
-  const preemptions = kv.preemptions15m ?? 0;
-  const hasRamTier = kv.ramTierPerc != null;
-  if (!hasRamTier && preemptions <= 0) return null;
-  return (
-    <Card title="Память">
-      {hasRamTier && (
-        <>
-          <KvRow k="Тир в RAM" v={formatPerc(kv.ramTierPerc)} />
-          <Meter perc={(kv.ramTierPerc ?? 0) * 100} color={C.info} />
-        </>
-      )}
-      {preemptions > 0 && (
-        <>
-          {hasRamTier && <div style={{ height: SP.xs }} />}
-          <KvRow k="Вытеснения за 15 мин" v={String(preemptions)} danger />
-          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, marginTop: SP.xxs }}>
-            Запросы выбивают друг друга из кэша и читают промпт заново — отсюда медленные ответы.
-          </div>
-        </>
-      )}
-    </Card>
-  );
-}
-
 // === «Видеокарты»: карточка на каждую карту текстового стенда ===
 // gpus === null — блока нет вовсе (макет: карта медиа на другом узле сюда не
 // попадает); пустой массив — тоже нет.
@@ -426,7 +369,6 @@ function TextTabSkeleton() {
       <div style={block(76)} />
       {/* «Нагрузка и кэш»: 280 px — карточка без поля вытеснений (самое частое состояние) */}
       <div style={block(280)} />
-      <div style={block(110)} />
       <div style={block(120)} />
       <div style={block(110)} />
     </div>
@@ -463,10 +405,8 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
         <NowCard data={data} />
         <SpeedCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
-        {/* «Память» — под «Нагрузка и кэш» (замечание Андрея): кэш на графике и
-            занятость в таблице рядом, а не разбросенные по вкладке */}
-        <MemoryCard data={data} />
-        {/* «Видеокарты» — под памятью: детали железа (nvidia-smi), а не живая нагрузка */}
+        // TODO: вернуть MemoryCard после фикса заполненности RAM-тира (ADR-029 v2.4)
+        {/* «Видеокарты» — детали железа (nvidia-smi), а не живая нагрузка */}
         <GpusCard data={data} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>

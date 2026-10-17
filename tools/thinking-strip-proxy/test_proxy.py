@@ -4,6 +4,7 @@
 import base64
 import contextlib
 import copy
+import gzip
 import http.client
 import io
 import json
@@ -2295,6 +2296,39 @@ class ДетекторМусораTests(unittest.TestCase):
             self.assertFalse(proxy.мусорное_слово(w), w)
 
 
+# Ход 17.10 17:53, дословно до вырождения: дальше сотни строк из одного «-» до конца хода.
+ВЫРОЖДЕНИЕ = ("ImageEditor.Tests зависит-зависит от `FakeImageEditor` (monoлит, "
+              "`ImageEditor/FakeImageEditor.cs`) и `ImageEditorFakes.cs`. Про-типов. Про-ов-\nПроверя-\n")
+
+
+class ЦепочкаБезБуквTests(unittest.TestCase):
+    """Второй признак мусора: run одинаковых «слов» без букв и цифр подряд."""
+
+    def test_вырождение_инцидента_ловится(self):
+        текст = РУССКАЯ_ПРОЗА + ВЫРОЖДЕНИЕ + "-\n" * 150
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(текст, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN}×"), д.причина)
+        # Доля мусорных слов тут ни при чём: без второго признака детектор молчит
+        self.assertIsNone(прогнать_мусор(текст, proxy.ДетекторМусора(run=10 ** 6)))
+
+    def test_цепочка_короче_порога_не_мусор(self):
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "-\n" * (proxy.JUNK_RUN - 1) + РУССКАЯ_ПРОЗА))
+
+    def test_разметка_не_цепочка(self):
+        строки = 3 * proxy.JUNK_RUN
+        случаи = {
+            "список": "".join(f"- пункт {i}\n" for i in range(строки)),
+            "таблица с пустыми ячейками": "| a | b | c |\n|---|---|---|\n" + "| - | - | - |\n" * строки,
+            "дерево": "".join(f"│   ├── файл{i}.cs\n" for i in range(строки)),
+            "разделители между абзацами": (РУССКАЯ_ПРОЗА + "\n---\n") * 10,
+            "цепочка в заборе кода": "```\n" + "-\n" * строки + "```\n" + РУССКАЯ_ПРОЗА,
+        }
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(текст))
+
+
 class МусорСквознойTests(unittest.TestCase):
     """CLI → прокси → vLLM-заглушка с мусором → обрыв без повтора, пометка и счётчики."""
 
@@ -2302,13 +2336,90 @@ class МусорСквознойTests(unittest.TestCase):
 
     def setUp(self):
         ПетляСквознаяTests.setUp(self)
-        self.мусор_был = proxy.JUNK_GUARD
+        self.мусор_был = proxy.JUNK_GUARD, proxy.GUARD_DUMP_DIR, proxy.GUARD_DUMP_KEEP
         proxy.JUNK_GUARD = "on"
+        self.дампы = os.path.join(tempfile.mkdtemp(), "guard")
+        proxy.GUARD_DUMP_DIR = self.дампы
         proxy.stats["junk_aborts"], proxy.stats["junk_words_max_ratio"] = 0, 0.0
+        proxy.stats["guard_dumps"] = 0
 
     def tearDown(self):
-        proxy.JUNK_GUARD = self.мусор_был
+        proxy.JUNK_GUARD, proxy.GUARD_DUMP_DIR, proxy.GUARD_DUMP_KEEP = self.мусор_был
+        shutil.rmtree(os.path.dirname(self.дампы), ignore_errors=True)
         ПетляСквознаяTests.tearDown(self)
+
+    def файлы_дампа(self):
+        return sorted(os.listdir(self.дампы)) if os.path.isdir(self.дампы) else []
+
+    def мета_дампа(self):
+        тела = [f for f in self.файлы_дампа() if f.endswith(".req.json.gz")]
+        self.assertEqual(len(тела), 1, self.файлы_дампа())
+        основа = os.path.join(self.дампы, тела[0][:-len(".req.json.gz")])
+        with gzip.open(основа + ".req.json.gz") as f:
+            тело = json.loads(f.read())
+        with open(основа + ".meta.json", encoding="utf-8") as f:
+            мета = json.load(f)
+        for путь in (основа + ".req.json.gz", основа + ".meta.json"):
+            self.assertEqual(os.stat(путь).st_mode & 0o777, 0o600, путь)
+        self.assertEqual(os.stat(self.дампы).st_mode & 0o777, 0o700)
+        return тело, мета
+
+    def test_дамп_сработки_мусора(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        тело, мета = self.мета_дампа()
+        self.assertEqual(тело, self.Модель.принятые[0], "в дампе ровно то, что ушло в движок")
+        self.assertEqual((мета["guard"], мета["path"], мета["session"]), ("мусор", "/v1/messages", "sess-loop"))
+        self.assertTrue(мета["reason"].startswith("доля"), мета["reason"])
+        self.assertEqual(proxy.stats["guard_dumps"], 1)
+
+    def test_дамп_сработки_вырождения(self):
+        self.Модель.ответы = [поток_ответа([("thinking", "Plan quickly."),
+                                            ("text", ВСТУПЛЕНИЕ + ВЫРОЖДЕНИЕ + "-\n" * 300000)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        _, мета = self.мета_дампа()
+        self.assertTrue(мета["reason"].startswith("цепочка"), мета["reason"])
+        self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
+
+    def test_дамп_сработки_петли(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        тело, мета = self.мета_дампа()
+        self.assertEqual(тело, self.Модель.принятые[0], "дамп первой попытки, не повтора")
+        self.assertEqual((мета["guard"], мета["block"]), ("петля", "text"))
+        self.assertTrue(мета["reason"])
+
+    def test_без_сработки_дампа_нет(self):
+        self.Модель.ответы = [поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.файлы_дампа(), [])
+        self.assertEqual(proxy.stats["guard_dumps"], 0)
+
+    def test_дамп_выключен_без_каталога(self):
+        proxy.GUARD_DUMP_DIR = ""
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        self.assertFalse(os.path.exists(self.дампы))
+        self.assertEqual(proxy.stats["junk_aborts"], 1, "обрыв работает и без дампа")
+
+    def test_хранятся_только_свежие(self):
+        proxy.GUARD_DUMP_KEEP = 2
+        for i in range(4):
+            proxy.dump_guard(json.dumps({"n": i}).encode(), "s", {"guard": "мусор"})
+            time.sleep(0.02)
+        тела = [f for f in self.файлы_дампа() if f.endswith(".req.json.gz")]
+        self.assertEqual(len(тела), 2)
+        self.assertEqual(len(self.файлы_дампа()), 4, "у каждого тела своя мета, сироты удалены")
+        номера = sorted(json.loads(gzip.open(os.path.join(self.дампы, f)).read())["n"] for f in тела)
+        self.assertEqual(номера, [2, 3])
 
     def мусорный_поток(self):
         # Мусор длиннее буферов сокета (~2,5 МБ): иначе заглушка успела бы дописать его до обрыва
@@ -2324,8 +2435,7 @@ class МусорСквознойTests(unittest.TestCase):
         self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
                          ["end_turn"])
         текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
-        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор (vLLM #60174, DFlash2 + prefix "
-                      "cache). Повтори ход.]", текст)
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
         self.assertLess(текст.count("PunchTransfer"), 20, "мусор оборван рано")
         self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
         # Обрыв заглушка замечает на следующей записи в сокет — уже после ответа клиенту

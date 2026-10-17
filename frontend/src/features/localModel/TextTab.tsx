@@ -405,7 +405,6 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
         <NowCard data={data} />
         <SpeedCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
-        // TODO: вернуть MemoryCard после фикса заполненности RAM-тира (ADR-029 v2.4)
         {/* «Видеокарты» — детали железа (nvidia-smi), а не живая нагрузка */}
         <GpusCard data={data} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />

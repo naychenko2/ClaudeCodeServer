@@ -169,30 +169,20 @@ function NowCard({ data }: { data: LocalModelStats }) {
 }
 
 // === «Скорость»: генерация и чтение промпта, ток/с на поток, «сейчас» (окно ~60 с) ===
-// Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат) +
-// «ускорение угадыванием ×N». Среднее и пик за окно графика — ТОЛЬКО у графика
-// (дубль под KPI убран: пик там был из чужой величины — genThroughput суммарно, а
-// среднее — на поток).
+// Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат).
+// Среднее и пик за окно графика — ТОЛЬКО у графика (дубль под KPI убран).
 function SpeedCard({ data }: { data: LocalModelStats }) {
   if (data.speed == null) {
     return <Card title="Скорость"><NotReported data={data} /></Card>;
   }
-  const speedup = data.speed.speculativeSpeedup;
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
         <Kpi
           value={formatTps(data.speed.genPerStream)}
-          label="генерация на одного агента, ток/с, за последнюю минуту"
+          label="генерация на агента, ток/с, за последнюю минуту"
         />
         <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, ток/с, за последнюю минуту" />
-      </div>
-      <div style={{ marginTop: SP.sm }}>
-        <Kpi
-          value={speedup != null ? `×${speedup.toFixed(1)}` : '—'}
-          label="ускорение угадыванием"
-          note="во сколько раз черновая модель ускоряет генерацию. Упало — текст трудный для угадывания (числа, код)"
-        />
       </div>
     </Card>
   );

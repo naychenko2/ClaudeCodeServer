@@ -9,6 +9,9 @@
 // • Доля попаданий считается из СУММ приращений по интервалу, а не средним
 //   долей точек: точка 5 с с одним коротким запросом дала бы 0 % или 100 % и
 //   перевесила бы минуту реальной работы.
+// • Линия throughput интервала = Σ genTokens / длина интервала (сек) — честная
+//   сумма с паузами (выше линии агента при нескольких агентах, ниже — при
+//   простое); null — нет точек с genTokens (молчание/рестарт).
 // • SVG рисуется в реальных px (ResizeObserver), без preserveAspectRatio="none":
 //   подписи осей не сплющиваются, работают токены FS.xs/FONT.mono.
 // • Считывание — одна вертикаль через все три поля + строка-итог над ними.
@@ -60,8 +63,9 @@ export interface ChartGeom {
 export interface Interval {
   tStart: number;
   tEnd: number;
-  // «выдано стендом, с паузами»: среднее genThroughput (Δтокенов/Δвремя по стене) — второй
-  // план графика. null — разрыв (движок молчал/рестарт).
+  // «выдано стендом, с паузами»: Σ genTokens / длина интервала (сек) — честная сумма с
+  // паузами (выше линии агента при нескольких агентах, ниже — при простое). Второй план
+  // графика. null — нет точек с genTokens (движок молчал/рестарт — разрыв).
   throughput: number | null;
   // «скорость генерации» на поток — ГЛАВНАЯ линия: Σ genTokens / Σ itlSeconds. Это измерение
   // vLLM (время, когда модель реально выдавала токены), а не оценка по опросам. null — разрыв
@@ -193,8 +197,8 @@ export function buildPerStreamSegments(
   return buildIntervalSegments(intervals, it => it.perStream, tMin, tMax, maxSeries, geom);
 }
 
-// Второй план «выдано стендом, с паузами»: среднее genThroughput по интервалу
-// (Δтокенов/Δвремя по стене), null — обрыв.
+// Второй план «выдано стендом, с паузами»: Σ genTokens / длина интервала (сек),
+// null — обрыв.
 export function buildIssuedSegments(
   intervals: Interval[],
   tMin: number,
@@ -346,14 +350,21 @@ export function avgPerStreamOf(samples: ThroughputSample[]): number | null {
   return any && sumItl > 0 ? sumGen / sumItl : null;
 }
 
-// «Выдано стендом, с паузами» за окно: среднее genThroughput по всем точкам, где оно != null
-// (простой входит нулями — серия показывает стенд целиком). null — движок молчал всё окно.
+// «Выдано стендом, с паузами» за окно: Σ genTokens / длина окна (сек) — честная сумма
+// с паузами (выше линии агента при нескольких агентах, ниже — при простое). Простой
+// (genTokens=0) размывает, null (молчание) не входит в сумму, но входит в длину окна.
+// null — нет ни одной точки с genTokens (молчание/рестарт всё окно).
 export function avgIssuedOf(samples: ThroughputSample[]): number | null {
-  let sum = 0, n = 0;
+  let sumGen = 0, hasGen = false;
+  let tMin = Infinity, tMax = -Infinity;
   for (const s of samples) {
-    if (s.throughput != null) { sum += s.throughput; n++; }
+    if (s.genTokens != null) { sumGen += s.genTokens; hasGen = true; }
+    if (s.t < tMin) tMin = s.t;
+    if (s.t > tMax) tMax = s.t;
   }
-  return n > 0 ? sum / n : null;
+  if (!hasGen) return null;
+  const windowSec = (tMax - tMin) / 1000;
+  return windowSec > 0 ? sumGen / windowSec : null;
 }
 
 // Пик скорости генерации за окно: максимум perStream по интервалам. 0 — если данных нет.
@@ -616,10 +627,15 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     // скорость генерации на поток: ΣgenTokens/ΣitlSeconds (измерение vLLM); null — разрыв
     // (молчание/рестарт) или Σitl = 0 (токены не делим на ноль).
     const perStream = r.hasStream && r.sumItl > 0 ? r.sumGen / r.sumItl : null;
+    // «всего по стенду, с паузами»: Σ genTokens / длина интервала (сек) — честная сумма
+    // с паузами (выше линии агента при нескольких агентах, ниже — при простое).
+    // null — нет точек с genTokens (молчание/рестарт — разрыв), а не 0.
+    const intervalSec = (r.tEnd - r.tStart) / 1000;
+    const issued = intervalSec > 0 && r.hasStream ? r.sumGen / intervalSec : null;
     out.push({
       tStart: r.tStart,
       tEnd: r.tEnd,
-      throughput: r.nTp > 0 ? r.sumTp / r.nTp : null,
+      throughput: issued,
       perStream,
       kvUsage: r.maxKv,
       prefix,
@@ -852,7 +868,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const maxT = niceAxisMax(maxSeriesOf(intervals));
   // «в среднем» — скорость генерации на агента за окно: ΣgenTokens/ΣitlSeconds.
   const avg = avgPerStreamOf(samples);
-  // «всего по стенду» за окно: среднее genThroughput (Δтокенов/Δвремя по стене).
+  // «всего по стенду» за окно: Σ genTokens / длина окна (сек) — честная сумма с паузами.
   const issuedAvg = avgIssuedOf(samples);
   const hitAvg = cacheHitAvg(samples);
   const preTotal = preemptionTotal(samples);

@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import base64, gzip, hashlib, http.client, json, os, re, sys, threading, time
+import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time
 from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -343,12 +343,29 @@ LOOP_RETRY_SAMPLING = _parse_kv(os.environ.get("LOOP_RETRY_SAMPLING",
 # JUNK_RATIO и выше — upstream закрывается, ответ обрывается пометкой. Повтора нет: тот же префикс
 # попадёт в тот же кэш и выдаст тот же мусор.
 #
+# 2026-10-17: второй признак — вырождение в цепочку одинаковых «слов» без букв и цифр. Ход
+# 17:53 (контекст 88K, 98,5 % из кэша): «зависит-зависит от (monoлит, ) … Про-ов- Проверя-»,
+# затем больше сотни строк из одного «-» до конца хода. Доля мусорных слов такое не видит
+# (в «-» нет письменностей), детектор петли тоже — «слова» без букв он выкидывает намеренно,
+# ради таблиц. Списки, таблицы и разделители чередуют такие «слова» с текстом, подряд их
+# десятками не бывает.
+#
 # Дефолт off по той же причине, что у предохранителя петли: включает mode.conf.
 # Откат: JUNK_GUARD=off и рестарт.
 JUNK_GUARD = os.environ.get("JUNK_GUARD", "off")
 JUNK_WINDOW = int(os.environ.get("JUNK_WINDOW", "80"))          # слов в скользящем окне
 JUNK_RATIO = float(os.environ.get("JUNK_RATIO", "0.35"))        # доля мусорных слов — обрыв
 JUNK_MIN_WORDS = int(os.environ.get("JUNK_MIN_WORDS", "60"))    # раньше не срабатывать
+JUNK_RUN = int(os.environ.get("JUNK_RUN", "40"))                # одинаковых «слов» без букв подряд
+
+# Тело запроса, на котором сработал предохранитель петли или мусора (2026-10-17). Причину
+# срывов (порча состояния после prefix cache, DFlash2 или сама модель) по транскриптам не
+# различить — нужен тот самый запрос, чтобы переиграть его через кэш и мимо (cache_salt).
+# В отличие от PRUNE_DUMP_DIR пишутся только сработки — единицы в день, а не каждый запрос.
+# В файлах чужие чаты: каталог 0700, файлы 0600, хранятся GUARD_DUMP_KEEP последних.
+# Пусто — выключено. Откат: убрать строку из mode.conf и рестарт.
+GUARD_DUMP_DIR = os.environ.get("GUARD_DUMP_DIR", "")
+GUARD_DUMP_KEEP = int(os.environ.get("GUARD_DUMP_KEEP", "30"))
 
 # --- Прунинг картинок -----------------------------------------------------------------------
 #
@@ -379,7 +396,7 @@ stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
          "loops_truncated": 0, "loop_guard_errors": 0,
-         "junk_aborts": 0, "junk_words_max_ratio": 0.0}
+         "junk_aborts": 0, "junk_words_max_ratio": 0.0, "guard_dumps": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -1555,19 +1572,23 @@ class ДетекторМусора:
     """Скользящее окно слов из дельт thinking/text; мусор — доля мусорных слов `ratio` и выше.
 
     Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
-    ```-заборов не считается (длинные токены там легальны), «слова» без букв и цифр — тоже.
+    ```-заборов не считается (длинные токены там легальны). «Слова» без букв и цифр в долю не
+    идут, зато `run` одинаковых таких подряд — второй признак мусора (вырождение в «- - - -»).
     """
 
-    def __init__(self, window=None, ratio=None, min_words=None):
+    def __init__(self, window=None, ratio=None, min_words=None, run=None):
         self.window = window or JUNK_WINDOW
         self.ratio = JUNK_RATIO if ratio is None else ratio
         self.min_words = JUNK_MIN_WORDS if min_words is None else min_words
+        self.run = run or JUNK_RUN
         self.окно = deque(maxlen=self.window)  # True — мусорное слово
         self.мусорных = 0
         self.всего = 0
         self.хвост = ""
         self.в_коде = False
         self.доля = 0.0  # доля мусора в окне на последней проверке
+        self.пустое, self.подряд = None, 0  # «слово» без букв и цифр и длина цепочки из него
+        self.причина = ""  # чем сработал — для журнала и дампа
         self.сработал = False
 
     def новый_блок(self):
@@ -1592,8 +1613,17 @@ class ДетекторМусора:
             if w.count("```") % 2:
                 self.в_коде = not self.в_коде
             return False
-        if self.в_коде or ("\ufffd" not in w and not any(ch.isalnum() for ch in w)):
+        if self.в_коде:
             return False
+        if "\ufffd" not in w and not any(ch.isalnum() for ch in w):
+            self.подряд = self.подряд + 1 if w == self.пустое else 1
+            self.пустое = w
+            if self.подряд < self.run:
+                return False
+            self.причина = f"цепочка {self.подряд}× {w!r}"
+            self.сработал = True
+            return True
+        self.пустое, self.подряд = None, 0
         мусор = мусорное_слово(w)
         if len(self.окно) == self.окно.maxlen:
             self.мусорных -= self.окно[0]
@@ -1605,6 +1635,7 @@ class ДетекторМусора:
         self.доля = self.мусорных / len(self.окно)
         if self.доля < self.ratio:
             return False
+        self.причина = f"доля {self.доля:.2f} в окне {self.window}"
         self.сработал = True
         return True
 
@@ -2022,6 +2053,35 @@ def dump_request(тело, session, мета):
     return ЗаписьДампа(каталог, seq, session, тело, мета)
 
 
+def dump_guard(тело, session, мета):
+    """Кладёт в GUARD_DUMP_DIR тело запроса, на котором сработал предохранитель, и мету.
+
+    Тот же формат, что у `ЗаписьДампа` (gzip-тело + meta.json, 0600): переигрывать сработку и
+    разбирать дамп промахов можно одними инструментами. Хранятся GUARD_DUMP_KEEP свежих пар.
+    Fail-open: осечка записи — строка в журнал, ход идёт дальше.
+    """
+    if not GUARD_DUMP_DIR or not тело:
+        return
+    global _dump_seq
+    try:
+        os.makedirs(GUARD_DUMP_DIR, mode=0o700, exist_ok=True)
+        with _dump_lock:
+            _dump_seq += 1
+            seq = _dump_seq
+        запись = ЗаписьДампа(GUARD_DUMP_DIR, seq, session, тело, мета)
+        запись.записать()
+        with lock:
+            stats["guard_dumps"] += 1
+        тела = sorted((e for e in os.scandir(GUARD_DUMP_DIR) if e.name.endswith(".req.json.gz")),
+                      key=lambda e: e.stat().st_mtime)
+        for e in тела[:-GUARD_DUMP_KEEP] if GUARD_DUMP_KEEP > 0 else []:
+            for путь in (e.path, e.path[:-len(".req.json.gz")] + ".meta.json"):
+                with contextlib.suppress(OSError):
+                    os.remove(путь)
+    except Exception as e:
+        print(f"дамп сработки не записан ({e!r})", file=sys.stderr, flush=True)
+
+
 def _debug_dump(doc, msgs, body_len):
     """Разбор запроса в журнал: зачем прунинг решил так, а не иначе.
 
@@ -2095,7 +2155,7 @@ class Handler(BaseHTTPRequestHandler):
                                   loop_guard=(f"{LOOP_GUARD}: {LOOP_NGRAM}-грамма x{LOOP_REPEATS} "
                                               f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"),
                                   junk_guard=(f"{JUNK_GUARD}: доля {JUNK_RATIO} в {JUNK_WINDOW} "
-                                              f"словах, не раньше {JUNK_MIN_WORDS}"),
+                                              f"словах, не раньше {JUNK_MIN_WORDS}, цепочка {JUNK_RUN}"),
                                   image_prune=(f"{IMAGE_PRUNE}: свежих {IMAGE_KEEP}, "
                                                f"потолок {IMAGE_MAX}"))).encode()
         self.send_response(200)
@@ -2131,7 +2191,7 @@ class Handler(BaseHTTPRequestHandler):
         # ПО СЕССИЯМ (сравнивается соседняя пара запросов одного чата), и без него дамп
         # прогона превращается в кашу из ходов исполнителя и фоновых действий продукта.
         сессия = (self.headers.get(EVENT_SESSION_HEADER)
-                  if (BACKEND_EVENTS_URL or DUMP_DIR) else None)
+                  if (BACKEND_EVENTS_URL or DUMP_DIR or GUARD_DUMP_DIR) else None)
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
         дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
@@ -2357,6 +2417,7 @@ class Handler(BaseHTTPRequestHandler):
             реле = РелеПотока(выход, петли=LOOP_GUARD == "on",
                               детектор_мусора=ДетекторМусора() if JUNK_GUARD == "on" else None)
         итог_петли = {"петли": 0, "повторён": False, "conn": None}
+        сработка = None  # мета для дампа сработки предохранителя
         try:
             if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
                 prefill = time.monotonic() - начало
@@ -2376,6 +2437,15 @@ class Handler(BaseHTTPRequestHandler):
                     выход(chunk)
                 elif реле.усвоить(chunk):
                     break
+            if реле is not None and (реле.мусор or реле.петля):
+                # Мета — на момент сработки, а запись — в finally: диск не должен задерживать
+                # обрыв генерации, каждая лишняя доля секунды — токены впустую.
+                сработка = dict(
+                    path=self.path, guard="мусор" if реле.мусор else "петля",
+                    reason=(реле.детектор_мусора.причина if реле.мусор
+                            else " ".join(реле.детектор.петля or ())),
+                    block=реле.петля_в, usage=dict(usage_карточки),
+                    ttfbSeconds=None if prefill is None else round(prefill, 3))
             if реле is not None and реле.мусор:
                 self._после_мусора(реле, conn)
             elif реле is not None and реле.петля:
@@ -2391,6 +2461,8 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if итог_петли["conn"] is not None:
                 итог_петли["conn"].close()
+            if сработка is not None:
+                dump_guard(body, сессия, сработка)
             # Карточка «петля перехвачена»: blocks — сколько петель поймали (2 — и повтор
             # петлял, ответ усечён), resultBlocks — был ли повтор, thinkingBlocks — петля в
             # размышлениях. Поля общие с карточкой обрезки: ручка бэкенда одна.
@@ -2484,11 +2556,10 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             stats["junk_aborts"] += 1
             stats["junk_words_max_ratio"] = round(д.доля, 3)
-        print(f"мусор в потоке ({д.всего} слов, доля {д.доля:.2f} в окне {д.window}) — ответ оборван",
+        print(f"мусор в потоке ({д.всего} слов, {д.причина}) — ответ оборван",
               file=sys.stderr, flush=True)
         реле.закрыть_блок()
-        реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор (vLLM #60174, DFlash2 + "
-                     "prefix cache). Повтори ход.]")
+        реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]")
         реле.хвост()
 
     def handle_one_request(self):
@@ -2527,10 +2598,11 @@ if __name__ == "__main__":
              else ", карточка сдвига границы выкл")
           + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "
              f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл")
-          + (f", предохранитель мусора вкл (доля {JUNK_RATIO} в {JUNK_WINDOW} словах)"
+          + (f", предохранитель мусора вкл (доля {JUNK_RATIO} в {JUNK_WINDOW} словах, цепочка {JUNK_RUN})"
              if JUNK_GUARD == "on" else ", предохранитель мусора выкл")
           + (f", прунинг картинок вкл (свежих {IMAGE_KEEP}, потолок {IMAGE_MAX})"
-             if IMAGE_PRUNE == "on" else ", прунинг картинок выкл"),
+             if IMAGE_PRUNE == "on" else ", прунинг картинок выкл")
+          + (f", дамп сработок -> {GUARD_DUMP_DIR} (свежих {GUARD_DUMP_KEEP})" if GUARD_DUMP_DIR else ""),
           flush=True)
     prepare_dump_dir()  # сообщит в журнал, включён дамп или каталог не годится
     srv.serve_forever()

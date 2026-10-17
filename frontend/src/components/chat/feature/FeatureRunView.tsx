@@ -4,7 +4,7 @@ import { useIsMobile } from '../../../lib/breakpoints';
 import { Button, ConfirmDialog } from '../../ui';
 import type { FeatureRun, FeatureTask, FeatureRound } from '../../../types/featureRun';
 import { Rounds } from './Rounds';
-import { PipelineStages } from './PipelineStages';
+import { PipelineFlow } from './PipelineFlow';
 
 // Карточка фичи в режиме «Исполнение фичи»: сводка по агрегату `FeatureRun`.
 //
@@ -285,9 +285,10 @@ export function FeatureRunView({ run }: { run: FeatureRun }) {
       <SectionLabel>Шаги</SectionLabel>
       <Steps steps={run.steps} />
 
-      {/* Конвейер: линейка 7 стадий жизненного цикла фичи (рез → … → мерж) */}
+      {/* Конвейер: вертикальная диаграмма — шкала стадий + линии бэк/фронт (толщина =
+          проходы) + дуга возврата (ревью/проверка → производство) */}
       <SectionLabel>Конвейер</SectionLabel>
-      <PipelineStages run={run} />
+      <PipelineFlow run={run} />
 
       {/* «Пружина» витков: видна всегда, пустая — с плейсхолдером «витков нет» */}
       <SectionLabel>Витки</SectionLabel>

@@ -8,8 +8,9 @@ import type { FeatureRound } from '../../../types/featureRun';
 // Кольца нарисованы inline-SVG (эллипсы внахлёст, как витки спирали), а не
 // иконками lucide: нужен именно «спиральный» силуэт, готовой такой иконки нет.
 
-// Штрих и толщина кольца по исходу витка.
-const RING: Record<string, { stroke: string; width: number; dash?: string }> = {
+// Штрих и толщина кольца по исходу витка. Экспортируется: PipelineFlow берёт
+// stroke по verdict для дуги возврата (тот же кодировщик исходов, что и кольца).
+export const RING: Record<string, { stroke: string; width: number; dash?: string }> = {
   returned:             { stroke: C.warning, width: 2 },
   accepted_with_remarks:{ stroke: C.warning, width: 1.6, dash: '2.4 1.8' },
   accepted:             { stroke: C.success, width: 2 },

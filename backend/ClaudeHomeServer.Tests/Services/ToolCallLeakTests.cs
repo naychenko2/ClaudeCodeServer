@@ -293,6 +293,8 @@ public class ToolCallLeakTests : IDisposable
 
         text.Should().Contain("<function=", "формат Qwen3-Coder: <function=...>");
         text.Should().Contain("<parameter=", "формат Qwen3-Coder: <parameter=...>");
+        text.Should().Contain("<tool_call>", "обёртка tool_call обязательна — без неё парсер vLLM вызов не распознаёт");
+        text.Should().Contain("</tool_call>", "закрывающая обёртка tool_call");
         text.Should().NotContain("invoke", "не показываем модели Anthropic-синтаксис </invoke>");
         text.Should().NotContain("parameter name=", "не Anthropic-формат <parameter name=...>");
         text.Should().Contain("попытка 1 из 2", "номер попытки N из M");

@@ -61,8 +61,8 @@ public static class SubagentPrompts
     /// протокол повторов, что у обрывов сабагентов). Snippet — выдержка ушедшего в текст
     /// вызова, чтобы модель знала, что именно повторять.
     ///
-    /// Формат вызова в директиве — дословный Qwen3-Coder (<function=...></parameter><parameter=...></invoke>),
-    /// а не Anthropic (<invoke>...</invoke>): именно Anthropic-синтаксис мы считаем
+    /// Формат вызова в директиве — дословный Qwen3-Coder с обёрткой tool_call (без неё
+    /// парсер vLLM вызов не распознаёт), а не Anthropic (invoke / parameter name=): именно Anthropic-синтаксис мы считаем
     /// слипом модели, который ToolCallLeakDetector ловит, — не показываем его как образец.
     /// </summary>
     public static string ResumeToolCallLeak(int attempt, int max, string? snippet = null)
@@ -73,13 +73,15 @@ public static class SubagentPrompts
         return $"""
             [СИСТЕМНАЯ ДИРЕКТИВА — ВЫЗОВ УШЁЛ В ТЕКСТ {attempt}/{max}]
             Последний вызов инструмента ушёл в текст и НЕ выполнен{tail}: модель выдала его
-            как обычный текст, а не tool_use. Повтори вызов в штатном формате:
+            как обычный текст, а не tool_use. Повтори вызов в штатном формате, целиком, с обёрткой:
 
+            <tool_call>
             <function=ИМЯ>
             <parameter=ИМЯ_ПАРАМЕТРА>
             ЗНАЧЕНИЕ
             </parameter>
             </function>
+            </tool_call>
             (попытка {attempt} из {max}).
             """;
     }

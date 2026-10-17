@@ -1956,27 +1956,23 @@ class ВставкаВJson:
         self.отдать(готовое)
 
 
-def retry_body(body, сдвиг=True):
-    """Тело повтора после срыва (петля/мусор): новый cache_salt — повтор идёт мимо prefix
-    cache (та же соль → та же петля; замер S0 2026-10-17). Сэмплинг сдвинут на
-    LOOP_RETRY_SAMPLING, когда сдвиг=True (петля); для мусора сдвиг выключен — он не зависит
-    от сэмплинга (S0, факт 3). Исходное тело не трогается: соль только в повторе. None — не
-    разобрать."""
+def retry_body(body):
+    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать.
+
+    Соль prefix cache сюда не добавляет: её кладёт вызывающий через salted_body (карантин),
+    чтобы повтор шёл в чистом пространстве, а сессия и дальше ходила со своей солью."""
     try:
         doc = json.loads(body)
         if not isinstance(doc, dict):
             return None
-        if сдвиг:
-            for ключ, добавка in LOOP_RETRY_SAMPLING.items():
-                было = doc.get(ключ)
-                if not isinstance(было, (int, float)) or isinstance(было, bool):
-                    было = 1.0 if ключ == "temperature" else 0.0  # дефолты vLLM
-                стало = round(было + добавка, 3)
-                if ключ == "presence_penalty":
-                    стало = min(стало, 2.0)
-                doc[ключ] = стало
-        cache_salt = uuid.uuid4().hex
-        doc["cache_salt"] = cache_salt
+        for ключ, добавка in LOOP_RETRY_SAMPLING.items():
+            было = doc.get(ключ)
+            if not isinstance(было, (int, float)) or isinstance(было, bool):
+                было = 1.0 if ключ == "temperature" else 0.0  # дефолты vLLM
+            стало = round(было + добавка, 3)
+            if ключ == "presence_penalty":
+                стало = min(стало, 2.0)
+            doc[ключ] = стало
         return json.dumps(doc, ensure_ascii=False).encode("utf-8")
     except Exception:
         return None
@@ -2503,7 +2499,7 @@ class Handler(BaseHTTPRequestHandler):
             if реле is not None and реле.мусор:
                 self._после_мусора(реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None and реле.петля:
-                self._после_петли(реле, conn, body, headers, итог_петли)
+                self._после_петли(реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None:
                 реле.дослать()
             if вставка is not None:
@@ -2541,17 +2537,19 @@ class Handler(BaseHTTPRequestHandler):
                 событие = None
             conn.close()
 
-    def _после_срыва(self, kind, реле, conn, body, headers, итог):
+    def _после_срыва(self, kind, реле, conn, body, headers, сессия, итог):
         """Общий хвост после срыва (петля/мусор): гасим генерацию, закрываем блок и один раз
-        повторяем запрос.
+        повторяем запрос — мимо испорченного prefix cache.
 
         Закрытие соединения — и есть остановка: vLLM снимает запрос по обрыву клиента, расход
         GPU прекращается сразу. Поток повтора приклеивается к тому же ответу клиенту. Срыв и
         в повторе (или повтор не удался) — пометка отдельным текстовым блоком и штатный хвост.
 
-        Сдвиг сэмплинга в повторе — только для петли: мусор не зависит от сэмплинга (S0,
-        факт 3). Повторный запрос, cache_salt, закрытие блока, пометка и штатный хвост —
-        общие для обоих; счётчики, логи и текст пометки различаются по виду срыва.
+        Повтор идёт с солью карантина (q-<сессия>-<ns>): vLLM не берёт для неё чужие блоки
+        prefix cache, а сессия и дальше ходит со своей солью (parse_body подставляет её в
+        каждый запрос). Петля дополнительно сдвигает сэмплинг (локальная стохастика); мусор —
+        нет (S0, факт 3). Повторный запрос, закрытие блока, пометка и штатный хвост — общие;
+        счётчики, логи и текст пометки различаются по виду срыва.
         """
         петля = kind == "loop"
         conn.close()
@@ -2569,8 +2567,19 @@ class Handler(BaseHTTPRequestHandler):
             print(f"мусор в потоке ({д.всего} слов, {д.причина}) — ответ оборван",
                   file=sys.stderr, flush=True)
         реле.закрыть_блок()
-        повтор_вкл = (LOOP_RETRY if петля else JUNK_RETRY) == "on"
-        тело = retry_body(body, сдвиг=петля) if повтор_вкл and body else None
+        # Повтор: петля — сдвиг сэмплинга (всегда, если LOOP_RETRY), мусор — только при
+        # карантине. Соль карантина (q-<сессия>-<ns>) — обоим: повтор уходит в чистое
+        # пространство, а сессия и дальше ходит со своей солью.
+        повтор_вкл = (LOOP_RETRY if петля else CACHE_QUARANTINE) == "on"
+        тело = (retry_body(body) if петля else body) if повтор_вкл and body else None
+        if CACHE_QUARANTINE == "on" and body and тело is not None:
+            соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
+            if сессия:
+                with lock:
+                    _карантин[сессия] = соль
+            тело = salted_body(тело, соль)
+            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша с солью",
+                  file=sys.stderr, flush=True)
         причина = "повтор выключен" if тело is None else None
         if тело is not None:
             заголовки = dict(headers, **{"Content-Length": str(len(тело))})
@@ -2621,9 +2630,9 @@ class Handler(BaseHTTPRequestHandler):
             реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]")
         реле.хвост()
 
-    def _после_петли(self, реле, conn, body, headers, итог):
-        """Петля поймана: общий хвост срыва с повтором и сдвигом сэмплинга (S2a)."""
-        self._после_срыва("loop", реле, conn, body, headers, итог)
+    def _после_петли(self, реле, conn, body, headers, сессия, итог):
+        """Петля поймана: общий хвост срыва — повтор, сдвиг сэмплинга, соль карантина (S2a)."""
+        self._после_срыва("loop", реле, conn, body, headers, сессия, итог)
 
     def _после_мусора(self, реле, conn, body, headers, сессия, итог):
         """Мусор пойтан: гасим генерацию; при карантине — переспрос мимо испорченного кэша.

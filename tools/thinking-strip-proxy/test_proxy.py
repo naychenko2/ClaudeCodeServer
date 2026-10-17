@@ -2032,6 +2032,48 @@ class РелеПотокаTests(unittest.TestCase):
         self.assertIsNone(proxy.retry_body(b"not json"))
 
 
+class ОбрывКлиентаTests(unittest.TestCase):
+    """Обрыв клиента (BrokenPipe/ConnectionReset) не должен инкрементировать loop_guard_errors."""
+
+    def setUp(self):
+        self.сохранено = proxy.stats.get("loop_guard_errors", 0)
+        proxy.stats["loop_guard_errors"] = 0
+
+    def tearDown(self):
+        proxy.stats["loop_guard_errors"] = self.сохранено
+
+    def _прогнать_с_обрывом(self, ошибка, после_n=0):
+        """Прогоняет поток через РелеПотока, где отдать бросает `ошибка` после `после_n` вызовов."""
+        вызовы = [0]
+
+        def отдать(сырое):
+            вызовы[0] += 1
+            if вызовы[0] > после_n:
+                raise ошибка("клиент ушёл")
+
+        реле = proxy.РелеПотока(отдать)
+        сырое = поток_ответа([("text", "Привет")])
+        for i in range(0, len(сырое), 97):
+            try:
+                if реле.усвоить(сырое[i:i + 97]):
+                    break
+            except (BrokenPipeError, ConnectionResetError):
+                break
+        return реле
+
+    def test_connection_reset_на_первом_байте_не_считается(self):
+        """Upstream-поток: ConnectionResetError на первом байте — loop_guard_errors не дёргается."""
+        реле = self._прогнать_с_обрывом(ConnectionResetError, после_n=0)
+        self.assertEqual(proxy.stats["loop_guard_errors"], 0,
+                         "ConnectionResetError на первом байте не должна инкрементировать loop_guard_errors")
+
+    def test_broken_pipe_после_первого_байта_не_считается(self):
+        """Клиент рвёт после отдачи первого события — loop_guard_errors не дёргается."""
+        реле = self._прогнать_с_обрывом(BrokenPipeError, после_n=1)
+        self.assertEqual(proxy.stats["loop_guard_errors"], 0,
+                         "BrokenPipeError после первого байта не должна инкрементировать loop_guard_errors")
+
+
 class ПетляЗаглушка(BaseHTTPRequestHandler):
     """vLLM-заглушка: отдаёт по очереди заготовленные потоки (петля, нормальный ответ...)."""
     протокол_версия = "HTTP/1.1"

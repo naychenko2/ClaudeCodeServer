@@ -2,7 +2,8 @@ import { CircleGauge } from 'lucide-react';
 import { Island, IslandHeader } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { C, FS, ISLAND, SP } from '../lib/design';
-import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../components/chat/ChatHeaderBar';
+import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCostStats, type HandoffControl, type ProviderBalance } from '../components/chat/ChatHeaderBar';
+import { handoffAvailability } from '../lib/chatHandoff';
 import type { ContextEstimate } from '../lib/context';
 import type { GlifGenStats } from '../components/chat/glifStats';
 import { toRateWindows, type RateWindow } from '../lib/rateLimit';
@@ -57,7 +58,12 @@ interface Sample {
   empty?: boolean;                      // пилюли нет: на её месте — пояснение
   cache?: keyof typeof CACHE;           // циферблат кэша промпта
   waiting?: boolean;                    // идёт ход
+  handoff?: HandoffControl;             // кнопка «Перенести в новый чат» в секции кэша
 }
+
+// Перенос в новый чат: в витрине клик ничего не делает; выключенный — с причиной текстом
+const HANDOFF_ON: HandoffControl = { enabled: true, busy: false, onClick: noop };
+const HANDOFF_OFF: HandoffControl = { ...handoffAvailability({ participants: ['p1', 'p2'] }, false), busy: false, onClick: noop };
 
 const DS_OK: ProviderBalance = { available: true, currency: 'USD', totalBalance: '4.20' };
 
@@ -65,8 +71,10 @@ const SAMPLES: Sample[] = [
   { caption: 'кэш тёплый — «норм»', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.12 }), cache: 'warm' },
   { caption: 'кэш остывает + лимит', estimate: ctx(40), windows: wins({ five_hour: 0.81, seven_day: 0.3 }), cache: 'expiring' },
   { caption: 'кэш остыл', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold' },
-  { caption: 'кэш остыл (мобила — без подписи)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', compact: true },
+  { caption: 'кэш остыл (мобила — без подписи)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', compact: true, handoff: HANDOFF_ON },
   { caption: 'идёт ход — стрелка крутится', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', waiting: true },
+  { caption: 'перенос в новый чат — кнопка в поповере', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'expiring', handoff: HANDOFF_ON },
+  { caption: 'перенос выключен (групповой чат)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', handoff: HANDOFF_OFF },
   { caption: '5.1 обычное — худшее окно', estimate: ctx(62), windows: wins({ five_hour: 0.81, seven_day: 0.34, seven_day_opus: 0.12 }) },
   { caption: '5.1 контекст danger перебивает', estimate: ctx(92), windows: wins({ five_hour: 0.41, seven_day: 0.12 }) },
   { caption: '5.1 окно вне колец (Opus 95%) красит рамку', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.3, seven_day_opus: 0.95 }) },
@@ -99,7 +107,7 @@ function RingSample({ s }: { s: Sample }) {
         cost={s.cost ?? NO_COST} falCost={s.fal ?? NO_FAL} glifCost={NO_GLIF}
         balance={s.provider?.balance ?? null} billing={s.billing ?? 'subscription'} windows={s.windows ?? []}
         activeWorkflow={s.workflow} isMobile={s.compact} isCompact={s.compact} resetKey={s.caption}
-        forceReducedMotion={s.reducedMotion} cacheItems={s.cache && CACHE[s.cache]}
+        forceReducedMotion={s.reducedMotion} cacheItems={s.cache && CACHE[s.cache]} handoff={s.handoff}
       />
       {s.empty && <div style={{ fontSize: FS.sm, color: C.textMuted }}>(компонент вернул null)</div>}
     </div>

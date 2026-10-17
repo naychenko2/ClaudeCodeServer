@@ -416,17 +416,15 @@ public class TasksController(
         return WithWarning(updated);
     }
 
-    // Карточка + мягкое warning (FeatureVerdict.Warning), если условие сработало. Без warning
-    // — обычный Ok(task), байт-в-байт как раньше. С warning — сериализуем TaskItem в JsonObject
-    // теми же опциями, что MVC (camelCase + string-enum camelCase, relaxed-энкодер против
-    // двойного \u-экранирования), и дописываем warning на верхнем уровне — та же форма, что
-    // у MCP-ответа tasks_complete.
+    // Карточка + мягкое warning (FeatureVerdict.Warning), если условие сработало. Единый путь
+    // сериализации: TaskItem → JsonObject теми же опциями, что MVC (camelCase + string-enum
+    // camelCase, relaxed-энкодер против двойного \u-экранирования) — один source of truth,
+    // warning (если есть) дописывается на верхнем уровне. Та же форма, что у MCP tasks_complete.
     private ObjectResult WithWarning(TaskItem task)
     {
-        if (FeatureVerdict.Warning(task) is not { } warning) return Ok(task);
-        // Та же форма, что у MCP (TasksToolset.CompleteResponse): serialize → JsonNode.Parse → AsObject.
         var json = JsonNode.Parse(JsonSerializer.Serialize(task, FeatureJsonOptions))!.AsObject();
-        json["warning"] = warning;
+        if (FeatureVerdict.Warning(task) is { } warning)
+            json["warning"] = warning;
         return Ok(json);
     }
 

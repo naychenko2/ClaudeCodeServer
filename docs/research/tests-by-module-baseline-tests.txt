@@ -1,11 +1,19 @@
-# Эталон списка тестов (--list-tests) — фича «тесты по модулям», шаг 0.2
-# Команда: dotnet test backend/ClaudeHomeServer.slnx --no-build --list-tests (после полной сборки slnx)
-# SHA коммита эталона: a5dea0112d304d8684eeea7f5bab075e80a36e88
-# Дата/время снимка: 2026-10-17 18:15 MSK
-# СУММАРНОЕ ЧИСЛО ТЕСТОВ (по файлу, = число строк ниже): 15198
-# Уникальных display-name: 15033 (остальные 165 — data-driven тесты,
-#   чьи параметры усечены runner'ом до '···' в одинаковые строки; это разные экземпляры).
-# Имена отсортированы (LC_ALL=C), по одному на строку.
+# Эталон списка тестов (--list-tests) — фича «тесты по модулям», шаг 0.2 (rework)
+# Методика (одна команда, воспроизводима в шаге 3.15):
+#   dotnet test backend/ClaudeHomeServer.slnx --no-build --list-tests 2>/dev/null \
+#     | grep -E '^[[:space:]]' \
+#     | sed 's/^[[:space:]]*//' \
+#     | LC_ALL=C sort -u
+#   (grep -E '^[[:space:]]' берёт ЦЕЛИК строку с именем; grep -oE '…[^[:space:]]*' из
+#    черновика обрезал имя по первому пробелу и схлопывал data-driven-тесты → 11732, не 15203)
+# SHA коммита эталона: 4637954cf9239638d682f50e17cde17431e3f7b0
+# Дата/время снимка: 2026-10-17 19:41 MSK
+# СУММАРНОЕ ЧИСЛО ТЕСТОВ (= число строк ниже): 15203
+# Уникальных display-name: 15203. Настоящих склеек (два FQN через 4 пробела) — 0:
+#   все 7 склеек старого эталона (строки 235/236/13367/13368/13370/13371/13372) расщеплены.
+#   grep -cP '[^[:space:]] {2,}[A-Z]' = 10 — все 10 ложные: data-driven-параметры
+#   (line: "      Now listening…", "  ➜  Local:…", "[xUnit.net …]     A.Tests.CalcTests.Fail"…)
+#   с 2+ пробелами перед заглавной, не два FQN. Имена отсортированы (LC_ALL=C), по одному на строку.
 ClaudeHomeServer.AudioEditor.Tests.AudioEditorSubsystemTests.Ключ_подсистемы_совпадает_с_ключом_динамического_модуля
 ClaudeHomeServer.AudioEditor.Tests.AudioEditorSubsystemTests.Регистрация_заводит_монтаж_без_ИИ_у_агента
 ClaudeHomeServer.AudioEditor.Tests.AudioEditorSubsystemTests.Регистрация_заводит_поставщика_fal
@@ -221,7 +229,11 @@ ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioConcatServiceTests.Путь_вне_
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioConcatServiceTests.Путь_вне_проекта_или_несуществующий_отказ(file: "sfx/нет-такого.wav")
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioConcatServiceTests.Склейка_версии_нити_и_файла_проекта_заводит_новую_нить_с_версией_1
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioConcatServiceTests.Файл_проекта_в_личной_области_отказ
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Cancel_StopsJobAndSendsCancelled
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Failure_NoNeighborWithSameVoiceKind_NoRetry
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Failure_RetryQuoteIsNeighborWithSameOpAndVoiceKind_NotLaunched
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.GpuNull_НеПишетсяВJsonСобытияИDto
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.PrefsSave_SendsPrefsChanged
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Quote_ExplicitProviderDown_RefusedWithoutSubstitution
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Quote_ResolvesChain_ThreadSettingsBeforePrefsAndDefault
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_ExpiredQuote_Refused
@@ -230,12 +242,20 @@ ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_ForeignOr
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_LocalSpend_RecordedOnAcceptWithZero
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_PerCharSpend_InUsdWithUnitInLabel
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_SecondLocalHeavy_Refused_LightStillRuns
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_SendsProgressThreadChangedAndCompletedToOwner
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_Success_BecomesThreadVersionWithRolesAndLicense
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_ThirdJobOfOwner_RefusedWithText
-ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditWorkspaceTests.Задачи_версий_нитей_владельца_удерживаются    ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "")
-ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioJobThreadsSavedTests.Сохранение_переводит_нить_на_файл_проекта_пишет_журнал_и_рассылает    ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "   ")
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.СобытиеПрогресса_НесётGpu_СтатусТратаИRecordTypeНеЗависят
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditWorkspaceTests.Задачи_версий_нитей_владельца_удерживаются
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditWorkspaceTests.Рабочая_папка_отдельный_корень_от_нитей_и_префов
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditWorkspaceTests.Чистка_сносит_задачи_старше_недели_кроме_свежих_и_удержанных
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.NЗаПределами_404
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.НесколькоВариантов_ПоИндексу
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.ОдинВариант_N0_Файл
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.УдалённыйФайл_410
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioJobThreadsSavedTests.Сохранение_переводит_нить_на_файл_проекта_пишет_журнал_и_рассылает
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioJobThreadsSavedTests.Стемы_без_звука_не_перепривязывают_нить_а_черновику_дают_имя
-ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioJobThreadsSavedTests.Черновик_после_сохранения_перестаёт_быть_черновиком    ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "smotrim")
+ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioJobThreadsSavedTests.Черновик_после_сохранения_перестаёт_быть_черновиком
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioJobThreadsSavedTests.Чужая_нить_молча_пропускается
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioLaunchByContextTests.Extract_куски_идут_в_порядке_AddedAt_а_не_вставки
 ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioLaunchByContextTests.Extract_раскладывает_основной_голос_образец_и_куски_по_ролям_операции
@@ -2181,13 +2201,10 @@ ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.Ping_ОтвечаетП
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(request: "{\"method\":\"tools/call\",\"params\":{\"_meta\":{"···, expected: "2")
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(request: "{\"method\":\"tools/call\",\"params\":{\"_meta\":{"···, expected: "\"abc\"")
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(request: "{\"method\":\"tools/call\",\"params\":{\"_meta\":{"···, expected: null)
-ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(request: "{\"method\":\"tools/call\",\"params\":{\"_meta\":{"···, expected: null)
-ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(request: "{\"method\":\"tools/call\",\"params\":{\"_meta\":{"···, expected: null)
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(request: "{\"method\":\"tools/list\",\"params\":{\"_meta\":{"···, expected: null)
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ServerDiscover_ОтвечаетМетодНеПоддерживается
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ToolUseIdOf_БерётIdКарточкиИзMeta_ТолькоГоднойФормы(parms: "{\"name\":\"x\",\"_meta\":\"toolu_1\"}", expected: null)
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ToolUseIdOf_БерётIdКарточкиИзMeta_ТолькоГоднойФормы(parms: "{\"name\":\"x\",\"_meta\":{\"claudecode/toolUseId\"···, expected: "toolu_01REifwHiyZSRmWHsCRkoEbY")
-ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ToolUseIdOf_БерётIdКарточкиИзMeta_ТолькоГоднойФормы(parms: "{\"name\":\"x\",\"_meta\":{\"claudecode/toolUseId\"···, expected: null)
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ToolUseIdOf_БерётIdКарточкиИзMeta_ТолькоГоднойФормы(parms: "{\"name\":\"x\",\"_meta\":{\"claudecode/toolUseId\"···, expected: null)
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ToolUseIdOf_БерётIdКарточкиИзMeta_ТолькоГоднойФормы(parms: "{\"name\":\"x\"}", expected: null)
 ClaudeHomeServer.Tests.Controllers.McpHttpTransportTests.ToolUseIdOf_СлишкомДлинный_Null
@@ -8046,9 +8063,6 @@ ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_д�
 ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":-1,\"height\":8,\"faces"···)
 ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":0,\"height\":8,\"faces\"···)
 ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":8,\"height\":8,\"faces\"···)
-ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":8,\"height\":8,\"faces\"···)
-ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":8,\"height\":8,\"faces\"···)
-ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":8,\"height\":8,\"faces\"···)
 ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_негодный_ответ_это_неожиданный_а_не_лица_нет(text: "ccs_face_detect={\"width\":8,\"height\":8}")
 ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_потолок_ожидания_это_Busy
 ClaudeHomeServer.Tests.Services.LocalImageMediaAdapterTests.Детекция_размер_воркера_не_совпал_с_байтами_отказ_сопоставить
@@ -8590,7 +8604,6 @@ ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_�
 ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(text: "{\"type\":\"execution_error\",\"data\":{\"prompt_i"···, fraction: null, done: True)
 ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(text: "{\"type\":\"execution_success\",\"data\":{\"prompt"···, fraction: null, done: True)
 ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(text: "{\"type\":\"progress\",\"data\":{\"value\":3,\"max"···, fraction: 0,375, done: False)
-ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(text: "{\"type\":\"progress\",\"data\":{\"value\":3,\"max"···, fraction: null, done: False)
 ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(text: "{\"type\":\"progress\",\"data\":{\"value\":3,\"max"···, fraction: null, done: False)
 ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(text: "не json", fraction: null, done: False)
 ClaudeHomeServer.Tests.Services.LocalVideoMediaAdapterTests.Тест_Busy_наша_идёт_чужая_ждёт_null
@@ -13364,24 +13377,27 @@ ClaudeHomeServer.Tests.Services.ViaductStaticHostingTests.НеУстановле
 ClaudeHomeServer.Tests.Services.ViaductStaticHostingTests.Промах_404БезSpaФолбэка(path: "/modules/viaduct/.viaduct-build.json")
 ClaudeHomeServer.Tests.Services.ViaductStaticHostingTests.Промах_404БезSpaФолбэка(path: "/modules/viaduct/editor")
 ClaudeHomeServer.Tests.Services.ViaductStaticHostingTests.УстановленПриЖивомСервере_ОтдаётсяБезРестарта
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Битый_ответ_вырождается_в_каталог_без_плееров    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.GpuNull_НеПишетсяВJsonСобытияИDto
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Играбельные_каналы_идут_первыми    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Cancel_StopsJobAndSendsCancelled
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Канал_без_потока_отдаётся_карточкой_со_ссылкой_наружу    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Start_SendsProgressThreadChangedAndCompletedToOwner
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Канал_со_своим_потоком_помечается_играбельным    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.Failure_RetryQuoteIsNeighborWithSameOpAndVoiceKind_NotLaunched
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Каталог_не_содержит_повторов    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.НесколькоВариантов_ПоИндексу
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Отказ_одного_канала_не_роняет_весь_список    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.СобытиеПрогресса_НесётGpu_СтатусТратаИRecordTypeНеЗависят
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Повторный_вызов_берёт_кеш_вместо_новых_запросов    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditJobServiceTests.PrefsSave_SendsPrefsChanged
-ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Эфирный_провайдер_лент_не_отдаёт    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.ОдинВариант_N0_Файл
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Битый_ответ_вырождается_в_каталог_без_плееров
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Играбельные_каналы_идут_первыми
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Канал_без_потока_отдаётся_карточкой_со_ссылкой_наружу
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Канал_со_своим_потоком_помечается_играбельным
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Каталог_не_содержит_повторов
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Отказ_одного_канала_не_роняет_весь_список
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Повторный_вызов_берёт_кеш_вместо_новых_запросов
+ClaudeHomeServer.Tests.Services.Video.SmotrimProviderTests.Эфирный_провайдер_лент_не_отдаёт
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Normalize_режет_по_потолку
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Normalize_убирает_дубли_и_мусор_сохраняя_порядок
-ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Валидный_ключ_принимается(key: "smotrim:1")    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.NЗаПределами_404
-ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Валидный_ключ_принимается(key: "smotrim:678")    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditWorkspaceTests.Рабочая_папка_отдельный_корень_от_нитей_и_префов
-ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Валидный_ключ_принимается(key: "youtube:UC_x5XG1OV2P6uZZ5FSM9Ttw")    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditorHistorySourceTests.УдалённыйФайл_410
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Валидный_ключ_принимается(key: "smotrim:1")
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Валидный_ключ_принимается(key: "smotrim:678")
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Валидный_ключ_принимается(key: "youtube:UC_x5XG1OV2P6uZZ5FSM9Ttw")
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Дефолт_состоит_из_валидных_ключей_без_дублей
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "   ")
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "")
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: ":1")
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "SMOTRIM:1")
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "smotrim")
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: "smotrim:../../etc")
-ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: null)    ClaudeHomeServer.AudioEditor.Tests.Jobs.AudioEditWorkspaceTests.Чистка_сносит_задачи_старше_недели_кроме_свежих_и_удержанных
+ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Мусорный_ключ_отбрасывается(key: null)
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Набор_сохраняется_в_порядке_показа_и_переживает_перезагрузку
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Неизвестный_пользователь_не_сохраняется
 ClaudeHomeServer.Tests.Services.Video.VideoFavoritesTests.Ненастроенный_пользователь_отдаёт_null_а_не_пустой_список
@@ -14529,9 +14545,6 @@ HandsBridge.Policy.Tests.HandsBridgeSourceGuardTests.Tool_reports_its_action_aft
 HandsBridge.Policy.Tests.HandsBridgeSourceGuardTests.Window_and_screenshot_report_their_action_name
 HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--USER-DATA-DIR=C:\\Users\\an\\AppData\\Local\\Cla"···)
 HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-\"dir=C:\\Users\\an\\AppData\\Local\\C"···)
-HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-dir=C:\\Users\\an\\AppData\\Local\\Cla"···)
-HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-dir=C:\\Users\\an\\AppData\\Local\\Cla"···)
-HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-dir=C:\\Users\\an\\AppData\\Local\\Cla"···)
 HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-dir=C:\\Users\\an\\AppData\\Local\\Cla"···)
 HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-dir=\"C:\\Users\\an\\AppData\\Local\\C"···)
 HandsBridge.Policy.Tests.HandsBrowserTests.App_does_not_open_a_hands_browser_profile(arguments: "--user-data-dir=c:/users/AN/appdata/local/claudeho"···)

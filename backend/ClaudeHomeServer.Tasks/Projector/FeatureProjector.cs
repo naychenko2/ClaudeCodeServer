@@ -34,8 +34,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         var steps = children.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList();
         var reviews = children.Where(t => t.Role == TaskRoles.Review).ToList();
         var qa = children.Where(t => t.Role == TaskRoles.Qa).ToList();
-        var final = Last(children.Where(t => t.Role == TaskRoles.Final));
-        var merge = Last(children.Where(t => t.Role == TaskRoles.Merge));
+        var final = children.LastOrDefault(t => t.Role == TaskRoles.Final);
+        var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge);
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
         var verdictBearing = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
@@ -107,13 +107,5 @@ public sealed class FeatureProjector(TaskManager tasks)
         var all = new List<TaskItem> { epic };
         all.AddRange(owner.Where(t => t.FeatureId == epic.Id));
         return all;
-    }
-
-    // «Последний» по порядку, в котором задачи дал вызывающий: финал/мерж — последний в списке.
-    private static TaskItem? Last(IEnumerable<TaskItem> tasks)
-    {
-        TaskItem? last = null;
-        foreach (var t in tasks) last = t;
-        return last;
     }
 }

@@ -360,17 +360,18 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «На одного агента, ток/с» обновляется на hover', () => {
-  it('базовый: окно + среднее + кэш', () => {
+describe('tpChartAriaLabel: SVG «На агента, ток/с» обновляется на hover', () => {
+  it('базовый: окно + кэш (среднее под графиком не дублируем)', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('На одного агента, ток/с за 15 минут');
-    expect(label).toContain('на агента в среднем 412 ток/с');
+    expect(label).toContain('На агента, ток/с за 15 минут');
+    expect(label).toContain('кэш 87 %');
     expect(label).not.toContain('интервал');
+    expect(label).not.toContain('в среднем');
   });
-  it('hover: интервал со скоростью на одного агента', () => {
+  it('hover: интервал со скоростью на агента', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('на одного агента 250 ток/с');
+    expect(label).toContain('на агента 250 ток/с');
   });
   it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
     const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);

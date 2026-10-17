@@ -15,7 +15,7 @@ import type { LocalModelMedia, MediaHistoryRecord } from './api';
 import { HistoryFilterMenuPopup } from './MediaHistoryFilters';
 import { MediaHistoryCard, historyFileUrl } from './MediaHistoryCard';
 import {
-  dayGroupLabel, formatClockFromIso, historyRowTitle,
+  dayGroupLabel, historyRowTime, historyRowTitle,
   historySummaryLine, historyWaitLine, historyOutcomeBadge,
 } from './mediaFormat';
 import { useMediaHistory, type HistoryKind } from './useMediaHistory';
@@ -45,8 +45,8 @@ function HistoryRow({ record, isMobile, selected, meUsername, onOpen }: {
   const badge = historyOutcomeBadge(record.status);
   const who = ownerPart(record, meUsername);
   const title = historyRowTitle(record.kind, record.op);
-  const time = formatClockFromIso(record.finishedAt ?? record.startedAt ?? record.enqueuedAt);
-  const wait = historyWaitLine(record.enqueuedAt, record.startedAt, record.runSeconds);
+  const time = historyRowTime(record);
+  const wait = historyWaitLine(record.enqueuedAt, record.startedAt);
   // миниатюра: только у завершённых картинок (у звука/видео/ошибок — плитка вида)
   const thumb = record.kind === 'image' && record.status === 'completed'
     ? historyFileUrl(record.id, 0, 'thumb')

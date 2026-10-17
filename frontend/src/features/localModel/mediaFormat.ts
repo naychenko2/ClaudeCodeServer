@@ -395,7 +395,7 @@ export function historySummaryLine(counters: { outcomes: Record<string, number> 
   return parts.length ? parts.join(' · ') : null;
 }
 
-// === Строка 3 записи: «masha · очередь 1 мин 20 с · расчёт 42 с» ===
+// === Строка 3 записи: «masha · очередь 1 мин 20 с» ===
 
 // Ожидание в очереди = started − enqueued (по часам бэкенда). startedAt не задан
 // (прервано до старта) — null («неизвестно»).
@@ -407,13 +407,21 @@ export function historyWaitSeconds(enqueuedAt?: string | null, startedAt?: strin
   return Math.max(0, Math.round((b - a) / 1000));
 }
 
-// «очередь 1 мин 20 с · расчёт 42 с»: без времени старта — «очередь —»,
-// без времени расчёта — часть «расчёт» не показываем.
-export function historyWaitLine(enqueuedAt?: string | null, startedAt?: string | null, runSeconds?: number | null): string {
+// «очередь 1 мин 20 с»: без времени старта — «очередь —».
+export function historyWaitLine(enqueuedAt?: string | null, startedAt?: string | null): string {
   const wait = historyWaitSeconds(enqueuedAt, startedAt);
-  const waitPart = wait == null ? 'очередь —' : `очередь ${formatDurationHuman(wait)}`;
-  if (runSeconds == null) return waitPart;
-  return `${waitPart} · расчёт ${formatDurationHuman(runSeconds)}`;
+  return wait == null ? 'очередь —' : `очередь ${formatDurationHuman(wait)}`;
+}
+
+// Вторая строка записи справа: время запуска + длительность, «10:24 · 39 с».
+// Время запуска = startedAt (у прерванных до старта — enqueuedAt, время постановки);
+// без runSeconds (идёт/прервано/упало до расчёта) — только время, без « · ».
+// Ни времени, ни длительности — пустая строка.
+export function historyRowTime(record: { enqueuedAt?: string | null; startedAt?: string | null; runSeconds?: number | null }): string {
+  const clock = formatClockFromIso(record.startedAt ?? record.enqueuedAt);
+  if (!clock) return '';
+  if (record.runSeconds == null) return clock;
+  return `${clock} · ${formatDurationHuman(record.runSeconds)}`;
 }
 
 // === Параметры и время карточки ===

@@ -607,6 +607,11 @@ export interface Task {
   // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
   featureId?: string | null;   // id задачи-эпика
   stepRef?: string | null;    // код шага из плана («Ш1», «D1c»)
+  // Роль задачи в фиче (бэк TaskItem.Role): feature · cut · plan · step · rework · review · qa · final · merge · consult.
+  role?: string | null;
+  // Чат, породивший задачу (бэк TaskItem.SourceSessionId). Для фичи — связь эпика с чатом:
+  // GET /api/tasks/features?sessionId= выбирает эпики по этому полю (и ExecutorLaunchedBySessionId).
+  sourceSessionId?: string | null;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
   // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»

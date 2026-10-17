@@ -1,107 +1,73 @@
 // Модель фичи для режима «Исполнение фичи» в «Плане хода».
 //
-// Фича — это задача-эпик (role=feature) плюс её дочерние задачи в том же трекере.
-// Агрегат `FeatureRun` считается ОДНОЙ чистой функцией (projector) из сырых задач:
-// на бэке её считает `FeatureProjector.Build`, а фронт в демо-фазе (пока REST
-// `GET /api/tasks/features` не готов) считает из фикстуры. Правила подсчёта держим
-// в одном месте, чтобы «План хода» и «Пульт куратора» не разъехались.
+// Источник правды — БЭК: агрегат `FeatureRun` считает `FeatureProjector.Build`
+// (backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs) и приходит готовым из
+// REST `GET /api/tasks/features?sessionId=…`. Фронт НЕ пересчитывает конвейер —
+// только отображает. Ниже — зеркало полей бэкового агрегата (camelCase, как
+// сериализует MVC); задачи внутри — подмножество `TaskItem`, которое несёт ответ.
+//
+// Что считать источником: бэк. `progress` — `double 0..1` (доля решённых витков),
+// `verdicts.loops` — СЧЁТЧИК (`returned + acceptedWithRemarks`), не boolean:
+// UI-условие «были правки» = `loops > 0`.
 
-// Роль задачи в конвейере фичи. Значения — строки-константы (без enum): бэк
-// добавляет их аддитивно, старый код при чтении игнорирует незнакомые.
-export type FeatureRole =
-  | 'feature'   // эпик — сама фича
-  | 'cut'       // разрез фичи
-  | 'plan'       // план (макет/план шагов)
-  | 'step'       // производственный шаг
-  | 'rework'     // доработка шага после ревью/проверки
-  | 'review'     // ревью (пачкой — reviewOf на несколько задач)
-  | 'qa'          // проверка (Вера)
-  | 'final'      // финальное ревью
-  | 'merge'      // мерж
-  | 'consult';   // архитектурная консультация
-
-// Исход витка. `null` = старая семантика «проверено» (без вердикта).
-export type Verdict = 'accepted' | 'accepted_with_remarks' | 'returned' | 'withdrawn';
-
-// Сырая задача трекера в форме, в которой её несёт фикстура/REST. Всё, кроме
-// id/title, — аддитивно и nullable: UI обязан пережить отсутствие любого поля.
+// Задача в агрегате фичи: подмножество `TaskItem` бэка (camelCase), которое
+// использует карточка. Все поля аддитивны и nullable — UI обязан пережить
+// отсутствие любого (старые задачи без разметки не несут feature-полей).
 export interface FeatureTask {
   id: string;
   title: string;
-  persona?: string | null;
-  status?: string | null;              // 'todo' | 'inProgress' | 'done'
-  created?: string | null;             // 'YYYY-MM-DDTHH:MM'
-  completed?: string | null;
-  kind?: string | null;
-  role?: FeatureRole | null;
+  status?: 'todo' | 'inProgress' | 'done' | null;
+  kind?: 'task' | 'defect' | null;
+  // Роль в конвейере: feature · cut · plan · step · rework · review · qa · final · merge · consult.
+  role?: string | null;
   featureId?: string | null;           // id эпика
+  stepRef?: string | null;            // код шага («Ш1», «D1c»)
+  lane?: string | null;               // линия («бэк», «фронт», «тест»)
+  reviewOf?: string[] | null;         // id задач, которые оценивает это ревью/проверка/финал
   worktreeBranch?: string | null;
-  stepRef?: string | null;             // код шага («Ш1», «D1c»)
-  lane?: string | null;                // линия («фронт», «бэк», «тест»)
-  reviewOf?: string[] | null;          // id задач, которые оценивает ревью
-  verification?: { verdict?: Verdict | null; notes?: string | null } | null;
+  personaId?: string | null;
+  createdAt?: string | null;
+  completedAt?: string | null;
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
+  verification?: { verdict?: string | null; notes?: string | null } | null;
 }
 
-// Один виток ревью/проверки/финала. `verdict='running'` — виток открыт, вердикта ещё нет.
+// Один виток ревью/проверки/финала для отображения («пружина»). `verdict='running'`
+// — виток открыт, вердикта ещё нет. Строится в `FeatureRunView` из бэковых задач.
 export interface FeatureRound {
   n: number;
-  verdict: Verdict | 'running';
+  verdict: string;   // 'accepted' | 'accepted_with_remarks' | 'returned' | 'withdrawn' | 'running'
   who?: string | null;
   at?: string | null;
   reason?: string | null;
-  ghost?: boolean;                      // ревью вне трекера (виден только по доработке)
+  ghost?: boolean;
 }
 
-// Производственный шаг (role=step/rework) со своими витками.
-export interface FeatureStep {
-  id: string;                          // stepRef
-  lane?: string | null;
-  name: string;
-  status: 'todo' | 'run' | 'await' | 'done';
-  rounds: FeatureRound[];
-  ret: number;                         // число витков «вернул/с правками»
-  closed?: string | null;              // «снят с выкладки»
+// Счётчики исходов витков (бэк: `FeatureVerdicts`). `loops` — СЧЁТЧИК
+// (`returned + acceptedWithRemarks`), не boolean: «были правки» = `loops > 0`.
+export interface FeatureVerdicts {
+  accepted: number;
+  acceptedWithRemarks: number;
+  returned: number;
+  withdrawn: number;
+  loops: number;
 }
 
-// Состояние фичи: идёт / ждёт человека / смержена / закрыта (спайк).
-export type FeatureState = 'run' | 'wait' | 'done' | 'closed';
-
-// Статус одной стадии конвейера.
-//  none  — задач этой роли в трекере нет
-//  todo  — стадия ещё не начата (нет задач, но ожидается)
-//  run   — идёт
-//  done  — завершена
-//  wait  — ждёт человека (мерж)
-//  loop  — вернула, но не закрыта (финал)
-export type FeatureStageStatus = 'none' | 'todo' | 'run' | 'done' | 'wait' | 'loop';
-
-// Стадия конвейера: разрез → план → производство → ревью → проверка → финал → мерж.
-export interface FeatureStage {
-  key: 'cut' | 'plan' | 'prod' | 'review' | 'check' | 'final' | 'merge';
-  name: string;
-  status: FeatureStageStatus;
-  meta?: string | null;
-  rounds?: FeatureRound[];   // витки стадии (ревью/проверка/финал)
-}
-
-// Агрегат фичи — то, что рисует карточка.
+// Агрегат фичи — зеркало бэкового `FeatureRun`. `epic`/`steps`/`reviews`/`qa`/
+// `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
+// `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
 export interface FeatureRun {
-  id: string;                          // id эпика
-  name: string;                        // заголовок эпика
-  branch?: string | null;
-  kind?: string | null;
-  lanes: { key: string; label: string }[];
-  state: FeatureState;
-  progress: { done: number; total: number };   // принято шагов / всего
-  verdicts: { accepted: number; acceptedWithRemarks: number; returned: number; withdrawn: number };
-  ret: number;                         // суммарные возвраты (уникальные)
-  ready: boolean;                      // final.verdict ∈ {accepted, accepted_with_remarks}
+  featureId: string;
+  epic: FeatureTask;
+  steps: FeatureTask[];
+  reviews: FeatureTask[];
+  qa: FeatureTask[];
+  final: FeatureTask | null;
+  merge: FeatureTask | null;
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
-  merged?: string | null;
-  running: { who: string; title: string; stepId?: string }[];   // «Сейчас»
-  steps: FeatureStep[];
-  stages: FeatureStage[];
+  verdicts: FeatureVerdicts;
+  progress: number;   // доля решённых витков, 0..1
+  ready: boolean;     // финал закрыт с accepted/accepted_with_remarks
 }

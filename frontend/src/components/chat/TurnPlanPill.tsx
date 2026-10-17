@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ListChecks, Route } from 'lucide-react';
 import { C, FONT } from '../../lib/design';
 import { Menu } from '../ui';
@@ -19,17 +19,24 @@ import { FeatureRunView } from './feature/FeatureRunView';
 // Режим по умолчанию — «фича», если она есть, иначе «план». Без фичи в чате
 // переключатель не рендерится, и пилюля/меню остаются прежними.
 //
-// `runs` — агрегаты фич чата (из useFeatureRuns); `todos` — план хода. Пилюля
-// показывается, когда есть хоть что-то: todos.length > 0 ИЛИ runs.length > 0.
+// `runs` — агрегаты фич чата (из useFeatureRuns, бэковый FeatureRun); `todos` — план хода.
+// Пилюля показывается, когда есть хоть что-то: todos.length > 0 ИЛИ runs.length > 0.
 
-// Подпись пилюли в режиме фичи: текущая стадия + прогресс + ↺.
+// Текущая стадия для подписи: по идущим задачам ролей (бэк уже сгруппировал).
+function activeStageName(run: FeatureRun): string {
+  if (run.steps.some(t => t.status === 'inProgress')) return 'Производство';
+  if (run.reviews.some(t => t.status === 'inProgress')) return 'Ревью';
+  if (run.qa.some(t => t.status === 'inProgress')) return 'Проверка';
+  if (run.final && run.final.status === 'inProgress') return 'Финальное ревью';
+  return 'План';
+}
+
+// Подпись пилюли в режиме фичи: состояние (ждёт вас / смержена / финал) или стадия.
 function featurePillLabel(run: FeatureRun): string {
-  if (run.state === 'wait') return 'ждёт вас · мерж';
-  if (run.state === 'done' && run.merged) return 'Фича смержена';
-  if (run.state === 'closed') return 'Спайк закрыт';
-  const running = run.stages.find(s => s.status === 'run');
-  const who = run.running.map(r => r.who).filter((w, i, a) => a.indexOf(w) === i).join(', ');
-  return `${running?.name ?? 'Производство'}${who ? ` · ${who}` : ''}`;
+  if (run.awaitingHumanSince) return 'ждёт вас · мерж';
+  if (run.merge && run.merge.status === 'done') return 'Фича смержена';
+  if (run.ready) return 'Финал зелёный';
+  return activeStageName(run);
 }
 
 export function TurnPlanPill({ todos, runs = [] }: { todos: TodoItem[]; runs?: FeatureRun[] }) {
@@ -37,6 +44,12 @@ export function TurnPlanPill({ todos, runs = [] }: { todos: TodoItem[]; runs?: F
   const hasFeatures = runs.length > 0;
   // Режим по умолчанию: «фича», если она есть, иначе «план».
   const [mode, setMode] = useState<TurnPlanMode>(hasFeatures ? 'feature' : 'plan');
+  // M4: пересчёт режима при изменении НАЛИЧИЯ фич (не только на mount): фичи
+  // появились — дефолт «фича», исчезли — «план». Ручной выбор пользователя
+  // сохраняется, пока наличие фич не меняется.
+  useEffect(() => {
+    setMode(hasFeatures ? 'feature' : 'plan');
+  }, [hasFeatures]);
   const [selected, setSelected] = useState(0);
   const [menu, setMenu] = useState<DOMRect | null>(null);
 
@@ -51,9 +64,10 @@ export function TurnPlanPill({ todos, runs = [] }: { todos: TodoItem[]; runs?: F
   const run = runs[sel];
   const featureMode = hasFeatures && mode === 'feature';
 
-  // Счётчик в шапке: по режиму.
+  // Счётчик в шапке: по режиму. Прогресс фичи — доля решённых витков (0..1 → %),
+  // ↺ — число витков возврата (бэк: verdicts.loops).
   const counter = featureMode && run
-    ? `${run.progress.done}/${run.progress.total}${run.ret ? ` · ↺${run.ret}` : ''}`
+    ? `${Math.round(run.progress * 100)}%${run.verdicts.loops ? ` · ↺${run.verdicts.loops}` : ''}`
     : `${done}/${todos.length}`;
 
   // Текст кнопки-пилюли.
@@ -61,7 +75,7 @@ export function TurnPlanPill({ todos, runs = [] }: { todos: TodoItem[]; runs?: F
   let iconColor: string = C.accent;
   if (featureMode && run) {
     label = featurePillLabel(run);
-    iconColor = run.state === 'wait' ? C.info : C.accent;
+    iconColor = run.awaitingHumanSince ? C.info : C.accent;
   } else if (!hint) {
     iconColor = C.textMuted;
   }

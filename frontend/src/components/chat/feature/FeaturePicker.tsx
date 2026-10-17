@@ -2,11 +2,19 @@ import { C, R } from '../../../lib/design';
 import type { FeatureRun } from '../../../types/featureRun';
 
 // Выбор фичи, когда в чате их несколько: горизонтальный ряд чипов.
-// Каждый чип — глифа состояния + имя фичи; выбранная подсвечена, у той, что
-// показывает пилюля, — маркер. На мобиле ряд скроллится горизонтально.
+// Каждый чип — глифа состояния + имя фичи; выбранная подсвечена. На мобиле
+// ряд скроллится горизонтально.
+
+// Состояние фичи для глифы: из полей бэкового агрегата (ждёт вас / готово / идёт).
+type GlyphState = 'wait' | 'done' | 'closed' | 'run';
+function glyphState(run: FeatureRun): GlyphState {
+  if (run.awaitingHumanSince) return 'wait';
+  if (run.ready || (run.merge && run.merge.status === 'done')) return 'done';
+  return 'run';
+}
 
 // Глифа состояния фичи: маленький SVG-знак (12 px).
-function StateGlyph({ state }: { state: FeatureRun['state'] }) {
+function StateGlyph({ state }: { state: GlyphState }) {
   const common = { width: 12, height: 12, viewBox: '0 0 16 16', 'aria-hidden': true as const };
   switch (state) {
     case 'wait':
@@ -56,10 +64,10 @@ export function FeaturePicker({ runs, selected, onSelect }: {
         const on = i === selected;
         return (
           <button
-            key={run.id}
+            key={run.featureId}
             role="radio"
             aria-checked={on}
-            title={run.branch ?? run.name}
+            title={run.epic.worktreeBranch ?? run.epic.title}
             onClick={() => onSelect(i)}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, maxWidth: 220,
@@ -70,9 +78,9 @@ export function FeaturePicker({ runs, selected, onSelect }: {
               cursor: 'pointer', fontWeight: on ? 600 : 400,
             }}
           >
-            <StateGlyph state={run.state} />
+            <StateGlyph state={glyphState(run)} />
             <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-              {run.name}
+              {run.epic.title}
             </span>
           </button>
         );

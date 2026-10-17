@@ -68,6 +68,7 @@ import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessi
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { useFeatureRuns } from '../lib/featureRuns';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -1757,9 +1758,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const taskTodos = useMemo(
     () => (todoBatches.length ? todoBatches[todoBatches.length - 1].todos : []),
     [todoBatches]);
-  // Агрегаты фич чата (режим «Исполнение фичи»). Пока REST не готов — фикстура;
-  // подмена источника не тронет ни проектор, ни компоненты.
-  const featureRuns = useFeatureRuns();
+  // Режим «Исполнение фичи»: гейт фич-флага (dark-launch) — выключен, фича не
+  // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
+  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
+  const featureRuns = useFeatureRuns(session.id, featureMode);
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента

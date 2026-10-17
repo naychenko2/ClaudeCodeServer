@@ -16,7 +16,7 @@ export function ModeSwitcher({ mode, onMode, hasFeatures }: {
   const btn = (m: TurnPlanMode): React.CSSProperties => {
     const on = mode === m;
     return {
-      border: 'none', borderRadius: R.lg - 3, cursor: 'pointer',
+      border: 'none', borderRadius: R.md, cursor: 'pointer',
       fontSize: 11, fontWeight: 600, padding: '2px 8px', minHeight: 20,
       background: on ? C.accentLight : 'transparent',
       color: on ? C.accent : C.textMuted,

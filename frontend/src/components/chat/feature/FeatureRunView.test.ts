@@ -1,61 +1,103 @@
-// Карточка фичи (режим «Исполнение фичи»): статический рендер по фикстуре.
-// Проверяем три вещи из постановки:
-//   1. рендер по фикстуре — имя, «Сейчас», шаги, конвейер;
-//   2. отображение progress — «N из M шагов»;
-//   3. реакция на verdict — смена вердикта витка меняет подпись «↺».
-//
-// Рендер — renderToStaticMarkup (паттерн соседних тестов, @testing-library нет).
+// Карточка фичи (режим «Исполнение фичи») + гейт фич-флага.
+// Рендер — renderToStaticMarkup (паттерн соседних тестов, @testing-library нет;
+// окружение node — window undefined, useIsMobile() = false, effects не идут).
+// Проверяем:
+//   1. M1/M3: рендер по БЭКОВОМУ FeatureRun — имя, ветка, прогресс, «финал
+//      зелёный», «ждёт вас», «Ревью не было», действия куратора;
+//   2. M2: гейт — runs=[] → пилюля в режиме плана, runs=[run] → режим фичи;
+//   3. M7: мобила (useIsMobile) не рвёт SSR-рендер.
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { projectFeatureRun } from '../../../lib/featureRuns';
-import type { FeatureTask } from '../../../types/featureRun';
-import fixture from '../../../__fixtures__/feature-runs.json';
+import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
+import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView } from './FeatureRunView';
+import { TurnPlanPill } from '../TurnPlanPill';
 
-const tasks = fixture as FeatureTask[];
-const epic = tasks.find(t => t.role === 'feature')!;
-
-// Копия фикстуры с переписанным вердиктом ревью cc-r1: исходный accepted_with_remarks
-// (считается возвратом) → вариант 'accepted' (без возврата) и 'returned' (явный возврат).
-function withVerdict(verdict: 'accepted' | 'returned'): FeatureTask[] {
-  return tasks.map(t => (t.id === 'cc-r1'
-    ? { ...t, verification: { verdict } }
-    : t));
+// Задача-заглушка (подмножество TaskItem, как несёт GET /api/tasks/features).
+function task(over: Partial<FeatureTask> = {}): FeatureTask {
+  return { id: 't', title: 'Задача', status: 'todo', ...over };
 }
 
-// createElement, а не JSX: тест .ts (в конфиге vitest include только *.test.ts).
-const render = (list: FeatureTask[]) => {
-  const run = projectFeatureRun(epic, list)!;
-  return { run, html: renderToStaticMarkup(createElement(FeatureRunView, { run })) };
-};
+// Базовый агрегат фичи: эпик + шаг + ревью + финал; готовность/прогресс/вердикты.
+function run(over: Partial<FeatureRun> = {}): FeatureRun {
+  return {
+    featureId: 'epic-1',
+    epic: task({ id: 'epic-1', title: 'Пульт куратора', worktreeBranch: 'feat/curator-console' }),
+    steps: [task({ id: 's1', title: 'Шаг 1', stepRef: 'Ш1', lane: 'фронт', status: 'done' })],
+    reviews: [task({ id: 'r1', title: 'Ревью', status: 'done', verification: { verdict: 'accepted' } })],
+    qa: [],
+    final: task({ id: 'f1', title: 'Финал', status: 'done', verification: { verdict: 'accepted' } }),
+    merge: null,
+    awaitingHumanSince: null,
+    awaitingHumanReason: null,
+    verdicts: { accepted: 2, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+    progress: 1,
+    ready: true,
+    ...over,
+  };
+}
 
-describe('FeatureRunView', () => {
-  it('рендерит карточку по фикстуре: имя, «Сейчас», шаги и конвейер', () => {
-    const { html } = render(tasks);
-    expect(html).toContain('Пульт куратора');            // имя фичи
-    expect(html).toContain('feat/curator-console');       // ветка
-    expect(html).toContain('Сейчас');                     // идущие задачи
-    expect(html).toContain('Конвейер');                   // секция конвейера
-    expect(html).toContain('Производство');              // стадия конвейера
-    // Все четыре шага фичи на месте
-    for (const id of ['Ш1', 'Ш2', 'Ш3', 'Ш4']) expect(html).toContain(id);
+const render = (r: FeatureRun) => renderToStaticMarkup(createElement(FeatureRunView, { run: r }));
+
+describe('FeatureRunView (бэковый FeatureRun)', () => {
+  it('M1: имя, ветка, прогресс и «финал зелёный»', () => {
+    const html = render(run());
+    expect(html).toContain('Пульт куратора');
+    expect(html).toContain('feat/curator-console');
+    expect(html).toContain('100%');
+    expect(html).toContain('Финал зелёный');
   });
 
-  it('показывает progress «N из M шагов»', () => {
-    const { run, html } = render(tasks);
-    // 4 шага, 2 завершены (Ш1, Ш2) → «2 из 4 шага» (4 → форма «шага»)
-    expect(run.progress).toEqual({ done: 2, total: 4 });
-    expect(html).toContain('2 из 4 шага');
+  it('M3: «Принять» + «Изменить ход» + последствия (closed)', () => {
+    const html = render(run());
+    expect(html).toContain('Принять');
+    expect(html).toContain('Изменить ход');
+    expect(html).toContain('closed');
   });
 
-  it('реагирует на verdict: возврат витка даёт «↺1», принятие — без него', () => {
-    const accepted = render(withVerdict('accepted'));
-    const returned = render(withVerdict('returned'));
-    // Принято — возврата нет; возвращено — виток считается возвратом.
-    expect(accepted.html).not.toContain('↺1');
-    expect(returned.html).toContain('↺1');
-    // Итоговые разметки различаются — UI действительно зависит от вердикта.
-    expect(returned.html).not.toEqual(accepted.html);
+  it('M3: «Принять» неактивно, когда финал не закрыт', () => {
+    const html = render(run({
+      ready: false,
+      final: null,
+      progress: 0.5,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+    }));
+    expect(html).toContain('Принять');
+    expect(html).toContain('Доступно, когда финал закрыт');
+  });
+
+  it('M3: «Ревью не было» — когда ревью нет', () => {
+    const html = render(run({ reviews: [] }));
+    expect(html).toContain('Ревью не было');
+  });
+
+  it('M3: «Ждёт вас» — когда awaitingHumanSince стоит', () => {
+    const html = render(run({
+      ready: false,
+      awaitingHumanSince: '2026-10-17T10:00:00Z',
+      awaitingHumanReason: 'нужно решение о мерже',
+    }));
+    expect(html).toContain('Ждёт вас');
+    expect(html).toContain('нужно решение о мерже');
+  });
+
+  it('M7: мобила (useIsMobile) не рвёт SSR-рендер', () => {
+    expect(() => render(run())).not.toThrow();
+  });
+});
+
+describe('Гейт фич-флага (M2)', () => {
+  const todo: TodoItem = { content: 'Шаг плана', status: 'pending' };
+
+  it('runs=[] → пилюля в режиме плана (нет «исполнение фичи»)', () => {
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [todo], runs: [] }));
+    expect(html).toContain('Показать план хода');
+    expect(html).not.toContain('Показать исполнение фичи');
+  });
+
+  it('runs=[run] → пилюля в режиме фичи', () => {
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs: [run()] }));
+    expect(html).toContain('Показать исполнение фичи');
   });
 });

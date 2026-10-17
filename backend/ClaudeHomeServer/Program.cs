@@ -513,6 +513,10 @@ builder.Services.AddGatedHostedService<ImageChatV3Migration>(builder.Configurati
 // читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
 // генератор текста через ICheapTextRunner (см. шапку файла).
 builder.Services.AddSingleton<ChatDigestService>();
+// Перенос в новый чат (место chat-handoff): тот же класс сервиса, что сводка карточки —
+// читает историю чата и создаёт чат-преемника через SessionManager, модель — через
+// ICheapTextRunner (docs/features/chat-handoff.md).
+builder.Services.AddSingleton<ChatHandoffService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();

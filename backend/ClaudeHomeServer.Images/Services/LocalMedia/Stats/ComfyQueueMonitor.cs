@@ -51,6 +51,12 @@ public sealed class ComfyQueueMonitor(
     // Wake-токен: Touch() будит монитор, не досиживая текущую паузу (иначе снимок устаревает)
     private CancellationTokenSource? _wakeCts;
     private readonly object _touchLock = new();
+    // Тип текущей паузы: Touch будит только из простоя (IdlePoll); активная пауза 2с не прерывается,
+    // иначе K опросчиков (адаптеры редакторов, цикл 2–3 с) рвут нижнюю границу частоты опроса.
+    // private set: выставляется DelayAsync под _touchLock; тесты ждут по нему «монитор вошёл в паузу»
+    internal bool LastPauseIsIdle { get; private set; }
+    // Монитор спит в DelayAsync (Task.Delay висит): тесты ждут по этому признаку, а не по 50мс по часам
+    internal bool InDelay { get; private set; }
 
     // Последний вычисленный период: тесты проверяют переключение 2с ↔ 15с
     internal TimeSpan LastDelay { get; private set; }
@@ -85,7 +91,10 @@ public sealed class ComfyQueueMonitor(
         lock (_touchLock)
         {
             _lastTouch = _time.GetUtcNow();
-            _wakeCts?.Cancel();
+            // Будим только из простоя: активная пауза 2с не прерывается — нижняя граница частоты
+            // опроса (2с) не рвётся K опросчиками, даже если панель открыта и задачи активны
+            if (LastPauseIsIdle)
+                _wakeCts?.Cancel();
         }
     }
 
@@ -100,7 +109,7 @@ public sealed class ComfyQueueMonitor(
         while (!stoppingToken.IsCancellationRequested)
         {
             await TickAsync(stoppingToken);
-            if (!await DelayAsync(LastDelay, stoppingToken)) return;
+            if (!await DelayAsync(stoppingToken)) return;
         }
     }
 
@@ -294,16 +303,24 @@ public sealed class ComfyQueueMonitor(
         }
     }
 
-    // Пауза между тиками: Task.Delay(delay) с объединением stoppingToken и wake-токена.
-    // Touch() будит монитор, не досиживая текущую паузу (иначе снимок простоял бы до 15с);
-    // stop (stoppingToken) — выход из цикла.
-    private async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
+    // Пауза между тиками: Task.Delay с объединением stoppingToken и wake-токена. Период
+    // пересчитывается под _touchLock (не из LastDelay): Touch, пришедший во время тика (между
+    // TickAsync и DelayAsync), не теряется — пауза сразу 2с, а не 15. Touch будит только из
+    // простоя (см. Touch); stop (stoppingToken) — выход из цикла.
+    private async Task<bool> DelayAsync(CancellationToken ct)
     {
+        CancellationTokenSource? old;
         CancellationTokenSource wake;
+        TimeSpan delay;
         lock (_touchLock)
         {
+            delay = (RecentlyTouched() || ledger.HasActive()) ? ActivePoll : IdlePoll;
+            LastPauseIsIdle = delay == IdlePoll;
+            InDelay = true;
+            old = _wakeCts;
             wake = _wakeCts = new CancellationTokenSource();
         }
+        old?.Dispose();   // старый wake-токен освобождаем: не копим хвост CTS
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, wake.Token);
         try
         {
@@ -314,6 +331,10 @@ public sealed class ComfyQueueMonitor(
         {
             // ct (stop) — выход из цикла; wake (Touch) — цикл продолжается
             return !ct.IsCancellationRequested;
+        }
+        finally
+        {
+            InDelay = false;
         }
     }
 }

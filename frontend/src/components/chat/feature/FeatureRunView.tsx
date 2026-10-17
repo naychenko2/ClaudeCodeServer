@@ -131,25 +131,40 @@ function StatusAlert({ tone, children }: { tone: 'wait' | 'done'; children: Reac
   );
 }
 
+// Пока REST-эндпоинта accept (этап 2.6) нет — «Принять» не фиксирует эпик, а показывает
+// заглушку: кнопка secondary + «Доступно с релизом 2.6». Поднять в true, когда появится
+// POST /api/tasks/{finalId}/accept.
+const ACCEPT_READY = false;
+
 // Действия куратора: «Принять» (финал) + «Изменить ход» (модал-заглушка).
-// «Принять» доступно, когда финал закрыт (run.ready); «Изменить ход» — заглушка
+// «Принять» активно, когда финал закрыт (run.ready); «Изменить ход» — заглушка
 // «Скоро» (реальные поля — в этапе 2.5). Диалог показывает последствия.
 function CuratorActions({ run }: { run: FeatureRun }) {
   const [confirmAccept, setConfirmAccept] = useState(false);
   const [changePlan, setChangePlan] = useState(false);
   const [accepted, setAccepted] = useState(false);
 
-  const canAccept = run.ready;
+  // run.ready — финал закрыт (кнопка активна). ACCEPT_READY — есть ли реальный эндпоинт
+  // (этап 2.6): пока его нет, «Принять» — заглушка, не фиксация эпика.
+  const ready = run.ready;
+
+  // Тултип: финал не закрыт → «когда финал закрыт»; закрыт, но эндпоинта нет → «с релизом
+  // 2.6»; всё готово → «Принять фичу».
+  const acceptTitle = !ready
+    ? 'Доступно, когда финал закрыт'
+    : ACCEPT_READY
+      ? 'Принять фичу'
+      : 'Доступно с релизом 2.6';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <Button
           size="xs"
-          variant={canAccept ? 'primary' : 'ghost'}
-          disabled={!canAccept}
+          variant={ready ? 'secondary' : 'ghost'}
+          disabled={!ready}
           onClick={() => setConfirmAccept(true)}
-          title={canAccept ? 'Принять фичу' : 'Доступно, когда финал закрыт'}
+          title={acceptTitle}
         >
           Принять
         </Button>
@@ -157,11 +172,13 @@ function CuratorActions({ run }: { run: FeatureRun }) {
           Изменить ход
         </Button>
       </div>
-      {/* Текст последствий под кнопкой: диалог показывает, что будет с эпиком */}
+      {/* Текст под кнопкой: что будет с эпиком (и когда «Принять» станет реальной фиксацией) */}
       <div style={{ fontSize: 11, color: C.textMuted }}>
-        {canAccept
-          ? 'После принятия эпик перейдёт в closed.'
-          : '«Принять» станет доступно, когда финал закрыт.'}
+        {!ready
+          ? '«Принять» станет доступно, когда финал закрыт.'
+          : ACCEPT_READY
+            ? 'После принятия эпик перейдёт в closed.'
+            : 'Доступно с релизом 2.6 — пока не закроет эпик.'}
       </div>
       {accepted && (
         <div style={{ fontSize: 12, color: C.successText }}>Принято. Эпик закрыт.</div>
@@ -170,8 +187,11 @@ function CuratorActions({ run }: { run: FeatureRun }) {
       {confirmAccept && (
         <ConfirmDialog
           title="Принять фичу?"
-          subtitle="После этого эпик перейдёт в closed."
+          subtitle={ACCEPT_READY
+            ? 'После этого эпик перейдёт в closed.'
+            : 'Доступно с релизом 2.6 — пока не закроет эпик.'}
           confirmLabel="Принять"
+          confirmVariant={ACCEPT_READY ? 'primary' : 'secondary'}
           onConfirm={() => { setAccepted(true); setConfirmAccept(false); }}
           onCancel={() => setConfirmAccept(false)}
         />

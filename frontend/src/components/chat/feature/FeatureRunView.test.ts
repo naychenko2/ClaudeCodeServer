@@ -49,11 +49,14 @@ describe('FeatureRunView (бэковый FeatureRun)', () => {
     expect(html).toContain('Финал зелёный');
   });
 
-  it('M3: «Принять» + «Изменить ход» + последствия (closed)', () => {
+  it('M3: «Принять» — заглушка до эндпоинта (secondary, «с релизом 2.6»)', () => {
     const html = render(run());
     expect(html).toContain('Принять');
     expect(html).toContain('Изменить ход');
-    expect(html).toContain('closed');
+    // Пока REST-эндпоинта accept (этап 2.6) нет — «Принять» не фиксирует эпик:
+    // secondary-кнопка + «Доступно с релизом 2.6», а не «перейдёт в closed».
+    expect(html).toContain('Доступно с релизом 2.6');
+    expect(html).not.toContain('После принятия эпик перейдёт в closed');
   });
 
   it('M3: «Принять» неактивно, когда финал не закрыт', () => {

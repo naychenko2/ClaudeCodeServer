@@ -15,10 +15,9 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main: тесты грани поднимают общий стек
-         (JwtService и UserStore для capability-токенов).
-         Прецедент — Dossiers.Tests/Turn.Tests. -->
-    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- Main (шаг 2.2): прямой ProjectReference убран — JwtService/UserStore для
+         capability-токенов приходят транзитно через TestKit.Host (он ссылается на
+         Main). Хост не поднимается. -->
     <!-- TestKit (Core-only хелперы: FakeHostEnvironment/TestFs) + TestKit.Host
          (AgentReleaseFixture/TestWebApplicationFactory) — шаг 1.3. -->
     <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />

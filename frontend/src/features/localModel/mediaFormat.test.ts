@@ -15,7 +15,7 @@ import {
   slotsLine, queueJobLabel, LAST_HOUR_VISIBLE,
   formatDurationHuman, formatClockFromIso, formatClockSecFromIso, formatDayTimeFromIso,
   dayGroupLabel, historyKindLabel, historyOpLabel, historyRowTitle, goneReasonText,
-  humanErrorPhrase, historySummaryLine, historyWaitSeconds, historyWaitLine,
+  humanErrorPhrase, historySummaryLine, historyWaitSeconds, historyWaitLine, historyRowTime,
   seedFormatted, historyVariantCount, historyParamsRows, historyTimeRows,
   historyPeriodTail, historyPeriodFrom, liveCompletionMarker, historyOutcomeBadge,
 } from './mediaFormat';
@@ -488,10 +488,29 @@ describe('historyWaitSeconds / historyWaitLine: ожидание = started − e
     expect(historyWaitSeconds(enq, null)).toBeNull();
     expect(historyWaitSeconds(null, start)).toBeNull();
   });
-  it('«очередь 1 мин 20 с · расчёт 42 с»; без старта — «очередь —»; без расчёта — только очередь', () => {
-    expect(historyWaitLine(enq, start, 42)).toBe('очередь 1 мин 20 с · расчёт 42 с');
-    expect(historyWaitLine(enq, null, null)).toBe('очередь —');
-    expect(historyWaitLine(enq, start, null)).toBe('очередь 1 мин 20 с');
+  it('«очередь 1 мин 20 с»; без старта — «очередь —»', () => {
+    expect(historyWaitLine(enq, start)).toBe('очередь 1 мин 20 с');
+    expect(historyWaitLine(enq, null)).toBe('очередь —');
+  });
+});
+
+describe('historyRowTime: время запуска + длительность, «10:24 · 39 с»', () => {
+  const enq = new Date(2026, 9, 15, 9, 58, 0).toISOString();
+  const start = new Date(2026, 9, 15, 10, 24, 0).toISOString();
+  it('старт + длительность → «ЧЧ:ММ · N с»', () => {
+    expect(historyRowTime({ enqueuedAt: enq, startedAt: start, runSeconds: 39 })).toBe('10:24 · 39 с');
+  });
+  it('длительность ≥ 60 с → «1 мин 12 с»', () => {
+    expect(historyRowTime({ enqueuedAt: enq, startedAt: start, runSeconds: 72 })).toBe('10:24 · 1 мин 12 с');
+  });
+  it('без runSeconds → только время, без « · »', () => {
+    expect(historyRowTime({ enqueuedAt: enq, startedAt: start, runSeconds: null })).toBe('10:24');
+  });
+  it('без startedAt → время постановки (enqueuedAt)', () => {
+    expect(historyRowTime({ enqueuedAt: enq, startedAt: null, runSeconds: null })).toBe('09:58');
+  });
+  it('без всего → пустая строка', () => {
+    expect(historyRowTime({ enqueuedAt: null, startedAt: null, runSeconds: null })).toBe('');
   });
 });
 

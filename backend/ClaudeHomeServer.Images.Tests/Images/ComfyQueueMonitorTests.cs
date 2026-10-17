@@ -34,6 +34,10 @@ public class ComfyQueueMonitorTests
         public int QueueCalls { get; private set; }
         // Сбой /queue не-ComfyException (C1): симулирует мусорный тип, проскочивший разбор
         public Exception? ThrowOnQueue { get; set; }
+        // Ворота: блок первого /queue, чтобы тест поймал Touch «во время тика» (между TickAsync и
+        // DelayAsync). QueueGateHit — монитор уже в GetQueueAsync (LastDelay вычислен), Touch не потерян
+        public TaskCompletionSource? QueueGate { get; set; }
+        public bool QueueGateHit { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -43,6 +47,11 @@ public class ComfyQueueMonitorTests
             if (request.Method == HttpMethod.Get && path == "/queue")
             {
                 if (ThrowOnQueue is { } ex) throw ex;
+                if (QueueGate is { } gate)
+                {
+                    QueueGateHit = true;
+                    await gate.Task;   // блокирует первый вызов; после SetResult — мгновенно
+                }
                 QueueCalls++;
                 return Json(new JsonObject
                 {
@@ -368,6 +377,103 @@ public class ComfyQueueMonitorTests
         await h.Monitor.TickAsync(CancellationToken.None);
 
         h.Monitor.Snapshot!.Running.Should().HaveCount(1, "после сбоя цикл продолжил работу");
+    }
+
+    // ─── Touch будит монитор, не досиживая текущую паузу (фантомная очередь) ───────────────
+
+    // В простое монитор досиживает паузу 15с; Touch (опрос вкладки «Медиа») будит его сразу,
+    // иначе снимок устаревает до 15с после открытия панели. ManualTime не двигает Task.Delay,
+    // поэтому второй тик возможен ТОЛЬКО через отмену wake-токена. Мутация: убрать
+    // _wakeCts?.Cancel() в Touch — монитор досиживает паузу, второй тик не происходит, тест краснеет.
+    [Fact]
+    public async Task Touch_БудитМонитор_НеДосиживаяТекущуюПаузу()
+    {
+        var h = Build();
+        var cts = new CancellationTokenSource();
+        await h.Monitor.StartAsync(cts.Token);
+
+        // Первый тик прошёл (QueueCalls=1); ждём наблюдаемого признака «монитор вошёл в паузу»
+        // (InDelay), а не 50мс по часам — на загруженном CI сон по таймеру мог мигать
+        await WaitUntil(() => h.Fake.QueueCalls >= 1);
+        await WaitUntil(() => h.Monitor.InDelay);
+
+        // Touch будит монитор: второй тик происходит, не дожидаясь 15с
+        h.Monitor.Touch();
+        await WaitUntil(() => h.Fake.QueueCalls >= 2);
+
+        cts.Cancel();
+        await h.Monitor.StopAsync(CancellationToken.None);
+
+        h.Fake.QueueCalls.Should().BeGreaterThanOrEqualTo(2, "Touch будит монитор — второй тик без ожидания 15с");
+    }
+
+    // Touch во время АКТИВНОЙ паузы (2с) монитор не будит: нижняя граница частоты опроса (2с)
+    // не рвётся K опросчиками (адаптеры редакторов, цикл 2–3 с) при открытых панели и задачах.
+    // Мутация: убрать `if (LastPauseIsIdle)` в Touch — wake-токен отменяется, лишний тик в пределах
+    // 200мс, тест краснеет.
+    [Fact]
+    public async Task Touch_ВоВремяАктивнойПаузы_НеДаетЛишнегоТика()
+    {
+        var h = Build();
+        h.Ledger.Register("p1", Origin(), 42);   // активная задача → активная пауза 2с
+        var cts = new CancellationTokenSource();
+        await h.Monitor.StartAsync(cts.Token);
+
+        // Первый тик: активная задача → активная пауза 2с; ждём, пока монитор вошёл в неё
+        await WaitUntil(() => h.Fake.QueueCalls >= 1);
+        await WaitUntil(() => h.Monitor.InDelay && !h.Monitor.LastPauseIsIdle);
+
+        var before = h.Fake.QueueCalls;
+        h.Monitor.Touch();   // активная пауза → wake-токен НЕ отменяется
+
+        // ~200мс (<< 2с): если бы Touch будил из активной паузы, был бы лишний тик
+        await Task.Delay(200);
+        h.Fake.QueueCalls.Should().Be(before, "активная пауза 2с не прервана Touch — лишнего тика нет");
+
+        cts.Cancel();
+        await h.Monitor.StopAsync(CancellationToken.None);
+    }
+
+    // Гонка: Touch, пришедший во время тика (между TickAsync и DelayAsync), не теряется. До
+    // правки период брался из LastDelay (вычислен в TickAsync = IdlePoll, 15с), и Touch, отменив
+    // уже отработавший wake-токен, терялся — монитор досиживал 15с. Теперь DelayAsync пересчитывает
+    // период под lock: Touch ставит _lastTouch, и DelayAsync сразу берёт ActivePoll (2с).
+    // Ворота QueueGate блокируют первый /queue: Touch приходит, пока TickAsync в GetQueueAsync.
+    // Мутация: вернуть период в DelayAsync к LastDelay (без пересчёта) — следующий тик через 15с,
+    // в пределах 5с второй тик не происходит, тест краснеет.
+    [Fact]
+    public async Task Touch_ВоВремяТика_НеТеряется_СледующийТик_В_АктивнойПаузе()
+    {
+        var h = Build();
+        h.Fake.QueueGate = new TaskCompletionSource();
+        var cts = new CancellationTokenSource();
+        await h.Monitor.StartAsync(cts.Token);
+
+        // Первый тик: TickAsync вычислил LastDelay = IdlePoll (нет активных, нет Touch) и ушёл в
+        // GetQueueAsync (ворота). Ждём, пока монитор реально в опросе очереди (QueueGateHit)
+        await WaitUntil(() => h.Fake.QueueGateHit);
+
+        // Touch «во время тика»: ставит _lastTouch, пока TickAsync ещё в GetQueueAsync
+        h.Monitor.Touch();
+
+        // Открываем ворота: TickAsync завершится, DelayAsync пересчитает период на ActivePoll (2с)
+        h.Fake.QueueGate!.SetResult();
+
+        // Второй тик в пределах ~2с (ActivePoll), а не 15с (IdlePoll). Потолок 5с: 2с << 5с << 15с
+        await WaitUntil(() => h.Fake.QueueCalls >= 2, 5000);
+        h.Fake.QueueCalls.Should().BeGreaterThanOrEqualTo(2,
+            "Touch во время тика не потерян — следующий тик в пределах ActivePoll, а не IdlePoll");
+
+        cts.Cancel();
+        await h.Monitor.StopAsync(CancellationToken.None);
+    }
+
+    // Хелпер: ждать условие (реальное время, с потолком) — для асинхронного цикла монитора
+    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 2000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!cond() && sw.ElapsedMilliseconds < timeoutMs)
+            await Task.Delay(5);
     }
 
     // Хелпер: классификация по prompt_id из снимка

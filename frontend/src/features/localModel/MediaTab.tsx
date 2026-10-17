@@ -364,7 +364,12 @@ function QueueRow({ q, isMobile, onOpen }: { q: MediaQueue; isMobile: boolean; o
 }
 
 function QueueCard({ media, isMobile, onOpen }: { media: LocalModelMedia; isMobile: boolean; onOpen: (id: string) => void }) {
-  const { used, limit } = media.slots;
+  // used = только идущие (accent), queued = ждущие (info);
+  // media.slots.used (running+pending) здесь НЕ используем — иначе ждущие
+  // красились бы и как «занято», и как «ждёт». Ёмкость (limit) и подпись
+  // slotsLine() по-прежнему идут от media.slots.
+  const { limit } = media.slots;
+  const used = media.running.length;
   const queued = media.queue.length;
   return (
     <Card

@@ -1,4 +1,5 @@
 using System.Reflection;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Reader;
 using ClaudeHomeServer.Tests.Helpers;
@@ -50,7 +51,7 @@ public class ReaderSubsystemRegistrationTests
     }
 
     [Fact]
-    public void Register_ИменованныйКлиентСФабрикойХендлера_SocketsHttpHandlerБезПрокси()
+    public void Register_ИменованныйКлиентСФабрикойХендлера_PrimarySsrfSafeHttpHandler()
     {
         var (services, config) = NewHost();
         services.AddSubsystems(config, new ReaderSubsystem());
@@ -64,10 +65,13 @@ public class ReaderSubsystemRegistrationTests
         // ASP.NET кладёт дефолтный `HttpClientHandler` с `UseProxy=true` — и клиент
         // уезжает через системный egress, а тот релеит на приватные адреса без
         // фильтрации (ADR-005 §2). Тест должен падать в этом случае.
+        // Primary обязан быть самой SSRF-обёрткой: голый `SocketsHttpHandler { UseProxy = false }`
+        // тоже без прокси, но без `ConnectCallback` примитива — проверяем тип ДО спуска внутрь
         var primary = UnwrapPrimary(client);
-        Assert.IsType<SocketsHttpHandler>(primary);
-        var sockets = (SocketsHttpHandler)primary;
-        Assert.False(sockets.UseProxy);
+        var safe = Assert.IsType<SsrfSafeHttpHandler>(primary);
+        Assert.Same(safe.Transport, safe.InnerHandler);
+        Assert.False(safe.Transport.UseProxy);
+        Assert.NotNull(safe.Transport.ConnectCallback);
     }
 
     // Сторож факта подключения в Program.cs: поднимает полный стенд через
@@ -84,8 +88,10 @@ public class ReaderSubsystemRegistrationTests
         sp.GetRequiredService<ReaderQuotaService>();
     }
 
-    // HttpClient оборачивает primary-билдер декораторами (Logging/Activities), поэтому
-    // реальный handler сидит в `InnerHandler` цепочки. Идём до non-delegating.
+    // HttpClient оборачивает primary-билдер декораторами фабрики (Logging/Activities,
+    // LifetimeTracking — все из Microsoft.Extensions.Http), поэтому реальный handler сидит в
+    // `InnerHandler` цепочки. Снимаем только декораторы фабрики: primary сам может быть
+    // `DelegatingHandler` (SSRF-обёртка), и спуск через него скрыл бы подмену.
     //
     // Где достать сам primary-handler:
     // - .NET 8/9: HttpClient композировал HttpMessageInvoker, у него было internal
@@ -100,7 +106,8 @@ public class ReaderSubsystemRegistrationTests
         var primary = GetPrimaryHandler(client);
         Assert.NotNull(primary);
 
-        while (primary is DelegatingHandler decorating)
+        while (primary is DelegatingHandler decorating
+               && decorating.GetType().Namespace?.StartsWith("Microsoft.Extensions.Http", StringComparison.Ordinal) == true)
         {
             Assert.NotNull(decorating.InnerHandler);
             primary = decorating.InnerHandler;

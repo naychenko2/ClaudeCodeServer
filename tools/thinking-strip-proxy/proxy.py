@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time
+import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time, uuid
 from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -1948,7 +1948,9 @@ class ВставкаВJson:
 
 
 def retry_body(body):
-    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать."""
+    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING, и новый
+    cache_salt — повтор идёт мимо prefix cache (та же соль → та же петля; замер S0 2026-10-17).
+    Исходное тело не трогается: соль только в повторе. None — не разобрать."""
     try:
         doc = json.loads(body)
         if not isinstance(doc, dict):
@@ -1961,6 +1963,8 @@ def retry_body(body):
             if ключ == "presence_penalty":
                 стало = min(стало, 2.0)
             doc[ключ] = стало
+        cache_salt = uuid.uuid4().hex
+        doc["cache_salt"] = cache_salt
         return json.dumps(doc, ensure_ascii=False).encode("utf-8")
     except Exception:
         return None

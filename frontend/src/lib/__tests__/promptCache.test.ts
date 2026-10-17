@@ -1,6 +1,32 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, PromptCacheInfo } from '../../types';
-import { promptCacheState, rewriteCostUsd } from '../promptCache';
+import { cacheNoteText, promptCacheState, rewriteCostUsd } from '../promptCache';
+
+describe('cacheNoteText', () => {
+  const rewrite = { tokens: '120.0k', usd: '$1.80', apiTariff: true };
+
+  it('пока идёт ход — ни остатка, ни цены, при любом статусе', () => {
+    for (const status of ['warm', 'expiring', 'cold'] as const) {
+      const text = cacheNoteText(status, true, rewrite);
+      expect(text).toBe('Обновится после хода.');
+      expect(text).not.toContain('$');
+    }
+  });
+
+  it('тёплый и остывающий — одна короткая строка', () => {
+    expect(cacheNoteText('warm', false)).toBe('Ход до конца срока читает кэш в 10 раз дешевле. Каждый ход продлевает срок.');
+    expect(cacheNoteText('expiring', false, rewrite)).toBe(cacheNoteText('warm', false));
+  });
+
+  it('остывший — объём и цена перезаписи', () => {
+    expect(cacheNoteText('cold', false, rewrite)).toBe('Следующий ход перепишет ≈120.0k токенов, ≈$1.80 по API-тарифу.');
+    expect(cacheNoteText('cold', false, { tokens: '5.0k', usd: '$0.10' })).toBe('Следующий ход перепишет ≈5.0k токенов, ≈$0.10.');
+  });
+
+  it('остывший без данных — без чисел', () => {
+    expect(cacheNoteText('cold', false)).toBe('Следующий ход перепишет кэш заново.');
+  });
+});
 
 const MIN = 60_000;
 const T0 = 1_700_000_000_000;

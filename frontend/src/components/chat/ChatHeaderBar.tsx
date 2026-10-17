@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { rewriteCostUsd, cacheLeftText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { rewriteCostUsd, cacheLeftText, cacheNoteText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -740,19 +740,26 @@ function CacheClockFace({ items, isWaiting, isCompact }: { items: ChatItem[]; is
   );
 }
 
-// Тело попапа: срок, остаток, объём в кэше, последний промах и цена перезаписи остывшего кэша
-function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling }) {
+// Тело попапа: срок, остаток, объём в кэше, последний промах и цена перезаписи остывшего кэша.
+// Пока идёт ход (isWaiting), остаток и прогноз перезаписи скрыты — как на лице пилюли:
+// они считаются от якоря прошлого хода и к начатому ходу уже не относятся
+function PromptCacheDetails({ items, state, billing, isWaiting }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling; isWaiting: boolean }) {
   const { status, ttl, prefixTokens, lastMiss, remainingMs } = state;
   const cold = status === 'cold';
   const rewrite = useMemo(
-    () => (cold && ttl && prefixTokens ? rewriteCostUsd(items, ttl, prefixTokens) : undefined),
-    [items, cold, ttl, prefixTokens]);
+    () => (cold && !isWaiting && ttl && prefixTokens ? rewriteCostUsd(items, ttl, prefixTokens) : undefined),
+    [items, cold, isWaiting, ttl, prefixTokens]);
   if (status === 'unknown') return null;
+  const note = cacheNoteText(status, isWaiting, {
+    tokens: prefixTokens !== undefined ? fmtTokens(prefixTokens) : undefined,
+    usd: rewrite !== undefined ? fmtUsd(rewrite) : undefined,
+    apiTariff: billing === 'subscription',
+  });
   return (
     <>
       <div style={badgeTitleStyle}>Кэш промпта</div>
-      <BadgeRow k="Состояние" v={CACHE_STATUS_TEXT[status]} />
-      {!cold && remainingMs !== undefined && <BadgeRow k="Осталось" v={cacheLeftText(remainingMs)} />}
+      <BadgeRow k="Состояние" v={isWaiting ? 'идёт ход' : CACHE_STATUS_TEXT[status]} />
+      {!isWaiting && !cold && remainingMs !== undefined && <BadgeRow k="Осталось" v={cacheLeftText(remainingMs)} />}
       {ttl && <BadgeRow k="Срок кэша" v={ttl === '1h' ? '1 час' : '5 минут'} />}
       {/* prefixTokens — неизменное начало запроса: системный промпт, инструменты и история */}
       {prefixTokens !== undefined && <BadgeRow k="В кэше" v={`${fmtTokens(prefixTokens)} токенов`} />}
@@ -762,23 +769,21 @@ function PromptCacheDetails({ items, state, billing }: { items: ChatItem[]; stat
           ? <>{lastMiss.label}{lastMiss.tokens ? ` · переписано ${fmtTokens(lastMiss.tokens)} токенов` : ''}</>
           : 'в этом чате не было'}
       </div>
-      <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
-        {cold
-          ? <>Следующий ход перепишет кэш заново{prefixTokens !== undefined ? ` — ≈${fmtTokens(prefixTokens)} токенов` : ''}
-              {rewrite !== undefined ? `, ≈${fmtUsd(rewrite)}${billing === 'subscription' ? ' по API-тарифу' : ''}` : ''}.
-              {/* База цены — стоимость прошлого хода целиком: сабагенты на других моделях её искажают */}
-              {rewrite !== undefined ? ' Цена — ориентир: если в ходах работали сабагенты на других моделях, она может быть занижена.' : ''}</>
-          : 'В кэше — системный промпт, инструменты и история чата. Ход до конца срока читает их из кэша в десять раз дешевле обычного входа. Каждый ход продлевает срок.'}
+      {/* База цены — стоимость прошлого хода целиком: сабагенты на других моделях её искажают,
+          поэтому оговорка — подсказкой, а не текстом плашки */}
+      <div title={rewrite !== undefined ? 'Цена — ориентир: сабагенты на других моделях могут её занижать' : undefined}
+        style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
+        {note}
       </div>
     </>
   );
 }
 
 // Детали кэша — секцией поповера пилюли шапки
-function PromptCacheSection({ items, billing, style }: { items: ChatItem[]; billing: ClaudeBilling; style: React.CSSProperties }) {
+function PromptCacheSection({ items, billing, isWaiting, style }: { items: ChatItem[]; billing: ClaudeBilling; isWaiting: boolean; style: React.CSSProperties }) {
   const state = usePromptCache(items);
   if (state.status === 'unknown') return null;
-  return <div style={style}><PromptCacheDetails items={items} state={state} billing={billing} /></div>;
+  return <div style={style}><PromptCacheDetails items={items} state={state} billing={billing} isWaiting={isWaiting} /></div>;
 }
 
 // Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
@@ -979,7 +984,7 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {cacheItems && <PromptCacheSection items={cacheItems} billing={billing} style={sectionDivider} />}
+      {cacheItems && <PromptCacheSection items={cacheItems} billing={billing} isWaiting={props.isWaiting} style={sectionDivider} />}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />

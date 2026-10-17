@@ -66,6 +66,20 @@ export function cacheLeftText(remainingMs: number): string {
   return `${Math.max(1, Math.ceil(remainingMs / 60_000))} мин`;
 }
 
+// Пояснение внизу секции кэша в поповере, одной строкой. Пока идёт ход, якорь вот-вот
+// сдвинется: ни остатка, ни прогноза перезаписи — они относились бы к уже начатому ходу.
+// tokens/usd — уже отформатированные значения (форматтеры живут у вёрстки).
+export function cacheNoteText(
+  status: Exclude<PromptCacheStatus, 'unknown'>, isWaiting: boolean,
+  rewrite?: { tokens?: string; usd?: string; apiTariff?: boolean },
+): string {
+  if (isWaiting) return 'Обновится после хода.';
+  if (status !== 'cold') return 'Ход до конца срока читает кэш в 10 раз дешевле. Каждый ход продлевает срок.';
+  const tokens = rewrite?.tokens ? ` ≈${rewrite.tokens} токенов` : ' кэш заново';
+  const usd = rewrite?.usd ? `, ≈${rewrite.usd}${rewrite.apiTariff ? ' по API-тарифу' : ''}` : '';
+  return `Следующий ход перепишет${tokens}${usd}.`;
+}
+
 // Множители тарифа Anthropic к базовой цене входа: выход ×5, чтение кэша ×0,1, запись
 // кэша ×1,25 на 5 минут и ×2 на час. Абсолютных цен фронт не знает — базу выводим из
 // фактической стоимости последнего хода этого же чата.

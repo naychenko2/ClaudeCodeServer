@@ -36,6 +36,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         var qa = children.Where(t => t.Role == TaskRoles.Qa).ToList();
         var final = children.LastOrDefault(t => t.Role == TaskRoles.Final);
         var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge);
+        var cut = children.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var plan = children.Where(t => t.Role == TaskRoles.Plan).ToList();
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
         var verdictBearing = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
@@ -54,6 +56,136 @@ public sealed class FeatureProjector(TaskManager tasks)
         bool ready = final is not null
             && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
 
+        // Конвейер: 7 стадий в порядке жизненного цикла.
+        var stageDefs = new (string key, List<TaskItem> tasks)[]
+        {
+            ("cut", cut),
+            ("plan", plan),
+            ("prod", steps),
+            ("review", reviews),
+            ("qa", qa),
+            ("final", final is not null ? [final] : []),
+            ("merge", merge is not null ? [merge] : []),
+        };
+
+        // isDone[i]: стадия имеет ≥1 задачи И все они Done.
+        // Мерж done ТОЛЬКО при merge.Status == Done (финал зелёный, а мержа нет → мерж active).
+        bool[] isDone = stageDefs
+            .Select((_, i) => stageDefs[i].tasks.Count > 0
+                && stageDefs[i].tasks.All(t => t.Status == TaskItemStatus.Done))
+            .ToArray();
+
+        // activeIndex: текущая стадия конвейера.
+        // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
+        // 2) Если таких нет (все стадии с задачами пройдены) — merge (последняя),
+        //    если не пройдена: финал зелёный, merge-задачи ещё нет → мерж active.
+        // 3) -1 — все стадии пройдены.
+        int activeIndex = -1;
+        for (int i = 0; i < isDone.Length; i++)
+        {
+            if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
+        }
+        if (activeIndex == -1 && !isDone[^1])
+            activeIndex = isDone.Length - 1;
+
+        var stages = new List<FeatureStage>(stageDefs.Length);
+        for (int i = 0; i < stageDefs.Length; i++)
+        {
+            var (key, tasks) = stageDefs[i];
+
+            // Состояние стадии.
+            string state;
+            if (i == activeIndex)
+                state = "active";
+            else if (isDone[i])
+                state = "done";
+            else
+            {
+                // Не пройдена, не активная: ноль задач → «нет в трекере»,
+                // если какая-либо последующая стадия уже начата (имеет задачи).
+                if (tasks.Count == 0)
+                {
+                    bool laterStarted = stageDefs
+                        .Skip(i + 1).Any(d => d.tasks.Count > 0);
+                    state = laterStarted ? "absent" : "pending";
+                }
+                else
+                {
+                    state = "pending";
+                }
+            }
+
+            // Тон (только у active, иначе null): loop > stopped > wait > run.
+            string? tone = null;
+            if (state == "active")
+            {
+                // loop: активная prod, куда вернули работу (финал или проверка вернули, доработка идёт).
+                bool isLoop = key == "prod"
+                    && ((final is not null
+                        && final.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
+                        || qa.Any(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks));
+                // stopped: идущая задача стадии с ExecutorStoppedAt.
+                bool isStopped = tasks.Any(t => t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is not null);
+                // wait: эпик ждёт человека.
+                bool isWait = epic.AwaitingHumanSince is not null;
+
+                if (isLoop) tone = "loop";
+                else if (isStopped) tone = "stopped";
+                else if (isWait) tone = "wait";
+                else tone = "run";
+            }
+
+            // Число проходов: у prod — 1 + возвраты (returned/awr у review/qa/final),
+            // у остальных — число задач.
+            int passes;
+            switch (key)
+            {
+                case "prod":
+                    int returns = reviews.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
+                        + qa.Count(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks);
+                    if (final is not null && final.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
+                        returns++;
+                    passes = 1 + returns;
+                    break;
+                case "review":
+                    passes = reviews.Count;
+                    break;
+                case "qa":
+                    passes = qa.Count;
+                    break;
+                case "final":
+                    passes = final is not null ? 1 : 0;
+                    break;
+                case "cut":
+                    passes = cut.Count;
+                    break;
+                case "plan":
+                    passes = plan.Count;
+                    break;
+                case "merge":
+                    passes = merge is not null ? 1 : 0;
+                    break;
+                default:
+                    passes = tasks.Count;
+                    break;
+            }
+
+            // RunningSince: ClaudeStartedAt идущей (InProgress) задачи стадии.
+            DateTime? runningSince = state == "active"
+                ? tasks.FirstOrDefault(t => t.Status == TaskItemStatus.InProgress)?.ClaudeStartedAt
+                : null;
+
+            stages.Add(new FeatureStage
+            {
+                Key = key,
+                State = state,
+                Tone = tone,
+                Passes = passes,
+                TaskIds = tasks.Select(t => t.Id).ToList(),
+                RunningSince = runningSince,
+            });
+        }
+
         return new FeatureRun
         {
             FeatureId = epic.Id,
@@ -68,6 +200,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             Verdicts = verdicts,
             Progress = progress,
             Ready = ready,
+            Cut = cut,
+            Plan = plan,
+            Stages = stages,
         };
     }
 

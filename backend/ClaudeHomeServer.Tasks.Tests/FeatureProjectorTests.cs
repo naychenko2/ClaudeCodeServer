@@ -133,4 +133,154 @@ public class FeatureProjectorTests
         ((Action)(() => FeatureProjector.Build(epic, [epic, foreign]))).Should()
             .Throw<ArgumentException>("чужая задача обязана падать явно, а не фильтроваться молча");
     }
+
+    // ─── Б1: стадии конвейера и честный мерж ───────────────────────────────────────────────
+
+    // Финал accepted, merge-задачи нет → merge НЕ done (active, а не done).
+    // Это «честный мерж»: финал зелёный, но мержа не было.
+    [Fact]
+    public void Build_ФиналAcceptedБезМержа_MergeActive()
+    {
+        const string epicId = "epic-merge-test";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem { Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut, Status = TaskItemStatus.Done };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var qa = new TaskItem
+        {
+            Id = "q1", FeatureId = epicId, Role = TaskRoles.Qa, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan, step, review, qa, final]);
+
+        // Все стадии до merge — done; merge — 0 задач → active (не done).
+        var mergeStage = run.Stages.Single(s => s.Key == "merge");
+        mergeStage.State.Should().Be("active",
+            "финал зелёный, а merge-задачи нет — мерж не пройден, а активен");
+        // Все стадии до merge — done.
+        run.Stages.Where(s => s.Key != "merge").Should().OnlyContain(s => s.State == "done");
+    }
+
+    // Нет cut-задачи, а план начат (имеет задачи) → cut = absent («нет в трекере»).
+    [Fact]
+    public void Build_НетCut_ПланНачат_CutAbsent()
+    {
+        const string epicId = "epic-absent-test";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.InProgress };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.InProgress };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step]);
+
+        var cutStage = run.Stages.Single(s => s.Key == "cut");
+        cutStage.State.Should().Be("absent",
+            "у cut ноль задач, а следующая стадия (plan) уже начата — «нет в трекере»");
+        cutStage.Passes.Should().Be(0);
+        cutStage.TaskIds.Should().BeEmpty();
+    }
+
+    // Cut-задача done → cut = done.
+    [Fact]
+    public void Build_CutDone_CutDone()
+    {
+        const string epicId = "epic-cut-done";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem { Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut, Status = TaskItemStatus.Done };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.InProgress };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan]);
+
+        var cutStage = run.Stages.Single(s => s.Key == "cut");
+        cutStage.State.Should().Be("done");
+        cutStage.Passes.Should().Be(1);
+        cutStage.TaskIds.Should().ContainSingle().Which.Should().Be("c1");
+    }
+
+    // У prod при 2 возвратах (2 review с returned) passes == 3 (1 + 2).
+    [Fact]
+    public void Build_ДваВозврата_Passes3()
+    {
+        const string epicId = "epic-passes-test";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.InProgress };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned },
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step, r1, r2]);
+
+        var prodStage = run.Stages.Single(s => s.Key == "prod");
+        prodStage.Passes.Should().Be(3, "1 (базовый проход) + 2 (возврата) = 3");
+    }
+
+    // Тон: финал вернул (returned), доработка (rework) идёт → активная prod с tone = loop.
+    [Fact]
+    public void Build_ФиналВернул_ДоработкаИдёт_ToneLoop()
+    {
+        const string epicId = "epic-loop-test";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var rework = new TaskItem { Id = "rw1", FeatureId = epicId, Role = TaskRoles.Rework, Status = TaskItemStatus.InProgress };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step, rework, final]);
+
+        // Prod: step (done) + rework (inProgress) → не все done → active.
+        var prodStage = run.Stages.Single(s => s.Key == "prod");
+        prodStage.State.Should().Be("active");
+        prodStage.Tone.Should().Be("loop",
+            "финал вернул (returned), доработка (rework) идёт — цикл");
+    }
+
+    // Мутация на правило мержа: если merge done при `|| ready` (финал зелёный),
+    // то тест Build_ФиналAcceptedБезМержа_MergeActive краснеет (merge будет done, а не active).
+    // Мутация: в isDone для merge добавить `|| ready`.
+    [Fact]
+    public void Build_МутацияМержа_ReadyНеДелаетMergeDone()
+    {
+        // Сценарий: финал accepted (ready=true), merge-задачи нет.
+        // Без мутации: merge active. С мутацией `|| ready`: merge done → тест краснеет.
+        const string epicId = "epic-mutation-test";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem { Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut, Status = TaskItemStatus.Done };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan, step, final]);
+
+        // Ready=true (финал accepted), но merge-задачи нет → merge НЕ done.
+        run.Ready.Should().BeTrue();
+        var mergeStage = run.Stages.Single(s => s.Key == "merge");
+        // Мутация: если isDone[merge] = tasks.Count > 0 && all Done || ready → true (ready=true).
+        // Без мутации: isDone[merge] = false (0 задач) → merge active.
+        mergeStage.State.Should().Be("active",
+            "ready=true не делает merge done: мерж — только при merge.Status == Done");
+    }
 }

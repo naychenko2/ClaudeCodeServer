@@ -220,6 +220,136 @@ public sealed class FeatureProjector(TaskManager tasks)
             });
         }
 
+        // ─── Б3: «Сейчас», тревоги, итог ───────────────────────────────────────────────────
+
+        // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
+        // У закрытой фичи список пуст (ни одна задача не InProgress).
+        var nowList = featureTasks
+            .Where(t => t.Status == TaskItemStatus.InProgress)
+            .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
+            .Select(t => new FeatureNow
+            {
+                TaskId = t.Id,
+                Stage = RoleToStage(t.Role),
+                PersonaId = t.PersonaId,
+                StepRef = t.StepRef,
+                Title = t.Title,
+                StartedAt = t.ClaudeStartedAt,
+                LinkedSessionId = t.LinkedSessionId,
+            })
+            .ToList();
+
+        // Тревога: приоритет stopped → wait явный → wait «мерж».
+        FeatureAttention? attention = null;
+
+        // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
+        //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
+        //    перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt), но пометка
+        //    не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
+        var stoppedTask = featureTasks
+            .Where(t => t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStoppedAt is not null
+                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
+            .OrderByDescending(t => t.ExecutorStoppedAt)
+            .FirstOrDefault();
+        if (stoppedTask is not null)
+        {
+            attention = new FeatureAttention
+            {
+                Kind = "stopped",
+                TaskId = stoppedTask.Id,
+                Since = stoppedTask.ExecutorStoppedAt,
+                Reason = stoppedTask.ExecutorStopReason,
+                PersonaId = stoppedTask.PersonaId,
+                LinkedSessionId = stoppedTask.LinkedSessionId,
+            };
+        }
+
+        // 2. wait явный: AwaitingHumanSince у эпика или задачи (ждущий дольше всех).
+        if (attention is null)
+        {
+            var waitTask = featureTasks
+                .Where(t => t.AwaitingHumanSince is not null)
+                .OrderBy(t => t.AwaitingHumanSince)
+                .FirstOrDefault();
+            if (waitTask is not null)
+            {
+                attention = new FeatureAttention
+                {
+                    Kind = "wait",
+                    TaskId = waitTask.Id,
+                    Since = waitTask.AwaitingHumanSince,
+                    Reason = waitTask.AwaitingHumanReason,
+                    PersonaId = waitTask.PersonaId,
+                    LinkedSessionId = waitTask.LinkedSessionId,
+                };
+            }
+        }
+
+        // 3. wait «мерж» — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
+        //    а merge-задачи нет или она не Done. since = CompletedAt финала.
+        if (attention is null)
+        {
+            bool finalAccepted = final is not null
+                && final.Status == TaskItemStatus.Done
+                && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+            bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
+            if (finalAccepted && mergeNotDone)
+            {
+                attention = new FeatureAttention
+                {
+                    Kind = "wait",
+                    TaskId = final!.Id,
+                    Since = final.CompletedAt,
+                    Reason = "мерж",
+                    PersonaId = final.PersonaId,
+                    LinkedSessionId = final.LinkedSessionId,
+                };
+            }
+        }
+
+        // Счётчик шагов: принятые (outcome=accepted) / все (из StepChains).
+        int stepsTotal = stepChains.Count;
+        int stepsAccepted = stepChains.Count(c => c.Outcome == "accepted");
+
+        // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи
+        // (время мержа — это CompletedAt merge-задачи, уже учтено).
+        DateTime? lastActivityAt = null;
+        foreach (var t in featureTasks)
+        {
+            if (t.CompletedAt is not null && (lastActivityAt is null || t.CompletedAt > lastActivityAt))
+                lastActivityAt = t.CompletedAt;
+            if (t.ClaudeStartedAt is not null && (lastActivityAt is null || t.ClaudeStartedAt > lastActivityAt))
+                lastActivityAt = t.ClaudeStartedAt;
+        }
+
+        // Закрыта: merge-задача Done или эпик Done.
+        bool closed = (merge is not null && merge.Status == TaskItemStatus.Done)
+            || epic.Status == TaskItemStatus.Done;
+
+        // Итог смерженной фичи: только у закрытой, иначе null.
+        FeatureSummary? summary = null;
+        if (closed)
+        {
+            // МergedAt: CompletedAt merge-задачи; если мержа нет — CompletedAt эпика.
+            var mergedAt = merge is not null && merge.Status == TaskItemStatus.Done
+                ? merge.CompletedAt
+                : epic.CompletedAt;
+            // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
+            var firstStart = featureTasks
+                .Min(t => t.ClaudeStartedAt ?? t.CreatedAt);
+            var end = mergedAt ?? lastActivityAt ?? DateTime.UtcNow;
+            var duration = Math.Max(0, Math.Round((end - firstStart).TotalMinutes));
+            summary = new FeatureSummary
+            {
+                MergedAt = mergedAt,
+                DurationMinutes = duration,
+                Tasks = featureTasks.Count(),
+                Steps = stepsTotal,
+                Loops = verdicts.Loops,
+            };
+        }
+
         return new FeatureRun
         {
             FeatureId = epic.Id,
@@ -240,6 +370,13 @@ public sealed class FeatureProjector(TaskManager tasks)
             StepChains = stepChains,
             ReturnsBySource = returnsBySource,
             Lanes = lanes,
+            Now = nowList,
+            Attention = attention,
+            StepsAccepted = stepsAccepted,
+            StepsTotal = stepsTotal,
+            LastActivityAt = lastActivityAt,
+            Closed = closed,
+            Summary = summary,
         };
     }
 
@@ -280,6 +417,20 @@ public sealed class FeatureProjector(TaskManager tasks)
         if (l is "front" or "frontend" or "фронт" or "фронтенд") return "front";
         return "other";
     }
+
+    // Роль задачи → ключ стадии конвейера (для блока «Сейчас»).
+    // step/rework → prod; feature/consult/прочее → prod (эпик — контейнер, стадия производства).
+    private static string RoleToStage(string? role) => role switch
+    {
+        TaskRoles.Cut => "cut",
+        TaskRoles.Plan => "plan",
+        TaskRoles.Step or TaskRoles.Rework => "prod",
+        TaskRoles.Review => "review",
+        TaskRoles.Qa => "qa",
+        TaskRoles.Final => "final",
+        TaskRoles.Merge => "merge",
+        _ => "prod",
+    };
 
     // Цепочки шагов: группировка steps (role=step/rework) по stepRef. Порядок групп — по первому
     // появлению (порядок вызывающего); внутри группы — по времени (стабильная сортировка: равные
@@ -521,14 +672,56 @@ public sealed class FeatureProjector(TaskManager tasks)
 
     // Фичи чата (REST ?sessionId=): эпик связан с чатом через SourceSessionId/
     // ExecutorLaunchedBySessionId (разрез §2: «фича переезжает за оркестратором»).
+    // Порядок (правило v2): 1) не закрытые с Attention — по since ascending (ждущая дольше всех);
+    // 2) не закрытые идущие — по max ClaudeStartedAt descending; 3) не закрытые прочие —
+    // по LastActivityAt descending; 4) закрытые — по LastActivityAt descending.
+    // Пилюля показывает runs[0], поэтому порядок определяет бэк, фронт его не пересортирует.
     public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
-        return owner
+        var runs = owner
             .Where(t => t.Role == TaskRoles.Feature
                 && (t.SourceSessionId == sessionId || t.ExecutorLaunchedBySessionId == sessionId))
             .Select(epic => Build(epic, FeatureTasks(epic, owner)))
             .ToList();
+        return OrderRuns(runs);
+    }
+
+    // Порядок фич (правило v2): 4 группы, внутри каждой — свой ключ сортировки.
+    // internal — для золотых тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
+    internal static IReadOnlyList<FeatureRun> OrderRuns(List<FeatureRun> runs)
+    {
+        // 1. Не закрытые с Attention: по since ascending (ждущая дольше всех — первая).
+        var withAttention = runs
+            .Where(r => !r.Closed && r.Attention is not null)
+            .OrderBy(r => r.Attention!.Since ?? DateTime.MaxValue)
+            .ToList();
+
+        // 2. Не закрытые идущие (Now не пуст, Attention null): по max ClaudeStartedAt descending.
+        //    Now[0] — задача с самым поздним ClaudeStartedAt (Now отсортирован по убыванию).
+        var running = runs
+            .Where(r => !r.Closed && r.Attention is null && r.Now.Count > 0)
+            .OrderByDescending(r => r.Now[0].StartedAt ?? DateTime.MinValue)
+            .ToList();
+
+        // 3. Не закрытые прочие (без Attention, не идут): по LastActivityAt descending.
+        var other = runs
+            .Where(r => !r.Closed && r.Attention is null && r.Now.Count == 0)
+            .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
+            .ToList();
+
+        // 4. Закрытые: в конец, по LastActivityAt descending.
+        var closed = runs
+            .Where(r => r.Closed)
+            .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
+            .ToList();
+
+        var result = new List<FeatureRun>(runs.Count);
+        result.AddRange(withAttention);
+        result.AddRange(running);
+        result.AddRange(other);
+        result.AddRange(closed);
+        return result;
     }
 
     // Эпик + все его дочерние (FeatureId == epic.Id) из уже отобранных задач владельца.

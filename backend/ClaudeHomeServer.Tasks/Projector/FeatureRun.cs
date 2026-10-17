@@ -49,6 +49,71 @@ public sealed class FeatureRun
     // Линии (back/front/прочее): исполнители (уникальные, по первому появлению) и счётчики.
     // Из этого фронт рисует «Бэк · Денис · 3 из 4».
     public List<FeatureLane> Lanes { get; init; } = [];
+    // «Сейчас»: все InProgress-задачи фичи, по убыванию ClaudeStartedAt. У закрытой фичи — пусто.
+    // Стадия пилюли фронт берёт у первого элемента; имена — уникальные через запятую.
+    public List<FeatureNow> Now { get; init; } = [];
+    // Тревога: stopped → wait явный → wait «мерж»; один элемент либо null.
+    public FeatureAttention? Attention { get; init; }
+    // Счётчик шагов: принятые (Done) / все (из StepChains).
+    public int StepsAccepted { get; init; }
+    public int StepsTotal { get; init; }
+    // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
+    public DateTime? LastActivityAt { get; init; }
+    // Закрыта: merge-задача Done или эпик Done.
+    public bool Closed { get; init; }
+    // Итог смерженной фичи: только у закрытой, иначе null.
+    public FeatureSummary? Summary { get; init; }
+}
+
+// «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).
+public sealed class FeatureNow
+{
+    // Id задачи.
+    public string TaskId { get; init; } = "";
+    // Стадия конвейера: cut | plan | prod | review | qa | final | merge.
+    public string Stage { get; init; } = "";
+    // Исполнитель (PersonaId задачи).
+    public string? PersonaId { get; init; }
+    // Код шага (у step/rework).
+    public string? StepRef { get; init; }
+    // Название задачи.
+    public string Title { get; init; } = "";
+    // Старт: ClaudeStartedAt задачи (запуск исполнителя); null — не запускалась.
+    public DateTime? StartedAt { get; init; }
+    // Связанный чат исполнителя.
+    public string? LinkedSessionId { get; init; }
+}
+
+// Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → wait «мерж».
+public sealed class FeatureAttention
+{
+    // wait | stopped.
+    public string Kind { get; init; } = "";
+    // Id задачи, к которой относится тревога (у «мерж» — финал).
+    public string? TaskId { get; init; }
+    // С какого момента: ExecutorStoppedAt (stopped) / AwaitingHumanSince (wait) / CompletedAt финала (мерж).
+    public DateTime? Since { get; init; }
+    // Причина: ExecutorStopReason (stopped) / AwaitingHumanReason (wait) / "мерж" (мерж).
+    public string? Reason { get; init; }
+    // Исполнитель (PersonaId задачи).
+    public string? PersonaId { get; init; }
+    // Связанный чат исполнителя.
+    public string? LinkedSessionId { get; init; }
+}
+
+// Итог смерженной фичи: только у закрытой фичи, иначе null.
+public sealed class FeatureSummary
+{
+    // Момент мержа: CompletedAt merge-задачи; null — мержа нет (итог по закрытию эпика).
+    public DateTime? MergedAt { get; init; }
+    // Длительность (минуты): от старта первой задачи до мержа/закрытия.
+    public double DurationMinutes { get; init; }
+    // Число задач фичи (эпик + дочерние).
+    public int Tasks { get; init; }
+    // Число шагов (из StepChains).
+    public int Steps { get; init; }
+    // Число возвратов (Loops).
+    public int Loops { get; init; }
 }
 
 // Счётчики исходов витков (вердиктов) ревью/проверки/финала.

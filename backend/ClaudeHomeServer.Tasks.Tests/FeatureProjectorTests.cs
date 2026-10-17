@@ -432,4 +432,349 @@ public class FeatureProjectorTests
         mergeStage.State.Should().Be("active",
             "ready=true не делает merge done: мерж — только при merge.Status == Done");
     }
+
+    // ─── Б3: «Сейчас», тревоги, итог, порядок ───────────────────────────────────────────────
+
+    // Две идущие задачи → Now из двух, порядок по убыванию ClaudeStartedAt.
+    [Fact]
+    public void Build_ДвеИдущие_NowДваПоУбываниюClaudeStartedAt()
+    {
+        const string epicId = "epic-now-test";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var t1 = new TaskItem
+        {
+            Id = "t1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            PersonaId = "Денис", Title = "шаг 1", LinkedSessionId = "sess-1",
+        };
+        var t2 = new TaskItem
+        {
+            Id = "t2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 0, 0), // позже t1
+            PersonaId = "Кира", Title = "шаг 2", LinkedSessionId = "sess-2",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, t1, t2]);
+
+        run.Now.Should().HaveCount(2, "две InProgress-задачи — два элемента Now");
+        // Порядок по убыванию ClaudeStartedAt: t2 (11:00) перед t1 (10:00).
+        run.Now[0].TaskId.Should().Be("t2");
+        run.Now[1].TaskId.Should().Be("t1");
+        run.Now[0].StartedAt.Should().Be(new DateTime(2026, 10, 17, 11, 0, 0));
+        run.Now[1].StartedAt.Should().Be(new DateTime(2026, 10, 17, 10, 0, 0));
+        // Поля элемента.
+        run.Now[0].PersonaId.Should().Be("Кира");
+        run.Now[0].StepRef.Should().Be("Ш2");
+        run.Now[0].Title.Should().Be("шаг 2");
+        run.Now[0].LinkedSessionId.Should().Be("sess-2");
+        run.Now[0].Stage.Should().Be("prod");
+    }
+
+    // У закрытой фичи Now пуст (все задачи Done).
+    [Fact]
+    public void Build_ЗакрытаяФича_NowПуст()
+    {
+        const string epicId = "epic-closed-now";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.Now.Should().BeEmpty("у закрытой фичи ни одна задача не InProgress");
+    }
+
+    // Финал accepted, merge-задачи нет → Attention = wait / "мерж", since = CompletedAt финала.
+    [Fact]
+    public void Build_ФиналAcceptedБезМержа_AttentionWaitМерж()
+    {
+        const string epicId = "epic-merge-wait";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            PersonaId = "Александр",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        run.Attention.Should().NotBeNull("финал принят, мержа нет — ждём мержа");
+        run.Attention!.Kind.Should().Be("wait");
+        run.Attention.Reason.Should().Be("мерж");
+        run.Attention.Since.Should().Be(new DateTime(2026, 10, 17, 12, 0, 0));
+        run.Attention.TaskId.Should().Be("f1");
+    }
+
+    // Остановленный исполнитель И явный wait у той же фичи → Attention.kind = stopped (приоритет).
+    [Fact]
+    public void Build_ОстановленныйИЯвныйWait_StoppedПриоритет()
+    {
+        const string epicId = "epic-stopped-wait";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            AwaitingHumanSince = new DateTime(2026, 10, 17, 9, 0, 0),
+            AwaitingHumanReason = "ждём решения",
+        };
+        var stopped = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 8, 30, 0), // позже ClaudeStartedAt
+            ExecutorStopReason = "auth_failed",
+            PersonaId = "Денис",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, stopped]);
+
+        run.Attention.Should().NotBeNull();
+        run.Attention!.Kind.Should().Be("stopped", "stopped приоритетнее явного wait");
+        run.Attention.Reason.Should().Be("auth_failed");
+        run.Attention.Since.Should().Be(new DateTime(2026, 10, 17, 8, 30, 0));
+        run.Attention.TaskId.Should().Be("s1");
+    }
+
+    // Явный wait приоритетнее вычисленного «мерж».
+    [Fact]
+    public void Build_ЯвныйWait_ПриоритетнееВычисленногоМержа()
+    {
+        const string epicId = "epic-wait-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            AwaitingHumanSince = new DateTime(2026, 10, 17, 9, 0, 0),
+            AwaitingHumanReason = "ждём решения",
+        };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        // Явный wait (AwaitingHumanSince) приоритетнее вычисленного «мерж».
+        run.Attention.Should().NotBeNull();
+        run.Attention!.Kind.Should().Be("wait");
+        run.Attention.Reason.Should().Be("ждём решения", "явный wait, а не вычисленный «мерж»");
+        run.Attention.Since.Should().Be(new DateTime(2026, 10, 17, 9, 0, 0));
+    }
+
+    // Перезапущенная задача (ClaudeStartedAt позже ExecutorStoppedAt) → stopped нет.
+    [Fact]
+    public void Build_Перезапущенная_StoppedНет()
+    {
+        const string epicId = "epic-rerun";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var task = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            // ClaudeStartedAt (10:00) позже ExecutorStoppedAt (9:00) — исполнитель перезапущен.
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 9, 0, 0),
+            ExecutorStopReason = "auth_failed",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, task]);
+
+        // Guard: ExecutorStoppedAt (9:00) НЕ позже ClaudeStartedAt (10:00) → stopped не показываем.
+        run.Attention.Should().BeNull(
+            "перезапущенная задача: ExecutorStoppedAt раньше ClaudeStartedAt — stale-пометка, stopped нет");
+    }
+
+    // Счётчик шагов: StepsAccepted (outcome=accepted) / StepsTotal (все цепочки).
+    [Fact]
+    public void Build_СчётчикШагов_ПринятыеИВсе()
+    {
+        const string epicId = "epic-steps-count";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            ReviewOf = ["s1"],
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress, // ещё не принят
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1, s2]);
+
+        run.StepsTotal.Should().Be(2, "две цепочки шагов");
+        run.StepsAccepted.Should().Be(1, "Ш1 принят (accepted), Ш2 ещё идёт");
+    }
+
+    // Summary: есть у закрытой фичи, null у открытой.
+    [Fact]
+    public void Build_Summary_ЗакрытаяИОткрытая()
+    {
+        // Открытая фича: Summary null.
+        var epicOpen = new TaskItem { Id = "epic-open", Role = TaskRoles.Feature };
+        var stepOpen = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-open", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+        };
+        var runOpen = FeatureProjector.Build(epicOpen, [epicOpen, stepOpen]);
+        runOpen.Closed.Should().BeFalse();
+        runOpen.Summary.Should().BeNull("у открытой фичи Summary null");
+
+        // Закрытая фича (эпик Done): Summary есть.
+        var epicClosed = new TaskItem { Id = "epic-closed", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var stepClosed = new TaskItem
+        {
+            Id = "s2", FeatureId = "epic-closed", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var runClosed = FeatureProjector.Build(epicClosed, [epicClosed, stepClosed]);
+        runClosed.Closed.Should().BeTrue();
+        runClosed.Summary.Should().NotBeNull("у закрытой фичи Summary есть");
+        runClosed.Summary!.Tasks.Should().Be(2, "эпик + 1 шаг");
+        runClosed.Summary.Steps.Should().Be(1, "1 цепочка шагов");
+        runClosed.Summary.DurationMinutes.Should().Be(120, "2 часа от старта до закрытия");
+    }
+
+    // ─── Б3: порядок фич (правило v2) ────────────────────────────────────────────────────────
+
+    // Порядок на трёх фичах (ждёт · идёт · спокойная) + закрытая — последней.
+    [Fact]
+    public void OrderRuns_ТриФичи_ПорядокПоПравилу()
+    {
+        // Фича A: ждёт (Attention, since 10:00) — первая.
+        var epicA = new TaskItem { Id = "epic-a", Role = TaskRoles.Feature };
+        var waitTaskA = new TaskItem
+        {
+            Id = "a1", FeatureId = "epic-a", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            AwaitingHumanSince = new DateTime(2026, 10, 17, 10, 0, 0),
+            AwaitingHumanReason = "ждём",
+        };
+        var runA = FeatureProjector.Build(epicA, [epicA, waitTaskA]);
+
+        // Фича B: идёт (Now, ClaudeStartedAt 11:00) — вторая.
+        var epicB = new TaskItem { Id = "epic-b", Role = TaskRoles.Feature };
+        var runTaskB = new TaskItem
+        {
+            Id = "b1", FeatureId = "epic-b", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+        };
+        var runB = FeatureProjector.Build(epicB, [epicB, runTaskB]);
+
+        // Фича C: спокойная (без Attention, не идёт) — третья.
+        var epicC = new TaskItem { Id = "epic-c", Role = TaskRoles.Feature };
+        var calmTaskC = new TaskItem
+        {
+            Id = "c1", FeatureId = "epic-c", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Todo,
+        };
+        var runC = FeatureProjector.Build(epicC, [epicC, calmTaskC]);
+
+        // Фича D: закрытая — последняя.
+        var epicD = new TaskItem { Id = "epic-d", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var runD = FeatureProjector.Build(epicD, [epicD]);
+
+        var ordered = FeatureProjector.OrderRuns([runA, runB, runC, runD]);
+
+        ordered.Select(r => r.FeatureId).Should().Equal(
+            new[] { "epic-a", "epic-b", "epic-c", "epic-d" },
+            "1) ждёт (A) → 2) идёт (B) → 3) спокойная (C) → 4) закрытая (D)");
+    }
+
+    // Мутация (а): Now берёт одну задачу вместо списка.
+    // Сломал: Now = [первая InProgress] вместо списка → тест «две идущие» краснеет (HaveCount(1) ≠ 2).
+    [Fact]
+    public void Build_Мутация_NowСписокНеОдна()
+    {
+        const string epicId = "epic-mut-now";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var t1 = new TaskItem
+        {
+            Id = "t1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var t2 = new TaskItem
+        {
+            Id = "t2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, t1, t2]);
+
+        // Мутация: если Now = [первая InProgress] (одна) → HaveCount(1) ≠ 2 → краснеет.
+        run.Now.Should().HaveCount(2, "Now — список всех InProgress, не одна задача");
+    }
+
+    // Мутация (б): приоритет stopped ниже wait.
+    // Сломал: wait явный проверяется ПЕРЕД stopped → тест «stopped + wait → stopped» краснеет.
+    [Fact]
+    public void Build_Мутация_StoppedВышеWait()
+    {
+        const string epicId = "epic-mut-stopped";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            AwaitingHumanSince = new DateTime(2026, 10, 17, 9, 0, 0),
+            AwaitingHumanReason = "ждём",
+        };
+        var stopped = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 8, 30, 0),
+            ExecutorStopReason = "auth_failed",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, stopped]);
+
+        // Мутация: если wait проверяется перед stopped → Kind="wait", а не "stopped" → краснеет.
+        run.Attention!.Kind.Should().Be("stopped", "stopped приоритетнее wait");
+    }
+
+    // Мутация (в): убрать вычисление «мерж».
+    // Сломал: Attention = null (без вычисления мержа) → тест «финал accepted, мержа нет» краснеет.
+    [Fact]
+    public void Build_Мутация_МержВычисляется()
+    {
+        const string epicId = "epic-mut-merge";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        // Мутация: если вычисление «мерж» убрано → Attention=null → краснеет.
+        run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = wait/мерж");
+        run.Attention!.Reason.Should().Be("мерж");
+    }
 }

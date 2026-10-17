@@ -367,6 +367,17 @@ JUNK_RUN = int(os.environ.get("JUNK_RUN", "40"))                # одинако
 GUARD_DUMP_DIR = os.environ.get("GUARD_DUMP_DIR", "")
 GUARD_DUMP_KEEP = int(os.environ.get("GUARD_DUMP_KEEP", "30"))
 
+# Карантин сессии после мусора (2026-10-17). Переигровка сработки 22:11 показала: мусор даёт
+# испорченное состояние в prefix cache, а не модель. Тот же запрос мимо кэша (cache_salt) — 7 из 7
+# чисто, через кэш после порчи — 6 из 6 мусор с первых слов. Поэтому «Повтори ход» бесполезен:
+# повтор попадёт в те же блоки. На срыве прокси сам переспрашивает с новой солью (полный префилл,
+# ~70 с на 95K), а сессия и дальше ходит со своей солью: один пересчёт — и кэш снова работает,
+# только в чистом пространстве, куда испорченные блоки не попадают. Остальных сессий это не
+# касается. Карантин живёт в памяти процесса: рестарт прокси его снимает.
+# Дефолт off: включает mode.conf. Откат: CACHE_QUARANTINE=off и рестарт.
+CACHE_QUARANTINE = os.environ.get("CACHE_QUARANTINE", "off")
+_карантин = {}  # заголовок сессии -> cache_salt
+
 # --- Прунинг картинок -----------------------------------------------------------------------
 #
 # Картинки (скриншоты через Read, вложения человека) живут в истории вечно: CLI шлёт её целиком
@@ -396,7 +407,8 @@ stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
          "loops_truncated": 0, "loop_guard_errors": 0,
-         "junk_aborts": 0, "junk_words_max_ratio": 0.0, "guard_dumps": 0}
+         "junk_aborts": 0, "junk_words_max_ratio": 0.0, "guard_dumps": 0,
+         "quarantine_retries": 0, "quarantine_failed": 0, "quarantine_salted": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -1573,7 +1585,8 @@ class ДетекторМусора:
 
     Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
     ```-заборов не считается (длинные токены там легальны). «Слова» без букв и цифр в долю не
-    идут, зато `run` одинаковых таких подряд — второй признак мусора (вырождение в «- - - -»).
+    идут, зато `run` одинаковых токенов подряд — второй признак мусора: вырождение в «- - - -»
+    или в одно слово «like like like…» (числа не в счёт).
     """
 
     def __init__(self, window=None, ratio=None, min_words=None, run=None):
@@ -1587,7 +1600,7 @@ class ДетекторМусора:
         self.хвост = ""
         self.в_коде = False
         self.доля = 0.0  # доля мусора в окне на последней проверке
-        self.пустое, self.подряд = None, 0  # «слово» без букв и цифр и длина цепочки из него
+        self.пустое, self.подряд = None, 0  # последний токен и длина цепочки из него
         self.причина = ""  # чем сработал — для журнала и дампа
         self.сработал = False
 
@@ -1615,15 +1628,21 @@ class ДетекторМусора:
             return False
         if self.в_коде:
             return False
-        if "\ufffd" not in w and not any(ch.isalnum() for ch in w):
-            self.подряд = self.подряд + 1 if w == self.пустое else 1
-            self.пустое = w
-            if self.подряд < self.run:
-                return False
-            self.причина = f"цепочка {self.подряд}× {w!r}"
-            self.сработал = True
-            return True
-        self.пустое, self.подряд = None, 0
+        без_букв = "\ufffd" not in w and not any(ch.isalnum() for ch in w)
+        # Одинаковый токен подряд: «слово» без букв и цифр как есть, слово с буквами — без
+        # регистра и краевой пунктуации («like like like…», 18.10). Числа («0 0 0») — не в счёт.
+        ключ = w if без_букв else w.strip(_JUNK_TRIM).lower()
+        if без_букв or any(ch.isalpha() for ch in ключ):
+            self.подряд = self.подряд + 1 if ключ == self.пустое else 1
+            self.пустое = ключ
+            if self.подряд >= self.run:
+                self.причина = f"цепочка {self.подряд}× {ключ!r}"
+                self.сработал = True
+                return True
+        else:
+            self.пустое, self.подряд = None, 0
+        if без_букв:
+            return False
         мусор = мусорное_слово(w)
         if len(self.окно) == self.окно.maxlen:
             self.мусорных -= self.окно[0]
@@ -1947,6 +1966,18 @@ def retry_body(body):
         return None
 
 
+def salted_body(body, соль):
+    """Тело с cache_salt: vLLM не берёт для него чужие блоки prefix cache. None — не разобрать."""
+    try:
+        doc = json.loads(body)
+        if not isinstance(doc, dict):
+            return None
+        doc["cache_salt"] = соль
+        return json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        return None
+
+
 # --- Дамп тел на диск ------------------------------------------------------------------------
 
 _dump_dir = None  # None — ещё не готовили; "" — дамп выключен (или каталог не годится)
@@ -2191,7 +2222,8 @@ class Handler(BaseHTTPRequestHandler):
         # ПО СЕССИЯМ (сравнивается соседняя пара запросов одного чата), и без него дамп
         # прогона превращается в кашу из ходов исполнителя и фоновых действий продукта.
         сессия = (self.headers.get(EVENT_SESSION_HEADER)
-                  if (BACKEND_EVENTS_URL or DUMP_DIR or GUARD_DUMP_DIR) else None)
+                  if (BACKEND_EVENTS_URL or DUMP_DIR or GUARD_DUMP_DIR
+                      or CACHE_QUARANTINE == "on") else None)
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
         дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
@@ -2301,7 +2333,13 @@ class Handler(BaseHTTPRequestHandler):
                                 "thinkingBlocks": виды.get("thinking", 0) if сдвиг else 0,
                                 "imageBlocks": картинки["pruned"] if картинки else 0,
                                 "imageTokens": картинки["tokens"] if картинки else 0}
-                    if stripped:
+                    соль = (_карантин.get(сессия) if CACHE_QUARANTINE == "on" and сессия
+                            and compact is None else None)
+                    if соль and doc.get("cache_salt") != соль:
+                        doc["cache_salt"] = соль
+                        with lock:
+                            stats["quarantine_salted"] += 1
+                    if stripped or соль:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
             except Exception as e:
                 # fail-open: не наш формат ИЛИ неожиданная структура внутри — отдаём тело как
@@ -2447,7 +2485,7 @@ class Handler(BaseHTTPRequestHandler):
                     block=реле.петля_в, usage=dict(usage_карточки),
                     ttfbSeconds=None if prefill is None else round(prefill, 3))
             if реле is not None and реле.мусор:
-                self._после_мусора(реле, conn)
+                self._после_мусора(реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None and реле.петля:
                 self._после_петли(реле, conn, body, headers, итог_петли)
             elif реле is not None:
@@ -2545,11 +2583,12 @@ class Handler(BaseHTTPRequestHandler):
                      + (", повтор запроса тоже" if итог["повторён"] else "") + "]")
         реле.хвост()
 
-    @staticmethod
-    def _после_мусора(реле, conn):
-        """Мусор пойман: гасим генерацию и обрываем ответ пометкой — без повтора.
+    def _после_мусора(self, реле, conn, body, headers, сессия, итог):
+        """Мусор пойман: гасим генерацию; при карантине — переспрос мимо испорченного кэша.
 
-        Повтор того же тела попадёт в тот же prefix cache и выдаст тот же мусор (vLLM #60174).
+        Без карантина — обрыв пометкой, как раньше. С карантином сессия получает новую соль, и
+        запрос один раз повторяется с ней; поток приклеивается к тому же ответу. Мусор или петля
+        и в повторе (или повтор не удался) — пометка «Повтори ход» и штатный хвост.
         """
         conn.close()
         д = реле.детектор_мусора
@@ -2559,6 +2598,48 @@ class Handler(BaseHTTPRequestHandler):
         print(f"мусор в потоке ({д.всего} слов, {д.причина}) — ответ оборван",
               file=sys.stderr, flush=True)
         реле.закрыть_блок()
+        соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
+        тело = salted_body(body, соль) if CACHE_QUARANTINE == "on" and body else None
+        if тело is not None:
+            if сессия:
+                with lock:
+                    _карантин[сессия] = соль
+            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша с солью",
+                  file=sys.stderr, flush=True)
+            реле.пометка("\n\n[прокси: модель выдала мусор из испорченного кэша — ответ "
+                         "пересчитывается заново]\n\n")
+            заголовки = dict(headers, **{"Content-Length": str(len(тело))})
+            c2 = итог["conn"] = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
+            try:
+                c2.request(self.command, self.path, body=тело, headers=заголовки)
+                r2 = c2.getresponse()
+            except OSError as e:
+                r2 = None
+                print(f"карантин: повтор не ушёл ({e!r})", file=sys.stderr, flush=True)
+            if r2 is not None and r2.status == 200:
+                реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True,
+                                   петли=LOOP_GUARD == "on", детектор_мусора=ДетекторМусора())
+                while True:
+                    chunk = r2.read1(65536)
+                    if not chunk or реле2.усвоить(chunk):
+                        break
+                if not (реле2.мусор or реле2.петля):
+                    реле2.дослать()
+                    if not реле2.завершён and not реле2.сквозной:
+                        реле2.закрыть_блок()
+                        реле2.хвост()
+                    with lock:
+                        stats["quarantine_retries"] += 1
+                    return
+                c2.close()
+                print("карантин: мусор или петля и в повторе — ответ оборван",
+                      file=sys.stderr, flush=True)
+                реле2.закрыть_блок()
+                реле = реле2
+            elif r2 is not None:
+                print(f"карантин: повтор ответил HTTP {r2.status}", file=sys.stderr, flush=True)
+            with lock:
+                stats["quarantine_failed"] += 1
         реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]")
         реле.хвост()
 

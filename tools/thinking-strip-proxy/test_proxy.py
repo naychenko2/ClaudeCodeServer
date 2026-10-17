@@ -2312,6 +2312,19 @@ class ЦепочкаБезБуквTests(unittest.TestCase):
         # Доля мусорных слов тут ни при чём: без второго признака детектор молчит
         self.assertIsNone(прогнать_мусор(текст, proxy.ДетекторМусора(run=10 ** 6)))
 
+    def test_повтор_одного_слова_ловится(self):
+        # 17.10 22:38: размышление ушло в «like like like…» до среза бюджета, ответ — в тысячи «like»
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "Program.cs`-у`-у` " + "like " * 100, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN}× 'like'"), д.причина)
+        self.assertIsNotNone(прогнать_мусор("Like, LIKE like. " * 30), "без регистра и пунктуации")
+
+    def test_числа_и_обычные_повторы_не_цепочка(self):
+        for имя, текст in {"нули матрицы": "0 " * 300, "единицы": "1, " * 300,
+                           "очень-очень": (РУССКАЯ_ПРОЗА + " очень очень очень ") * 10}.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(текст))
+
     def test_цепочка_короче_порога_не_мусор(self):
         self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "-\n" * (proxy.JUNK_RUN - 1) + РУССКАЯ_ПРОЗА))
 
@@ -3138,3 +3151,72 @@ class ВставкаБлокаTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class КарантинСессииTests(unittest.TestCase):
+    """Мусор → повтор с cache_salt мимо испорченного кэша; сессия и дальше ходит со своей солью."""
+
+    спросить = ПетляСквознаяTests.спросить
+    мусорный_поток = МусорСквознойTests.мусорный_поток
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.было = proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, dict(proxy._карантин)
+        proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE = "on", "on"
+        proxy._карантин.clear()
+        for к in ("junk_aborts", "quarantine_retries", "quarantine_failed", "quarantine_salted"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, карантин = self.было
+        proxy._карантин.clear()
+        proxy._карантин.update(карантин)
+        ПетляСквознаяTests.tearDown(self)
+
+    def текст(self, список):
+        return "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+
+    def test_повтор_мимо_кэша_и_соль_сессии(self):
+        self.Модель.ответы = [self.мусорный_поток(), поток_ответа([("text", РУССКАЯ_ПРОЗА)]),
+                              поток_ответа([("text", "второй ход")]), поток_ответа([("text", "чужой")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = self.текст(список)
+        self.assertIn("ответ пересчитывается заново", текст)
+        self.assertIn(РУССКАЯ_ПРОЗА.strip()[:40], текст, "ответ повтора приклеен к тому же сообщению")
+        self.assertNotIn("Повтори ход", текст)
+        первый, повтор = self.Модель.принятые[:2]
+        self.assertNotIn("cache_salt", первый)
+        соль = повтор["cache_salt"]
+        self.assertEqual({k: v for k, v in повтор.items() if k != "cache_salt"}, первый,
+                         "повтор — то же тело, только с солью")
+        self.assertEqual(proxy._карантин["sess-loop"], соль)
+        # Следующий ход той же сессии — с той же солью: кэш работает, но в чистом пространстве
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[2]["cache_salt"], соль)
+        # Чужая сессия соли не получает
+        self.спросить(сессия="sess-other", ждать_карточку=False)
+        self.assertNotIn("cache_salt", self.Модель.принятые[3])
+        self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"],
+                          proxy.stats["quarantine_salted"]), (1, 0, 1))
+
+    def test_мусор_и_в_повторе_обрыв(self):
+        self.Модель.ответы = [self.мусорный_поток(), self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = self.текст(список)
+        self.assertIn("ответ пересчитывается заново", текст)
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        self.assertEqual(len(self.Модель.принятые), 2, "повтор один")
+        self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"]), (0, 1))
+
+    def test_без_карантина_повтора_нет(self):
+        proxy.CACHE_QUARANTINE = "off"
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        self.assertIn("Повтори ход", self.текст(список))
+        self.assertEqual(len(self.Модель.принятые), 1)
+        self.assertEqual(proxy._карантин, {})

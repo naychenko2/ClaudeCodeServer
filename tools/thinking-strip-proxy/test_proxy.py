@@ -2207,11 +2207,12 @@ class ПетляСквознаяTests(unittest.TestCase):
             # [2] второй запрос той же сессии: parse_body подставляет соль S_A из _карантин.
             self.assertEqual(принятые[2].get("cache_salt"), соль_a,
                              "сессия и дальше ходит со своей солью")
-            # [3] повтор второго запроса — новая соль S_B (петля заново → новая ns).
+            # [3] повтор второго запроса — та же соль S_A: петля в уже засоленной сессии
+            # соль не меняет, _карантин не перезаписан (новый префилл не тратится).
             соль_b = принятые[3]["cache_salt"]
-            self.assertNotEqual(соль_b, соль_a, "повтор новой петли — новая соль")
-            self.assertEqual(proxy._карантин["sess-loop"], соль_b,
-                             "после второй петли _карантин держит свежую соль")
+            self.assertEqual(соль_b, соль_a, "повтор в засоленной сессии — та же соль")
+            self.assertEqual(proxy._карантин["sess-loop"], соль_a,
+                             "после второй петли _карантин держит прежнюю соль")
         finally:
             proxy.CACHE_QUARANTINE = было
             proxy._карантин.clear()
@@ -3252,7 +3253,8 @@ class КарантинСессииTests(unittest.TestCase):
         self.было = proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, dict(proxy._карантин)
         proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE = "on", "on"
         proxy._карантин.clear()
-        for к in ("junk_aborts", "quarantine_retries", "quarantine_failed", "quarantine_salted"):
+        for к in ("junk_aborts", "quarantine_retries", "quarantine_failed", "quarantine_salted",
+                  "quarantine_loop_reused"):
             proxy.stats[к] = 0
 
     def tearDown(self):
@@ -3288,6 +3290,17 @@ class КарантинСессииTests(unittest.TestCase):
         self.assertNotIn("cache_salt", self.Модель.принятые[3])
         self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"],
                           proxy.stats["quarantine_salted"]), (1, 0, 1))
+
+    def test_мусор_в_засоленной_сессии_соль_новая(self):
+        # Мусор в сессии, которая уже ходит с солью: новая соль на каждый срыв,
+        # _карантин перезаписан (испорченный кэш мог появиться и в засоленном пространстве).
+        proxy._карантин["sess-loop"] = "q-sess-loop-предварительная"
+        self.Модель.ответы = [self.мусорный_поток(), поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        повтор = self.Модель.принятые[1]["cache_salt"]
+        self.assertNotEqual(повтор, "q-sess-loop-предварительная", "мусор берёт новую соль")
+        self.assertEqual(proxy._карантин["sess-loop"], повтор, "_карантин перезаписан новой солью")
 
     def test_мусор_и_в_повторе_обрыв(self):
         self.Модель.ответы = [self.мусорный_поток(), self.мусорный_поток()]
@@ -3328,7 +3341,8 @@ class КарантинLoopTests(unittest.TestCase):
         proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE = "on", "on", "on"
         proxy._карантин.clear()
         for к in ("loops_detected", "loops_retried", "loops_truncated",
-                  "quarantine_retries", "quarantine_failed", "quarantine_salted"):
+                  "quarantine_retries", "quarantine_failed", "quarantine_salted",
+                  "quarantine_loop_reused"):
             proxy.stats[к] = 0
 
     def tearDown(self):
@@ -3363,6 +3377,37 @@ class КарантинLoopTests(unittest.TestCase):
         self.спросить(сессия="sess-other", ждать_карточку=False)
         self.assertNotIn("cache_salt", self.Модель.принятые[3])
         self.assertEqual(proxy.stats["quarantine_salted"], 1, "подстановка соли в parse_body")
+
+    def test_повторная_петля_в_засоленной_сессии_соль_та_же(self):
+        # Две петли подряд в одной сессии: первый срыв выдаёт соль, второй — берёт её,
+        # новую не выдаёт и _карантин не перезаписывает (quarantine_loop_reused == 1).
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77),
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+            self.спросить(ждать_карточку=False)
+        соль = self.Модель.принятые[1]["cache_salt"]
+        self.assertEqual(self.Модель.принятые[3]["cache_salt"], соль,
+                         "второй повтор — та же соль, что в _карантин")
+        self.assertEqual(proxy._карантин["sess-loop"], соль, "_карантин не перезаписан")
+        self.assertEqual(proxy.stats["quarantine_loop_reused"], 1,
+                         "повторная петля в засоленной сессии учтена")
+
+    def test_первая_петля_без_соли_повторное_поведение(self):
+        # Первая петля в сессии без соли: новая соль, как раньше (quarantine_loop_reused == 0).
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        соль = self.Модель.принятые[1]["cache_salt"]
+        self.assertTrue(соль.startswith("q-sess-loop-"), "первая петля выдаёт новую соль")
+        self.assertEqual(proxy._карантин["sess-loop"], соль)
+        self.assertEqual(proxy.stats["quarantine_loop_reused"], 0,
+                         "первая петля — не переиспользование")
 
     def test_петля_и_в_повторе_обрыв(self):
         # Петля и в повторе: ответ усечён, соль всё равно в _карантин (сессия не ходит в испорченный кэш).

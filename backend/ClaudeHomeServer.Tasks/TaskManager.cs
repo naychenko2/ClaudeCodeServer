@@ -330,10 +330,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             : 0;
 
     // Родительская задача-фича (эпик) по контексту исполнителя: ищем задачу, которую
-    // исполняет сессия-источник (тот же поиск, что ComputeDelegationDepth), и проверяем,
-    // что это эпик фичи (Role=feature) того же владельца. executorLaunchedBySessionId —
-    // запасной путь: если sourceSessionId не дал результата, пробуем сессию, запустившую
-    // исполнителя. null — контекст ложный или отсутствует.
+    // исполняет сессия-источник (тот же поиск, что ComputeDelegationDepth), и поднимаемся
+    // к её фиче. executorLaunchedBySessionId — запасной путь: если sourceSessionId не дал
+    // результата, пробуем сессию, запустившую исполнителя. null — контекст ложный или отсутствует.
+    //
+    // В жизни сессия исполняет НЕ эпик (Role=feature), а шаг/ревью/проверку/финал фичи:
+    // эпик не запускается исполнителем (гейт 1.4 — role=feature + personaId — отказ).
+    // У такой задачи FeatureId указывает на эпик — поднимаемся к нему. Если сама задача —
+    // эпик (Role=feature, FeatureId=null), возвращаем её (обход гейта в тестах).
     private TaskItem? FindOwningFeature(string? sourceSessionId, string? executorLaunchedBySessionId, string ownerId)
     {
         TaskItem? candidate = null;
@@ -343,8 +347,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             candidate = GetBySession(executorLaunchedBySessionId);
         if (candidate is null) return null;
         if (candidate.OwnerId != ownerId) return null;
-        if (candidate.Role != TaskRoles.Feature) return null;
-        return candidate;
+        if (candidate.FeatureId is not null) return GetById(candidate.FeatureId);
+        return candidate.Role == TaskRoles.Feature ? candidate : null;
     }
 
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.

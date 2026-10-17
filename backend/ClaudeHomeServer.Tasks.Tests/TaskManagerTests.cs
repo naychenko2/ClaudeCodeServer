@@ -1152,18 +1152,35 @@ public class TaskManagerTests : IDisposable
     [Fact]
     public void Create_ИзЧатаГдеИсполнительИмеетЗадачуНеFeature_НаследованияНет()
     {
-        // Родитель — обычный шаг (Role=step), не эпик фичи. featureId обязателен у step
-        // (fail-closed, дефект d0b2ff78), но на наследование не влияет: оно смотрит Role.
+        // Родитель — задача, не привязанная к эпика (Role=cut, FeatureId=null):
+        // ни эпик фичи, ни шаг фичи — наследовать нечего.
+        var cut = _sut.Create(null, "u", new CreateTaskRequest("разрез",
+            Role: TaskRoles.Cut));
+        _sut.MarkClaudeStarted(cut.Id, "sess-cut", DateTime.UtcNow);
+
+        var child = _sut.Create(null, "u", new CreateTaskRequest("ребёнок",
+            SourceSessionId: "sess-cut"));
+
+        child.FeatureId.Should().BeNull("не фича и не шаг фичи — наследуем нечего");
+        child.Role.Should().BeNull();
+    }
+
+    // ─── Регрессия: живое наследование через шаг фичи (не эпик) ───────────────
+    // Живой сценарий: сессия исполняет ШАГ фичи (эпик исполнителем не запускается —
+    // гейт 1.4), исполнитель создаёт свою задачу без явного featureId — сервер
+    // наследует featureId от эпика, к которому шаг привязан.
+    [Fact]
+    public void Create_ИзЧатаИсполнителяШагаФичи_НаследуетFeatureId_Regression()
+    {
         var epic = CreateEpic("u");
         var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
             FeatureId: epic.Id, Role: TaskRoles.Step));
         _sut.MarkClaudeStarted(step.Id, "sess-step", DateTime.UtcNow);
 
-        var child = _sut.Create(null, "u", new CreateTaskRequest("ребёнок",
+        var child = _sut.Create(null, "u", new CreateTaskRequest("своя задача",
             SourceSessionId: "sess-step"));
 
-        child.FeatureId.Should().BeNull("Role≠feature — контекст ложный, наследуем нечего");
-        child.Role.Should().BeNull();
+        child.FeatureId.Should().Be(epic.Id, "featureId наследуется от эпика через шаг");
     }
 
     [Fact]

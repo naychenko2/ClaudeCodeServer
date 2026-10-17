@@ -6,9 +6,11 @@
 // useIsMobile() = false → десктоп-раскладка (дуги рисуются, полосы бэк/фронт — строки).
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FeatureRun, FeatureTask } from '../../../types/featureRun';
 import { C, SP, FONT } from '../../../lib/design';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
 import {
   PipelineFlow, stagePhases, stagePasses, stageWidth, stageTasks,
   laneInfo, laneTrackWidth, arcSpecs, buildArcs, arcPath, chevronPath, ARCS_W,
@@ -378,8 +380,9 @@ describe('PipelineFlow: рендер', () => {
     });
     const html = render(r);
 
-    // 1) Грид строки — align-items:start (точка у верха, центр = 12 в любой строке).
-    const rowTag = html.match(/<div[^>]*data-stage="prod"[^>]*>/)?.[0] ?? '';
+    // 1) Грид строки — теперь на <button> (2.15.1), не на <div>: align-items:start
+    //    (точка у верха, центр = 12 в любой строке).
+    const rowTag = html.match(/<button[^>]*data-testid="stage-row-prod"[^>]*>/)?.[0] ?? '';
     const rowStyle = rowTag.match(/style="([^"]*)"/)?.[1] ?? '';
     expect(rowStyle).toContain('align-items:start');
 
@@ -467,5 +470,76 @@ describe('Глеб_Покрытие: viewBox-число, FONT.mono, null-guard',
     // не падает на null (null-guard `t?.`). Рендер не бросает исключение.
     const r = run({ epic: null });
     expect(() => render(r)).not.toThrow();
+  });
+});
+
+// === Раскрытие строк стадий (2.15): aria-expanded + список шагов «Производства» ===
+
+// Агрегат с шагами в линиях бэк/фронт (для проверки раскрытия «Производства»).
+function runWithSteps(): FeatureRun {
+  return run({
+    steps: [
+      task({ id: 's1', title: 'Бэк-шаг', stepRef: 'Ш1', lane: 'back', status: 'done', personaId: 'denis' }),
+      task({
+        id: 's2', title: 'Фронт-шаг', stepRef: 'Ш2', lane: 'front', status: 'inProgress',
+        personaId: 'kira', awaitingHumanSince: '2026-10-17T10:00:00Z', awaitingHumanReason: 'нужен выбор',
+      }),
+    ],
+  });
+}
+
+describe('PipelineFlow: раскрытие строк (2.15)', () => {
+  // fake-DOM для интерактивного кейса (клик); SSR-кейсы на renderToStaticMarkup не зависят от него.
+  beforeAll(() => installFakeDom());
+  afterAll(() => uninstallFakeDom());
+
+  // SSR: «Производство» раскрыто по умолчанию → список шагов в разметке.
+  // Мутация «закомментировать <StageDetails/>» обязана покрасить этот кейс (шаги исчезнут).
+  it('Prod_СодержитШаги_РаскрытПоУмолчанию: шаги показаны (stepRef, lane, personaId, ожидание)', () => {
+    const html = render(runWithSteps());
+    // prod раскрыт по умолчанию → StageDetails рендерит список шагов (id stage-details-prod).
+    expect(html).toContain('stage-details-prod');
+    // Шаги: stepRef, заголовок, исполнитель (personaId).
+    expect(html).toContain('Ш1');
+    expect(html).toContain('Бэк-шаг');
+    expect(html).toContain('Ш2');
+    expect(html).toContain('Фронт-шаг');
+    expect(html).toContain('denis');
+    expect(html).toContain('kira');
+    // Ожидание человека: reason + отметка времени «с ЧЧ:ММ» (локальное время, TZ-независимо).
+    expect(html).toContain('нужен выбор');
+    expect(html).toMatch(/с \d{2}:\d{2}/);
+  });
+
+  // SSR: стадия вне расширенного набора по умолчанию (review) → aria-expanded=false, деталей нет.
+  it('Review_НетШагов_НетДеталей: aria-expanded=false, деталей нет', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done' })],
+      reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
+    });
+    const html = render(r);
+    // review не в расширенном наборе по умолчанию (только prod) → aria-expanded="false".
+    const reviewBtn = html.match(/<button[^>]*data-testid="stage-row-review"[^>]*>/)?.[0] ?? '';
+    expect(reviewBtn).toContain('aria-expanded="false"');
+    // Деталей review нет: контейнера <div id="stage-details-review"> нет (строка есть
+    // только в aria-controls кнопки, не в id деталей).
+    expect(html).not.toContain('<div id="stage-details-review"');
+  });
+
+  // Интерактив (fake-DOM): клик по строке переключает aria-expanded.
+  // Мутация «убрать onClick» (кнопка не переключает) обязана покрасить этот кейс.
+  it('StageRows_КликПереключаетРаскрытие: aria-expanded переключается', () => {
+    const { root, container } = mount(createElement(PipelineFlow, { run: runWithSteps() }));
+    const btn = findNodeByAttr(container, 'data-testid', 'stage-row-prod');
+    expect(btn, 'кнопка «Производство» не найдена').not.toBeNull();
+    // По умолчанию prod раскрыт.
+    expect(btn!.getAttribute('aria-expanded')).toBe('true');
+    // Клик сворачивает.
+    act(() => (reactProps(btn!)!.onClick as () => void)());
+    expect(btn!.getAttribute('aria-expanded')).toBe('false');
+    // Клик раскрывает обратно.
+    act(() => (reactProps(btn!)!.onClick as () => void)());
+    expect(btn!.getAttribute('aria-expanded')).toBe('true');
+    root.unmount();
   });
 });

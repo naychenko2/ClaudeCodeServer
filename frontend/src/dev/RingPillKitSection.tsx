@@ -6,11 +6,12 @@ import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCos
 import type { ContextEstimate } from '../lib/context';
 import type { GlifGenStats } from '../components/chat/glifStats';
 import { toRateWindows, type RateWindow } from '../lib/rateLimit';
-import type { RateLimitInfo } from '../types';
+import type { ChatItem, RateLimitInfo } from '../types';
 
-// Витрина кольцевой пилюли шапки чата (вариант C2): все состояния спецификации §5 —
-// заметка «Шапка чата — пилюля «кольца» (C2), спецификация». Тема — общим переключателем
-// страницы; поповеры живые (клик по пилюле), сжатие в них ничего не делает.
+// Витрина пилюли шапки чата: полоски контекста и лимитов (бывшие кольца C2, состояния
+// спецификации §5 — заметка «Шапка чата — пилюля «кольца» (C2), спецификация») и
+// циферблат кэша промпта справа. Тема — общим переключателем страницы; поповеры живые
+// (клик по пилюле), сжатие в них ничего не делает.
 
 const noop = () => {};
 const NO_COST: CostStats = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 };
@@ -30,6 +31,17 @@ const wins = (u: Record<string, number | undefined>, over: Record<string, Partia
   toRateWindows(Object.fromEntries(Object.entries(u).map(([k, v]) =>
     [k, { limitType: k, utilization: v, status: 'allowed', resetsAt: RESET, ...over[k] }])));
 
+// Лента с одним ходом родного Claude: якорь кэша сдвинут от «сейчас» витрины так, чтобы
+// часовой кэш был тёплым, остывающим или остывшим
+const NOW = Date.now();
+const cacheFeed = (agoMin: number): ChatItem[] => [{
+  kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1, contextTokens: 120_000,
+  promptCache: { ttl: '1h', anchorAtMs: NOW - agoMin * 60_000, prefixTokens: 118_000 },
+}];
+const CACHE: Record<'warm' | 'expiring' | 'cold', ChatItem[]> = {
+  warm: cacheFeed(12), expiring: cacheFeed(56), cold: cacheFeed(130),
+};
+
 interface Sample {
   caption: string;
   estimate?: ContextEstimate;
@@ -43,11 +55,18 @@ interface Sample {
   compact?: boolean;
   reducedMotion?: boolean;
   empty?: boolean;                      // пилюли нет: на её месте — пояснение
+  cache?: keyof typeof CACHE;           // циферблат кэша промпта
+  waiting?: boolean;                    // идёт ход
 }
 
 const DS_OK: ProviderBalance = { available: true, currency: 'USD', totalBalance: '4.20' };
 
 const SAMPLES: Sample[] = [
+  { caption: 'кэш тёплый — «норм»', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.12 }), cache: 'warm' },
+  { caption: 'кэш остывает + лимит', estimate: ctx(40), windows: wins({ five_hour: 0.81, seven_day: 0.3 }), cache: 'expiring' },
+  { caption: 'кэш остыл', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold' },
+  { caption: 'кэш остыл (мобила — без подписи)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', compact: true },
+  { caption: 'идёт ход — стрелка крутится', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', waiting: true },
   { caption: '5.1 обычное — худшее окно', estimate: ctx(62), windows: wins({ five_hour: 0.81, seven_day: 0.34, seven_day_opus: 0.12 }) },
   { caption: '5.1 контекст danger перебивает', estimate: ctx(92), windows: wins({ five_hour: 0.41, seven_day: 0.12 }) },
   { caption: '5.1 окно вне колец (Opus 95%) красит рамку', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.3, seven_day_opus: 0.95 }) },
@@ -74,13 +93,13 @@ function RingSample({ s }: { s: Sample }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, alignItems: 'flex-start' }}>
       <div style={{ fontSize: FS.sm, color: C.textMuted }}>{s.caption}</div>
       <RingPillBadge
-        estimate={s.estimate ?? NO_CTX} isWaiting={false} isCompacting={!!s.compacting}
+        estimate={s.estimate ?? NO_CTX} isWaiting={!!s.waiting} isCompacting={!!s.compacting}
         canCompact compactNote={undefined} onCompact={noop} online assistantName={s.provider?.name ?? 'Claude'}
         isCliProvider={!!s.provider} providerName={s.provider?.name ?? 'Claude'}
         cost={s.cost ?? NO_COST} falCost={s.fal ?? NO_FAL} glifCost={NO_GLIF}
         balance={s.provider?.balance ?? null} billing={s.billing ?? 'subscription'} windows={s.windows ?? []}
         activeWorkflow={s.workflow} isMobile={s.compact} isCompact={s.compact} resetKey={s.caption}
-        forceReducedMotion={s.reducedMotion}
+        forceReducedMotion={s.reducedMotion} cacheItems={s.cache && CACHE[s.cache]}
       />
       {s.empty && <div style={{ fontSize: FS.sm, color: C.textMuted }}>(компонент вернул null)</div>}
     </div>
@@ -102,7 +121,7 @@ function HeaderRowSample() {
           isCliProvider={false} providerName="Claude"
           cost={NO_COST} falCost={NO_FAL} glifCost={NO_GLIF}
           balance={null} billing="subscription" windows={wins({ five_hour: 0.81, seven_day: 0.34 })}
-          resetKey="header-row"
+          resetKey="header-row" cacheItems={CACHE.warm}
         />
         <FalCostBadge stats={FAL} resetKey="header-row" />
         <GlifCostBadge stats={GLIF} resetKey="header-row" />
@@ -116,8 +135,8 @@ export function RingPillKitSection() {
     <Island>
       <IslandHeader
         icon={<CircleGauge size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
-        title="Пилюля «кольца» шапки чата"
-        badge="RingPillBadge · C2"
+        title="Пилюля шапки чата — полоски и кэш"
+        badge="RingPillBadge"
       />
       <div style={{
         padding: ISLAND.pad,

@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time, uuid
+import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time
 from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -2497,7 +2497,7 @@ class Handler(BaseHTTPRequestHandler):
                     block=реле.петля_в, usage=dict(usage_карточки),
                     ttfbSeconds=None if prefill is None else round(prefill, 3))
             if реле is not None and реле.мусор:
-                self._после_мусора(реле, conn, body, headers, сессия, итог_петли)
+                self._после_срыва("junk", реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None and реле.петля:
                 self._после_петли(реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None:
@@ -2582,6 +2582,10 @@ class Handler(BaseHTTPRequestHandler):
                   file=sys.stderr, flush=True)
         причина = "повтор выключен" if тело is None else None
         if тело is not None:
+            if not петля:
+                # Мусор: перед повтором — пометка, что ответ пересчитывается заново.
+                реле.пометка("\n\n[прокси: модель выдала мусор из испорченного кэша — ответ "
+                             "пересчитывается заново]\n\n")
             заголовки = dict(headers, **{"Content-Length": str(len(тело))})
             c2 = итог["conn"] = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
             try:
@@ -2596,17 +2600,24 @@ class Handler(BaseHTTPRequestHandler):
                     итог["повторён"] = True
                     with lock:
                         stats["loops_retried"] += 1
-                реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
+                if петля:
+                    реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
+                else:
+                    реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True,
+                                       петли=LOOP_GUARD == "on", детектор_мусора=ДетекторМусора())
                 while True:
                     chunk = r2.read1(65536)
                     if not chunk or реле2.усвоить(chunk):
                         break
-                if not реле2.петля:
+                if not (реле2.мусор or реле2.петля):
                     реле2.дослать()
                     if not реле2.завершён and not реле2.сквозной:
                         # Повтор оборвался без message_stop — клиенту всё равно целое сообщение.
                         реле2.закрыть_блок()
                         реле2.хвост()
+                    if not петля:
+                        with lock:
+                            stats["quarantine_retries"] += 1
                     return
                 c2.close()
                 if петля:
@@ -2617,6 +2628,10 @@ class Handler(BaseHTTPRequestHandler):
                           file=sys.stderr, flush=True)
                 реле2.закрыть_блок()
                 реле = реле2
+            if not петля:
+                # Повтор мусора не ушёл (не 200, обрыв, или мусор/петля и в повторе) — счётчик.
+                with lock:
+                    stats["quarantine_failed"] += 1
         if петля:
             if причина:
                 print(f"петля: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
@@ -2633,66 +2648,6 @@ class Handler(BaseHTTPRequestHandler):
     def _после_петли(self, реле, conn, body, headers, сессия, итог):
         """Петля поймана: общий хвост срыва — повтор, сдвиг сэмплинга, соль карантина (S2a)."""
         self._после_срыва("loop", реле, conn, body, headers, сессия, итог)
-
-    def _после_мусора(self, реле, conn, body, headers, сессия, итог):
-        """Мусор пойтан: гасим генерацию; при карантине — переспрос мимо испорченного кэша.
-
-        Без карантина — обрыв пометкой, как раньше. С карантином сессия получает новую соль, и
-        запрос один раз повторяется с ней; поток приклеивается к тому же ответу. Мусор или петля
-        и в повторе (или повтор не удался) — пометка «Повтори ход» и штатный хвост.
-        """
-        conn.close()
-        д = реле.детектор_мусора
-        with lock:
-            stats["junk_aborts"] += 1
-            stats["junk_words_max_ratio"] = round(д.доля, 3)
-        print(f"мусор в потоке ({д.всего} слов, {д.причина}) — ответ оборван",
-              file=sys.stderr, flush=True)
-        реле.закрыть_блок()
-        соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
-        тело = salted_body(body, соль) if CACHE_QUARANTINE == "on" and body else None
-        if тело is not None:
-            if сессия:
-                with lock:
-                    _карантин[сессия] = соль
-            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша с солью",
-                  file=sys.stderr, flush=True)
-            реле.пометка("\n\n[прокси: модель выдала мусор из испорченного кэша — ответ "
-                         "пересчитывается заново]\n\n")
-            заголовки = dict(headers, **{"Content-Length": str(len(тело))})
-            c2 = итог["conn"] = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
-            try:
-                c2.request(self.command, self.path, body=тело, headers=заголовки)
-                r2 = c2.getresponse()
-            except OSError as e:
-                r2 = None
-                print(f"карантин: повтор не ушёл ({e!r})", file=sys.stderr, flush=True)
-            if r2 is not None and r2.status == 200:
-                реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True,
-                                   петли=LOOP_GUARD == "on", детектор_мусора=ДетекторМусора())
-                while True:
-                    chunk = r2.read1(65536)
-                    if not chunk or реле2.усвоить(chunk):
-                        break
-                if not (реле2.мусор or реле2.петля):
-                    реле2.дослать()
-                    if not реле2.завершён and not реле2.сквозной:
-                        реле2.закрыть_блок()
-                        реле2.хвост()
-                    with lock:
-                        stats["quarantine_retries"] += 1
-                    return
-                c2.close()
-                print("карантин: мусор или петля и в повторе — ответ оборван",
-                      file=sys.stderr, flush=True)
-                реле2.закрыть_блок()
-                реле = реле2
-            elif r2 is not None:
-                print(f"карантин: повтор ответил HTTP {r2.status}", file=sys.stderr, flush=True)
-            with lock:
-                stats["quarantine_failed"] += 1
-        реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]")
-        реле.хвост()
 
     def handle_one_request(self):
         try:

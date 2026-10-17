@@ -69,6 +69,18 @@ public class ChatHandoffServiceTests : IDisposable
     }
 
     [Fact]
+    public void ТёплыйПромпт_ТеЖеРазделыЧтоУХолодного_ТолькоТекстом()
+    {
+        var cold = ChatHandoffService.BuildPrompt("Чат", "Пользователь:\nпривет");
+        var warm = ChatHandoffService.BuildWarmPrompt();
+
+        var spec = cold[cold.IndexOf("Разделы —", StringComparison.Ordinal)..cold.IndexOf("Правила:", StringComparison.Ordinal)];
+        warm.Should().Contain(spec, "записки двух путей не должны разойтись по составу");
+        warm.Should().Contain("Не вызывай инструменты").And.Contain("Не выдумывай того, чего нет в нашем разговоре");
+        warm.Should().NotContain("Транскрипт:");
+    }
+
+    [Fact]
     public async Task Handoff_НовыйЧат_ЧерновикСЗапискойИСсылкойНаСтарый()
     {
         var runner = new StubRunner("### Цель\nнастроить значки");

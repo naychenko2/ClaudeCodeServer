@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
 
@@ -582,18 +583,22 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // Как /branch, работает и для проектной сессии: владение — GetOwned (OwnedChat отсёк бы
     // проектные). Коды: 404 — чужой/нет; 409 — отказ (группа, штаб, worktree, пустой чат,
     // место на локали) или перенос уже идёт; 502 — модель не собрала записку.
+    // Тело необязательно: { warm: true } — тёплый путь (записку пишет сам чат своим ходом),
+    // при невыполненном предусловии сервер молча идёт холодным; какой путь сработал — warm в ответе.
     [HttpPost("{id}/handoff")]
-    public async Task<IActionResult> Handoff(string id, CancellationToken ct)
+    public async Task<IActionResult> Handoff(string id,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] HandoffRequest? req, CancellationToken ct)
     {
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
         try
         {
-            var result = await handoff.HandoffAsync(UserId, id, ct);
+            var result = await handoff.HandoffAsync(UserId, id, ct, warm: req?.Warm == true);
             return Ok(new
             {
                 chatId = result.Session.Id,
                 projectId = result.Session.ProjectId,
                 draft = result.Draft,
+                warm = result.Warm,
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -727,3 +732,6 @@ public record SetModeRequest(string Mode);
 // AnchorText обязателен: индекс — договорённость двух счётчиков (клиент/сервер), сверка текста
 // на сервере страхует от расхождения (SessionManager.BranchAsync).
 public record BranchChatRequest(int UserMessageIndex, string AnchorText, string Include, string? Name = null);
+
+// Перенос в новый чат: Warm — попросить записку у самого чата (тёплый путь), иначе холодный
+public record HandoffRequest(bool Warm = false);

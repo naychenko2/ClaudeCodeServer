@@ -1,4 +1,6 @@
+using System.Collections;
 using System.Net;
+using System.Reflection;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
@@ -122,5 +124,148 @@ public class ChatsControllerHandoffTests(TestWebApplicationFactory factory)
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await resp.Content.ReadAsStringAsync()).Should().Contain("переносить нечего");
+    }
+
+    // ─── Тёплый путь: записку пишет сам чат своим ходом ─────────────────────────
+
+    private Task<HttpResponseMessage> PostWarm(string id) =>
+        _client.PostAsJsonAsync($"/api/chats/{id}/handoff", new { warm = true });
+
+    private FakeLlmSessionAdapter Adapter(string chatId) => factory.LlmAdapters.Adapters[chatId];
+
+    // Живой аккумулятор и OnMessageAsync — приватное ядро; события хода подаём мимо CLI
+    // (тот же приём, что в ModuleRecordFreshChatTests)
+    private object Entry(string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return ((IDictionary)field.GetValue(Sessions)!)[sessionId]!;
+    }
+
+    private async Task EmitAsync(string sessionId, ServerMessage msg)
+    {
+        var entry = Entry(sessionId);
+        var acc = (TurnAccumulator?)entry.GetType().GetField("Accumulator")!.GetValue(entry);
+        if (acc is null)
+        {
+            await (Task)typeof(SessionManager).GetMethod("EnsureAccumulatorAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(Sessions, [entry])!;
+            acc = (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
+        }
+        await (Task)typeof(SessionManager).GetMethod("OnMessageAsync", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(Sessions, [sessionId, acc, msg, 0L])!;
+    }
+
+    // Ход передачи ушёл в адаптер (ожидатель выставлен) — можно отвечать за модель
+    private async Task WaitWarmTurnAsync(string chatId)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!(factory.LlmAdapters.Adapters.TryGetValue(chatId, out var a) && a.SentMessages.Count > 0))
+        {
+            if (sw.Elapsed > TimeSpan.FromSeconds(20)) throw new TimeoutException("ход передачи не ушёл в адаптер");
+            await Task.Delay(20);
+        }
+    }
+
+    [Fact]
+    public async Task Тёплый_УспешныйХод_ЗапискаЧата_ВЧерновике()
+    {
+        var chat = await PlainChatAsync();
+        var mode = chat.Mode;
+        var before = Sessions.GetAll().Count;
+
+        var post = PostWarm(chat.Id);
+        await WaitWarmTurnAsync(chat.Id);
+        Adapter(chat.Id).SentMessages.Should().ContainSingle()
+            .Which.Should().Contain("Не вызывай инструменты").And.Contain("### Следующий шаг");
+        await EmitAsync(chat.Id, new TextDeltaMessage("### Цель\nтёплая записка"));
+        await EmitAsync(chat.Id, new ResultMessage("success", 10, 1, null, null));
+        var resp = await post;
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("warm").GetBoolean().Should().BeTrue();
+        body.GetProperty("draft").GetString().Should().Contain("### Цель\nтёплая записка")
+            .And.EndWith($"Исходный чат: {chat.Id} — детали через chats_history.");
+        Sessions.GetAll().Count.Should().Be(before + 1);
+        Sessions.GetById(chat.Id)!.Mode.Should().Be(mode, "режим чата ходом передачи не меняется");
+    }
+
+    [Theory]
+    [InlineData("error")]
+    [InlineData("result-error")]
+    [InlineData("interrupted")]
+    [InlineData("empty")]
+    public async Task Тёплый_ОшибкаХода_502_ЧатНеСоздан(string kind)
+    {
+        var chat = await PlainChatAsync();
+        var before = Sessions.GetAll().Count;
+
+        var post = PostWarm(chat.Id);
+        await WaitWarmTurnAsync(chat.Id);
+        switch (kind)
+        {
+            case "error":
+                await EmitAsync(chat.Id, new ErrorMessage("API упал"));
+                break;
+            case "result-error":
+                await EmitAsync(chat.Id, new TextDeltaMessage("ползаписки"));
+                await EmitAsync(chat.Id, new ResultMessage("error_during_execution", 10, 1, null, null));
+                break;
+            case "interrupted":
+                await EmitAsync(chat.Id, new TextDeltaMessage("ползаписки"));
+                await EmitAsync(chat.Id, new ExitedMessage());
+                break;
+            case "empty":
+                await EmitAsync(chat.Id, new ResultMessage("success", 10, 1, null, null));
+                break;
+        }
+        var resp = await post;
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        if (kind == "error") (await resp.Content.ReadAsStringAsync()).Should().Contain("API упал");
+        Sessions.GetAll().Count.Should().Be(before, "без записки новый чат не создаётся");
+    }
+
+    // Любое невыполненное предусловие — тихо холодным путём: 200, warm=false, хода в чате нет
+    [Theory]
+    [InlineData("working")]
+    [InlineData("waiting")]
+    [InlineData("workloop")]
+    [InlineData("bg-agents")]
+    [InlineData("archived")]
+    public async Task Тёплый_ПредусловиеНеВыполнено_ХолодныйПуть(string kind)
+    {
+        var chat = await PlainChatAsync();
+        var live = Sessions.GetById(chat.Id)!;
+        switch (kind)
+        {
+            case "working": live.Status = SessionStatus.Working; break;
+            case "waiting": live.Status = SessionStatus.Waiting; break;
+            case "workloop": live.WorkLoop = new SessionWorkLoop(); break;
+            case "bg-agents": Adapter(chat.Id).BgAlive = true; break;
+            case "archived":
+                live.UpdatedAt = DateTime.UtcNow.AddHours(-1);
+                live.ArchivedAt = DateTime.UtcNow;
+                break;
+        }
+
+        var resp = await PostWarm(chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("warm").GetBoolean().Should().BeFalse("ушли на холодный путь");
+        Adapter(chat.Id).SentMessages.Should().BeEmpty("ход передачи в чат не подавался");
+    }
+
+    [Fact]
+    public async Task Тёплый_ГрупповойЧат_ТотЖеОтказ409()
+    {
+        var chat = await PlainChatAsync();
+        Sessions.GetById(chat.Id)!.Participants = ["p1", "p2"];
+
+        var resp = await PostWarm(chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Adapter(chat.Id).SentMessages.Should().BeEmpty();
     }
 }

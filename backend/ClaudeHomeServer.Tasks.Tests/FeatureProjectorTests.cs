@@ -254,6 +254,155 @@ public class FeatureProjectorTests
             "финал вернул (returned), доработка (rework) идёт — цикл");
     }
 
+    // ─── Б2: цепочки шагов, источники возврата, линии ───────────────────────────────────────
+    // Фикстура feat-step-chains.json (в духе «Истории» v2): 6 шагов, одно ревью на два шага,
+    // возвраты с ревью/проверки/финала, доработка без связи, снятый шаг, идущая доработка.
+
+    private static (TaskItem Epic, List<TaskItem> Tasks) LoadChains()
+    {
+        var tasks = FeatureRunFixture.Load("feat-step-chains.json");
+        var epic = tasks.Single(t => t.Role == TaskRoles.Feature);
+        return (epic, tasks);
+    }
+
+    // Одно ревью (sc-r1) на два шага (Ш1 и Ш2) попадает в ОБЕ цепочки;
+    // Loops фичи = число УНИКАЛЬНЫХ ревью-возвратов (10), а не сумма по шагам (11).
+    [Fact]
+    public void Build_РевьюНаДваШага_ВОбеХЦепочках_LoopsУникальные()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var c1 = run.StepChains.Single(c => c.StepRef == "Ш1");
+        var c2 = run.StepChains.Single(c => c.StepRef == "Ш2");
+
+        // sc-r1 — в витках обеих цепочек.
+        c1.Rounds.Select(r => r.ReviewTaskId).Should().Contain("sc-r1",
+            "ревью на два шага — в цепочке Ш1");
+        c2.Rounds.Select(r => r.ReviewTaskId).Should().Contain("sc-r1",
+            "ревью на два шага — в цепочке Ш2");
+
+        // Loops фичи = 10 уникальных возвратов (7 ревью + 2 проверки + 1 финал),
+        // НЕ сумма по шагам (11): sc-r1 учтён один раз, а не дважды.
+        run.Verdicts.Loops.Should().Be(10,
+            "Loops фичи считает уникальные ревью/проверки/финалы, не сумму по шагам");
+    }
+
+    // Источник возврата: доработка после проверки Веры → qa; после ревью Глеба → review;
+    // после финала → final; без связи ReviewOf → null.
+    [Fact]
+    public void Build_ИсточникВозврата_ПоСвязи()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        run.StepChains.Single(c => c.StepRef == "Ш1").Source.Should().Be("review",
+            "Ш1: доработка по ревью Глеба");
+        run.StepChains.Single(c => c.StepRef == "Ш3").Source.Should().Be("qa",
+            "Ш3: доработка по проверке Веры");
+        run.StepChains.Single(c => c.StepRef == "Ш5").Source.Should().Be("final",
+            "Ш5: доработка по финалу");
+        run.StepChains.Single(c => c.StepRef == "Ш4").Source.Should().BeNull(
+            "Ш4: доработка без связи ReviewOf — метки нет");
+    }
+
+    // Три возврата и решение о снятии → outcome=withdrawn, status=снят с выкладки.
+    [Fact]
+    public void Build_ТриВозвратаИСнятие_Withdrawn()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var c6 = run.StepChains.Single(c => c.StepRef == "Ш6");
+        c6.Outcome.Should().Be("withdrawn");
+        c6.Status.Should().Be("снят с выкладки");
+        // Три витка-возврата (sc-r6a/b/c) + решение о снятии (sc-r6w, withdrawn).
+        c6.Loops.Should().Be(3, "три возврата по шагу");
+        c6.Rounds.Should().HaveCount(4);
+        // Порядок: три возврата, затем решение о снятии (withdrawn) — последнее.
+        c6.Rounds.Select(r => r.Verdict).Should().Equal(
+            "returned", "returned", "returned", "withdrawn");
+    }
+
+    // verdict витка — строго из пяти разрешённых значений (тест перебирает ВСЕ цепочки фикстуры).
+    [Fact]
+    public void Build_ВердиктыВитков_ТолькоРазрешённые()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var allowed = new HashSet<string> { "returned", "accepted_with_remarks", "accepted", "withdrawn", "running" };
+        foreach (var chain in run.StepChains)
+            foreach (var round in chain.Rounds)
+                allowed.Contains(round.Verdict).Should().BeTrue(
+                    $"вердикт витка «{round.Verdict}» (шаг {chain.StepRef}) из разрешённого набора");
+    }
+
+    // Линия: два исполнителя в одной линии (бэк: Денис и Кира) → оба в personaIds.
+    [Fact]
+    public void Build_Линия_ДваИсполнителя()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var back = run.Lanes.Single(l => l.Lane == "back");
+        back.PersonaIds.Should().BeEquivalentTo(new[] { "Денис", "Кира" },
+            "оба исполнителя линии бэк — в personaIds");
+        back.Total.Should().Be(4, "бэк: 4 шага (Ш1, Ш2, Ш5, Ш6)");
+        var front = run.Lanes.Single(l => l.Lane == "front");
+        front.PersonaIds.Should().ContainSingle().Which.Should().Be("Кира");
+        front.Total.Should().Be(2, "фронт: 2 шага (Ш3, Ш4)");
+    }
+
+    // ReturnsBySource.review.open > 0, пока доработка (sc-rw-open) не закрыта.
+    [Fact]
+    public void Build_ВозвратыПоИсточникам_ОткрытыйРевью()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        run.ReturnsBySource.Review.Count.Should().Be(7,
+            "7 уникальных ревью-возвратов (sc-r1, r2, r4, r5, r6a, r6b, r6c)");
+        run.ReturnsBySource.Review.Open.Should().Be(1,
+            "sc-r5: доработка sc-rw-open ещё идёт → открыт");
+        run.ReturnsBySource.Qa.Count.Should().Be(2);
+        run.ReturnsBySource.Qa.Open.Should().Be(0, "доработки по проверкам закрыты");
+        run.ReturnsBySource.Final.Count.Should().Be(1);
+        run.ReturnsBySource.Final.Open.Should().Be(0);
+    }
+
+    // Мутация (а): связь шага с ревью идёт ТОЛЬКО через пересечение ReviewOf.
+    // Сломал: цепляем витки без пересечения (всегда true) → sc-r2 (только про sc-s3)
+    // ошибочно попадает в цепочку Ш1. Без мутации тест зелёный.
+    [Fact]
+    public void Build_Мутация_СвязьБезПересеченияReviewOf()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var c1 = run.StepChains.Single(c => c.StepRef == "Ш1");
+        // sc-r2 ревьюит только sc-s3 (Ш3) — в цепочку Ш1 не попадает.
+        c1.Rounds.Select(r => r.ReviewTaskId).Should().NotContain("sc-r2",
+            "ревью без пересечения ReviewOf с задачами шага не цепляется");
+        // Но sc-r1 (ревьюит sc-s1 и sc-s2) — в цепочке.
+        c1.Rounds.Select(r => r.ReviewTaskId).Should().Contain("sc-r1");
+    }
+
+    // Мутация (б): Loops фичи НЕ сумма по шагам. Сломал: Loops = сумма loops цепочек (11)
+    // вместо уникальных (10) → тест краснеет. Без мутации зелёный.
+    [Fact]
+    public void Build_Мутация_LoopsНеСуммаПоШагам()
+    {
+        var (epic, tasks) = LoadChains();
+        var run = FeatureProjector.Build(epic, tasks);
+
+        int sumPerStep = run.StepChains.Sum(c => c.Loops);
+        sumPerStep.Should().Be(11, "сумма loops по шагам: sc-r1 учтён в Ш1 и Ш2");
+        run.Verdicts.Loops.Should().Be(10,
+            "Loops фичи = уникальные возвраты (10), не сумма по шагам (11)");
+        run.Verdicts.Loops.Should().NotBe(sumPerStep);
+    }
+
     // Мутация на правило мержа: если merge done при `|| ready` (финал зелёный),
     // то тест Build_ФиналAcceptedБезМержа_MergeActive краснеет (merge будет done, а не active).
     // Мутация: в isDone для merge добавить `|| ready`.

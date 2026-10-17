@@ -181,7 +181,7 @@ function buildIntervalSegments(
   return segs;
 }
 
-// Главная линия «скорость генерации, ток/с на поток»: ΣgenTokens/ΣitlSeconds по интервалу,
+// Главная линия «на одного агента, ток/с»: ΣgenTokens/ΣitlSeconds по интервалу,
 // null — обрыв.
 export function buildPerStreamSegments(
   intervals: Interval[],
@@ -700,20 +700,20 @@ export function chartAriaLabel(window: Window, avg: number | null, hit: number |
   return parts.join(', ');
 }
 
-// aria-label SVG «Скорость генерации, ток/с»: базовая сводка; при hover — время
+// aria-label SVG «На одного агента, ток/с»: базовая сводка; при hover — время
 // интервала и значение главной серии, или «движок не отвечал» на разрыве.
 export function tpChartAriaLabel(
   window: Window, avg: number | null, hit: number | null,
   hoverTime: string | null, hoverPerStream: number | null,
 ): string {
-  const parts = [`Скорость генерации, ток/с за ${WINDOW_LABEL[window]}`];
-  if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
+  const parts = [`На одного агента, ток/с за ${WINDOW_LABEL[window]}`];
+  if (avg != null) parts.push(`на агента в среднем ${formatTps(avg)}`);
   if (hit != null) parts.push(`кэш ${formatPerc(hit)}`);
   if (hoverTime != null) {
     if (hoverPerStream == null) {
       parts.push(`интервал ${hoverTime}: движок не отвечал`);
     } else {
-      parts.push(`интервал ${hoverTime}: скорость генерации ${formatTps(hoverPerStream)}`);
+      parts.push(`интервал ${hoverTime}: на одного агента ${formatTps(hoverPerStream)}`);
     }
   }
   return parts.join(', ');
@@ -848,13 +848,13 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const tMin = grid.from;
   const tMax = grid.to;
   // Верх ОБЩЕЙ оси — по максимуму ОБЕИХ серий (обе на интервалах): ни одна не
-  // уходит за верх поля.
-  // Верх ОБЩЕЙ оси — по пику ГЛАВНОЙ серии (скорость на поток). «Выдано стендом»
-  // (total по всем потокам) сейчас не рисуется, поэтому в масштаб не входит: иначе
-  // при нескольких агентах total > на-поток, ось раздувалась и линия прижималась к низу.
-  const maxT = niceAxisMax(peakPerStreamOf(intervals));
-  // «в среднем» — скорость генерации на поток за окно: ΣgenTokens/ΣitlSeconds.
+  // уходит за верх поля. «Всего по стенду» (genThroughput) при нескольких агентах
+  // выше «на агента», поэтому в масштаб входит — иначе линия стенда ушла бы за верх.
+  const maxT = niceAxisMax(maxSeriesOf(intervals));
+  // «в среднем» — скорость генерации на одного агента за окно: ΣgenTokens/ΣitlSeconds.
   const avg = avgPerStreamOf(samples);
+  // «всего по стенду» за окно: среднее genThroughput (Δтокенов/Δвремя по стене).
+  const issuedAvg = avgIssuedOf(samples);
   const hitAvg = cacheHitAvg(samples);
   const preTotal = preemptionTotal(samples);
 
@@ -876,7 +876,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   // интервал. null — ни один интервал не отдал долей.
   const avgShares = avgTimeSharesOf(intervals);
 
-  // Главная линия «скорость генерации»: из интервалов (ΣgenTokens/ΣitlSeconds), с заливкой.
+  // Главная линия «на одного агента, ток/с»: из интервалов (ΣgenTokens/ΣitlSeconds), с заливкой.
   const tpSegments = useMemo(
     () => buildPerStreamSegments(intervals, tMin, tMax, maxT, geomTp),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -884,6 +884,14 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   );
   const tpPoints = segmentsToPoints(tpSegments);
   const tpAreas = segmentsToArea(tpSegments, geomTp);
+  // Вторая линия «всего по стенду» (genThroughput, Δтокенов/Δвремя по стене): тонкая
+  // пунктирная, на той же общей оси; null — разрыв (как у главной).
+  const issuedSegments = useMemo(
+    () => buildIssuedSegments(intervals, tMin, tMax, maxT, geomTp),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [intervals, tMin, tMax, maxT, width],
+  );
+  const issuedPoints = segmentsToPoints(issuedSegments);
   // Поле «Куда уходит время» (ADR-029, v2.4): на каждом интервале — полоса на ВСЮ
   // высоту поля. shares — 4 цветных сегмента; idle — нейтральная заливка «простой»;
   // break — фон-разрыв (renderBreaks). Высота по нагрузке НЕ вводится (ADR-029 v2.3).
@@ -949,14 +957,17 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
       // Движок молчал (все серии null) — «не отвечал»; perStream здесь тоже null.
       summary = `${time} · движок не отвечал`;
     } else {
-      // «скорость N · <куда уходит время>»: shares — доли, idle — «простой».
+      // «на одного агента N · <куда уходит время>»: shares — доли, idle — «простой».
       // «—» — скорости в интервале не было (idle: движок отвечал, но шагов не было).
-      summary = `${time} · скорость ${hover.perStream != null ? formatTps(hover.perStream) : '—'}`
+      summary = `${time} · на одного агента ${hover.perStream != null ? formatTps(hover.perStream) : '—'}`
         + timeSharesSummary(hover.timeShares);
     }
   } else {
+    // Среднее за окно по ОБЕИМ сериям: «на агента» (Σgen/Σitl) и «всего по стенду»
+    // (среднее genThroughput). Пик — только у главной. Кэш — если движок отдал.
     const parts: string[] = [];
-    if (avg != null) parts.push(`в среднем ${formatTps(avg)}`);
+    if (avg != null) parts.push(`на агента в среднем ${formatTps(avg)}`);
+    if (issuedAvg != null) parts.push(`всего по стенду в среднем ${formatTps(issuedAvg)}`);
     const peak = peakPerStreamOf(intervals);
     if (avg != null && peak > 0) parts.push(`пик ${formatTps(peak)}`);
     if (hitAvg != null) parts.push(`кэш ${formatPerc(hitAvg)}`);
@@ -1031,6 +1042,8 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   // Легенда графика 1: значение главной серии — интервала (считывание) или за окно.
   // formatTps(null) = '—' (серия в интервале/окне не была).
   const legendPerStream = hover ? formatTps(hover.perStream) : formatTps(avg);
+  // Значение второй серии «всего по стенду» — интервала (считывание) или среднее за окно.
+  const legendIssued = hover ? formatTps(hover.throughput) : formatTps(issuedAvg);
   // Легенда «Куда уходит время»: доли интервала (считывание) или средние за окно.
   // hover.timeShares — TimeState; доли — только если kind === 'shares', иначе «—».
   const legendShares: TimeShares | null = hover
@@ -1080,7 +1093,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
           ? <NotReported engine={engine} />
           : (
             <>
-              <FieldLabel>Скорость генерации, ток/с на поток</FieldLabel>
+              <FieldLabel>На одного агента, ток/с</FieldLabel>
               <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}
                 aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.perStream ?? null)}>
                 {[0, 0.5, 1].map(f => {
@@ -1124,12 +1137,17 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                 {tpPoints.map((pts, i) => (
                   <polyline key={`tpl${i}`} points={pts} fill="none" stroke={C.accent} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
                 ))}
-                {hoverX != null && hover && hover.perStream != null && (() => {
+                {issuedPoints.map((pts, i) => (
+                  <polyline key={`iss${i}`} points={pts} fill="none" stroke={C.info} strokeWidth={1.25} strokeDasharray="4 3" strokeLinejoin="round" strokeLinecap="round" />
+                ))}
+                {hoverX != null && hover && (hover.perStream != null || hover.throughput != null) && (() => {
                   const psY = hover.perStream != null ? yForThroughput(hover.perStream, maxT, geomTp) : null;
+                  const issY = hover.throughput != null ? yForThroughput(hover.throughput, maxT, geomTp) : null;
                   return (
                     <g>
                       <line x1={hoverX} x2={hoverX} y1={geomTp.top} y2={GEOM_TP.height - geomTp.bottom} stroke={C.textMuted} strokeWidth={1} />
                       {psY != null && <circle cx={hoverX} cy={psY} r={3} fill={C.accent} stroke={C.bgCard} strokeWidth={2} />}
+                      {issY != null && <circle cx={hoverX} cy={issY} r={2.5} fill={C.info} stroke={C.bgCard} strokeWidth={2} />}
                     </g>
                   );
                 })()}
@@ -1143,7 +1161,12 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                 <span title="сколько токенов в секунду модель выдаёт одному агенту, без чтения промпта и пауз"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
                   <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.accent}` }} />
-                  скорость генерации <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendPerStream}</b>
+                  на одного агента, ток/с <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendPerStream}</b>
+                </span>
+                <span title="сколько токенов стенд выдаёт всего; выше линии агента — работали несколько агентов, ниже — стенд простаивал"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 10, height: 0, borderTop: `1.5px dashed ${C.info}` }} />
+                  всего по стенду, ток/с <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendIssued}</b>
                 </span>
               </div>
             </>

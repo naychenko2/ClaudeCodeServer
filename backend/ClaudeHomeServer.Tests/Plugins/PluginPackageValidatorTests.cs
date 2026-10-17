@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Models.Plugins;
 using ClaudeHomeServer.Services.Plugins;
 using FluentAssertions;
 
@@ -42,6 +41,14 @@ public class PluginPackageValidatorTests
     }
 
     private static void MakeSymlink(string root, string linkRel, string target)
+    {
+        var link = Path.Combine(root, linkRel);
+        Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+        File.CreateSymbolicLink(link, target);
+    }
+
+    // Каталог-symlink (C4): ссылка на каталог, не на файл.
+    private static void MakeDirSymlink(string root, string linkRel, string target)
     {
         var link = Path.Combine(root, linkRel);
         Directory.CreateDirectory(Path.GetDirectoryName(link)!);
@@ -191,5 +198,86 @@ public class PluginPackageValidatorTests
         WriteBytes(root, "panel/huge.bin", 6 * 1024 * 1024);
 
         Validate(root).Problems.Should().Contain(p => p.Code == "file-size-limit");
+    }
+
+    // --- C4: symlink-каталог → no-symlink (не только symlink-файл) ---
+
+    [Fact]
+    public void СсылкаНаКаталог_ДаетNoSymlink()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        // Реальный каталог с 10 файлами (вне пакета).
+        var realDir = Path.Combine(Path.GetDirectoryName(root)!, "real-" + Path.GetRandomFileName());
+        Directory.CreateDirectory(realDir);
+        for (var i = 0; i < 10; i++)
+            File.WriteAllText(Path.Combine(realDir, $"f{i}.txt"), "x");
+        // Каталог-symlink на него, внутри пакета.
+        MakeDirSymlink(root, "panel/link-dir", realDir);
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "no-symlink");
+    }
+
+    // --- M9: лимит MaxFileCount прерывает обход (1001 файл, не все перечислены) ---
+
+    [Fact]
+    public void ЛимитЧислаФайлов_ПрерываетОбход()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        // 1001 файл > лимита 500: обход прерывается на 501-м.
+        var total = PluginPackageValidator.MaxFileCount + 501;
+        for (var i = 0; i < total; i++)
+            WriteFile(root, $"panel/f{i}.txt", "x");
+
+        var r = Validate(root);
+        r.Problems.Should().Contain(p => p.Code == "file-count-limit");
+        // Обрыв: перечислено ≤ лимита, а не все 1001.
+        r.ScannedFileCount.Should().BeLessThan(total);
+    }
+
+    // --- M9: лимит MaxTotalSizeBytes прерывает обход, до чтения байтов последнего файла ---
+
+    [Fact]
+    public void ЛимитРазмера_ПрерываетОбходДоПоследнегоФайла()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        // 10 файлов по 3 МБ = 30 МБ > лимита 20 МБ; каждый < 5 МБ (file-size-limit нет).
+        // Лимит срабатывает на 7-м файле (21 МБ); файлы 8-10 не перечислены.
+        for (var i = 0; i < 10; i++)
+            WriteBytes(root, $"panel/big{i}.bin", 3 * 1024 * 1024);
+
+        var r = Validate(root);
+        r.Problems.Should().Contain(p => p.Code == "size-limit");
+        // Обрыв: перечислено < 10 файлов (лимит на 7-м), не все 10.
+        r.ScannedFileCount.Should().BeLessThan(10);
+    }
+
+    // --- minor: EscapesRoot — «..» в ИМЕНИ файла (не отдельный компонент) НЕ выход за корень ---
+
+    [Fact]
+    public void ДвеТочкиВИмениФайла_НеВыходЗаКорень()
+    {
+        // Файл с «..» в имени (panel/..file.txt): «..» не отдельный компонент пути.
+        var root = NewPackage(("panel/..file.txt", "x"));
+
+        Validate(root).Problems.Should().NotContain(p => p.Code == "within-root");
+    }
+
+    // --- minor: битая symlink (target не существует) → читаемая, не 500 ---
+
+    [Fact]
+    public void БитаяСсылка_ВалидацияНеПадает()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        WriteFile(root, "panel/real.html", "<html></html>");
+        // Битая ссылка: target вне пакета и не существует.
+        var missing = Path.Combine(Path.GetDirectoryName(root)!, "missing-" + Path.GetRandomFileName());
+        MakeSymlink(root, "panel/broken.html", missing);
+
+        var r = Validate(root); // не бросает (FileInfo.Length / File.OpenRead ловятся)
+        r.Problems.Should().Contain(p => p.Code == "no-symlink");
     }
 }

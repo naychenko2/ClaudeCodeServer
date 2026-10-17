@@ -1,6 +1,5 @@
 using System.Text.Json;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Models.Plugins;
 
 namespace ClaudeHomeServer.Services.Plugins;
 

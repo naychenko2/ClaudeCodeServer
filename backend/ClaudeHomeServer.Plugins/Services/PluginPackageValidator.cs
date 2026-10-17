@@ -1,13 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
-using ClaudeHomeServer.Models.Plugins;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
-// Валидатор пакета плагина владельца (ADR-031 §2.3, шаг 1.3): allow-list файлов пакета.
-// Пакет — каталог `data/plugins/{owner}/packages/{id}/{version}` (PluginStore.PackageDir);
-// валидатор не знает владельца, ему дан корень пакета. Пропускает только разрешённые файлы;
-// на каждый запрещённый вход — отдельный код проблемы (RCE/обход allow-list).
+// Валидатор пакета плагина владельца (ADR-031 §2.3, шаг 1.3, rework C3/C4/M9): allow-list
+// файлов пакета. Пакет — каталог `data/plugins/{owner}/packages/{id}/{version}`
+// (PluginStore.PackageDir); валидатор не знает владельца, ему дан корень пакета.
+// Пропускает только разрешённые файлы; на каждый запрещённый вход — отдельный код проблемы
+// (RCE/обход allow-list).
 //
 // Allow-list (из спайка, docs/research/plugin-dir-spike-2026-10.md):
 //   манифест  ccs-plugin.json / plugin.json / .claude-plugin/plugin.json
@@ -19,8 +19,14 @@ namespace ClaudeHomeServer.Services.Plugins;
 //   hooks/ (исполняет shell), .mcp.json (регистрирует MCP-сервер), agents/ (сабагент),
 //   bin/ (исполняемое), settings.json (override).
 //
-// Плюс проверки: без symlink, без выхода за корень, лимиты размера/числа файлов.
-// Итог — sha256 пакета (для записи PluginInstall).
+// Rework:
+//   C4  symlink-каталог — своя рекурсия: на каталоге с ReparsePoint → no-symlink, внутрь
+//       не спускаемся (Directory.EnumerateFiles(AllDirectories) symlink-каталог не видит).
+//   M9  лимиты MaxFileCount/MaxTotalSizeBytes проверяются ВО время перечисления (прерывают
+//       обход), не после; хеш — только валидного пакета.
+//   C3  поля манифеста (plugin.json/ccs-plugin.json) — через PluginManifestReader
+//       (deny-manifest-field).
+//   minor  битая symlink → читаемая проблема, не 500; EscapesRoot на «..» в имени.
 public class PluginPackageValidator
 {
     // Лимиты пакета (ADR-031 §2.3). Константы, не конфиг: MVP без тюнинга.
@@ -54,66 +60,124 @@ public class PluginPackageValidator
         ("settings.json", "deny-settings",  "settings.json — глобальный override"),
     ];
 
+    // Единая точка разбора манифеста (rework C3): поля plugin.json/ccs-plugin.json.
+    private readonly PluginManifestReader _manifestReader = new();
+
     /// <summary>
     /// Валидирует пакет по корневому каталогу <paramref name="packageRoot"/>.
     /// Возвращает результат: <see cref="PluginPackageValidationResult.IsValid"/>, список
-    /// <see cref="PluginPackageValidationResult.Problems"/> и <see cref="PluginPackageValidationResult.Sha256"/>.
+    /// <see cref="PluginPackageValidationResult.Problems"/>, <see cref="PluginPackageValidationResult.Sha256"/>
+    /// и <see cref="PluginPackageValidationResult.ScannedFileCount"/> (M9: обрыв по лимиту).
     /// </summary>
     public PluginPackageValidationResult Validate(string packageRoot)
     {
         var problems = new List<PluginPackageProblem>();
         var files = new List<PackageFile>();
-
-        // Перечисление файлов пакета (рекурсивно, только файлы).
-        foreach (var full in Directory.EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories))
-        {
-            var rel = Path.GetRelativePath(packageRoot, full).Replace('\\', '/');
-            files.Add(new PackageFile(rel, full));
-        }
-
-        // Лимит числа файлов.
-        if (files.Count > MaxFileCount)
-            problems.Add(new PluginPackageProblem(
-                "file-count-limit", $"Файлов в пакете {files.Count}, лимит {MaxFileCount}"));
-
         long totalSize = 0;
-        foreach (var f in files)
-        {
-            totalSize += f.Size;
+        bool limitHit = false;
 
-            // 1) Символическая ссылка — любой symlink запрещён.
-            if (f.IsSymlink)
-                problems.Add(new PluginPackageProblem("no-symlink", $"Символическая ссылка: {f.RelativePath}"));
+        // C4+M9: своя рекурсия — лимиты (число/размер) прерывают обход, symlink-каталог
+        // даёт no-symlink и внутрь не спускаемся. Directory.EnumerateFiles(AllDirectories)
+        // не годится: не помечает symlink-каталог как ReparsePoint и перечисляет всё до конца.
+        Walk(packageRoot, packageRoot, ref files, ref totalSize, problems, ref limitHit);
+
+        // C3: поля манифеста (plugin.json/ccs-plugin.json) — deny-manifest-field.
+        var (_, manifestProblems) = _manifestReader.Read(packageRoot);
+        problems.AddRange(manifestProblems);
+
+        // M9: хеш — только валидного пакета (нет проблем), до лимита (limitHit → null).
+        // Невалидный пакет хеш не несёт: sha256 = null.
+        var sha256 = limitHit || problems.Count > 0 ? null : ComputeSha256(files);
+        return new PluginPackageValidationResult(
+            problems.Count == 0, problems, sha256, files.Count);
+    }
+
+    // Своя рекурсия (C4+M9): <paramref name="current"/> — текущий каталог,
+    // <paramref name="root"/> — корень пакета (для относительных путей).
+    //   * symlink-каталог (ReparsePoint) → no-symlink, внутрь не спускаемся;
+    //   * файл: лимиты (прерывают обход) + size + IsSymlink + EscapesRoot + deny + allow + size;
+    //   * обычные подкаталоги — рекурсия.
+    private void Walk(
+        string current,
+        string root,
+        ref List<PackageFile> files,
+        ref long totalSize,
+        List<PluginPackageProblem> problems,
+        ref bool limitHit)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+        {
+            var rel = Path.GetRelativePath(root, entry).Replace('\\', '/');
+
+            // Каталог: symlink-каталог → no-symlink, внутрь не заходить (C4).
+            if (Directory.Exists(entry))
+            {
+                if (IsReparsePoint(entry))
+                    problems.Add(new PluginPackageProblem("no-symlink", $"Символическая ссылка (каталог): {rel}"));
+                continue; // обычный каталог — в цикле рекурсии ниже
+            }
+
+            // Файл (или symlink-файл / битая ссылка).
+            var file = new PackageFile(rel, entry);
+
+            // M9: лимит числа файлов — прерывает обход (не после).
+            if (files.Count >= MaxFileCount)
+            {
+                problems.Add(new PluginPackageProblem(
+                    "file-count-limit", $"Файлов в пакете {files.Count + 1}, лимит {MaxFileCount}"));
+                limitHit = true;
+                return;
+            }
+
+            // M9: лимит общего размера — прерывает обход, до чтения байтов следующего файла.
+            totalSize += file.Size;
+            if (totalSize > MaxTotalSizeBytes)
+            {
+                problems.Add(new PluginPackageProblem(
+                    "size-limit", $"Пакет больше {MaxTotalSizeBytes / 1024 / 1024} МБ: {totalSize} байт"));
+                limitHit = true;
+                return;
+            }
+
+            files.Add(file);
+
+            // 1) Символическая ссылка (файл) — любой symlink запрещён.
+            if (file.IsSymlink)
+                problems.Add(new PluginPackageProblem("no-symlink", $"Символическая ссылка: {file.RelativePath}"));
 
             // 2) Выход за корень пакета: «..»/абсолютный путь, либо symlink, чей target вне корня.
-            if (EscapesRoot(f.RelativePath) || (f.IsSymlink && SymlinkEscapesRoot(f.FullPath, packageRoot)))
-                problems.Add(new PluginPackageProblem("within-root", $"Путь выходит за корень пакета: {f.RelativePath}"));
+            if (EscapesRoot(file.RelativePath) || (file.IsSymlink && SymlinkEscapesRoot(file.FullPath, root)))
+                problems.Add(new PluginPackageProblem("within-root", $"Путь выходит за корень пакета: {file.RelativePath}"));
 
             // 3) Запрещённые файлы (RCE/обход) — специфичный код.
-            if (TryMatchDeny(f.RelativePath, out var deny))
+            if (TryMatchDeny(file.RelativePath, out var deny))
             {
-                problems.Add(new PluginPackageProblem(deny.Code, $"{deny.Why}: {f.RelativePath}"));
+                problems.Add(new PluginPackageProblem(deny.Code, $"{deny.Why}: {file.RelativePath}"));
                 continue;
             }
 
             // 4) Allow-list: не в списке — не разрешён.
-            if (!IsAllowed(f.RelativePath))
-                problems.Add(new PluginPackageProblem("not-allowed", $"Файл не в allow-list пакета: {f.RelativePath}"));
+            if (!IsAllowed(file.RelativePath))
+                problems.Add(new PluginPackageProblem("not-allowed", $"Файл не в allow-list пакета: {file.RelativePath}"));
 
             // 5) Лимит размера отдельного файла.
-            if (f.Size > MaxSingleFileSizeBytes)
+            if (file.Size > MaxSingleFileSizeBytes)
                 problems.Add(new PluginPackageProblem(
-                    "file-size-limit", $"Файл больше {MaxSingleFileSizeBytes / 1024 / 1024} МБ: {f.RelativePath}"));
+                    "file-size-limit", $"Файл больше {MaxSingleFileSizeBytes / 1024 / 1024} МБ: {file.RelativePath}"));
         }
 
-        // Лимит общего размера пакета.
-        if (totalSize > MaxTotalSizeBytes)
-            problems.Add(new PluginPackageProblem(
-                "size-limit", $"Пакет больше {MaxTotalSizeBytes / 1024 / 1024} МБ: {totalSize} байт"));
-
-        var sha256 = ComputeSha256(files);
-        return new PluginPackageValidationResult(problems.Count == 0, problems, sha256);
+        // Рекурсия в обычные подкаталоги (symlink-каталоги уже отсечены: no-symlink + continue).
+        foreach (var dir in Directory.EnumerateDirectories(current))
+        {
+            if (limitHit) return;
+            if (IsReparsePoint(dir)) continue;
+            Walk(dir, root, ref files, ref totalSize, problems, ref limitHit);
+        }
     }
+
+    // Признак symlink (каталог или файл): ReparsePoint в атрибутах (Linux .NET так помечает ссылки).
+    private static bool IsReparsePoint(string path) =>
+        (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 
     // Запрещённый файл/каталог? Возвращает код проблемы и причину.
     private static bool TryMatchDeny(string rel, out (string Code, string Why) deny)
@@ -164,7 +228,8 @@ public class PluginPackageValidator
     }
 
     // Выход за корень: «..» как компонент пути (любым разделителем) или ведущий разделитель
-    // (абсолютный путь).
+    // (абсолютный путь). minor: «..» в ИМЕНИ файла/каталога (не отдельный компонент) —
+    // НЕ выход за корень; тест это фиксирует.
     private static bool EscapesRoot(string rel)
     {
         if (rel.StartsWith('/') || rel.StartsWith('\\')) return true;
@@ -174,6 +239,7 @@ public class PluginPackageValidator
     }
 
     // Symlink, чей разрешённый target лежит вне корня пакета — выход за корень.
+    // minor: битая ссылка (target не существует) → null, не выход за корень.
     private static bool SymlinkEscapesRoot(string fullPath, string root)
     {
         var target = new FileInfo(fullPath).ResolveLinkTarget(true);
@@ -186,7 +252,8 @@ public class PluginPackageValidator
 
     // SHA-256 пакета: детерминированный хеш содержимого всех файлов (путь + «\0» + байты),
     // файлы в сортированном порядке. Неизменяемость пакета = неизменность hash.
-    private static string ComputeSha256(List<PackageFile> files)
+    // minor: битая symlink (target не существует) → IOException → null (читаемая, не 500).
+    private static string? ComputeSha256(List<PackageFile> files)
     {
         using var hash = SHA256.Create();
         var buffer = new byte[8192];
@@ -195,10 +262,18 @@ public class PluginPackageValidator
             var pathBytes = Encoding.UTF8.GetBytes(f.RelativePath);
             hash.TransformBlock(pathBytes, 0, pathBytes.Length, null, 0);
             hash.TransformBlock([0], 0, 1, null, 0); // разделитель: конец записи пути
-            using var stream = File.OpenRead(f.FullPath);
-            int read;
-            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-                hash.TransformBlock(buffer, 0, read, null, 0);
+            try
+            {
+                using var stream = File.OpenRead(f.FullPath);
+                int read;
+                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                    hash.TransformBlock(buffer, 0, read, null, 0);
+            }
+            catch (IOException)
+            {
+                // Битая symlink: target не существует. Хеш прерываем: пакет невалиден, sha не несём.
+                return null;
+            }
         }
         hash.TransformFinalBlock([0], 0, 1);
         return Convert.ToHexString(hash.Hash).ToLowerInvariant();
@@ -217,7 +292,9 @@ public class PluginPackageValidator
             RelativePath = relativePath;
             FullPath = fullPath;
             var info = new FileInfo(fullPath);
-            Size = info.Length;
+            // minor: битая symlink — FileInfo.Length бросает; размер 0 (файл не читается).
+            try { Size = info.Length; }
+            catch (IOException) { Size = 0; }
             // Symlink — признак ReparsePoint (на Linux .NET так помечает ссылки; проверено прогоном).
             IsSymlink = (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0;
         }

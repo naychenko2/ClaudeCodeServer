@@ -89,32 +89,6 @@ public sealed class PluginPermissions
     [JsonPropertyName("requested")] public List<string>? Requested { get; set; }
 }
 
-/// <summary>
-/// Известные права пакета (ADR-031 §4): крупные, называют поверхности хоста.
-/// <c>net:{exact-host}</c> и <c>secret:{name}</c> — с параметром; <c>notes:read</c> и
-/// <c>tasks:read</c> — точные.
-/// </summary>
-public static class PluginPermission
-{
-    public const string NotesRead = "notes:read";
-    public const string TasksRead = "tasks:read";
-
-    /// <summary>
-    /// Право из известного набора? <c>net:*</c> и <c>secret:*</c> требуют непустого параметра.
-    /// Всё остальное — неизвестное право.
-    /// </summary>
-    public static bool IsKnown(string? permission)
-    {
-        if (string.IsNullOrEmpty(permission)) return false;
-        if (permission is NotesRead or TasksRead) return true;
-        if (permission.StartsWith("net:", StringComparison.Ordinal))
-            return permission["net:".Length..].Length > 0;
-        if (permission.StartsWith("secret:", StringComparison.Ordinal))
-            return permission["secret:".Length..].Length > 0;
-        return false;
-    }
-}
-
 /// <summary>Одна проблема валидации манифеста: код (машиночитаемый) + текст для человека.</summary>
 public sealed record PluginManifestProblem(string Code, string Message);
 

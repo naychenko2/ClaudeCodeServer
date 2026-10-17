@@ -138,7 +138,7 @@ const ACCEPT_READY = false;
 
 // Действия куратора: «Принять» (финал) + «Изменить ход» (модал-заглушка).
 // «Принять» активно, когда финал закрыт (run.ready); «Изменить ход» — заглушка
-// «Скоро» (реальные поля — в этапе 2.5). Диалог показывает последствия.
+// «Скоро» (реальные поля — в этапе 2.6). Диалог показывает последствия.
 function CuratorActions({ run }: { run: FeatureRun }) {
   const [confirmAccept, setConfirmAccept] = useState(false);
   const [changePlan, setChangePlan] = useState(false);
@@ -199,7 +199,7 @@ function CuratorActions({ run }: { run: FeatureRun }) {
       {changePlan && (
         <ConfirmDialog
           title="Изменить ход"
-          subtitle="Смена приоритета, остановка, переразрезание — скоро (этап 2.5)."
+          subtitle="Смена приоритета, остановка, переразрезание — скоро (этап 2.6)."
           confirmLabel="Скоро"
           onConfirm={() => setChangePlan(false)}
           onCancel={() => setChangePlan(false)}

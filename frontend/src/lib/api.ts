@@ -24,7 +24,7 @@ export interface GlyphCandidate {
 // его владелец). Время — unix-мс; kv — доли 0..1 (не проценты и не ГиБ);
 // phase — строка; чужие чаты анонимны (own=false, без sessionId/projectId).
 
-// Снимок панели: GET /api/local-model/stats?window=15m|1h&since=<unix ms>.
+// Снимок панели: GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>.
 // configured=false — локальный провайдер не настроен (панель и значок скрыты);
 // status: working | busy | down | notConnected.
 export interface LocalModelStats {
@@ -667,8 +667,8 @@ export const api = {
   // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
   // LocalModelStatsController / SessionLocalModelController (типы выше).
   localModel: {
-    // GET /api/local-model/stats?window=5m|15m|1h&since=<unix ms>
-    stats: (window: '5m' | '15m' | '1h' = '15m', since?: number) => {
+    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>
+    stats: (window: '1m' | '5m' | '15m' | '1h' = '15m', since?: number) => {
       const qs = new URLSearchParams({ window });
       if (since != null) qs.set('since', String(since));
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);

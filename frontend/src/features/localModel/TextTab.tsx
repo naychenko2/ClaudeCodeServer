@@ -1,6 +1,7 @@
 // Вкладка «LLM» панели «Локальные модели»: сверху вниз — жива ли модель →
-// кто на ней → как быстро → чем забита память → что с картами (макет
-// docs/mockups/local-model-stats-panel.html, раздел «Спецификация для Киры»).
+// очередь → как быстро → нагрузка и кэш → чем забита память → что с картами →
+// кто на ней (макет docs/mockups/local-model-stats-panel.html, раздел
+// «Спецификация для Киры»).
 //
 // Состояния: notConnected — пустое состояние с кнопкой в «Поставщики моделей»;
 // down — баннер «не отвечает с HH:MM» + последние данные приглушённые (opacity .55,
@@ -423,10 +424,10 @@ function TextTabSkeleton() {
       <div style={bar('60%', 20)} />
       <div style={block(76)} />
       <div style={block(76)} />
-      <div style={block(120)} />
-      <div style={block(110)} />
       {/* «Нагрузка и кэш»: 280 px — карточка без поля вытеснений (самое частое состояние) */}
       <div style={block(280)} />
+      <div style={block(110)} />
+      <div style={block(120)} />
       <div style={block(110)} />
     </div>
   );
@@ -461,11 +462,12 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
         <SpeedCard data={data} />
-        <GpusCard data={data} />
+        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         {/* «Память» — под «Нагрузка и кэш» (замечание Андрея): кэш на графике и
             занятость в таблице рядом, а не разбросенные по вкладке */}
-        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         <MemoryCard data={data} />
+        {/* «Видеокарты» — под памятью: детали железа (nvidia-smi), а не живая нагрузка */}
+        <GpusCard data={data} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>
     </>

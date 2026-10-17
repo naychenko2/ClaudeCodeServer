@@ -211,11 +211,10 @@ export function buildIssuedSegments(
 // «Чистый шаг» общий для окна (считается в buildIntervals), поэтому доли интервалов
 // соизмеримы между собой.
 
-// Цвета сегментов (только токены C.*): генерирует — accent, читает промпт — info,
-// ждёт соседа — success, в очереди — smoke (нейтральный).
-// «Ждёт соседа» — success (зелёный), а не warning: в обеих темах warning (янтарь)
-// сливается с accent (оранжевый) «генерирует»; зелёный — комплементарный, различим.
-const TIME_BAR_COLORS = [C.accent, C.info, C.success, C.smoke] as const;
+// Цвета сегментов (только токены C.*): генерирует — success, читает промпт — info,
+// ждёт соседа — accent, в очереди — smoke (нейтральный).
+// «Генерирует» (зелёный) и «ждёт соседа» (оранжевый) — различимы в обеих темах.
+const TIME_BAR_COLORS = [C.success, C.info, C.accent, C.smoke] as const;
 
 // Нейтральная заливка «простой» (ADR-029, v2.4): движок отвечал, но шагов/запросов
 // не было (сумма четырёх = 0). Спокойный утопленный тон C.bgInset — в обеих темах.
@@ -448,8 +447,10 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
 
 // === Сведение в интервалы (чистые функции, тестируются) ===
 
-// Число интервалов окна: 5 мин — 20 по 15 с, 15 мин — 60 по 15 с, 1 ч — 60 по 60 с.
+// Число интервалов окна: 1 мин — 12 по 5 с, 5 мин — 20 по 15 с, 15 мин — 60 по 15 с,
+// 1 ч — 60 по 60 с.
 export function intervalCountFor(window: Window): number {
+  if (window === '1m') return 12;
   if (window === '5m') return 20;
   if (window === '15m') return 60;
   return 60;
@@ -687,7 +688,7 @@ export function perStreamBreakRuns(intervals: Interval[]): [number, number][] {
 // pointermove / ArrowLeft / ArrowRight, потому что у SVG стоит aria-label и
 // строка-считывание над ним (aria-live).
 
-const WINDOW_LABEL: Record<Window, string> = { '5m': '5 минут', '15m': '15 минут', '1h': '1 час' };
+const WINDOW_LABEL: Record<Window, string> = { '1m': '1 минуту', '5m': '5 минут', '15m': '15 минут', '1h': '1 час' };
 
 // Подпись общего контейнера (сводка без привязки к полю). Используется в
 // сводке над графиками; SVG получают свои, чтобы скринридеру было понятно,
@@ -751,9 +752,9 @@ export function shouldShowNoDataLabel(zoneWidth: number): boolean {
 
 // === Компонент ===
 
-// Окно графика: 5 минут, 15 минут или 1 час.
-export type Window = '5m' | '15m' | '1h';
-export const WINDOW_MS: Record<Window, number> = { '5m': 5 * 60_000, '15m': 15 * 60_000, '1h': 60 * 60_000 };
+// Окно графика: 1 минута, 5 минут, 15 минут или 1 час.
+export type Window = '1m' | '5m' | '15m' | '1h';
+export const WINDOW_MS: Record<Window, number> = { '1m': 60_000, '5m': 5 * 60_000, '15m': 15 * 60_000, '1h': 60 * 60_000 };
 // Окно по умолчанию — 5 минут (замечание Андрея): у нового пользователя 5m,
 // выбор не персистентен, так что дефолт и есть то, что видит первый раз.
 export const DEFAULT_WINDOW: Window = '5m';
@@ -770,6 +771,14 @@ const GEOM_EV: ChartGeom = { width: 340, height: 32, left: 0, right: 28, top: 4,
 // Метки общей оси времени: «−5 / −3 / −1 / сейчас» (5m), «−15 / −10 / −5 / сейчас» (15m),
 // «−1 ч / −45 / −30 / −15 / сейчас» (1h). Единица — только на первой метке.
 function timeTicks(window: Window): { f: number; label: string }[] {
+  if (window === '1m') {
+    // Окно короче минуты округления: тики в секундах (−1 мин / −30 с / сейчас).
+    return [
+      { f: 0, label: '−1 мин' },
+      { f: 1 / 2, label: '−30 с' },
+      { f: 1, label: 'сейчас' },
+    ];
+  }
   if (window === '5m') {
     return [0, 1 / 3, 2 / 3, 1].map(f => ({ f, label: f === 1 ? 'сейчас' : `−${Math.round(5 * (1 - f))}` }));
   }
@@ -1389,6 +1398,7 @@ export function WindowToggle({ value, onChange, isMobile }: { value: Window; onC
       isMobile={isMobile}
       onChange={onChange}
       options={[
+        { value: '1m', label: '1 мин' },
         { value: '5m', label: '5 мин' },
         { value: '15m', label: '15 мин' },
         { value: '1h', label: '1 ч' },

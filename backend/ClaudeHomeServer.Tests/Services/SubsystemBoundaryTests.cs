@@ -1885,6 +1885,10 @@ public class SubsystemBoundaryTests
         // нет, а в Main этот хелпер заставлял вертикали ходить в обход через SessionManager.
         "ClaudeHomeServer.Services.SessionTaskLinks",
         "ClaudeHomeServer.Services.ExecutorStopClassifier",
+        // Детектор утечки вызова инструмента в текст (локальная модель): чистая функция
+        // (маркеры XML-формата вызова в text-блоке), зовётся и Llm (ClaudeSession), и Main
+        // (TaskExecutionService). Примитив без владения — прецедент ExecutorStopClassifier.
+        "ClaudeHomeServer.Services.ToolCallLeakDetector",
         // Состояние ```-забора при построчном разборе markdown (правила CommonMark).
         // В спине, а не в вертикали Docs: её зовут и сканер карты (Docs), и раскрытие
         // @-импортов CLAUDE.md (Core, ClaudeMdExpander) — третий комплект правил

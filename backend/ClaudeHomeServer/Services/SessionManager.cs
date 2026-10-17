@@ -348,6 +348,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Direct,         // auto — прямая отправка (SendOrEnqueueAsync при свободном чате: доклад исполнителя и пр.)
         WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
         SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
+        ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 

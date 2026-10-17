@@ -43,7 +43,9 @@ public sealed class LocalModelLiveSink(
                 summary.CompactionRequests,
                 summary.AuxiliaryRequests,
                 summary.AgentTypes,
-                summary.CompactionKind)
+                summary.CompactionKind,
+                summary.ToolCallLeakTail,
+                summary.ToolCallLeakWholeCall)
             { SessionId = sessionId });
     }
 }

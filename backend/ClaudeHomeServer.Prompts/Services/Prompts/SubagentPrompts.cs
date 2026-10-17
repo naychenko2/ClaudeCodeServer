@@ -54,6 +54,39 @@ public static class SubagentPrompts
             блокер обычным текстом и остановись: это законное завершение хода, а не провал.
             """;
     }
+    /// <summary>
+    /// Утечка вызова инструмента в текст (локальная модель): ход закончился, но вызов не
+    /// отработал — модель выдала его обычным текстом, а не tool_use. Директива просит
+    /// повторить вызов штатным tool_use. Номер попытки — по потолку MaxSubagentNudges (тот же
+    /// протокол повторов, что у обрывов сабагентов). Snippet — выдержка ушедшего в текст
+    /// вызова, чтобы модель знала, что именно повторять.
+    /// </summary>
+    public static string ResumeToolCallLeak(int attempt, int max, string? snippet = null)
+    {
+        var tail = string.IsNullOrWhiteSpace(snippet)
+            ? ""
+            : $" (хвост: {TruncateSnippet(snippet)})";
+        return $"""
+            [СИСТЕМНАЯ ДИРЕКТИВА — ВЫЗОВ УШЁЛ В ТЕКСТ {attempt}/{max}]
+            Последний вызов инструмента ушёл в текст и НЕ выполнен{tail}: модель выдала его
+            как обычный текст, а не tool_use. Повтори вызов в штатном формате
+             <function=...>
+              ...
+            </function>
+              ...
+            </invoke>
+            (попытка {attempt} из {max}).
+            """;
+    }
+
+    // Выдержка ушедшего в текст вызова: в одну строку, не длиннее 120 символов,
+    // чтобы директива не раздувалась.
+    private static string TruncateSnippet(string text)
+    {
+        var flat = string.Join(' ', text.Split('\n', '\r').Select(s => s.Trim()));
+        return flat.Length <= 120 ? flat : flat[..120] + "…";
+    }
+
 
     /// <summary>
     /// Обрыв «убит прерыванием хода»: транскрипт сабагента цел, но координатору не нужно

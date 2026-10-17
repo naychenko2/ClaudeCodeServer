@@ -938,6 +938,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // один раз, и живой локальный процесс CLI перезапускается (предусмотрено фичей).
     // null (тесты без DI) — локальная модель на шлюз не уходит.
     private readonly IOptionsMonitor<LocalModelStatsOptions>? _localModelStats;
+    // Шов утечки вызова инструмента в текст: при детекте в text-блоке основного агента
+    // сообщаем счётчику хода локальной модели. null (тесты/без DI) — счётчик не копит.
+    private readonly IToolCallLeakSink? _leakSink;
 
     // Заглушки адреса и токена шлюза в env: env входит в сигнатуру запуска, а настоящий токен
     // выдаётся только НОВОМУ процессу (BindGatewayTurn) — иначе сигнатура менялась бы каждый
@@ -1026,10 +1029,12 @@ public class ClaudeSession : ILlmSessionAdapter
         ILogger? logger = null,
         ILogger<ClaudeSession>? sessionLogger = null,
         Gateway.ServerTurnGateway? serverGateway = null,
-        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null)
+        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null,
+        IToolCallLeakSink? leakSink = null)
     {
         _serverGateway = serverGateway;
         _localModelStats = localModelStats;
+        _leakSink = leakSink;
         _llmGatewayApiUrl = context.LlmGatewayApiUrl;
         _log = logger;
         _sessionLog = sessionLogger;
@@ -6774,6 +6779,24 @@ public class ClaudeSession : ILlmSessionAdapter
         var parentId = root.TryGetProperty("parent_tool_use_id", out var pid) && pid.ValueKind == JsonValueKind.String
             ? pid.GetString() : null;
 
+        // Утечка вызова инструмента в текст (локальная модель): маркеры XML-формата вызова в
+        // text-блоках ОСНОВНОГО агента. Вид зависит от состава сообщения: есть tool_use — хвост
+        // (Tail, вызов после успешного tool_use, параметр мог потеряться), нет — вызов целиком
+        // ушёл текстом (WholeCall).
+        var hasToolUse = false;
+        string? lastToolName = null;
+        if (parentId is null)
+        {
+            foreach (var b in content.EnumerateArray())
+            {
+                if (b.TryGetProperty("type", out var bt2) && bt2.GetString() == "tool_use")
+                {
+                    hasToolUse = true;
+                    lastToolName = b.TryGetProperty("name", out var tn2) ? tn2.GetString() : null;
+                }
+            }
+        }
+
         foreach (var block in content.EnumerateArray())
         {
             if (!block.TryGetProperty("type", out var bt)) continue;
@@ -6785,6 +6808,26 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 if (parentId is null) await _onMessage(new RedactedThinkingMessage());
                 continue;
+            }
+
+            // Текст ОСНОВНОГО агента: ищем утечку вызова инструмента в текст (локальная модель,
+            // vLLM qwen3_coder). Сабагенту не показываем: его text-блоки CLI в stdout не
+            // транслирует (сюда приходят только его tool_use), полный поток эмитит
+            // SubagentStreamWatcher из транскрипта.
+            if (blockType == "text" && parentId is null)
+            {
+                var text = block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                var sig = ClaudeHomeServer.Services.ToolCallLeakDetector.Detect(text);
+                if (sig is not null)
+                {
+                    var kind = hasToolUse ? "tail" : "whole_call";
+                    // Счётчик хода локальной модели (шов): итог уходит в LocalModelTurnSummary.
+                    _leakSink?.NoteLeak(Info.Id, kind);
+                    await _onMessage(new ToolCallLeakMessage(
+                        kind,
+                        hasToolUse ? lastToolName : null,
+                        BuildLeakSnippet(text, sig)));
+                }
             }
 
             // Текст/thinking сабагента CLI в stdout НЕ транслирует (сюда приходят только его
@@ -6838,6 +6881,18 @@ public class ClaudeSession : ILlmSessionAdapter
         if (parentId is null && msg.TryGetProperty("stop_reason", out var stopReason)
             && stopReason.GetString() == "max_tokens")
             await _onMessage(new TruncatedMessage());
+    }
+
+    // Выдержка ушедшего в текст вызова: окно вокруг маркера, в одну строку, ≤ 200 символов.
+    // Короткий контекст — чтобы директива повтора (SubagentPrompts.ResumeToolCallLeak) и
+    // плашка на фронте не раздувались простынёй.
+    internal static string BuildLeakSnippet(string text, string signature)
+    {
+        var idx = text.IndexOf(signature, StringComparison.Ordinal);
+        var start = idx < 0 ? 0 : Math.Max(0, idx - 80);
+        var end = idx < 0 ? text.Length : Math.Min(text.Length, idx + signature.Length + 120);
+        var snippet = string.Join(' ', text[start..end].Split('\n', '\r').Select(s => s.Trim()));
+        return snippet.Length <= 200 ? snippet : snippet[..200];
     }
 
     // Обогащение input вызова Workflow: сохранённый workflow запускается по имени

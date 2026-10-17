@@ -51,6 +51,8 @@ public class SessionLocalModelController(SessionManager sessions, IServiceProvid
                 AuxiliaryRequests = last.AuxiliaryRequests,
                 AgentTypes = last.AgentTypes,
                 CompactionKind = last.CompactionKind,
+                ToolCallLeakTail = last.ToolCallLeakTail,
+                ToolCallLeakWholeCall = last.ToolCallLeakWholeCall,
             },
         });
     }
@@ -80,5 +82,9 @@ public class SessionLocalModelController(SessionManager sessions, IServiceProvid
         public string[]? AgentTypes { get; init; }
         // Вид компакции (auto | manual | reactive); null — не было.
         public string? CompactionKind { get; init; }
+        // Утечки вызова инструмента в текст (vLLM qwen3_coder): число text-блоков основного
+        // агента с маркерами XML-формата вызова, по видам. 0 — не было.
+        public int ToolCallLeakTail { get; init; }
+        public int ToolCallLeakWholeCall { get; init; }
     }
 }

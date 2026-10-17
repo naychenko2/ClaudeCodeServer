@@ -1,7 +1,8 @@
 import { memo, useContext, useEffect, useMemo, useState } from 'react';
 import { SquareCheck, ArrowRight } from 'lucide-react';
 import type { ChatItem, Task } from '../../types';
-import { C, FONT, SHADOW } from '../../lib/design';
+import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { dueLabel, isDueUrgent, openTaskInSection, PRIORITY_LABEL } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
@@ -58,6 +59,9 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   const personas = usePersonas();
   const project = useContext(ChatProjectContext);
   const [hovered, setHovered] = useState(false);
+  // Чип «Шаг N фичи» — за гейтом фич-флага: разметка (featureId/stepRef) уже в проде,
+  // но чип показываем только когда режим «Исполнение фичи» включён.
+  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
 
   const running = item.result === undefined;
   const task = useMemo(
@@ -198,6 +202,21 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
         {labels.length > 0 && (
           <div style={{ marginTop: 11, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {labels.map(l => <LabelChip key={l} label={l} />)}
+          </div>
+        )}
+        {/* Чип «Шаг N фичи»: только когда режим «Исполнение фичи» включён И в ответе
+            tasks_create есть featureId И stepRef (Major 3 Глеба: без них чипа нет, чтобы
+            не врать про неразмеченные задачи) */}
+        {featureMode && task?.featureId && task?.stepRef && (
+          <div style={{ marginTop: SP.md }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm,
+              color: C.textSecondary, background: C.bgCard, border: `1px solid ${C.borderLight}`,
+              borderRadius: R.md, padding: `${SP.xxs}px ${SP.sm}px`,
+            }}>
+              <span style={{ color: C.accent, fontWeight: 700 }}>●</span>
+              Шаг {task.stepRef} фичи
+            </span>
           </div>
         )}
       </div>

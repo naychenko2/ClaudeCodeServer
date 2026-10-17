@@ -67,6 +67,8 @@ import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
+import { useFeatureRuns } from '../lib/featureRuns';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -1756,6 +1758,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const taskTodos = useMemo(
     () => (todoBatches.length ? todoBatches[todoBatches.length - 1].todos : []),
     [todoBatches]);
+  // Режим «Исполнение фичи»: гейт фич-флага (dark-launch) — выключен, фича не
+  // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
+  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
+  const featureRuns = useFeatureRuns(session.id, featureMode);
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
@@ -2078,8 +2084,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       online={online}
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
-      planPill={!showWaiting && i === lastResultIndex && taskTodos.length > 0
-        ? <TurnPlanPill todos={taskTodos} />
+      planPill={!showWaiting && i === lastResultIndex && (taskTodos.length > 0 || featureRuns.length > 0)
+        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} />
         : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
       onToggleThinking={toggleThinking}
@@ -2927,7 +2933,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 индикатора не оставалось места даже под аватар и время. Половина — потолок,
                 а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
             <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
-              <TurnPlanPill todos={taskTodos} />
+              <TurnPlanPill todos={taskTodos} runs={featureRuns} />
             </div>
           </div>
         )}

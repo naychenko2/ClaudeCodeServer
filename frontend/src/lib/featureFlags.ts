@@ -19,6 +19,8 @@ export const FLAGS = {
   characterFaceSwap: 'character-face-swap',
   // Статистика локальных моделей: живые метрики в чипе Ctx + панель админа по медиа-стенду ComfyUI.
   localModelStats: 'local-model-stats',
+  // Режим «Исполнение фичи» в «Плане хода»: переключатель + карточка фичи (этап 2).
+  turnPlanFeatureMode: 'turn-plan-feature-mode',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

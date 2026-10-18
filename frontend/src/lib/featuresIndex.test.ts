@@ -251,4 +251,19 @@ describe('live-режим: перезапрос затронутого прое�
     vi.advanceTimersByTime(1500);
     expect(featuresIndexSpy).not.toHaveBeenCalled();
   });
+
+  it('M1: размонтирование наблюдателя отменяет pending-таймер перезапроса', () => {
+    upsertTaskLocal(task({ id: 'epic-7', role: 'feature', projectId: 'p1' }));
+    __test.setActive('p1');
+    // task_changed поставил дебаунс-таймер перезапроса p1
+    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'epic-7', role: 'feature', projectId: 'p1' }) });
+    expect(__test.pending().has('p1')).toBe(true);
+    // Размонтирование: таймер отменён, проект снят из активных
+    __test.onUnmount('p1');
+    expect(__test.pending().has('p1')).toBe(false);
+    expect(__test.active().has('p1')).toBe(false);
+    // Таймер мёртв — даже по истечении окна дебаунса запрос не уйдёт
+    vi.advanceTimersByTime(1500);
+    expect(featuresIndexSpy).not.toHaveBeenCalled();
+  });
 });

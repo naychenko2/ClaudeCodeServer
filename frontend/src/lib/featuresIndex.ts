@@ -118,6 +118,9 @@ function scheduleRefetch(projectKey: string) {
   }, REFETCH_DEBOUNCE_MS));
 }
 
+// Роль задачи-эпика (бэк TaskItem.Role): именно она отличает «саму фичу» от дочерней.
+const FEATURE_ROLE = 'feature' as const;
+
 // Затронутый проект по task_changed:
 //   • задача с role='feature' — это сам эпик → его проект (Task.projectId);
 //   • задача с featureId — дочерняя → эпик (по id) → его проект.
@@ -125,7 +128,7 @@ function scheduleRefetch(projectKey: string) {
 function affectedProjectKey(msg: ServerMessage): string | null {
   if (msg.type !== 'task_changed' || msg.action === 'deleted') return null;
   const t = msg.task;
-  if (t.role === 'feature') return t.projectId ?? '';
+  if (t.role === FEATURE_ROLE) return t.projectId ?? '';
   if (t.featureId) return getTaskById(t.featureId)?.projectId ?? null;
   return null;
 }
@@ -146,6 +149,17 @@ function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
   onMessage(handleTaskChanged);
+}
+
+// Размонтирование наблюдателя проекта: снимаем его из активных и отменяем
+// pending-таймер перезапроса (M1, минор по Ф1). Иначе дебаунс task_changed,
+// поставленный ещё до размонтирования, ушёл бы в REST-запрос за проектом,
+// которого никто уже не смотрит. Вынесено в функцию — cleanup хука её вызывает,
+// а тест проверяет эффект напрямую (окружение node, без jsdom).
+function onUnmount(projectKey: string) {
+  _active.delete(projectKey);
+  const t = _pending.get(projectKey);
+  if (t) { clearTimeout(t); _pending.delete(projectKey); }
 }
 
 // Хук: индекс фич проекта.
@@ -177,7 +191,7 @@ export function useFeaturesIndex(projectId: string | null, enabled: boolean): Fe
       .finally(() => { if (!cancelled) setLoading(projectKey, false); });
     return () => {
       cancelled = true;
-      _active.delete(projectKey);
+      onUnmount(projectKey);
     };
   }, [projectKey, enabled]);
   return index;
@@ -205,4 +219,5 @@ export const __test = {
   setActive: (k: string) => _active.add(k),
   active: () => new Set(_active),
   pending: () => new Set(_pending.keys()),
+  onUnmount,
 };

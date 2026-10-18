@@ -177,6 +177,61 @@ export function useFeatureStepFocus(sessionId: string | null): FeatureStepFocus 
   );
 }
 
+// F9: «в ленте есть живая карточка плана» (per chat): ChatPanel пишет (карточка живая
+// только на последней пачке и только когда есть фичи), чип «Шаг N фичи» (TaskCreatedView)
+// читает: есть — сигнал фокуса потребляется в ленте, нет — чип открывает меню пилюли.
+let _planCardBySession = new Map<string, boolean>();
+
+function planCardFor(sessionId: string | null): boolean {
+  if (!sessionId) return false;
+  return _planCardBySession.get(sessionId) ?? false;
+}
+
+export function setHasPlanCard(sessionId: string, has: boolean) {
+  if (!sessionId) return;
+  _planCardBySession = new Map(_planCardBySession);
+  _planCardBySession.set(sessionId, has);
+  emit();
+}
+
+// Хук: есть ли в ленте чата живая карточка плана (false, пока ChatPanel не написал).
+export function useHasPlanCard(sessionId: string | null): boolean {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => planCardFor(sessionId),
+    () => planCardFor(sessionId),
+  );
+}
+
+// F9: одноразовый сигнал «открыть меню пилюли» (per chat): чип «Шаг N фичи» открывает
+// меню, когда живой карточки плана в ленте нет. `seq` — монотонный счётчик: повторное
+// открытие — новая ссылка → подписчик (TurnPlanPill) срабатывает заново.
+export interface PillMenuOpen { seq: number }
+let _pillMenuBySession = new Map<string, PillMenuOpen>();
+let _pillMenuSeq = 0;
+
+function pillMenuFor(sessionId: string | null): PillMenuOpen | null {
+  if (!sessionId) return null;
+  return _pillMenuBySession.get(sessionId) ?? null;
+}
+
+export function openPillMenu(sessionId: string) {
+  if (!sessionId) return;
+  _pillMenuSeq += 1;
+  _pillMenuBySession = new Map(_pillMenuBySession);
+  _pillMenuBySession.set(sessionId, { seq: _pillMenuSeq });
+  emit();
+}
+
+// Хук: сигнал «открыть меню пилюли» чата (null, пока сигнала не было).
+export function usePillMenuOpen(sessionId: string | null): PillMenuOpen | null {
+  return useSyncExternalStore(
+    subscribeRuns,
+    () => pillMenuFor(sessionId),
+    () => pillMenuFor(sessionId),
+  );
+}
+
 // F1: ТОЛЬКО ЧИТАЕТ стор агрегатов, без fetch (запрос уже делает ChatPanel через
 // useFeatureRuns). Нужен карточке плана в ленте: она видит те же агрегаты, что и
 // пилюля, но не дублирует сетевой запрос.
@@ -270,6 +325,9 @@ export const __test = {
     _selectedFeatureBySession = new Map();
     _focusBySession = new Map();
     _focusSeq = 0;
+    _planCardBySession = new Map();
+    _pillMenuBySession = new Map();
+    _pillMenuSeq = 0;
     _active.clear();
     _pending.forEach(t => clearTimeout(t));
     _pending.clear();
@@ -288,4 +346,9 @@ export const __test = {
   modeFor,
   selectedFeatureIdFor,
   focusFor,
+  // F9: прямой доступ к срезам «живая карточка плана» и «открыть меню пилюли».
+  setHasPlanCard,
+  planCardFor,
+  openPillMenu,
+  pillMenuFor,
 };

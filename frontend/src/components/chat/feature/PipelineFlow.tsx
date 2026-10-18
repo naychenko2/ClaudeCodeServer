@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { C, FS, SP, R, FONT, TB } from '../../../lib/design';
 import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { getPersonaById } from '../../../lib/personas';
+import { useFeatureStepFocus } from '../../../lib/featureRuns';
+import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { Rounds } from './Rounds';
 import { StepDetails } from './StepDetails';
@@ -508,6 +510,8 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
   const minH = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
   return (
     <button
+      // id — для scrollIntoView по сигналу фокуса (F9): document.getElementById
+      id={`step-row-${chain.stepRef}`}
       data-testid={`step-row-${chain.stepRef}`}
       aria-expanded={expanded}
       aria-controls={expanded ? `step-details-${chain.stepRef}` : undefined}
@@ -819,11 +823,44 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
   const lanes = laneInfo(run);
   const badges = returnBadges(run);
   // F8: управляемое раскрытие. «Производство» открыто по умолчанию; шаг — одиночно внутри этапа.
-  // Ф9 выставит их по сигналу фокуса (props), пока — внутреннее состояние.
+  // F9: сигнал фокуса чипа «Шаг N фичи» (стор Ф1, per chat) выставляет их по сигналу.
   const [expandedStage, setExpandedStage] = useState<StageKey | null>('prod');
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   // minHeight строки: тач-цель по TB (32 десктоп / 40 мобила).
   const rowMinH = isMobile ? ROW_MIN_H_MOBILE : ROW_MIN_H_DESKTOP;
+
+  // F9: сигнал фокуса: раскрыть «Производство» и шаг, чья цепочка содержит задачу
+  // (taskIds ⊇ taskId); шаг не найден — раскрыто только «Производство». Одноразовый:
+  // потреблённый seq запоминается — ререндер не раскрывает шаг заново и не перебивает
+  // ручное раскрытие пользователя; сигнал другой фичи (featureId не совпадает) этот
+  // поток не трогает; сигнал другого чата (другой sessionId) сюда не доходит.
+  const sessionId = useContext(ChatSessionContext);
+  const focus = useFeatureStepFocus(sessionId);
+  const focusSeq = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.seq === focusSeq.current) return;
+    focusSeq.current = focus.seq;
+    if (focus.featureId !== run.featureId) return;
+    const stepRef = (run.stepChains ?? []).find(c => c.taskIds.includes(focus.taskId))?.stepRef ?? null;
+    setExpandedStage('prod');
+    setExpandedStep(stepRef);
+    if (!stepRef) return;
+    // Строка шага: «Производство» раскрыто по умолчанию — строка уже в DOM; если пользователь
+    // сворачивал стадию — строка появится на следующий кадр: повтор до 30 кадров (паттерн ChatPanel).
+    // prefers-reduced-motion — без плавной прокрутки.
+    let tries = 0;
+    let raf = 0;
+    const tryScroll = () => {
+      const el = document.getElementById(`step-row-${stepRef}`);
+      if (el) {
+        el.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+      } else if (++tries < 30) {
+        raf = requestAnimationFrame(tryScroll);
+      }
+    };
+    raf = requestAnimationFrame(tryScroll);
+    return () => cancelAnimationFrame(raf);
+  }, [focus, run.featureId, run.stepChains, reduced]);
 
   // Клик по стадии: одиночное раскрытие (открыть — закрыть предыдущую); смена стадии сбрасывает шаг.
   const onStage = (key: StageKey) => {

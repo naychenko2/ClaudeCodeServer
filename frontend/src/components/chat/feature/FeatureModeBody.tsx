@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { C, FONT, SHADOW, Z } from '../../../lib/design';
 import { openTaskInSection } from '../../../lib/tasks';
 import type { FeatureRun } from '../../../types/featureRun';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
-import { useTurnPlanMode, useSelectedFeatureId, setTurnPlanMode, setSelectedFeatureId } from '../../../lib/featureRuns';
+import { useTurnPlanMode, useSelectedFeatureId, setTurnPlanMode, setSelectedFeatureId, useFeatureStepFocus } from '../../../lib/featureRuns';
 import { ModeSwitcher } from './ModeSwitcher';
 import { FeaturePicker } from './FeaturePicker';
 import { FeatureRunView } from './FeatureRunView';
@@ -48,6 +48,21 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
   const selectedId = useSelectedFeatureId(sessionId);
   const hasFeatures = runs.length > 0;
   const featureMode = hasFeatures && mode === 'feature';
+
+  // F9: сигнал фокуса чипа «Шаг N фичи» (стор Ф1, per chat): переключить режим на
+  // «Исполнение фичи» и выбрать фичу из сигнала. Одноразовый: потреблённый seq
+  // запоминается — ререндер не сбрасывает ручной выбор пользователя, сигнал другого
+  // чата (другой sessionId) сюда не доходит.
+  const focus = useFeatureStepFocus(sessionId);
+  const focusSeq = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.seq === focusSeq.current) return;
+    focusSeq.current = focus.seq;
+    if (sessionId) {
+      setTurnPlanMode(sessionId, 'feature');
+      setSelectedFeatureId(sessionId, focus.featureId);
+    }
+  }, [focus, sessionId]);
 
   // Выбранная фича: индекс по id (клампится, если фич стало меньше); нет выбора — runs[0].
   const sel = selectedId ? Math.max(0, runs.findIndex(r => r.featureId === selectedId)) : 0;

@@ -16,6 +16,8 @@ import type {
 } from '../../../types/featureRun';
 import { SP } from '../../../lib/design';
 import { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from '../__tests__/fakeDom';
+import { __test, focusFeatureStep, setTurnPlanMode } from '../../../lib/featureRuns';
+import { ChatSessionContext } from '../contexts';
 import {
   PipelineFlow, stageByKey, stageState, stageWidth,
   laneInfo, laneTrackWidth, returnBadges, toggleExpanded,
@@ -1033,5 +1035,97 @@ describe('PipelineFlow: F8 (мутации)', () => {
       stepChains: [chain({ stepRef: 'D1', title: 'Один виток', rounds: [round({ n: 1, verdict: 'accepted' })] })],
     });
     expect(render(one), '1 виток — блока «дольше всех» нет').not.toContain('дольше всех');
+  });
+});
+
+// === F9: сигнал фокуса чипа «Шаг N фичи» (стор Ф1, per chat) ===
+// Чип открывает план на нужном шаге: PipelineFlow раскрывает «Производство» и шаг, чья
+// цепочка содержит задачу (taskIds ⊇ taskId); шаг не найден — только «Производство».
+// Одноразовый: потреблённый seq запоминается (ререндер не перебивает ручное раскрытие);
+// сигнал другого чата (sessionId) или другой фичи (featureId) этот поток не трогает.
+describe('PipelineFlow: F9 (сигнал фокуса)', () => {
+  beforeAll(() => {
+    installFakeDom();
+    // Node-окружение без rAF/cAF, а код зовёт ГЛОБАЛЬНЫЕ requestAnimationFrame/cancelAnimationFrame
+    // (ретраит скролла по кадрам, cleanup — cancel). Стабы: rAF синхронный — элемент найден
+    // сразу, один проход; cAF no-op.
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (fn: () => void) => { fn(); return 1; };
+    (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = () => {};
+  });
+  afterAll(() => { uninstallFakeDom(); });
+  beforeEach(() => { __test.reset(); });
+
+  function focusRun(): FeatureRun {
+    return run({
+      stages: stages({
+        prod: { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [] },
+      }),
+      stepChains: [
+        chain({ stepRef: 'D1', title: 'Бэк-шаг', lane: 'back', taskIds: ['s1', 's2'] }),
+        chain({ stepRef: 'F1', title: 'Фронт-шаг', lane: 'front', taskIds: ['s3'] }),
+      ],
+    });
+  }
+
+  function mountFlow(sessionId: string, r: FeatureRun) {
+    const node = createElement(ChatSessionContext.Provider, { value: sessionId }, createElement(PipelineFlow, { run: r }));
+    return mount(node);
+  }
+
+  it('сигнал: раскрыты «Производство» и шаг, чья цепочка содержит задачу (taskIds ⊇ taskId)', () => {
+    const { root, container } = mountFlow('sess-1', focusRun());
+    // Фейковый document ищет getElementById от body, а контейнер от него отсоединён —
+    // стаб ищет по контейнеру; FNode без scrollIntoView — стаб-запись вызова.
+    const doc = (globalThis as { document: { getElementById: (id: string) => unknown } }).document;
+    const origGetById = doc.getElementById;
+    doc.getElementById = (id: string) => findNodeByAttr(container, 'id', id) ?? null;
+    const d1 = findNodeByAttr(container, 'id', 'step-row-D1');
+    const scrolled: unknown[] = [];
+    (d1 as unknown as { scrollIntoView: (o: unknown) => void }).scrollIntoView = (o: unknown) => { scrolled.push(o); };
+
+    act(() => { focusFeatureStep('sess-1', 'epic-1', 's2'); });
+
+    expect(d1!.getAttribute('aria-expanded'), 'шаг D1 раскрыт (s2 в его цепочке)').toBe('true');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-row-prod')!.getAttribute('aria-expanded'), '«Производство» раскрыто').toBe('true');
+    expect(scrolled, 'скролл на раскрытый шаг (block nearest, smooth — reduced-motion выключен)').toEqual([{ block: 'nearest', behavior: 'smooth' }]);
+    doc.getElementById = origGetById;
+    root.unmount();
+  });
+
+  it('шаг не найден в цепочках — раскрыто только «Производство» (шага нет)', () => {
+    const { root, container } = mountFlow('sess-1', focusRun());
+    act(() => { focusFeatureStep('sess-1', 'epic-1', 'no-such-task'); });
+    expect(findNodeByAttr(container, 'data-testid', 'stage-row-prod')!.getAttribute('aria-expanded'), '«Производство» раскрыто').toBe('true');
+    expect(findNodeByAttr(container, 'data-testid', 'step-row-D1')!.getAttribute('aria-expanded'), 'D1 не раскрыт').toBe('false');
+    expect(findNodeByAttr(container, 'data-testid', 'step-row-F1')!.getAttribute('aria-expanded'), 'F1 не раскрыт').toBe('false');
+    root.unmount();
+  });
+
+  it('одноразовый: ререндер после сигнала не раскрывает заново шаг, свёрнутый пользователем', () => {
+    const { root, container } = mountFlow('sess-1', focusRun());
+    act(() => { focusFeatureStep('sess-1', 'epic-1', 's2'); });
+    const d1 = findNodeByAttr(container, 'data-testid', 'step-row-D1')!;
+    expect(d1.getAttribute('aria-expanded'), 'сигнал раскрыл D1').toBe('true');
+    // Пользователь вручную сворачивает шаг
+    act(() => (reactProps(d1)!.onClick as () => void)());
+    expect(d1.getAttribute('aria-expanded'), 'пользователь свёрнул').toBe('false');
+    // Ререндер (смена стора БЕЗ нового сигнала) — шаг не раскрывается заново
+    act(() => { setTurnPlanMode('sess-1', 'feature'); });
+    expect(d1.getAttribute('aria-expanded'), 'ререндер не перебивает ручное раскрытие').toBe('false');
+    root.unmount();
+  });
+
+  it('сигнал другого чата (sessionId) не доходит', () => {
+    const { root, container } = mountFlow('sess-A', focusRun());
+    act(() => { focusFeatureStep('sess-B', 'epic-1', 's2'); });
+    expect(findNodeByAttr(container, 'data-testid', 'step-row-D1')!.getAttribute('aria-expanded'), 'поток чата A сигнала чата B не получил').toBe('false');
+    root.unmount();
+  });
+
+  it('сигнал другой фичи (featureId не совпадает) поток не трогает', () => {
+    const { root, container } = mountFlow('sess-1', focusRun());
+    act(() => { focusFeatureStep('sess-1', 'other-epic', 's2'); });
+    expect(findNodeByAttr(container, 'data-testid', 'step-row-D1')!.getAttribute('aria-expanded'), 'D1 не раскрыт').toBe('false');
+    root.unmount();
   });
 });

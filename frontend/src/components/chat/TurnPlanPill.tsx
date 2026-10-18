@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ListChecks, Route } from 'lucide-react';
 import { C, FONT } from '../../lib/design';
 import { Menu } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { planHint, type TodoItem } from '../../hooks/useSessionArtifacts';
 import { useIsMobile } from '../../lib/breakpoints';
-import { useTurnPlanMode } from '../../lib/featureRuns';
+import { useTurnPlanMode, usePillMenuOpen } from '../../lib/featureRuns';
 import type { FeatureRun } from '../../types/featureRun';
 import { TodoList } from './TodoList';
 import { FeatureModeBody } from './feature/FeatureModeBody';
@@ -42,6 +42,19 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
   const mode = useTurnPlanMode(sessionId);
   const hasFeatures = runs.length > 0;
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  const pillBtnRef = useRef<HTMLButtonElement>(null);
+
+  // F9: одноразовый сигнал «открыть меню» (стор Ф1, per chat): чип «Шаг N фичи»
+  // (TaskCreatedView) шлёт его, когда в ленте нет живой карточки плана. Потреблённый
+  // seq запоминается — ререндер сам по себе меню не переоткрывает.
+  const pillMenu = usePillMenuOpen(sessionId);
+  const pillMenuSeq = useRef(0);
+  useEffect(() => {
+    if (!pillMenu || pillMenu.seq === pillMenuSeq.current) return;
+    pillMenuSeq.current = pillMenu.seq;
+    const rect = pillBtnRef.current?.getBoundingClientRect();
+    if (rect) setMenu(rect);
+  }, [pillMenu]);
 
   if (!todos.length && !hasFeatures) return null;
 
@@ -83,6 +96,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
   return (
     <>
       <button
+        ref={pillBtnRef}
         onClick={e => setMenu(menu ? null : e.currentTarget.getBoundingClientRect())}
         title={featureMode ? 'Показать исполнение фичи' : 'Показать план хода'}
         aria-label={ariaLabel}

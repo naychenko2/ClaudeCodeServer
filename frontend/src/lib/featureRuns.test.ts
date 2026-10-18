@@ -15,6 +15,8 @@ import {
   setSelectedFeatureId,
   getSelectedFeatureId,
   focusFeatureStep,
+  setHasPlanCard,
+  openPillMenu,
 } from './featureRuns';
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
@@ -283,5 +285,49 @@ describe('F1: useFeatureRunsSnapshot — только читает стор, б�
   it('срез несуществующей сессии — EMPTY, без fetch', () => {
     expect(__test.snapshotFor('nope').length).toBe(0);
     expect(getFeaturesSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── F9: срез «живая карточка плана» + сигнал «открыть меню пилюли» (per chat) ──
+describe('F9: hasPlanCard (per chat) и openPillMenu (одноразовый сигнал)', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  it('hasPlanCard: по умолчанию false, setHasPlanCard пишет per-session', () => {
+    expect(__test.planCardFor('A'), 'по умолчанию нет').toBe(false);
+    setHasPlanCard('A', true);
+    expect(__test.planCardFor('A'), 'после записи true').toBe(true);
+    expect(__test.planCardFor('B'), 'чужая сессия не затронута').toBe(false);
+    setHasPlanCard('A', false);
+    expect(__test.planCardFor('A'), 'сброс на false').toBe(false);
+  });
+
+  it('hasPlanCard: null/пустой sessionId — false (нет чата)', () => {
+    expect(__test.planCardFor(null)).toBe(false);
+    setHasPlanCard('', true);
+    expect(__test.planCardFor(null), 'запись в пустой id не видна через null').toBe(false);
+  });
+
+  it('openPillMenu: null до сигнала, после — объект с seq', () => {
+    expect(__test.pillMenuFor('A'), 'до сигнала null').toBeNull();
+    openPillMenu('A');
+    const first = __test.pillMenuFor('A');
+    expect(first, 'после сигнала объект').not.toBeNull();
+    expect(first!.seq).toBeGreaterThan(0);
+  });
+
+  it('openPillMenu: повторный сигнал — seq растёт, новая ссылка (подписчик сработает заново)', () => {
+    openPillMenu('A');
+    const first = __test.pillMenuFor('A')!;
+    openPillMenu('A');
+    const second = __test.pillMenuFor('A')!;
+    expect(second.seq).toBeGreaterThan(first.seq);
+    expect(second).not.toBe(first);
+  });
+
+  it('openPillMenu: изоляция по sessionId (сигнал чата A не доходит в B)', () => {
+    openPillMenu('A');
+    expect(__test.pillMenuFor('A')).not.toBeNull();
+    expect(__test.pillMenuFor('B'), 'чужая сессия сигнала не получила').toBeNull();
   });
 });

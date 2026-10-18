@@ -67,7 +67,7 @@ import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
-import { useFeatureRuns } from '../lib/featureRuns';
+import { useFeatureRuns, setHasPlanCard } from '../lib/featureRuns';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -1768,6 +1768,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featureRuns = useFeatureRuns(session.id, featureMode);
+
+  // F9: чип «Шаг N фичи» (TaskCreatedView) должен знать, есть ли в ленте живая карточка
+  // плана (стор Ф1, per chat): есть — сигнал фокуса потребляется в ней, нет — чип открывает
+  // меню пилюли. Живая карточка — только на последней пачке (lastPlanIndex ≥ 0) и только
+  // когда у чата есть фичи (иначе там снимок TodoList, а не FeatureModeBody).
+  useEffect(() => {
+    if (session.id) setHasPlanCard(session.id, lastPlanIndex >= 0 && featureRuns.length > 0);
+  }, [session.id, lastPlanIndex, featureRuns]);
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента

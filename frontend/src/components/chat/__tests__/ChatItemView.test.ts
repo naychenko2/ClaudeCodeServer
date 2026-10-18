@@ -208,3 +208,27 @@ describe('TodoPlanView — живое тело только на текущей 
     expect(html).toContain('План хода');
   });
 });
+
+// === Ветка tool_use: tasks_create → строка инструмента (не карточка); tasks_run_executor → карточка ===
+// Задачи создаются заранее (все шаги фичи сразу в todo) — карточка «Задача создана» на каждом
+// tasks_create засоряла ленту. Теперь: tasks_create → обычная строка инструмента; карточка
+// появляется, когда задача отдана в исполнение (tasks_run_executor, добор полной задачи по id).
+describe('ChatItemView — ветка tool_use: tasks_create / tasks_run_executor', () => {
+  function toolItem(name: string, over: Partial<Extract<ChatItem, { kind: 'tool_use' }>> = {}): ChatItem {
+    return { kind: 'tool_use', id: 't1', name, input: {}, result: undefined, ...over } as ChatItem;
+  }
+
+  it('tasks_create → строка инструмента, БЕЗ карточки «Задача создана»', () => {
+    const html = renderItem(toolItem('mcp__tasks__tasks_create', { input: { title: 'Шаг D1' }, result: '{"id":"task-1","title":"Шаг D1"}' }));
+    expect(html, 'карточка «Задача создана» не рисуется').not.toContain('Задача создана');
+    expect(html, 'строка инструмента рисуется (имя tools · tasks_create, не пустота)').toContain('tasks_create');
+  });
+
+  it('tasks_run_executor → SSR: карточки нет (задача ещё не доборена) — строка инструмента, не падение', () => {
+    const html = renderItem(toolItem('mcp__tasks__tasks_run_executor', { input: { taskId: 'task-1' }, result: '{"id":"task-1","title":"Шаг D1","status":"inProgress"}' }));
+    // SSR: useEffect ещё не отработал, задача не доборена → TaskRunExecutorView показывает строку
+    // инструмента (не карточку). Карточка по доборенной задаче — покрыто TaskCreatedView.test.ts (async).
+    expect(html, 'SSR: карточки нет (задача не доборена)').not.toContain('Задача создана');
+    expect(html, 'строка инструмента рисуется').toContain('tasks_run_executor');
+  });
+});

@@ -15,6 +15,7 @@ import { Button } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolUseView } from './ToolUseView';
 import { ChatProjectContext, ChatSessionContext } from './contexts';
+import { api } from '../../lib/api';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -30,6 +31,22 @@ function parseTask(result: string): Task | null {
     if (t && typeof t === 'object' && typeof t.id === 'string' && typeof t.title === 'string')
       return t as unknown as Task;
   } catch { /* не JSON — деградация в обычный блок инструмента */ }
+  return null;
+}
+
+// Вызов tasks_run_executor (mcp__tasks__tasks_run_executor) — сравнение по суффиксу, без регистра
+export function isTasksRunExecutor(name: string): boolean {
+  return name.toLowerCase().endsWith('__tasks_run_executor');
+}
+
+// Результат tasks_run_executor неполный: {id, title, status, executorSessionId, note}.
+// Нужен только id (для добора полной задачи); остальное не используем.
+function parseRunExecutorResult(result: string | undefined): { id?: string } | null {
+  if (!result) return null;
+  try {
+    const o = JSON.parse(result) as { id?: unknown };
+    if (o && typeof o.id === 'string' && o.id) return { id: o.id };
+  } catch { /* не JSON */ }
   return null;
 }
 
@@ -62,10 +79,14 @@ const cellValueStyle: React.CSSProperties = {
 // Вместо технического блока: тонированная шапка с техподписью, название, описание,
 // сетка деталей (исполнитель/срок/приоритет/подзадачи), метки, футер-ссылка.
 // Вся карточка кликабельна → задача в её разделе (проектная — «Задачи», личная — «Календарь»).
-export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onOpenFile }: {
+export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onOpenFile, toolName = 'create' }: {
   item: ToolUseItem;
   online: boolean;
   onOpenFile?: (path: string) => void;
+  // Техподпись в шапке — по имени инструмента: tasks_create → «create» (дефолт),
+  // tasks_run_executor → «run_executor». Не хардкод, чтобы карточка запуска не вешала
+  // чужую подпись.
+  toolName?: string;
 }) {
   // Резолв персоны-исполнителя: в чатах без персоны стор мог быть не загружен
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -154,7 +175,7 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
           </span>
         ) : (
           <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
-            tasks · create
+            tasks · {toolName}
           </span>
         )}
       </div>
@@ -304,4 +325,36 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
       )}
     </div>
   );
+});
+
+// Карточка задачи на месте вызова tasks_run_executor: задача «отдана в исполнение».
+// Результат вызова неполный ({id, title, status, executorSessionId, note}) — полную задачу
+// добираем по id (GET /api/tasks/{id}); пока грузится или при ошибке/403/404/нет id —
+// обычная строка инструмента (ToolUseView), не падение. id — из input (taskId, надёжнее)
+// или из result (id, фолбэк). Поведение карточки (чип «Шаг N фичи», переход к задаче) —
+// то же, что у TaskCreatedView: рисуем её, передав полный Task в result.
+export const TaskRunExecutorView = memo(function TaskRunExecutorView({ item, online, onOpenFile }: {
+  item: ToolUseItem; online: boolean; onOpenFile?: (path: string) => void;
+}) {
+  const inp = (item.input ?? {}) as { taskId?: unknown };
+  const res = parseRunExecutorResult(item.result);
+  const id = (typeof inp.taskId === 'string' && inp.taskId) || res?.id || null;
+
+  const [task, setTask] = useState<Task | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    api.tasks.get(id)
+      .then(t => { if (!cancelled) setTask(t); })
+      .catch(() => { if (!cancelled) setTask(null); });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // Пока грузится (task null) или задача не найдена/ошибка — обычная строка инструмента
+  if (!task) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+
+  // Полная задача готова — карточка «Задача создана» (result = полный Task, как у tasks_create).
+  // toolName — «run_executor»: карточка появляется на месте запуска, подпись шапки не хардкод.
+  const synth: ToolUseItem = { ...item, result: JSON.stringify(task) };
+  return <TaskCreatedView item={synth} online={online} onOpenFile={onOpenFile} toolName="run_executor" />;
 });

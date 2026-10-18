@@ -21,6 +21,7 @@ import {
 import { useBindingLabels } from './useBindingLabels';
 import { Stepper, Crumb } from './stepperUi';
 import { ToolTargetPicker } from './ToolTargetPicker';
+import { PluginTargetPicker } from './PluginTargetPicker';
 import { ownProjectId } from '../../lib/personaZone';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
@@ -1239,8 +1240,9 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
   const notesSource = panel.notesSource ?? null;
 
   useEffect(() => {
-    // У инструментов свой пикер с собственной загрузкой (нужен personaId в запросе)
-    if (type === 'tool') return;
+    // У инструментов и плагинов свои пикеры с собственной загрузкой (tool — нужен
+    // personaId в запросе; plugin — цель составная, не каталог бэка)
+    if (type === 'tool' || type === 'plugin') return;
     let alive = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка каталога целей при смене типа цели
     setItems(null);
@@ -1263,6 +1265,20 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
           bindings={toolPicker.bindings}
           onSetMode={toolPicker.onSetMode}
           onOpenRule={toolPicker.onOpenRule}
+        />
+      </>
+    );
+  }
+
+  // Плагин (ADR-031) — пикер «плагин → навык»: цель — составная строка plugin:{id}/{skill}
+  if (type === 'plugin') {
+    return (
+      <>
+        <Crumb onClick={() => onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null })}>
+          {BINDING_ICONS[type](13)} {BINDING_TYPE_META[type].name}
+        </Crumb>
+        <PluginTargetPicker
+          onCommit={(target, label) => onChange({ ...panel, step: 3, targetId: target, targetLabel: label, path: undefined })}
         />
       </>
     );

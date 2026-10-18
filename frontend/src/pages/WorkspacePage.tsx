@@ -37,6 +37,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { PluginFrame, useHasInstalledPlugins } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -312,6 +313,9 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // достаточно не передавать `notes` в panels (см. блок ниже). Здесь же
   // подписка на стор подсистем нужна — она же читается гейтом.
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
+  // Панели плагинов (ADR-031, гейт V5): слот появляется, только когда у проекта есть
+  // хотя бы один установленный плагин. Стор питает useInstalledPlugins (секция/слот).
+  const hasPlugins = useHasInstalledPlugins(project.id)
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
   // Панели подсистем (слот workspace-panel-def, например «Персонажи» редактора картинок):
@@ -2127,6 +2131,8 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
+            // Панели плагинов (ADR-031, гейт V5): только когда есть установленные плагины
+            ...(hasPlugins ? { pluginPanels: <PluginFrame project={project} /> } : {}),
             ...(activeSession ? {
               chatContext: <ContextPanelHost session={activeSession} project={project}
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,

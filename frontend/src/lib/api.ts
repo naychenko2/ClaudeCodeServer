@@ -559,6 +559,38 @@ export function setStoredToken(token: string) {
   else sessionStorage.setItem('cc_token', token);
 }
 
+// === Плагины владельца (ADR-031, вертикаль ClaudeHomeServer.Plugins) ===
+// DTO зеркалит PluginResponse.cs: значения секретов наружу НЕ едут — только имя
+// + признак «заполнен» (M7). id — {publisher}/{slug}; в URL — один сегмент publisher~slug
+// (бэк нормализует ~ → /), поэтому urlId кодирует разделитель.
+export interface PluginSecretView {
+  name: string;
+  set: boolean;
+}
+export interface PluginInfo {
+  id: string;
+  version: string;
+  sha256: string;
+  requested: string[];
+  granted: string[];
+  enabled: boolean;
+  source: string;
+  secrets: PluginSecretView[];
+}
+// Тело POST /api/plugins/{id}/grant: выданные права (подмножество requested) + значения секретов
+export interface PluginGrantSecret {
+  name: string;
+  value: string;
+}
+export interface PluginPermissionsView {
+  requested: string[];
+  granted: string[];
+}
+// id → сегмент URL: publisher/slug → publisher~slug (M1: один сегмент маршрута)
+function pluginUrlId(id: string): string {
+  return id.replace(/\//g, '~');
+}
+
 // Projects
 export const api = {
   auth: {
@@ -834,6 +866,33 @@ export const api = {
       }),
     // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
     revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
+  // Плагины владельца (ADR-031 §2.3, §4). Гейты бэка: подсистема выключена → 503,
+  // флаг plugins-mvp off → 403; install/grant/uninstall/тумблер — только пользовательский
+  // JWT (сервисный → 403). Секреты: значение не возвращается, только {name, set}.
+  plugins: {
+    // Список установленных (DTO без значений секретов)
+    list: () => request<PluginInfo[]>('/plugins'),
+    // Принять пакет по метке источника: draft:{slug} | upload:{id} | catalog:{ref}
+    install: (source: string) =>
+      request<PluginInfo>('/plugins/install', { method: 'POST', body: JSON.stringify({ source }) }),
+    // Выдать права (подмножество requested) и ввести значения секретов
+    grant: (id: string, permissions: string[], secrets: PluginGrantSecret[]) =>
+      request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/grant`, {
+        method: 'POST', body: JSON.stringify({ permissions, secrets }),
+      }),
+    // Удалить пакет и запись (каскад)
+    uninstall: (id: string) =>
+      request<{ id: string; removed: boolean }>(`/plugins/${pluginUrlId(id)}/uninstall`, { method: 'POST' }),
+    // requested + granted для диалога согласия/редактирования
+    permissions: (id: string) =>
+      request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/permissions`),
+    // Тумблер включения: выключенный не даёт --plugin-dir и не монтирует панели
+    setEnabled: (id: string, enabled: boolean) =>
+      request<{ id: string; enabled: boolean }>(`/plugins/${pluginUrlId(id)}/${enabled ? 'enable' : 'disable'}`, {
+        method: 'POST',
+      }),
   },
 
   providers: {

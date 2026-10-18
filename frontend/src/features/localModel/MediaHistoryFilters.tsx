@@ -82,11 +82,13 @@ function distinctCounted(values: (string | null | undefined)[]): { value: string
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
 }
 
-export function HistoryFilterMenu({ filters, counters, records, meUsername, onPatch, onReset, onClose }: {
+export function HistoryFilterMenu({ filters, counters, records, meUsername, hideLogin, onPatch, onReset, onClose }: {
   filters: HistoryFilters;
   counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
   records: MediaHistoryRecord[];
   meUsername: string | null;
+  // scope=self: фильтр по логину скрыт (все записи — свои)
+  hideLogin?: boolean;
   onPatch: (patch: Partial<HistoryFilters>) => void;
   onReset: () => void;
   onClose: () => void;
@@ -151,26 +153,28 @@ export function HistoryFilterMenu({ filters, counters, records, meUsername, onPa
         ))}
       </Section>
 
-      <Section title="Пользователь">
-        <OptionRow label="Все" selected={filters.login == null} onClick={() => onPatch({ login: null })} />
-        {meOwner && (
-          <OptionRow
-            label={`вы (${meOwner})`}
-            count={ownerCounts.get(meOwner)}
-            selected={filters.login === meOwner}
-            onClick={() => onPatch({ login: meOwner })}
-          />
-        )}
-        {otherOwners.map(o => (
-          <OptionRow
-            key={o}
-            label={o}
-            count={ownerCounts.get(o)}
-            selected={filters.login === o}
-            onClick={() => onPatch({ login: o })}
-          />
-        ))}
-      </Section>
+      {!hideLogin && (
+        <Section title="Пользователь">
+          <OptionRow label="Все" selected={filters.login == null} onClick={() => onPatch({ login: null })} />
+          {meOwner && (
+            <OptionRow
+              label={`вы (${meOwner})`}
+              count={ownerCounts.get(meOwner)}
+              selected={filters.login === meOwner}
+              onClick={() => onPatch({ login: meOwner })}
+            />
+          )}
+          {otherOwners.map(o => (
+            <OptionRow
+              key={o}
+              label={o}
+              count={ownerCounts.get(o)}
+              selected={filters.login === o}
+              onClick={() => onPatch({ login: o })}
+            />
+          ))}
+        </Section>
+      )}
 
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -194,13 +198,15 @@ export function HistoryFilterMenu({ filters, counters, records, meUsername, onPa
 
 // Обёртка меню: Menu (anchor) с карточкой HistoryFilterMenu.
 // isMobile — fullWidth-карточка (шторка) на телефоне.
-export function HistoryFilterMenuPopup({ anchor, isMobile, filters, counters, records, meUsername, onPatch, onReset, onClose }: {
+export function HistoryFilterMenuPopup({ anchor, isMobile, filters, counters, records, meUsername, hideLogin, onPatch, onReset, onClose }: {
   anchor: DOMRect;
   isMobile: boolean;
   filters: HistoryFilters;
   counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
   records: MediaHistoryRecord[];
   meUsername: string | null;
+  // scope=self: фильтр по логину скрыт
+  hideLogin?: boolean;
   onPatch: (patch: Partial<HistoryFilters>) => void;
   onReset: () => void;
   onClose: () => void;
@@ -221,6 +227,7 @@ export function HistoryFilterMenuPopup({ anchor, isMobile, filters, counters, re
         counters={counters}
         records={records}
         meUsername={meUsername}
+        hideLogin={hideLogin}
         onPatch={onPatch}
         onReset={onReset}
         onClose={onClose}

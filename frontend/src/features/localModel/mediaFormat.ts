@@ -543,3 +543,17 @@ export function historyOutcomeBadge(status?: string | null): HistoryOutcomeBadge
     default: return null;
   }
 }
+
+// === «Перед вами в очереди: N» (не-админ, scope=self) ===
+
+// Склонение «задача/задачи/задач» по правилам русского:
+// 1 → «задача», 2–4 → «задачи», 5–20/25/… → «задач» (11–14 → «задач»).
+export function pluralTasks(n: number): string {
+  const abs = Math.abs(Math.trunc(n));
+  const last2 = abs % 100;
+  const last1 = abs % 10;
+  if (last2 >= 11 && last2 <= 14) return 'задач';
+  if (last1 === 1) return 'задача';
+  if (last1 >= 2 && last1 <= 4) return 'задачи';
+  return 'задач';
+}

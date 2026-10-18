@@ -293,12 +293,17 @@ public class FeatureIndexRowTests
 
     // Ключевое правило: при равенстве частот ExecutorLaunchedBySessionId у дочерних берётся
     // лексикографически меньший id (детерминизм). Мутация: убрать ThenBy(g => g.Key) →
-    // выбор при равенстве нестабилен (зависит от порядка GroupBy) → тест краснеет.
+    // выбор при равенстве по первому появлению (порядок GroupBy) → тест краснеет.
+    //
+    // Фикстура: первое появление — НЕ-минимальный ключ (tA: chat-b, tB: chat-a, порядок
+    // добавления tA → tB). Без ThenBy GroupBy-порядок [chat-b, chat-a] стабилен (равные
+    // частоты) → FirstOrDefault = chat-b ≠ chat-a → краснеет. С ThenBy → chat-a (меньший).
     [Fact]
     public void Мутация_КлючевойЧат_РавенствоЧастот_МеньшийId()
     {
         // Оба дочерних запускали исполнителя из разных чатов, по одному разу (равенство частот 1:1).
-        // chat-b < chat-a лексикографически? Нет: "chat-a" < "chat-b". Берём меньший = "chat-a".
+        // "chat-a" < "chat-b" лексикографически — меньший = "chat-a".
+        // Первое появление — chat-b (tA добавлен первым): без ThenBy выбор упёрся бы в chat-b.
         var epic = Epic("epic-mut-key");
         var tA = Child("tA", "epic-mut-key", executorLaunchedBy: "chat-b");
         var tB = Child("tB", "epic-mut-key", executorLaunchedBy: "chat-a");

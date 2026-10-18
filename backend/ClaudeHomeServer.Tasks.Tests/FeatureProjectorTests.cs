@@ -813,6 +813,64 @@ public class FeatureProjectorTests
             "1) ждёт (A) → 2) идёт (B) → 3) спокойная (C) → 4) закрытая (D)");
     }
 
+    // Монотонность (план С0 §2): features[] в индексе идёт строго по группам
+    // attention → running → idle → closed. OrderRuns группирует по Bucket (единая точка
+    // правды), порядок групп фиксирован. Вход перемешан (не в порядке групп) — вывод обязан
+    // быть строго по группам. Мутация: OrderRuns расходитcя с Bucket (группа выбирается
+    // собственным условием, а не Bucket) → порядок групп в выводе ломается → тест краснеет.
+    [Fact]
+    public void OrderRuns_Монотонность_СтрогоПоГруппамBucket()
+    {
+        var t = new DateTime(2026, 10, 17);
+
+        // attention: InProgress-задача с AwaitingHumanSince (Attention «wait», не closed).
+        var epicA = new TaskItem { Id = "epic-a", Role = TaskRoles.Feature };
+        var waitA = new TaskItem
+        {
+            Id = "a1", FeatureId = "epic-a", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            AwaitingHumanSince = t.AddHours(8),
+        };
+        var runA = FeatureProjector.Build(epicA, [epicA, waitA]);
+
+        // running: InProgress, без Attention.
+        var epicR = new TaskItem { Id = "epic-r", Role = TaskRoles.Feature };
+        var runR = new TaskItem
+        {
+            Id = "r1", FeatureId = "epic-r", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = t.AddHours(9),
+        };
+        var runRunning = FeatureProjector.Build(epicR, [epicR, runR]);
+
+        // idle: только Todo, без Attention, не идёт.
+        var epicI = new TaskItem { Id = "epic-i", Role = TaskRoles.Feature };
+        var idleI = new TaskItem
+        {
+            Id = "i1", FeatureId = "epic-i", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Todo,
+        };
+        var runI = FeatureProjector.Build(epicI, [epicI, idleI]);
+
+        // closed: эпик Done.
+        var epicC = new TaskItem { Id = "epic-c", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var runC = FeatureProjector.Build(epicC, [epicC]);
+
+        // Sanity: четыре фичи — в четырёх разных bucket (иначе тест тривиален).
+        FeatureProjector.Bucket(runA).Should().Be("attention");
+        FeatureProjector.Bucket(runRunning).Should().Be("running");
+        FeatureProjector.Bucket(runI).Should().Be("idle");
+        FeatureProjector.Bucket(runC).Should().Be("closed");
+
+        // Вход перемешан (не в порядке групп) — вывод строго по группам.
+        var shuffled = new List<FeatureRun> { runI, runC, runRunning, runA };
+        var ordered = FeatureProjector.OrderRuns(shuffled);
+
+        ordered.Select(r => r.FeatureId).Should().Equal(
+            new[] { "epic-a", "epic-r", "epic-i", "epic-c" },
+            "features[] идёт строго по группам attention → running → idle → closed");
+    }
+
     // Мутация (а): Now берёт одну задачу вместо списка.
     // Сломал: Now = [первая InProgress] вместо списка → тест «две идущие» краснеет (HaveCount(1) ≠ 2).
     [Fact]

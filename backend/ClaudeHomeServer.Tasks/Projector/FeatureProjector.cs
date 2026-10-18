@@ -985,7 +985,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.Epic.Title,
             run.Epic.ProjectId,
             Bucket(run),
-            AttentionOf(run),
+            AttentionOf(run, sessions),
             RailOf(run),
             ChipsOf(run),
             run.StepsAccepted,
@@ -1068,18 +1068,22 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Тревога строки: из FeatureRun.Attention; kind «wait»+«мерж» → merge; reason у merge — null;
-    // sessionId — LinkedSessionId (без taskId, как в feature-mode).
-    internal static FeatureIndexAttention? AttentionOf(FeatureRun run)
+    // sessionId — LinkedSessionId, прошедший по снимку живых сессий владельца (иначе null,
+    // как в KeySession: мёртвый/чужой чат наружу не уходит).
+    internal static FeatureIndexAttention? AttentionOf(FeatureRun run, IReadOnlyCollection<FeatureIndexSession> sessions)
     {
         var a = run.Attention;
         if (a is null) return null;
         bool isMerge = a.Kind == "wait" && a.Reason == "мерж";
+        var live = new HashSet<string>(sessions.Select(s => s.Id));
+        string? sessionId = a.LinkedSessionId is not null && live.Contains(a.LinkedSessionId)
+            ? a.LinkedSessionId : null;
         return new FeatureIndexAttention(
             isMerge ? "merge" : a.Kind,
             a.Since,
             isMerge ? null : a.Reason,
             a.PersonaId,
-            a.LinkedSessionId);
+            sessionId);
     }
 
     // Рельса: ровно 7 стадий FeatureRun.Stages → сегменты {key, state, tone}.

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { C, FS, R, SP, FONT } from '../../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { ArrowRight, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
 import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf, type FeatureOfEntry } from '../../../lib/featuresIndex';
 import { useFeatureRuns } from '../../../lib/featureRuns';
@@ -12,6 +12,7 @@ import { featureDisplayState } from '../../../lib/chatGroups';
 import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureRail } from './FeatureRail';
 import { FeatureModeBody } from './FeatureModeBody';
+import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { dateOnly } from './featureTime';
 import type { FeatureIndexFeature, FeatureChatLink, FeatureChatKind } from '../../../types/featureIndex';
 
@@ -209,7 +210,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   const featuresOverview = useFeature(FLAGS.featuresOverview);
   const enabled = featureMode && featuresOverview;
   // Индекс фич проекта (реактивная подписка; fetch идемпотентен, дедуплицируется).
-  useFeaturesIndex(projectId, enabled);
+  // Захватываем сам индекс — шторка (мобила) читает из него чаты фичи.
+  const index = useFeaturesIndex(projectId, enabled);
   // Агрегаты фич чата (для «Конвейер ▾» в ключевом чате): по sessionId, гейт тем же флагом.
   const runs = useFeatureRuns(sessionId, featureMode);
   // «← назад»: исходный чат (в памяти вкладки); null, пока перехода из плашки не было.
@@ -219,6 +221,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   const [selIdx, setSelIdx] = useState(0);
   // «Конвейер ▾»: раскрытие (локальное, сбрасывается при смене чата/фичи).
   const [fxOpen, setFxOpen] = useState(false);
+  // Шторка (мобила): тап по плашке открывает; сбрасывается при смене чата.
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   // Фичи, к которым принадлежит чат; первая — сильнейшая связь (порядок — от бэка).
   const entries = featureOf(sessionId);
@@ -232,8 +236,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
     if (back && back.to !== sessionId) clearBackNav();
   }, [sessionId]);
 
-  // Сброс раскрытия/выбора при смене чата (иначе новое чат наследовало бы состояние).
-  useEffect(() => { setSelIdx(0); setFxOpen(false); }, [sessionId]);
+  // Сброс раскрытия/выбора/шторки при смене чата (иначе новое чат наследовало бы состояние).
+  useEffect(() => { setSelIdx(0); setFxOpen(false); setSheetOpen(false); }, [sessionId]);
 
   if (!enabled || entries.length === 0) return null;
 
@@ -264,6 +268,120 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // FeatureRunView). Агрегат — из стора featureRuns по фиче (runs[0] = эта фича).
   const run = runs.find(r => r.featureId === feature.featureId) ?? null;
 
+  // Мобила (360 px, макет .app.m .fs): плашка одной строкой 44 px — глиф + название
+  // (обрезка) + рельса + счётчик; справа тач-цель 40×40 («→» / «▾»). Тап по телу
+  // плашки открывает шторку (FeatureBannerSheet). Статус/роль/«← назад»-текст скрыты
+  // (у «← назад» — только иконка); горизонтального скролла нет (nowrap + ellipsis).
+  if (isMobile) {
+    return (
+      <div
+        role="region"
+        aria-label="Фича этого чата"
+        data-testid="feature-banner"
+        data-banner-tone={model.tone}
+        style={{
+          ...toneStyle(model.tone),
+          display: 'flex',
+          flexDirection: 'column',
+          borderRadius: R.lg,
+          padding: '4px 4px 4px 10px',
+          margin: `${SP.sm}px 8px 0`,
+          boxSizing: 'border-box',
+          fontFamily: FONT.sans,
+        }}
+      >
+        <div
+          data-testid="feature-banner-row"
+          style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minHeight: 44 }}
+        >
+          {/* «← назад»: иконка (без текста), только после перехода из плашки (ключевой чат). */}
+          {backLabel && (
+            <GhostButton
+              testId="feature-back"
+              onClick={goBack}
+              style={{ width: 40, height: 40, padding: 0, justifyContent: 'center' }}
+            >
+              <ArrowLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </GhostButton>
+          )}
+          {/* Тело плашки: тап открывает шторку. Глиф + название + рельса + счётчик. */}
+          <GhostButton
+            testId="feature-banner-body"
+            onClick={() => setSheetOpen(true)}
+            style={{ flex: 1, minWidth: 0, justifyContent: 'flex-start', padding: 0, height: 'auto', gap: 9 }}
+          >
+            <FeatureGlyph kind={model.glyph} size={13} />
+            <span
+              title={feature.title}
+              style={{
+                flex: 1, minWidth: 40,
+                fontSize: FS.md, fontWeight: 700, color: C.textHeading,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+            >
+              {feature.title}
+            </span>
+            <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />
+            <span style={{
+              fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap',
+              fontFamily: FONT.mono, flexShrink: 0,
+            }}>
+              {model.counter}
+            </span>
+          </GhostButton>
+          {/* Кнопка-тач-цель 40×40: «▾» (ключевой, конвейер) / «→» (не ключевой, в ключевой чат). */}
+          <GhostButton
+            testId={model.button.kind === 'pipeline' ? 'feature-pipeline' : 'feature-go'}
+            ariaExpanded={model.button.kind === 'pipeline' ? fxOpen : undefined}
+            onClick={() => {
+              if (model.button.kind === 'pipeline') toggleFx();
+              else if (model.button.kind === 'key') goKey();
+              else openTaskInSection({ id: feature.featureId, projectId: feature.projectId ?? undefined });
+            }}
+            style={{ width: 40, height: 40, padding: 0, justifyContent: 'center' }}
+          >
+            {model.button.kind === 'pipeline'
+              ? <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+              : <ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          </GhostButton>
+        </div>
+
+        {/* «Конвейер ▾» (ключевой чат): тело режима «Исполнение фичи» + легенда. */}
+        {isKey && fxOpen && run && (
+          <div
+            data-testid="feature-pipeline-body"
+            style={{ marginTop: SP.sm, borderTop: `1px solid ${C.borderLight}`, paddingTop: SP.sm }}
+          >
+            <FeatureModeBody
+              sessionId={sessionId}
+              todos={[]}
+              runs={[run]}
+              isMobile={isMobile}
+              variant="card"
+              headerPad="0"
+              bodyPad="0"
+              headerBorder="none"
+            />
+          </div>
+        )}
+
+        {/* Шторка: тап по телу плашки (мобила). */}
+        {sheetOpen && (
+          <FeatureBannerSheet
+            feature={feature}
+            model={model}
+            projectId={projectId}
+            index={index}
+            run={run}
+            onGoKey={goKey}
+            onClose={() => setSheetOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Десктоп: прежняя раскладка (строка с переносом, статус/роль/«· ещё», текстовые кнопки).
   return (
     <div
       role="region"
@@ -275,8 +393,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
         display: 'flex',
         flexDirection: 'column',
         borderRadius: R.lg,
-        padding: isMobile ? SP.sm : `10px ${SP.lg}px`,
-        margin: `${SP.sm}px ${isMobile ? 16 : 16}px 0`,
+        padding: `10px ${SP.lg}px`,
+        margin: `${SP.sm}px 16px 0`,
         boxSizing: 'border-box',
         fontFamily: FONT.sans,
       }}

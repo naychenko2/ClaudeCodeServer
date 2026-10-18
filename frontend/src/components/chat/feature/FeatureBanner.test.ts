@@ -211,6 +211,13 @@ function renderBanner(sessionId: string, projectId: string | null): string {
   );
 }
 
+// Мобильный рендер (360 px): плашка одной строкой + тач-цель 40×40.
+function renderBannerMobile(sessionId: string, projectId: string | null): string {
+  return renderToStaticMarkup(
+    createElement(FeatureBanner, { sessionId, projectId, isMobile: true }),
+  );
+}
+
 describe('FeatureBanner: рендер (SSR)', () => {
   beforeEach(() => {
     __test.reset();
@@ -400,5 +407,66 @@ describe('FeatureBanner: рендер (SSR)', () => {
     seedIndex(feat(), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).not.toContain('data-testid="feature-more"');
+  });
+});
+
+// === Ф5: мобильная ветка (360 px) — одна строка 44 px, тач-цель 40×40, тап → шторка ===
+
+describe('FeatureBanner: мобильная ветка (SSR, 360 px)', () => {
+  beforeEach(() => {
+    __test.reset();
+    backNavTest.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    backNavTest.reset();
+    setAllFlags({});
+  });
+
+  it('не-ключевой чат: одна строка (feature-banner-row) с телом (body) и тач-целью 40×40 (feature-go)', () => {
+    seedIndex(feat(), link(), 'chat-exec', 'p1');
+    const html = renderBannerMobile('chat-exec', 'p1');
+    expect(html).toContain('data-testid="feature-banner-row"');
+    expect(html).toContain('data-testid="feature-banner-body"');
+    expect(html).toContain('data-testid="feature-go"');
+    // Тач-цель 40×40 (TB.iconHitMobile): width/height 40px в стиле кнопки.
+    expect(html).toContain('width:40px');
+    expect(html).toContain('height:40px');
+    // Строка 44 px.
+    expect(html).toContain('min-height:44px');
+  });
+
+  it('мобила: статус и роль чата скрыты (в строке только глиф+название+рельса+счётчик)', () => {
+    seedIndex(feat(), link(), 'chat-exec', 'p1');
+    const html = renderBannerMobile('chat-exec', 'p1');
+    // Название, счётчик и рельса — на месте.
+    expect(html).toContain('Моя фича');
+    expect(html).toContain('1/3 ↺1');
+    expect(html).toContain('data-testid="feature-rail"');
+    // Статус («Производство · идёт») и роль («· этот чат: …») — НЕ в строке.
+    expect(html).not.toContain('Производство · идёт');
+    expect(html).not.toContain('этот чат:');
+  });
+
+  it('мобила: «← назад» — иконка (data-testid feature-back), без текстовой роли', () => {
+    seedKeyAndExec(
+      feat({ keySessionId: 'chat-key' }),
+      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
+      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+      'p1',
+    );
+    recordBackNav('chat-exec', 'chat-key');
+    const html = renderBannerMobile('chat-key', 'p1');
+    // Ключевой чат: кнопка — «Конвейер» (feature-pipeline), «← назад» — иконка.
+    expect(html).toContain('data-testid="feature-back"');
+    expect(html).toContain('data-testid="feature-pipeline"');
+    // Текстовая роль («Ш2 · бэк») в «← назад» не рисуется (только иконка).
+    expect(html).not.toContain('← Ш2 · бэк');
+  });
+
+  it('мобила: чат без фичи → плашки нет (null)', () => {
+    seedIndex(feat(), link(), 'other-chat', 'p1');
+    expect(renderBannerMobile('nope', 'p1')).toBe('');
   });
 });

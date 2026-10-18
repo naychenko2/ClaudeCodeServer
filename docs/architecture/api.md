@@ -370,8 +370,9 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
      tensorParallel? — из секции Stats провайдера (vLLM --tensor-parallel-size); null — фронт
      показывает число карт (gpus.length)
-GET  /api/local-model/stats/media  ?since=<unix ms>   (только admin)
-     → { configured, comfy: { status: working|busy|down|disabled, downSince?, version? },
+GET  /api/local-model/stats/media  ?since=<unix ms>   (аутентифицированный; ADR-030 §9)
+     → { scope: "all"|"self", queueAhead: number|null,
+         configured, comfy: { status: working|busy|down|disabled, downSince?, version? },
          slots: { used, limit }, gpus: [{ uuid, index, name, roles: ["media"], utilPerc?, memUsedMb?,
          memTotalMb?, tempC?, powerW?, powerLimitW?, mediaMemMb? }] | null, loadedModels: string[] | null,
          running: [{ kind, op, heavy, own, sessionId?, projectId?, title?, foreign?, steps?: { step, total, stage? },
@@ -379,6 +380,10 @@ GET  /api/local-model/stats/media  ?since=<unix ms>   (только admin)
          queue:   [{ position, kind, op, heavy, own, sessionId?, projectId?, title?, foreign?, etaSeconds?, startInSeconds? }],
          lastHour:[{ kind, op, own, outcome: completed|failed|cancelled, runSeconds?, etaSeconds?, finishedAt }],
          unsupported: string[] }
+     scope: "all" — админ (все строки, gpus на месте, флаг local-model-stats как раньше);
+     "self" — не-админ: running/queue/lastHour только свои (OwnerId == sub, не Foreign), gpus null,
+     queueAhead — задач в ПОЛНОЙ очереди перед первой своей (нет своих — null); флаг не требуется,
+     доступ даёт рубильник LocalModelStats:MediaForUsers (false → 404, как будто функции нет).
      gpus/loadedModels — с маршрута узла /ccs/stats; null — узел не сообщает. foreign — instance|transcription|external.
      Чужой прогон: sessionId/projectId null, title «Чат другого пользователя»; у своего title null — фронт берёт
      название по sessionId. since фильтрует только lastHour
@@ -389,20 +394,23 @@ GET  /api/sessions/{id}/local-model   (владелец чата; чужая и�
 ```
 
 **История медиа-генераций** ([ADR-030](../adr/ADR-030-local-media-history.md)) — журнал за 7 дней с диска.
-В отличие от ручек выше, обе проверяют **и роль admin (`403`), и серверный флаг `local-model-stats` у
-текущего пользователя (`404`)**: здесь отдаются чужие промпты и файлы. Финальная форма полей —
-**уточнить после шага 3 Дениса** (чтение и превью); ниже — контракт по разрезу и макету.
+Обе ручки — `[Authorize]` (аутентифицированный, ADR-030 §9): **админ** — серверный флаг `local-model-stats`
+(без него `404`), видит все записи (`scope: "all"`, логин владельца раскрывается); **не-админ** — только свои
+записи (`scope: "self"`): фильтр `OwnerId == sub` на уровне запроса к индексу (не пост-фильтр), параметр
+`login` игнорируется, поле логина владельца не заполняется, чужая запись → `404` (не `403`); доступ даёт
+рубильник `LocalModelStats:MediaForUsers` (без него `404`), флаг не требуется.
 
 ```
 GET  /api/local-model/history   ?kind=image|audio|video|train&outcome=completed|cancelled|failed|interrupted
                                 &model=<имя>&owner=<логин>&period=today|24h|7d&cursor=<непрозрачная строка>&limit=50
-     → { items: [{ id, kind, op, model?, ownerLogin, own, outcome, error?,
+     → { scope: "all"|"self", items: [{ id, kind, op, model?, ownerLogin, own, outcome, error?,
                    enqueuedAt, startedAt?, finishedAt?, waitSeconds?, runSeconds?, etaSeconds?,
                    count, prompt?, params?: { width?, height?, durationSec?, frames?, steps?, seed?, engine?, fast?, lora? },
                    card?: { index?, name? }, hasResult }],
          nextCursor: string | null, total, totalFiltered,
          summary: { completed, cancelled, failed, interrupted },
          facets?: { models: string[], owners: string[] } }
+     scope: "all" — админ (ownerLogin раскрывается); "self" — не-админ (только свои, ownerLogin не заполнен).
      Сортировка — по времени desc (finishedAt, у прерванных — enqueuedAt), затем по id; курсор непрозрачный,
      кодирует (время, id) последней записи страницы; nextCursor null — конец ленты. limit 1..50, по умолчанию 50.
      Все фильтры необязательны, незнакомое значение kind/outcome/period — 400. period задаёт окно:
@@ -420,7 +428,8 @@ GET  /api/local-model/history/{id}/file   ?n=0&size=thumb|full
        Range для звука и видео. thumb — webp 256 px (картинка; у видео — кадр из середины), строится лениво
        и кэшируется; у звука thumb нет — 404, фронт его не запрашивает. full — оригинал, потолок 50 МБ.
        У train n — номер фото обучения, у остальных — номер варианта (0..count−1).
-     403 — не admin; 404 — нет флага, нет записи, неверный id (в т. ч. с «..») или n вне диапазона;
+     404 — нет доступа (не-админ без MediaForUsers), нет записи, чужая запись у не-админа (ADR-030 §9),
+     неверный id (в т. ч. с «..») или n вне диапазона;
      410 { reason } — запись есть, файла нет:
        expired          истёк срок рабочей папки редактора или задачи стора
        missing          файла нет на месте

@@ -915,6 +915,67 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         body.GetProperty("scope").GetString().Should().Be("all");
     }
 
+    // ─── fail-closed: пустой владелец не расширяет выдачу (ADR-030, 2026-10-18) ──────
+
+    // Не-админ без непустого sub → 404 на /stats/media (как будто функции нет; та же общая
+    // проверка, что и /history*). Мутация: убрать MediaSelfScope из проверки — 200, тест краснеет.
+    [Fact]
+    public async Task Media_ПустойSub_НеАдмин_404()
+    {
+        var fake = new FakeComfyStats();
+        var factory = BuildFactoryWithComfyStats(fake);
+        // Ненулевой snapshot: иначе Media() вернёт 200 {configured:false} ДО fail-closed-проверки.
+        fake.Snapshot = new ComfyMediaStatsSnapshot(
+            Configured: true, Status: "working", DownSince: null, Version: "1.0",
+            LoadedModels: [], SlotsUsed: 0, SlotsLimit: 4, Gpus: [],
+            Running: [], Queue: [], LastHour: [], Unsupported: []);
+        using var client = factory.CreateClientWithSub("");
+
+        var resp = await client.GetAsync("/api/local-model/stats/media");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "пустой sub — 404, не все строки");
+    }
+
+    // Пустой myId не совпадает с чужими «done»-строками: Foreign-прогоны несут OwnerId "",
+    // и при пустом myId совпали бы. Защита: не-админ с пустым myId → пустые running/queue/
+    // lastHour, queueAhead null. Мутация: убрать guard IsNullOrEmpty(myId) — чужая done-строка
+    // просочится, тест краснеет.
+    [Fact]
+    public async Task Media_ПустойMyId_НеСовпадаетСЧужимиDone()
+    {
+        var fake = new FakeComfyStats();
+        var factory = BuildFactoryWithComfyStats(fake);
+        // sub = " " (пробел): непустой для IsNullOrEmpty (guard не сработал бы), но пробельный
+        // для IsNullOrWhiteSpace (гейт его не режет) — единственный путь до row-guard.
+        using var client = factory.CreateClientWithSub(" ");
+
+        var t0 = new DateTimeOffset(2026, 10, 13, 12, 0, 0, TimeSpan.Zero);
+        fake.Snapshot = new ComfyMediaStatsSnapshot(
+            Configured: true,
+            Status: "working",
+            DownSince: null,
+            Version: "1.0",
+            LoadedModels: [],
+            SlotsUsed: 1,
+            SlotsLimit: 4,
+            Gpus: [],
+            Running: [],
+            Queue: [],
+            LastHour:
+            [
+                new ComfyDoneRow("image", "t2i", "", "completed", 60, 120, t0),
+            ],
+            Unsupported: []);
+
+        var resp = await client.GetAsync("/api/local-model/stats/media");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        // Чужая done-строка (OwnerId "") не совпала с пустым myId: lastHour пуста.
+        body.GetProperty("lastHour").GetArrayLength().Should().Be(0, "пустой myId не совпадает с чужими done-строками");
+        body.GetProperty("running").GetArrayLength().Should().Be(0);
+        body.GetProperty("queue").GetArrayLength().Should().Be(0);
+        body.GetProperty("queueAhead").ValueKind.Should().Be(JsonValueKind.Null, "своих задач в очереди нет");
+    }
+
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
     // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;

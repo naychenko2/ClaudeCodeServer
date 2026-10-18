@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Media;
+using ClaudeHomeServer.Services.MediaHistory;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -308,6 +309,62 @@ public class LocalModelStatsHistoryTests
         // Своя запись → 200 (файл отдаётся).
         var respOwn = await h.NonAdmin.GetAsync("/api/local-model/history/p_nonadmin/file");
         respOwn.StatusCode.Should().Be(HttpStatusCode.OK, "своя запись — 200");
+    }
+
+    // ─── fail-closed: пустой владелец не расширяет выдачу (ADR-030, 2026-10-18) ─────────
+
+    // Индекс: scope "self" с пустым владельцем — ни одной записи (не «все»). В индексе
+    // записи двух владельцев и Foreign (OwnerId ""). Мутация: убрать guard null/IsNullOrWhiteSpace
+    // в OwnerMatches — записи просочатся, тест краснеет.
+    [Fact]
+    public void Index_ScopeSelf_ПустойВладелец_Пусто()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteRecord("p_a", "test-source", ownerId: h.AdminId);
+        h.WriteRecord("p_b", "test-source", ownerId: h.NonAdminId);
+        h.WriteRecord("p_foreign", "test-source", ownerId: "");
+
+        var index = h.Factory.Services.GetRequiredService<MediaHistoryIndex>();
+        index.Load();
+
+        // null-владелец (scope self) — не «все», а пусто
+        index.Query(new MediaHistoryQuery { Scope = "self", OwnerId = null }).Records
+            .Should().BeEmpty("scope self без непустого владельца — ни одной записи");
+        // пустой/пробельный владелец — пусто (Foreign с OwnerId "" не совпадает)
+        index.Query(new MediaHistoryQuery { Scope = "self", OwnerId = "" }).Records
+            .Should().BeEmpty();
+        index.Query(new MediaHistoryQuery { Scope = "self", OwnerId = " " }).Records
+            .Should().BeEmpty();
+        // админ (scope all, владелец null) — все три записи
+        index.Query(new MediaHistoryQuery { Scope = "all", OwnerId = null }).Records
+            .Should().HaveCount(3);
+    }
+
+    // fail-closed: не-админ без непустого sub → 404 на /history (как будто функции нет,
+    // не «все записи» и не падение). Мутация: убрать проверку MediaSelfScope из Enabled() —
+    // 200, тест краснеет.
+    [Fact]
+    public async Task ПустойSub_НеАдмин_404_История()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteRecord("p_a", "test-source");
+        var client = h.Factory.CreateClientWithSub("");
+        var resp = await client.GetAsync("/api/local-model/history");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "пустой sub — 404, не все записи");
+    }
+
+    // fail-closed: не-админ без непустого sub → 404 на /history/{id}/file (та же общая проверка,
+    // что и /history и /stats/media). Без проверки Foreign-запись (OwnerId "") отдалась бы.
+    // Мутация: убрать проверку MediaSelfScope — 200, тест краснеет.
+    [Fact]
+    public async Task ПустойSub_НеАдмин_404_Файл()
+    {
+        using var h = new Harness("test-source",
+            (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
+        h.WriteRecord("p_foreign", "test-source", ownerId: "");
+        var client = h.Factory.CreateClientWithSub("");
+        var resp = await client.GetAsync("/api/local-model/history/p_foreign/file");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "пустой sub — 404, не чужой файл");
     }
 
     // Рубильник MediaForUsers=false: не-админ → 404 (как будто функции нет), админ → 200.

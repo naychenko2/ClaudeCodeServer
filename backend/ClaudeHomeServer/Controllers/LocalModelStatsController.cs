@@ -179,8 +179,36 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         var myId = UserId;
         var isAdmin = IsAdmin;
         // Рубильник: не-админ без MediaForUsers → 404, как будто функции нет (админ не меняется).
-        if (!isAdmin && !_mediaOptions.Value.MediaForUsers)
+        // fail-closed (ADR-030): не-админ без непустого sub → 404 тоже (та же общая проверка,
+        // что и в /history*, через MediaSelfScope).
+        if (!isAdmin && (!_mediaOptions.Value.MediaForUsers || !MediaSelfScope.HasOwner(User)))
             return NotFound();
+
+        // fail-closed (ADR-030): не-админ с пустым/пробельным myId — своих строк нет: чужие
+        // (Foreign) несут OwnerId "", и совпали бы с пустым myId. Строже gate (IsNullOrEmpty):
+        // whitespace myId (" ") проходит gate, но здесь даёт пустые running/queue/lastHour.
+        // queueAhead остаётся null (своих задач в очереди нет), gpus null (не-админ).
+        if (!isAdmin && string.IsNullOrWhiteSpace(myId))
+        {
+            return Ok(new LocalModelMediaResponse
+            {
+                Configured = snap.Configured,
+                Scope = "self",
+                Comfy = new MediaComfyDto
+                {
+                    Status = snap.Status,
+                    DownSince = snap.DownSince?.ToUnixTimeMilliseconds(),
+                    Version = snap.Version,
+                },
+                Slots = new MediaSlotsDto { Used = snap.SlotsUsed, Limit = snap.SlotsLimit },
+                Gpus = null,
+                LoadedModels = snap.LoadedModels.Count > 0 ? [.. snap.LoadedModels] : null,
+                Running = [],
+                Queue = [],
+                LastHour = [],
+                Unsupported = [.. snap.Unsupported],
+            });
+        }
 
         // queueAhead — по ПОЛНОЙ очереди ДО фильтра: сколько задач стоит перед первой своей
         // поставленной в очередь задачей; нет своих в очереди → null.

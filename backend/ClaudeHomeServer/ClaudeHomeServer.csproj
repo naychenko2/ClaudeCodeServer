@@ -25,6 +25,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.TestKit.Host</_Parameter1>
     </AssemblyAttribute>
+    <!-- Llm.Tests (шаг 3.3): перенесённые Llm-тесты читают internal-члены Main-типов
+         (SessionManager.ShouldNudgeSubagent/MaxSubagentNudges/…, TaskExecutionService.
+         SubagentStateFor/ExecutorStopText, FileWatcherService.Inspect/Warnings/RecreateCount/
+         DropWatcherKeepEntry) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

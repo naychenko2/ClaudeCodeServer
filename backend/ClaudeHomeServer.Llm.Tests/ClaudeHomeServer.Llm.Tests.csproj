@@ -48,6 +48,9 @@
     </PackageReference>
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
     <PackageReference Include="Moq" Version="4.20.72" />
+    <!-- [SkippableFact] в перенесённых InotifyLeakRegression/TurnFileWatcherSubscription
+         (шаг 3.3) — тот же пакет, что в монолите. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
 
 </Project>

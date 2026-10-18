@@ -53,6 +53,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.TestKit.Host</_Parameter1>
     </AssemblyAttribute>
+    <!-- Llm.Tests (шаг 3.3): перенесённые Llm-тесты (ImageLabeler/OneShotClaudeRunner*/
+         TurnFileWatcherSubscription/InotifyLeakRegression) используют TestLauncherFactory
+         и InotifyProbe (internal) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

@@ -113,12 +113,17 @@ public class LocalMediaHistorySourceTests : IDisposable
         Directory.CreateDirectory(root);
         var file = Path.Combine(root, "result.png");
         File.WriteAllBytes(file, LocalMediaTestImages.Png(64, 64));
-        File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddDays(-8));
+
+        var time = new ManualTime();
+        // Last-write — относительно фиксированного «сейчас», а не реального UtcNow: иначе тест
+        // зависит от дрейфа реальной даты (8 дней назад от реального now сближается с фиксированным
+        // «сейчас» и перестаёт быть старше 7 дней)
+        File.SetLastWriteTimeUtc(file, time.GetUtcNow().UtcDateTime.AddDays(-8));
 
         var store = NewStore();
         store.Add(JobWithOneOutput());
         var src = new LocalMediaHistorySource(store,
-            new ProbeAccess(new MediaHistoryProjectProbe(MediaHistoryProjectState.OnServer, root)), new ManualTime());
+            new ProbeAccess(new MediaHistoryProjectProbe(MediaHistoryProjectState.OnServer, root)), time);
         var res = await src.ResolveAsync(Ref(), 0, CancellationToken.None);
         res.Should().NotBeNull();
         res!.Reason.Should().Be(MediaHistoryGoneReason.Expired);

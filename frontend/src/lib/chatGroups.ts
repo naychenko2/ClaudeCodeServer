@@ -500,3 +500,14 @@ export function otherFeatureCount(chatId: string, index: FeaturesIndex): number 
   if (!links || links.length <= 1) return 0;
   return links.length - 1;
 }
+
+// Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»
+// (ключевой чат фичи) и/или «ещё N» (чат принадлежит ещё N фичам — C0, п.5: след
+// других фич). Считается по id САМОЙ строки, а не замыканием корня: ChatTreeBranch
+// рекурсивно передаёт renderCard потомкам, и роль корня лилась на всё поддерево (M3).
+// undefined — метки нет (чат не ключевой и не мультифичевый).
+export function featureRoleFor(sessionId: string, keyId: string | null, index: FeaturesIndex): string | undefined {
+  const otherN = otherFeatureCount(sessionId, index);
+  if (sessionId === keyId) return otherN > 0 ? `ключевой · ещё ${otherN}` : 'ключевой';
+  return otherN > 0 ? `ещё ${otherN}` : undefined;
+}

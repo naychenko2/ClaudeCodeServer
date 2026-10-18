@@ -45,7 +45,7 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, otherFeatureCount, NO_SUBJECT_KEY, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, NO_SUBJECT_KEY, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
@@ -900,25 +900,19 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           now={nowMs}
         />
         <div style={{ marginLeft: 13, paddingLeft: 9, borderLeft: `1px solid ${C.divider}` }}>
-          {nestTreeRows(rows).map(node => {
-            const c = node.row.chat;
-            // Роль чата в фиче — меткой В карточке (подстрока), а не отдельной строкой
-            // над ней (минор m6: +17 px на группу). «ключевой» (ключевой чат фичи) и/или
-            // «ещё N» (чат принадлежит ещё N фичам — C0, п.5: след других фич).
-            const otherN = otherFeatureCount(c.id, featuresIndex);
-            const role = c.id === keyId
-              ? (otherN > 0 ? `ключевой · ещё ${otherN}` : 'ключевой')
-              : otherN > 0 ? `ещё ${otherN}` : undefined;
-            return (
-              <ChatTreeBranch
-                key={c.id}
-                node={node}
-                isMobile={isMobile}
-                onToggleCollapse={toggleCollapse}
-                renderCard={(s, inset) => renderCard(s, inset, role)}
-              />
-            );
-          })}
+          {nestTreeRows(rows).map(node => (
+            <ChatTreeBranch
+              key={node.row.chat.id}
+              node={node}
+              isMobile={isMobile}
+              onToggleCollapse={toggleCollapse}
+              // Роль и «ещё N» — по id САМОЙ строки (M3): ChatTreeBranch рекурсивно
+              // передаёт renderCard потомкам, и замыкание роли корня лило её на всё
+              // поддерево. inFeatureGroup=true — метку фичи в карточке не рисуем:
+              // её уже несёт заголовок группы (n1)
+              renderCard={(s, inset) => renderCard(s, inset, featureRoleFor(s.id, keyId, featuresIndex), true)}
+            />
+          ))}
           {!expanded && layout.hiddenCount > 0 && (
             <button
               type="button"
@@ -1085,12 +1079,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
   // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
   // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
-  const renderCard = (s: Session, leadingInset = 0, featureRole?: string) => (
+  const renderCard = (s: Session, leadingInset = 0, featureRole?: string, inFeatureGroup?: boolean) => (
       <ChatCard
         key={s.id}
         session={s}
         leadingInset={leadingInset}
         featureRole={featureRole}
+        inFeatureGroup={inFeatureGroup}
         isActive={activeSession?.id === s.id}
         isMobile={isMobile}
         fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}

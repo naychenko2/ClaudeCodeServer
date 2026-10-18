@@ -172,6 +172,9 @@ export interface RemoteCommandResult {
 // TimeoutSeconds из примера конфига (Dify — 180 с) с запасом на дорогу: обрывать запрос
 // раньше, чем сервер закончит команду, значит показывать «нет связи» поверх живого старта.
 const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
+// Перенос в новый чат: серверный потолок тёплого хода (ChatHandoffService.WarmTurnTimeout,
+// 5 мин) + запас на создание чата-преемника и сеть
+const HANDOFF_TIMEOUT_MS = 330_000;
 
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
 // порт по часам: не дольше DevServerLaunchPolicy.DotnetRunReadyTimeout (300 с, `dotnet run`
@@ -1787,10 +1790,14 @@ export const api = {
     // Сервер заводит чат-преемник без истории; draft — записка для композера нового чата
     // (НЕ отправляется сама). 409 — отказ с человеческим текстом (группа, штаб, worktree,
     // пустой чат, место на локали), 502 — записка не собралась (ошибка/обрыв хода, модель).
+    // Таймаут — явный и с запасом над ChatHandoffService.WarmTurnTimeout (5 мин): тёплый
+    // путь ждёт целый ход старого чата. С дефолтными 30 с фронт обрывал запрос сам, обрыв без
+    // явного timeoutMs request() считает сетевым («Действие недоступно офлайн»), а сервер по
+    // RequestAborted отменял перенос.
     handoff: (id: string, warm: boolean) =>
       request<{ chatId: string; projectId: string | null; draft: string; warm: boolean }>(
         `/chats/${id}/handoff`,
-        { method: 'POST', body: JSON.stringify({ warm }) },
+        { method: 'POST', body: JSON.stringify({ warm }), timeoutMs: HANDOFF_TIMEOUT_MS },
       ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы

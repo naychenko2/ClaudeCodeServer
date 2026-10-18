@@ -14,8 +14,9 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { FeatureBanner, featureBannerModel } from './FeatureBanner';
+import { FeatureBanner, featureBannerModel, backRoleLabel, moreFeaturesCount } from './FeatureBanner';
 import { __test } from '../../../lib/featuresIndex';
+import { __test as backNavTest, recordBackNav, clearBackNav, backNavFrom } from '../../../lib/featureBackNav';
 import { setAllFlags } from '../../../lib/featureFlags';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
 
@@ -115,9 +116,84 @@ describe('featureBannerModel: тон, статус, счётчик, роль, к
     expect(m.role).toBe('ключевой');
   });
 
+  it('ключевой чат: кнопка «Конвейер ▾» (kind pipeline), не «Ключевой чат»', () => {
+    const m = featureBannerModel(feat({ keySessionId: 'chat-key' }), link(), 'chat-key');
+    expect(m.button).toEqual({ label: 'Конвейер', kind: 'pipeline' });
+  });
+
+  it('не-ключевой чат с живым ключевым: кнопка «Ключевой чат» (kind key) — переход, не конвейер', () => {
+    const m = featureBannerModel(feat({ keySessionId: 'chat-key' }), link(), 'chat-exec');
+    expect(m.button).toEqual({ label: 'Ключевой чат', kind: 'key' });
+  });
+
   it('куратор без stepRef/lane: роль по виду (куратор)', () => {
     const m = featureBannerModel(feat(), link({ kind: 'curator', stepRef: null, lane: null }), 'chat-cur');
     expect(m.role).toBe('куратор');
+  });
+});
+
+// === 1b: «← назад» — роль исходного чата (backRoleLabel) ===
+
+// Индекс с двумя чатами одной фичи: ключевой (orchestrator) + исполнитель (Ш2 · бэк).
+function seedKeyAndExec(f: FeatureIndexFeature, keyLink: FeatureChatLink, execLink: FeatureChatLink, projectKey: string) {
+  const index: FeaturesIndex = {
+    features: [f],
+    chats: { [f.keySessionId!]: [keyLink], 'chat-exec': [execLink] },
+  };
+  __test.setIndex(projectKey, index);
+}
+
+describe('backRoleLabel: роль исходного чата в фиче', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  it('исполнитель с stepRef+lane → «Ш2 · бэк»', () => {
+    const f = feat({ keySessionId: 'chat-key' });
+    seedKeyAndExec(f, { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
+      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }, 'p1');
+    expect(backRoleLabel('chat-exec', 'f1')).toBe('Ш2 · бэк');
+  });
+
+  it('исходный чат не принадлежит этой фиче → пусто (кнопки «← назад» нет)', () => {
+    const f = feat({ keySessionId: 'chat-key' });
+    // Связь чата-exec — к ДРУГОЙ фиче (f2), не к f1.
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
+        'chat-exec': [{ featureId: 'f2', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    expect(backRoleLabel('chat-exec', 'f1')).toBe('');
+  });
+
+  it('куратор без stepRef/lane → роль по виду (куратор)', () => {
+    const f = feat({ keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
+        'chat-exec': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }] },
+    };
+    __test.setIndex('p1', index);
+    expect(backRoleLabel('chat-exec', 'f1')).toBe('куратор');
+  });
+});
+
+// === 1c: мультифича — число других фич (moreFeaturesCount) ===
+
+describe('moreFeaturesCount: фронт не сортирует и не считает порядок', () => {
+  it('одна фича → 0 (кнопки «· ещё» нет)', () => {
+    expect(moreFeaturesCount([{ feature: feat(), link: link() }])).toBe(0);
+  });
+  it('две фичи → 1; три → 2 (N = entries.length − 1)', () => {
+    expect(moreFeaturesCount([
+      { feature: feat(), link: link() },
+      { feature: feat({ featureId: 'f2', title: 'Вторая' }), link: link({ featureId: 'f2' }) },
+    ])).toBe(1);
+    expect(moreFeaturesCount([
+      { feature: feat(), link: link() },
+      { feature: feat({ featureId: 'f2' }), link: link({ featureId: 'f2' }) },
+      { feature: feat({ featureId: 'f3' }), link: link({ featureId: 'f3' }) },
+    ])).toBe(2);
   });
 });
 
@@ -138,10 +214,12 @@ function renderBanner(sessionId: string, projectId: string | null): string {
 describe('FeatureBanner: рендер (SSR)', () => {
   beforeEach(() => {
     __test.reset();
+    backNavTest.reset();
     setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
   });
   afterEach(() => {
     __test.reset();
+    backNavTest.reset();
     setAllFlags({});
   });
 
@@ -202,5 +280,125 @@ describe('FeatureBanner: рендер (SSR)', () => {
     setAllFlags({ 'turn-plan-feature-mode': false, 'features-overview': false });
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toBe('');
+  });
+
+  // === Ф4: «Конвейер ▾» в ключевом чате ===
+
+  it('ключевой чат: кнопка «Конвейер ▾» (data-testid feature-pipeline), НЕ «Ключевой чат»', () => {
+    // Чат = ключевой (keySessionId === sessionId) → button kind pipeline.
+    seedIndex(feat({ keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
+    const html = renderBanner('chat-key', 'p1');
+    expect(html).toContain('data-testid="feature-pipeline"');
+    expect(html).toContain('Конвейер');
+    expect(html).not.toContain('data-testid="feature-go"');
+    expect(html).not.toContain('Ключевой чат');
+  });
+
+  it('не-ключевой чат: кнопка «Ключевой чат» (data-testid feature-go), без «Конвейер»', () => {
+    seedIndex(feat({ keySessionId: 'chat-key' }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).toContain('data-testid="feature-go"');
+    expect(html).toContain('Ключевой чат');
+    expect(html).not.toContain('data-testid="feature-pipeline"');
+  });
+
+  // === Ф4: «← назад» только после перехода из плашки ===
+
+  it('«← назад» (feature-back) — ПОСЛЕ перехода из плашки: роль исходного чата', () => {
+    // Ключевой чат + исполнитель той же фичи; переход из плашки исполнителя.
+    seedKeyAndExec(
+      feat({ keySessionId: 'chat-key' }),
+      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
+      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+      'p1',
+    );
+    recordBackNav('chat-exec', 'chat-key');
+    const html = renderBanner('chat-key', 'p1');
+    expect(html).toContain('data-testid="feature-back"');
+    expect(html).toContain('← Ш2 · бэк');
+  });
+
+  it('«← назад» НЕ при обычном открытии ключевого чата (перехода из плашки не было)', () => {
+    seedKeyAndExec(
+      feat({ keySessionId: 'chat-key' }),
+      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
+      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+      'p1',
+    );
+    // Без recordBackNav — «← назад» нет, даже в ключевом чате.
+    const html = renderBanner('chat-key', 'p1');
+    expect(html).not.toContain('data-testid="feature-back"');
+  });
+
+  it('«← назад» не показывается, если исходный чат — другой фиче (роль пуста)', () => {
+    // Ключевой чат фичи f1; исходный чат-exec — фичи f2 (не f1).
+    const index: FeaturesIndex = {
+      features: [feat({ keySessionId: 'chat-key' })],
+      chats: {
+        'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
+        'chat-exec': [{ featureId: 'f2', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }],
+      },
+    };
+    __test.setIndex('p1', index);
+    recordBackNav('chat-exec', 'chat-key');
+    const html = renderBanner('chat-key', 'p1');
+    expect(html).not.toContain('data-testid="feature-back"');
+  });
+
+  it('«← назад» в НЕ-ключевом чате не показывается (даже если back-nav записан)', () => {
+    seedKeyAndExec(
+      feat({ keySessionId: 'chat-key' }),
+      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
+      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+      'p1',
+    );
+    // Back-nav ведёт в chat-key, но рендерим chat-exec (не ключевой) → «← назад» нет.
+    recordBackNav('chat-exec', 'chat-key');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).not.toContain('data-testid="feature-back"');
+  });
+
+  it('возврат в исходный чат: «← назад» → исходный чат + сброс back-nav (кнопка исчезает)', () => {
+    seedKeyAndExec(
+      feat({ keySessionId: 'chat-key' }),
+      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
+      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+      'p1',
+    );
+    // Переход из плашки исполнителя → ключевой чат.
+    recordBackNav('chat-exec', 'chat-key');
+    // Ключевой чат: «← назад» на исходный чат (chat-exec).
+    expect(backNavFrom('chat-key')).toBe('chat-exec');
+    // Клик «← назад»: возврат в исходный чат + сброс указателя (ядро goBack, без навигации).
+    clearBackNav();
+    expect(backNavFrom('chat-key')).toBeNull();
+    // После возврата в исходный чат (chat-exec) «← назад» не показывается: указатель пуст.
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).not.toContain('data-testid="feature-back"');
+  });
+
+  // === Ф4: мультифича «· ещё N» ===
+
+  it('чат с двумя фичами: «· ещё 1» (feature-more); порядок — от бэка', () => {
+    const f1 = feat({ keySessionId: 'chat-key' });
+    const f2 = feat({ featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
+    const index: FeaturesIndex = {
+      features: [f1, f2],
+      // chat-exec связан с ОБЕИМИ фичами: f1 (исполнитель) и f2 (куратор).
+      chats: { 'chat-exec': [
+        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+        { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
+      ] },
+    };
+    __test.setIndex('p1', index);
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).toContain('data-testid="feature-more"');
+    expect(html).toContain('· ещё 1');
+  });
+
+  it('чат с одной фичей: «· ещё» нет', () => {
+    seedIndex(feat(), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).not.toContain('data-testid="feature-more"');
   });
 });

@@ -313,4 +313,43 @@ public class FeatureIndexRowTests
         row.KeySessionId.Should().Be("chat-a",
             "равенство частот → лексикографически меньший id (детерминизм)");
     }
+
+    // ── 7. attention.sessionId: снимок живых сессий владельца ─────────────────────────────────
+
+    // attention.sessionId — LinkedSessionId задачи, прошедший по снимку живых сессий владельца
+    // (как KeySession: мёртвый/чужой чат наружу не уходит).
+    // (1) Удалённый/чужой LinkedSessionId (не в снимке) → attention.sessionId = null.
+    // (2) Живой LinkedSessionId (в снимке) → attention.sessionId = id.
+    // Мутация: убрать проверку по live-set (AttentionOf возвращает LinkedSessionId как есть)
+    // → тест (1) краснеет (sessionId ≠ null).
+    [Fact]
+    public void Attention_SessionId_Снимок_ЖивыхСессий()
+    {
+        const string epicId = "epic-att-sess";
+
+        // (1) Мёртвый чат: LinkedSessionId = "chat-dead", но в снимке только "chat-live".
+        var epic1 = Epic(epicId);
+        var stopped1 = Child("a1", epicId, status: TaskItemStatus.InProgress);
+        stopped1.ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0);
+        stopped1.ExecutorStoppedAt = new DateTime(2026, 10, 17, 8, 30, 0);
+        stopped1.ExecutorStopReason = "auth_failed";
+        stopped1.LinkedSessionId = "chat-dead";
+        var row1 = Row(epic1, [epic1, stopped1], [Session("chat-live")]);
+        row1.Attention.Should().NotBeNull("исполнитель встал — тревога есть");
+        row1.Attention!.Kind.Should().Be("stopped");
+        row1.Attention.SessionId.Should().BeNull(
+            "мёртвый чат (не в снимке) → sessionId = null");
+
+        // (2) Живой чат: LinkedSessionId = "chat-live", и он в снимке.
+        var epic2 = Epic("epic-att-sess-2");
+        var stopped2 = Child("a2", "epic-att-sess-2", status: TaskItemStatus.InProgress);
+        stopped2.ClaudeStartedAt = new DateTime(2026, 10, 17, 9, 0, 0);
+        stopped2.ExecutorStoppedAt = new DateTime(2026, 10, 17, 9, 30, 0);
+        stopped2.ExecutorStopReason = "timeout";
+        stopped2.LinkedSessionId = "chat-live";
+        var row2 = Row(epic2, [epic2, stopped2], [Session("chat-live")]);
+        row2.Attention.Should().NotBeNull();
+        row2.Attention!.SessionId.Should().Be("chat-live",
+            "живой чат (в снимке) → sessionId = id");
+    }
 }

@@ -606,10 +606,10 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
 
 // Размеры шрифта, которых нет в шкале FS (FS.xs=11, FS.sm=12) — именованные константы
 // с комментарием (Майя M5: не литералы 10/10.5 в разметке).
-// Заголовок секции деталей (макет .det .h): 10.
-const SECTION_H_SIZE = 10;
-// Метка источника возврата (макет .src): 10.5.
-const SOURCE_TAG_SIZE = 10.5;
+// Заголовок секции деталей (макет .det .h): FS.xxs (10, Р-1).
+const SECTION_H_SIZE = FS.xxs;
+// Метка источника возврата (макет .src): FS.xs (11, Р-3); высота 17 та же.
+const SOURCE_TAG_SIZE = FS.xs;
 
 // Заголовок секции деталей (макет .det .h): 10, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionH({ children }: { children: React.ReactNode }) {

@@ -278,6 +278,9 @@ export function stageMeta(stage: FeatureStage | null): string | null {
   const names = allNames.length <= 2
     ? allNames.join(', ')
     : `${allNames.slice(0, 2).join(', ')} +${allNames.length - 2}`;
+  // m-7: упавший исполнитель (tone=stopped) — исход в мете не показываем (только имя);
+  // тег «стоит · …» остаётся (activeStageLabel). Иначе verdict «running» читался «идёт».
+  if (stage.tone === 'stopped') return names || null;
   let second: string | null = null;
   if (stage.verdict) second = VERDICT_WORD[stage.verdict] ?? null;
   else if (stage.taskCount != null && stage.taskCount > 0) {
@@ -524,6 +527,17 @@ function SourceTag({ source }: { source?: string | null }) {
   );
 }
 
+// m-6: заголовок задачи в трекере часто начинается с «{stepRef}: …» (напр. «Ш1: парсер»).
+// При показе рядом с моно-номером (stepRef) ведущий «{stepRef}:» (с пробелом) отрезается,
+// чтобы не было «Ш1 Ш1: парсер».
+function stripStepRefPrefix(title: string, stepRef: string | null | undefined): string {
+  const ref = (stepRef ?? '').trim();
+  if (!ref) return title;
+  const prefix = `${ref}:`;
+  if (title.startsWith(prefix)) return title.slice(prefix.length).replace(/^\s+/, '');
+  return title;
+}
+
 // Строка шага (макет v2 .step): кнопка, сетка 14px 1fr auto, зазор 7, minHeight 32 (десктоп,
 // TB.iconHitDesktop) / 40 (мобила, TB.iconHitMobile), hover и раскрытая — C.bgSelected, R.md.
 // Слева глиф 14 → номер шага (mono, muted) → название → метка источника → «· снят с выкладки».
@@ -570,7 +584,8 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
       <StepGlyph chain={chain} />
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0 }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{chain.stepRef}</span>
-        <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{chain.title || 'Без названия'}</span>
+        {/* m-6: ведущий «{stepRef}:» от названия отрезается (рядом уже моно-номер). */}
+        <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{stripStepRefPrefix(chain.title || 'Без названия', chain.stepRef)}</span>
         <SourceTag source={chain.source} />
         {chain.outcome === 'withdrawn' && (
           <span style={{ color: C.textMuted, whiteSpace: 'nowrap' }}>· снят с выкладки</span>
@@ -633,7 +648,7 @@ function TaskOpenLink({ target, isMobile }: { target: { id: string; projectId?: 
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
         alignSelf: 'flex-end', border: 'none', background: 'transparent', cursor: 'pointer',
         minHeight: isMobile ? 40 : 24, padding: 0,
-        fontSize: 12, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
       }}
     >
       Открыть задачу
@@ -671,7 +686,7 @@ function TaskLine({ t, isMobile }: { t: FeatureTask; isMobile: boolean }) {
           {persona && <PersonaAvatar persona={persona} size={18} />}
           {name && <span style={{ color: C.textSecondary }}>{name}</span>}
           <span>{status}</span>
-          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, whiteSpace: 'nowrap' }}>{time}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         <TaskOpenLink target={{ id: t.id, projectId: t.projectId ?? undefined }} isMobile={isMobile} />
       </div>
@@ -717,7 +732,7 @@ function RoundLine({ r, run, isMobile }: { r: FeatureRound; run: FeatureRun; isM
           {persona && <PersonaAvatar persona={persona} size={18} />}
           {name && <span style={{ color: C.textSecondary }}>{name}</span>}
           {verdictWord && <span>· {verdictWord}</span>}
-          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, whiteSpace: 'nowrap' }}>{time}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         {r.reason && <div style={{ overflowWrap: 'anywhere', color: C.textSecondary, fontSize: FS.xs }}>{r.reason}</div>}
         {target && <TaskOpenLink target={target} isMobile={isMobile} />}
@@ -908,14 +923,14 @@ function VerdictBeads({ rounds }: { rounds: FeatureRound[] }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
       {skip > 0 && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: C.bgSelected, color: C.textHeading, border: `1px dashed ${C.dashed}` }} title="ранние витки">
+        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: FS.xs, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: C.bgSelected, color: C.textHeading, border: `1px dashed ${C.dashed}` }} title="ранние витки">
           +{skip}
         </span>
       )}
       {shown.map((r) => {
         const b = BEAD[r.verdict] ?? BEAD.running;
         return (
-          <span key={r.n} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: b.bg, color: b.fg, border: b.border ? `1px dashed ${b.border}` : '1px solid transparent' }}>
+          <span key={r.n} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: FS.xs, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: b.bg, color: b.fg, border: b.border ? `1px dashed ${b.border}` : '1px solid transparent' }}>
             {r.n} {b.text}
           </span>
         );

@@ -56,9 +56,9 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
       }}>
         <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </span>
-      {/* Глиф состояния фичи (wait/stopped/run/loop/closed/merged) */}
+      {/* Глиф состояния фичи (wait/stopped/run/loop/closed/done) */}
       <span style={{ gridColumn: 2, display: 'flex', flexShrink: 0 }}>
-        <FeatureGlyph kind={st.kind as FeatureGlyph} size={13} />
+        <FeatureGlyph kind={st.kind} size={13} />
       </span>
       {/* Название фичи: одна строка, обрезка многоточием */}
       <span

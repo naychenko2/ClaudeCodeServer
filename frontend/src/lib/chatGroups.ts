@@ -304,10 +304,13 @@ const STAGE_NAME: Record<FeatureRailKey, string> = {
 // Визуальное состояние фичи для заголовка группы: глиф, кромка тревоги, статус.
 // Бэк считает bucket/attention/rail/summary (контракт индекса фич); фронт только
 // раскладывает их в глиф/кромку/статус — не пересчитывает. Чистая функция.
-export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'merged';
+// Значения — подмножество глифа FeatureGlyph (wait/stopped/run/loop/closed/done):
+// поэтому st.kind передаётся в FeatureGlyph БЕЗ каста, и tsc ловит рассинхрон.
+// Смерженная фича → 'done' (галочка, макет glyph('done')), закрытая без мержа → 'closed'.
+export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done';
 
 export interface FeatureDisplayState {
-  // Глиф (FeatureGlyph): wait — ромб, stopped — квадрат, run/loop/closed/merged.
+  // Глиф (FeatureGlyph): wait — ромб, stopped — квадрат, run/loop/closed/done.
   kind: FeatureDisplayKind;
   // Кромка тревоги 3px: 'wait' (ждёт вас, info) / 'stop' (упала, danger) / null.
   alarm: 'wait' | 'stop' | null;
@@ -319,7 +322,7 @@ export function featureDisplayState(f: FeatureIndexFeature): FeatureDisplayState
   // Закрыта: смержена (summary.mergedAt) или закрыта без мержа.
   if (f.bucket === 'closed') {
     const merged = f.summary?.mergedAt != null;
-    return { kind: merged ? 'merged' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
+    return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
   }
   // Тревога: упала (stopped) или ждёт человека (wait/merge).
   if (f.attention) {

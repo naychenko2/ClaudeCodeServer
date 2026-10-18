@@ -35,7 +35,7 @@ import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/regis
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
 import { featureDisplayState } from '../lib/chatGroups';
-import { FeatureGlyph, type FeatureGlyph as FeatureGlyphKind } from './chat/feature/FeatureGlyphs';
+import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
@@ -139,7 +139,7 @@ function TeamImplementMarker({ session }: { session: Session }) {
 // Метка фичи в строке чата (макет features-overview.html, «Дни»: глиф + название,
 // обрезка с title). Показывается для чата, принадлежащего фиче, под флагом
 // features-overview — вместо имени персоны. Глиф — по состоянию фичи
-// (featureDisplayState: wait/stopped/run/loop/closed/merged).
+// (featureDisplayState: wait/stopped/run/loop/closed/done).
 export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   const st = featureDisplayState(feature);
   return (
@@ -151,7 +151,7 @@ export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
         minWidth: 0, maxWidth: '100%', flexShrink: 1,
       }}
     >
-      <FeatureGlyph kind={st.kind as FeatureGlyphKind} size={11} />
+      <FeatureGlyph kind={st.kind} size={11} />
       <span style={{
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
         fontSize: 10, color: C.textMuted,

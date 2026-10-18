@@ -92,6 +92,18 @@ describe('groupByFeatures: мультифичевый чат', () => {
     // чат ровно в одной строке, без дубля
     expect(allChatIds(groups)).toEqual(['cur']);
   });
+
+  it('перестановка chats[id] в индексе меняет группу (фронт следует за бэком, сам не выбирает)', () => {
+    const feats = [feature('X', 'running'), feature('Y', 'running')];
+    // cur — мультифичевый: X (key) и Y (curator).
+    // Порядок [X, Y] → первая фича X → группа X.
+    const idxXY = index(feats, { 'cur': [link('X', 'key'), link('Y', 'curator')] });
+    expect(groupByFeatures([chat('cur')], idxXY)[0].feature?.featureId).toBe('X');
+    // Переставляем chats['cur'] на [Y, X] → первая фича Y → группа Y (фронт не «чинит»
+    // порядок, а следует за порядком, который отдал бэк).
+    const idxYX = index(feats, { 'cur': [link('Y', 'curator'), link('X', 'key')] });
+    expect(groupByFeatures([chat('cur')], idxYX)[0].feature?.featureId).toBe('Y');
+  });
 });
 
 describe('groupByFeatures: «Без фичи»', () => {

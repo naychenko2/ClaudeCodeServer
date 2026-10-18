@@ -1,6 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Authorization;
@@ -29,6 +31,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // Llm-зависимости необязательны: подсистема может быть выключена (GetService → null).
     private readonly ILocalModelStatsReader? _reader = services.GetService<ILocalModelStatsReader>();
     private readonly IGpuSampler? _gpus = services.GetService<IGpuSampler>();
+    // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. Необязателен (подсистема Llm отключаема).
+    private readonly IHardwareReportService? _hardware = services.GetService<IHardwareReportService>();
     // Счётчик хода: живые чаты на движке (chats) и прогоны, которые он не видит (othersCount).
     private readonly ILocalModelTurnMeter? _meter = services.GetService<ILocalModelTurnMeter>();
     // Рубильник «медиа для обычных пользователей» (ADR-030, 2026-10-18): единственная точка
@@ -154,7 +158,29 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             History = history,
             Chats = chats,
             Unsupported = current.Unsupported,
+            // Строка-ссылка «Видеокарты»: ручка уже admin-only, отдельного опроса нет.
+            Hardware = _hardware?.Brief(),
         });
+    }
+
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h
+    // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
+    // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403) плюс серверный
+    // флаг local-model-stats (без него 404, как в MediaHistory). Неизвестное window → 400.
+    // Подсистема Llm выключена → 200 пустой отчёт (не 500).
+    [Authorize(Roles = "admin")]
+    [HttpGet("hardware")]
+    public IActionResult Hardware([FromQuery] string? window, [FromServices] FeatureFlagService flags)
+    {
+        if (UserId is not { } id || !flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats))
+            return NotFound();
+        if (!TryParseWindow(window, out var windowSpan))
+            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
+
+        if (_hardware is null)
+            return Ok(new HardwareReport(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "ok", null, "ok",
+                [], [], [], [], (long)HardwareReportService.StepFor(windowSpan).TotalMilliseconds));
+        return Ok(_hardware.Build(windowSpan));
     }
 
     // GET /api/local-model/stats/media?since=<unix ms>
@@ -281,6 +307,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             Queue = queue,
             LastHour = lastHour,
             Unsupported = [.. snap.Unsupported],
+            // Только админ (scope "all"): у не-админа поля нет.
+            Hardware = isAdmin ? _hardware?.Brief() : null,
         });
     }
 
@@ -427,6 +455,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         // Метрики, которых движок не сообщил (отсутствуют в /metrics).
         public IReadOnlyList<string> Unsupported { get; init; } = [];
+
+        // Сводка «Железо» для строки-ссылки и точки на вкладке; только админ (у не-админа поля нет).
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public HardwareBrief? Hardware { get; init; }
     }
 
     // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени. GenPerStream/PrefillPerStream —
@@ -541,6 +573,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         public MediaDoneDto[] LastHour { get; init; } = [];
 
         public IReadOnlyList<string> Unsupported { get; init; } = [];
+
+        // Сводка «Железо»: только админ (scope "all"); у не-админа поля нет в ответе.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public HardwareBrief? Hardware { get; init; }
     }
 
     // Блок ComfyUI: статус (working|busy|down|disabled), момент первого сбоя, версия.

@@ -111,16 +111,16 @@ describe('stageWidth', () => {
 describe('laneInfo', () => {
   it('нет lanes → total=0 (строка не рисуется)', () => {
     expect(laneInfo(run())).toEqual({
-      back: { label: 'бэк', total: 0, accepted: 0, returns: 0 },
-      front: { label: 'фронт', total: 0, accepted: 0, returns: 0 },
+      back: { label: 'Бэк', total: 0, accepted: 0, returns: 0, personaIds: [] },
+      front: { label: 'Фронт', total: 0, accepted: 0, returns: 0, personaIds: [] },
     });
   });
 
-  it('lanes: back total=3, accepted=2, returns=1 → строка «бэк · 2 из 3»', () => {
+  it('lanes: back total=3, accepted=2, returns=1 → строка «Бэк · 2 из 3»', () => {
     const r = run({
       lanes: [{ lane: 'back', personaIds: ['denis'], total: 3, accepted: 2, returns: 1 }],
     });
-    expect(laneInfo(r).back).toEqual({ label: 'бэк', total: 3, accepted: 2, returns: 1 });
+    expect(laneInfo(r).back).toEqual({ label: 'Бэк', total: 3, accepted: 2, returns: 1, personaIds: ['denis'] });
     expect(laneInfo(r).front.total).toBe(0);
   });
 
@@ -298,12 +298,12 @@ describe('PipelineFlow: рендер', () => {
     expect(badge, 'бейдж с open>0 — тревожный текст').toContain('var(--c-warning-text)');
   });
 
-  it('3 back-шага (2 done) → линия «бэк · 2 из 3» + дорожка', () => {
+  it('3 back-шага (2 done) → линия «Бэк · 2 из 3» + дорожка', () => {
     const r = run({
       stages: stages(),
       lanes: [{ lane: 'back', personaIds: ['denis'], total: 3, accepted: 2, returns: 0 }],
     });
-    expect(render(r)).toContain('бэк · 2 из 3');
+    expect(render(r)).toContain('Бэк · 2 из 3');
   });
 
   it('активная стадия помечена aria-current=step', () => {
@@ -315,27 +315,42 @@ describe('PipelineFlow: рендер', () => {
     expect(render(r)).toContain('aria-current="step"');
   });
 
-  it('runningSince → метка «идёт сейчас» + ▶', () => {
+  it('runningSince → метка «сейчас · …» (tone=run, длительность от runningSince)', () => {
     const r = run({
       stages: stages({
         prod: { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], runningSince: '2026-10-17T10:00:00Z' },
       }),
     });
     const html = render(r);
-    expect(html).toContain('идёт сейчас');
-    expect(html).toContain('▶');
+    // Метка текущего этапа: «сейчас · …» (tone=run). Не «стоит» (только упавший).
+    expect(html).toContain('сейчас ·');
+    expect(html).not.toContain('стоит');
   });
 
-  it('tone=wait → wait-обводка (border C.info) + «ждёт»', () => {
+  it('tone=wait → wait-обводка (border C.info) + метка «ждёт вас · …»', () => {
     const r = run({
       stages: stages({
-        prod: { key: 'prod', state: 'active', tone: 'wait', passes: 1, taskIds: [] },
+        prod: { key: 'prod', state: 'active', tone: 'wait', passes: 1, taskIds: [], runningSince: '2026-10-17T10:00:00Z' },
       }),
       awaitingHumanReason: 'нужно решение',
     });
     const html = render(r);
     // wait-обводка: border 1px solid C.info (var(--c-info)).
     expect(html).toContain('var(--c-info)');
+    // Метка текущего этапа: «ждёт вас · …».
+    expect(html).toContain('ждёт вас ·');
+  });
+
+  it('tone=stopped → метка «стоит · …» (только упавший исполнитель)', () => {
+    const r = run({
+      stages: stages({
+        prod: { key: 'prod', state: 'active', tone: 'stopped', passes: 1, taskIds: [], runningSince: '2026-10-17T10:00:00Z' },
+      }),
+    });
+    const html = render(r);
+    // «Стоит» — только для упавшего; старая подпись «стоит сейчас» (значила и «идёт») — нет.
+    expect(html).toContain('стоит ·');
+    expect(html).not.toContain('стоит сейчас');
   });
 
   it('Ready_ФиналЗелёный: merge done + run.ready=true → «Мерж» done с зелёным акцентом', () => {
@@ -358,6 +373,97 @@ describe('PipelineFlow: рендер', () => {
   });
 });
 
+// === Ф6: различение pending/absent, метки, ×N, линии, рельса, minHeight, 360px ===
+describe('PipelineFlow: Ф6 (строки и линии)', () => {
+  // Регион стадии в HTML: от её data-stage до data-stage следующей (для точечных проверок).
+  const region = (html: string, key: string, next: string) =>
+    html.slice(html.indexOf(`data-stage="${key}"`), html.indexOf(`data-stage="${next}"`));
+
+  it('absent и pending различимы: подпись, aria-label, не-кнопка, без шеврона', () => {
+    const r = run({
+      stages: stages({
+        cut: { key: 'cut', state: 'absent', passes: 0, taskIds: [] },
+        plan: { key: 'plan', state: 'pending', passes: 0, taskIds: [] },
+      }),
+    });
+    const html = render(r);
+    // absent: подпись «задачи разреза в трекере нет» + aria-label «Разрез — нет в трекере».
+    const cut = region(html, 'cut', 'plan');
+    expect(cut).toContain('задачи разреза в трекере нет');
+    expect(cut).toContain('aria-label="Разрез — нет в трекере"');
+    // pending: подпись «ещё не начат» + aria-label «План — ещё не начат».
+    const plan = region(html, 'plan', 'prod');
+    expect(plan).toContain('ещё не начат');
+    expect(plan).toContain('aria-label="План — ещё не начат"');
+    // Обе — не-кнопки (div role=group), без шеврона (path M4 6l4 4 4-4) и без <button>.
+    for (const seg of [cut, plan]) {
+      expect(seg).toContain('role="group"');
+      expect(seg).not.toContain('<button');
+      expect(seg).not.toContain('M4 6l4 4 4-4');
+    }
+  });
+
+  it('×N при passes>1, но НЕ у стадии «Ревью»', () => {
+    const r = run({
+      stages: stages({
+        prod: { key: 'prod', state: 'done', passes: 3, taskIds: [] },
+        review: { key: 'review', state: 'done', passes: 4, taskIds: [] },
+      }),
+    });
+    const html = render(r);
+    // «Производство» (passes=3) — ×3; «Ревью» (passes=4) — без ×N.
+    const prod = region(html, 'prod', 'review');
+    const review = region(html, 'review', 'qa');
+    expect(prod).toContain('×3');
+    expect(review).not.toContain('×4');
+  });
+
+  it('линия «Бэк · Денис, Кира · 3 из 4» (два исполнителя) и нет линии при total=0', () => {
+    personaMap.set('denis', 'Денис');
+    personaMap.set('kira', 'Кира');
+    const r = run({
+      stages: stages(),
+      lanes: [{ lane: 'back', personaIds: ['denis', 'kira'], total: 4, accepted: 3, returns: 0 }],
+    });
+    const html = render(r);
+    // Два исполнителя — через запятую; неизвестный id не выводится (тут оба известны).
+    expect(html).toContain('Бэк · Денис, Кира · 3 из 4');
+    // front: total=0 → линия не рисуется.
+    expect(html).not.toContain('Фронт ·');
+  });
+
+  it('цвет рельсы — C.progressTrack (не C.textMuted)', () => {
+    const r = run({
+      stages: stages({
+        prod: { key: 'prod', state: 'done', passes: 3, taskIds: [] },
+      }),
+    });
+    const html = render(r);
+    const prod = region(html, 'prod', 'review');
+    // Сегмент рельсы «Производства» — background C.progressTrack.
+    expect(prod).toContain('var(--c-progress-track)');
+  });
+
+  it('minHeight строк: 32 (десктоп) — из TB.iconHitDesktop', () => {
+    const r = run({ stages: stages() });
+    const html = render(r);
+    // useIsMobile()=false в SSR → десктоп: minHeight 32.
+    expect(html).toContain('min-height:32px');
+  });
+
+  it('360px: длинные имя/исполнители переносятся (overflow-wrap:anywhere), не горизонтальный скролл', () => {
+    personaMap.set('denis', 'Денис');
+    personaMap.set('kira', 'Кира');
+    const r = run({
+      stages: stages(),
+      lanes: [{ lane: 'back', personaIds: ['denis', 'kira'], total: 4, accepted: 3, returns: 0 }],
+    });
+    const html = render(r);
+    // Подпись линии и имя стадии — overflow-wrap:anywhere: длинное переносится, а не скроллится.
+    expect(html).toContain('overflow-wrap:anywhere');
+  });
+});
+
 // === Геометрия рельсы (SSR: из инлайн-стилей) ===
 describe('PipelineFlow: геометрия рельсы', () => {
   it('РельсаНепрерывна: align-start, top=низ точки, bottom=верх следующей', () => {
@@ -377,7 +483,7 @@ describe('PipelineFlow: геометрия рельсы', () => {
     const top = segStyle.match(/top:([^;]+)/)?.[1]?.trim();
     const bottom = segStyle.match(/bottom:([^;]+)/)?.[1]?.trim();
     const pad = SP.xs + 1; // рамка 1px + паддинг SP.xs = 5
-    expect(top).toBe(`${pad + 14}px`);        // 19 = верх точки (5) + 14 (низ точки)
+    expect(top).toBe(`${pad + 16}px`);        // 21 = верх точки (5) + 16 (низ точки)
     expect(bottom).toBe(`-${pad}px`);         // -5 = до верха следующей точки (5)
   });
 
@@ -414,8 +520,10 @@ describe('Покрытие: FONT.mono, null-guard', () => {
 // === Раскрытие строк стадий (2.15): aria-expanded + список шагов «Производства» ===
 
 // Агрегат с шагами в линиях бэк/фронт (для проверки раскрытия «Производства»).
+// stages: базовые (prod/review — done → строки-кнопки; без stages все стадии pending → не-кнопки).
 function runWithSteps(): FeatureRun {
   return run({
+    stages: stages(),
     steps: [
       task({ id: 's1', title: 'Бэк-шаг', stepRef: 'Ш1', lane: 'back', status: 'done', personaId: 'denis' }),
       task({
@@ -449,6 +557,7 @@ describe('PipelineFlow: раскрытие строк (2.15)', () => {
 
   it('Review_НетШагов_НетДеталей: aria-expanded=false, деталей нет', () => {
     const r = run({
+      stages: stages(),
       steps: [task({ id: 's1', status: 'done' })],
       reviews: [task({ id: 'r1', status: 'done', verification: { verdict: 'accepted' } })],
     });

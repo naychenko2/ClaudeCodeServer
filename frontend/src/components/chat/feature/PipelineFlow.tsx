@@ -1,23 +1,40 @@
-import { useState } from 'react';
-import { C, FS, SP, R, FONT } from '../../../lib/design';
+import { useEffect, useState } from 'react';
+import { C, FS, SP, R, FONT, TB } from '../../../lib/design';
 import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
+import { useIsMobile } from '../../../lib/breakpoints';
 import { getPersonaById } from '../../../lib/personas';
+import { FeatureGlyph } from './FeatureGlyphs';
 import type {
   FeatureRun, FeatureTask, FeatureStage, FeatureSourceReturns,
-  StageKey, StageState,
+  StageKey, StageState, StageTone,
 } from '../../../types/featureRun';
 
+// Тик раз в минуту: длительность метки «сейчас/ждёт вас/стоит · N мин» не застывает,
+// пока открыта карточка (как useMinuteTick в FeatureRunView).
+function useMinuteTick(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  return now;
+}
+
 // === Геометрия строки стадии (единый источник, чтобы рельса не рвалась) ===
-// Точка стадии — 14px (SVG). Строка несёт рамку 1px + паддинг SP.xs, поэтому
-// центр точки = SP.xs + 1 + 14/2 = 12px от верха строки (не зависит от высоты строки,
+// Точка стадии — 16px (SVG). Строка несёт рамку 1px + паддинг SP.xs, поэтому
+// центр точки = SP.xs + 1 + 16/2 = 12px от верха строки (не зависит от высоты строки,
 // т.к. грид строки — align-items:start: точка всегда у верха, а не по центру).
-// Сегмент рельсы: top = низ текущей точки (SP.xs + 1 + 14 = 19), bottom = -(SP.xs + 1)
+// Сегмент рельсы: top = низ текущей точки (SP.xs + 1 + 16 = 21), bottom = -(SP.xs + 1)
 // (до верха следующей точки: её рамка 1 + паддинг SP.xs = 5). Тогда рельса непрерывна.
-const DOT = 14;
-const RAIL_TOP = SP.xs + 1 + DOT;     // 19 — низ текущей точки, от верха строки
-// Мин. высота строки стадии: 34 — текущего значения нет в шкале SP (ближайшее SP.xxl=32),
-// поэтому константа: 34 = DOT + 2·(SP.xs + 1) + 10 — точка + рамка/паддинг + запас под мета.
-const ROW_MIN_H = 34;
+const DOT = 16;
+const RAIL_TOP = SP.xs + 1 + DOT;     // 21 — низ текущей точки, от верха строки
+// Мин. высота строки стадии: тач-цель по шкале TB (макет v1: minHeight TB.iconHitDesktop/Mobile).
+// Десктоп 32 / мобила 40 — из TB, не литерал 34 (34 в шкале SP не было).
+const ROW_MIN_H_DESKTOP = TB.iconHitDesktop; // 32
+const ROW_MIN_H_MOBILE = TB.iconHitMobile;   // 40
+// Метка текущего этапа: line-height 18px и padding-x 8px — в шкалах SP/FS значений нет
+// (SP.sm=8 есть, но макет v2 задаёт 0 8px и line-height 18px) — константы.
+const LABEL_LH = 18;
 // Бейджи возврата (↺N): паддинг 7px и line-height 18px — в шкалах SP/FS значений нет
 // (SP.xs=4, SP.sm=8; FS.xs=11, FS.sm=12), значения макета v2 (.badge: padding 0 7px,
 // line-height 18px) — константы.
@@ -64,18 +81,20 @@ export function stageWidth(passes: number, state: StageState): number {
   return Math.min(2 + (Math.min(passes, 5) - 1) * 1.5, 8);
 }
 
-// Линия бэк/фронт: total (все шаги), accepted (done), returns (шаги с возвратом).
-export interface LaneInfo { label: string; total: number; accepted: number; returns: number }
+// Линия бэк/фронт: total (все шаги), accepted (done), returns (шаги с возвратом),
+// personaIds (исполнители; имена резолвятся в LaneBar через lib/personas).
+export interface LaneInfo { label: string; total: number; accepted: number; returns: number; personaIds: string[] }
 
 // Линии бэк/фронт из ответа бэка (run.lanes). total=0 → строка линии не выводится.
 export function laneInfo(run: FeatureRun): { back: LaneInfo; front: LaneInfo } {
   const build = (lane: 'back' | 'front'): LaneInfo => {
     const l = run.lanes?.find(x => x.lane === lane);
     return {
-      label: lane === 'back' ? 'бэк' : 'фронт',
+      label: lane === 'back' ? 'Бэк' : 'Фронт',
       total: l?.total ?? 0,
       accepted: l?.accepted ?? 0,
       returns: l?.returns ?? 0,
+      personaIds: l?.personaIds ?? [],
     };
   };
   return { back: build('back'), front: build('front') };
@@ -84,6 +103,80 @@ export function laneInfo(run: FeatureRun): { back: LaneInfo; front: LaneInfo } {
 // Толщина дорожки линии: min(2 + r·0.5, 8), r = число шагов с возвратом.
 export function laneTrackWidth(returns: number): number {
   return Math.min(2 + returns * 0.5, 8);
+}
+
+// Подпись стадии «нет в трекере» (absent) — по ключу стадии (pending — «ещё не начат»).
+// Различие pending/absent держат три вещи: подпись, косая черта у absent, aria-label строки.
+const ABSENT_LABEL: Record<StageKey, string> = {
+  cut: 'задачи разреза в трекере нет',
+  plan: 'задачи плана в трекере нет',
+  prod: 'задачи производства в трекере нет',
+  review: 'ревью в трекере нет',
+  qa: 'задачи проверки в трекере нет',
+  final: 'задачи финала в трекере нет',
+  merge: 'задачи мержа в трекере нет',
+};
+export function absentLabel(key: StageKey): string {
+  return ABSENT_LABEL[key];
+}
+
+// aria-label строки стадии: «{Имя} — нет в трекере» (absent) / «{Имя} — ещё не начат» (pending);
+// у остальных — просто имя (строка нажимается, имя говорит само за себя).
+export function stageAriaLabel(label: string, state: StageState): string {
+  if (state === 'absent') return `${label} — нет в трекере`;
+  if (state === 'pending') return `${label} — ещё не начат`;
+  return label;
+}
+
+// Длительность активной стадии: минуты от runningSince до now. «25 мин» / «1 ч 10 мин»;
+// null — старт не задан (метка «сейчас» без длительности).
+export function durationLabel(since: string | null | undefined, now: number): string | null {
+  if (!since) return null;
+  const d = new Date(since);
+  if (Number.isNaN(d.getTime())) return null;
+  const min = Math.max(0, Math.floor((now - d.getTime()) / 60000));
+  if (min < 1) return '0 мин';
+  if (min < 60) return `${min} мин`;
+  const h = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
+}
+
+// Имена исполнителей линии: personaIds → имена (lib/personas), неизвестный id — пропускается
+// (не выводим сырой id). Пусто — нет исполнителей (линия без имён).
+export function laneNames(personaIds: string[]): string {
+  const names = personaIds
+    .map(id => getPersonaById(id)?.name)
+    .filter((n): n is string => !!n && n.trim() !== '');
+  return names.join(', ');
+}
+
+// Метка текущего этапа (активная стадия): текст по tone. «сейчас · N мин» (run),
+// «ждёт вас · N мин» (wait), «стоит · N мин» (stopped), «доработка · N мин» (loop).
+// «Стоит» — ТОЛЬКО упавший исполнитель (раньше «стоит сейчас» значило и «идёт», и «упал» — путало).
+// Длительность — от runningSince; null — метка без длительности.
+export function activeStageLabel(tone: StageTone | null | undefined, since: string | null | undefined, now: number): string {
+  const dur = durationLabel(since, now);
+  const suffix = dur ? ` · ${dur}` : '';
+  switch (tone) {
+    case 'wait': return `ждёт вас${suffix}`;
+    case 'stopped': return `стоит${suffix}`;
+    case 'loop': return `доработка${suffix}`;
+    case 'run':
+    default: return `сейчас${suffix}`;
+  }
+}
+
+// Цвета метки по tone: run — bgSelected/textHeading; wait — infoBg/info; stopped — dangerBg/dangerText;
+// loop — warningBg/warningText. Рамка = текст (макет v2: рамка 1px того же тона).
+function activeStageTone(tone: StageTone | null | undefined): { bg: string; fg: string; border: string } {
+  switch (tone) {
+    case 'wait': return { bg: C.infoBg, fg: C.info, border: C.info };
+    case 'stopped': return { bg: C.dangerBg, fg: C.dangerText, border: C.danger };
+    case 'loop': return { bg: C.warningBg, fg: C.warningText, border: C.warning };
+    case 'run':
+    default: return { bg: C.bgSelected, fg: C.textHeading, border: C.textHeading };
+  }
 }
 
 // Бейдж возврата (↺N с ревью/проверки/финала) в строке «Производство».
@@ -113,62 +206,75 @@ export function toggleExpanded(prev: StageKey | null, key: StageKey): StageKey |
 
 // === Рендер ===
 
-// Точка-индикатор стадии: active — акцент с пульсом, done — галочка, pending/absent — пунктир.
-// ready — «Мерж» завершён и фича готова (run.ready): done с зелёным акцентом
-// (кольцо C.success, галочка C.successText) — финал фичи зелёный, не просто серая галочка.
-function StageDot({ state, ready = false }: { state: StageState; ready?: boolean }) {
-  if (state === 'active') {
-    return (
-      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" className="feature-pulse">
-        <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.accent} strokeWidth="1.6" />
-        <circle cx="8" cy="8" r="3.5" fill={C.accent} />
-      </svg>
-    );
-  }
-  if (state === 'done') {
-    const ring = ready ? C.success : C.textMuted;
-    const check = ready ? C.successText : C.textMuted;
-    return (
-      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="7" fill="none" stroke={ring} strokeWidth="1.4" />
-        <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={check} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  // pending и absent — пунктирный кружок (F6 добавит у absent отдельный глиф «нет в трекере»).
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="6" fill="none" stroke={C.dashed} strokeWidth="1.4" strokeDasharray="2.5 2" />
-    </svg>
+// Точка-индикатор стадии 16px: подложка — круг C.bgWhite поверх рельсы, поверх — глиф по
+// состоянию. done — круг C.bgSelected с галкой C.textMuted (финал фичи — зелёный); active по
+// tone: run — пульс C.textHeading (reduced-motion — статичен, opacity .5 — через .feature-pulse),
+// wait — ромб, stopped — квадрат, loop — петля C.warning (ромб/квадрат — из FeatureGlyphs);
+// pending — пунктирный круг C.dashed; absent — сплошной круг C.dashed с косой чертой (FeatureGlyphs).
+function StageDot({ state, tone, ready = false }: {
+  state: StageState; tone?: StageTone | null; ready?: boolean;
+}) {
+  // Подложка: круг C.bgWhite r 7.5 — закрывает рельсу под точкой (viewBox 16).
+  const bg = <circle cx="8" cy="8" r="7.5" fill={C.bgWhite} />;
+  const svg = (children: React.ReactNode) => (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">{bg}{children}</svg>
   );
-}
 
-// Иконка «часы» (ожидание человека).
-function ClockIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.info} strokeWidth="1.4" />
-      <path d="M8 4.5V8l2.5 1.5" fill="none" stroke={C.info} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  if (state === 'done') {
+    // «Пройдено»: круг C.bgSelected + галка C.textMuted. Финал фичи (ready) — зелёный.
+    const fill = ready ? C.success : C.bgSelected;
+    const check = ready ? C.successText : C.textMuted;
+    return svg(
+      <>
+        <circle cx="8" cy="8" r="6.5" fill={fill} />
+        <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={check} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </>
+    );
+  }
+
+  if (state === 'active') {
+    // wait — ромб, stopped — квадрат: из FeatureGlyphs (не дублируем); loop — петля C.warning;
+    // run (и дефолт active) — пульс C.textHeading (.feature-pulse; reduced-motion — CSS: opacity .5).
+    if (tone === 'wait') return svg(<FeatureGlyph kind="wait" size={16} />);
+    if (tone === 'stopped') return svg(<FeatureGlyph kind="stopped" size={16} />);
+    if (tone === 'loop') return svg(<circle cx="8" cy="8" r="6" fill="none" stroke={C.warning} strokeWidth="1.6" />);
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="feature-pulse">
+        {bg}
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" />
+        <circle cx="8" cy="8" r="3.5" fill={C.textHeading} />
+      </svg>
+    );
+  }
+
+  // absent — сплошной круг C.dashed с косой чертой (глиф из FeatureGlyphs); pending — пунктирный.
+  if (state === 'absent') return svg(<FeatureGlyph kind="absent" size={16} />);
+  return svg(<circle cx="8" cy="8" r="6" fill="none" stroke={C.dashed} strokeWidth="1.5" strokeDasharray="2.5 2" />);
 }
 
 // Горизонтальная полоса линии (бэк/фронт) под «Производством»:
-//   «бэк · N из M» + дорожка (заливка = доля принятых) + бейдж ↺r (hot при r ≥ 3).
-// Сетка auto 1fr auto (строки, не колонки — на мобиле и десктопе).
+//   «Бэк · Денис, Кира · N из M» + дорожка (заливка = доля принятых) + бейдж ↺r (hot при r ≥ 3).
+// Сетка auto 1fr auto (строки, не колонки — на мобиле и десктопе). Имена исполнителей
+// (personaIds → lib/personas) — через запятую; неизвестный id не выводится. На 360px подпись
+// переносится (overflow-wrap), не вызывая горизонтального скролла.
 function LaneBar({ info }: { info: LaneInfo }) {
   if (info.total === 0) return null; // 0 шагов в линии → строка не выводится
   const pct = info.total ? Math.round((info.accepted / info.total) * 100) : 0;
   const trackH = laneTrackWidth(info.returns);
   const hot = info.returns >= 3;
+  const names = laneNames(info.personaIds);
+  // «Бэк · Денис, Кира · 3 из 4»; без исполнителей — «Бэк · 3 из 4» (без двойного «·»).
+  const head = names
+    ? `${info.label} · ${names} · ${info.accepted} из ${info.total}`
+    : `${info.label} · ${info.accepted} из ${info.total}`;
   return (
     <div
       style={{
         display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: SP.sm,
-        alignItems: 'center', fontSize: FS.sm, color: C.textSecondary,
+        alignItems: 'center', fontSize: FS.sm, color: C.textSecondary, minWidth: 0,
       }}
     >
-      <span style={{ whiteSpace: 'nowrap' }}>{info.label} · {info.accepted} из {info.total}</span>
+      <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{head}</span>
       <span
         role="progressbar"
         aria-label={`${info.label}: принято ${info.accepted} из ${info.total}`}
@@ -176,7 +282,7 @@ function LaneBar({ info }: { info: LaneInfo }) {
         aria-valuemax={info.total}
         style={{
           height: trackH, minHeight: 2, background: C.progressTrack,
-          borderRadius: R.max, overflow: 'hidden', display: 'block',
+          borderRadius: R.full, overflow: 'hidden', display: 'block',
         }}
       >
         <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: C.textMuted }} />
@@ -185,7 +291,7 @@ function LaneBar({ info }: { info: LaneInfo }) {
         <span
           style={{
             display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.xs, fontWeight: 700,
-            borderRadius: R.max, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
+            borderRadius: R.full, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
             // «Холодный» (r < 3) — textSecondary на bgSelected; «горячий» (r ≥ 3) —
             // warningText на warningBg (контраст по макету v2, .badge.hot).
             background: hot ? C.warningBg : C.bgSelected,
@@ -259,7 +365,7 @@ function Chevron({ expanded, reduced }: { expanded: boolean; reduced: boolean })
         color: C.textMuted,
       }}
     >
-      <svg width="12" height="12" viewBox="0 0 16 16">
+      <svg width="14" height="14" viewBox="0 0 16 16">
         <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </span>
@@ -397,6 +503,8 @@ function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
 // run.returnsBySource), рендер только раскладывает. Нет stages (старый ответ/кэш) → 7 pending.
 export function PipelineFlow({ run }: { run: FeatureRun }) {
   const reduced = usePrefersReducedMotion();
+  const isMobile = useIsMobile();
+  const now = useMinuteTick();
   const lanes = laneInfo(run);
   const badges = returnBadges(run);
   // Раскрытая стадия (2.16.5) — ОДИНОЧНАЯ: «Производство» открыто по умолчанию, остальные свёрнуты.
@@ -405,6 +513,8 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
   // без лишнего клика (главная претензия v4: «не вижу шаги»). Клик переключает:
   // открыть одну стадию — закрыть предыдущую (toggleExpanded).
   const [expanded, setExpanded] = useState<StageKey | null>('prod');
+  // minHeight строки: тач-цель по TB (32 десктоп / 40 мобила).
+  const rowMinH = isMobile ? ROW_MIN_H_MOBILE : ROW_MIN_H_DESKTOP;
 
   return (
     <div
@@ -419,12 +529,15 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
         const isLast = i === STAGES.length - 1;
         const passes = stage?.passes ?? 0;
         const width = stageWidth(passes, state);
-
-        // Состояния активной стадии: «ждёт вас» (tone=wait) / «идёт сейчас» (runningSince).
-        const waiting = active && stage?.tone === 'wait';
-        const inProgress = active && !!stage?.runningSince;
+        const tone = stage?.tone;
+        const isPendingOrAbsent = state === 'pending' || state === 'absent';
         // run.ready + «Мерж» done → зелёная подсветка строки и точки (финал фичи зелёный).
         const readyMerge = s.key === 'merge' && state === 'done' && run.ready;
+        // Метка текущего этапа: только у active (текст + тон по tone).
+        const label = active ? activeStageLabel(tone, stage?.runningSince, now) : null;
+        const toneColors = active ? activeStageTone(tone) : null;
+        // ×N: passes > 1, кроме стадии «Ревью».
+        const showPasses = passes > 1 && s.key !== 'review';
 
         return (
           <div
@@ -433,13 +546,13 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
             aria-current={active ? 'step' : undefined}
             style={{
               position: 'relative',
-              minHeight: ROW_MIN_H,
+              minHeight: rowMinH,
               padding: `${SP.xs}px ${SP.xs}px`,
               borderRadius: R.lg,
               // active → подсветка C.accentLight; «Мерж» done + run.ready → зелёная (C.successBg).
               background: active ? C.accentLight : readyMerge ? C.successBg : 'transparent',
-              // Состояние ожидания: поверх подсветки — C.wait border (C.info) + иконка «часы».
-              border: waiting ? `1px solid ${C.info}` : '1px solid transparent',
+              // Состояние ожидания (tone=wait): поверх подсветки — рамка C.info.
+              border: active && tone === 'wait' ? `1px solid ${C.info}` : '1px solid transparent',
             }}
           >
             {/* Сегмент рельсы: своя толщина (width) или пунктир (pending/absent). */}
@@ -453,89 +566,99 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                   // (-(SP.xs + 1): рамка+паддинг следующей строки) — рельса непрерывна.
                   top: RAIL_TOP,
                   bottom: -(SP.xs + 1),
-                  width: (state === 'pending' || state === 'absent') ? 0 : width,
-                  background: (state === 'pending' || state === 'absent') ? 'none' : C.progressTrack,
-                  borderLeft: (state === 'pending' || state === 'absent') ? `2px dashed ${C.dashed}` : 'none',
+                  width: isPendingOrAbsent ? 0 : width,
+                  background: isPendingOrAbsent ? 'none' : C.progressTrack,
+                  borderLeft: isPendingOrAbsent ? `2px dashed ${C.dashed}` : 'none',
                   transform: 'translateX(-50%)',
                   // 2px — скругление сегмента: в шкале R значения 2 нет (R.sm=6).
                   borderRadius: 2,
                 }}
               />
             )}
-            {/* Строка стадии — кнопка (2.15.1): aria-expanded/aria-controls, клик переключает
-                раскрытие. Грид 16px 1fr (точка + контент). padding:0, чтобы точка осталась
-                на месте (геометрия рельсы). */}
-            <button
-              data-testid={`stage-row-${s.key}`}
-              aria-expanded={expanded === s.key && stageHasDetails(s.key, run)}
-              aria-controls={`stage-details-${s.key}`}
-              onClick={() => setExpanded(prev => toggleExpanded(prev, s.key))}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '16px 1fr',
-                gap: SP.sm,
-                // 'start' (не 'center'): точка всегда у верха строки (центр = 12px от верха),
-                // независимо от высоты строки (иначе в высокой «Производство» точка
-                // центрировалась вниз и рельса рвалась над ней).
-                alignItems: 'start',
-                width: '100%',
-                padding: 0,
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                textAlign: 'left',
-                font: 'inherit',
-                color: 'inherit',
-              }}
-            >
-              <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
-                <StageDot state={state} ready={readyMerge} />
-              </span>
-              <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
-                  {/* Метка «идёт сейчас»: ▶ (accent) слева от имени, когда стадия в работе. */}
-                  {inProgress && (
-                    <span aria-hidden="true" style={{ color: C.accent, fontSize: FS.xs, lineHeight: 1 }}>▶</span>
-                  )}
-                  <span
-                    style={{
-                      fontSize: FS.sm,
-                      fontWeight: active ? 700 : 400,
-                      color: active ? C.textHeading : state === 'done' ? C.textSecondary : C.textMuted,
-                    }}
-                  >
-                    {s.label}
-                  </span>
-                  {/* Ожидание человека: иконка «часы» (встроена в стадию, не отдельный StatusAlert). */}
-                  {waiting && (
-                    <span title={run.awaitingHumanReason ?? 'Ждёт вашего решения'} style={{ display: 'inline-flex', alignItems: 'center' }}>
-                      <ClockIcon />
-                    </span>
-                  )}
-                  {/* Бейджи возврата (↺N с ревью/проверки/финала) — на всех ширинах, из run.returnsBySource. */}
-                  {s.key === 'prod' && badges.map(b => <ReturnBadgeView key={b.key} b={b} />)}
-                  {/* Шеврон раскрытия: справа в строке, поворот при раскрытии (reduced-motion — без перехода). */}
-                  <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center' }}>
-                    <Chevron expanded={expanded === s.key} reduced={reduced} />
+            {isPendingOrAbsent ? (
+              // Не-кнопка: без шеврона и onClick, имя C.textMuted, подпись обязательна
+              // (pending «ещё не начат» / absent «…в трекере нет»), aria-label строки.
+              <div
+                data-testid={`stage-row-${s.key}`}
+                role="group"
+                aria-label={stageAriaLabel(s.label, state)}
+                style={{ display: 'grid', gridTemplateColumns: '16px 1fr', gap: 9, alignItems: 'start', width: '100%', padding: 0 }}
+              >
+                <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+                  <StageDot state={state} tone={tone} />
+                </span>
+                <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.textMuted }}>{s.label}</span>
+                  <span style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                    {state === 'absent' ? absentLabel(s.key) : 'ещё не начат'}
                   </span>
                 </span>
-                {/* Мета под именем: «ещё не начат» (pending/absent) / «идёт сейчас» (inProgress) / reason (wait). */}
-                {state === 'pending' || state === 'absent' ? (
-                  <span style={{ fontSize: FS.sm, color: C.textMuted }}>ещё не начат</span>
-                ) : inProgress ? (
-                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>идёт сейчас</span>
-                ) : waiting ? (
-                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>{run.awaitingHumanReason ?? 'ждёт вашего решения'}</span>
-                ) : null}
-                {/* Полосы бэк/фронт под «Производством» (одна под другой, строки). */}
-                {s.key === 'prod' && (
-                  <span style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, margin: `${SP.xxs}px 0 ${SP.xs}px 0` }}>
-                    <LaneBar info={lanes.back} />
-                    <LaneBar info={lanes.front} />
+              </div>
+            ) : (
+              // Кнопка: сетка 16px 1fr auto (точка + контент + шеврон), имя 13/600 C.textHeading,
+              // метка текущего этапа (active), ×N (passes>1, не «Ревью»), бейджи возврата (prod).
+              <button
+                data-testid={`stage-row-${s.key}`}
+                aria-expanded={expanded === s.key && stageHasDetails(s.key, run)}
+                aria-controls={`stage-details-${s.key}`}
+                onClick={() => setExpanded(prev => toggleExpanded(prev, s.key))}
+                className="cc-stage-row"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '16px 1fr auto',
+                  gap: 9,
+                  // 'start' (не 'center'): точка всегда у верха строки (центр = 12px от верха),
+                  // независимо от высоты строки (иначе в высокой «Производство» точка
+                  // центрировалась вниз и рельса рвалась над ней).
+                  alignItems: 'start',
+                  width: '100%',
+                  padding: 0,
+                  border: 'none',
+                  // hover/tap/фокус — через .cc-stage-row (index.css); радиус R.md.
+                  borderRadius: R.md,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  font: 'inherit',
+                  color: 'inherit',
+                }}
+              >
+                <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+                  <StageDot state={state} tone={tone} ready={readyMerge} />
+                </span>
+                <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 2 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{s.label}</span>
+                    {showPasses && (
+                      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>×{passes}</span>
+                    )}
+                    {active && label && toneColors && (
+                      <span
+                        style={{
+                          fontSize: FS.xs, fontWeight: 700, borderRadius: R.full,
+                          lineHeight: `${LABEL_LH}px`, padding: '0 8px', whiteSpace: 'nowrap',
+                          border: `1px solid ${toneColors.border}`, background: toneColors.bg, color: toneColors.fg,
+                        }}
+                      >
+                        {label}
+                      </span>
+                    )}
+                    {/* Бейджи возврата (↺N с ревью/проверки/финала) — на всех ширинах, из run.returnsBySource. */}
+                    {s.key === 'prod' && badges.map(b => <ReturnBadgeView key={b.key} b={b} />)}
                   </span>
-                )}
-              </span>
-            </button>
+                  {/* Полосы бэк/фронт под «Производством» (одна под другой, строки). */}
+                  {s.key === 'prod' && (
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, margin: `${SP.xxs}px 0 ${SP.xs}px 0` }}>
+                      <LaneBar info={lanes.back} />
+                      <LaneBar info={lanes.front} />
+                    </span>
+                  )}
+                </span>
+                {/* Шеврон: только у нажимаемых строк (pending/absent — не кнопки), поворот при раскрытии. */}
+                <span style={{ display: 'inline-flex', alignItems: 'center', alignSelf: 'start', paddingTop: 2 }}>
+                  <Chevron expanded={expanded === s.key} reduced={reduced} />
+                </span>
+              </button>
+            )}
             {/* Раскрытие: список шагов «Производства» (2.15.2/2.16.1). Только когда стадия раскрыта;
                 StageDetails сам отдаёт null для стадий без деталей (только «Производство» их имеет).
                 `key` — React-реконсиляция, `stageKey` — данные (см. StageDetails). */}

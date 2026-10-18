@@ -16,7 +16,7 @@ import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelStats } from './api';
 import { formatSince, formatTps, formatUpdatedAt, gpuCountLabel, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
-import { GpuCard } from './GpuCard';
+import { HwLinkRow } from './HwLinkRow';
 import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
 
 // === Оболочка секции ===
@@ -188,21 +188,13 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Видеокарты»: карточка на каждую карту текстового стенда ===
-// gpus === null — блока нет вовсе (макет: карта медиа на другом узле сюда не
-// попадает); пустой массив — тоже нет.
-function GpusCard({ data }: { data: LocalModelStats }) {
-  if (data.gpus == null || data.gpus.length === 0) return null;
-  return (
-    <Card title="Видеокарты">
-      {/* auto-fit, а не auto-fill: одна карта тянется на всю ширину, несколько делят её поровну */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: SP.sm }}>
-        {data.gpus.map(g => (
-          <GpuCard key={g.index} gpu={g} total={data.gpus!.length} kind="text" />
-        ))}
-      </div>
-    </Card>
-  );
+// === «Видеокарты»: строка-ссылка на вкладку «Железо» (только админ) ===
+// GpuCard ушёл на «Железо» (GpuDetailCard); здесь — компактная строка-ссылка:
+// точка худшего уровня, «память 68° · 81°», плашки, «Железо →». Касание открывает
+// «Железо». hardware — только у админа (не-админу поля нет → строки нет, ADR-030).
+function GpusCard({ data, onOpenHardware }: { data: LocalModelStats; onOpenHardware: () => void }) {
+  if (!data.hardware || data.hardware.gpus.length === 0) return null;
+  return <HwLinkRow brief={data.hardware} onOpen={onOpenHardware} />;
 }
 
 // === «Нагрузка и кэш»: выработка (ток/с) + график «Кэш, %» + полоса «Вытеснения»
@@ -366,12 +358,13 @@ function TextTabSkeleton() {
 }
 
 // === Вкладка ===
-export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window, onWindowChange }: {
+export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpenHardware, window, onWindowChange }: {
   data: LocalModelStats | null;
   loading: boolean;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
+  onOpenHardware: () => void;
   window: Window;
   onWindowChange: (w: Window) => void;
 }) {
@@ -395,8 +388,8 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
         <NowCard data={data} />
         <SpeedCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
-        {/* «Видеокарты» — детали железа (nvidia-smi), а не живая нагрузка */}
-        <GpusCard data={data} />
+        {/* «Видеокарты» — строка-ссылка на вкладку «Железо» (только админ) */}
+        <GpusCard data={data} onOpenHardware={onOpenHardware} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>
     </>

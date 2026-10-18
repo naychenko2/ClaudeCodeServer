@@ -1373,3 +1373,25 @@ describe('PipelineFlow: F9.1 (скролл, два PipelineFlow)', () => {
     expect(scrolled).toContain('second');
   });
 });
+
+// === K-2: строка шага — fontFamily inherit (не Arial) + явный fontSize FS.sm (12) ===
+describe('PipelineFlow: K-2 (строка шага: шрифт)', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  function runWithStep(): FeatureRun {
+    return run({
+      stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
+      stepChains: [chain({ stepRef: 'D1', title: 'Шаг', outcome: 'accepted', durationMinutes: 30 })],
+    });
+  }
+
+  it('кнопка строки: font-size 12 (FS.sm) и font-family inherit', () => {
+    const { root, container } = mount(createElement(PipelineFlow, { run: runWithStep() }));
+    const row = findNodeByAttr(container, 'data-step-ref', 'D1');
+    expect(row, 'строка шага D1 не найдена').not.toBeNull();
+    expect(row!.style.fontSize, 'K-2: font-size 12px').toBe('12px');
+    expect(row!.style.fontFamily, 'K-2: font-family inherit').toBe('inherit');
+    root.unmount();
+  });
+});

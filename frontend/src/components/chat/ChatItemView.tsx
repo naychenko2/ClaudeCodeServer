@@ -61,6 +61,10 @@ import { TeamEscalationView } from './TeamEscalationView';
 import { teamPlanningDoneText } from '../../lib/teamImplement';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 
+// K-1 (360): поле справа у строки пилюли — не меньше ширины плавающего аватара (FAB,
+// 36 px на мобиле), чтобы правый край строки не заходил под него.
+const PILL_ROW_RIGHT_PAD = 36;
+
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
   const t = (input as { todos?: unknown } | null)?.todos;
@@ -1741,10 +1745,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
-      // Пилюля плана — в ОДНОМ ряду с итогом: обе служебные, и держать их на разных
-      // строках значит гонять взгляд по вертикали за состоянием одного и того же хода
+      // Пилюля плана — в ОДНОМ ряду с итогом (десктоп): обе служебные, и держать их на
+      // разных строках значит гонять взгляд по вертикали за состоянием одного и того же хода.
+      // На мобиле (K-1) — пилюля отдельной строкой ПОД мета-строкой: мета-строка занимает
+      // всю ширину, и пилюля в правой распорке сжималась до 22 px под плавающим аватаром.
       return planPill
-        ? (
+        ? (isMobile ? (
+          // K-1 (360): пилюля отдельной строкой под мета-строкой, прижата вправо; правый
+          // край строки не заходит под плавающий аватар (поле справа — не меньше его ширины).
+          <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+            <div style={{ alignSelf: 'center' }}>{meta}</div>
+            <div style={{
+              display: 'flex', justifyContent: 'flex-end', marginTop: SP.xs, maxWidth: '100%',
+              paddingRight: PILL_ROW_RIGHT_PAD,
+            }}>
+              {planPill}
+            </div>
+          </div>
+        ) : (
           // Итог хода остаётся ТОЧНО по центру ленты, как и без пилюли: держат его две
           // равные распорки по краям, а не justifyContent — иначе центр съезжал бы влево
           // ровно на ширину пилюли, и мета-строка «прыгала» бы при её появлении.
@@ -1756,7 +1774,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               {planPill}
             </div>
           </div>
-        )
+        ))
         : <div style={{ alignSelf: 'center' }}>{meta}</div>;
     }
 

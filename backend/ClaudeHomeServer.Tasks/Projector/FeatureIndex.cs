@@ -30,9 +30,68 @@ public sealed record FeatureIndexChatEntry(
     string? StepRef,      // только у executor: StepRef задачи Session.TaskId
     string? Lane);        // только у executor: Lane задачи Session.TaskId
 
-// Строка фичи в индексе (контракт С0 §1). Б1 создаёт заготовку (id/название/проект эпика);
-// Б2 дополнит bucket/rail/chips/attention/summary/ключевой чат/chatCount.
+// Строка фичи в индексе (контракт «Контракт индекса фич — утверждён»). Б1 создаёт
+// заготовку (id/название/проект эпика); Б2 дополняет bucket/rail/chips/attention/summary/
+// ключевой чат/chatCount и пересортировывает Features по OrderRuns. Значения bucket/rail/chips/
+// attention/now0/summary берутся из FeatureRun (тон выводится из Attention, MAJOR-1) —
+// проектор не пересчитывает. Даты — DateTime?: сериализуются в ISO-строку (camelCase),
+// как и в FeatureRun; фронт читает их как string | null.
 public sealed record FeatureIndexRow(
     string FeatureId,
     string Title,
-    string? ProjectId);
+    string? ProjectId,
+    // Группа фичи: attention — требует внимания; running — идёт; idle — стоит; closed — закрыта.
+    string Bucket,
+    // Тревога; null — тревоги нет.
+    FeatureIndexAttention? Attention,
+    // Рельса: ровно 7 стадий в порядке жизненного цикла.
+    List<FeatureIndexRailSegment> Rail,
+    // Чипы-фильтры: open | waiting | stopped | merge | closed.
+    List<string> Chips,
+    // Счётчики шагов: принятые (Done) / все.
+    int StepsAccepted,
+    int StepsTotal,
+    // Число возвратов (Loops).
+    int Loops,
+    // «Сейчас» (now0): одна InProgress-задача; null — фича не идёт.
+    FeatureIndexNow? Now0,
+    // Последняя активность (максимум по CompletedAt/ClaudeStartedAt); null — активности нет.
+    DateTime? LastActivityAt,
+    // Итог смерженной фичи; только у закрытой, иначе null.
+    FeatureIndexSummary? Summary,
+    // Ключевой чат фичи (цепочка контракта §1); null — не найден.
+    string? KeySessionId,
+    // Ключевой чат в архиве (остаётся ключевым, помечается).
+    bool KeyArchived,
+    // Проект ключевого чата; null — чат вне проектов.
+    string? KeyProjectId,
+    // Чатов фичи в этом ответе (архивные включены).
+    int ChatCount);
+
+// Тревога фичи (контракт §1): kind расширен значением merge (маппинг сырой строки «мерж»
+// — на бэке, на фронт уходит только kind); sessionId — чат исполнителя (без taskId, в отличие
+// от feature-mode FeatureAttention).
+public sealed record FeatureIndexAttention(
+    string Kind,        // stopped | wait | merge
+    DateTime? Since,
+    string? Reason,
+    string? PersonaId,
+    string? SessionId);
+
+// Сегмент рельсы: одна стадия конвейера. state — словарь FeatureStage.State один в один;
+// tone — только у active, иначе null (как FeatureStage.Tone).
+public sealed record FeatureIndexRailSegment(
+    string Key,        // cut | plan | prod | review | qa | final | merge
+    string State,      // done | active | pending | absent
+    string? Tone);     // run | loop | wait | stopped | null
+
+// «Сейчас» фичи (now0): одна InProgress-задача — кто, стадия, шаг.
+public sealed record FeatureIndexNow(
+    string? PersonaId,
+    string Stage,
+    string? StepRef);
+
+// Итог смерженной фичи: только у закрытой, иначе null.
+public sealed record FeatureIndexSummary(
+    DateTime? MergedAt,
+    double DurationMinutes);

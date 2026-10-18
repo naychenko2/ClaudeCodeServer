@@ -12,7 +12,7 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, filterFeaturesByChip, featureGroupTreeRows, otherFeatureCount } from '../chatGroups';
+import { groupByFeatures, featureChipCounts, filterFeaturesByChip, featureGroupTreeRows, otherFeatureCount, featureRoleFor } from '../chatGroups';
 import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
@@ -393,5 +393,39 @@ describe('M2: otherFeatureCount (чип «ещё N»)', () => {
     expect(otherFeatureCount('orch', idx)).toBe(2);
     expect(otherFeatureCount('single', idx)).toBe(0);
     expect(otherFeatureCount('none', idx)).toBe(0);
+  });
+});
+
+// === M3: роль чата в группе — по id САМОЙ строки, не замыканием корня ===
+// featureRoleFor: «ключевой» (ключевой чат фичи) и/или «ещё N» (чат в ещё N фичах).
+// Считается по id строки: ChatTreeBranch рекурсивно передаёт renderCard потомкам, и
+// замыкание роли корня лило её на всё поддерево (M3). Мутация (в отчёте): роль по
+// фиксированному id (корню) вместо id строки — «plain» (не ключевой, не мультифичевый)
+// получает «ключевой», тест краснеет.
+describe('M3: featureRoleFor (роль по id строки, не корня)', () => {
+  const feats = [feature('A', 'running'), feature('B', 'running'), feature('C', 'running')];
+  const idx = index(feats, {
+    // key — ключевой чат фичи A, ровно одна фича
+    'key': [link('A', 'key')],
+    // multi — мультифичевый: A (первая) + B + C → «ещё 2»
+    'multi': [link('A', 'executor'), link('B', 'executor'), link('C', 'executor')],
+    // plain — одна фича (A), не ключевой → метки нет
+    'plain': [link('A', 'executor')],
+  });
+
+  it('ключевой чат: «ключевой» (без других фич) / «ключевой · ещё N» (с другими)', () => {
+    // key — ровно A → «ключевой»
+    expect(featureRoleFor('key', 'key', idx)).toBe('ключевой');
+    // multi — A + B + C, ключевой = multi → «ключевой · ещё 2»
+    expect(featureRoleFor('multi', 'multi', idx)).toBe('ключевой · ещё 2');
+  });
+
+  it('не-ключевой мультифичевый: «ещё N»; обычный (одна фича) и вне индекса — метки нет', () => {
+    // multi не ключевой (keyId='key') → «ещё 2»
+    expect(featureRoleFor('multi', 'key', idx)).toBe('ещё 2');
+    // plain — одна фича, не ключевой → undefined
+    expect(featureRoleFor('plain', 'key', idx)).toBeUndefined();
+    // ghost — не в индексе → undefined
+    expect(featureRoleFor('ghost', 'key', idx)).toBeUndefined();
   });
 });

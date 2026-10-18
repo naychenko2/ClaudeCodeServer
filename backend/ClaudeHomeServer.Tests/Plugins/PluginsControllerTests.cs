@@ -100,7 +100,7 @@ public class PluginsControllerTests : IDisposable
         var manifest = new
         {
             id,
-            name = "Pkg",
+            name = slug,
             version,
             contributes = new
             {
@@ -186,7 +186,7 @@ public class PluginsControllerTests : IDisposable
         File.WriteAllText(Path.Combine(realDir, "ccs-plugin.json"),
             JsonSerializer.Serialize(new
             {
-                id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+                id = "local-a/pkg", name = "pkg", version = "1.0.0",
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true }));

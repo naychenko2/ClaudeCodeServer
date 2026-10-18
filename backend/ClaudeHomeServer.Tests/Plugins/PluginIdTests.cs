@@ -106,7 +106,7 @@ public class PluginIdTests : IDisposable
             JsonSerializer.Serialize(new
             {
                 id = "local.a/pkg",   // точка в publisher — не [a-z0-9-]
-                name = "Pkg",
+                name = "pkg",
                 version = "1.0.0",
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "notes:read" } },

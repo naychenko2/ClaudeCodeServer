@@ -92,12 +92,13 @@ public class PluginPackageValidator
         Walk(packageRoot, packageRoot, ref files, ref totalSize, ref dirCount, problems, ref limitHit);
 
         // C3: поля манифеста (plugin.json/ccs-plugin.json) — deny-manifest-field.
-        var (raw, manifestProblems) = _manifestReader.Read(packageRoot);
+        var (raws, manifestProblems) = _manifestReader.Read(packageRoot);
         problems.AddRange(manifestProblems);
 
-        // M3: name == slug. CLI берёт пространство имён плагина из name, а Skill-привязка
-        // адресует навык по slug из id; name != slug → привязка указывает в никуда.
-        CheckNameEqualsSlug(raw, problems);
+        // M3: name == slug. CLI берёт имя пакета из .claude-plugin/plugin.json (спайк
+        // plugin-dir-name-spike-2026-10.md), а Skill-привязка адресует навык по slug из id;
+        // name != slug → привязка указывает в никуда.
+        CheckNameEqualsSlug(raws, problems);
 
         // M9: хеш — только валидного пакета (нет проблем), до лимита (limitHit → null).
         // Невалидный пакет хеш не несёт: sha256 = null.
@@ -378,16 +379,44 @@ public class PluginPackageValidator
         return Convert.ToHexString(hash.Hash).ToLowerInvariant();
     }
 
-    // M3: name == slug. CLI берёт пространство имён плагина из `name` в .claude-plugin/plugin.json
-    // (спайк plugin-dir-spike-2026-10.md: source = <name>@inline, skill/команда = <name>:<skill>),
-    // а Skill-привязка адресует навык по slug из id ({publisher}/{slug}). name != slug → привязка
-    // указывает в никуда. Код deny-name-not-equal-slug. <paramref name="rawJson"/> — первый манифест
-    // (ccs-plugin.json, несёт и id, и name); без id или name проверка не применима (не отказ).
-    private static void CheckNameEqualsSlug(string? rawJson, List<PluginPackageProblem> problems)
+    // M3: name == slug. CLI берёт имя пакета ТОЛЬКО из .claude-plugin/plugin.json (спайк
+    // plugin-dir-name-spike-2026-10.md: ccs-plugin.json CLI не читает; без нативного манифеста
+    // имя = имя каталога), а Skill-привязка адресует навык по slug из id ({publisher}/{slug}).
+    // name != slug → привязка указывает в никуда. Код deny-name-not-equal-slug.
+    // M3a: сверяем `name` у КАЖДОГО манифеста, где оно есть (не только у ccs-plugin.json):
+    // пакет с расхождением (name в ccs-plugin.json ≠ name в .claude-plugin/plugin.json)
+    // раньше проходил, т.к. проверялся только первый. slug — из id первого манифеста, несущего
+    // id в формате {publisher}/{slug}; без извлекаемого slug проверка не применима (не отказ).
+    private static void CheckNameEqualsSlug(IReadOnlyList<string> rawJsons, List<PluginPackageProblem> problems)
     {
-        if (rawJson is null) return;
-        string? name = null;
-        string? id = null;
+        if (rawJsons.Count == 0) return;
+
+        string? slug = null;
+        foreach (var raw in rawJsons)
+        {
+            var id = ReadStringProp(raw, "id");
+            if (id is null) continue;
+            var s = SlugFromId(id);
+            if (s is not null) { slug = s; break; }
+        }
+        if (slug is null) return;
+
+        foreach (var raw in rawJsons)
+        {
+            var name = ReadStringProp(raw, "name");
+            if (string.IsNullOrEmpty(name)) continue;
+            if (!string.Equals(name, slug, StringComparison.Ordinal))
+                problems.Add(new PluginPackageProblem(
+                    "deny-name-not-equal-slug",
+                    $"name манифеста «{name}» не равен slug пакета «{slug}» (CLI берёт имя пакета из .claude-plugin/plugin.json, привязка — по slug)"));
+        }
+    }
+
+    // Прочитать строковое top-level поле из сырого JSON. null — поля нет, JSON бит или не объект
+    // (deny-manifest-field/модель отчитаются отдельно).
+    private static string? ReadStringProp(string? rawJson, string prop)
+    {
+        if (rawJson is null) return null;
         try
         {
             using var doc = JsonDocument.Parse(rawJson, new JsonDocumentOptions
@@ -395,25 +424,20 @@ public class PluginPackageValidator
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
             });
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
-            if (doc.RootElement.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
-                name = n.GetString();
-            if (doc.RootElement.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String)
-                id = i.GetString();
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (doc.RootElement.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
+                return v.GetString();
         }
-        catch (JsonException)
-        {
-            return; // битый JSON — deny-manifest-field/модель отчитаются отдельно
-        }
+        catch (JsonException) { }
+        return null;
+    }
 
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(id)) return;
-        var slash = id!.LastIndexOf('/');
-        if (slash < 0 || slash == id!.Length - 1) return; // slug не извлекаем (id не по формату)
-        var slug = id[(slash + 1)..];
-        if (!string.Equals(name, slug, StringComparison.Ordinal))
-            problems.Add(new PluginPackageProblem(
-                "deny-name-not-equal-slug",
-                $"name манифеста «{name}» не равен slug пакета «{slug}» (CLI берёт пространство имён из name, привязка — по slug)"));
+    // slug — часть id после последнего '/'; null, если id не по формату {publisher}/{slug}.
+    private static string? SlugFromId(string id)
+    {
+        var slash = id.LastIndexOf('/');
+        if (slash < 0 || slash == id.Length - 1) return null;
+        return id[(slash + 1)..];
     }
 
     // Файл пакета: относительный путь (через «/»), полный путь (для symlink), метаданные.

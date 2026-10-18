@@ -80,9 +80,9 @@ public class PluginManifestReaderTests
         var root = NewPackage(
             ("ccs-plugin.json", """{"name":"P","version":"0.1.0","hooks":{}}"""));
 
-        var (raw, problems) = Reader().Read(root);
+        var (raws, problems) = Reader().Read(root);
 
-        raw.Should().NotBeNull();
+        raws.Should().NotBeEmpty("найден ccs-plugin.json");
         problems.Should().Contain(p => p.Code == "deny-manifest-field" && p.Message.Contains("hooks"));
     }
 
@@ -130,16 +130,16 @@ public class PluginManifestReaderTests
         problems.Should().Contain(p => p.Code == "deny-manifest-field" && p.Message.Contains("hooks"));
     }
 
-    // --- Read: нет манифеста → (null, []) ---
+    // --- Read: нет манифеста → ([], []) ---
 
     [Fact]
-    public void Read_НетМанифеста_Null()
+    public void Read_НетМанифеста_ПустойСписок()
     {
         var root = NewPackage(("panel/index.html", "<html></html>"));
 
-        var (raw, problems) = Reader().Read(root);
+        var (raws, problems) = Reader().Read(root);
 
-        raw.Should().BeNull();
+        raws.Should().BeEmpty("манифестов нет");
         problems.Should().BeEmpty();
     }
 

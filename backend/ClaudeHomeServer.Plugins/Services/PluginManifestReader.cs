@@ -17,25 +17,27 @@ public class PluginManifestReader
         ".claude-plugin/plugin.json",
     ];
 
-    // Найти манифест пакета (ccs-plugin.json → plugin.json → .claude-plugin/plugin.json),
-    // прочитать его и проверить топ-уровневые поля. Возвращает (сырой JSON | null, проблемы).
-    // (null, []) — манифест не найден; (raw, [..]) — разобран, проблемы по полям.
+    // Найти ВСЕ манифесты пакета (ccs-plugin.json → plugin.json → .claude-plugin/plugin.json),
+    // прочитать их и проверить топ-уровневые поля. Возвращает (список сырых JSON, проблемы).
+    // ([], []) — ни одного манифеста; ([raw1, ..], [..]) — разобраны все найденные, проблемы
+    // по полям каждого. M3a: список (а не только первый) — чтобы валидатор сверял `name`
+    // у каждого манифеста, а не только у ccs-plugin.json.
     // C3: поля проверяются у КАЖДОГО найденного манифеста (цикл без раннего return), а не
     // только у первого: CLI читает .claude-plugin/plugin.json, поэтому «чистый»
     // ccs-plugin.json + hooks/mcpServers в нативном манифесте не должен проходить.
-    public (string? RawJson, IReadOnlyList<PluginPackageProblem> Problems) Read(string packageRoot)
+    public (IReadOnlyList<string> RawJsons, IReadOnlyList<PluginPackageProblem> Problems) Read(string packageRoot)
     {
-        string? firstRaw = null;
+        var raws = new List<string>();
         var problems = new List<PluginPackageProblem>();
         foreach (var name in ManifestNames)
         {
             var path = Path.Combine(packageRoot, name);
             if (!File.Exists(path)) continue;
             var raw = File.ReadAllText(path);
-            if (firstRaw is null) firstRaw = raw;
+            raws.Add(raw);
             problems.AddRange(ValidateFields(raw));
         }
-        return (firstRaw, problems);
+        return (raws, problems);
     }
 
     // Проверить топ-уровневые поля сырого JSON манифеста. Каждый ключ вне белого списка

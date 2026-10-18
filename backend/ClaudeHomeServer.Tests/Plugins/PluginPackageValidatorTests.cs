@@ -121,6 +121,38 @@ public class PluginPackageValidatorTests
         r.IsValid.Should().BeTrue();
     }
 
+    // --- M3a: name сверяется у КАЖДОГО манифеста, а не только у ccs-plugin.json ---
+    // CLI берёт имя пакета из .claude-plugin/plugin.json (спайк plugin-dir-name-spike-2026-10.md).
+    // Пакет с расхождением (name в ccs-plugin.json = slug, но name в .claude-plugin/plugin.json ≠ slug)
+    // раньше проходил, т.к. проверялся только первый манифест.
+
+    [Fact]
+    public void M3a_РасхождениеManifestов_ДаетDenyNameNotEqualSlug()
+    {
+        // ccs-plugin.json: id=local-x/pkg (slug=pkg), name=pkg (совпадает).
+        // .claude-plugin/plugin.json: name=other (≠ slug) → CLI назовёт пакет "other" → отказ.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"other","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-name-not-equal-slug");
+    }
+
+    [Fact]
+    public void M3a_ОбаМанифестаNameРавныSlug_БезDenyNameNotEqualSlug()
+    {
+        // name = slug = "pkg" в обоих манифестах → проверка не срабатывает.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        var r = Validate(root);
+        r.Problems.Should().NotContain(p => p.Code == "deny-name-not-equal-slug");
+        r.IsValid.Should().BeTrue();
+    }
+
     // --- Запрещённые файлы (RCE/обход) ---
 
     [Fact]

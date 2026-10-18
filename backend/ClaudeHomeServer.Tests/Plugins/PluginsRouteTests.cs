@@ -91,7 +91,7 @@ public class PluginsRouteTests : IAsyncLifetime
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(new
             {
-                id = "local-test/pkg", name = "Pkg", version = "1.0.0",
+                id = "local-test/pkg", name = "pkg", version = "1.0.0",
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true }));

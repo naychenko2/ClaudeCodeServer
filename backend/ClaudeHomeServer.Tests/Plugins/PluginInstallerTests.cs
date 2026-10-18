@@ -56,7 +56,7 @@ public class PluginInstallerTests : IDisposable
             File.WriteAllText(p, "content of " + f + "\n");
         }
 
-        var manifest = new { id, name = "Pkg", version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested = new[] { "notes:read" } } };
+        var manifest = new { id, name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested = new[] { "notes:read" } } };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
         return "draft:" + slug;
@@ -183,12 +183,16 @@ public class PluginInstallerTests : IDisposable
         // read и copy (гонка TOCTOU): read и copy увидят разные значения.
         // Два предсериализованных варианта манифеста (id=OrigId / id=OtherId): цикл
         // просто чередует их запись (write + rename), без чтения — максимально быстро.
-        string MakeManifestJson(string id) => JsonSerializer.Serialize(new
+        string MakeManifestJson(string id)
         {
-            id, name = "Pkg", version = "1.0.0",
-            contributes = new { skills = new[] { "skills/a" } },
-            permissions = new { requested = new[] { "notes:read" } },
-        }, new JsonSerializerOptions { WriteIndented = true });
+            var slug = id[(id.LastIndexOf('/') + 1)..];
+            return JsonSerializer.Serialize(new
+            {
+                id, name = slug, version = "1.0.0",
+                contributes = new { skills = new[] { "skills/a" } },
+                permissions = new { requested = new[] { "notes:read" } },
+            }, new JsonSerializerOptions { WriteIndented = true });
+        }
         var jsonOrig = MakeManifestJson(OrigId);
         var jsonOther = MakeManifestJson(OtherId);
 
@@ -281,7 +285,7 @@ public class PluginInstallerTests : IDisposable
         File.CreateSymbolicLink(Path.Combine(root, "panel", "link.txt"), outside);
         var manifest = new
         {
-            id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+            id = "local-a/pkg", name = "pkg", version = "1.0.0",
             contributes = new { skills = new[] { "skills/a" } },
             permissions = new { requested = new[] { "notes:read" } },
         };
@@ -344,7 +348,7 @@ public class PluginInstallerTests : IDisposable
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
         var manifest = new
         {
-            id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+            id = "local-a/pkg", name = "pkg", version = "1.0.0",
             contributes = new { skills = new[] { "skills/a" } },
             permissions = new { requested = new[] { "unknown:perm" } },
         };
@@ -367,7 +371,7 @@ public class PluginInstallerTests : IDisposable
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
         var manifest = new
         {
-            id = "local-a/pkg", name = "Pkg", version = "1.0.0",
+            id = "local-a/pkg", name = "pkg", version = "1.0.0",
             contributes = new { skills = new[] { "skills/a" } },
             permissions = new { requested = new[] { "net:bad/host" } },
         };

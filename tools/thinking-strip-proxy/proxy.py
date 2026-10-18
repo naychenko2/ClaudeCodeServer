@@ -273,6 +273,10 @@ COMPACT_SIGNATURE = os.environ.get(
 # Запрос сжатия при живом стенде молча уходил бы на локаль — те самые 330–430 с стоп-мира.
 # Две величины отвечают на разные вопросы и совпадали случайно.
 COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS", "150000"))
+# Фиксированный словарь значений маркера сжатия: шлюз ставит x-ccs-compaction, сырой CLI
+# (ход мимо шлюза) — x-claude-code-compaction. Значения те же, что у CLI (auto|manual|reactive);
+# вне словаря — мусор, по нему маршрут не едет.
+COMPACT_HEADER_VALUES = {"auto", "manual", "reactive"}
 # Сжатие с сохранением дословного (план «сжатие с сохранением дословного», шаг 5): к сводке в
 # ответе сжатия дописывается <ccs-preserved> — постановка, реплики человека, файлы, проверки,
 # план и якоря, собранные compactor.py по ОРИГИНАЛЬНОМУ телу. Дописывается в тот же текстовый
@@ -403,6 +407,7 @@ IMAGE_TOKENS_CAP = 2048
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "images_pruned": 0, "images_kept": 0, "image_tokens_saved": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
+         "compact_routed_header": 0, "compact_cloud_retry": 0,
          "compact_preserved": 0, "compact_preserve_failed": 0, "usage_normalized": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
@@ -926,6 +931,20 @@ def _tail_text(msgs, role=None):
         if текст.strip():
             return текст
     return ""
+
+
+def compact_header_kind(headers):
+    """Вид сжатия по заголовку-маркеру: x-ccs-compaction (шлюз) или x-claude-code-compaction
+    (ход, идущий мимо шлюза). None — заголовка нет или значение вне словаря (мусор).
+
+    Заголовок — ГЛАВНЫЙ признак: при нём тело любого размера уходит в облако, без проверки
+    сигнатуры и порога. Сигнатура + порог остаются запасным путём, когда заголовка нет.
+    """
+    raw = headers.get("x-ccs-compaction") or headers.get("x-claude-code-compaction")
+    if raw is None:
+        return None
+    v = raw.strip().lower()
+    return v if v in COMPACT_HEADER_VALUES else None
 
 
 def compact_verdict(doc, min_context_tokens=None):
@@ -2379,6 +2398,7 @@ class Handler(BaseHTTPRequestHandler):
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
         дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
+        compact_by_header = False  # True — в облако шлём по заголовку-маркеру, а не по сигнатуре+порогу
         прунинг = {"blocks": 0, "freedChars": 0}
         if body and self.command == "POST":
             try:
@@ -2386,29 +2406,46 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(doc, dict):
                     # Распознаём и снимаем копию ДО правок: в облако едет сырая история.
                     if COMPACT_UPSTREAM or COMPACT_PRESERVE == "on":
-                        вердикт, оценка = compact_verdict(doc)
-                        if вердикт == "route" and COMPACT_PRESERVE == "on":
-                            # По оригинальному телу и до compact_body: дополнение инструкции
-                            # должно уехать и в облако, и в фолбэк на локаль.
-                            сохранённое = preserve_for_compact(doc)
-                            if сохранённое is not None:
-                                stripped = True
-                        if вердикт == "route" and COMPACT_UPSTREAM:
-                            compact = compact_body(doc)
-                            compact_before = оценка
-                        elif вердикт == "signature_small" and COMPACT_UPSTREAM:
-                            # Настройка стенда разъехалась: CLI сжимается раньше, чем история
-                            # набирает порог. Молча отпускать такой запрос на локаль нельзя —
-                            # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
-                            with lock:
-                                stats["compact_signature_small"] += 1
-                            print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
-                                  f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
-                                  f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
-                                  f"опусти COMPACT_MIN_CONTEXT_TOKENS; до нормализации usage "
-                                  f"(usage_normalized) раннее сжатие могло дать и удвоение "
-                                  f"input_tokens в message_delta",
-                                  file=sys.stderr, flush=True)
+                        маркер = compact_header_kind(self.headers)
+                        if маркер is not None:
+                            # Заголовок-маркер — ГЛАВНЫЙ признак: шлюз (x-ccs-compaction) или сырой
+                            # CLI (x-claude-code-compaction, ход мимо шлюза) помечают запрос-суммаризацию,
+                            # и тело ЛЮБОГО размера уходит в облако, без проверки сигнатуры и порога.
+                            if COMPACT_PRESERVE == "on":
+                                # По оригинальному телу и до compact_body: дополнение инструкции
+                                # должно уехать и в облако, и в фолбэк на локаль.
+                                сохранённое = preserve_for_compact(doc)
+                                if сохранённое is not None:
+                                    stripped = True
+                            if COMPACT_UPSTREAM:
+                                compact = compact_body(doc)
+                                compact_before = 0
+                                compact_by_header = True
+                        else:
+                            # Заголовка нет — запасной путь: сигнатура + порог.
+                            вердикт, оценка = compact_verdict(doc)
+                            if вердикт == "route" and COMPACT_PRESERVE == "on":
+                                # По оригинальному телу и до compact_body: дополнение инструкции
+                                # должно уехать и в облако, и в фолбэк на локаль.
+                                сохранённое = preserve_for_compact(doc)
+                                if сохранённое is not None:
+                                    stripped = True
+                            if вердикт == "route" and COMPACT_UPSTREAM:
+                                compact = compact_body(doc)
+                                compact_before = оценка
+                            elif вердикт == "signature_small" and COMPACT_UPSTREAM:
+                                # Настройка стенда разъехалась: CLI сжимается раньше, чем история
+                                # набирает порог. Молча отпускать такой запрос на локаль нельзя —
+                                # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
+                                with lock:
+                                    stats["compact_signature_small"] += 1
+                                print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
+                                      f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
+                                      f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
+                                      f"опусти COMPACT_MIN_CONTEXT_TOKENS; до нормализации usage "
+                                      f"(usage_normalized) раннее сжатие могло дать и удвоение "
+                                      f"input_tokens в message_delta",
+                                      file=sys.stderr, flush=True)
                     if apply_sampling(doc):
                         stripped = True
                     изменено, решение = apply_thinking_mode(doc)
@@ -2519,8 +2556,22 @@ class Handler(BaseHTTPRequestHandler):
         начало = time.monotonic()
         if compact is not None:
             попытка = open_compact(compact, self.path)
+            if попытка is None:
+                # Первая попытка облака упала, а ответ клиенту ещё не начат (send_response ниже) —
+                # повторяем один раз: обрыв в начале потока — самый вероятный из отказов, и он
+                # ещё лечится повтором. Второй отказ — фолбэк на локаль, как раньше.
+                попытка = open_compact(compact, self.path)
+                if попытка is not None:
+                    with lock:
+                        stats["compact_cloud_retry"] += 1
             with lock:
-                stats["compact_routed" if попытка else "compact_fallback"] += 1
+                if попытка:
+                    # Маршрут в облако: по заголовку-маркеру (compact_routed_header) или по
+                    # запасному пути сигнатура+порог (compact_routed) — исходы взаимно исключают
+                    # друг друга: запрос едет в облако ровно по одному признаку.
+                    stats["compact_routed_header" if compact_by_header else "compact_routed"] += 1
+                else:
+                    stats["compact_fallback"] += 1
             if попытка:
                 conn, resp, первый = попытка
                 дамп = dump_request(compact, сессия, dict(

@@ -697,6 +697,39 @@ class КомпактРаспознаваниеTests(unittest.TestCase):
         self.assertEqual(proxy.compact_verdict(self.тело(большое))[0], "route")
 
 
+class _CI:
+    """Case-insensitive header dict: имитирует email.message.Message.get (реальные self.headers)."""
+
+    def __init__(self, d):
+        self._d = {k.lower(): v for k, v in d.items()}
+
+    def get(self, k):
+        return self._d.get(k.lower())
+
+
+class КомпактМаркерTests(unittest.TestCase):
+    """Заголовок-маркер сжатия — ГЛАВНЫЙ признак маршрута в облако (шлюз или сырой CLI)."""
+
+    def test_маркер_шлюза(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-ccs-compaction": "auto"})), "auto")
+
+    def test_сырой_cli_маркер_мимо_шлюза(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-claude-code-compaction": "manual"})), "manual")
+
+    def test_маркер_шлюза_имеет_приоритет(self):
+        h = _CI({"x-ccs-compaction": "auto", "x-claude-code-compaction": "reactive"})
+        self.assertEqual(proxy.compact_header_kind(h), "auto")
+
+    def test_мусорное_значение_не_маркер(self):
+        self.assertIsNone(proxy.compact_header_kind(_CI({"x-ccs-compaction": "banana"})))
+
+    def test_без_заголовка_маркера_нет(self):
+        self.assertIsNone(proxy.compact_header_kind(_CI({})))
+
+    def test_регистр_и_пробелы_нормализуются(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-ccs-compaction": "  AUTO "})), "auto")
+
+
 class КомпактТелоTests(unittest.TestCase):
     def test_подменяется_только_модель(self):
         doc = {"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True,
@@ -1192,7 +1225,8 @@ class КомпактСквознойTests(unittest.TestCase):
         proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
         proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
         proxy._compact_key = "sk-test"
-        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0)
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0,
+                            compact_routed_header=0, compact_cloud_retry=0)
 
     def tearDown(self):
         (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
@@ -1203,12 +1237,14 @@ class КомпактСквознойTests(unittest.TestCase):
             с.shutdown()
             с.server_close()
 
-    def спросить(self, msgs):
+    def спросить(self, msgs, заголовки=None):
         тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
                            "messages": msgs}).encode()
+        h = {"Content-Type": "application/json", "Content-Length": str(len(тело))}
+        if заголовки:
+            h.update(заголовки)
         c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
-        c.request("POST", "/v1/messages", body=тело,
-                  headers={"Content-Type": "application/json", "Content-Length": str(len(тело))})
+        c.request("POST", "/v1/messages", body=тело, headers=h)
         ответ = c.getresponse().read()
         c.close()
         return ответ
@@ -1289,6 +1325,121 @@ class КомпактСквознойTests(unittest.TestCase):
         self.assertIn("локальный".encode(), self.спросить(self.запрос_сжатия()))
         self.assertEqual(self.Облако.принятые, [])
         self.assertEqual((proxy.stats["compact_routed"], proxy.stats["compact_fallback"]), (0, 0))
+
+
+class МаршрутПоЗаголовкуTests(unittest.TestCase):
+    """Маршрут автосжатия по заголовку-маркеру (2026-10-18): главный признак — x-ccs-compaction
+    (шлюз) или x-claude-code-compaction (ход мимо шлюза) — тело любого размера в облако, без
+    порога; сигнатура + порог — запасной путь, когда заголовка нет. Ретрай облака при отказе."""
+
+    def setUp(self):
+        class Облако(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+
+        class Локальный(Заглушка):
+            метка = "локальный".encode()
+            принятые = []
+
+        self.Облако, self.Локальный = Облако, Локальный
+        self.облако, self.локальный = поднять(Облако), поднять(Локальный)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+                          proxy._compact_key, proxy.COMPACT_PRESERVE, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        proxy.COMPACT_PRESERVE = "off"
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0,
+                           compact_routed_header=0, compact_cloud_retry=0)
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+         proxy._compact_key, proxy.COMPACT_PRESERVE, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.облако, self.локальный, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, msgs, заголовки=None):
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
+                           "messages": msgs}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело,
+                  headers=dict({"Content-Type": "application/json",
+                                "Content-Length": str(len(тело))}, **(заголовки or {})))
+        ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def малое_сжатие(self):
+        """Сигнатура сжатия в маленьком теле: ниже порога, поэтому по сигнатуре — локаль."""
+        return [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."}]
+
+    def test_заголовок_малое_тело_идёт_в_облако(self):
+        """Главный признак: маркер шлёт в облако тело любого размера, без проверки порога."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "auto"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual((proxy.stats["compact_routed_header"], proxy.stats["compact_routed"],
+                           proxy.stats["compact_fallback"], proxy.stats["compact_signature_small"]),
+                         (1, 0, 0, 0), "маркер → облако (свой счётчик), порог не смотрим, сигнатура-малое не растёт")
+
+    def test_сырой_заголовок_мимо_шлюза_тоже_в_облако(self):
+        """Ход мимо шлюза несёт сырой x-claude-code-compaction — он тоже главный признак."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-claude-code-compaction": "manual"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(proxy.stats["compact_routed_header"], 1)
+
+    def test_без_заголовка_сигнатура_малое_тело_в_локаль(self):
+        """Запасной путь: без маркера маленькое тело с сигнатурой — локаль, как раньше."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие())
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [], "без маркера в облако не ходит")
+        self.assertEqual((proxy.stats["compact_signature_small"], proxy.stats["compact_routed_header"],
+                           proxy.stats["compact_routed"]), (1, 0, 0))
+
+    def test_маркер_с_мусором_игнорируется(self):
+        """Значение вне словаря — мусор: маршрут по нему не едет, запрос честно на локаль."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "banana"})
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [])
+        self.assertEqual((proxy.stats["compact_routed_header"], proxy.stats["compact_signature_small"]),
+                         (0, 1), "мусорный маркер → запасной путь по сигнатуре")
+
+    def test_повтор_облака_при_первом_отказе(self):
+        """Первая попытка облака упала, ответ клиенту ещё не начат — повтор один раз, спасает ход."""
+        class ОблакоСРетраем(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+            вызовы = 0
+
+            def do_POST(self):
+                type(self).вызовы += 1
+                if type(self).вызовы == 1:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    self.rfile.read(n)
+                    self.send_response(500)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                super().do_POST()
+
+        облако = поднять(ОблакоСРетраем)
+        self.addCleanup(lambda: (облако.shutdown(), облако.server_close()))
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{облако.server_address[1]}"
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "auto"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(ОблакоСРетраем.вызовы, 2, "первый отказ + один повтор")
+        self.assertEqual((proxy.stats["compact_cloud_retry"], proxy.stats["compact_routed_header"],
+                           proxy.stats["compact_routed"], proxy.stats["compact_fallback"]),
+                         (1, 1, 0, 0), "повтор спас: header-routed, не fallback")
 
 
 class МодельЗаглушка(Заглушка):

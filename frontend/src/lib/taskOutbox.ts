@@ -207,6 +207,11 @@ let _draining = false;
 export async function drainTaskOutbox(): Promise<void> {
   if (!_hooks || !isOnline() || _draining) return;
   _draining = true;
+  // Поставили на сервер хотя бы одну операцию (реально применили или сняли как
+  // отклонённую) — значит серверное состояние изменилось и его стоит канонизировать.
+  // Пустая очередь (ничего не отправлено) — reload не нужен: иначе каждый монтаж
+  // компонента задач тянул бы весь список (GET /api/tasks) впустую.
+  let applied = false;
   try {
     const ops = (await outboxAll<OutboxOp>().catch(() => [] as OutboxOp[])).sort((a, b) => a.seq - b.seq);
     for (const op of ops) {
@@ -215,6 +220,7 @@ export async function drainTaskOutbox(): Promise<void> {
         await applyOp(op);
         await outboxDelete(op.taskId).catch(() => {});
         _pending.delete(op.taskId);
+        applied = true;
       } catch (e) {
         if (e instanceof OfflineError) break;             // снова офлайн — ждём следующего триггера
         const status = httpStatus(e);
@@ -222,6 +228,7 @@ export async function drainTaskOutbox(): Promise<void> {
           handlePermanent(op, e);
           await outboxDelete(op.taskId).catch(() => {});
           _pending.delete(op.taskId);
+          applied = true;
         } else {
           // 5xx / прочее — повтор с backoff
           await outboxPut({ ...op, attempts: op.attempts + 1, nextAttemptAt: Date.now() + backoff(op.attempts + 1) }).catch(() => {});
@@ -231,7 +238,9 @@ export async function drainTaskOutbox(): Promise<void> {
   } finally {
     _draining = false;
   }
-  // Канонизируем состояние только когда очередь пуста (иначе reload затрёт pending)
+  // Канонизируем состояние только после реального дренажа и когда очередь пуста
+  // (иначе reload затрёт pending)
+  if (!applied) return;
   const rest = await outboxAll<OutboxOp>().catch(() => [] as OutboxOp[]);
   if (rest.length === 0) await _hooks.reload().catch(() => {});
 }

@@ -59,6 +59,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Team.Tests (шаг 3.5): TeamBlockerResolveTests/TeamWaveServiceTests используют
+         TestLauncherFactory (internal) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Team.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

@@ -165,6 +165,12 @@
       и новый проект был в графе сборки монолита.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Personas.Tests\ClaudeHomeServer.Personas.Tests.csproj" />
+    <!--
+      Team.Tests (шаг 3.5): 13 Team*Tests переехали в отдельную тестовую сборку вертикали.
+      Монолит тянет её как ProjectReference, чтобы в переходный период (до финальной чистки)
+      обе копии перенесённых тестов компилировались и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Team.Tests\ClaudeHomeServer.Team.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

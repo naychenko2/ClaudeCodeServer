@@ -38,6 +38,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Team.Tests (шаг 3.5): перенесённые Team-тесты читают internal-члены Main-типов
+         (Services.Team: TeamServices и internal-члены, на которые опираются Team*Tests). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Team.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

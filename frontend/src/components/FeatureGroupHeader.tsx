@@ -4,7 +4,8 @@ import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import { FeatureRail } from './chat/feature/FeatureRail';
 import { CountBadge } from './ui';
-import { featureDisplayState } from '../lib/chatGroups';
+import { featureDisplayState, formatDuration } from '../lib/chatGroups';
+import { dateOnly } from './chat/feature/featureTime';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 
 // Заголовок группы фичи в списке (макет features-overview.html, .fgh):
@@ -13,7 +14,9 @@ import type { FeatureIndexFeature } from '../types/featureIndex';
 // Кромка тревоги 3px слева — у «ждёт вас» (info) и «упала» (danger).
 // Клик по заголовку сворачивает/разворачивает группу (группа свёрнута по умолчанию).
 // Компактный: на 360 px живёт в двух строках, только токены C.* и шкалы, обе темы.
-export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobile = false }: {
+// compact — закрытая фича «на втором плане» (макет .closed .fgh): без рамки/заливки,
+//   название вторичным, статус «смержена {дата} · {длительность}» (или «закрыта»).
+export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobile = false, compact = false, personaName, now }: {
   feature: FeatureIndexFeature;
   // Число чатов группы (счётчик в заголовке)
   count: number;
@@ -21,10 +24,22 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
   expanded: boolean;
   onToggle: () => void;
   isMobile?: boolean;
+  compact?: boolean;
+  // «Кто» в статусе: имя персоны (attention.personaId / now0.personaId, резолвит вызывающий)
+  personaName?: string | null;
+  // «Сейчас» в мс для «сколько» (стабильные тесты); не задано — Date.now()
+  now?: number;
 }) {
-  const st = featureDisplayState(feature);
+  const st = featureDisplayState(feature, { now, personaName });
   // Кромка тревоги 3px: 'wait' → info (синий), 'stop' → danger (красный), иначе нет
   const alarmEdge = st.alarm === 'wait' ? C.info : st.alarm === 'stop' ? C.danger : null;
+  // Закрытая фича: статус «смержена {дата} · {длительность}» (макет .closed) или «закрыта».
+  const closedMerged = feature.bucket === 'closed' && feature.summary?.mergedAt != null;
+  const status = compact && feature.bucket === 'closed'
+    ? (closedMerged
+      ? `смержена ${dateOnly(feature.summary!.mergedAt)} · ${formatDuration(feature.summary!.durationMinutes)}`
+      : 'закрыта')
+    : st.status;
   return (
     <button
       type="button"

@@ -232,6 +232,10 @@ interface Props {
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
   // абсолютно и на месте остаются.
   leadingInset?: number;
+  // Роль чата в фиче (режим «Фичи», макет: метка в подстроке карточки, а не отдельной
+  // строкой над ней): «ключевой» (ключевой чат фичи) и/или «ещё N» (чат принадлежит
+  // ещё N фичам). Не задано — метки нет.
+  featureRole?: string;
   // === Свайп-действия (мобильная раскладка) ===
   // Эта карточка раскрыта свайпом (список держит ОДНУ раскрытую — открытие другой
   // закрывает предыдущую). Не задан/undefined — свайп-механика выключена
@@ -298,7 +302,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
+  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -1022,6 +1026,18 @@ function ChatCardView({
           {/* Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
               Глиф + название (обрезка с title); в «Днях» — вместо имени персоны */}
           {feature && <FeatureLabel feature={feature} />}
+          {/* Роль чата в фиче (режим «Фичи»): «ключевой»/«ещё N» — в подстроке
+              карточки, а не отдельной строкой над ней (макет, минор m6) */}
+          {featureRole && (
+            <span data-testid="chat-feature-role" style={{
+              display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+              fontSize: FS.xs, fontWeight: 600, color: C.accent,
+              background: C.accentLight, borderRadius: R.max, padding: '1px 6px',
+              fontFamily: FONT.sans, whiteSpace: 'nowrap',
+            }}>
+              {featureRole}
+            </span>
+          )}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (
             <span data-testid="chat-continued-mark" style={{ display: 'inline-flex', flexShrink: 0, color: C.textMuted }}

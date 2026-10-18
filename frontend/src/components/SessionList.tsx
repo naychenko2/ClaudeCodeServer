@@ -889,28 +889,36 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       <div key={g.feature.featureId} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
         <FeatureGroupHeader
           feature={g.feature}
-          count={g.sessions.length}
+          // Счётчик — chatCount строки индекса (бэк считает чаты фичи, архивные
+          // включены), а не число корней/строк группы (минор m3: «1» при 8 чатах)
+          count={g.feature.chatCount}
           expanded={expanded}
           onToggle={toggle}
           isMobile={isMobile}
+          // «Кто · сколько» в статусе: персона-исполнитель (attention.personaId) + «сейчас»
+          personaName={personaNameOf(g.feature)}
+          now={nowMs}
         />
         <div style={{ marginLeft: 13, paddingLeft: 9, borderLeft: `1px solid ${C.divider}` }}>
-          {shown.map(root => (
-            <div key={root.id}>
-              {root.id === keyId && (
-                <span data-testid="feature-key-chat" style={{
-                  display: 'inline-block', fontSize: FS.xs, fontWeight: 700, color: C.accent,
-                  background: C.accentLight, borderRadius: R.max, padding: '1px 6px',
-                  margin: `2px 0 0 ${SP.xs}px`, fontFamily: FONT.sans,
-                }}>
-                  ключевой
-                </span>
-              )}
-              {nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
-                <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
-              ))}
-            </div>
-          ))}
+          {nestTreeRows(rows).map(node => {
+            const c = node.row.chat;
+            // Роль чата в фиче — меткой В карточке (подстрока), а не отдельной строкой
+            // над ней (минор m6: +17 px на группу). «ключевой» (ключевой чат фичи) и/или
+            // «ещё N» (чат принадлежит ещё N фичам — C0, п.5: след других фич).
+            const otherN = otherFeatureCount(c.id, featuresIndex);
+            const role = c.id === keyId
+              ? (otherN > 0 ? `ключевой · ещё ${otherN}` : 'ключевой')
+              : otherN > 0 ? `ещё ${otherN}` : undefined;
+            return (
+              <ChatTreeBranch
+                key={c.id}
+                node={node}
+                isMobile={isMobile}
+                onToggleCollapse={toggleCollapse}
+                renderCard={(s, inset) => renderCard(s, inset, role)}
+              />
+            );
+          })}
           {!expanded && layout.hiddenCount > 0 && (
             <button
               type="button"
@@ -941,26 +949,27 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const openFeatures = allFeatures.filter(f => f.bucket !== 'closed');
     const closedFeatures = allFeatures.filter(f => f.bucket === 'closed');
     const closedExpanded = closedSectionOpen || chip === 'closed';
-
-    // Пустое состояние: фич нет вовсе (индекс пуст)
-    if (allFeatures.length === 0) {
-      return (
-        <EmptyState
-          compact
-          icon={<Sparkles size={20} strokeWidth={2} />}
-          title="Фич пока нет"
-          subtitle="Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу."
-        />
-      );
-    }
+    // Фич нет вовсе (индекс пуст): спокойный EmptyState — но БЕЗ раннего return (M1):
+    // ниже остаются обычные чаты без фичи (группа «Без фичи»), иначе список пустел
+    const noFeatures = allFeatures.length === 0;
 
     // Чипы со счётчиками (только когда есть фичи)
-    const chips = (
+    const chips = !noFeatures && (
       <FeatureFilterChips
         features={allFeatures}
         selected={chip}
         onSelect={c => patch({ featureFilter: c })}
         isMobile={isMobile}
+      />
+    );
+
+    // Пустое: фич нет — спокойный EmptyState (рядом, а не вместо чатов)
+    const noFeaturesState = noFeatures && (
+      <EmptyState
+        compact
+        icon={<Sparkles size={20} strokeWidth={2} />}
+        title="Фич пока нет"
+        subtitle="Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу."
       />
     );
 
@@ -982,8 +991,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       .pop();
     const lastMergedDate = lastMerged ? dateOnly(lastMerged) : null;
 
-    // Спокойное состояние: все закрыты (фичи есть, открытых нет, фильтр не «Закрытые»)
-    const calm = openFeatures.length === 0 && chip !== 'closed' && (
+    // Спокойное состояние: все закрыты (фичи ЕСТЬ, открытых нет, фильтр не «Закрытые»).
+    // noFeatures отдельно: там свой EmptyState «Фич пока нет», а не «Открытых фич нет»
+    const calm = !noFeatures && openFeatures.length === 0 && chip !== 'closed' && (
       <div style={{
         display: 'flex', alignItems: 'center', gap: SP.sm,
         // Только вертикальные отступы: горизонтальный задаёт контейнер списка
@@ -1059,6 +1069,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     return (
       <>
         {chips}
+        {noFeaturesState}
         {calm}
         {chip !== 'closed' && openGroups.map(g => renderFeatureGroup(g))}
         {noMatch}
@@ -1070,11 +1081,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
   // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
   // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
-  const renderCard = (s: Session, leadingInset = 0) => (
+  const renderCard = (s: Session, leadingInset = 0, featureRole?: string) => (
       <ChatCard
         key={s.id}
         session={s}
         leadingInset={leadingInset}
+        featureRole={featureRole}
         isActive={activeSession?.id === s.id}
         isMobile={isMobile}
         fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}

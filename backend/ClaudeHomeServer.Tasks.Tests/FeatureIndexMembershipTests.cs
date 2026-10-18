@@ -1,3 +1,4 @@
+using System.Collections;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
@@ -242,6 +243,54 @@ public class FeatureIndexMembershipTests
         index.Chats.Should().NotContainKey("sOther");
         // Чужая фича строку не даёт.
         index.Features.Select(f => f.FeatureId).Should().NotContain("epicOther");
+    }
+
+    // ── Мутация: O(E×T) — owner сканируется константное число раз, а не на каждый эпик ──────
+
+    // Ядро индекса (BuildIndexCore) перечисливает список задач владельца константное число раз
+    // (byId + epics + orchestrator + ОДИН ToLookup-скан по FeatureId = 4) — O(E+T), а не O(E×T)
+    // (полный скан owner на каждый эпик — старый FeatureTasks). Тест считает перечисления:
+    // на 50 эпиках мутация O(E×T) даёт 4+2E = 104 перечисления, исправленный код — 4 (порог 10
+    // — между ними).
+    [Fact]
+    public void Мутация_Индекс_OwnerСканируетсяКонстантно_НеOExT()
+    {
+        const int epics = 50;
+        const int childrenPerEpic = 100;
+        var owner = new List<TaskItem>(epics * (1 + childrenPerEpic));
+        for (var i = 0; i < epics; i++)
+        {
+            var epicId = $"epic-{i}";
+            owner.Add(Epic(epicId));
+            for (var j = 0; j < childrenPerEpic; j++)
+                owner.Add(Child($"{epicId}-t{j}", epicId));
+        }
+        var counting = new CountingOwner(owner);
+        var sessions = Array.Empty<FeatureIndexSession>();
+
+        FeatureProjector.BuildIndexCore(counting, sessions);
+
+        counting.Enumerations.Should().BeLessThanOrEqualTo(10,
+            "owner перечисливается константное число раз (O(E+T)), а не на каждый эпик (O(E×T))");
+    }
+
+    // Обёртка, считающая вызовы GetEnumerator(): BuildIndexCore принимает IReadOnlyList,
+    // поэтому каждый скан (ToDictionary/Where/foreach/ToLookup) диспатчится через этот метод.
+    // Обёртка, а не наследник List: у наследника `new`-GetEnumerator НЕ становится
+    // реализацией интерфейса (interface map держит метод базовой List<T>) — проверено.
+    private sealed class CountingOwner : IReadOnlyList<TaskItem>
+    {
+        private readonly List<TaskItem> _inner;
+        public int Enumerations { get; private set; }
+        public CountingOwner(List<TaskItem> items) => _inner = items;
+        public TaskItem this[int index] => _inner[index];
+        public int Count => _inner.Count;
+        public IEnumerator<TaskItem> GetEnumerator()
+        {
+            Enumerations++;
+            return _inner.GetEnumerator();
+        }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     // ── Мутация к ключевому правилу: SourceSessionId дочерних — НЕ членство ─────────────────

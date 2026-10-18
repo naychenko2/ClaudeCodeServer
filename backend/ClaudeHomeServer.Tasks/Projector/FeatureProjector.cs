@@ -739,28 +739,31 @@ public sealed class FeatureProjector(TaskManager tasks)
     // internal — для золотых тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
     internal static IReadOnlyList<FeatureRun> OrderRuns(List<FeatureRun> runs)
     {
+        // 4 группы — по Bucket (единая точка правды, план С0 §2: bucket и OrderRuns не
+        // расходятся): attention → running → idle → closed, у каждой — свой ключ сортировки.
+
         // 1. Не закрытые с Attention: по since ascending (ждущая дольше всех — первая).
         var withAttention = runs
-            .Where(r => !r.Closed && r.Attention is not null)
+            .Where(r => Bucket(r) == "attention")
             .OrderBy(r => r.Attention!.Since ?? DateTime.MaxValue)
             .ToList();
 
         // 2. Не закрытые идущие (Now не пуст, Attention null): по max ClaudeStartedAt descending.
         //    Now[0] — задача с самым поздним ClaudeStartedAt (Now отсортирован по убыванию).
         var running = runs
-            .Where(r => !r.Closed && r.Attention is null && r.Now.Count > 0)
+            .Where(r => Bucket(r) == "running")
             .OrderByDescending(r => r.Now[0].StartedAt ?? DateTime.MinValue)
             .ToList();
 
         // 3. Не закрытые прочие (без Attention, не идут): по LastActivityAt descending.
         var other = runs
-            .Where(r => !r.Closed && r.Attention is null && r.Now.Count == 0)
+            .Where(r => Bucket(r) == "idle")
             .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
         // 4. Закрытые: в конец, по LastActivityAt descending.
         var closed = runs
-            .Where(r => r.Closed)
+            .Where(r => Bucket(r) == "closed")
             .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
@@ -773,10 +776,19 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Эпик + все его дочерние (FeatureId == epic.Id) из уже отобранных задач владельца.
-    private static List<TaskItem> FeatureTasks(TaskItem epic, List<TaskItem> owner)
+    private static List<TaskItem> FeatureTasks(TaskItem epic, IReadOnlyList<TaskItem> owner)
     {
         var all = new List<TaskItem> { epic };
         all.AddRange(owner.Where(t => t.FeatureId == epic.Id));
+        return all;
+    }
+
+    // То же, но из lookup, сгруппированного по FeatureId (BuildIndexCore): эпик кладётся
+    // первым (сторож Build), дочерние — по ключу lookup; полного скана owner на эпик нет.
+    private static List<TaskItem> FeatureTasks(TaskItem epic, ILookup<string, TaskItem> byFeature)
+    {
+        var all = new List<TaskItem> { epic };
+        all.AddRange(byFeature[epic.Id]);
         return all;
     }
 
@@ -806,7 +818,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     //
     // Задачи группируются по FeatureId ОДИН раз (ToLookup) — уходит O(E×T) старого FeatureTasks.
     internal static FeatureIndex BuildIndexCore(
-        List<TaskItem> owner,
+        IReadOnlyList<TaskItem> owner,
         IReadOnlyCollection<FeatureIndexSession> sessions,
         string? projectId = null,
         DateTime? now = null)
@@ -818,6 +830,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         var byId = owner.ToDictionary(t => t.Id);
         // Эпики (role=feature) — источники curator/orchestrator-членства.
         var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
+        // Задачи, сгруппированные по FeatureId, ОДИН раз (ToLookup): O(E×T) старого
+        // FeatureTasks (полный скан owner на каждый эпик) уходит.
+        var byFeature = owner.Where(t => t.FeatureId is not null).ToLookup(t => t.FeatureId);
 
         // curator: кто создал эпик (SourceSessionId) → фичи.
         var curatorBySession = new Dictionary<string, HashSet<string>>();
@@ -887,10 +902,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Cast<TaskItem>()
             .ToList();
         var runs = survivingEpics
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), now))
+            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now))
             .ToList();
         var rows = OrderRuns(runs)
-            .Select(run => BuildRow(run, owner, sessions, ChatCount(map, run.FeatureId)))
+            .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
+                ChatCount(map, run.FeatureId)))
             .ToList();
         var featureOrder = new Dictionary<string, int>();
         for (var i = 0; i < rows.Count; i++)
@@ -952,15 +968,15 @@ public sealed class FeatureProjector(TaskManager tasks)
     // из FeatureRun (тон выводится из Attention, MAJOR-1) — проектор не пересчитывает.
     // internal — для золотых тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
 
-    // Строка фичи: FeatureRun + чаты фичи (chatCount) + сессии (ключевой чат: archived/project).
+    // Строка фичи: FeatureRun + задачи фичи (эпик + дочерние, для ключевого чата) + сессии
+    // (ключевой чат: archived/project) + chatCount.
     // Чистая функция — на ней золотые тесты (FeatureIndexRowTests).
     internal static FeatureIndexRow BuildRow(
         FeatureRun run,
-        List<TaskItem> owner,
+        IReadOnlyList<TaskItem> featureTasks,
         IReadOnlyCollection<FeatureIndexSession> sessions,
         int chatCount)
     {
-        var featureTasks = FeatureTasks(run.Epic, owner);
         // Ключевой чат: первое живое звено цепочки (удалённый/чужой чат → следующее звено).
         var key = KeySession(run.Epic, featureTasks, sessions);
         var keySession = key is null ? null : sessions.FirstOrDefault(s => s.Id == key);
@@ -968,7 +984,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.FeatureId,
             run.Epic.Title,
             run.Epic.ProjectId,
-            BucketOf(run),
+            Bucket(run),
             AttentionOf(run),
             RailOf(run),
             ChipsOf(run),
@@ -988,7 +1004,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // epic.SourceSessionId → epic.ExecutorLaunchedBySessionId → самый частый
     // ExecutorLaunchedBySessionId у дочерних. Удалённый/чужой чат (не в снимке владельца
     // sessions) пропускается — берётся следующее звено; живых звеньев нет → null.
-    internal static string? KeySession(TaskItem epic, List<TaskItem> featureTasks,
+    internal static string? KeySession(TaskItem epic, IReadOnlyList<TaskItem> featureTasks,
         IReadOnlyCollection<FeatureIndexSession> sessions)
     {
         var live = new HashSet<string>(sessions.Select(s => s.Id));
@@ -998,7 +1014,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Цепочка ключевого чата в порядке звеньев (без дублей): epic.SourceSessionId →
     // epic.ExecutorLaunchedBySessionId → самый частый ExecutorLaunchedBySessionId у дочерних
     // (эпик исключён; при равенстве частот — лексикографически меньший id, детерминизм).
-    internal static List<string> KeyChain(TaskItem epic, List<TaskItem> featureTasks)
+    internal static List<string> KeyChain(TaskItem epic, IReadOnlyList<TaskItem> featureTasks)
     {
         var chain = new List<string>();
         if (epic.SourceSessionId is not null) chain.Add(epic.SourceSessionId);
@@ -1014,8 +1030,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         return chain.Distinct().ToList();
     }
 
-    // Группа фичи (контракт §1): closed → attention → running → idle.
-    internal static string BucketOf(FeatureRun run)
+    // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
+    // OrderRuns выведены из неё, не расходятся): closed → attention → running → idle.
+    internal static string Bucket(FeatureRun run)
     {
         if (run.Closed) return "closed";
         if (run.Attention is not null) return "attention";

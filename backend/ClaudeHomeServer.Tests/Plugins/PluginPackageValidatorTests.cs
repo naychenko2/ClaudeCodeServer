@@ -163,7 +163,7 @@ public class PluginPackageValidatorTests
     // ({version} в проде) → привязка навыка по slug ломается. ---
 
     [Fact]
-    public void Validator_НетNativeManifest_Прошёл()
+    public void Validator_НетNativeManifest_Отказ()
     {
         // Пакет БЕЗ .claude-plugin/plugin.json (только ccs) → deny-native-manifest-missing, невалиден.
         // Мутация: убрать проверку наличия нативного манифеста → тест краснеет.
@@ -177,7 +177,7 @@ public class PluginPackageValidatorTests
     }
 
     [Fact]
-    public void Validator_NameПустой_Прошёл()
+    public void Validator_NameПустой_Отказ()
     {
         // Нативный манифест есть, но name пуст ("") → deny-name-missing, невалиден.
         // (Отсутствующий name — тот же путь: string.IsNullOrEmpty.)

@@ -167,7 +167,11 @@ public class PluginInstallerTests : IDisposable
     // --- TOCTOU: запись (id) и пакет (файлы, sha256) не разходятся: манифест читается из
     // staging-копии (того, что перемещается в target), не из источника.
     //
-    // Детерминированная гонка: фон-поток меняет id в ccs-plugin.json источника на OtherId.
+    // Детерминированная гонка: фон-поток меняет id в ccs-plugin.json источника (OrigId ↔ OtherId).
+    // R11-1: оба id — с ОДИНАКОВЫМ slug (local-a/pkg ↔ local-b/pkg), чтобы нативный манифест
+    // (name = slug = "pkg", создаётся CreateDraft) оставался неизменным: фон-поток его НЕ трогает
+    // (два отдельных File.Move давали смешанный снимок → deny-name-not-equal-slug). TOCTOU
+    // по-прежнему проверяется через расхождение id записи и пакета.
     //   FIX  (copy → read из staging): staging — снапшот; запись и пакет берут id из одного
     //         снапшота → совпадают (и запись, и пакет имеют тот же id).
     //   МУТАЦИЯ (read из source → copy): read и copy — по разные стороны изменения → запись
@@ -178,15 +182,18 @@ public class PluginInstallerTests : IDisposable
     public void TOCTOU_МанифестИзStaging_ЗаписьСовпадаетСПакетом()
     {
         const string OrigId = "local-a/pkg";
-        const string OtherId = "local-a/other";
+        const string OtherId = "local-b/pkg"; // тот же slug "pkg" — нативный name = slug не трогается
         var source = CreateDraft(OrigId, "1.0.0");
         var manifestPath = Path.Combine(_store.DraftDir(Owner, "pkg"), "ccs-plugin.json");
 
-        // Фон-поток: в плотном цикле чередует id в манифесте источника (OrigId ↔ OtherId)
+        // Фон-поток: в плотном цикле чередует id в ccs-plugin.json источника (OrigId ↔ OtherId)
         // атомарной записью (tmp + rename), чтобы изменение гарантированно попало в окно между
         // read и copy (гонка TOCTOU): read и copy увидят разные значения.
-        // Два предсериализованных варианта манифеста (id=OrigId / id=OtherId): цикл
-        // просто чередует их запись (write + rename), без чтения — максимально быстро.
+        // Два предсериализованных варианта ccs-манифеста (id=OrigId / id=OtherId, оба name = slug =
+        // "pkg"): цикл просто чередует их запись (write + rename), без чтения — максимально быстро.
+        // R11-1: нативный .claude-plugin/plugin.json фон-поток НЕ трогает (один File.Move, не два) —
+        // иначе смешанный снимок (ccs уже OtherId, а native ещё name=slug от OrigId) давал бы
+        // deny-name-not-equal-slug. Slug у обоих id один → name = slug неизменен.
         string MakeManifestJson(string id)
         {
             var slug = id[(id.LastIndexOf('/') + 1)..];
@@ -197,18 +204,8 @@ public class PluginInstallerTests : IDisposable
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true });
         }
-        // R10-1: нативный манифест чередуем вместе с ccs, чтобы name (= slug) оставался
-        // согласованным (иначе name != slug давал бы deny-name-not-equal-slug в гонке).
-        string MakeNativeJson(string id)
-        {
-            var slug = id[(id.LastIndexOf('/') + 1)..];
-            return JsonSerializer.Serialize(new { name = slug, version = "1.0.0" }, new JsonSerializerOptions { WriteIndented = true });
-        }
         var jsonOrig = MakeManifestJson(OrigId);
         var jsonOther = MakeManifestJson(OtherId);
-        var nativeOrig = MakeNativeJson(OrigId);
-        var nativeOther = MakeNativeJson(OtherId);
-        var nativePath = Path.Combine(_store.DraftDir(Owner, "pkg"), ".claude-plugin", "plugin.json");
 
         // .tmp-файл — в отдельном каталоге (не в source), чтобы CopyDirectoryNoSymlinks
         // не увидел его при перечислении source (гонка: rename ещё не завершён).
@@ -229,9 +226,6 @@ public class PluginInstallerTests : IDisposable
                     var tmp = Path.Combine(tmpDir, "ccs-plugin.json");
                     File.WriteAllText(tmp, toOther ? jsonOther : jsonOrig);
                     File.Move(tmp, manifestPath, overwrite: true); // замена (не атомарно между каталогами — ок для теста)
-                    var tmpNative = Path.Combine(tmpDir, "plugin.json");
-                    File.WriteAllText(tmpNative, toOther ? nativeOther : nativeOrig);
-                    File.Move(tmpNative, nativePath, overwrite: true);
                 }
                 catch { return; }
                 toOther = !toOther;
@@ -314,10 +308,11 @@ public class PluginInstallerTests : IDisposable
         result.Problems.Should().Contain(p => p.Code == "no-symlink");
     }
 
-    // --- non-blocker: symlink-манифест (plugin.json → чужой файл) — 400 без утечки
-    // содержимого чужого файла. Манифест читается ПОСЛЕ валидатора: no-symlink отбивает
+    // --- non-blocker: symlink-манифест (.claude-plugin/plugin.json → чужой файл) — 400 без
+    // утечки содержимого чужого файла. Манифест читается ПОСЛЕ валидатора: no-symlink отбивает
     // symlink-манифест до ReadManifest, и JsonException с куском чужого файла (старый
-    // порядок: read → copy) не уходит в ответ. ---
+    // порядок: read → copy) не уходит в ответ. R11: ссылка — на НАТИВНЫЙ манифест
+    // .claude-plugin/plugin.json (корневой plugin.json из allow-list убран, R10-1). ---
 
     [Fact]
     public void SymlinkManifest_Утечка_ЧужогоСодержимого()
@@ -328,10 +323,12 @@ public class PluginInstallerTests : IDisposable
         Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
 
-        // Чужой файл (вне пакета) с характерным содержимым + symlink plugin.json → на него.
+        // Чужой файл (вне пакета) с характерным содержимым + symlink на нативный манифест
+        // .claude-plugin/plugin.json → на него.
         var foreign = Path.Combine(Path.GetTempPath(), "ccs_foreign_" + Path.GetRandomFileName() + ".txt");
         File.WriteAllText(foreign, Secret);
-        File.CreateSymbolicLink(Path.Combine(root, "plugin.json"), foreign);
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.CreateSymbolicLink(Path.Combine(root, ".claude-plugin", "plugin.json"), foreign);
 
         try
         {

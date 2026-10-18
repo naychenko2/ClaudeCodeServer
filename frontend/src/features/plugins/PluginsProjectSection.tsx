@@ -362,8 +362,10 @@ export function PluginsProjectSection({ project, onUpdated }: {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
             <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
-              Путь к папке пакета на этом компьютере. Пакет должен содержать манифест
-              <span style={{ fontFamily: FONT.mono }}> ccs-plugin.json</span>.
+              Путь к папке пакета на этом компьютере. Пакет должен содержать нативный манифест
+              <span style={{ fontFamily: FONT.mono }}> .claude-plugin/plugin.json</span>
+              (обязателен, CLI берёт из него имя пакета) и, при необходимости, наш
+              <span style={{ fontFamily: FONT.mono }}> ccs-plugin.json</span> (источник id/прав).
             </div>
             <input
               value={folderPath}

@@ -206,6 +206,15 @@
       сборки монолита.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.LocalStats.Tests\ClaudeHomeServer.LocalStats.Tests.csproj" />
+    <!--
+      Deploy.Tests (шаг 3.11, пачка G): 8 Deploy*Tests (Composition/Controllers/Services)
+      переехали в отдельную тестовую сборку вертикали. Deploy — отдельная сборка
+      (ClaudeHomeServer.Deploy), не папка Main, поэтому InternalsVisibleTo на Deploy.Tests
+      стоит в ClaudeHomeServer.Deploy.csproj (internal-члены PendingReport/Compose живут там),
+      а не в Main. Монолит тянет Deploy.Tests как ProjectReference, чтобы в переходный период
+      (до финальной чистки) перенесённые тесты компилировались и новый проект был в графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Deploy.Tests\ClaudeHomeServer.Deploy.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

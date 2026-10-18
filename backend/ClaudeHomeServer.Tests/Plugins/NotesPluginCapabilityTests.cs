@@ -170,7 +170,6 @@ public class NotesPluginCapabilityTests : IDisposable
         var big = new string('x', 300 * 1024);
         WritePersonalNote(OwnerA, "big", $"# Big\n{big}\n");
 
-        _sut.MaxTotalBytes = 200 * 1024;
         var result = await _sut.HandleAsync(Ctx(OwnerA), "notes.read",
             Args($"{{\"id\":\"{_notes.GetSummaries(OwnerA, null, null).Single(n => n.Title == "big").Id}\"}}"),
             [PluginPermission.NotesRead], CancellationToken.None);

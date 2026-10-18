@@ -1206,6 +1206,10 @@ export type ServerMessage = { sessionId: string } & (
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
   // delegationTaskId — задача этого доклада (StoredTextMessage.DelegationTaskId)
   | { type: 'guest_text'; text: string; personaId: string; timestamp?: number; delegationTaskId?: string }
+  // Черновик плагина build-it-yourself изменился (ADR-031, шаг 4.2): наблюдатель
+  // data/plugins/{owner}/_drafts/{slug} шлёт владельцу сигнал обновить предпросмотр.
+  // slug + монотонная ревизия; без содержимого файлов и хостовых путей.
+  | { type: 'plugin_draft_changed'; slug: string; revision: number }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }

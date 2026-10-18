@@ -70,5 +70,10 @@ public sealed class PluginsSubsystem : IAppSubsystem
             sp.GetRequiredService<PluginSecretsStore>(), PluginNetProxy.CreateHandler()));
         // Обработчик прав: мост резолвит IEnumerable<IPluginCapability> (net: + Notes/Tasks).
         services.AddSingleton<IPluginCapability>(sp => sp.GetRequiredService<PluginNetProxy>());
+        // Наблюдатель черновиков (шаг 4.2): один inotify-экземпляр на процесс, следит за
+        // data/plugins/{owner}/_drafts, шлёт владельцу событие plugin_draft_changed (дебаунс 300 мс).
+        // Hosted-сервис: подсистема выключена → Register не вызывается → наблюдатель не стартует,
+        // приложение поднимается (отключаемость по ADR-014).
+        services.AddHostedService<PluginDraftWatcher>();
     }
 }

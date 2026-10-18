@@ -38,6 +38,10 @@ public class PluginStore
     public string OwnerRoot(string ownerId) =>
         SafePath.Join(_dataDir, $"{RootDirName}/{ownerId}");
 
+    // Корень плагинов: data/plugins (родитель всех OwnerRoot). Наблюдатель черновиков
+    // (шаг 4.2) поднимает слежку отсюда — один inotify-экземпляр на процесс.
+    public string PluginsRoot => SafePath.Join(_dataDir, RootDirName);
+
     // Каталог пакета: data/plugins/{owner}/packages/{id}/{version}.
     // M3: формат id/version проверяется ДО SafePath.Join (единый метод PluginId/PluginVersion):
     // «..» в id или version отклоняется как 400-валидация, а не как UnauthorizedAccessException

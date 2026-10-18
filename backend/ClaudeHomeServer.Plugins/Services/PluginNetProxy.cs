@@ -246,10 +246,12 @@ public class PluginNetProxy : IPluginCapability
                     // адреса / сбой DNS. Редирект на приватный адрес без этой проверки —
                     // SSRF (исходный url был публичным, а Location — нет).
                     var (_, check) = await ResolveAndCheckAsync(currentUri, cts.Token);
+                    // Стабильные коды вместо подробного текста (ревью 3.5): хост в сообщении
+                    // — «подробный текст», который тестам/фронту не нужен; код говорит о причине.
                     if (check == SsrfGuard.AddressCheck.Private)
-                        return Err("upstream", $"Приватный адрес: {currentUri.Host}");
+                        return Err("forbidden_address", "Приватный адрес");
                     if (check == SsrfGuard.AddressCheck.DnsFailed)
-                        return Err("upstream", $"DNS не ответил: {currentUri.Host}");
+                        return Err("dns_failed", "DNS не ответил");
 
                     var request = new HttpRequestMessage(new HttpMethod(method), currentUri);
                     foreach (var (name, value) in headers)

@@ -167,8 +167,8 @@ public class PluginNetProxyTests : IDisposable
             ["net:127.0.0.1"], CancellationToken.None);
 
         result.Ok.Should().BeFalse();
-        result.Error!.Code.Should().Be("upstream");
-        result.Error.Message.Should().Contain("127.0.0.1");
+        result.Error!.Code.Should().Be("forbidden_address");
+        result.Error.Message.Should().NotContain("127.0.0.1", "стабильный код — без подробного текста (хоста)");
     }
 
     // --- 3a. Редирект на приватный адрес → upstream (rework 12, critical 1) ---
@@ -186,6 +186,9 @@ public class PluginNetProxyTests : IDisposable
             Args("""{"url":"https://api.linear.app/graphql"}"""),
             ["net:api.linear.app"], CancellationToken.None);
 
+        // Редирект на ДРУГОЙ хост (127.0.0.1 ≠ api.linear.app) — ловит проверка «разный хост»,
+        // не SSRF: код остаётся upstream (стабильные коды forbidden_address/dns_failed —
+        // для приватного адреса того же хоста, см. 3/3b).
         result.Ok.Should().BeFalse();
         result.Error!.Code.Should().Be("upstream");
         result.Error.Message.Should().Contain("127.0.0.1");
@@ -220,8 +223,8 @@ public class PluginNetProxyTests : IDisposable
             ["net:rebind.example"], CancellationToken.None);
 
         result.Ok.Should().BeFalse();
-        result.Error!.Code.Should().Be("upstream");
-        result.Error.Message.Should().Contain("rebind.example");
+        result.Error!.Code.Should().Be("forbidden_address");
+        result.Error.Message.Should().NotContain("rebind.example", "стабильный код — без подробного текста (хоста)");
     }
 
     // --- 3c. ConnectCallback: вторая линия защиты (rework 12, critical 1) ---

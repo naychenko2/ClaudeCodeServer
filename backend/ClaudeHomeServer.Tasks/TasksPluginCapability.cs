@@ -81,16 +81,17 @@ public sealed class TasksPluginCapability : IPluginCapability
         foreach (var item in source)
         {
             if (items.Count >= limit) { truncated = true; break; }
-            var size = JsonSize(item);
+            // Сериализуем запись ОДИН раз: и размер, и элемент ответа — из той же сериализации.
+            // (Раньше JsonSize(item) сериализовал запись для размера, а ответ — повторно,
+            //  «двойная сериализация» из ревью 3.5.)
+            var element = JsonSerializer.SerializeToElement(item);
+            var size = element.GetRawText().Length;
             if (bytes + size > MaxTotalBytes) { truncated = true; break; }
-            items.Add(item);
+            items.Add(element);
             bytes += size;
         }
         return (items.ToArray(), truncated);
     }
-
-    // Размер записи в JSON (байты) — для учёта суммарного объёма.
-    private static int JsonSize(object item) => JsonSerializer.SerializeToUtf8Bytes(item).Length;
 
     // Строковое поле JSON-объекта (null, если нет или не string).
     private static string? GetString(JsonElement obj, string name) =>

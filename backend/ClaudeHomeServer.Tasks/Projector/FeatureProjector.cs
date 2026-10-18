@@ -75,6 +75,79 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Линии (back/front/прочее): исполнители и счётчики.
         var lanes = BuildLanes(steps, verdictTasks);
 
+        // ─── Б3: «Сейчас», тревоги, итог ───────────────────────────────────────────────────
+        // Attention вычисляется ДО цикла стадий: тон активной стадии — производное от него
+        // (MAJOR-1 финального ревью: тон и Attention не должны расхождаться).
+
+        // Тревога: приоритет stopped → wait явный → wait «мерж».
+        FeatureAttention? attention = null;
+
+        // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
+        //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
+        //    перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt), но пометка
+        //    не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
+        var stoppedTask = featureTasks
+            .Where(t => t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStoppedAt is not null
+                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
+            .OrderByDescending(t => t.ExecutorStoppedAt)
+            .FirstOrDefault();
+        if (stoppedTask is not null)
+        {
+            attention = new FeatureAttention
+            {
+                Kind = "stopped",
+                TaskId = stoppedTask.Id,
+                Since = stoppedTask.ExecutorStoppedAt,
+                Reason = stoppedTask.ExecutorStopReason,
+                PersonaId = stoppedTask.PersonaId,
+                LinkedSessionId = stoppedTask.LinkedSessionId,
+            };
+        }
+
+        // 2. wait явный: AwaitingHumanSince у эпика или задачи (ждущий дольше всех).
+        if (attention is null)
+        {
+            var waitTask = featureTasks
+                .Where(t => t.AwaitingHumanSince is not null)
+                .OrderBy(t => t.AwaitingHumanSince)
+                .FirstOrDefault();
+            if (waitTask is not null)
+            {
+                attention = new FeatureAttention
+                {
+                    Kind = "wait",
+                    TaskId = waitTask.Id,
+                    Since = waitTask.AwaitingHumanSince,
+                    Reason = waitTask.AwaitingHumanReason,
+                    PersonaId = waitTask.PersonaId,
+                    LinkedSessionId = waitTask.LinkedSessionId,
+                };
+            }
+        }
+
+        // 3. wait «мерж» — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
+        //    а merge-задачи нет или она не Done. since = CompletedAt финала.
+        if (attention is null)
+        {
+            bool finalAccepted = final is not null
+                && final.Status == TaskItemStatus.Done
+                && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+            bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
+            if (finalAccepted && mergeNotDone)
+            {
+                attention = new FeatureAttention
+                {
+                    Kind = "wait",
+                    TaskId = final!.Id,
+                    Since = final.CompletedAt,
+                    Reason = "мерж",
+                    PersonaId = final.PersonaId,
+                    LinkedSessionId = final.LinkedSessionId,
+                };
+            }
+        }
+
         // Конвейер: 7 стадий в порядке жизненного цикла.
         var stageDefs = new (string key, List<TaskItem> tasks)[]
         {
@@ -134,7 +207,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                 }
             }
 
-            // Тон (только у active, иначе null): loop > stopped > wait > run.
+            // Тон (только у active, иначе null): stopped/wait из Attention, иначе loop/run.
+            // Принцип: тон стадии — производное от Attention, отдельного расчёта быть не должно.
             string? tone = null;
             if (state == "active")
             {
@@ -143,14 +217,10 @@ public sealed class FeatureProjector(TaskManager tasks)
                     && ((final is not null
                         && final.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks)
                         || qa.Any(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks));
-                // stopped: идущая задача стадии с ExecutorStoppedAt.
-                bool isStopped = tasks.Any(t => t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is not null);
-                // wait: эпик ждёт человека.
-                bool isWait = epic.AwaitingHumanSince is not null;
 
-                if (isLoop) tone = "loop";
-                else if (isStopped) tone = "stopped";
-                else if (isWait) tone = "wait";
+                if (attention is not null && attention.Kind == "stopped") tone = "stopped";
+                else if (attention is not null && attention.Kind == "wait") tone = "wait";
+                else if (isLoop) tone = "loop";
                 else tone = "run";
             }
 
@@ -227,7 +297,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             });
         }
 
-        // ─── Б3: «Сейчас», тревоги, итог ───────────────────────────────────────────────────
+        // ─── Б3: «Сейчас», итог ─────────────────────────────────────────────────────────────
 
         // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
         // Эпик — контейнер фичи, не стадия конвейера: идущий эпик в «Сейчас» не показываем.
@@ -246,75 +316,6 @@ public sealed class FeatureProjector(TaskManager tasks)
                 LinkedSessionId = t.LinkedSessionId,
             })
             .ToList();
-
-        // Тревога: приоритет stopped → wait явный → wait «мерж».
-        FeatureAttention? attention = null;
-
-        // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
-        //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
-        //    перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt), но пометка
-        //    не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
-        var stoppedTask = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStoppedAt is not null
-                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
-            .OrderByDescending(t => t.ExecutorStoppedAt)
-            .FirstOrDefault();
-        if (stoppedTask is not null)
-        {
-            attention = new FeatureAttention
-            {
-                Kind = "stopped",
-                TaskId = stoppedTask.Id,
-                Since = stoppedTask.ExecutorStoppedAt,
-                Reason = stoppedTask.ExecutorStopReason,
-                PersonaId = stoppedTask.PersonaId,
-                LinkedSessionId = stoppedTask.LinkedSessionId,
-            };
-        }
-
-        // 2. wait явный: AwaitingHumanSince у эпика или задачи (ждущий дольше всех).
-        if (attention is null)
-        {
-            var waitTask = featureTasks
-                .Where(t => t.AwaitingHumanSince is not null)
-                .OrderBy(t => t.AwaitingHumanSince)
-                .FirstOrDefault();
-            if (waitTask is not null)
-            {
-                attention = new FeatureAttention
-                {
-                    Kind = "wait",
-                    TaskId = waitTask.Id,
-                    Since = waitTask.AwaitingHumanSince,
-                    Reason = waitTask.AwaitingHumanReason,
-                    PersonaId = waitTask.PersonaId,
-                    LinkedSessionId = waitTask.LinkedSessionId,
-                };
-            }
-        }
-
-        // 3. wait «мерж» — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
-        //    а merge-задачи нет или она не Done. since = CompletedAt финала.
-        if (attention is null)
-        {
-            bool finalAccepted = final is not null
-                && final.Status == TaskItemStatus.Done
-                && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
-            bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
-            if (finalAccepted && mergeNotDone)
-            {
-                attention = new FeatureAttention
-                {
-                    Kind = "wait",
-                    TaskId = final!.Id,
-                    Since = final.CompletedAt,
-                    Reason = "мерж",
-                    PersonaId = final.PersonaId,
-                    LinkedSessionId = final.LinkedSessionId,
-                };
-            }
-        }
 
         // Счётчик шагов: принятые (outcome=accepted) / все (из StepChains).
         int stepsTotal = stepChains.Count;

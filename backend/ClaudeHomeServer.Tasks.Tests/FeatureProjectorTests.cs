@@ -283,6 +283,59 @@ public class FeatureProjectorTests
             "финал вернул (returned), доработка (rework) идёт — цикл");
     }
 
+    // MAJOR-1: финал принят (accepted), merge-задачи нет → активная стадия merge с tone = wait.
+    // Тон стадии — производное от Attention (wait/«мерж»), а не отдельный расчёт.
+    [Fact]
+    public void Build_ФиналAcceptedБезМержа_MergeToneWait()
+    {
+        const string epicId = "epic-merge-tone";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step, final]);
+
+        var mergeStage = run.Stages.Single(s => s.Key == "merge");
+        mergeStage.State.Should().Be("active",
+            "финал принят, merge-задачи нет — мерж активен");
+        mergeStage.Tone.Should().Be("wait",
+            "тон активной стадии — производное от Attention (wait/«мерж»), а не run");
+        run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = wait/мерж");
+        run.Attention!.Reason.Should().Be("мерж");
+    }
+
+    // MAJOR-1: stopped с устаревшей пометкой (ExecutorStoppedAt раньше ClaudeStartedAt) →
+    // тон НЕ stopped (guard из Attention защищает от stale-пометки).
+    [Fact]
+    public void Build_StoppedStale_ТонНеStopped()
+    {
+        const string epicId = "epic-stale-stopped";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var task = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            // ClaudeStartedAt (10:00) позже ExecutorStoppedAt (9:00) — исполнитель перезапущен.
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 9, 0, 0),
+            ExecutorStopReason = "auth_failed",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, task]);
+
+        // Guard: ExecutorStoppedAt (9:00) НЕ позже ClaudeStartedAt (10:00) → stopped нет.
+        // Attention = null → тон активной стадии (prod) = run, не stopped.
+        var prodStage = run.Stages.Single(s => s.Key == "prod");
+        prodStage.State.Should().Be("active");
+        prodStage.Tone.Should().Be("run",
+            "stale-пометка: ExecutorStoppedAt раньше ClaudeStartedAt — stopped не показываем");
+    }
+
     // ─── Б2: цепочки шагов, источники возврата, линии ───────────────────────────────────────
     // Фикстура feat-step-chains.json (в духе «Истории» v2): 6 шагов, одно ревью на два шага,
     // возвраты с ревью/проверки/финала, доработка без связи, снятый шаг, идущая доработка.

@@ -18,7 +18,7 @@ import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
   deleteTask, deviceWaitDuration, dueLabel, executorStopText, isDeviceWaiting, projectColor, projectInitial,
-  recurrenceLabel, reminderLabel, updateTask,
+  recurrenceLabel, reminderLabel, updateTask, useEnsureFullTask, useTasks,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
@@ -98,7 +98,40 @@ function HeaderChip({ children, urgent }: { children: React.ReactNode; urgent?: 
   );
 }
 
-export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
+// Панель всегда работает с ЖИВОЙ задачей из стора (родители WallPage/TaskDetailsModal держат
+// снимок) и с ПОЛНЫМ текстом: список приходит облегчённым (без Description/ResultMarkdown),
+// поэтому пока задача listItem, догружаем карточку по id и показываем заглушку.
+export function TaskDetailsPane(props: Props) {
+  const stored = useTasks().find(t => t.id === props.task.id);
+  // Стор новее снимка; исключение — снимок уже полный, а в сторе ещё облегчённая версия
+  const task = stored && (!stored.listItem || props.task.listItem) ? stored : props.task;
+  const { state, retry } = useEnsureFullTask(task);
+  if (state === 'ready') return <TaskDetailsPaneInner {...props} task={task} />;
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      gap: 12, height: '100%', padding: 24, boxSizing: 'border-box',
+      fontFamily: FONT.sans, color: C.textMuted, fontSize: FS.sm, textAlign: 'center',
+    }}>
+      <div style={{ color: C.textPrimary, fontWeight: 600 }}>{task.title}</div>
+      {state === 'loading'
+        ? <div>Загружаю задачу…</div>
+        : (
+          <>
+            <div>Не удалось загрузить задачу</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="secondary" size="sm" onClick={retry}>Повторить</Button>
+              {(props.onClose ?? props.onBack) && (
+                <Button variant="ghostFilled" size="sm" onClick={(props.onClose ?? props.onBack)!}>Закрыть</Button>
+              )}
+            </div>
+          </>
+        )}
+    </div>
+  );
+}
+
+function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
   const [editing, setEditing] = useState(!!startInEdit);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);

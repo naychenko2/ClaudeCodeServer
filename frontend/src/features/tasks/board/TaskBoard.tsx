@@ -16,6 +16,7 @@ import {
   boardCardSort, boardLanes, columnColor, computeOrder, createTask, isOpenDefect, reloadTasks,
   taskColumnKey, updateTask, upsertTaskLocal, type BoardGroupBy,
 } from '../../../lib/tasks';
+import { api } from '../../../lib/api';
 import { showToast } from '../../../lib/toast';
 import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
@@ -47,6 +48,25 @@ interface Props {
   onEditColumns?: () => void;                 // открыть редактор колонок (проектная доска)
 }
 
+// id задач, найденных сервером по запросу (с задержкой, чтобы не слать запрос на каждую
+// букву). null — запроса нет, ответ ещё не пришёл или не вышел (офлайн): тогда работает
+// только локальный поиск по названию, превью и меткам.
+function useServerSearchIds(query: string): Set<string> | null {
+  const [found, setFound] = useState<{ q: string; ids: Set<string> } | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) { setFound(null); return; }
+    let alive = true;
+    const timer = setTimeout(() => {
+      api.tasks.search(q)
+        .then(list => { if (alive) setFound({ q, ids: new Set(list.map(t => t.id)) }); })
+        .catch(() => { /* офлайн/сбой — остаётся локальный поиск */ });
+    }, 300);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [query]);
+  return found && found.q === query.trim() ? found.ids : null;
+}
+
 export function TaskBoard({
   tasks, columns, projectsById, onOpenTask,
   quickAddProjectId = null, scope = 'hub', inlineToolbar = true, onEditColumns,
@@ -72,6 +92,9 @@ export function TaskBoard({
   const deviceNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.device?.name : undefined);
   const columnById = useMemo(() => new Map(columns.map(c => [c.id, c])), [columns]);
 
+  // Совпадения по полному описанию — с сервера (в облегчённом списке описания нет)
+  const descMatches = useServerSearchIds(search);
+
   // Фильтрация (клиентская, по стору)
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -83,12 +106,14 @@ export function TaskBoard({
       // Закрытые дефекты сюда не попадают — для них есть фильтр по колонке.
       if (defectsOnly && !isOpenDefect(t)) return false;
       if (q) {
-        const hay = `${t.title} ${t.description} ${t.labels.join(' ')}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+        // Облегчённая задача несёт только превью описания; глубже превью находит сервер
+        const desc = t.listItem ? (t.descriptionPreview ?? '') : t.description;
+        const hay = `${t.title} ${desc} ${t.labels.join(' ')}`.toLowerCase();
+        if (!hay.includes(q) && !descMatches?.has(t.id)) return false;
       }
       return true;
     });
-  }, [tasks, search, priorities, assignee, defectsOnly]);
+  }, [tasks, search, priorities, assignee, defectsOnly, descMatches]);
 
   const lanes = useMemo(() => boardLanes(filtered, groupBy, projectsById), [filtered, groupBy, projectsById]);
 

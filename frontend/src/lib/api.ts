@@ -1385,6 +1385,9 @@ export const api = {
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
+    // в облегчённом списке); элементы ответа — облегчённые, нужны id совпавших
+    search: (q: string) => request<Task[]>(`/tasks?q=${encodeURIComponent(q)}`),
     // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
     listByPersona: (personaId: string) =>
       request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),

@@ -591,7 +591,15 @@ export interface Task {
   projectId?: string;
   ownerId?: string;
   title: string;
-  description: string;      // markdown
+  description: string;      // markdown; у облегчённого элемента списка (listItem) всегда ''
+  // Облегчённый элемент СПИСКА (GET /api/tasks, /projects/{id}/tasks): description='' и
+  // resultMarkdown отсутствуют, вместо них — признаки и превью. Полный текст — через
+  // ensureFullTask(id) (GET /api/tasks/{id}); у полной задачи (ответ create/update/get,
+  // realtime task_changed) поля listItem нет.
+  listItem?: boolean;
+  hasDescription?: boolean;
+  hasResult?: boolean;
+  descriptionPreview?: string;   // начало описания (≤200 символов + «…» при усечении)
   status: TaskStatus;
   columnId?: string;         // колонка доски проекта; отсутствует = дефолтная колонка категории
   priority: TaskPriority;

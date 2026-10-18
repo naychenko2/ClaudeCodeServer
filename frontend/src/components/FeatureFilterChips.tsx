@@ -41,20 +41,31 @@ export function FeatureFilterChips({
         scrollbarWidth: 'none',
       }}
     >
-      {FEATURE_FILTER_CHIPS.map(({ value, label }) => (
-        <Chip
-          key={value}
-          variant="toggle"
-          selected={selected === value}
-          minHeight={isMobile ? 36 : undefined}
-          onClick={() => onSelect(value)}
-        >
-          {label}
-          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, opacity: 0.75, color: C.textMuted }}>
-            {counts[value]}
-          </span>
-        </Chip>
-      ))}
+      {FEATURE_FILTER_CHIPS.map(({ value, label }) => {
+        const isSel = selected === value;
+        return (
+          <Chip
+            key={value}
+            variant="toggle"
+            selected={isSel}
+            minHeight={isMobile ? 36 : undefined}
+            onClick={() => onSelect(value)}
+          >
+            {/* Подпись без переноса: на 360 чип «Ждут вас»/«К мержу» не должен
+                распадаться на две строки (высота 36, одна строка с прокруткой) */}
+            <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+            {/* Число: на заливке выбранного чипа (C.accent) — onAccent (читается);
+                не выбран — приглушённый textMuted (макет .fch .cnt) */}
+            <span style={{
+              fontFamily: FONT.mono, fontSize: FS.xs,
+              color: isSel ? C.onAccent : C.textMuted,
+              opacity: isSel ? 0.9 : 0.75,
+            }}>
+              {counts[value]}
+            </span>
+          </Chip>
+        );
+      })}
     </div>
   );
 }

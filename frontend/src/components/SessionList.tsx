@@ -10,7 +10,7 @@ import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
-import { C, FONT, FS, GROUP_COLORS, MODAL_W, R, SP } from '../lib/design';
+import { C, FONT, FS, GROUP_COLORS, MODAL_W, R, SP, TB } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
@@ -1039,6 +1039,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             display: 'flex', alignItems: 'center', gap: 6, width: '100%',
             border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
             padding: `${SP.xs}px ${SP.xs}px`, fontFamily: FONT.sans,
+            // Тач-цель на мобиле: не ниже 40 (TB.iconHitMobile), иначе 22 px (минор m2)
+            minHeight: isMobile ? TB.iconHitMobile : undefined,
           }}
         >
           <span style={{
@@ -1051,7 +1053,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           <span style={{ fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted }}>
             Закрытые
           </span>
-          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{closedFeatures.length}</span>
+          {/* Число = нарисованные группы закрытых фич (фича без чатов секцией не
+              рисуется), а не все закрытые фичи индекса — иначе «4» при 3 группах (m9) */}
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{closedGroups.length}</span>
           {!closedExpanded && (
             <span style={{ marginLeft: 'auto', fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>
               на втором плане

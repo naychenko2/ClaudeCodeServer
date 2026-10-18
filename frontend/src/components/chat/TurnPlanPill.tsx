@@ -36,9 +36,16 @@ function FeaturePillIcon({ model }: { model: PillModel }) {
 // n-2/n-3: на десктопе меню пилюли — фиксированная ширина 380 в обоих режимах
 // («План хода» и «Исполнение фичи»), чтобы переключатель режима не дёргал ширину
 // (раньше фича 336, план 280–296 — по содержимому). min=max → ровно 380. На мобиле —
-// прежние min/max: фича — во всю ширину (fullWidth), план — по содержимому (280–380).
+// прежние min/max (280–380); фактическая ширина на мобиле — во всю (pillMenuFullWidth).
 export function pillMenuWidths(isMobile: boolean): { minWidth: number; maxWidth: number } {
   return isMobile ? { minWidth: 280, maxWidth: 380 } : { minWidth: 380, maxWidth: 380 };
+}
+
+// r-3: fullWidth меню (left/right 8, min/max не действуют): на МОБИЛЕ — в обоих режимах
+// (фича и план), чтобы переключение режима не дёргало ширину (раньше фича fullWidth,
+// план по содержимому 280–296); на ДЕСКТОПЕ — false (фикс. 380 из pillMenuWidths).
+export function pillMenuFullWidth(isMobile: boolean, _featureMode: boolean): boolean {
+  return isMobile;
 }
 
 export function TurnPlanPill({ todos, runs = [], sessionId }: {
@@ -177,8 +184,9 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
             minWidth={menuMin}
             maxWidth={menuMax}
             maxHeight={menuMaxHeight}
-            // K-3: во всю ширину (left/right 8) — только мобила; на десктопе меню фикс. 380.
-            fullWidth={featureMode && isMobile}
+            // r-3: во всю ширину (left/right 8) — на мобиле в обоих режимах (одна ширина);
+            // на десктопе — фикс. 380 (fullWidth=false).
+            fullWidth={pillMenuFullWidth(isMobile, featureMode)}
           >
             <FeatureModeBody
               sessionId={sessionId}
@@ -194,7 +202,8 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
           </Menu>
         ) : (
           // Без фич — прежняя разметка меню (байт-в-байт): заголовок «План хода» + чек-лист.
-          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={menuMin} maxWidth={menuMax} maxHeight={340}>
+          // r-3: на мобиле — во всю ширину (одна ширина с режимом фичи); на десктопе — фикс. 380.
+          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={menuMin} maxWidth={menuMax} maxHeight={340} fullWidth={pillMenuFullWidth(isMobile, false)}>
             <div data-testid="turn-plan-menu" style={{ padding: '9px 12px 11px' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,

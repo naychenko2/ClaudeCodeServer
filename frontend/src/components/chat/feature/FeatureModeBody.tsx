@@ -86,7 +86,7 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
   const body = featureMode && run
     ? (
       <>
-        <FeaturePicker runs={runs} selected={sel} isMobile={isMobile} onSelect={i => {
+        <FeaturePicker runs={runs} selected={sel} isMobile={isMobile} inMenu={variant === 'pill'} onSelect={i => {
           const r = runs[i];
           if (r && sessionId) setSelectedFeatureId(sessionId, r.featureId);
         }} />

@@ -2,7 +2,7 @@
 // Чистая функция — 4 грани (с префиксом / без / пустой·null ref / ref с пробелами)
 // + случай «название = номеру» (без двоеточия префикс не распознаётся, возвращается как есть).
 import { describe, expect, it } from 'vitest';
-import { stripStepRefPrefix } from './stepRef';
+import { stripStepRefPrefix, stepDisplayName } from './stepRef';
 
 describe('stripStepRefPrefix', () => {
   it('с префиксом: «Ш1: парсер» → «парсер»', () => {
@@ -24,5 +24,21 @@ describe('stripStepRefPrefix', () => {
 
   it('название = номеру: без двоеточия префикс не распознаётся, возвращается как есть', () => {
     expect(stripStepRefPrefix('Ш8', 'Ш8')).toBe('Ш8');
+  });
+});
+
+// r-2: название шага для строки, где рядом уже моно-номер (общий хелпер NowCard/строки шага).
+describe('stepDisplayName', () => {
+  it('нормальное название → возвращается (ведущий «{stepRef}:» отрезается)', () => {
+    expect(stepDisplayName('Ш1: пересборка', 'Ш1')).toBe('пересборка');
+    expect(stepDisplayName('Бэк-шаг', 'D1')).toBe('Бэк-шаг');
+  });
+
+  it('название = номеру → null (не «Ш8 Ш8»)', () => {
+    expect(stepDisplayName('Ш8', 'Ш8')).toBeNull();
+  });
+
+  it('пустое название → null (остаётся только номер)', () => {
+    expect(stepDisplayName('', 'Ш8')).toBeNull();
   });
 });

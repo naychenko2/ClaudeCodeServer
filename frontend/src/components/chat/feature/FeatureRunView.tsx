@@ -8,7 +8,7 @@ import { prefillComposer } from '../../../lib/ai/startChat';
 import { api } from '../../../lib/api';
 import { getPersonaById, usePersonasVersion, ensurePersonasLoaded } from '../../../lib/personas';
 import { showToast } from '../../../lib/toast';
-import { stripStepRefPrefix } from '../../../lib/stepRef';
+import { stripStepRefPrefix, stepDisplayName } from '../../../lib/stepRef';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary, FeatureTask } from '../../../types/featureRun';
 import { PipelineFlow } from './PipelineFlow';
@@ -149,12 +149,10 @@ function NowCard({ item }: { item: FeatureNow }) {
   const now = useMinuteTick();
   const persona = item.personaId ? getPersonaById(item.personaId) : undefined;
   const line1 = [persona?.name, item.stepRef].filter(Boolean).join(' · ');
-  // n-4: вторая строка — заголовок задачи; ведущий «{stepRef}:» отрезается (номер уже в
-  // строке 1). Пустое название или название = номер шага дублируют строку 1 — строку 2
-  // не рисуем (не «Ш8 Ш8»).
-  const stripped = stripStepRefPrefix(item.title, item.stepRef);
-  const ref = (item.stepRef ?? '').trim();
-  const line2 = !stripped || stripped === ref ? null : stripped;
+  // n-4/r-2: вторая строка — заголовок задачи (общий хелпер stepDisplayName): ведущий
+  // «{stepRef}:» отрезается (номер уже в строке 1); пустое название или название = номеру
+  // шага дублируют строку 1 — строку 2 не рисуем (не «Ш8 Ш8»).
+  const line2 = stepDisplayName(item.title, item.stepRef);
   const elapsed = elapsedLabel(item.startedAt, now);
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>

@@ -9,14 +9,15 @@
 import { useEffect } from 'react';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import {
-  setLocalModelAdmin, shouldPollConfigured, useLocalModelAdmin,
+  setLocalModelAdmin, configuredSource, useLocalModelAdmin,
   useLocalModelConfigured, useLocalModelConfiguredPolling,
 } from './useLocalModelStats';
 
 export function useLocalModelWatcher(isAdmin: boolean): void {
   const flag = useFeature(FLAGS.localModelStats);
   useEffect(() => { setLocalModelAdmin(isAdmin); }, [isAdmin]);
-  useLocalModelConfiguredPolling(shouldPollConfigured(flag, isAdmin));
+  // Админ — /stats (флаг гейтит), не-админ — /stats/media (без флага)
+  useLocalModelConfiguredPolling(configuredSource(flag, isAdmin));
   // Подписка страницы на стор (значение не нужно — нужен ререндер)
   useLocalModelConfigured();
   useLocalModelAdmin();

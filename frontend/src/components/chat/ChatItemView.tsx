@@ -13,7 +13,7 @@ import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { FeatureModeBody } from './feature/FeatureModeBody';
 import { useFeatureRunsSnapshot } from '../../lib/featureRuns';
-import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
+import { C, FONT, SHADOW, R, FS, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useSpheres } from '../../lib/useSpheres';
 import { isZoneRefusal, OPEN_COMPANION_PICKER_EVENT } from '../../lib/personaZone';
@@ -61,9 +61,9 @@ import { TeamEscalationView } from './TeamEscalationView';
 import { teamPlanningDoneText } from '../../lib/teamImplement';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 
-// K-1 (360): поле справа у строки пилюли — не меньше ширины плавающего аватара (FAB,
-// 36 px на мобиле), чтобы правый край строки не заходил под него.
-const PILL_ROW_RIGHT_PAD = 36;
+// K-1/n-1 (360): поле справа у строки пилюли — по тач-размеру (TB.iconHitMobile, 40 px),
+// чтобы правый край строки не заходил под плавающий аватар (FAB) на 4 px.
+const PILL_ROW_RIGHT_PAD = TB.iconHitMobile;
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {

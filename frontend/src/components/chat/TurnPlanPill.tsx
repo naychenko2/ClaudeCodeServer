@@ -33,6 +33,14 @@ function FeaturePillIcon({ model }: { model: PillModel }) {
   return <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={model.iconColor} />;
 }
 
+// n-2/n-3: на десктопе меню пилюли — фиксированная ширина 380 в обоих режимах
+// («План хода» и «Исполнение фичи»), чтобы переключатель режима не дёргал ширину
+// (раньше фича 336, план 280–296 — по содержимому). min=max → ровно 380. На мобиле —
+// прежние min/max: фича — во всю ширину (fullWidth), план — по содержимому (280–380).
+export function pillMenuWidths(isMobile: boolean): { minWidth: number; maxWidth: number } {
+  return isMobile ? { minWidth: 280, maxWidth: 380 } : { minWidth: 380, maxWidth: 380 };
+}
+
 export function TurnPlanPill({ todos, runs = [], sessionId }: {
   todos: TodoItem[];
   runs?: FeatureRun[];
@@ -93,8 +101,10 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
     + (showDot && model?.ariaExtra ? ` · ${model.ariaExtra}` : '');
 
   // Потолок меню: режим фичи выше (520 десктоп / 560 мобила; во всю ширину left/right 8 —
-  // только мобила, на десктопе меню карточкой 280–380, как режим «План»), план — как раньше (340).
+  // только мобила), план — как раньше (340).
   const menuMaxHeight = isMobile ? (featureMode ? 560 : 340) : (featureMode ? 520 : 340);
+  // n-2/n-3: ширина меню — одна у обоих режимов (380 на десктопе, 280–380 на мобиле).
+  const { minWidth: menuMin, maxWidth: menuMax } = pillMenuWidths(isMobile);
 
   return (
     <>
@@ -164,10 +174,10 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
           <Menu
             onClose={() => setMenu(null)}
             anchor={menu}
-            minWidth={280}
-            maxWidth={380}
+            minWidth={menuMin}
+            maxWidth={menuMax}
             maxHeight={menuMaxHeight}
-            // K-3: во всю ширину (left/right 8) — только мобила; на десктопе меню карточкой 280–380.
+            // K-3: во всю ширину (left/right 8) — только мобила; на десктопе меню фикс. 380.
             fullWidth={featureMode && isMobile}
           >
             <FeatureModeBody
@@ -184,7 +194,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
           </Menu>
         ) : (
           // Без фич — прежняя разметка меню (байт-в-байт): заголовок «План хода» + чек-лист.
-          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={280} maxWidth={380} maxHeight={340}>
+          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={menuMin} maxWidth={menuMax} maxHeight={340}>
             <div data-testid="turn-plan-menu" style={{ padding: '9px 12px 11px' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,

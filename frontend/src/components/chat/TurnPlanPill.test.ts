@@ -9,7 +9,7 @@
 import { createElement } from 'react';
 import { act } from 'react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { TurnPlanPill } from './TurnPlanPill';
+import { TurnPlanPill, pillMenuWidths } from './TurnPlanPill';
 import { __test, openPillMenu } from '../../lib/featureRuns';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './__tests__/fakeDom';
@@ -72,5 +72,14 @@ describe('TurnPlanPill: F9 (сигнал «открыть меню»)', () => {
     act(() => { openPillMenu('sess-B'); });
     expect(bodyHasMenu(), 'сигнал чата B меню чата A не открыл').toBe(false);
     root.unmount();
+  });
+});
+
+describe('TurnPlanPill: n-2/n-3 (ширина меню)', () => {
+  it('десктоп: фиксированная 380 в обоих режимах (план и фича)', () => {
+    expect(pillMenuWidths(false)).toEqual({ minWidth: 380, maxWidth: 380 });
+  });
+  it('мобила: прежние min/max (280–380; фича — во всю ширину)', () => {
+    expect(pillMenuWidths(true)).toEqual({ minWidth: 280, maxWidth: 380 });
   });
 });

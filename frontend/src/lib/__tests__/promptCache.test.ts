@@ -3,19 +3,19 @@ import type { ChatItem, PromptCacheInfo } from '../../types';
 import { cacheNoteText, cacheTipText, cacheWarnMaxSec, expiringThresholdMs, promptCacheState, rewriteCostUsd } from '../promptCache';
 
 describe('cacheTipText', () => {
-  it('состояние с остатком в минутах', () => {
-    expect(cacheTipText('warm', false, 42 * 60_000)).toBe('Кэш тёплый · 42 мин');
-    expect(cacheTipText('expiring', false, 90_000)).toBe('Кэш скоро остынет · 2 мин');
-    expect(cacheTipText('warm', false)).toBe('Кэш тёплый');
+  it('подпись состояния и остаток значением в колонке', () => {
+    expect(cacheTipText('warm', false, 42 * 60_000)).toEqual({ label: 'Кэш тёплый', value: '42 мин' });
+    expect(cacheTipText('expiring', false, 90_000)).toEqual({ label: 'Кэш скоро остынет', value: '2 мин' });
+    expect(cacheTipText('warm', false)).toEqual({ label: 'Кэш тёплый', value: undefined });
   });
 
   it('остывший — без остатка', () => {
-    expect(cacheTipText('cold', false, 0)).toBe('Кэш остыл');
+    expect(cacheTipText('cold', false, 0)).toEqual({ label: 'Кэш', value: 'остыл' });
   });
 
   it('пока идёт ход — без остатка при любом статусе', () => {
     for (const status of ['warm', 'expiring', 'cold'] as const)
-      expect(cacheTipText(status, true, 42 * 60_000)).toBe('Кэш: идёт ход');
+      expect(cacheTipText(status, true, 42 * 60_000)).toEqual({ label: 'Кэш', value: 'идёт ход' });
   });
 });
 

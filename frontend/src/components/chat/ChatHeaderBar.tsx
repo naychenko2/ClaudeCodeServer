@@ -816,14 +816,23 @@ function CacheTipLine({ items, isWaiting }: { items: ChatItem[]; isWaiting: bool
   const state = usePromptCache(items);
   if (state.status === 'unknown') return null;
   const { status, remainingMs } = state;
+  const { label, value } = cacheTipText(status, isWaiting, remainingMs);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
-      <span style={{ width: 12, flexShrink: 0, display: 'inline-flex', justifyContent: 'center' }}>
-        <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
-          cold={!isWaiting && status === 'cold'} spin={isWaiting} />
-      </span>
-      <span>{cacheTipText(status, isWaiting, remainingMs)}</span>
-    </div>
+    <TipRow label={label} value={value} icon={
+      <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
+        cold={!isWaiting && status === 'cold'} spin={isWaiting} />} />
+  );
+}
+
+// Строка подсказки пилюли — три ячейки сетки родителя (пип | подпись | значение), без
+// своей обёртки: так значения всех строк встают одной колонкой по правому краю
+function TipRow({ icon, label, value }: { icon: ReactNode; label: string; value?: string }) {
+  return (
+    <>
+      <span style={{ display: 'inline-flex', justifyContent: 'center' }}>{icon}</span>
+      <span>{label}</span>
+      <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{value ?? ''}</span>
+    </>
   );
 }
 
@@ -1007,34 +1016,40 @@ export function RingPillBadge(props: {
 
   // Подсказка и aria-label — всё полными подписями, доступно без клика. У строк, за
   // которыми стоит кольцо, — пип этого кольца (как в поповере): так видно, что есть что
-  const parts: { text: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] } }[] = [];
-  if (wfActive) parts.push({ text: `Workflow ${activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'}` });
-  if (apiCost) parts.push({ text: `Claude по API-ключу ${fmtUsd(cost.cost)}` });
+  // Строка — подпись и значение: значения (проценты, остатки) идут своей колонкой по правому
+  // краю с моноширинными цифрами, чтобы 9% и 55% стояли друг под другом
+  const parts: { label: string; value?: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] } }[] = [];
+  if (wfActive) parts.push({ label: 'Workflow', value: activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт' });
+  if (apiCost) parts.push({ label: 'Claude по API-ключу', value: fmtUsd(cost.cost) });
   const ctxPip = { slot: 0 as const, level: estimate.level };
-  if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
-  else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
+  if (isCompacting) parts.push({ label: 'Контекст', value: 'идёт сжатие', pip: ctxPip });
+  else if (showCtx) parts.push({ label: 'Контекст', value: estimate.pct !== undefined ? `${estimate.pct}%` : 'сжат', pip: ctxPip });
   if (isCliProvider) {
     if (balance) parts.push({
-      text: `${providerName}: ${isQuota ? 'израсходовано' : 'остаток'} ${providerPillLabel(balance)}`,
+      label: `${providerName}: ${isQuota ? 'израсходовано' : 'остаток'}`, value: providerPillLabel(balance),
       pip: isQuota ? { slot: 1, level: provLevel } : undefined,
     });
   } else {
     parts.push(...ratePillSegments(windows).map((s, i) => ({
-      text: `${windowLabel(s.limitType)} ${s.text}${s.stale ? ' (данные устарели)' : ''}`,
+      label: `${windowLabel(s.limitType)}${s.stale ? ' (данные устарели)' : ''}`, value: s.text,
       pip: i < RING_WINDOWS ? { slot: (i + 1) as 1 | 2, level: s.level } : undefined,
     })));
   }
-  const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
+  const partText = (p: { label: string; value?: string }) => (p.value ? `${p.label} ${p.value}` : p.label);
+  const title = (parts.length > 0 ? parts.map(partText).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
-      {parts.length > 0 ? parts.map(p => (
-        <div key={p.text} style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
-          {/* Строки без кольца — с пустым местом под пип, чтобы текст шёл одной колонкой */}
-          {p.pip ? <MeterPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
-          <span>{p.text}</span>
+      {/* Сетка «пип | подпись | значение»: строки без кольца держат пустую ячейку под пип */}
+      {(parts.length > 0 || cacheItems) && (
+        <div style={{ display: 'grid', gridTemplateColumns: '12px auto auto', alignItems: 'center', columnGap: SP.xs + 2, rowGap: SP.xxs + 1 }}>
+          {parts.map(p => (
+            <TipRow key={p.label} label={p.label} value={p.value}
+              icon={p.pip ? <MeterPip slot={p.pip.slot} level={p.pip.level} /> : null} />
+          ))}
+          {cacheItems && <CacheTipLine items={cacheItems} isWaiting={props.isWaiting} />}
         </div>
-      )) : <div>Контекст и расход сессии</div>}
-      {cacheItems && <CacheTipLine items={cacheItems} isWaiting={props.isWaiting} />}
+      )}
+      {parts.length === 0 && !cacheItems && <div>Контекст и расход сессии</div>}
       <div style={{ color: C.textMuted, fontSize: FS.xs }}>Нажмите для деталей</div>
     </div>
   );

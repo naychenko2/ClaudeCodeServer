@@ -60,6 +60,9 @@ function FeatureChip({ run, on, isPill, isMobile, onPick }: {
         background: bg,
         color: on ? C.textHeading : C.textSecondary,
         borderRadius: R.md, padding: '2px 8px',
+        // M-1: у <button> браузер не наследует font-family → без inherit чипы были Arial
+        // среди Hanken Grotesk; ● унаследует сам.
+        fontFamily: 'inherit',
         minHeight: isMobile ? 40 : 26, fontSize: 12,
         cursor: 'pointer', fontWeight: on ? 600 : 400,
         boxShadow: focused ? SHADOW.focus : 'none',
@@ -95,7 +98,10 @@ export function FeaturePicker({ runs, selected, onSelect, isMobile = false }: {
         aria-label="Фича"
         style={{
           display: 'flex', alignItems: 'center', gap: 4,
-          flexWrap: 'nowrap', overflowX: 'auto', scrollbarWidth: 'none',
+          // M-4: десктоп — перенос (все чипы видны); мобила — одна строка с прокруткой.
+          flexWrap: isMobile ? 'nowrap' : 'wrap',
+          overflowX: isMobile ? 'auto' : 'visible',
+          scrollbarWidth: 'none',
           paddingBottom: 2, marginBottom: 2,
         }}
       >

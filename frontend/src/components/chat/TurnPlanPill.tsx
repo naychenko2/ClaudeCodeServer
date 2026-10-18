@@ -175,8 +175,9 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
               runs={runs}
               isMobile={isMobile}
               variant="pill"
-              headerPad="9px 12px 11px"
-              bodyPad="9px 12px 11px"
+              // M-2: шапка padding-bottom 7 + (margin-bottom 5 даёт bodyPad-top 5); тело top 0 (макет .hd/.in).
+              headerPad="9px 12px 7px"
+              bodyPad="5px 12px 11px"
               headerBorder={`1px solid ${C.divider}`}
             />
           </Menu>

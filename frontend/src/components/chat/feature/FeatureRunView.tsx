@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { C, FONT, R, FS, SP } from '../../../lib/design';
+import { C, FONT, R, FS, SP, TB } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { Button, ConfirmDialog } from '../../ui';
 import { openTaskInSection } from '../../../lib/tasks';
@@ -170,8 +170,9 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   const now = useMinuteTick();
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  // Мобила — md (minHeight 40), десктоп — xs (Майя M3: у sm minHeight 32, тач-цель 40 даёт md).
-  const size: 'xs' | 'md' = isMobile ? 'md' : 'xs';
+  // M-5: кнопки sm (minHeight 32); на мобиле minHeight 40 (TB.iconHitMobile) — тач-цель.
+  const size: 'xs' | 'sm' = isMobile ? 'sm' : 'xs';
+  const btnStyle = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   const mins = minutesSince(att.since, now);
 
   if (att.kind === 'wait') {
@@ -190,12 +191,12 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
           {isMerge ? (
             <>
               {/* «Попросить Марка» — затравка в композере оркестратора; саму задачу Марку не создаёт. */}
-              <Button size={size} variant="secondary" onClick={() => prefillComposer(mergePrefill(run))}>
+              <Button size={size} variant="secondary" style={btnStyle} onClick={() => prefillComposer(mergePrefill(run))}>
                 Попросить Марка
               </Button>
               {/* У мержа att.taskId — это финал: «Итог финала» открывает его; без taskId кнопки нет (Майя M4). */}
               {att.taskId && (
-                <Button size={size} variant="ghost" onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
+                <Button size={size} variant="ghost" style={btnStyle} onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
                   Итог финала
                 </Button>
               )}
@@ -203,7 +204,7 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
           ) : (
             // Явное ожидание (reason ≠ «мерж»): одна кнопка «Открыть задачу»; без taskId кнопок нет (Майя M4).
             att.taskId && (
-              <Button size={size} variant="secondary" onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
+              <Button size={size} variant="secondary" style={btnStyle} onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
                 Открыть задачу
               </Button>
             )
@@ -230,11 +231,11 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <Button size={size} variant="secondary" loading={restarting} onClick={() => setConfirmRestart(true)}>
+        <Button size={size} variant="secondary" style={btnStyle} loading={restarting} onClick={() => setConfirmRestart(true)}>
           Перезапустить
         </Button>
         {att.linkedSessionId && (
-          <Button size={size} variant="ghost" onClick={() => { if (att.linkedSessionId) void openChatById(att.linkedSessionId); }}>
+          <Button size={size} variant="ghost" style={btnStyle} onClick={() => { if (att.linkedSessionId) void openChatById(att.linkedSessionId); }}>
             Чат исполнителя
           </Button>
         )}
@@ -307,23 +308,18 @@ function Legend() {
 // Главная карточка фичи.
 export function FeatureRunView({ run }: { run: FeatureRun }) {
   const isMobile = useIsMobile();
-  const pad = isMobile ? 8 : 10;
-
-  // Прогресс: доля решённых витков (0..1) → %; ?? 0 — без ?? в HTML «NaN%» (Глеб).
-  const pct = Math.round((run.progress ?? 0) * 100);
   const hasSteps = (run.steps?.length ?? 0) > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: pad }}>
-      {/* Шапка: имя + ветка + прогресс (baseline, перенос разрешён) */}
+    // M-2: собственный padding убран — поля задаёт поверхность (меню: headerPad/bodyPad);
+    // остаётся только вертикальный зазор 10 между блоками.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Шапка: имя + ветка (M-3: счётчик acc/tot · ↺N — в FeatureModeBody, % из шапки убран) */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{run.epic.title}</span>
         {run.epic.worktreeBranch && (
           <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{run.epic.worktreeBranch}</span>
         )}
-        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {pct}%
-        </span>
       </div>
 
       {/* Плашка-тревога: ждёт вас / исполнитель упал (с действиями) */}

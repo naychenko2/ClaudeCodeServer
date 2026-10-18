@@ -6,19 +6,20 @@ import {
   isLocalModelPanelVisible,
   setLocalModelAdmin,
   setLocalModelConfigured,
-  shouldPollConfigured,
+  configuredSource,
   startConfiguredPolling,
 } from './useLocalModelStats';
 
-describe('shouldPollConfigured: сторож опрашивает только при флаг && admin', () => {
-  it('флаг + admin — опрос идёт', () => {
-    expect(shouldPollConfigured(true, true)).toBe(true);
+describe('configuredSource: откуда сторож берёт configured', () => {
+  it('admin + флаг — /stats', () => {
+    expect(configuredSource(true, true)).toBe('stats');
   });
-  it('без флага — нет', () => {
-    expect(shouldPollConfigured(false, true)).toBe(false);
+  it('admin без флага — нет запросов (null)', () => {
+    expect(configuredSource(false, true)).toBeNull();
   });
-  it('не admin — нет', () => {
-    expect(shouldPollConfigured(true, false)).toBe(false);
+  it('не admin — /stats/media (флаг не гейтит)', () => {
+    expect(configuredSource(true, false)).toBe('media');
+    expect(configuredSource(false, false)).toBe('media');
   });
 });
 

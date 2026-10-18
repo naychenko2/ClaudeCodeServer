@@ -201,3 +201,19 @@ export function mockLocalModelMedia(state: LocalModelMediaMockState = 'run'): Lo
       };
   }
 }
+
+// scope=self (не-админ): только свои строки, gpus=null, queueAhead — сколько
+// задач перед пользователем в очереди. База — то же состояние, но отфильтрованное
+// по own (чужие строки сервер не отдаёт).
+export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run'): LocalModelMedia {
+  const m = mockLocalModelMedia(state);
+  return {
+    ...m,
+    scope: 'self',
+    queueAhead: 3,
+    gpus: null,
+    running: m.running.filter(r => r.own),
+    queue: m.queue.filter(q => q.own),
+    lastHour: m.lastHour.filter(d => d.own),
+  };
+}

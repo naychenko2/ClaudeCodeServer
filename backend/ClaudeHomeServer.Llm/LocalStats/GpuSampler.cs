@@ -7,6 +7,10 @@ namespace ClaudeHomeServer.Services.Llm;
 // Одна видеокарта хоста из nvidia-smi. Ключ карты — Uuid, Index — для подписи.
 // Числовые поля nullable: nvidia-smi отдаёт [N/A] для недоступного поля (например,
 // power.draw на старых драйверах) — тогда null, а не 0.
+//
+// Поля для вкладки «Железо» (Б1): fan.speed, clocks.*, pstate, pcie.*, utilization.memory,
+// clocks_event_reasons.* (троттлинг) и pci.bus_id (связка с файлом помощника ccs-gddr6
+// по busId). Память GDDR6X и hotspot берутся НЕ отсюда, а из файла помощника (см. Gddr6HelperReader).
 public sealed record GpuSample
 {
     public int Index { get; init; }
@@ -14,14 +18,35 @@ public sealed record GpuSample
     public string Name { get; init; } = "";
     // Утилизация GPU, %.
     public int? Utilization { get; init; }
+    // Утилизация шины памяти, %.
+    public int? UtilizationMemory { get; init; }
     // Память, МБ.
     public long? MemoryUsed { get; init; }
     public long? MemoryTotal { get; init; }
-    // Температура, °C.
+    // Температура ядра, °C.
     public int? Temperature { get; init; }
+    // Вентилятор, %.
+    public int? FanSpeed { get; init; }
+    // Частоты, МГц.
+    public int? ClocksSm { get; init; }
+    public int? ClocksMaxSm { get; init; }
+    public int? ClocksMem { get; init; }
+    // Состояние питания (P0..P15); null — [N/A].
+    public string? Pstate { get; init; }
+    // PCIe: поколение и ширина ссылки (текущие).
+    public int? PcieGen { get; init; }
+    public int? PcieWidth { get; init; }
     // Мощность, Вт.
     public double? PowerDraw { get; init; }
     public double? PowerLimit { get; init; }
+    // Причины троттлинга (clocks_event_reasons.*): true — активен, false — «Not Active»,
+    // null — [N/A] (поле не поддержано).
+    public bool? SwPowerCap { get; init; }
+    public bool? HwThermalSlowdown { get; init; }
+    public bool? SwThermalSlowdown { get; init; }
+    // PCI bus id в формате nvidia-smi (00000000:0B:00.0). Связка с помощником — по
+    // канонической форме (CanonicalBusId).
+    public string BusId { get; init; } = "";
 }
 
 // Сэмплер видеокарт: по запросу (не в фоне) запускает nvidia-smi на хосте бэкенда.
@@ -36,9 +61,16 @@ public interface IGpuSampler
 public sealed class GpuSampler : IGpuSampler
 {
     // nvidia-smi: csv,noheader,nounits — числа без единиц, [N/A] для недоступного поля.
+    // Порядок полей ПОСЛЕ имени фиксирован (см. QueryArgs и ParseCsv): 18 полей.
     private const string QueryArgs =
-        "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit" +
+        "--query-gpu=index,uuid,name,utilization.gpu,utilization.memory,memory.used,memory.total," +
+        "temperature.gpu,fan.speed,clocks.sm,clocks.max.sm,clocks.mem,pstate,pcie.link.gen.current," +
+        "pcie.link.width.current,power.draw,power.limit,clocks_event_reasons.sw_power_cap," +
+        "clocks_event_reasons.hw_thermal_slowdown,clocks_event_reasons.sw_thermal_slowdown,pci.bus_id" +
         " --format=csv,noheader,nounits";
+
+    // Число полей после имени (name) — фиксированный хвост, который ParseCsv читает справа.
+    private const int FieldsAfterName = 18;
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(3);
 
@@ -147,10 +179,11 @@ public sealed class GpuSampler : IGpuSampler
     }
 
     // Чистая функция: разбирает CSV nvidia-smi (csv,noheader,nounits).
-    // Формат строки: index,uuid,name,utilization,memory.used,memory.total,temperature,power.draw,power.limit
-    // [N/A] в числовом поле → null. Имя (name) может содержать запятые — но nvidia-smi
-    // его не экранирует, поэтому имя берём как всё между 2-й и 4-й запятой (uuid + name).
-    public static IReadOnlyList<GpuSample> ParseCsv(string text)
+    // Формат строки: index, uuid, name, <18 полей в фиксированном порядке, см. QueryArgs>.
+    // name — поле 3 (может содержать запятые, nvidia-smi их не экранирует), поэтому имя
+    // берём как всё между uuid (2-е) и фиксированным хвостом из 18 полей (справа).
+    // [N/A] в числовом поле → null; [N/A] в clocks_event_reasons.* → null (не поддержано).
+    public static IReadOnlyList<GpuSample> ParseCsv(string? text)
     {
         var result = new List<GpuSample>();
         if (string.IsNullOrWhiteSpace(text))
@@ -161,25 +194,36 @@ public sealed class GpuSampler : IGpuSampler
             var line = rawLine.TrimEnd('\r').Trim();
             if (line.Length == 0) continue;
 
-            // Разбиваем на поля: 9 колонок, name — вторая по счёту (может содержать запятые,
-            // но на практике nvidia-smi не экранирует; берём жёстко 9 полей, name — склейка 3..(n-6)).
             var parts = line.Split(',');
-            if (parts.Length < 9) continue;
+            // Минимум: index, uuid, name (1 поле) + 18 полей хвоста = 21.
+            if (parts.Length < 2 + 1 + FieldsAfterName) continue;
 
-            // index=0, uuid=1, name=2..(len-7), utilization=len-6, mem.used=len-5, mem.total=len-4,
-            // temp=len-3, power.draw=len-2, power.limit=len-1.
-            var name = string.Join(",", parts, 2, parts.Length - 8);
+            // index=0, uuid=1, name=2..(len-19), хвост 18 полей = len-18..len-1.
+            var name = string.Join(",", parts, 2, parts.Length - 2 - FieldsAfterName);
+            var p = parts.Length;
             result.Add(new GpuSample
             {
                 Index = ParseInt(parts[0]) ?? 0,
                 Uuid = parts[1].Trim(),
                 Name = name.Trim(),
-                Utilization = ParseInt(parts[parts.Length - 6]),
-                MemoryUsed = ParseLong(parts[parts.Length - 5]),
-                MemoryTotal = ParseLong(parts[parts.Length - 4]),
-                Temperature = ParseInt(parts[parts.Length - 3]),
-                PowerDraw = ParseDouble(parts[parts.Length - 2]),
-                PowerLimit = ParseDouble(parts[parts.Length - 1]),
+                Utilization = ParseInt(parts[p - 18]),
+                UtilizationMemory = ParseInt(parts[p - 17]),
+                MemoryUsed = ParseLong(parts[p - 16]),
+                MemoryTotal = ParseLong(parts[p - 15]),
+                Temperature = ParseInt(parts[p - 14]),
+                FanSpeed = ParseInt(parts[p - 13]),
+                ClocksSm = ParseInt(parts[p - 12]),
+                ClocksMaxSm = ParseInt(parts[p - 11]),
+                ClocksMem = ParseInt(parts[p - 10]),
+                Pstate = ParsePstate(parts[p - 9]),
+                PcieGen = ParseInt(parts[p - 8]),
+                PcieWidth = ParseInt(parts[p - 7]),
+                PowerDraw = ParseDouble(parts[p - 6]),
+                PowerLimit = ParseDouble(parts[p - 5]),
+                SwPowerCap = ParseThrottle(parts[p - 4]),
+                HwThermalSlowdown = ParseThrottle(parts[p - 3]),
+                SwThermalSlowdown = ParseThrottle(parts[p - 2]),
+                BusId = parts[p - 1].Trim(),
             });
         }
         return result;
@@ -205,5 +249,40 @@ public sealed class GpuSampler : IGpuSampler
         s = s.Trim();
         if (s == "[N/A]" || s.Length == 0) return null;
         return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : null;
+    }
+
+    // pstate: nvidia-smi отдаёт "P0".."P15" (или [N/A]). Храним строку как есть.
+    private static string? ParsePstate(string s)
+    {
+        s = s.Trim();
+        if (s == "[N/A]" || s.Length == 0) return null;
+        return s;
+    }
+
+    // clocks_event_reasons.*: "Active" → true, "Not Active" → false, "[N/A]" → null.
+    private static bool? ParseThrottle(string s)
+    {
+        s = s.Trim();
+        if (s == "[N/A]" || s.Length == 0) return null;
+        if (s == "Active") return true;
+        if (s == "Not Active") return false;
+        return null; // неизвестное значение — не доверяем
+    }
+
+    // Каноническая форма PCI bus id для связки nvidia-smi ↔ файл помощника ccs-gddr6:
+    // нижний регистр + домен, дополненный нулями до 8 hex. nvidia-smi отдаёт
+    // "00000000:0B:00.0" (8-значный домен, верхний регистр), помощник — "0000:0b:00.0"
+    // (4-значный домен, нижний): обе формы сводятся к "00000000:0b:00.0".
+    public static string CanonicalBusId(string? busId)
+    {
+        if (string.IsNullOrWhiteSpace(busId)) return "";
+        var s = busId.Trim().ToLowerInvariant();
+        var colon = s.IndexOf(':');
+        if (colon < 0) return s;
+        var domain = s[..colon];
+        var rest = s[colon..];
+        while (domain.Length < 8)
+            domain = "0" + domain;
+        return domain + rest;
     }
 }

@@ -1395,11 +1395,10 @@ def usage_totals(usage):
 
     `(None, None)` — если цифр нет вовсе (чужой формат ответа, оборванный поток).
 
-    У `input_tokens` роутера vLLM ДВЕ семантики, и различать их обязательно (та же развилка,
-    что в `diff_miss.цифры`): в `message_start` это только то, что прошло МИМО кэша, а в
-    финальном `message_delta` — ВЕСЬ промпт, кэш включительно. Сложишь слагаемые вслепую —
-    промпт удвоится, и доля из кэша в карточке соврёт вдвое. Признак полной формы простой:
-    `input_tokens` не меньше `cache_read_input_tokens`.
+    Копилка (`merge_usage`) берёт по максимуму, поэтому `input_tokens` в ней — это `input` из
+    `message_start` роутера vLLM, то есть ВЕСЬ промпт (дельта даёт только часть мимо кэша, она
+    меньше и не перекрывает). Тогда `input_tokens` не меньше `cache_read_input_tokens` — полная
+    форма, промпт = `input`. Если старта в копилке не было (чужой формат), слагаемые складываются.
     """
     вход = usage.get("input_tokens") or 0
     чтение = usage.get("cache_read_input_tokens")
@@ -1408,26 +1407,29 @@ def usage_totals(usage):
     return (чтение if isinstance(чтение, int) else None), (промпт or None)
 
 
-def normalize_usage(usage):
-    """Нормализует `usage` к семантике Anthropic: `input_tokens` — только то, что мимо кэша.
+def normalize_usage(usage, промпт_старта=None):
+    """Правит `message_delta.usage`, если `input_tokens` в нём — ВЕСЬ промпт, кэш включительно.
 
-    Роутер vLLM в финальном `message_delta` кладёт в `input_tokens` ВЕСЬ промпт, кэш включительно
-    (в `message_start` — только то, что мимо кэша). CLI складывает `input + cache_read +
-    cache_creation` и видит контекст вдвое больше. Признак полной формы — тот же, что в
-    `usage_totals` (`_полная_форма`): тогда `input_tokens` переписывается на
-    `input − cache_read − cache_creation` (не ниже 0).
+    Снято живьём 2026-10-18 (README, «Нормализация usage»): роутер vLLM шлёт `message_start` с
+    `input_tokens` = ВЕСЬ промпт (оценка до поиска в кэше), а финальный `message_delta` — уже в
+    семантике Anthropic: `input` = только мимо кэша, `cache_read` и `cache_creation` отдельно, и
+    `input + cache_read + cache_creation` = промпт. «Полная форма» в дельте (`input` = весь промпт
+    при ненулевом кэше) не наблюдалась, но защита оставлена: опознаётся ТОЧНО — `input` дельты
+    равен `input` старта (в правильной форме он строго меньше при ненулевом кэше). Прежний
+    признак `input ≥ cache_read` был ошибочным: он принимал за полную форму любой промах кэша
+    (`input 773 ≥ read 0`) и обнулял `input`, а CLI берёт `input` дельты только когда он больше
+    нуля, иначе остаётся старт (весь промпт) — и промпт удваивался.
 
     Возвращает (новый usage, изменилось ли). Вход не мутирует.
     """
-    if not isinstance(usage, dict) or not _полная_форма(usage):
+    if not isinstance(usage, dict) or not промпт_старта:
         return usage, False
     вход = usage.get("input_tokens") or 0
     чтение = usage.get("cache_read_input_tokens") or 0
     создание = usage.get("cache_creation_input_tokens") or 0
-    новый_вход = max(0, вход - чтение - создание)
-    if новый_вход == вход:
-        return usage, False  # кэша нет — менять нечего
-    return dict(usage, input_tokens=новый_вход), True
+    if вход != промпт_старта or чтение + создание <= 0:
+        return usage, False
+    return dict(usage, input_tokens=max(0, вход - чтение - создание)), True
 
 
 def post_event(payload, connector=None):
@@ -2006,14 +2008,20 @@ class ВставкаВJson:
 
 
 class НормализаторUsage:
-    """Нормализует `usage` ответа ЛОКАЛЬНОЙ модели к семантике Anthropic (см. `normalize_usage`).
+    """Приводит `usage` ответа ЛОКАЛЬНОЙ модели к тому, что CLI соберёт верно (см. `normalize_usage`).
 
-    Роутер vLLM в финальном `message_delta` кладёт в `input_tokens` весь промпт, кэш включительно,
-    и CLI складывает `input + cache_read + cache_creation` вслепую, удваивая контекст. Нормализуем
-    только локальный ответ: облачный (MiniMax) уже в семантике Anthropic, и его не трогаем.
+    Живьём снято 2026-10-18: `message_start` vLLM несёт `input_tokens` = ВЕСЬ промпт, а
+    `message_delta` — `input` мимо кэша + `cache_read` + `cache_creation` (сумма = промпт). CLI
+    берёт `input_tokens` дельты, только если он больше нуля; при промахе кэша после сжатия
+    (`input` 773, creation 128128) или полном попадании (`input` 0) остаётся `input` старта —
+    весь промпт, и итог выходит вдвое больше реального. Лечим там, где корень: `input_tokens`
+    в `message_start` обнуляем — настоящую цифру CLI получит из дельты (она всегда следует за
+    стартом), а нулевая дельта больше не оставляет в итоге весь промпт.
 
-    SSE: правит `usage` в событии `message_delta` (единственное, где цифры кэша приходят).
-    Не-SSE: копиит тело целиком, правит верхнеуровневый `usage`.
+    SSE: правит `message_start` (обнуляет `input_tokens`, запоминает его как промпт) и страхует
+    `message_delta` от «полной формы». Не-SSE (один объект `usage` в правильной форме, снято
+    живьём) — тело проходит как есть. Облачный ответ (MiniMax: `input_tokens` 0 в старте,
+    остальное в дельте) сюда не попадает.
 
     Fail-open, как и всё в прокси: любой сбой разбора — сквозной режим, ход важнее цифры.
     """
@@ -2024,16 +2032,14 @@ class НормализаторUsage:
         self.отдать = отдать
         self.sse = sse
         self.буфер = b""
-        self.сквозной = False
+        self.сквозной = not sse
+        self.промпт = None  # input_tokens из message_start, до обнуления
 
     def усвоить(self, chunk):
         if self.сквозной:
             self.отдать(chunk)
             return
-        if self.sse:
-            self._sse(chunk)
-        else:
-            self._json(chunk)
+        self._sse(chunk)
 
     def _sse(self, chunk):
         self.буфер += chunk
@@ -2050,11 +2056,7 @@ class НормализаторUsage:
                 return
 
     def _событие(self, сырое):
-        """Правит `usage` в `message_delta` и отдаёт событие (нормализованное или как есть).
-
-        Разбор целым событием, как у `РелеПотока`: правим только `data:` строку `message_delta`,
-        остальное (включая `event:`) пересобираем `_sse`. Событие ВСЕГДА уходит клиенту.
-        """
+        """Правит `usage` в `message_start`/`message_delta`; событие ВСЕГДА уходит клиенту."""
         for строка in сырое.split(b"\n"):
             if not строка.startswith(b"data:"):
                 continue
@@ -2062,10 +2064,23 @@ class НормализаторUsage:
                 данные = json.loads(строка[5:].strip())
             except ValueError:
                 break
-            if isinstance(данные, dict) and данные.get("type") == "message_delta":
+            if not isinstance(данные, dict):
+                break
+            тип = данные.get("type")
+            if тип == "message_start":
+                usage = (данные.get("message") or {}).get("usage")
+                вход = usage.get("input_tokens") if isinstance(usage, dict) else None
+                if isinstance(вход, int) and вход > 0:
+                    self.промпт = вход
+                    данные["message"]["usage"] = dict(usage, input_tokens=0)
+                    with lock:
+                        stats["usage_normalized"] += 1
+                    self.отдать(_sse("message_start", данные))
+                    return
+            elif тип == "message_delta":
                 usage = данные.get("usage")
                 if isinstance(usage, dict):
-                    новый, изменилось = normalize_usage(usage)
+                    новый, изменилось = normalize_usage(usage, self.промпт)
                     if изменилось:
                         данные["usage"] = новый
                         with lock:
@@ -2075,38 +2090,13 @@ class НормализаторUsage:
             break
         self.отдать(сырое)
 
-    def _json(self, chunk):
-        self.буфер += chunk
-
     def дослать(self):
-        """Конец ответа: в не-SSE правеим верхнеуровневый `usage` и отдаём тело целиком."""
+        """Конец ответа: недочитанный хвост SSE (событие без пустой строки) уходит как есть."""
         if self.сквозной:
             return
-        if self.sse:
-            if self.буфер:
-                self.отдать(self.буфер)
-            self.буфер = b""
-            return
-        сырое, self.буфер = self.буфер, b""
-        if not сырое:
-            return
-        try:
-            doc = json.loads(сырое)
-            if not isinstance(doc, dict):
-                raise ValueError("ответ не объект")
-            usage = doc.get("usage")
-            if not isinstance(usage, dict):
-                raise ValueError("в ответе нет usage")
-            новый, изменилось = normalize_usage(usage)
-            if изменилось:
-                doc["usage"] = новый
-                with lock:
-                    stats["usage_normalized"] += 1
-                сырое = json.dumps(doc, ensure_ascii=False).encode("utf-8")
-        except Exception as e:
-            print(f"нормализация usage не удалась ({e!r}) — ответ как есть",
-                  file=sys.stderr, flush=True)
-        self.отдать(сырое)
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
 
     def _сквозной(self):
         if self.буфер:

@@ -10,11 +10,14 @@ import type { FeatureRound } from '../../../types/featureRun';
 
 // Штрих и толщина кольца по исходу витка. Экспортируется: PipelineFlow берёт
 // stroke по verdict для дуги возврата (тот же кодировщик исходов, что и кольца).
+// withdrawn — приглушённое сплошное кольцо (C.textMuted, штрих 1.6) БЕЗ пульса:
+// «снят с выкладки» не «идёт» (running — C.textHeading + пунктир + пульс).
 export const RING: Record<string, { stroke: string; width: number; dash?: string }> = {
   returned:             { stroke: C.warning, width: 2 },
   accepted_with_remarks:{ stroke: C.warning, width: 1.6, dash: '2.4 1.8' },
   accepted:             { stroke: C.success, width: 2 },
   running:              { stroke: C.textHeading, width: 1.6, dash: '2 2' },
+  withdrawn:            { stroke: C.textMuted, width: 1.6 },
 };
 
 // Подпись исхода витка (для title/aria).
@@ -37,7 +40,7 @@ export function Rounds({ rounds, max = 6, caption = true }: { rounds: FeatureRou
   const gap = 7;
   const w = 12 + (shown.length - 1) * gap;
   const rets = rounds.filter(r => r.verdict === 'returned' || r.verdict === 'accepted_with_remarks').length;
-  const label = `${rounds.length} ${plural(rounds.length, 'виток', 'витка', 'витков')}${rets ? ` · ↺${rets}` : ''}`;
+  const baseLabel = `${rounds.length} ${plural(rounds.length, 'виток', 'витка', 'витков')}`;
 
   return (
     <span
@@ -70,8 +73,10 @@ export function Rounds({ rounds, max = 6, caption = true }: { rounds: FeatureRou
         })}
       </svg>
       {caption && (
-        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
-          {label}
+        // ↺N — C.warningText 700 (отдельный span), остальная подпись — C.textMuted.
+        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
+          <span style={{ color: C.textMuted }}>{baseLabel}</span>
+          {rets > 0 && <span style={{ color: C.warningText, fontWeight: 700 }}> · ↺{rets}</span>}
         </span>
       )}
     </span>

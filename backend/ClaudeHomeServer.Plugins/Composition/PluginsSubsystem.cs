@@ -46,5 +46,9 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // Каскад «внешних» ссылок (привязки персон, слоты). MVP — no-op: реальный
         // адаптер, снимающий биндинги/слоты, приходит с UI-шагом 2.x (ADR-031 §4).
         services.AddSingleton<IPluginInstallCascade, NoOpPluginInstallCascade>();
+        // Мост панели v1 (шаг 3.1): диспетчер IPluginCapability. Stateless — singleton;
+        // список обработчиков (Notes/Tasks) резолвится DI'ем из вертикалей-владельцев.
+        // PluginBridgeController — ApplicationPart (Web SDK), регистрируется MVC'ом.
+        services.AddSingleton<PluginBridge>();
     }
 }

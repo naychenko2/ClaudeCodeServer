@@ -16,6 +16,7 @@ import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
 import { __test } from '../../../lib/featureRuns';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (как в PipelineFlow.test.ts).
 // importOriginal — сохранить остальные экспорты (personaInitials и др., их читает PersonaAvatar).
@@ -357,5 +358,75 @@ describe('FeatureRunView: F6.1 (плашка)', () => {
     expect(toastMock.calls, 'тост при сбое перезапуска').toContain('Не удалось перезапустить исполнителя');
     root.unmount();
     uninstallFakeDom();
+  });
+});
+
+// === K-3: меню пилюли в режиме фичи — во всю ширину ТОЛЬКО на мобиле ===
+// На десктопе меню режима фичи — карточкой 280–380 (то же правило якоря, что у режима
+// «План хода»): fullWidth не включается. На мобиле — во всю ширину (left/right 8).
+// Карточка меню — портал в document.body; fullWidth отличим по `right:8px` в стиле.
+describe('FeatureRunView: K-3 (меню пилюли: fullWidth только на мобиле)', () => {
+  const sid = 'k3-sess';
+
+  // Кнопка-пилюля: единственный <button> с aria-label, начинающимся с «Показать».
+  function findPill(container: AnyNode): AnyNode | null {
+    let hit: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.nodeName === 'BUTTON') {
+        const al = x.getAttribute('aria-label') ?? '';
+        if (al.startsWith('Показать')) { hit = x; return; }
+      }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(container);
+    return hit;
+  }
+
+  // Карточка меню (портал в body): единственный элемент дерева body с non-empty `background`.
+  // Подложка (backdrop) `background` не имеет, поэтому карточка недвусмысленна.
+  function findMenuCard(): AnyNode | null {
+    const body = (globalThis as { document: AnyNode }).document.body;
+    let hit: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.style && typeof x.style.background === 'string' && x.style.background) { hit = x; return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(body);
+    return hit;
+  }
+
+  // Открывает меню пилюли (клик по кнопке) и возвращает карточку меню.
+  function openPillMenu(mobile: boolean): AnyNode | null {
+    mobileFlag.value = mobile;
+    __test.reset();
+    __test.setRuns(sid, [run()]);
+    installFakeDom();
+    const { root, container } = mount(createElement(TurnPlanPill, { todos: [], runs: [run()], sessionId: sid }));
+    const pill = findPill(container);
+    if (pill) {
+      act(() => {
+        (reactProps(pill)!.onClick as (e: unknown) => void)({
+          currentTarget: { getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }) },
+        });
+      });
+    }
+    const card = findMenuCard();
+    root.unmount();
+    uninstallFakeDom();
+    return card;
+  }
+
+  it('десктоп: fullWidth не включается — у карточки нет right (как у режима «План»)', () => {
+    const card = openPillMenu(false);
+    expect(card, 'карточка меню (десктоп) не найдена').not.toBeNull();
+    expect(card!.style.right, 'десктоп: right не задан (fullWidth off)').toBeUndefined();
+  });
+
+  it('мобила: fullWidth включён — у карточки right:8px (во всю ширину)', () => {
+    const card = openPillMenu(true);
+    expect(card, 'карточка меню (мобила) не найдена').not.toBeNull();
+    expect(card!.style.right, 'мобила: right:8px (fullWidth on)').toBe('8px');
   });
 });

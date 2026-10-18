@@ -4,9 +4,11 @@ import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion'
 import { useIsMobile } from '../../../lib/breakpoints';
 import { getPersonaById } from '../../../lib/personas';
 import { FeatureGlyph } from './FeatureGlyphs';
+import { Rounds } from './Rounds';
+import { StepDetails } from './StepDetails';
 import type {
-  FeatureRun, FeatureTask, FeatureStage, FeatureSourceReturns,
-  StageKey, StageState, StageTone,
+  FeatureRun, FeatureTask, FeatureStage, FeatureSourceReturns, FeatureStepChain,
+  FeatureRound, FeatureRoundVerdict, StageKey, StageState, StageTone,
 } from '../../../types/featureRun';
 
 // Тик раз в минуту: длительность метки «сейчас/ждёт вас/стоит · N мин» не застывает,
@@ -51,6 +53,9 @@ const ROW_GAP = 9;
 // 1px вправо: 1 (рамка кнопки) + 16/2 (центр колонки точки) = 9 — центр сегмента совпадает
 // с центром кольца (Майя M2: рельса не рвётся и не сдвигается от центра точек).
 const RAIL_LEFT = 1 + 16 / 2; // 9
+// Отступ деталей/пружин-блоков слева (макет v2 .det/.stg-rounds/.lanes: margin-left 25px):
+// 16 (колонка точки) + 9 (зазор грида) — контент начинается рядом с рельсой, а не сквозь неё.
+const DET_INDENT = 25;
 
 // Стадии в порядке жизненного цикла. Ключи — как в бэке (FeatureStage.Key:
 // cut | plan | prod | review | qa | final | merge).
@@ -210,6 +215,89 @@ export function toggleExpanded(prev: StageKey | null, key: StageKey): StageKey |
   return prev === key ? null : key;
 }
 
+// === F8: чистая логика раскрытия/меток/пружин ===
+
+// Нормализация линии шага (из FeatureStepChain.lane): back | front | other.
+// lane в данных бывает 'back'/'front' (англ.) или 'бэк'/'фронт' (рус.) — нормализуем;
+// прочие линии (тест, дизайн) — в «прочее».
+export function laneOfChain(lane?: string | null): 'back' | 'front' | 'other' {
+  const l = (lane ?? '').trim().toLowerCase();
+  if (l === 'back' || l === 'backend' || l === 'бэк' || l === 'бэкенд') return 'back';
+  if (l === 'front' || l === 'frontend' || l === 'фронт' || l === 'фронтенд') return 'front';
+  return 'other';
+}
+
+// Русские формы: задача/задачи/задач.
+function plural(n: number, one: string, few: string, many: string): string {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return one;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return few;
+  return many;
+}
+
+// Исход стадии словами (макет .ms): «вернул» / «принял с правками» / «принял» / «снят» / «идёт».
+const VERDICT_WORD: Record<FeatureRoundVerdict, string> = {
+  returned: 'вернул',
+  accepted_with_remarks: 'принял с правками',
+  accepted: 'принял',
+  withdrawn: 'снят',
+  running: 'идёт',
+};
+
+// Подпись-мета этапа (макет .ms, 12, C.textSecondary): «{имена} · {исход | N задач}».
+// Исполнители — имена из personaIds через запятую (неизвестный id не показываем);
+// исход — из verdict (словом); иначе число задач с правильным склонением.
+// Нет данных — null (подпись не рисуется). pending/absent — подписи Ф6, не мета (решает вызывающий).
+export function stageMeta(stage: FeatureStage | null): string | null {
+  if (!stage) return null;
+  if (stage.state === 'pending' || stage.state === 'absent') return null;
+  const names = (stage.personaIds ?? [])
+    .map(id => getPersonaById(id)?.name)
+    .filter((n): n is string => !!n && n.trim() !== '')
+    .join(', ');
+  let second: string | null = null;
+  if (stage.verdict) second = VERDICT_WORD[stage.verdict] ?? null;
+  else if (stage.taskCount != null && stage.taskCount > 0) {
+    second = `${stage.taskCount} ${plural(stage.taskCount, 'задача', 'задачи', 'задач')}`;
+  }
+  if (!names && !second) return null;
+  if (names && second) return `${names} · ${second}`;
+  return names || second;
+}
+
+// Метка источника возврата (макет .src): review → «с ревью», qa → «с проверки», final → «с финала».
+// Цвета: review — bgSelected/textSecondary; qa — infoBg/info; final — accentLight/accent.
+// Метка есть ТОЛЬКО если source не null (догадок не делаем).
+const SOURCE_META: Record<string, { label: string; bg: string; fg: string }> = {
+  review: { label: 'с ревью', bg: C.bgSelected, fg: C.textSecondary },
+  qa:     { label: 'с проверки', bg: C.infoBg, fg: C.info },
+  final:  { label: 'с финала', bg: C.accentLight, fg: C.accent },
+};
+
+// Цепочка шага по stepRef (для «Ревью»: пружина самого длинного шага из longestStepRef).
+export function stepChainByRef(run: FeatureRun, ref: string | null | undefined): FeatureStepChain | null {
+  if (!ref) return null;
+  return (run.stepChains ?? []).find(c => c.stepRef === ref) ?? null;
+}
+
+// Есть ли у стадии раскрытие (детали):
+//   cut/plan — есть задачи; prod — есть шаги; review — есть шаги с витками;
+//   qa/final — есть проходы (rounds стадии); merge — всегда (строка мержа).
+// Для aria-expanded/aria-controls: стадия без деталей не считается «раскрытой».
+// QA/Final — по rounds стадии (не по сырым спискам задач: те — только в StepDetails).
+export function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
+  switch (key) {
+    case 'cut':   return (run.cut ?? []).length > 0;
+    case 'plan':  return (run.plan ?? []).length > 0;
+    case 'prod':  return (run.stepChains ?? []).length > 0;
+    case 'review': return (run.stepChains ?? []).some(c => c.rounds.length > 0);
+    case 'qa':
+    case 'final': return (stageByKey(run, key)?.rounds?.length ?? 0) > 0;
+    case 'merge': return true;
+    default: return false;
+  }
+}
+
 // === Рендер ===
 
 // Точка-индикатор стадии 16px: подложка — круг C.bgWhite поверх рельсы, поверх — глиф по
@@ -336,33 +424,6 @@ function ReturnBadgeView({ b }: { b: ReturnBadge }) {
   );
 }
 
-// === Раскрытие стадии: список шагов «Производства» (2.15.2) ===
-
-// ISO → «ЧЧ:ММ» (отметка «с этого момента ждёт человека»). Невалидная/пустая дата → ''.
-function formatWhen(iso?: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-// Имя статуса (fallback, когда personaId нет): в каком состоянии задача.
-function statusLabel(status?: FeatureTask['status']): string {
-  switch (status) {
-    case 'done': return 'закрыто';
-    case 'inProgress': return 'в работе';
-    case 'todo': return 'ожидает';
-    default: return '—';
-  }
-}
-
-// Исполнитель: имя персоны из стора персон (lib/personas), или null, если персона не найдена
-// (вызывающий тогда падает на имя статуса, а не на сырой id — блокер 2.16.2).
-function personaName(id?: string | null): string | null {
-  if (!id) return null;
-  return getPersonaById(id)?.name ?? null;
-}
-
 // Шеврон раскрытия: поворачивается на 180° при раскрытии. reduced-motion — без плавного перехода.
 function Chevron({ expanded, reduced }: { expanded: boolean; reduced: boolean }) {
   return (
@@ -382,120 +443,357 @@ function Chevron({ expanded, reduced }: { expanded: boolean; reduced: boolean })
   );
 }
 
-// Глиф статуса шага (макет v2 .step: grid 14px 1fr auto, глиф слева, 2.16.3):
-//   todo — приглушённый кружок (пунктирная рамка), inProgress — ▶ (accent), done — галочка (muted).
-function StepGlyph({ status }: { status?: FeatureTask['status'] }) {
-  if (status === 'inProgress') {
+// === F8: строка шага (внутри «Производства») ===
+
+// Глиф строки шага 14: принят — «пройдено» (круг bgSelected + галка textMuted, как done);
+// снят — круг с чертой C.textMuted; идёт — пульс C.textHeading.
+function StepGlyph({ chain }: { chain: FeatureStepChain }) {
+  if (chain.outcome === 'withdrawn') {
     return (
-      <span aria-hidden="true" style={{ width: 14, display: 'inline-flex', justifyContent: 'center', color: C.accent, fontSize: FS.xs, lineHeight: 1 }}>▶</span>
-    );
-  }
-  if (status === 'done') {
-    return (
-      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M3.5 8.5 6.5 11.5 12.5 5" fill="none" stroke={C.textMuted} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
+        <circle cx="8" cy="8" r="6" fill="none" stroke={C.textMuted} strokeWidth="1.5" />
+        <path d="M5 8h6" stroke={C.textMuted} strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     );
   }
-  // todo (и дефолт, когда статуса нет): приглушённый кружок с пунктирной рамкой.
+  if (chain.outcome === 'running' || chain.outcome === 'pending') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" className="feature-pulse" />
+        <circle cx="8" cy="8" r="3.5" fill={C.textHeading} />
+      </svg>
+    );
+  }
+  // accepted/done — «пройдено».
   return (
-    <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: '50%', border: `1.5px dashed ${C.dashed}`, display: 'inline-block', flexShrink: 0 }} />
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
+      <circle cx="8" cy="8" r="6.5" fill={C.bgSelected} />
+      <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.textMuted} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
-// Строка шага в раскрытии «Производства»: глиф статуса, линия, stepRef, заголовок, исполнитель, ожидание человека.
-function StepRow({ t }: { t: FeatureTask }) {
-  const lane = laneOf(t);
-  const laneLabel = lane === 'back' ? 'бэк' : lane === 'front' ? 'фронт' : (t.lane?.trim() || '—');
-  // Исполнитель: имя персоны (lib/personas); если персона не найдена — имя статуса, не сырой id (2.16.2).
-  const who = personaName(t.personaId) ?? statusLabel(t.status);
-  const waiting = !!t.awaitingHumanSince;
-  const when = formatWhen(t.awaitingHumanSince);
+// Метка источника возврата (10.5/700, R.sm): «с ревью»/«с проверки»/«с финала».
+// Есть только если chain.source не null (догадок не делаем).
+function SourceTag({ source }: { source?: string | null }) {
+  if (!source) return null;
+  const m = SOURCE_META[source];
+  if (!m) return null;
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 700,
+        borderRadius: R.sm, padding: '0 6px', lineHeight: '17px', whiteSpace: 'nowrap',
+        background: m.bg, color: m.fg,
+      }}
+    >
+      {m.label}
+    </span>
+  );
+}
+
+// Строка шага (макет v2 .step): кнопка, сетка 14px 1fr auto, зазор 7/12, minHeight 28 (десктоп)
+// / 40 (мобила, TB.iconHit*), hover и раскрытая — C.bgSelected, R.md, фокус SHADOW.focus.
+// Слева глиф 14 → номер шага (mono, muted) → название → метка источника → «· снят с выкладки».
+// Справа пружина (Rounds, >6 → +N) + mono 11: длительность идущего шага или «ждёт ревью».
+// На 360px пружина не переносится (правая колонка flexShrink 0), переносится название.
+function StepRow({ chain, expanded, onToggle, isMobile, now }: {
+  chain: FeatureStepChain; expanded: boolean; onToggle: () => void; isMobile: boolean; now: number;
+}) {
+  const running = chain.outcome === 'running' || chain.outcome === 'pending';
+  // Длительность: у идущего — от старта (chain.durationMinutes как есть), иначе «ждёт ревью».
+  const right = running
+    ? (chain.durationMinutes > 0 ? durationLabel(new Date(Date.now() - chain.durationMinutes * 60000).toISOString(), now) : 'идёт')
+    : 'ждёт ревью';
+  const minH = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
+  return (
+    <button
+      data-testid={`step-row-${chain.stepRef}`}
+      aria-expanded={expanded}
+      aria-controls={expanded ? `step-details-${chain.stepRef}` : undefined}
+      onClick={onToggle}
+      className="cc-step-row"
+      style={{
+        display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: '7px 12px', alignItems: 'start',
+        width: '100%', minHeight: minH, padding: `${SP.xs}px ${SP.xs}px`,
+        border: '1px solid transparent', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
+        font: 'inherit', color: 'inherit', background: expanded ? C.bgSelected : 'transparent',
+      }}
+    >
+      <StepGlyph chain={chain} />
+      <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0 }}>
+        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{chain.stepRef}</span>
+        <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{chain.title || 'Без названия'}</span>
+        <SourceTag source={chain.source} />
+        {chain.outcome === 'withdrawn' && (
+          <span style={{ color: C.textMuted, whiteSpace: 'nowrap' }}>· снят с выкладки</span>
+        )}
+      </span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, whiteSpace: 'nowrap' }}>
+        {chain.rounds.length > 0 && <Rounds rounds={chain.rounds} max={6} />}
+        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{right}</span>
+      </span>
+    </button>
+  );
+}
+
+// === F8: детали шага (F7) — раскрывается под строкой ===
+
+// === F8: детали этапа (по ключу) ===
+
+// Заголовок секции деталей (макет .det .h): 10, 700, uppercase, letter-spacing .06em, C.textMuted.
+function SectionH({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
+      {children}
+    </div>
+  );
+}
+
+// Строка задачи этапа (разрез/план/проверка/финал): глиф + заголовок + исполнитель + статус/исход.
+// `verdict`/`reason` — из stages[].rounds (проверка/финал); `status` — для разреза/плана.
+function TaskLine({ t, verdict, reason }: {
+  t: FeatureTask; verdict?: string | null; reason?: string | null;
+}) {
+  const persona = t.personaId ? getPersonaById(t.personaId) : undefined;
+  const who = persona?.name ?? (t.status === 'done' ? 'закрыто' : t.status === 'inProgress' ? 'в работе' : 'ожидает');
+  const verdictWord = verdict ? (VERDICT_WORD[verdict as FeatureRoundVerdict] ?? null) : null;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr', gap: SP.xs, alignItems: 'start', fontSize: FS.sm }}>
-      <StepGlyph status={t.status} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+      <span style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
+        {t.status === 'inProgress'
+          ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" className="feature-pulse" /><circle cx="8" cy="8" r="3.5" fill={C.textHeading} /></svg>
+          : t.status === 'done'
+            ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill={C.bgSelected} /><path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.textMuted} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            : <span style={{ width: 14, height: 14, borderRadius: '50%', border: `1.5px dashed ${C.dashed}`, display: 'inline-block' }} />}
+      </span>
+      <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{t.stepRef ?? '—'}</span>
-          <span style={{ color: C.textPrimary }}>{t.title || 'Без заголовка'}</span>
+          <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{t.title || 'Без заголовка'}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
-          <span>{laneLabel}</span>
-          <span>·</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>
           <span>{who}</span>
-          {waiting && (
-            <>
-              <span>·</span>
-              <span style={{ color: C.info }} title={t.awaitingHumanReason ?? undefined}>
-                {t.awaitingHumanReason ?? 'ждёт человека'}{when ? ` · с ${when}` : ''}
-              </span>
-            </>
-          )}
+          {verdictWord && <span>· {verdictWord}</span>}
+          {reason && <span style={{ overflowWrap: 'anywhere' }}>— {reason}</span>}
         </div>
       </div>
     </div>
   );
 }
 
-// Линия шага: 'back' | 'front' | null. lane в данных бывает 'back'/'front' (англ.)
-// или 'бэк'/'фронт' (рус.) — нормализуем; прочие линии (тест, дизайн) не в бэк/фронт.
-// (F8 переделывает раскрытие шагов; пока используется только StepRow/StageDetails.)
-function laneOf(t: FeatureTask): 'back' | 'front' | null {
-  const l = (t.lane ?? '').trim().toLowerCase();
-  if (l === 'back' || l === 'backend' || l === 'бэк' || l === 'бэкенд') return 'back';
-  if (l === 'front' || l === 'frontend' || l === 'фронт' || l === 'фронтенд') return 'front';
-  return null;
-}
-
-// Раскрытие стадии: список шагов «Производства», сгруппированный по линии (бэк/фронт/прочее).
-// `stageKey` — ключ стадии: детали рендерятся ТОЛЬКО для «Производства» (2.16.1), для остальных — null.
-// (Имя не `key`: `key` — спец-проп React для реконсиляции, в props компонента не попадает.)
-// `id` — цель aria-controls кнопки-строки. Пустой набор шагов → null (раскрытия нет).
-// Поверхность (2.16.4, макет .det): фон C.bgCard, рамка C.borderLight, радиус R.md, паддинг SP.sm.
-function StageDetails({ id, stageKey, run }: { id: string; stageKey: StageKey; run: FeatureRun }) {
-  if (stageKey !== 'prod') return null;
-  // run.steps может быть undefined (старый ответ/кэш) — нормализуем, чтобы рендер не падал (Глеб).
-  const steps = run.steps ?? [];
-  if (steps.length === 0) return null;
-  const back = steps.filter(s => laneOf(s) === 'back');
-  const front = steps.filter(s => laneOf(s) === 'front');
-  const other = steps.filter(s => laneOf(s) === null);
-  const groups: { label: string; list: FeatureTask[] }[] = [];
-  if (back.length) groups.push({ label: 'бэк', list: back });
-  if (front.length) groups.push({ label: 'фронт', list: front });
-  if (other.length) groups.push({ label: 'прочее', list: other });
-  // Отступ слева: колонка точки (16px, см. gridTemplateColumns) + gap (SP.sm) —
-  // детали выровнены по колонке контента, а не по точке.
-  const indent = 16 + SP.sm;
+// Строка прохода проверки/финала (stages[].rounds): глиф по вердикту + исполнитель + исход + причина.
+// Сырых задач не читает — всё из витка (personaId/verdict/reason).
+function RoundLine({ r }: { r: FeatureRound }) {
+  const persona = r.personaId ? getPersonaById(r.personaId) : undefined;
+  const who = persona?.name;
+  const verdictWord = VERDICT_WORD[r.verdict] ?? null;
   return (
-    <div
-      id={id}
-      className="stage-details-bgCard"
-      style={{
-        display: 'flex', flexDirection: 'column', gap: SP.xs,
-        background: C.bgCard,
-        border: `1px solid ${C.borderLight}`,
-        borderRadius: R.md,
-        padding: `${SP.sm}px ${SP.sm}px ${SP.sm}px ${indent}px`,
-      }}
-    >
-      {groups.map(g => (
-        <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-          <div style={{ fontSize: FS.xs, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            {g.label}
-          </div>
-          {g.list.map(s => <StepRow key={s.id} t={s} />)}
+    <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr', gap: SP.xs, alignItems: 'start', fontSize: FS.sm }}>
+      <span style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
+        {r.verdict === 'accepted'
+          ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill={C.bgSelected} /><path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.textMuted} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          : r.verdict === 'running'
+            ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" className="feature-pulse" /><circle cx="8" cy="8" r="3.5" fill={C.textHeading} /></svg>
+            : <span style={{ width: 14, height: 14, borderRadius: '50%', border: `1.5px dashed ${C.dashed}`, display: 'inline-block' }} />}
+      </span>
+      <div style={{ minWidth: 0, fontSize: FS.xs, color: C.textMuted }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
+          {who && <span>{who}</span>}
+          {verdictWord && <span>· {verdictWord}</span>}
         </div>
-      ))}
+        {r.reason && <div style={{ overflowWrap: 'anywhere', marginTop: 1, color: C.textSecondary }}>{r.reason}</div>}
+      </div>
     </div>
   );
 }
 
-// Есть ли у стадии раскрытие (детали): только «Производство» с хотя бы одним шагом (2.16.1).
-// Для aria-expanded: стадия без деталей не считается «раскрытой», даже если она — текущая expanded.
-function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
-  // run.steps может быть undefined (старый ответ/кэш) — ?? 0, чтобы рендер не падал (Глеб).
-  return key === 'prod' && (run.steps?.length ?? 0) > 0;
+// Пружина-блок под строкой этапа (макет .stg-rounds): margin 0 0 SP 25, колонка с зазором 3.
+// У «Проверки»/«Финального ревью» — по stages[].rounds; у «Ревью» — пружина самого длинного
+// шага (longestStepRef) + подпись «дольше всех {ref} · {название}» (только если витков > 1).
+function StageRounds({ stage, run }: { stage: FeatureStage; run: FeatureRun }) {
+  const key = stage.key;
+  let label: string | null = null;
+  let rounds: FeatureRound[] = [];
+  if (key === 'qa' || key === 'final') {
+    rounds = stage.rounds ?? [];
+  } else if (key === 'review') {
+    const worst = stepChainByRef(run, stage.longestStepRef);
+    if (worst && (worst.rounds?.length ?? 0) > 1) {
+      label = `дольше всех ${worst.stepRef} · ${worst.title}`;
+      rounds = worst.rounds ?? [];
+    }
+  }
+  if (rounds.length === 0) return null;
+  return (
+    <div style={{ margin: `0 0 ${SP.xs}px ${DET_INDENT}px`, display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {label && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{label}</span>}
+      <Rounds rounds={rounds} max={6} />
+    </div>
+  );
+}
+
+// Детали этапа (макет .det): фон C.bgCard, рамка 1px C.borderLight, R.lg, padding SP.sm,
+// margin-left 25px (рельса идёт рядом, а не сквозь). На мобиле детали ШАГА — на всю ширину
+// (margin-left 0 у StepDetails, не у этапа).
+function StageDetails({ id, stageKey, run, expandedStep, onStep, isMobile, now }: {
+  id: string; stageKey: StageKey; run: FeatureRun;
+  expandedStep: string | null; onStep: (ref: string) => void; isMobile: boolean; now: number;
+}) {
+  const stage = stageByKey(run, stageKey);
+  const surface: React.CSSProperties = {
+    display: 'flex', flexDirection: 'column', gap: SP.sm,
+    background: C.bgCard, border: `1px solid ${C.borderLight}`,
+    borderRadius: R.lg, padding: `${SP.sm}px ${SP.sm + 2}px`,
+    margin: `2px 0 ${SP.sm}px ${DET_INDENT}px`,
+  };
+
+  // «Производство»: шаги по линиям (бэк/фронт/прочее).
+  if (stageKey === 'prod') {
+    const chains = run.stepChains ?? [];
+    if (chains.length === 0) return null;
+    const groups: { lane: 'back' | 'front' | 'other'; list: FeatureStepChain[] }[] = [];
+    for (const lane of ['back', 'front', 'other'] as const) {
+      const list = chains.filter(c => laneOfChain(c.lane) === lane);
+      if (list.length) groups.push({ lane, list });
+    }
+    // Заголовки линий: имена исполнителей из run.lanes (back/front), «прочее» — без имён.
+    const laneHeader = (lane: 'back' | 'front' | 'other'): string => {
+      if (lane === 'other') return 'прочее';
+      const info = laneInfo(run)[lane];
+      const names = laneNames(info.personaIds);
+      return names ? `${info.label} · ${names}` : info.label;
+    };
+    return (
+      <div id={id} className="stage-details-bgCard" style={surface}>
+        {groups.map(g => (
+          <div key={g.lane} style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+            <div style={{ fontSize: FS.xs, color: C.textMuted, margin: `${SP.xs}px 0 0` }}>{laneHeader(g.lane)}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {g.list.map(c => (
+                <div key={c.stepRef}>
+                  <StepRow chain={c} expanded={expandedStep === c.stepRef} onToggle={() => onStep(c.stepRef)} isMobile={isMobile} now={now} />
+                  {expandedStep === c.stepRef && (
+                    <StepDetails key={c.stepRef} chain={c} run={run} isMobile={isMobile} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // «Ревью»: «Круги ревью по шагам» — на каждый шаг с витками: ID (mono, muted, minWidth 52) + бусины.
+  if (stageKey === 'review') {
+    const chains = (run.stepChains ?? []).filter(c => c.rounds.length > 0);
+    return (
+      <div id={id} className="stage-details-bgCard" style={surface}>
+        <SectionH>Круги ревью по шагам</SectionH>
+        {chains.length === 0 ? (
+          <div style={{ fontSize: FS.sm, color: C.textMuted }}>ревью ещё не было</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+            {chains.map(c => (
+              <div key={c.stepRef} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm }}>
+                <span style={{ fontFamily: FONT.mono, color: C.textSecondary, minWidth: 52, flexShrink: 0 }}>{c.stepRef}</span>
+                <VerdictBeads rounds={c.rounds} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // «Проверка»/«Финальное ревью»: проходы стадии (stages[].rounds) с вердиктом и причиной.
+  // Сырых списков задач не читаем (только StepDetails) — всё из готового агрегата.
+  if (stageKey === 'qa' || stageKey === 'final') {
+    const rounds = stage?.rounds ?? [];
+    if (rounds.length === 0) return null;
+    return (
+      <div id={id} className="stage-details-bgCard" style={surface}>
+        <SectionH>{stageKey === 'qa' ? 'Проходы проверки' : 'Финальное ревью'}</SectionH>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+          {rounds.map(r => <RoundLine key={r.n} r={r} />)}
+        </div>
+      </div>
+    );
+  }
+
+  // «Разрез»/«План»: задачи списком (заголовок, исполнитель, статус).
+  if (stageKey === 'cut' || stageKey === 'plan') {
+    const tasks = stageKey === 'cut' ? (run.cut ?? []) : (run.plan ?? []);
+    if (tasks.length === 0) return null;
+    return (
+      <div id={id} className="stage-details-bgCard" style={surface}>
+        <SectionH>Задачи этапа</SectionH>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>{tasks.map(t => <TaskLine key={t.id} t={t} />)}</div>
+      </div>
+    );
+  }
+
+  // «Мерж»: одна строка.
+  if (stageKey === 'merge') {
+    const merged = run.summary?.mergedAt;
+    const text = merged
+      ? `Смержено ${formatDate(merged)}`
+      : (stage?.state === 'active' && stage?.tone === 'wait')
+        ? 'Ждёт вашего решения — Марк получит запрос'
+        : 'Начнётся после финального ревью';
+    return (
+      <div id={id} className="stage-details-bgCard" style={surface}>
+        <SectionH>Мерж</SectionH>
+        <div style={{ fontSize: FS.sm, color: C.textSecondary }}>{text}</div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Бусины вердиктов (макет .chain): до 5 бусин, ранние свёрнуты в бусину «+N».
+// Цвета по вердикту (макет v2 .bead): returned — warningBg/warningText; accepted_with_remarks —
+// bgCard + пунктир C.warning; accepted — successBg/successText; running — bgSelected + пунктир C.dashed.
+const BEAD: Record<FeatureRound['verdict'], { bg: string; fg: string; border?: string; text: string }> = {
+  returned:              { bg: C.warningBg, fg: C.warningText, text: 'вернул' },
+  accepted_with_remarks: { bg: C.bgCard, fg: C.warningText, border: C.warning, text: 'принял с правками' },
+  accepted:              { bg: C.successBg, fg: C.successText, text: 'принял' },
+  running:               { bg: C.bgSelected, fg: C.textHeading, border: C.dashed, text: 'идёт' },
+  withdrawn:             { bg: C.bgSelected, fg: C.textMuted, text: 'снят' },
+};
+
+function VerdictBeads({ rounds }: { rounds: FeatureRound[] }) {
+  if (rounds.length === 0) return null;
+  const max = 5;
+  const shown = rounds.length > max ? rounds.slice(-max) : rounds;
+  const skip = rounds.length - shown.length;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
+      {skip > 0 && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: C.bgSelected, color: C.textHeading, border: `1px dashed ${C.dashed}` }} title="ранние витки">
+          +{skip}
+        </span>
+      )}
+      {shown.map((r) => {
+        const b = BEAD[r.verdict] ?? BEAD.running;
+        return (
+          <span key={r.n} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: b.bg, color: b.fg, border: b.border ? `1px dashed ${b.border}` : '1px solid transparent' }}>
+            {r.n} {b.text}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+// ISO → «15.10.2026» (дата мержа). Невалидная/пустая → ''.
+function formatDate(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
 // Конвейер фичи (режим «Исполнение фичи») — строго по макету v2.
@@ -509,25 +807,32 @@ function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
 //   • активная стадия — метка (текст + тон по tone) + глиф/пульс; фон и рамку строка НЕ носит
 //     (текущую строку выделяют метка и глиф, не подсветка — Майя M3);
 //   • «идёт сейчас» (▶) — когда у стадии есть runningSince; «ждёт вас» — tone=wait;
-//   • под строкой «Производство» — полосы бэк/фронт (одна под другой) + бейджи возврата (на всех
-//     ширинах, из run.returnsBySource).
+//   • F8: раскрывается КАЖДЫЙ этап (детали по ключу), шаги «Производства» — отдельные строки
+//     со пружиной, у этапов — пружины-блоки (stg-rounds) и подпись-мета (.ms).
 //
-// Компонент «глупый»: стадии/линии/возвраты считает БЭК (run.stages / run.lanes /
-// run.returnsBySource), рендер только раскладывает. Нет stages (старый ответ/кэш) → 7 pending.
+// Компонент «глупый»: стадии/линии/возвраты/шаги считает БЭК (run.stages / run.lanes /
+// run.returnsBySource / run.stepChains), рендер только раскладывает. Нет stages → 7 pending.
 export function PipelineFlow({ run }: { run: FeatureRun }) {
   const reduced = usePrefersReducedMotion();
   const isMobile = useIsMobile();
   const now = useMinuteTick();
   const lanes = laneInfo(run);
   const badges = returnBadges(run);
-  // Раскрытая стадия (2.16.5) — ОДИНОЧНАЯ: «Производство» открыто по умолчанию, остальные свёрнуты.
-  // В макете v2 по умолчанию S.open=null, но prod раскрывается при переходе на карточку
-  // (a==='tocard' → S.open='prod'); делаем prod открытым сразу, чтобы шаги были видны
-  // без лишнего клика (главная претензия v4: «не вижу шаги»). Клик переключает:
-  // открыть одну стадию — закрыть предыдущую (toggleExpanded).
-  const [expanded, setExpanded] = useState<StageKey | null>('prod');
+  // F8: управляемое раскрытие. «Производство» открыто по умолчанию; шаг — одиночно внутри этапа.
+  // Ф9 выставит их по сигналу фокуса (props), пока — внутреннее состояние.
+  const [expandedStage, setExpandedStage] = useState<StageKey | null>('prod');
+  const [expandedStep, setExpandedStep] = useState<string | null>(null);
   // minHeight строки: тач-цель по TB (32 десктоп / 40 мобила).
   const rowMinH = isMobile ? ROW_MIN_H_MOBILE : ROW_MIN_H_DESKTOP;
+
+  // Клик по стадии: одиночное раскрытие (открыть — закрыть предыдущую); смена стадии сбрасывает шаг.
+  const onStage = (key: StageKey) => {
+    const next = expandedStage === key ? null : key;
+    setExpandedStage(next);
+    if (next !== expandedStage) setExpandedStep(null);
+  };
+  // Клик по шагу: одиночное раскрытие внутри этапа.
+  const onStep = (ref: string) => setExpandedStep(prev => (prev === ref ? null : ref));
 
   return (
     <div
@@ -549,9 +854,11 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
         const toneColors = active ? activeStageTone(tone) : null;
         // ×N: passes > 1, кроме стадии «Ревью».
         const showPasses = passes > 1 && s.key !== 'review';
-        // aria-controls — только когда у стадии есть детали (prod с шагами); иначе id не существует
-        // (Глеб: для остальных стадий и prod без шагов атрибута нет).
+        // aria-controls — только когда у стадии есть детали; иначе id не существует.
         const hasDetails = stageHasDetails(s.key, run);
+        // Подпись-мета (.ms): у done/active — «{имена} · {исход | N задач}»; pending/absent — подписи Ф6.
+        const meta = stageMeta(stage);
+        const isExpanded = expandedStage === s.key;
 
         return (
           <div
@@ -611,12 +918,13 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
             ) : (
               // Кнопка = строка (макет v2 .row): minHeight тач-цели + паддинг + рамка + hover/фокус.
               // Сетка 16px 1fr auto (точка + контент + шеврон), имя FS.base/600 C.textHeading,
-              // метка текущего этапа (active), ×N (passes>1, не «Ревью»), бейджи возврата (prod).
+              // метка текущего этапа (active), ×N (passes>1, не «Ревью»), бейджи возврата (prod),
+              // подпись-мета (.ms, done/active).
               <button
                 data-testid={`stage-row-${s.key}`}
-                aria-expanded={expanded === s.key && hasDetails}
+                aria-expanded={isExpanded && hasDetails}
                 aria-controls={hasDetails ? `stage-details-${s.key}` : undefined}
-                onClick={() => setExpanded(prev => toggleExpanded(prev, s.key))}
+                onClick={() => onStage(s.key)}
                 className="cc-stage-row"
                 style={{
                   display: 'grid',
@@ -663,25 +971,42 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                     {/* Бейджи возврата (↺N с ревью/проверки/финала) — на всех ширинах, из run.returnsBySource. */}
                     {s.key === 'prod' && badges.map(b => <ReturnBadgeView key={b.key} b={b} />)}
                   </span>
-                  {/* Полосы бэк/фронт под «Производством» (одна под другой, строки). */}
-                  {s.key === 'prod' && (
-                    <span style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, margin: `${SP.xxs}px 0 ${SP.xs}px 0` }}>
-                      <LaneBar info={lanes.back} />
-                      <LaneBar info={lanes.front} />
-                    </span>
+                  {/* Подпись-мета (.ms): у done/active — «{имена} · {исход | N задач}»; нет данных — нет. */}
+                  {meta && (
+                    <span style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 1, overflowWrap: 'anywhere' }}>{meta}</span>
                   )}
                 </span>
                 {/* Шеврон: только у нажимаемых строк (pending/absent — не кнопки), поворот при раскрытии. */}
                 <span style={{ display: 'inline-flex', alignItems: 'center', alignSelf: 'start', paddingTop: 2 }}>
-                  <Chevron expanded={expanded === s.key} reduced={reduced} />
+                  <Chevron expanded={isExpanded} reduced={reduced} />
                 </span>
               </button>
             )}
-            {/* Раскрытие: список шагов «Производства» (2.15.2/2.16.1). Только когда стадия раскрыта;
-                StageDetails сам отдаёт null для стадий без деталей (только «Производство» их имеет).
-                `key` — React-реконсиляция, `stageKey` — данные (см. StageDetails). */}
-            {expanded === s.key && (
-              <StageDetails key={s.key} id={`stage-details-${s.key}`} stageKey={s.key} run={run} />
+            {/* Линии бэк/фронт (prod): под кнопкой, не внутри; margin-left 25 (рядом с рельсой). */}
+            {!isPendingOrAbsent && s.key === 'prod' && (lanes.back.total > 0 || lanes.front.total > 0) && (
+              <div style={{ margin: `0 0 ${SP.xs}px ${DET_INDENT}px`, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                <LaneBar info={lanes.back} />
+                <LaneBar info={lanes.front} />
+              </div>
+            )}
+            {/* Пружина-блок (stg-rounds): под кнопкой, не внутри. У «Ревью» — самый длинный шаг
+                (только если витков > 1); у «Проверки»/«Финального ревью» — по stages[].rounds. */}
+            {!isPendingOrAbsent && stage && (
+              <StageRounds stage={stage} run={run} />
+            )}
+            {/* Раскрытие: детали по ключу (F8). Только когда стадия раскрыта;
+                StageDetails сам отдаёт null для стадий без деталей. */}
+            {isExpanded && (
+              <StageDetails
+                key={s.key}
+                id={`stage-details-${s.key}`}
+                stageKey={s.key}
+                run={run}
+                expandedStep={expandedStep}
+                onStep={onStep}
+                isMobile={isMobile}
+                now={now}
+              />
             )}
           </div>
         );

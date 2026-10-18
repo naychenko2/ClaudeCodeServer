@@ -105,6 +105,13 @@ export interface FeatureStage {
   rounds: FeatureRound[];
   // Шаг с наибольшим числом витков (только у стадии review); null — витков нет.
   longestStepRef?: string | null;
+  // F8: исполнители стадии (имена для подписи-мета), число задач стадии (склонение
+  // «N задач» в мета) и исход стадии (returned/accepted_with_remarks/accepted/withdrawn/
+  // running → слово в мета). Аддитивные и nullable: старые ответы их не несут — UI обязан
+  // пережить отсутствие (без подписи-мета).
+  personaIds?: string[];
+  taskCount?: number;
+  verdict?: FeatureRoundVerdict | null;
 }
 
 // Цепочка шага (бэк: `FeatureStepChain`): задача шага + её доработки, в порядке времени.

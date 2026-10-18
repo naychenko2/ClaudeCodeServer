@@ -1045,6 +1045,11 @@ body {
 .cc-stage-row:active { background: var(--c-bg-selected); }
 @media (hover: hover) { .cc-stage-row:hover { background: var(--c-bg-selected); } }
 .cc-stage-row:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+/* Строка шага (PipelineFlow, «Производство»): hover/tap/фокус — как у строки стадии. */
+.cc-step-row { background: transparent; }
+.cc-step-row:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-step-row:hover { background: var(--c-bg-selected); } }
+.cc-step-row:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 @media (prefers-reduced-motion: reduce) {
   .cc-role-card, .cc-tools-row-btn { transition: none; }
 }

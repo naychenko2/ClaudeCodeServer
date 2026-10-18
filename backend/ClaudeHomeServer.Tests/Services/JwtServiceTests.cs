@@ -197,6 +197,38 @@ public class JwtServiceTests : IDisposable
     }
 
     [Fact]
+    public void IsSessionCurrent_TokenWithoutSub_Rejected()
+    {
+        // Инвариант «пустой sub = 401» держит само правило, а не то, что стор «не нашёл» пользователя:
+        // claim tv здесь валидный (версия живого пользователя), отсутствует только sub
+        var user = AddUser("alice");
+        var withoutSub = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(JwtService.TokenVersionClaim, user.TokenVersion.ToString())], "test"));
+        var emptySub = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(JwtRegisteredClaimNames.Sub, ""), new Claim(JwtService.TokenVersionClaim, user.TokenVersion.ToString())], "test"));
+
+        _sut.IsSessionCurrent(withoutSub).Should().BeFalse();
+        _sut.IsSessionCurrent(emptySub).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ValidateUserToken_TokenWithoutSub_Rejected()
+    {
+        // Подпись, срок и tv в порядке — отвергается именно из-за отсутствия sub
+        var user = AddUser("alice");
+        var secret = File.ReadAllText(Path.Combine(_tempDir, "jwt-secret.txt")).Trim();
+        var key = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(secret));
+        var noSub = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: "ClaudeHomeServer",
+            claims: [new Claim(JwtService.TokenVersionClaim, user.TokenVersion.ToString())],
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
+
+        _sut.ValidateUserToken(noSub).Should().BeNull();
+    }
+
+    [Fact]
     public void ValidateUserToken_DeletedUser_Rejected()
     {
         var user = AddUser("alice");

@@ -236,6 +236,16 @@
       был в графе сборки.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Watchdog.Tests\ClaudeHomeServer.Watchdog.Tests.csproj" />
+    <!--
+      Telemetry.Tests (шаг 3.14, пачка G, последний): 22 Telemetry*Tests (21 Telemetry/ +
+      1 Controllers/TelemetryIncidentsController) переехали в отдельную тестовую сборку
+      вертикали. Telemetry — папка Main (backend/ClaudeHomeServer/Telemetry/), поэтому
+      InternalsVisibleTo на Telemetry.Tests стоит в Main (ClaudeHomeServer.csproj), а не в
+      отдельной сборке. Монолит тянет Telemetry.Tests как ProjectReference, чтобы в переходный
+      период (до финальной чистки) перенесённые тесты компилировались и новый проект был в
+      графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Telemetry.Tests\ClaudeHomeServer.Telemetry.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

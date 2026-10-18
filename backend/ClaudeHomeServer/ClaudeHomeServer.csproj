@@ -60,6 +60,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Watchdog.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Telemetry.Tests (шаг 3.14, пачка G): Telemetry — папка Main (backend/ClaudeHomeServer/Telemetry/),
+         не отдельная сборка, поэтому функциональный InternalsVisibleTo (internal
+         ObservabilityExtensions.ResolveSampler/ParseEndpoint, GaugesRegistrarService.CountLive/ErrorDocuments,
+         IncidentQueries.Expression) стоит здесь, в Main. Перенесённые тесты читают эти internal-члены. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Telemetry.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

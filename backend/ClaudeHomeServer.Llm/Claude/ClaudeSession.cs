@@ -4128,6 +4128,16 @@ public class ClaudeSession : ILlmSessionAdapter
             // входит в сигнатуру запуска и стабильно по сессии (viaGateway не мерцает).
             envOverrides["CLAUDE_CODE_GATEWAY_HINT_HEADERS"] = "1";
         }
+        else if (localProvider is not null)
+        {
+            // Локальный ход МИМО шлюза (прямой путь CLI → прокси локальной модели): шлюз не
+            // включается у сессии без владельца (UseServerGateway требует Info.OwnerId — у части
+            // боевых чатов он пуст, проверено на sessions.json 2026-10-18) и при LlmGateway:Enabled=false.
+            // Прокси читает маркер сжатия из сырого x-claude-code-compaction сам, поэтому
+            // подсказочные заголовки нужны и здесь — без них автосжатие не уходит в облако по маркеру.
+            // vLLM лишние x-claude-code-* принимает (проверено живьём: 200), значение стабильно по сессии.
+            envOverrides["CLAUDE_CODE_GATEWAY_HINT_HEADERS"] = "1";
+        }
         if (localProvider is not null)
             customHeaders.Add($"X-CCS-Session: {Info.Id}");
         if (customHeaders.Count > 0)

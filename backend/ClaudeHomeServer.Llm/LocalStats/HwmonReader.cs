@@ -56,21 +56,36 @@ public sealed record HwmonSnapshot
 
 // Читатель /sys/class/hwmon/* (без процессов и без root). Имена hwmon определяются по `name`
 // и меткам, НЕ по номерам hwmonN (они плавают между загрузками). Корни подменяются в тестах:
-// hwmonRoot (/sys/class/hwmon), sysBlockRoot (/sys/block), mountinfoPath (/proc/self/mountinfo).
+// hwmonRoot (/sys/class/hwmon), mountinfoPath (/proc/self/mountinfo); DriveInfo — делегатом fsSize.
 // Любой сбой чтения → null-поле (недоверенный источник, не роняем BackgroundService).
 public sealed class HwmonReader
 {
+    // Доступ к размеру файловой системы (DriveInfo точки монтирования): всего и свободно (байты).
+    // Func, чтобы тест подменил DriveInfo и не зависел от ФС реальной машины.
+    private readonly Func<string, (long total, long free)> _fsSize;
+
+    private const long GiB = 1024L * 1024 * 1024;
+
     private readonly string _hwmonRoot;
-    private readonly string _sysBlockRoot;
     private readonly string _mountinfoPath;
 
     public HwmonReader() : this("/sys/class/hwmon", "/sys/block", "/proc/self/mountinfo") { }
 
-    public HwmonReader(string hwmonRoot, string sysBlockRoot, string mountinfoPath)
+    // sysBlockRoot больше не используется (total — с той же ФС, не из /sys/block), но остаётся
+    // в сигнатуре для стабильности; fsSize — подмена DriveInfo в тестах.
+    public HwmonReader(string hwmonRoot, string sysBlockRoot, string mountinfoPath,
+        Func<string, (long total, long free)>? fsSize = null)
     {
         _hwmonRoot = hwmonRoot;
-        _sysBlockRoot = sysBlockRoot;
         _mountinfoPath = mountinfoPath;
+        _fsSize = fsSize ?? DefaultFsSize;
+    }
+
+    // По умолчанию: DriveInfo точки монтирования.
+    private static (long total, long free) DefaultFsSize(string mountPoint)
+    {
+        var d = new DriveInfo(mountPoint);
+        return (d.TotalSize, d.TotalFreeSpace);
     }
 
     // Читает снимок. null — hwmonRoot не существует (чужая машина) — все поля null/пусто.
@@ -79,12 +94,12 @@ public sealed class HwmonReader
         if (!Directory.Exists(_hwmonRoot))
             return null;
 
-        var kvController = FindKvController();
+        var (kvController, kvFs) = FindKvDisk();
         var snap = new HwmonSnapshot
         {
             Cpu = ReadCpu(),
             Board = ReadBoard(),
-            Disks = ReadDisks(kvController),
+            Disks = ReadDisks(kvController, kvFs),
             CaseFans = ReadCaseFans(),
         };
         return snap;
@@ -122,7 +137,7 @@ public sealed class HwmonReader
 
     // ─── Диски (nvme, по контроллеру): температура, датчики, предел, роль ───────────
 
-    private HwmonDisk[]? ReadDisks(string? kvController)
+    private HwmonDisk[]? ReadDisks(string? kvController, (long total, long free)? kvFs)
     {
         var dirs = FindAllHwmon("nvme");
         if (dirs.Count == 0) return null;
@@ -149,15 +164,26 @@ public sealed class HwmonReader
                     second = t;
             }
 
+            var isKv = controller == kvController;
+            // kv — ФС, определившая роль (точка kvdisk); system — наибольшая ФС контроллера (не /boot/efi).
+            // used/total — пара с ОДНОЙ файловой системы (не «занято» из одной ФС и «всего» из /sys/block).
+            var fs = isKv ? kvFs : PickLargestFs(controller);
+            long? usedGb = null;
+            long? totalGb = null;
+            if (fs is { } f)
+            {
+                usedGb = (f.total - f.free) / GiB;
+                totalGb = f.total / GiB;
+            }
             disks.Add(new HwmonDisk
             {
                 Controller = controller,
-                Role = controller == kvController ? "kv" : "system",
+                Role = isKv ? "kv" : "system",
                 TempC = hottest,
                 Temp2C = second,
                 CritC = ReadCrit(dir),
-                UsedGb = ReadUsedGb(controller),
-                TotalGb = ReadTotalGb(controller),
+                UsedGb = usedGb,
+                TotalGb = totalGb,
             });
         }
         return disks.ToArray();
@@ -333,51 +359,37 @@ public sealed class HwmonReader
         catch { return null; }
     }
 
-    // Контроллер kvdisk: из mountinfo строка с точкой монтирования /home/an/llm/kvdisk →
-    // устройство /dev/nvmeXn1p1 → контроллер nvmeX. null — kvdisk не смонтирован.
-    private string? FindKvController()
+    // kvdisk: контроллер, на котором он живёт, и заполненность ФС, смонтированной в
+    // /home/an/llm/kvdisk. Оба — из ОДНОЙ строки mountinfo (одно правило — один источник):
+    // точка монтирования → устройство /dev/nvmeXn1p1 → контроллер nvmeX. null — kvdisk не смонтирован.
+    private (string? controller, (long total, long free)? fs) FindKvDisk()
     {
         try
         {
-            if (!File.Exists(_mountinfoPath)) return null;
+            if (!File.Exists(_mountinfoPath)) return (null, null);
             foreach (var line in File.ReadAllLines(_mountinfoPath))
             {
                 // Формат mountinfo: … <mountpoint> … - <fstype> <source> <opts>
                 // Ищем mountpoint = /home/an/llm/kvdisk, source = /dev/nvmeXn1p1.
                 var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                var mountpoint = fields.Length >= 5 ? fields[4] : null;
+                if (fields.Length < 8) continue;
+                var mountpoint = fields[4];
                 if (mountpoint != "/home/an/llm/kvdisk") continue;
-                var source = fields[^2]; // /dev/nvmeXn1p1 (… - fstype source super-opts)
-                var dev = Path.GetFileName(source); // nvmeXn1p1
-                var m = System.Text.RegularExpressions.Regex.Match(dev, @"^nvme(\d+)");
-                if (m.Success)
-                    return "nvme" + m.Groups[1].Value;
-                return null;
+                var source = Path.GetFileName(fields[^2]); // nvmeXn1p1
+                var m = System.Text.RegularExpressions.Regex.Match(source, @"^nvme(\d+)");
+                if (!m.Success) return (null, null);
+                return ("nvme" + m.Groups[1].Value, ReadFsUsage(mountpoint));
             }
         }
         catch { }
-        return null;
+        return (null, null);
     }
 
-    // Общий размер блока nvmeXn1 (512-байтовые сектора) → ГБ; null — нет.
-    private long? ReadTotalGb(string controller)
+    // Наибольшая ФС контроллера (среди смонтированных разделов nvmeXn1pY, не /boot/efi):
+    // всего и свободно (байты); null — смонтированных ФС нет.
+    private (long total, long free)? PickLargestFs(string controller)
     {
-        try
-        {
-            var sizeFile = Path.Combine(_sysBlockRoot, controller + "n1", "size");
-            if (!File.Exists(sizeFile)) return null;
-            var sectors = long.Parse(File.ReadAllText(sizeFile).Trim(), CultureInfo.InvariantCulture);
-            return sectors * 512L / (1024L * 1024 * 1024);
-        }
-        catch { return null; }
-    }
-
-    // Занято на ФС контроллера: среди смонтированных разделов (nvmeXn1pY) берётся ФС с
-    // наибольшим размером (не /boot/efi); statvfs точки монтирования → ГБ; null — нет.
-    private long? ReadUsedGb(string controller)
-    {
-        long? best = null;
-        long bestTotal = 0;
+        (long total, long free)? best = null;
         try
         {
             if (!File.Exists(_mountinfoPath)) return null;
@@ -387,15 +399,28 @@ public sealed class HwmonReader
                 if (fields.Length < 8) continue;
                 var source = Path.GetFileName(fields[^2]);
                 if (!source.StartsWith(controller + "n")) continue;
-                var drive = new DriveInfo(fields[4]);
-                var total = drive.TotalSize;
-                if (total <= bestTotal) continue;
-                bestTotal = total;
-                best = (total - drive.TotalFreeSpace) / (1024L * 1024 * 1024);
+                var mountpoint = fields[4];
+                if (mountpoint == "/boot/efi") continue;
+                var fs = ReadFsUsage(mountpoint);
+                if (fs is null) continue;
+                if (best is null || fs.Value.total > best.Value.total)
+                    best = fs;
             }
         }
         catch { }
         return best;
+    }
+
+    // Заполненность ФС (DriveInfo точки монтирования): всего и свободно (байты); null — не читается.
+    private (long total, long free)? ReadFsUsage(string mountpoint)
+    {
+        try
+        {
+            var (total, free) = _fsSize(mountpoint);
+            if (total <= 0) return null;
+            return (total, free);
+        }
+        catch { return null; }
     }
 
     // ─── Чтение чисел ──────────────────────────────────────────────────────────────

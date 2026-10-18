@@ -4,7 +4,7 @@
 // подписки, useSyncExternalStore.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { fetchLocalModelStats, type LocalModelStats } from './api';
+import { fetchLocalModelMedia, fetchLocalModelStats, type LocalModelStats } from './api';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
 // Захват текущего окна для fetch: poller живёт дольше выбора окна, поэтому fetch
@@ -14,12 +14,13 @@ export function makeStatsFetch(windowRef: { current: StatsWindow }): () => Promi
   return () => fetchLocalModelStats(windowRef.current);
 }
 
-// === Условие показа значка и панели: все три сразу ===
-// Флаг фичи включён, пользователь — админ, локальный провайдер настроен на
-// сервере (configured из ответа /api/local-model/stats). configured === null —
-// сервер ещё не ответил: значка нет, но и «не настроена» ещё не значит.
+// === Условие показа значка и панели ===
+// Админ: флаг фичи + configured (как раньше). Не-админ: только configured === true —
+// флаг local-model-stats его не гейтит, панель доступна всем, когда настроен ComfyUI.
+// configured === null — сервер ещё не ответил: значка нет, но и «не настроена» ещё не значит.
 export function isLocalModelPanelVisible(p: { flag: boolean; isAdmin: boolean; configured: boolean | null }): boolean {
-  return p.flag && p.isAdmin && p.configured === true;
+  if (p.isAdmin) return p.flag && p.configured === true;
+  return p.configured === true;
 }
 
 // === Стор configured: лёгкий редкий опрос для значка ===
@@ -61,17 +62,21 @@ export function useLocalModelAdmin(): boolean {
   );
 }
 
-// Опрашивать configured можно, только когда флаг включён и пользователь админ;
-// иначе ни одного запроса к /api/local-model/*
-export function shouldPollConfigured(flag: boolean, isAdmin: boolean): boolean {
-  return flag && isAdmin;
+// Источник значения configured для значка: админ — /stats (только при включённом
+// флаге), не-админ — /stats/media (флаг панель для него не гейтит). null — ни одного
+// запроса к /api/local-model/* (только админ без флага).
+export type ConfiguredSource = 'stats' | 'media';
+export function configuredSource(flag: boolean, isAdmin: boolean): ConfiguredSource | null {
+  if (isAdmin) return flag ? 'stats' : null;
+  return 'media';
 }
 
 // Чистый запуск лёгкого опроса (60 с): первый запрос сразу, затем по таймеру.
 // Возвращает остановку. Таймеры и запрос инъектируются — тест без React/DOM.
-// Сбой не критичен: прежнее значение остаётся.
+// Сбой не критичен: прежнее значение остаётся. fetch — любой ответ с configured
+// (и /stats, и /stats/media).
 export function startConfiguredPolling(
-  fetch: () => Promise<LocalModelStats>,
+  fetch: () => Promise<{ configured: boolean }>,
   intervalMs = 60_000,
   setTimer: (fn: () => void, ms: number) => unknown = (fn, ms) => window.setInterval(fn, ms),
   clearTimer: (id: unknown) => void = (id) => window.clearInterval(id as number),
@@ -87,14 +92,21 @@ export function startConfiguredPolling(
   return () => { cancelled = true; clearTimer(id); };
 }
 
+// Какой fetch для configured: 'stats' → /stats (админ), 'media' → /stats/media (не-админ).
+// Чистая функция — тест проверяет, что не-админ (/stats/media) /stats не трогает.
+export function configuredFetch(source: ConfiguredSource): () => Promise<{ configured: boolean }> {
+  return source === 'stats' ? () => fetchLocalModelStats() : () => fetchLocalModelMedia();
+}
+
 // Хук поверх startConfiguredPolling. Вызывается ТОЛЬКО из сторожа, который
 // смонтирован на странице всегда: панель монтируется лишь при configured=true,
 // опрос внутри неё замкнул бы круг (значок не появился бы никогда).
-export function useLocalModelConfiguredPolling(enabled: boolean, intervalMs = 60_000): void {
+// source — какой эндпоинт опрашивать: 'stats' (админ) или 'media' (не-админ).
+export function useLocalModelConfiguredPolling(source: ConfiguredSource | null, intervalMs = 60_000): void {
   useEffect(() => {
-    if (!enabled) return;
-    return startConfiguredPolling(() => fetchLocalModelStats(), intervalMs);
-  }, [enabled, intervalMs]);
+    if (source == null) return;
+    return startConfiguredPolling(configuredFetch(source), intervalMs);
+  }, [source, intervalMs]);
 }
 
 // === Тяжёлый опрос (2 с) — только пока панель открыта и вкладка видима ===

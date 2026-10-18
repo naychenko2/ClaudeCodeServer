@@ -973,56 +973,57 @@ class UsageИзОтветаTests(unittest.TestCase):
 
 
 class НормализацияUsageTests(unittest.TestCase):
-    """Нормализация usage к семантике Anthropic: `input_tokens` — только то, что мимо кэша.
+    """`usage` локального ответа: итог, который CLI собирает из `message_start` и `message_delta`.
 
-    Роутер vLLM в финальном `message_delta` кладёт в `input_tokens` ВЕСЬ промпт, кэш включительно,
-    и CLI складывает `input + cache_read + cache_creation` вслепую, удваивая контекст. Нормализуем
-    только локальный ответ: облачный (MiniMax) уже в семантике Anthropic.
+    Формы СНЯТЫ ЖИВЬЁМ с vLLM (2026-10-18, README «Нормализация usage»): `message_start` несёт
+    `input_tokens` = ВЕСЬ промпт, `message_delta` — `input` мимо кэша + `cache_read` +
+    `cache_creation` (сумма = промпт). CLI берёт `input` дельты, только если он > 0 (иначе
+    остаётся старт) — поэтому модель CLI в тестах такая же (`_итог_cli`).
     """
 
     def setUp(self):
         proxy.stats["usage_normalized"] = 0
 
+    # Снятые формы: (старт.input, дельта) — промпт во всех случаях равен сумме слагаемых дельты.
+    ПРОМАХ = (21440, {"input_tokens": 832, "output_tokens": 2,
+                      "cache_creation_input_tokens": 20608, "cache_read_input_tokens": 0})
+    ПОПАДАНИЕ = (21440, {"input_tokens": 832, "output_tokens": 2,
+                         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 20608})
+    ЧАСТИЧНО = (21749, {"input_tokens": 693, "output_tokens": 2,
+                        "cache_creation_input_tokens": 448, "cache_read_input_tokens": 20608})
+    # Сбой 15:06:20: дельта с input 0 — старт остаётся в итоге CLI целиком
+    ПОЛНОЕ_ПОПАДАНИЕ = (129024, {"input_tokens": 0, "output_tokens": 40,
+                                 "cache_creation_input_tokens": 896,
+                                 "cache_read_input_tokens": 128128})
 
-    def test_normalize_usage_полная_форма_нормализуется(self):
-        """Форма `message_delta` vLLM: `input` включает кэш — переписывается на `input − cache`."""
-        u = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
-             "cache_creation_input_tokens": 896, "output_tokens": 40}
-        n, changed = proxy.normalize_usage(u)
-        self.assertTrue(changed)
-        self.assertEqual(n["input_tokens"], 0)  # 129024 − 128128 − 896
-        self.assertEqual(n["cache_read_input_tokens"], 128128)
-        self.assertEqual(n["output_tokens"], 40)
-        self.assertEqual(u["input_tokens"], 129024, "вход не мутирует")
+    @staticmethod
+    def _итог_cli(события):
+        """Итог usage по модели CLI: старт задаёт `input`, дельта переписывает его, если > 0."""
+        итог = {}
+        for e in события:
+            if e.get("type") == "message_start":
+                итог.update(e["message"]["usage"])
+            elif e.get("type") == "message_delta":
+                for k, v in e["usage"].items():
+                    if k != "input_tokens" or v > 0:
+                        итог[k] = v
+        return (итог.get("input_tokens", 0) + итог.get("cache_read_input_tokens", 0)
+                + итог.get("cache_creation_input_tokens", 0))
 
-    def test_normalize_usage_правильная_форма_не_трогается(self):
-        """Форма `message_start`: `input < cache_read` — уже Anthropic-семантика, менять нечего."""
-        u = {"input_tokens": 2000, "cache_read_input_tokens": 18000, "output_tokens": 40}
-        n, changed = proxy.normalize_usage(u)
-        self.assertFalse(changed)
-        self.assertIs(n, u)
-
-    def test_normalize_usage_без_кэша_не_трогается(self):
-        u = {"input_tokens": 500, "output_tokens": 40}
-        n, changed = proxy.normalize_usage(u)
-        self.assertFalse(changed)
-        self.assertIs(n, u)
-
-    def test_normalize_usage_облачный_ответ_не_трогается(self):
-        """Облачный (MiniMax) уже в семантике Anthropic: `input < cache_read` — не трогать."""
-        u = {"input_tokens": 100, "cache_read_input_tokens": 18000,
-             "cache_creation_input_tokens": 0, "output_tokens": 40}
-        n, changed = proxy.normalize_usage(u)
-        self.assertFalse(changed)
-        self.assertIs(n, u)
-
-    def test_normalize_usage_не_ниже_ноля(self):
-        """`input ≥ cache_read` (полная форма), но `input − cache − creation` уходит в минус."""
-        u = {"input_tokens": 250, "cache_read_input_tokens": 200,
-             "cache_creation_input_tokens": 50, "output_tokens": 40}
-        n, changed = proxy.normalize_usage(u)
-        self.assertTrue(changed)
-        self.assertEqual(n["input_tokens"], 0)  # 250 − 200 − 50 = 0, не −0
+    def _прогнать(self, старт, дельта):
+        """Поток старт+дельта+стоп через нормализатор; вернуть события, как их увидит CLI."""
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
+        n.усвоить(self._sse({"input_tokens": старт, "output_tokens": 0}, "message_start"))
+        n.усвоить(self._sse(дельта))
+        n.усвоить(b"event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n")
+        n.дослать()
+        события = []
+        for кусок in собрано:
+            for строка in кусок.split(b"\n"):
+                if строка.startswith(b"data:"):
+                    события.append(json.loads(строка[5:]))
+        return события
 
     def _sse(self, usage, тип="message_delta"):
         if тип == "message_start":
@@ -1031,69 +1032,84 @@ class НормализацияUsageTests(unittest.TestCase):
             data = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage}
         return ("event: " + тип + "\ndata: " + json.dumps(data) + "\n\n").encode()
 
-    def test_нормализатор_sse_message_delta_нормализуется(self):
-        полный = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
-                  "cache_creation_input_tokens": 896, "output_tokens": 40}
-        собрано = []
-        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
-        n.усвоить(self._sse(полный))
-        n.дослать()
-        self.assertEqual(len(собрано), 1)
-        self.assertIn(b'"input_tokens": 0', собрано[0])
-        self.assertEqual(proxy.stats["usage_normalized"], 1)
+    def test_все_снятые_формы_дают_промпт_один_раз(self):
+        """Итог CLI = реальный промпт на промахе, попадании, частичном попадании и input 0."""
+        for имя, (старт, дельта) in [("промах", self.ПРОМАХ), ("попадание", self.ПОПАДАНИЕ),
+                                     ("частично", self.ЧАСТИЧНО),
+                                     ("input 0", self.ПОЛНОЕ_ПОПАДАНИЕ)]:
+            with self.subTest(имя):
+                события = self._прогнать(старт, дельта)
+                self.assertEqual(self._итог_cli(события), старт,
+                                 "итог CLI должен совпасть с реальным промптом")
 
-    def test_нормализатор_sse_message_start_не_трогается(self):
-        собрано = []
-        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
-        n.усвоить(self._sse({"input_tokens": 2000, "output_tokens": 1}, "message_start"))
-        n.дослать()
-        self.assertIn(b'"input_tokens": 2000', собрано[0])
-        self.assertEqual(proxy.stats["usage_normalized"], 0)
+    def test_без_нормализатора_формы_удваиваются(self):
+        """Контроль модели CLI: сырые события (как до правки) дают удвоение на промахе и input 0."""
+        for старт, дельта in (self.ПОЛНОЕ_ПОПАДАНИЕ,):
+            события = [{"type": "message_start", "message": {"usage": {"input_tokens": старт}}},
+                       {"type": "message_delta", "usage": дельта}]
+            self.assertEqual(self._итог_cli(события), старт + 128128 + 896)
 
-    def test_нормализатор_sse_message_stop_не_теряется(self):
-        """Два события в одном чанке: `message_delta` нормализуется, `message_stop` доходит."""
-        полный = {"input_tokens": 20000, "cache_read_input_tokens": 18000, "output_tokens": 40}
-        чанк = (self._sse(полный) + "event: message_stop\ndata: {}\n\n".encode())
-        собрано = []
-        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
-        n.усвоить(чанк)
-        n.дослать()
-        склейка = b"".join(собрано)
-        self.assertIn(b"message_stop", склейка, "message_stop не должен потеряться")
-        self.assertIn(b'"input_tokens": 2000', склейка)  # 20000 − 18000
-        self.assertEqual(proxy.stats["usage_normalized"], 1)
+    def test_старт_обнуляется_дельта_не_ломается(self):
+        события = self._прогнать(*self.ПРОМАХ)
+        self.assertEqual(события[0]["message"]["usage"]["input_tokens"], 0)
+        self.assertEqual(события[1]["usage"], self.ПРОМАХ[1], "правильная дельта не трогается")
+        self.assertEqual(события[2]["type"], "message_stop")
 
-    def test_нормализатор_json_нормализуется(self):
-        полный = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
-                  "cache_creation_input_tokens": 896, "output_tokens": 40}
+    def test_полная_форма_в_дельте_страхуется(self):
+        """Страховка: дельта, где input = весь промпт при ненулевом кэше, переписывается."""
+        полная = {"input_tokens": 21440, "cache_read_input_tokens": 20608,
+                  "cache_creation_input_tokens": 0, "output_tokens": 2}
+        события = self._прогнать(21440, полная)
+        self.assertEqual(события[1]["usage"]["input_tokens"], 832)
+        self.assertEqual(self._итог_cli(события), 21440)
+
+    def test_normalize_usage_без_промпта_старта_не_трогает(self):
+        u = {"input_tokens": 500, "cache_read_input_tokens": 100, "output_tokens": 4}
+        n, changed = proxy.normalize_usage(u)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_без_кэша_не_трогает(self):
+        u = {"input_tokens": 500, "output_tokens": 4}
+        n, changed = proxy.normalize_usage(u, 500)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_не_мутирует_вход(self):
+        u = {"input_tokens": 250, "cache_read_input_tokens": 200,
+             "cache_creation_input_tokens": 50}
+        n, changed = proxy.normalize_usage(u, 250)
+        self.assertTrue(changed)
+        self.assertEqual(n["input_tokens"], 0)
+        self.assertEqual(u["input_tokens"], 250)
+
+    def test_json_без_потока_проходит_как_есть(self):
+        """Не-SSE (снято живьём: одна верная форма `usage`) — тело байт в байт."""
+        тело = json.dumps({"type": "message", "usage": {
+            "input_tokens": 851, "output_tokens": 2, "cache_creation_input_tokens": 38976,
+            "cache_read_input_tokens": 0}}).encode()
         собрано = []
         n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=False)
-        n.усвоить(json.dumps({"type": "message", "usage": полный}).encode())
+        n.усвоить(тело)
         n.дослать()
-        doc = json.loads(собрано[0])
-        self.assertEqual(doc["usage"]["input_tokens"], 0)
-        self.assertEqual(proxy.stats["usage_normalized"], 1)
-
-    def test_нормализатор_json_правильная_форма_не_трогается(self):
-        u = {"input_tokens": 2000, "cache_read_input_tokens": 18000, "output_tokens": 40}
-        собрано = []
-        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=False)
-        n.усвоить(json.dumps({"type": "message", "usage": u}).encode())
-        n.дослать()
-        doc = json.loads(собрано[0])
-        self.assertEqual(doc["usage"]["input_tokens"], 2000)
+        self.assertEqual(b"".join(собрано), тело)
         self.assertEqual(proxy.stats["usage_normalized"], 0)
 
-    def test_мутация_признака_формы_красит(self):
-        """Признак полной формы — тот же, что в `usage_totals`: сломаешь его, нормализация сломается."""
-        u = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
-             "cache_creation_input_tokens": 896, "output_tokens": 40}
-        with unittest.mock.patch.object(proxy, "_полная_форма", lambda x: False):
-            _, changed = proxy.normalize_usage(u)
-            self.assertFalse(changed, "признак формы сломан — полная форма не распознана")
-        with unittest.mock.patch.object(proxy, "_полная_форма", lambda x: True):
-            n, changed = proxy.normalize_usage({"input_tokens": 2000, "cache_read_input_tokens": 18000})
-            self.assertTrue(changed, "признак формы сломан — правильная форма распознана как полная")
+    def test_облачный_ответ_minimax_не_ломается_нормализатором(self):
+        """Снятая форма MiniMax: старт input 0, дельта — слагаемые. Старт не растёт, дельта цела."""
+        дельта = {"input_tokens": 63043, "output_tokens": 3, "cache_read_input_tokens": 128}
+        события = self._прогнать(0, дельта)
+        self.assertEqual(события[0]["message"]["usage"]["input_tokens"], 0)
+        self.assertEqual(события[1]["usage"], дельта)
+        self.assertEqual(self._итог_cli(события), 63171)
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_мутация_обнуление_старта_красит(self):
+        """Сломать обнуление старта — итог CLI на промахе и при input 0 снова удвоен."""
+        with unittest.mock.patch.object(proxy.НормализаторUsage, "_событие",
+                                        lambda self, сырое: self.отдать(сырое)):
+            события = self._прогнать(*self.ПОЛНОЕ_ПОПАДАНИЕ)
+        self.assertNotEqual(self._итог_cli(события), self.ПОЛНОЕ_ПОПАДАНИЕ[0])
 
 
 class ОтправкаСобытияTests(unittest.TestCase):
@@ -2195,6 +2211,19 @@ def события(сырое):
     return итог
 
 
+def события_клиента(сырое):
+    """То же, что `события`, но так, как ответ локальной модели видит клиент: прокси обнуляет
+    `input_tokens` в `message_start` (настоящую цифру CLI берёт из дельты; см.
+    НормализаторUsage), остальное — байт в байт."""
+    итог = события(сырое)
+    for тип, данные in итог:
+        if тип == "message_start":
+            usage = данные["message"].get("usage")
+            if isinstance(usage, dict) and usage.get("input_tokens"):
+                usage["input_tokens"] = 0
+    return итог
+
+
 def проверить_целостность(тест, список):
     """Поток, который примет CLI: одно начало, блоки открыты-закрыты по порядку, конец в конце."""
     типы = [т for т, _ in список]
@@ -2535,14 +2564,14 @@ class ПетляСквознаяTests(unittest.TestCase):
         сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
         self.Модель.ответы = [сырое]
         список = self.спросить(ждать_карточку=False)
-        self.assertEqual(список, события(сырое))
+        self.assertEqual(список, события_клиента(сырое))
         self.assertEqual(proxy.stats["loops_detected"], 0)
         self.assertEqual(self.Бэкенд.принятые, [])
 
     def test_обычный_ответ_без_изменений_и_карточки(self):
         сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ * 2), ("text", "Сделано.")])
         self.Модель.ответы = [сырое]
-        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
         self.assertEqual(len(self.Модель.принятые), 1)
         self.assertEqual(self.Бэкенд.принятые, [])
 
@@ -2841,7 +2870,7 @@ class МусорСквознойTests(unittest.TestCase):
         proxy.LOOP_GUARD = "off"
         сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
         self.Модель.ответы = [сырое]
-        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
         self.assertEqual((proxy.stats["loops_detected"], proxy.stats["junk_aborts"]), (0, 0))
 
     def test_обычный_ответ_без_изменений(self):
@@ -2849,7 +2878,7 @@ class МусорСквознойTests(unittest.TestCase):
         сырое = поток_ответа([("thinking", АНГЛИЙСКАЯ_ПРОЗА),
                               ("text", РУССКАЯ_ПРОЗА + ПУТИ_И_ХЕШИ + BASE64_В_КОДЕ)])
         self.Модель.ответы = [сырое]
-        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
         self.assertEqual((proxy.stats["junk_aborts"], proxy.stats["loops_detected"]), (0, 0))
 
 
@@ -3230,11 +3259,12 @@ class СохранениеДословногоTests(unittest.TestCase):
         # Последнее сообщение в этих тестах — чистая инструкция сжатия: блок по истории без неё.
         return "\n\n" + proxy.compactor.build_preserved(dict(doc, messages=doc["messages"][:-1]))
 
-    def проверить_вставку(self, ответ, блок):
+    def проверить_вставку(self, ответ, блок, локаль=False):
+        """локаль=True — ответ идёт через локальный upstream: старт с обнулённым input."""
         список = события(ответ)
         проверить_целостность(self, список)
         проверить_индексы(self, список)
-        модель = события(self.поток)
+        модель = (события_клиента if локаль else события)(self.поток)
         # Ровно одно лишнее событие — дельта с блоком перед стопом текстового блока (index 1).
         self.assertEqual(len(список), len(модель) + 1)
         стоп = список.index(("content_block_stop", {"type": "content_block_stop", "index": 1}))
@@ -3329,7 +3359,7 @@ class СохранениеДословногоTests(unittest.TestCase):
         doc = self.запрос()
         блок = self.ожидаемый_блок(doc)
         ответ = self.спросить(doc)
-        self.проверить_вставку(ответ, блок)
+        self.проверить_вставку(ответ, блок, локаль=True)
         self.assertEqual(proxy.stats["compact_fallback"], 1)
         self.assertEqual(proxy.stats["compact_preserved"], 1)
         реплика = self.последняя_реплика(self.Локальный.принятые[-1])
@@ -3340,7 +3370,7 @@ class СохранениеДословногоTests(unittest.TestCase):
         proxy.LOOP_GUARD = proxy.JUNK_GUARD = "on"
         self.Облако.статус = 500
         doc = self.запрос()
-        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc), локаль=True)
 
     def test_фолбэк_петля_после_сводки_и_повтор(self):
         """Петля после <summary> → обрыв, повтор; в запись CLI идёт сводка повтора с блоком."""
@@ -3379,7 +3409,7 @@ class СохранениеДословногоTests(unittest.TestCase):
     def test_без_облака_блок_тоже_вставляется(self):
         proxy.COMPACT_UPSTREAM = ""
         doc = self.запрос()
-        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc), локаль=True)
         self.assertEqual(self.Облако.принятые, [])
 
     def test_выключено_поток_байт_в_байт(self):
@@ -3394,7 +3424,7 @@ class СохранениеДословногоTests(unittest.TestCase):
     def test_обычный_ход_не_трогается(self):
         doc = self.запрос()
         doc["messages"][-1] = {"role": "user", "content": "проверь сборку"}
-        self.assertEqual(self.спросить(doc), self.поток)
+        self.assertEqual(события(self.спросить(doc)), события_клиента(self.поток))
         self.assertEqual(self.Облако.принятые, [])
 
     def test_исключение_compactor_запрос_проходит(self):

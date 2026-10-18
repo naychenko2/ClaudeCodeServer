@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockLocalModelStats } from './localModel.fixtures';
 import {
+  configuredFetch,
   createStatsPoller,
   getLocalModelConfigured,
   isLocalModelPanelVisible,
@@ -11,24 +12,55 @@ import {
 
 // Блокёр: окно из UI доходит до fetch. makeStatsFetch читает windowRef.current на
 // каждый вызов; мутация «захватить окно при создании poller» краснеет.
-const { fetchLocalModelStats } = vi.hoisted(() => ({ fetchLocalModelStats: vi.fn() }));
-vi.mock('./api', () => ({ fetchLocalModelStats }));
+const { fetchLocalModelStats, fetchLocalModelMedia } = vi.hoisted(() => ({
+  fetchLocalModelStats: vi.fn(),
+  fetchLocalModelMedia: vi.fn(),
+}));
+vi.mock('./api', () => ({ fetchLocalModelStats, fetchLocalModelMedia }));
 
-describe('isLocalModelPanelVisible: значок — только когда все три условия', () => {
-  it('флаг + admin + configured — показывается', () => {
+describe('isLocalModelPanelVisible: видимость панели', () => {
+  // Админ: флаг + configured (как раньше)
+  it('admin: флаг + configured — показывается', () => {
     expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: true })).toBe(true);
   });
-  it('без флага — не показывается', () => {
+  it('admin: без флага — не показывается', () => {
     expect(isLocalModelPanelVisible({ flag: false, isAdmin: true, configured: true })).toBe(false);
   });
-  it('не admin — не показывается', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: true })).toBe(false);
-  });
-  it('configured: false — локальных моделей нет, значка нет', () => {
+  it('admin: configured: false — нет', () => {
     expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: false })).toBe(false);
   });
-  it('configured: null — сервер ещё не ответил, значка нет', () => {
+  it('admin: configured: null — сервер ещё не ответил, нет', () => {
     expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: null })).toBe(false);
+  });
+  // Не-админ: только configured (флаг local-model-stats его не гейтит)
+  it('не admin: configured: true — показывается, флаг не важен', () => {
+    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: true })).toBe(true);
+    expect(isLocalModelPanelVisible({ flag: false, isAdmin: false, configured: true })).toBe(true);
+  });
+  it('не admin: configured: false — нет', () => {
+    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: false })).toBe(false);
+  });
+  it('не admin: configured: null — нет', () => {
+    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: null })).toBe(false);
+  });
+});
+
+describe('configuredFetch: не-админ (/stats/media) /stats не трогает', () => {
+  it('media → fetchLocalModelMedia; /stats не вызван', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    vi.mocked(fetchLocalModelMedia).mockReset();
+    vi.mocked(fetchLocalModelMedia).mockResolvedValue({ configured: true });
+    await configuredFetch('media')();
+    expect(vi.mocked(fetchLocalModelMedia)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchLocalModelStats)).not.toHaveBeenCalled();
+  });
+  it('stats → fetchLocalModelStats; /stats/media не вызван', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    vi.mocked(fetchLocalModelMedia).mockReset();
+    vi.mocked(fetchLocalModelStats).mockResolvedValue({ configured: true });
+    await configuredFetch('stats')();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchLocalModelMedia)).not.toHaveBeenCalled();
   });
 });
 

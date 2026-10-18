@@ -28,7 +28,7 @@ function MiniTile({ name }: { name: string }) {
       width: 20, height: 20, borderRadius: R.sm, flexShrink: 0,
       background: C.accentLight, color: C.accent,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontWeight: 700, fontSize: 9,
+      fontWeight: 700, fontSize: FS.xs,
     }}>
       {initials}
     </div>
@@ -63,6 +63,7 @@ export function PluginFrame({ project }: { project: Project }) {
         title="Панели плагинов"
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            {/* M8: перезагрузка панели доедет в пачке C (мост) — пока onClick пуст */}
             <IconButton size="xs" tone="muted" ariaLabel="Перезагрузить панель" onClick={() => {}}>
               <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>

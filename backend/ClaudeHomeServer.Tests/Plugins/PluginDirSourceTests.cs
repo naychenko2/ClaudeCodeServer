@@ -104,12 +104,70 @@ public class PluginDirSourceTests : IDisposable
             "у локального проекта в MVP плагинов нет (ProjectCapabilities.PluginsFor)");
     }
 
+    // C1: привязка, созданная в формате пикера «plugin:{id}/{skill}», ОБЯЗАНА дать каталог
+    // в GetPluginDirs. До фикса PluginDirSource сравнивал «plugin:{id}» (без навыка) с
+    // «plugin:{id}/{skill}» (пикер) — никогда не совпадало, и --plugin-dir не доставлялся.
+    [Fact]
+    public void PluginDirSource_ПривязкаПерсоныДаетКаталог()
+    {
+        var pkgA = _store.PackageDir("owner-a", "local-a/pkg", "1.0.0");
+        Directory.CreateDirectory(pkgA);
+        _store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        // Персона привязана к навыку плагина в формате пикера: plugin:{publisher}/{slug}/{skill}.
+        var lookup = new Mock<IPersonaSkillBindingLookup>();
+        lookup.Setup(l => l.Get("owner-a", "persona-1"))
+            .Returns(new PersonaForSkillSuggestion("Тест", null, null, null, null,
+                ["plugin:local-a/pkg/my-skill"]));
+
+        var source = new PluginDirSource(_store, lookup.Object);
+        var dirs = source.GetPluginDirs("owner-a", "persona-1", ServerProject());
+
+        dirs.Should().ContainSingle(
+            "привязка в формате пикера даёт каталог привязанного плагина (C1)")
+            .Which.Should().EndWith("packages/local-a/pkg/1.0.0");
+    }
+
+    // C1 (мутация): плагин, НЕ привязанный персоне, в --plugin-dir не попадает.
+    // Убираем проверку префикса id (фильтр персоны) → чужой плагин B тоже попадёт → тест красный.
+    [Fact]
+    public void PluginDirSource_ПривязкаПерсоныНеДаетКаталог()
+    {
+        var pkgA = _store.PackageDir("owner-a", "local-a/pkg", "1.0.0");
+        Directory.CreateDirectory(pkgA);
+        var pkgB = _store.PackageDir("owner-a", "local-b/other", "1.0.0");
+        Directory.CreateDirectory(pkgB);
+        _store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+            new PluginInstall { Id = "local-b/other", Version = "1.0.0", Sha256 = "b", Enabled = true, Source = "draft" },
+        ]);
+
+        // Персона привязана ТОЛЬКО к плагину A; B установлен, но не привязан.
+        var lookup = new Mock<IPersonaSkillBindingLookup>();
+        lookup.Setup(l => l.Get("owner-a", "persona-1"))
+            .Returns(new PersonaForSkillSuggestion("Тест", null, null, null, null,
+                ["plugin:local-a/pkg/my-skill"]));
+
+        var source = new PluginDirSource(_store, lookup.Object);
+        var dirs = source.GetPluginDirs("owner-a", "persona-1", ServerProject());
+
+        dirs.Should().Contain(d => d.EndsWith("packages/local-a/pkg/1.0.0"),
+            "привязанный плагин A — в --plugin-dir");
+        dirs.Should().NotContain(d => d.EndsWith("packages/local-b/other/1.0.0"),
+            "плагин B не привязан персоне — в --plugin-dir не попадает (C1)");
+    }
+
     // СТОРОЖ (инвариант 4, ADR-031 §2.5): набор каталогов --plugin-dir зависит ТОЛЬКО от
-    // свойств сессии (владелец, персона, проект), не от хода. Два вызова с теми же
-    // свойствами дают тот же набор — иначе сигнатура запуска CLI «мерцает» между ходами и
-    // каждый переход убивает процесс claude вместе со всеми MCP-серверами.
-    // Мутация «набор начал зависеть от хода» (например, GetPluginDirs читает ambient-состояние
-    // хода) → два вызова расходятся → тест красный.
+    // свойств сессии (владелец, персона, проект), не от хода. Иначе сигнатура запуска CLI
+    // «мерцает» между ходами и каждый переход убивает процесс claude вместе со всеми MCP-серверами.
+    // M5: сравниваем ДВА РАЗНЫХ хода (отдельные снапшоты проекта), а не один вход дважды:
+    // GetPluginDirs перечитывает installed.json на каждый ход, и результат обязан совпасть,
+    // даже если снапшот хода — другой объект. Мутация «метод читает ambient-состояние хода»
+    // → два хода расходятся → тест красный.
     [Fact]
     public void PluginDirSource_НаборНеЗависитОтХода()
     {
@@ -121,11 +179,12 @@ public class PluginDirSourceTests : IDisposable
         ]);
 
         var source = new PluginDirSource(_store, Mock.Of<IPersonaSkillBindingLookup>());
-        var project = ServerProject();
-        // Два «хода» с теми же свойствами сессии → тот же набор.
-        var first = source.GetPluginDirs("owner-a", null, project);
-        var second = source.GetPluginDirs("owner-a", null, project);
+        // Два разных хода: отдельные снапшоты проекта (одинаковые данные, разные объекты).
+        var turn1 = new Project { Id = "p1", RootPath = "/srv/p1" };
+        var turn2 = new Project { Id = "p1", RootPath = "/srv/p1" };
+        var first = source.GetPluginDirs("owner-a", null, turn1);
+        var second = source.GetPluginDirs("owner-a", null, turn2);
         first.Should().BeEquivalentTo(second,
-            "набор --plugin-dir не должен зависеть от хода: иначе сигнатура запуска мерцает");
+            "набор --plugin-dir не зависит от хода: два разных хода дают одну сигнатуру запуска");
     }
 }

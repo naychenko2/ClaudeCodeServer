@@ -193,13 +193,14 @@ public class PluginStoreTests
             new PluginInstall { Id = "local-a/closed", Version = "1.0.0", Sha256 = "b", Enabled = true, Source = "draft" },
         ]);
 
-        // Персона имеет Skill-биндинг только на local-a/open (target plugin:local-a/open).
+        // Персона имеет Skill-биндинг только на local-a/open (target plugin:local-a/open/{skill},
+        // единый формат PluginSkillTarget, C1).
         var bindings = new Mock<IPersonaSkillBindingLookup>();
         bindings
             .Setup(b => b.Get("owner-a", "persona-1"))
             .Returns(new PersonaForSkillSuggestion(
                 Name: "Персона", Role: null, Description: null, Character: null,
-                MustDo: null, SkillBindingTargets: ["plugin:local-a/open"]));
+                MustDo: null, SkillBindingTargets: ["plugin:local-a/open/sync"]));
 
         // Minor: каталог открытого пакета обязан существовать, иначе --plugin-dir не отдаётся.
         Directory.CreateDirectory(store.PackageDir("owner-a", "local-a/open", "1.0.0"));

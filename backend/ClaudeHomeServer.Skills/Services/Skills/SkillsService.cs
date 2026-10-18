@@ -210,46 +210,34 @@ public class SkillsService
         return result;
     }
 
-    // Разобрать target привязки «plugin:{id}/{skill}» и вернуть навык из пакета владельца,
-    // если плагин установлен и включён; null — плагин удалён/выключен (привязка тихо пропадает
-    // из промпта, без исключения). id — {publisher}/{slug} (один разделитель), skill — имя
-    // навыка (без префикса slug).
-    public SkillInfo? ResolveOwnerPluginSkill(string ownerId, string target)
+    // Разобрать target привязки «plugin:{id}/{skill}» (единый разбор PluginSkillTarget, C1)
+    // и вернуть навык из пакета владельца, если плагин установлен и включён; null — плагин
+    // удалён/выключен (привязка тихо пропадает из промпта, без исключения). project —
+    // фильтрация по локальности (M2): у локального проекта плагины выключены, навык не
+    // виден; null (ход без привязки) — все включённые пакеты.
+    public SkillInfo? ResolveOwnerPluginSkill(string ownerId, string target, Project? project = null)
     {
-        if (!TryParsePluginTarget(target, out var pluginId, out var skillName)) return null;
-        foreach (var s in GetOwnerPluginSkills(ownerId, null))
+        if (!PluginSkillTarget.TryParse(target, out var parsed)) return null;
+        var source = $"{PluginSkillTarget.Prefix}{parsed.PluginId}";
+        foreach (var s in GetOwnerPluginSkills(ownerId, project))
         {
-            if (s.Source != $"plugin:{pluginId}") continue;
+            if (s.Source != source) continue;
             // Имя в листинге «{slug}:{имя}»; сравниваем по базовому имени навыка.
             var baseName = s.Name.Contains(':') ? s.Name[(s.Name.IndexOf(':') + 1)..] : s.Name;
-            if (string.Equals(baseName, skillName, StringComparison.OrdinalIgnoreCase)) return s;
+            if (string.Equals(baseName, parsed.Skill, StringComparison.OrdinalIgnoreCase)) return s;
         }
         return null;
     }
 
     // Содержимое навыка плагина владельца по target «plugin:{id}/{skill}»; null — плагин
     // удалён/выключен или навык не найден (выжимка Always-привязки тихо пропускается).
-    public string? GetOwnerPluginSkillContent(string ownerId, string target)
+    // project — та же фильтрация по локальности, что в ResolveOwnerPluginSkill (M2).
+    public string? GetOwnerPluginSkillContent(string ownerId, string target, Project? project = null)
     {
-        var skill = ResolveOwnerPluginSkill(ownerId, target);
+        var skill = ResolveOwnerPluginSkill(ownerId, target, project);
         if (skill is null || !File.Exists(skill.FilePath)) return null;
         try { return File.ReadAllText(skill.FilePath); }
         catch { return null; }
-    }
-
-    // «plugin:{publisher}/{slug}/{skill}» → id = «{publisher}/{slug}», skill = остаток.
-    // Формат id — ровно один разделитель (PluginId.Pattern), skill может содержать «/».
-    internal static bool TryParsePluginTarget(string target, out string pluginId, out string skillName)
-    {
-        pluginId = "";
-        skillName = "";
-        if (string.IsNullOrEmpty(target) || !target.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase))
-            return false;
-        var parts = target["plugin:".Length..].Split('/');
-        if (parts.Length < 3) return false; // минимум publisher/slug/skill
-        pluginId = $"{parts[0]}/{parts[1]}";
-        skillName = string.Join("/", parts, 2, parts.Length - 2);
-        return !string.IsNullOrEmpty(skillName);
     }
 
     // Навыки (skills/*/SKILL.md) и команды (commands/*.md) одного пакета владельца; дубли имён

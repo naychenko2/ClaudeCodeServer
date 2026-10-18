@@ -37,7 +37,8 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { PluginFrame, useHasInstalledPlugins } from '../features/plugins';
+import { PluginFrame, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -314,7 +315,12 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // подписка на стор подсистем нужна — она же читается гейтом.
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
   // Панели плагинов (ADR-031, гейт V5): слот появляется, только когда у проекта есть
-  // хотя бы один установленный плагин. Стор питает useInstalledPlugins (секция/слот).
+  // хотя бы один установленный плагин. M4: список грузим здесь (а не только в секции
+  // настроек) — иначе стор пуст до первого открытия настроек, и слот «не виден сразу».
+  // Гейт: флаг plugins-mvp + локальность (ProjectCapabilities.Plugins).
+  const pluginsMvp = useFeature(FLAGS.pluginsMvp)
+  const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins)
+  useInstalledPlugins(project.id, pluginsMvp && pluginsAvail)
   const hasPlugins = useHasInstalledPlugins(project.id)
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')

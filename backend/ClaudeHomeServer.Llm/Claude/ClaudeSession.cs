@@ -52,7 +52,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): шов IPluginDirSource
     // (опциональная зависимость — null, если подсистема Plugins выключена) и проект чата для
     // проверки локальности. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект),
-    // не от хода: установка/удаление/смена версии вступают в силу со следующего старта процесса CLI.
+    // не от хода: installed.json перечитывается на каждый ход, и установка/удаление/смена версии
+    // вступают в силу со следующего хода (процесс перезапускается, если сигнатура изменилась).
     private readonly ClaudeHomeServer.Services.Plugins.IPluginDirSource? _pluginDirSource;
     private readonly Models.Project? _pluginProject;
 
@@ -3383,12 +3384,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Каталоги плагинов владельца (ADR-031 §2.4/§2.5): --plugin-dir на каждый включённый
         // пакет. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект), не от
-        // хода — установка/удаление/смена версии вступают в силу со следующего старта процесса
-        // CLI (инвариант 4), поэтому аргумент стабилен в пределах сессии и не мерцает в
-        // сигнатуре запуска. Путь — в среде исполнения: в песочнице data/plugins смонтирована
-        // в /plugins (ro), ToRuntime переводит; локально — identity. Локальный проект
-        // (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [], аргументов нет.
-        // _pluginDirSource null — подсистема Plugins выключена (опциональная зависимость).
+        // хода — installed.json перечитывается на каждый ход, и установка/удаление/смена версии
+        // вступают в силу со следующего хода (инвариант 4): аргумент стабилен, пока набор не
+        // изменился, и не мерцает в сигнатуре запуска. Путь — в среде исполнения: в песочнице
+        // data/plugins смонтирована в /plugins (ro), ToRuntime переводит; локально — identity.
+        // Локальный проект (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [],
+        // аргументов нет. _pluginDirSource null — подсистема Plugins выключена.
         if (_pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
         {
             var pluginDirs = _pluginDirSource.GetPluginDirs(pluginOwnerId, Info.PersonaId, _pluginProject);

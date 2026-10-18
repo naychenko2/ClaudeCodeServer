@@ -104,6 +104,9 @@ public sealed class SandboxManager
             Directory.CreateDirectory(Options.ProjectsRoot);
             Directory.CreateDirectory(ProfilesHostDir);
             Directory.CreateDirectory(TmpHostDir);
+            // M7: data/plugins создаём при старте, а не при первой установке — иначе наличие
+            // каталога входит в ConfigHash, и первая установка пересоздаёт контейнер.
+            Directory.CreateDirectory(PluginsHostDir);
 
             var desiredImageId = (await DockerAsync(ct, "image", "inspect", "--format", "{{.Id}}", Options.Image))
                 is { Code: 0 } img

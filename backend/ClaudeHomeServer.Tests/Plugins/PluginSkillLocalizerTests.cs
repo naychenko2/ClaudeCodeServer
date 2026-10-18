@@ -90,6 +90,20 @@ public class PluginSkillLocalizerTests : IDisposable
             .Should().HaveCount(1);
     }
 
+    // M10: имя вызова — «{slug}:{имя}», где slug — хвост id. CLI берёт префикс имени из
+    // `name` в plugin.json; совпадение с нашим форматом гарантировано, пока name == slug
+    // (MVP: publisher local-{owner}, slug — из id). Закрепляем формат: смена формата имени
+    // вызова → тест красный.
+    [Fact]
+    public void PluginSkillLocalizer_ИмяВызова_СлагИзId()
+    {
+        InstallPlugin("owner-a", "local-3f9a/weekly-report", "1.0.0", "sync", userInvocable: true);
+
+        var s = _skills.GetOwnerPluginSkills("owner-a", null).Single();
+        s.Name.Should().Be("weekly-report:sync",
+            "M10: имя вызова — {slug}:{имя}; slug — хвост id (CLI берёт префикс из name в plugin.json)");
+    }
+
     // user-invocable: false → навык не slash-команда (только через Skill-тул).
     [Fact]
     public void PluginSkillLocalizer_БезUserInvocable_НеSlashКоманда()

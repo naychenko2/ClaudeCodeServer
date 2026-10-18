@@ -108,6 +108,28 @@ public class PluginBindingResolverTests : IDisposable
             .And.Contain("my-skill");
     }
 
+    // M3: в container агенту не дают ХОСТОВЫЙ путь (в песочнице он другой). Промпт —
+    // «используй навык {slug}:{skill} через Skill-тул», а не путь к файлу. Мутация
+    // «вернуть FilePath в промпт» → хостовый путь в блоке → тест красный.
+    [Fact]
+    public async Task PersonaBindingsService_ContainerPathПопалВПромпт()
+    {
+        var persona = MakePersona();
+        InstallPlugin();
+
+        var block = await _sut.BuildTurnBlockAsync(Owner, persona.Id, "вопрос", []);
+        block.Should().NotBeNull("плагин установлен — привязка в блоке");
+
+        // Хостовый путь к SKILL.md в промпт не попадает (в песочнице путь другой).
+        var skillFile = Path.Combine(_store.PackageDir(Owner, PluginId, "1.0.0"),
+            "skills", SkillName, "SKILL.md");
+        block!.Should().NotContain(skillFile,
+            "M3: хостовый путь к файлу навыка в промпт не попадает");
+        // Вместо пути — имя навыка через Skill-тул.
+        block.Should().Contain("Skill-тул",
+            "M3: промпт говорит «используй навык через Skill-тул», а не путь");
+    }
+
     // Плагин удалён → привязка тихо пропадает из промпта (блок пуст), без исключения.
     // Мутация «удаляем плагин, привязка не пропадает» → блок снова содержит навык → тест красный.
     [Fact]

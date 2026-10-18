@@ -48,8 +48,13 @@ public class PluginDirSource : IPluginDirSource
         foreach (var record in records)
         {
             if (!record.Enabled) continue;
+            // Персона: пакет открыт, только если среди её Skill-биндингов есть target
+            // «plugin:{id}/{skill}» с этим id. Разбор — единая точка PluginSkillTarget (C1):
+            // сравниваем по префиксу id, а не по целой строке (target несёт и имя навыка).
             if (hasPersonaFilter
-                && (personaTargets is null || !personaTargets.Contains($"plugin:{record.Id}")))
+                && (personaTargets is null
+                    || !personaTargets.Any(t => PluginSkillTarget.TryParse(t, out var p)
+                                               && p.PluginId == record.Id)))
                 continue;
             // minor 13: запись с битым id/version (не по формату) — пропустить, а не бросать
             // ArgumentException из PackageDir и ронять всю сборку --plugin-dir.

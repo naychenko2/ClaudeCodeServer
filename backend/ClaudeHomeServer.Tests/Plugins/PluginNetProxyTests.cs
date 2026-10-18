@@ -55,11 +55,14 @@ public class PluginNetProxyTests : IDisposable
     }
 
     // Прокси с fake-клиентом. Таймаут короткий, лимиты по умолчанию.
+    // dnsResolver — фейковый резолв для детерминированного DNS rebinding (critical 1);
+    // null — системный Dns (как в бою).
     private static (PluginNetProxy Proxy, FakeHttpHandler Handler) NewProxy(
-        PluginSecretsStore secrets, Func<HttpRequestMessage, HttpResponseMessage> respond)
+        PluginSecretsStore secrets, Func<HttpRequestMessage, HttpResponseMessage> respond,
+        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver = null)
     {
         var handler = new FakeHttpHandler(respond);
-        var proxy = new PluginNetProxy(secrets, new HttpClient(handler));
+        var proxy = new PluginNetProxy(secrets, handler, dnsResolver);
         proxy.Timeout = TimeSpan.FromSeconds(5);
         return (proxy, handler);
     }
@@ -168,6 +171,59 @@ public class PluginNetProxyTests : IDisposable
         result.Error.Message.Should().Contain("127.0.0.1");
     }
 
+    // --- 3a. Редирект на приватный адрес → upstream (rework 12, critical 1) ---
+    // Исходный хост публичный и выдан, но Location — 127.0.0.1 (loopback): редирект на
+    // приватный адрес — тот же SSRF. Мутация: убрать повторную SSRF-проверку на редиректе
+    // (и «разный хост») → тест красный.
+    [Fact]
+    public async Task РедиректНаПриватныйАдрес_ОтдаётUpstream()
+    {
+        var (proxy, _) = NewProxy(_secrets, req =>
+            req.RequestUri!.AbsolutePath == "/graphql"
+                ? Resp(302, "", [("Location", "http://127.0.0.1/secret")])
+                : Resp(200, "ok"));
+        var result = await proxy.HandleAsync(Ctx(), "net.fetch",
+            Args("""{"url":"https://api.linear.app/graphql"}"""),
+            ["net:api.linear.app"], CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error!.Code.Should().Be("upstream");
+        result.Error.Message.Should().Contain("127.0.0.1");
+    }
+
+    // --- 3b. DNS rebinding: хост, который при втором резолве даёт приватный адрес → upstream ---
+    // (rework 12, critical 1). Фейковый резолвер: первый резолв — публичный (предварительная
+    // проверка проходит), второй (на редиректе) — приватный. Мутация: убрать повторную
+    // SSRF-проверку на итерации редиректа → тест красный.
+    [Fact]
+    public async Task DnsRebinding_ВторойРезолвПриватный_ОтдаётUpstream()
+    {
+        var calls = 0;
+        Func<string, CancellationToken, Task<IPAddress[]>> fakeDns = (host, ct) =>
+        {
+            var result = Interlocked.Increment(ref calls) == 1
+                ? new[] { IPAddress.Parse("8.8.8.8") }
+                : new[] { IPAddress.Parse("127.0.0.1") };
+            return Task.FromResult(result);
+        };
+
+        // Редирект на тот же хост (rebind.example) — «разный хост» не сработает,
+        // ловит только повторная SSRF-проверка (второй резолв → приватный).
+        var (proxy, _) = NewProxy(_secrets, req =>
+            req.RequestUri!.AbsolutePath == "/graphql"
+                ? Resp(302, "", [("Location", "https://rebind.example/done")])
+                : Resp(200, "ok"),
+            dnsResolver: fakeDns);
+
+        var result = await proxy.HandleAsync(Ctx(), "net.fetch",
+            Args("""{"url":"https://rebind.example/graphql"}"""),
+            ["net:rebind.example"], CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error!.Code.Should().Be("upstream");
+        result.Error.Message.Should().Contain("rebind.example");
+    }
+
     // --- 4. Секрет не в теле и заголовках ответа (эхо вычищается) ---
     // Мутация: возвращаем значение секрета в ответ (не вычищаем) → этот тест красный.
 
@@ -213,6 +269,63 @@ public class PluginNetProxyTests : IDisposable
         // Плейсхолдер остался как есть (право не выдано) → значение не подставлялось.
         var json = JsonSerializer.Serialize(result.Data!);
         json.Should().NotContain(secretValue);
+    }
+
+    // --- 4a. Auth prefix: нормализация пробела (rework 12, minor 10) ---
+    // prefix "Bearer " (с пробелом) → "Bearer <значение>" (ровно один пробел, не два).
+    [Fact]
+    public async Task AuthPrefix_НормализуетПробел()
+    {
+        const string secretValue = "tok-abc";
+        _secrets.Set(OwnerA, PluginId, "LINEAR_TOKEN", secretValue);
+
+        string? capturedAuth = null;
+        var (proxy, _) = NewProxy(_secrets, req =>
+        {
+            if (req.Headers.TryGetValues("Authorization", out var v))
+                capturedAuth = string.Join(",", v!);
+            return Resp(200, "ok");
+        });
+
+        await proxy.HandleAsync(Ctx(), "net.fetch",
+            Args("""{"url":"https://api.linear.app/graphql","auth":{"secret":"LINEAR_TOKEN","prefix":"Bearer "}}"""),
+            ["net:api.linear.app", "secret:LINEAR_TOKEN"], CancellationToken.None);
+
+        capturedAuth.Should().Be("Bearer " + secretValue, "ровно один пробел между префиксом и значением");
+    }
+
+    // --- 4b. RedactSecrets на уровне байт (rework 12, minor 9) ---
+    // Тело — не-UTF-8 (бинарный) контент, содержащий байты значения секрета: redaction
+    // находит и заменяет значение на уровне байт, не декодируя тело как UTF-8.
+    [Fact]
+    public async Task RedactSecrets_БайтыНеТекстовогоТела_ЗаменяетЗначение()
+    {
+        const string secretValue = "secret-bytes-xyz";
+        _secrets.Set(OwnerA, PluginId, "LINEAR_TOKEN", secretValue);
+
+        var secretBytes = Encoding.UTF8.GetBytes(secretValue);
+        var body = new byte[2 + secretBytes.Length + 2];
+        body[0] = 0xFF; body[1] = 0xFE;           // не-UTF-8 префикс
+        secretBytes.CopyTo(body, 2);
+        body[^2] = 0x00; body[^1] = 0x01;           // не-UTF-8 суффикс
+
+        var (proxy, _) = NewProxy(_secrets, _ =>
+        {
+            var msg = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(body),
+            };
+            return msg;
+        });
+
+        var result = await proxy.HandleAsync(Ctx(), "net.fetch",
+            Args("""{"url":"https://api.linear.app/graphql","headers":{"Authorization":"{{secret:LINEAR_TOKEN}}"}}"""),
+            ["net:api.linear.app", "secret:LINEAR_TOKEN"], CancellationToken.None);
+
+        result.Ok.Should().BeTrue();
+        var json = JsonSerializer.Serialize(result.Data!);
+        json.Should().Contain(PluginNetProxy.Redacted, "значение секрета в бинарном теле заменено маркером");
+        json.Should().NotContain(secretValue, "само значение наружу не уходит");
     }
 
     // --- 5. Превышение размера ответа → limit ---

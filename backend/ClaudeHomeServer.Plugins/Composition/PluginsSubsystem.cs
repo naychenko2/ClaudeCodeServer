@@ -42,7 +42,12 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // no-op повтора. Stateless-логика поверх PluginStore + валидатора.
         services.AddSingleton<PluginInstaller>();
         // Каскад удаления установки (пакет, запись, черновики, granted, секреты + шов).
-        services.AddSingleton<PluginUninstall>();
+        // netProxy — для очистки окна ограничения частоты (rework 12, minor 8).
+        services.AddSingleton<PluginUninstall>(sp => new PluginUninstall(
+            sp.GetRequiredService<PluginStore>(),
+            sp.GetRequiredService<PluginSecretsStore>(),
+            sp.GetRequiredService<IPluginInstallCascade>(),
+            sp.GetRequiredService<PluginNetProxy>()));
         // Каскад «внешних» ссылок (привязки персон, слоты). MVP — no-op: реальный
         // адаптер, снимающий биндинги/слоты, приходит с UI-шагом 2.x (ADR-031 §4).
         services.AddSingleton<IPluginInstallCascade, NoOpPluginInstallCascade>();
@@ -51,9 +56,10 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // PluginBridgeController — ApplicationPart (Web SDK), регистрируется MVC'ом.
         services.AddSingleton<PluginBridge>();
         // Прокси net:{host} (шаг 3.3): обработчик net.fetch. Stateless — singleton;
-        // HttpClient — shared-инстанс (IHttpClientFactory не нужен: один клиент на инстанс).
+        // транспорт — SocketsHttpHandler с ConnectCallback, закрепляющим адрес (rework 12,
+        // critical 1: TOCTOU/DNS rebinding между SSRF-проверкой и TCP-connect закрыт).
         services.AddSingleton<PluginNetProxy>(sp => new PluginNetProxy(
-            sp.GetRequiredService<PluginSecretsStore>(), new HttpClient()));
+            sp.GetRequiredService<PluginSecretsStore>(), PluginNetProxy.CreateHandler()));
         // Обработчик прав: мост резолвит IEnumerable<IPluginCapability> (net: + Notes/Tasks).
         services.AddSingleton<IPluginCapability>(sp => sp.GetRequiredService<PluginNetProxy>());
     }

@@ -22,12 +22,18 @@ public class PluginUninstall
     private readonly PluginStore _store;
     private readonly PluginSecretsStore _secrets;
     private readonly IPluginInstallCascade _cascade;
+    // Прокси net:{host} (rework 12, minor 8): при удачном каскаде чистит его окно
+    // ограничения частоты, иначе словарь singleton'а рос бы на каждый удалённый плагин.
+    // Опциональная: без прокси (например, в старых тестах) очистка просто не происходит.
+    private readonly PluginNetProxy? _netProxy;
 
-    public PluginUninstall(PluginStore store, PluginSecretsStore secrets, IPluginInstallCascade cascade)
+    public PluginUninstall(PluginStore store, PluginSecretsStore secrets, IPluginInstallCascade cascade,
+        PluginNetProxy? netProxy = null)
     {
         _store = store;
         _secrets = secrets;
         _cascade = cascade;
+        _netProxy = netProxy;
     }
 
     // Удалить установку плагина <paramref name="id"/> владельца <paramref name="ownerId"/>.
@@ -70,6 +76,10 @@ public class PluginUninstall
 
         // 5) Секреты (M7): значения — из per-owner архива plugin-secrets.json.
         _secrets.RemovePlugin(ownerId, id);
+
+        // 6) Окно ограничения частоты (rework 12, minor 8): после удачного каскада —
+        //     словарь singleton'а прокси не растёт бесконечно (ключ на каждый плагин).
+        _netProxy?.RemoveRateWindow(ownerId, id);
 
         return true;
     }

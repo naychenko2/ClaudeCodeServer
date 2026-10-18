@@ -57,7 +57,9 @@ public class PluginBridgeControllerTests : IDisposable
         PluginBridge? bridge = null)
     {
         var config = NewConfig(userId, subsystemEnabled, flagOn);
-        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = flagOn }, _store, bridge ?? _bridge);
+        // projects: null — серверный гейт ProjectCapabilities (minor 7) в 3.1 no-op
+        // (ProjectId в контексте всегда null); тест гейта — отдельно со стабом.
+        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = flagOn }, _store, bridge ?? _bridge, null);
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },
@@ -313,6 +315,71 @@ public class PluginBridgeControllerTests : IDisposable
         obj.StatusCode.Should().Be(403);
     }
 
+    // --- Call: маппинг кодов ошибок (rework 12, major 4) ---
+    // timeout → 504, limit → 429, upstream → 502 (раньше все падали в 500).
+    // Код в теле JSON не меняется — фронт различает по нему.
+
+    [Fact]
+    public async Task Call_Timeout_Отдаёт504()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        var bridge = new PluginBridge([new StubErrorCapability("notes:read", "timeout")]);
+        var ctl = NewBridgeController(OwnerA, bridge: bridge);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(504);
+    }
+
+    [Fact]
+    public async Task Call_Limit_Отдаёт429()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        var bridge = new PluginBridge([new StubErrorCapability("notes:read", "limit")]);
+        var ctl = NewBridgeController(OwnerA, bridge: bridge);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(429);
+    }
+
+    [Fact]
+    public async Task Call_Upstream_Отдаёт502()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        var bridge = new PluginBridge([new StubErrorCapability("notes:read", "upstream")]);
+        var ctl = NewBridgeController(OwnerA, bridge: bridge);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(502);
+    }
+
+    // --- Assets: файл больше 4 MiB → 413 (rework 12, minor 6) ---
+
+    [Fact]
+    public void Assets_ФайлБольшой_Отдаёт413()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // Файл панели больше потолка 4 MiB.
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        System.IO.File.WriteAllBytes(
+            System.IO.Path.Combine(packageDir, "panel", "big.bin"),
+            new byte[4 * 1024 * 1024 + 1]);
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "big.bin");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(413);
+    }
+
     // --- Srcdoc: 200 (panel/index.html → srcdoc-ready HTML) ---
 
     [Fact]
@@ -381,5 +448,20 @@ public class PluginBridgeControllerTests : IDisposable
         public Task<PluginCapabilityResult> HandleAsync(
             PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct)
             => Task.FromResult(new PluginCapabilityResult(Ok: true, Data: "ok"));
+    }
+
+    // Обработчик, возвращающий ошибку с заданным кодом (для маппинга кодов, major 4).
+    private sealed class StubErrorCapability : IPluginCapability
+    {
+        public string Permission { get; }
+        private readonly string _code;
+        public StubErrorCapability(string permission, string code)
+        {
+            Permission = permission;
+            _code = code;
+        }
+        public Task<PluginCapabilityResult> HandleAsync(
+            PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct)
+            => Task.FromResult(new PluginCapabilityResult(false, Error: new PluginCallError(_code, "test")));
     }
 }

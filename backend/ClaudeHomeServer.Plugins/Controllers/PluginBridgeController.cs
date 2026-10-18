@@ -31,7 +31,8 @@ public class PluginBridgeController(
     IConfiguration config,
     IFeatureFlagGate flags,
     PluginStore? store,
-    PluginBridge? bridge) : ControllerBase
+    PluginBridge? bridge,
+    IProjectManager? projects) : ControllerBase
 {
     // Claim'ы — литералы (как в PluginsController): MapInboundClaims=false оставляет raw-имена.
     private const string SubClaim = "sub";
@@ -50,6 +51,10 @@ public class PluginBridgeController(
     private const string SrcdocCsp =
         "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
         "img-src data: blob:; connect-src 'none'; form-action 'none'";
+
+    // Потолок размера файла панели (rework 12, minor 6): больше — 413, чтобы одна
+    // установка не выкачивала неограниченный файл в память сервера.
+    private const long MaxAssetBytes = 4 * 1024 * 1024; // 4 MiB
 
     // Гейт: null — прошёл; иначе отказ.
     private IActionResult? Gate()
@@ -85,6 +90,10 @@ public class PluginBridgeController(
         var panelDir = Path.Combine(store.PackageDir(UserId, pluginId, ver), "panel");
         var filePath = SafePath.Join(panelDir, path);
         if (!System.IO.File.Exists(filePath)) return NotFound();
+
+        // Потолок размера (rework 12, minor 6): больше 4 MiB → 413.
+        if (new System.IO.FileInfo(filePath).Length > MaxAssetBytes)
+            return StatusCode(413, new { error = "Файл панели превышает лимит размера (4 MiB)" });
 
         var content = System.IO.File.ReadAllBytes(filePath);
         Response.Headers["Content-Security-Policy"] = PanelCsp;
@@ -146,19 +155,38 @@ public class PluginBridgeController(
             ProjectId: null,   // контекст слота приходит с фронтенда (3.2), в 3.1 — null
             ObjectId: null);
 
+        // Серверный гейт (rework 12, minor 7, defense in depth): если у вызова есть контекст
+        // проекта (слот), проект должен допускать плагины (локальный в MVP — нет).
+        // В 3.1 ProjectId всегда null (контекст слота приходит с фронта в 3.2) — гейт no-op.
+        if (context.ProjectId is not null)
+        {
+            var project = projects?.GetById(context.ProjectId);
+            if (project is not null)
+            {
+                var caps = ProjectCapabilities.PluginsFor(project);
+                if (!caps.Available)
+                    return StatusCode(409, new { error = caps.Reason });
+            }
+        }
+
         var result = await bridge!.DispatchAsync(context, req.Capability, req.Args, record.Granted, ct);
 
         if (result.Ok)
             return Ok(new PluginCallResponse { Ok = true, Result = result.Data });
 
-        // Маппинг кода ошибки → HTTP-статус (ADR-031 §3.4).
-        var (status, _) = result.Error!.Code switch
+        // Маппинг кода ошибки → HTTP-статус (ADR-031 §3.4; rework 12, major 4:
+        // timeout/limit/upstream раньше падали в общий 500). Код в теле JSON не меняется —
+        // фронт различает ошибки по нему, меняется только HTTP-статус.
+        var status = result.Error!.Code switch
         {
-            "denied" => (403, "denied"),
-            "not_found" => (404, "not_found"),
-            "invalid" => (400, "invalid"),
-            "unavailable" => (503, "unavailable"),
-            _ => (500, "upstream"),
+            "denied" => 403,
+            "not_found" => 404,
+            "invalid" => 400,
+            "unavailable" => 503,
+            "timeout" => 504,
+            "limit" => 429,
+            "upstream" => 502,
+            _ => 500,
         };
         return StatusCode(status, new PluginCallResponse
         {

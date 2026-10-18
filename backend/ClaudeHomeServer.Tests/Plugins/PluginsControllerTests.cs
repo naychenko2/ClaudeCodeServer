@@ -496,6 +496,9 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", false)]);
         var ctl = NewController(OwnerA);
+        // Выдать право (critical 2: PutSecret сверяет Granted, а не Requested).
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["secret:LINEAR_TOKEN"] })
+            .Should().BeOfType<OkObjectResult>();
 
         var res = ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
             new PluginSecretValueRequest { Value = "super-secret-value" });
@@ -527,6 +530,75 @@ public class PluginsControllerTests : IDisposable
         JsonSerializer.Serialize(bad.Value).Should().Contain("GHOST_SECRET");
     }
 
+    // PUT /secrets/{name}: право не выдано (в requested, но не в granted) → 400
+    // (rework 12, critical 2: раньше сверяли Requested — значение сохранялось без права).
+    // Мутация: вернуть проверку к Requested → тест красный.
+    [Fact]
+    public void PutSecret_ПравоНеВыдано_Отдаёт400()
+    {
+        // requested включает secret:LINEAR_TOKEN, но grant выдаёт только notes:read
+        // (granted = [notes:read], без secret:LINEAR_TOKEN) → PutSecret → 400.
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["notes:read"] })
+            .Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
+            new PluginSecretValueRequest { Value = "x" });
+        var bad = (BadRequestObjectResult)res;
+        JsonSerializer.Serialize(bad.Value).Should().Contain("secret:LINEAR_TOKEN");
+    }
+
+    // PUT /secrets/{name}: выключенный плагин → 409 (rework 12, major 3, как у call/assets/panel).
+    [Fact]
+    public void PutSecret_ВыключенныйПлагин_Отдаёт409()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["secret:LINEAR_TOKEN"] })
+            .Should().BeOfType<OkObjectResult>();
+        ctl.Disable("local-a~pkg").Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
+            new PluginSecretValueRequest { Value = "x" });
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(409);
+    }
+
+    // DELETE /secrets/{name}: выключенный плагин → 409 (rework 12, major 3).
+    [Fact]
+    public void DeleteSecret_ВыключенныйПлагин_Отдаёт409()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["secret:LINEAR_TOKEN"] })
+            .Should().BeOfType<OkObjectResult>();
+        ctl.Disable("local-a~pkg").Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.DeleteSecret("local-a~pkg", "LINEAR_TOKEN");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(409);
+    }
+
+    // PUT /secrets/{name}: пустое значение → 400 (rework 12, minor 5).
+    [Fact]
+    public void PutSecret_ПустоеЗначение_Отдаёт400()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["secret:LINEAR_TOKEN"] })
+            .Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
+            new PluginSecretValueRequest { Value = "   " });
+        var bad = (BadRequestObjectResult)res;
+        bad.StatusCode.Should().Be(400);
+    }
+
     // DELETE /secrets/{name}: user JWT → 200, значение убрано, set=false.
     [Fact]
     public void DeleteSecret_UserJwt_УбираетЗначение()
@@ -534,6 +606,9 @@ public class PluginsControllerTests : IDisposable
         Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", false)]);
         var ctl = NewController(OwnerA);
+        // Выдать право (critical 2: PutSecret сверяет Granted, а не Requested).
+        ctl.Grant("local-a~pkg", new PluginGrantRequest { Permissions = ["secret:LINEAR_TOKEN"] })
+            .Should().BeOfType<OkObjectResult>();
         ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
             new PluginSecretValueRequest { Value = "super-secret-value" })
             .Should().BeOfType<OkObjectResult>();

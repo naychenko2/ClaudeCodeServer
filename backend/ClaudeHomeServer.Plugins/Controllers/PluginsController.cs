@@ -249,14 +249,24 @@ public class PluginsController(
         var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == pluginId);
         if (record is null) return NotFound();
 
-        // Имя секрета — из манифеста (requires.secrets) и покрыто правом secret:{name} (minor 4).
+        // Выключенный плагин → 409 (rework 12, major 3): как у остальных ручек (call/assets/panel).
+        if (!record.Enabled)
+            return StatusCode(409, new { error = "Плагин выключен" });
+
+        // Пустое значение → 400 (rework 12, minor 5): пустой секрет неинформативен.
+        if (string.IsNullOrWhiteSpace(req.Value))
+            return BadRequest(new { error = "Значение секрета не задано" });
+
+        // Имя секрета — из манифеста (requires.secrets) и покрыто ВЫДАННЫМ правом secret:{name}
+        // (rework 12, critical 2: раньше сверяли Requested, а не Granted — значение сохранялось,
+        // даже когда право не выдано; теперь 400 с текстом без значения).
         var (manifest, _) = PluginInstaller.ReadManifest(store.PackageDir(UserId, pluginId, record.Version));
         var declared = manifest?.Contributes?.Requires?.Secrets
             ?.Select(s => s.Name).ToHashSet(StringComparer.Ordinal) ?? [];
         if (!declared.Contains(name, StringComparer.Ordinal))
             return BadRequest(new { error = $"Секрет не заявлен в манифесте (requires.secrets): {name}" });
-        if (!record.Requested.Contains($"secret:{name}", StringComparer.Ordinal))
-            return BadRequest(new { error = $"Секрет не покрыт запрошенным правом secret:{name}" });
+        if (!record.Granted.Contains($"secret:{name}", StringComparer.Ordinal))
+            return BadRequest(new { error = $"Секрет не покрыт выданным правом secret:{name}" });
 
         // Значение — в per-owner архиве; в запись установки — set + updatedAt (load→save под lock).
         secrets!.Set(UserId, pluginId, name, req.Value);
@@ -292,6 +302,10 @@ public class PluginsController(
         var pluginId = NormalizeId(id);
         var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == pluginId);
         if (record is null) return NotFound();
+
+        // Выключенный плагин → 409 (rework 12, major 3): как у остальных ручек.
+        if (!record.Enabled)
+            return StatusCode(409, new { error = "Плагин выключен" });
 
         secrets!.RemoveSecret(UserId, pluginId, name);
         store!.Update(UserId, records =>

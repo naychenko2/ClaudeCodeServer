@@ -81,11 +81,13 @@ function nowItem(over: Partial<FeatureNow> = {}): FeatureNow {
 }
 
 describe('FeatureRunView — шапка', () => {
-  it('имя, ветка и прогресс на месте', () => {
+  it('имя и ветка в шапке; прогресс {pct}% убран (M-3: счётчик acc/tot — в шапке режима)', () => {
     const html = render(run());
     expect(html).toContain('Пульт куратора');
     expect(html).toContain('feat/curator-console');
-    expect(html).toContain('100%');
+    // M-3: «100%» из шапки фичи удалён (в макете .fh = имя + ветка); доля — в счётчике FeatureModeBody.
+    // Текстовый узел «100%» (не width:100% в стилях конвейера) — нет.
+    expect(html).not.toMatch(/>100%</);
   });
 });
 
@@ -275,14 +277,16 @@ function findButton(root: AnyNode, text: string, fullWidth: boolean): AnyNode | 
 }
 
 describe('FeatureRunView: F6.1 (плашка)', () => {
-  it('M3: кнопки плашки — md (minHeight 40) на мобиле, xs (minHeight 24) на десктопе', () => {
+  it('M-5: кнопки плашки — sm (13px) + minHeight 40 (тач-цель) на мобиле, xs (24px) на десктопе', () => {
     const att: FeatureAttention = { kind: 'wait', reason: 'мерж', since: '2026-10-17T10:00:00Z', taskId: 'f1' };
-    // Мобила: size md → min-height:40px.
+    // Мобила: size sm (font-size 13, не md 14) + inline minHeight 40 (тач-цель).
     mobileFlag.value = true;
     const htmlMobile = render(run({ ready: false, attention: att }));
     const atM = htmlMobile.indexOf('Попросить Марка');
-    expect(htmlMobile.slice(atM - 400, atM), 'мобила — md (40px)').toContain('min-height:40px');
-    // Десктоп: size xs → min-height:24px.
+    const segM = htmlMobile.slice(atM - 800, atM);
+    expect(segM, 'мобила — minHeight 40 (тач-цель)').toContain('min-height:40px');
+    expect(segM, 'мобила — sm (font-size 13, не md 14)').toContain('font-size:13px');
+    // Десктоп: size xs (min-height 24, font-size 12).
     mobileFlag.value = false;
     const htmlDesk = render(run({ ready: false, attention: att }));
     const atD = htmlDesk.indexOf('Попросить Марка');

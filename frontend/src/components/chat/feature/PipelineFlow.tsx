@@ -577,7 +577,8 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
         )}
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, whiteSpace: 'nowrap' }}>
-        {chain.rounds.length > 0 && <Rounds rounds={chain.rounds} max={6} />}
+        {/* M-6: на 360 — только кольца max=3 без подписи (caption=false); длительность (right) остаётся. */}
+        {chain.rounds.length > 0 && <Rounds rounds={chain.rounds} max={isMobile ? 3 : 6} caption={!isMobile} />}
         {right && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{right}</span>}
       </span>
     </button>

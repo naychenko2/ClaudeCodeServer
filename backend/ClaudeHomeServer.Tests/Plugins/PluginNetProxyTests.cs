@@ -224,6 +224,41 @@ public class PluginNetProxyTests : IDisposable
         result.Error.Message.Should().Contain("rebind.example");
     }
 
+    // --- 3c. ConnectCallback: вторая линия защиты (rework 12, critical 1) ---
+    // Предварительная SSRF-проверка (ResolveAndCheckAsync) резолвит хост через _dnsResolver
+    // и видит публичный адрес. Но боевой транспорт (SocketsHttpHandler) резолвит хост
+    // ЗАНОВО прямо перед TCP-connect в ConnectCallback: если второй резолв даёт приватный
+    // адрес (DNS rebinding), соединение отбивается. Мутация: ослабить проверку в
+    // ConnectCallback (ResolvePublicAsync → всегда addresses[0], без SsrfGuard.IsPublic)
+    // → тест красный (приватный адрес 127.0.0.1 прошёл бы как публичный).
+    [Fact]
+    public async Task ConnectCallback_ВторойРезолвПриватный_ОтдаётUpstream()
+    {
+        var calls = 0;
+        Func<string, CancellationToken, Task<IPAddress[]>> fakeDns = (host, ct) =>
+        {
+            var result = Interlocked.Increment(ref calls) == 1
+                ? new[] { IPAddress.Parse("8.8.8.8") }        // первый резолв: публичный
+                : new[] { IPAddress.Parse("127.0.0.1") };      // второй (ConnectCallback): приватный
+            return Task.FromResult(result);
+        };
+
+        // Боевой транспорт: SocketsHttpHandler с ConnectCallback, использующим fakeDns.
+        // (Не fake-HttpMessageHandler: ConnectCallback живёт в SocketsHttpHandler,
+        // а не в HttpMessageHandler — только боевой транспорт его вызывает.)
+        var handler = PluginNetProxy.CreateHandler(fakeDns);
+        var proxy = new PluginNetProxy(_secrets, handler, fakeDns);
+        proxy.Timeout = TimeSpan.FromSeconds(5);
+
+        var result = await proxy.HandleAsync(Ctx(), "net.fetch",
+            Args("""{"url":"https://rebind.example/graphql"}"""),
+            ["net:rebind.example"], CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error!.Code.Should().Be("upstream");
+        result.Error.Message.Should().Contain("rebind.example");
+    }
+
     // --- 4. Секрет не в теле и заголовках ответа (эхо вычищается) ---
     // Мутация: возвращаем значение секрета в ответ (не вычищаем) → этот тест красный.
 

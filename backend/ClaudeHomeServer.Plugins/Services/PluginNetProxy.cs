@@ -102,19 +102,23 @@ public class PluginNetProxy : IPluginCapability
     /// проверкой и реальным соединением (DNS rebinding) закрыто, а имя хоста в URI
     /// остаётся исходным (заголовок Host и TLS SNI не ломаются, в отличие от подмены
     /// URI на голый IP).
+    /// <paramref name="dnsResolver"/> — резолв хоста для <c>ConnectCallback</c>: в бою
+    /// null (системный Dns), в тестах — фейк, чтобы детерминировать DNS rebinding.
     /// </summary>
-    public static SocketsHttpHandler CreateHandler() => new()
+    public static SocketsHttpHandler CreateHandler(
+        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver = null) => new()
     {
         AllowAutoRedirect = false,
         UseCookies = false,
         UseProxy = false,
         ConnectTimeout = TimeSpan.FromSeconds(10),
-        ConnectCallback = ConnectAsync,
+        ConnectCallback = (ctx, ct) => ConnectAsync(ctx, ct, dnsResolver),
     };
 
-    private static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+    private static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct,
+        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver)
     {
-        var address = await ResolvePublicAsync(context.DnsEndPoint.Host, ct)
+        var address = await ResolvePublicAsync(context.DnsEndPoint.Host, ct, dnsResolver)
             ?? throw new HttpRequestException($"Адрес {context.DnsEndPoint.Host} не публичный — соединение запрещено");
         var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         try
@@ -130,13 +134,15 @@ public class PluginNetProxy : IPluginCapability
     }
 
     /// <summary>Адрес для соединения, если ВСЕ адреса хоста публичные; иначе null (fail-closed, как у SsrfGuard).</summary>
-    private static async Task<IPAddress?> ResolvePublicAsync(string host, CancellationToken ct)
+    private static async Task<IPAddress?> ResolvePublicAsync(string host, CancellationToken ct,
+        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver)
     {
         IPAddress[] addresses;
         if (IPAddress.TryParse(host, out var literal)) addresses = [literal];
         else
         {
-            try { addresses = await Dns.GetHostAddressesAsync(host, ct); }
+            var resolver = dnsResolver ?? ((h, c) => Dns.GetHostAddressesAsync(h, c));
+            try { addresses = await resolver(host, ct); }
             catch (SocketException) { return null; }
         }
         return addresses.Length > 0 && addresses.All(SsrfGuard.IsPublic) ? addresses[0] : null;
@@ -280,9 +286,11 @@ public class PluginNetProxy : IPluginCapability
             {
                 return Err("timeout", "Таймаут запроса");
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException ex)
             {
-                return Err("upstream", "Сбой внешнего хоста");
+                // ex.Message — детальный: «Адрес X не публичный — соединение запрещено»
+                // (ConnectCallback) или «Connection refused» (боевой). Не теряем хост.
+                return Err("upstream", ex.Message);
             }
 
             // 10. Ответ: статус, белый список заголовков, тело. Секрет вычищается (эхо).

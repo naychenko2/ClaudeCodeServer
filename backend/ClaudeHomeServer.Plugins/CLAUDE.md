@@ -26,7 +26,12 @@
    секреты на устройство не едут), без инлайнового `if (project.IsLocal)`.
 5. **Граница вертикалей.** Plugins не ссылается на Notes/Tasks; обработчики прав
    (`notes:read`/`tasks:read`) приходят через Core-шов `IPluginCapability`, их
-   регистрируют сами вертикали-владельцы.
+   регистрируют сами вертикали-владельцы: `notes:read` — вертикаль Notes
+   (`NotesPluginCapability`, операции `notes.search`/`notes.read`), `tasks:read` —
+   вертикаль Tasks (`TasksPluginCapability`, операция `tasks.list`). Граница доступа:
+   только данные владельца из `PluginCallContext.OwnerId`, проектные — в рамках проекта
+   слота (`PluginCallContext.ProjectId`); чужой владелец/`..`/чужой `id` → `not_found`.
+   Лимиты ответа (100 записей, 200 KiB) с усечением `truncated`; служебных полей нет.
 6. **Отключаемость (ADR-014).** Тумблер `Subsystems:plugins:Enabled`; при выключенной
    подсистеме `Register` не вызывается и обязательного параметра конструктора от Plugins
    вне вертикали нет (потребители берут `IPluginDirSource` опциональной зависимостью).

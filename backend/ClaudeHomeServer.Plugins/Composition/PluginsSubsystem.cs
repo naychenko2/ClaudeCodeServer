@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Services.Plugins;
 // installed.json, черновики) и реализация шва IPluginDirSource (PluginDirSource) —
 // каталоги включённых пакетов владельца для --plugin-dir. Обработчики прав
 // IPluginCapability (notes:read/tasks:read) регистрируют сами вертикали-владельцы
-// (Notes, Tasks) отдельной задачей — здесь их нет, шов живёт в Core.
+// (Notes → NotesPluginCapability, Tasks → TasksPluginCapability, шаг 3.5) — здесь
+// их нет, шов живёт в Core; мост резолвит IEnumerable<IPluginCapability> из DI.
 //
 // Отключаемость по ADR-014: при выключенной подсистеме Register не вызывается,
 // и PluginStore/IPluginDirSource в контейнер не попадают. Обязательного параметра

@@ -158,7 +158,9 @@
   "sessionId": "c1",
   "contextRevision": 7,
   "format": null,
-  "resolved": null
+  "resolved": null,
+  "faceTarget": null,
+  "characterSlug": null
 }
 ```
 
@@ -192,7 +194,7 @@
 
 `multipart/form-data` на `POST …/image-editor/jobs`; здесь — поля формы как JSON-объект. С ревизией `source`,
 `references`, `referencePaths`, `characterSlug`, `threadId`, `versionId` не нужны; остаются `quoteId`, `prompt`, `marks`,
-`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `baseStepId` — клиент шлёт их по месту (маска, аннотации, роли референсов, шаг истории).
+`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `characterPhotos`, `baseStepId`, `faceTarget` — клиент шлёт их по месту (маска, аннотации, роли референсов, фото персонажа, шаг истории, подстановка на лицо).
 
 ```json image-job-form
 {

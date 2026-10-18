@@ -1,0 +1,60 @@
+[Unit]
+Description=ccs-gddr6: чтение температуры памяти и hotspot видеокарт (root, только чтение)
+Documentation=file:///usr/local/lib/ccs-gddr6/ccs-gddr6-helper.py
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ccs-gddr6/ccs-gddr6-helper.py
+Restart=on-failure
+RestartSec=5
+
+# Результат для бэкенда: /run/ccs-gddr6/temps.json (читается всеми).
+RuntimeDirectory=ccs-gddr6
+RuntimeDirectoryMode=0755
+UMask=0022
+
+# Единственная привилегия — чтение /dev/mem (CAP_SYS_RAWIO).
+CapabilityBoundingSet=CAP_SYS_RAWIO
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Файловая система и ядро — только чтение, домашние каталоги скрыты.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# Сети нет вовсе.
+PrivateNetwork=yes
+RestrictAddressFamilies=
+IPAddressDeny=any
+
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# Из устройств доступен только /dev/mem на чтение.
+DevicePolicy=closed
+DeviceAllow=/dev/mem r
+
+# Скромные потолки: служба читает два регистра раз в 2 с.
+MemoryMax=64M
+TasksMax=8
+
+[Install]
+WantedBy=multi-user.target

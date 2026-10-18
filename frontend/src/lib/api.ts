@@ -893,6 +893,33 @@ export const api = {
       request<{ id: string; enabled: boolean }>(`/plugins/${pluginUrlId(id)}/${enabled ? 'enable' : 'disable'}`, {
         method: 'POST',
       }),
+    // Вызов операции моста (ADR-031 §3.4): {op, args, context}. Хост сам добавляет
+    // id/версию плагина (id в URL) и контекст слота (projectId) — фрейм их не подставляет.
+    // Ответ — {ok, result?} | {ok:false, error:{code, message}}; коды error — ADR §3.4
+    // (denied/not_found/invalid/unavailable/upstream/timeout/limit).
+    call: (id: string, body: { op: string; args?: Record<string, unknown>; context?: { projectId?: string | null; objectId?: string | null } }) =>
+      request<{ ok: boolean; result?: unknown; error?: { code: string; message: string } }>(
+        `/plugins/${pluginUrlId(id)}/call`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    // Сырой panel/index.html пакета (ADR-031 §3.1): хост забирает его по REST с
+    // user JWT (навигация iframe не несёт Authorization) и сам строит srcdoc.
+    // Прямой fetch (не request()): ответ — текст, а не JSON, и request() упёрся бы
+    // в JSON.parse. 404 — у плагина нет панели (макет 3, «пусто»).
+    panelHtml: async (id: string, version: string): Promise<string> => {
+      const token = readStoredToken();
+      const res = await fetch(
+        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/panel/index.html`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
+        e.status = res.status;
+        throw e;
+      }
+      return res.text();
+    },
   },
 
   providers: {

@@ -1,0 +1,436 @@
+// Мост v1 (ADR-031 §3) — тесты стороны хоста.
+//
+// Часть 1 — чистый протокол: validateFrameMessage (четыре условия приёма, ADR §3.2),
+// srcdoc (CSP + шим + тема), кламп высоты, отказ по праву, тексты ошибок.
+// Часть 2 — поток компонента: валидный call доходит до API (POST /plugins/{id}/call),
+// а result возвращается фрейму.
+//
+// Окружение node (без jsdom): компонент гоняем мини-раннером — тот же паттерн,
+// что в hooks/__tests__/useSession.test.ts: react замокан, хуки держат состояние,
+// эффекты исполняются при render.
+//
+// Мутации (критерий готовности): убираем проверку e.origin === 'null' → тест
+// «чужой origin» краснеет; убираем проверку v → тест «неверная версия» краснеет.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// --- Мини-раннер React-хуков (до импортов: vi.mock/vi.hoisted поднимаются выше) ---
+type Host = {
+  i: number;
+  states: Map<number, unknown>;
+  refs: Map<number, { current: unknown }>;
+  cbs: Map<number, { deps?: unknown[]; fn: unknown }>;
+  effects: Map<number, { deps?: unknown[]; cleanup?: (() => void) | void }>;
+};
+
+const rt = vi.hoisted(() => {
+  const state = { current: null as Host | null };
+  const sameDeps = (a?: unknown[], b?: unknown[]) =>
+    !!a && !!b && a.length === b.length && a.every((d, k) => Object.is(d, b[k]));
+  return { state, sameDeps };
+});
+
+// Настоящий react + переопределённые хуки: createContext/forwardRef/memo и проч.
+// остаются реальными (ui-кит создаёт их при загрузке), хуки — мини-раннером.
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return {
+    ...actual,
+  useState: (init: unknown) => {
+    const host = rt.state.current!;
+    const idx = host.i++;
+    if (!host.states.has(idx)) host.states.set(idx, typeof init === 'function' ? (init as () => unknown)() : init);
+    return [
+      host.states.get(idx),
+      (v: unknown) => {
+        const cur = host.states.get(idx);
+        host.states.set(idx, typeof v === 'function' ? (v as (p: unknown) => unknown)(cur) : v);
+      },
+    ] as const;
+  },
+  useRef: (v: unknown) => {
+    const host = rt.state.current!;
+    const idx = host.i++;
+    if (!host.refs.has(idx)) host.refs.set(idx, { current: v });
+    return host.refs.get(idx)!;
+  },
+  useMemo: (fn: () => unknown) => fn(),
+  // useCallback уважает deps (как в React): с теми же deps — та же функция,
+  // иначе эффекты с ней в deps зря перезапускались бы на каждом render
+  useCallback: (fn: unknown, deps?: unknown[]) => {
+    const host = rt.state.current!;
+    const idx = host.i++;
+    const prev = host.cbs.get(idx);
+    if (prev && rt.sameDeps(prev.deps, deps)) return prev.fn;
+    host.cbs.set(idx, { deps, fn });
+    return fn;
+  },
+  useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {
+    const host = rt.state.current;
+    if (!host) return;
+    const idx = host.i++;
+    const prev = host.effects.get(idx);
+    if (prev && rt.sameDeps(prev.deps, deps)) return;
+    prev?.cleanup?.();
+    host.effects.set(idx, { deps, cleanup: effect() });
+  },
+  useSyncExternalStore: (_s: unknown, get: () => unknown) => get(),
+  };
+});
+
+// Моки: document (themeMode/IconButton трогают его при загрузке) и window
+// (EventTarget — на него компонент вешает message-обработчик).
+vi.stubGlobal('document', {
+  documentElement: { dataset: {} as Record<string, string> },
+  head: { appendChild: () => {} },
+  createElement: (tag: string) => ({ id: '', textContent: '', tagName: tag }),
+  getElementById: () => null,
+});
+vi.stubGlobal('window', Object.assign(new EventTarget(), {
+  innerWidth: 1440,
+  innerHeight: 900,
+  matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+  navigator: { language: 'ru-RU' },
+}));
+
+// Транспорт: список/панель/call — поддельные, но с настоящими сигнатурами.
+const m = vi.hoisted(() => ({
+  list: vi.fn<(id: string) => Promise<unknown[]>>(async () => []),
+  panelHtml: vi.fn<(id: string, version: string) => Promise<string>>(async () => '<html><body>panel</body></html>'),
+  call: vi.fn<(id: string, body: { op: string; args?: Record<string, unknown>; context?: unknown }) => Promise<unknown>>(
+    async () => ({ ok: true, result: { hello: 'world' } }),
+  ),
+}));
+
+vi.mock('../../lib/api', () => ({
+  api: {
+    plugins: {
+      list: () => m.list('p1'),
+      panelHtml: (id: string, version: string) => m.panelHtml(id, version),
+      call: (id: string, body: { op: string; args?: Record<string, unknown>; context?: unknown }) => m.call(id, body),
+    },
+  },
+}));
+
+// Динамический импорт ПОСЛЕ стабов: модули читают window/document при загрузке.
+const {
+  PANEL_CSP, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE, PANEL_MIN_HEIGHT,
+  validateFrameMessage, buildPanelSrcdoc, buildInitMessage, buildResultMessage,
+  buildThemeMessage, clampPanelHeight, deniedKeyOf, bridgeErrorText,
+} = await import('./bridge');
+const { PluginFrame } = await import('./PluginFrame');
+type PluginInfo = import('../../lib/api').PluginInfo;
+type Project = import('../../types').Project;
+
+// === Часть 1: чистый протокол ===
+
+// Минимальное «событие» в форме, какой оно приходит на window: source/origin/data.
+// frameWin — «окно» нашего iframe: e.source обязан быть именно им (ADR-031 §3.2).
+const frameWin = {};
+const mkEvent = (data: unknown, over: { source?: unknown; origin?: string } = {}) => ({
+  source: over.source ?? frameWin,
+  origin: over.origin ?? 'null',
+  data,
+});
+
+describe('validateFrameMessage (ADR-031 §3.2: четыре условия приёма)', () => {
+  it('чужой source (не окно нашего фрейма) — игнор', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'ready' }, { source: { other: true } }), {})).toBeNull();
+  });
+
+  it('чужой origin (не «null») — игнор', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'ready' }, { origin: 'https://evil.example' }), frameWin)).toBeNull();
+  });
+
+  it('неверная версия v — игнор', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 2, type: 'ready' }), frameWin)).toBeNull();
+  });
+
+  it('конверт без source: ccs-plugin — игнор', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'other', v: 1, type: 'ready' }), frameWin)).toBeNull();
+  });
+
+  it('валидный ready разбирается', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'ready' }), frameWin))
+      .toEqual({ source: 'ccs-plugin', v: 1, type: 'ready' });
+  });
+
+  it('валидный call разбирается: id, op, args', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: { id: 'n1' } }), frameWin))
+      .toEqual({ source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: { id: 'n1' } });
+  });
+
+  it('call с args не-объектом — игнор', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: 'x' }), frameWin)).toBeNull();
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: null }), frameWin)).toBeNull();
+  });
+
+  it('валидный resize разбирается; отрицательная/не-числовая высота — игнор', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'resize', height: 120 }), frameWin))
+      .toEqual({ source: 'ccs-plugin', v: 1, type: 'resize', height: 120 });
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'resize', height: -5 }), frameWin)).toBeNull();
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'resize', height: '120' }), frameWin)).toBeNull();
+  });
+
+  it('неизвестный type — игнор (аддитивное расширение, ADR §3.5)', () => {
+    expect(validateFrameMessage(mkEvent({ source: 'ccs-plugin', v: 1, type: 'teleport' }), frameWin)).toBeNull();
+  });
+});
+
+describe('buildPanelSrcdoc (ADR-031 §3.1)', () => {
+  it('несёт CSP, шим и html панели; тёмная тема — атрибутом', () => {
+    const s = buildPanelSrcdoc({ html: '<body>panel</body>', shimJs: 'SHIM_JS', shimCss: 'SHIM_CSS', theme: 'dark' });
+    expect(s).toContain('Content-Security-Policy');
+    expect(s).toContain(PANEL_CSP);
+    expect(s).toContain('SHIM_JS');
+    expect(s).toContain('SHIM_CSS');
+    expect(s).toContain('data-cc-theme="dark"');
+    expect(s).toContain('<body>panel</body>');
+  });
+
+  it('светлая тема — без атрибута', () => {
+    expect(buildPanelSrcdoc({ html: '', shimJs: '', shimCss: '', theme: 'light' })).not.toContain('data-cc-theme');
+  });
+});
+
+describe('сообщения хоста', () => {
+  it('init несёт plugin/slot/context/theme/locale/granted', () => {
+    expect(buildInitMessage({
+      plugin: { id: 'a/b', version: '1.0.0' },
+      slot: 'sidebar',
+      context: { projectId: 'p1' },
+      theme: 'light',
+      locale: 'ru-RU',
+      granted: ['notes:read'],
+    })).toEqual({
+      source: 'ccs-host', v: 1, type: 'init',
+      plugin: { id: 'a/b', version: '1.0.0' },
+      slot: 'sidebar',
+      context: { projectId: 'p1' },
+      theme: 'light',
+      locale: 'ru-RU',
+      granted: ['notes:read'],
+    });
+  });
+
+  it('result: успех и отказ — с тем же id', () => {
+    expect(buildResultMessage('c1', true, { ok: 1 })).toEqual({ source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: true, data: { ok: 1 } });
+    expect(buildResultMessage('c1', false, { code: 'denied', message: 'Нет права: notes:read' }))
+      .toEqual({ source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'denied', message: 'Нет права: notes:read' } });
+  });
+
+  it('theme — смена темы без перемонтирования', () => {
+    expect(buildThemeMessage('dark')).toEqual({ source: 'ccs-host', v: 1, type: 'theme', theme: 'dark' });
+  });
+});
+
+describe('clampPanelHeight (потолок слота)', () => {
+  it('в пределах — как есть; за потолком — потолок; под полом — пол', () => {
+    expect(clampPanelHeight(100)).toBe(100);
+    expect(clampPanelHeight(900)).toBe(PANEL_MAX_HEIGHT);
+    expect(clampPanelHeight(900, true)).toBe(PANEL_MAX_HEIGHT_MOBILE);
+    expect(clampPanelHeight(10)).toBe(PANEL_MIN_HEIGHT);
+  });
+});
+
+describe('deniedKeyOf (отказ по праву)', () => {
+  it('вытаскивает ключ права из «Нет права: {key}»', () => {
+    expect(deniedKeyOf('Нет права: notes:read')).toBe('notes:read');
+    expect(deniedKeyOf('Нет права: net:api.github.com')).toBe('net:api.github.com');
+  });
+  it('пустой ключ или другая формулировка — null', () => {
+    expect(deniedKeyOf('Нет права:   ')).toBeNull();
+    expect(deniedKeyOf('Upstream error')).toBeNull();
+  });
+});
+
+describe('bridgeErrorText (макет 3, «ОШИБКА МОСТА»)', () => {
+  it('текст для каждого кода', () => {
+    expect(bridgeErrorText('bridge_timeout')).toBe('Мост не получил ответа за 3 с.');
+    expect(bridgeErrorText('bridge_bad_message')).toBe('Панель отправила неверное сообщение');
+    expect(bridgeErrorText('bridge_version')).toBe('Версия моста не поддерживается');
+  });
+});
+
+// === Часть 2: поток компонента — валидный call доходит до API ===
+
+// React-элемент: { type, props }. Дети — в props.children (массив или один узел).
+function findElement(tree: unknown, type: string): { props: Record<string, unknown> } | null {
+  if (tree === null || tree === undefined || typeof tree !== 'object') return null;
+  const el = tree as { type?: unknown; props?: Record<string, unknown> };
+  if (el.type === type && el.props) return { props: el.props };
+  const children = el.props?.children;
+  const list = Array.isArray(children) ? children : children !== undefined && children !== null ? [children] : [];
+  for (const child of list) {
+    const found = findElement(child, type);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Событие message на window-EventTarget: Node требует экземпляр Event,
+// source/origin/data дописываем (в браузере это поля MessageEvent).
+function fireMessage(source: unknown, origin: string, data: unknown) {
+  const e = new Event('message');
+  Object.assign(e, { source, origin, data });
+  (window as unknown as EventTarget).dispatchEvent(e);
+}
+
+const plugin: PluginInfo = {
+  id: 'acme/notes-panel',
+  version: '1.0.0',
+  sha256: 'a'.repeat(64),
+  requested: ['notes:read'],
+  granted: ['notes:read'],
+  enabled: true,
+  source: 'upload:u1',
+  secrets: [],
+};
+
+describe('PluginFrame: мост v1 (мини-раннер)', () => {
+  beforeEach(() => {
+    m.list.mockClear();
+    m.panelHtml.mockClear();
+    m.call.mockClear();
+    m.list.mockImplementation(async () => [plugin]);
+    m.panelHtml.mockImplementation(async () => '<html><body>panel</body></html>');
+    m.call.mockImplementation(async () => ({ ok: true, result: { hello: 'world' } }));
+  });
+
+  it('ready → init; валидный call → POST /call с id/контекстом хоста; result возвращается фрейму', async () => {
+    const project = { id: 'p1' } as Project;
+    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
+    const render = () => {
+      host.i = 0;
+      rt.state.current = host;
+      try {
+        return PluginFrame({ project });
+      } finally {
+        rt.state.current = null;
+      }
+    };
+
+    // 1-й render: список плагинов запрашен (useInstalledPlugins)
+    render();
+    await Promise.resolve();
+    expect(m.list).toHaveBeenCalledTimes(1);
+
+    // 2-й render: список получен, панель запрашена (panelHtml)
+    render();
+    await Promise.resolve();
+    expect(m.panelHtml).toHaveBeenCalledWith('acme/notes-panel', '1.0.0');
+
+    // 3-й render: html на месте, iframe смонтирован, мост ждёт ready
+    const tree3 = render();
+    const iframeEl = findElement(tree3, 'iframe');
+    expect(iframeEl, 'iframe в дереве после загрузки html').not.toBeNull();
+    // sandbox: allow-scripts БЕЗ allow-same-origin (ADR-031, инвариант 1)
+    expect(iframeEl!.props.sandbox).toBe('allow-scripts');
+    expect(String(iframeEl!.props.srcDoc)).toContain('Content-Security-Policy');
+
+    // Фейковый фрейм: contentWindow с postMessage-шпионом
+    const posted: unknown[] = [];
+    const fakeFrame = { contentWindow: { postMessage: (msg: unknown) => { posted.push(msg); } } };
+    (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
+
+    // ready от фрейма (валидный конверт, origin 'null', source — окно фрейма)
+    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+
+    // host ответил init (тема, права, контекст слота)
+    const init = posted.find(p => (p as { type?: string }).type === 'init') as Record<string, unknown>;
+    expect(init).toBeDefined();
+    expect(init.plugin).toEqual({ id: 'acme/notes-panel', version: '1.0.0' });
+    expect(init.slot).toBe('sidebar');
+    expect(init.context).toEqual({ projectId: 'p1' });
+    expect(init.granted).toEqual(['notes:read']);
+
+    // Валидный call: host шлёт POST /plugins/{id}/call (id и контекст — от хоста)
+    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: { id: 'n1' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(m.call).toHaveBeenCalledTimes(1);
+    const [callId, callBody] = m.call.mock.calls[0] as [string, { op: string; args?: Record<string, unknown>; context?: unknown }];
+    expect(callId).toBe('acme/notes-panel');
+    expect(callBody.op).toBe('notes.read');
+    expect(callBody.args).toEqual({ id: 'n1' });
+    expect(callBody.context).toEqual({ projectId: 'p1' });
+
+    // result с тем же id возвращается фрейму
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    expect(result).toBeDefined();
+    expect(result.id).toBe('c1');
+    expect(result.ok).toBe(true);
+    expect(result.data).toEqual({ hello: 'world' });
+  });
+
+  it('отказ по праву (denied) — result с кодом и плашка «Нет права {key}»', async () => {
+    const project = { id: 'p1' } as Project;
+    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
+    const render = () => {
+      host.i = 0;
+      rt.state.current = host;
+      try {
+        return PluginFrame({ project });
+      } finally {
+        rt.state.current = null;
+      }
+    };
+    render();
+    await Promise.resolve();
+    render();
+    await Promise.resolve();
+    const tree = render();
+    const iframeEl = findElement(tree, 'iframe');
+    expect(iframeEl).not.toBeNull();
+    const posted: unknown[] = [];
+    const fakeFrame = { contentWindow: { postMessage: (msg: unknown) => { posted.push(msg); } } };
+    (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
+
+    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+
+    m.call.mockImplementationOnce(async () => ({
+      ok: false,
+      error: { code: 'denied', message: 'Нет права: notes:read' },
+    }));
+    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c2', op: 'notes.read', args: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    expect(result.id).toBe('c2');
+    expect(result.ok).toBe(false);
+    expect((result.error as { code: string }).code).toBe('denied');
+  });
+
+  it('resize клампится в пределы слота', async () => {
+    const project = { id: 'p1' } as Project;
+    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
+    const render = () => {
+      host.i = 0;
+      rt.state.current = host;
+      try {
+        return PluginFrame({ project });
+      } finally {
+        rt.state.current = null;
+      }
+    };
+    render();
+    await Promise.resolve();
+    render();
+    await Promise.resolve();
+    const tree = render();
+    const iframeEl = findElement(tree, 'iframe');
+    expect(iframeEl).not.toBeNull();
+    const fakeFrame = { contentWindow: { postMessage: () => {} } };
+    (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
+
+    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+    // Высота 5000 → потолок 800 (десктоп)
+    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 5000 });
+
+    // Перерисовка: iframe получает клампнутую высоту
+    const tree2 = render();
+    const iframeEl2 = findElement(tree2, 'iframe');
+    expect((iframeEl2!.props.style as Record<string, unknown>).height).toBe(PANEL_MAX_HEIGHT);
+  });
+});

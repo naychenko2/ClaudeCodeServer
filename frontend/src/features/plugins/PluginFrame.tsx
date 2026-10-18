@@ -1,21 +1,64 @@
-import { useState } from 'react';
-import { MoreHorizontal, Plug, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { AlertTriangle, MoreHorizontal, Plug, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Island, IslandHeader } from '../../components/ui/Island';
-import { IconButton, Menu, MenuItem, MenuSep, Notice } from '../../components/ui';
+import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
+import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
 import { useProjectFeature } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project } from '../../types';
+import { api, type PluginInfo } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
+import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
+import {
+  BRIDGE_VERSION, READY_TIMEOUT_MS,
+  buildInitMessage, buildPanelSrcdoc, buildResultMessage, buildThemeMessage,
+  bridgeErrorText, clampPanelHeight, deniedKeyOf, validateFrameMessage,
+  type BridgeErrorCode, type FrameMessage, type HostMessage,
+} from './bridge';
+// Шим plugin-kit: хост встраивает его в srcdoc (мост + CSS-токены тем).
+// ?raw — содержимое файла строкой; из public/ — файл одновременно доступен как
+// статика (PWA precache), но в srcdoc он нужен именно текстом.
+import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
+import shimCss from '../../../public/plugin-kit/theme.css?raw';
 
 // === Слот панели плагина в sidebar (экран 3 макетов, ADR-031 §3, флаг plugins-mvp) ===
-// Каркас слота (2.3): остров «Панели плагинов» в боковой колонке. Тело — sandbox-iframe
-// по мосту v1 (ADR §3.4); сам мост и контент панели — пачка C (3.1/3.2), здесь только
-// оправа: шапка (плитка + имя + перезагрузка + меню), тело, футер с правами и версией.
+// Остров «Панели плагинов» в боковой колонке. Тело — sandbox-iframe
+// (sandbox="allow-scripts" БЕЗ allow-same-origin) по мосту v1: хост забирает
+// panel/index.html по REST (user JWT), вставляет CSP и шим plugin-kit в srcdoc.
+// JWT и стор хоста во фрейм не передаются — панель видит только init/result/theme/
+// context и отвечает ready/call/resize (ADR-031, инвариант 1).
 //
-// Гейт V5: слота нет, пока нет ни одного установленного плагина; плагины стоят, но
-// панелей у них нет — пустой остров (мост/состав панелей уточнит пачка C).
+// Гейт V5: слота нет, пока нет ни одного установленного плагина (WorkspacePage).
+// Панель берём у ПЕРВОГО установленного и ВКЛЮЧЕННОГО плагина: выключенный
+// не монтирует панели (бэк отвечает 409), панелей у плагина может не быть (404) —
+// тогда пустое состояние.
+
+// Человекочитаемое имя из id пакета {publisher}/{slug} (та же логика, что в
+// PluginsProjectSection: slug → слова с большой буквы).
+function humanizeId(id: string): string {
+  const slug = id.split('/').pop() ?? id;
+  return slug.split('-').filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1))
+    .join(' ') || id;
+}
+
+// Данные диалога «Права…» в режиме «изменить» из записи установки (та же
+// логика, что в PluginsProjectSection: вклады в DTO бэка нет, required — false).
+function toConsentData(info: PluginInfo): PluginConsentData {
+  return {
+    id: info.id,
+    name: humanizeId(info.id),
+    version: info.version,
+    path: info.source.startsWith('upload:') ? info.source.slice('upload:'.length) : undefined,
+    sha256: info.sha256 ? info.sha256.slice(0, 8) : undefined,
+    contributions: [],
+    requested: info.requested,
+    secrets: info.secrets.map(s => ({ name: s.name, required: false, set: s.set })),
+    granted: info.granted,
+  };
+}
 
 // Мини-плитка 20×20 с инициалами (шапка острова, макет экран 3).
 function MiniTile({ name }: { name: string }) {
@@ -35,86 +78,448 @@ function MiniTile({ name }: { name: string }) {
   );
 }
 
-// Короткая дата/версия для футера: «Права: …» + версия моно.
-function footerText(granted: string[], version: string): string {
-  const perms = granted.length > 0 ? granted.join(', ') : 'не выданы';
-  return `Права: ${perms} · v${version}`;
+// Скелет загрузки: 4 полосы (макет, «ЗАГРУЗКА (ДО 1-ГО СООБЩЕНИЯ МОСТА)»).
+function LoadingSkeleton() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+      {[0, 1, 2, 3].map(i => (
+        <div key={i} style={{ height: 14, borderRadius: R.sm, background: C.bgInset, opacity: 0.6 + i * 0.1 }} />
+      ))}
+    </div>
+  );
 }
 
-export function PluginFrame({ project }: { project: Project }) {
+// Загрузка panel/index.html: absent (нет включённых плагинов) / fetching /
+// noPanel (у плагина нет панели, 404) / failed (остальные ошибки) / html.
+type FetchState =
+  | { kind: 'absent' }
+  | { kind: 'fetching' }
+  | { kind: 'noPanel' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'html'; html: string };
+
+// Состояние моста: waiting (iframe смонтирован, ждём ready) / alive (ready
+// получен, init отправлен) / код ошибки (bridge_timeout и др.).
+type BridgeState = 'waiting' | 'alive' | BridgeErrorCode;
+
+// Потолок одновременных вызовов одного фрейма и размер args (ADR-031 §3.4:
+// «числа фиксирует шаг 3.2 в CLAUDE.md вертикали» — зафиксировано там).
+const MAX_INFLIGHT_CALLS = 8;
+const MAX_ARGS_BYTES = 64 * 1024;
+
+export function PluginFrame({ project, onOpenPlugins, onClose }: {
+  project: Project;
+  // «Открыть в «Плагинах»» — настройки проекта (секция плагинов)
+  onOpenPlugins?: () => void;
+  // «Скрыть панель» — закрыть панельную зону
+  onClose?: () => void;
+}) {
   const isMobile = useIsMobile();
   const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins);
   const { plugins, loading } = useInstalledPlugins(project.id, pluginsAvail);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // Эффективная тема хоста: в init и в theme-сообщениях (без перемонтирования)
+  const theme = useSyncExternalStore(subscribeThemeMode, getEffectiveTheme, getEffectiveTheme);
 
-  // V5: без плагинов слота нет вовсе.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [fetch, setFetch] = useState<FetchState>({ kind: 'absent' });
+  const [bridge, setBridge] = useState<BridgeState>('waiting');
+  const [height, setHeight] = useState<number | null>(null);
+  const [deniedKey, setDeniedKey] = useState<string | null>(null);
+  const [log, setLog] = useState<string[]>([]);
+  const [logOpen, setLogOpen] = useState(false);
+  const [consent, setConsent] = useState<PluginConsentData | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Панель — у первого установленного и ВКЛЮЧЕННОГО плагина (выключенный
+  // не монтирует панели; бэк на его panel ответил бы 409)
+  const panelPlugin = useMemo(
+    () => plugins.find(p => p.enabled) ?? null,
+    [plugins],
+  );
+
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // init отправлен в текущем монтировании (повторный ready игнорируется, ADR §3.3)
+  const initedRef = useRef(false);
+  // Вызовы в полёте: потолок MAX_INFLIGHT_CALLS (лишний — result `limit`)
+  const inflightRef = useRef(0);
+  // Актуальные значения для message-обработчика без пересоздания подписки
+  const stateRef = useRef({ theme, project, isMobile, panelPlugin: null as PluginInfo | null, bridge, reloadKey });
+  stateRef.current = { theme, project, isMobile, panelPlugin: panelPlugin, bridge, reloadKey };
+
+  const name = panelPlugin ? humanizeId(panelPlugin.id) : '';
+
+  // Журнал моста (макет, «Подробнее»): последние 20 событий, человекочитаемо
+  const logEvent = useCallback((line: string) => {
+    setLog(l => [...l.slice(-19), line]);
+  }, []);
+
+  // Отправить сообщение хоста во фрейм: адресат — конкретное окно, targetOrigin
+  // '*' (непрозрачный origin назвать нельзя, ADR-031 §3.2)
+  const postToFrame = useCallback((msg: HostMessage) => {
+    const win = iframeRef.current?.contentWindow;
+    if (win) win.postMessage(msg, '*');
+    logEvent(`→ ${msg.type}${'id' in msg ? ` ${msg.id}` : ''}`);
+  }, [logEvent]);
+
+  // === Забор panel/index.html (REST, user JWT) + сброс состояния моста ===
+  useEffect(() => {
+    let cancelled = false;
+    initedRef.current = false;
+    inflightRef.current = 0;
+    setBridge('waiting');
+    setHeight(null);
+    setDeniedKey(null);
+    setLog([]);
+    if (!panelPlugin) {
+      setFetch({ kind: 'absent' });
+      return;
+    }
+    setFetch({ kind: 'fetching' });
+    api.plugins.panelHtml(panelPlugin.id, panelPlugin.version)
+      .then(html => {
+        if (cancelled) return;
+        setFetch({ kind: 'html', html });
+        logEvent('← panel/index.html загружен');
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const status = (e as { status?: number })?.status;
+        if (status === 404) {
+          setFetch({ kind: 'noPanel' });
+          logEvent('← панель не найдена (404)');
+        } else {
+          setFetch({ kind: 'failed', message: e instanceof Error ? e.message : 'Не удалось загрузить панель' });
+          logEvent(`← ошибка загрузки: ${e instanceof Error ? e.message : 'неизвестно'}`);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [panelPlugin?.id, panelPlugin?.version, reloadKey, logEvent]);
+
+  // srcdoc: CSP + шим plugin-kit + тема + html панели. Пересобирается при
+  // смене темы (атрибут data-cc-theme), но без перемонтирования iframe —
+  // состояние панели держится, тема доходит сообщением (см. эффект ниже).
+  const srcdoc = useMemo(() => {
+    if (fetch.kind !== 'html') return null;
+    return buildPanelSrcdoc({ html: fetch.html, shimJs, shimCss, theme });
+  }, [fetch, theme]);
+
+  // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
+  // «Перезагрузить» и смена плагина — да (reloadKey / id+version).
+  const frameKey = `${panelPlugin ? panelPlugin.id + panelPlugin.version : 'none'}#${reloadKey}`;
+
+  // === Таймаут ready: 3 с после монтирования iframe → bridge_timeout ===
+  useEffect(() => {
+    if (fetch.kind !== 'html' || bridge !== 'waiting') return;
+    const t = setTimeout(() => {
+      setBridge('bridge_timeout');
+      logEvent('× ready не пришёл за 3 с (bridge_timeout)');
+    }, READY_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [fetch, bridge, frameKey, logEvent]);
+
+  // === call: POST /api/plugins/{id}/call (user JWT), ответ — result с тем же id ===
+  const handleCall = useCallback(async (msg: Extract<FrameMessage, { type: 'call' }>) => {
+    const s = stateRef.current;
+    const plugin = s.panelPlugin;
+    if (!plugin) return;
+    // Потолки (ADR-031 §3.4): число вызовов в полёте и размер args
+    if (inflightRef.current >= MAX_INFLIGHT_CALLS) {
+      postToFrame(buildResultMessage(msg.id, false, { code: 'limit', message: 'Слишком много одновременных вызовов' }));
+      return;
+    }
+    let args = msg.args;
+    try {
+      if (JSON.stringify(args).length > MAX_ARGS_BYTES) {
+        postToFrame(buildResultMessage(msg.id, false, { code: 'limit', message: 'Аргументы слишком большие' }));
+        return;
+      }
+    } catch {
+      args = {};
+    }
+    inflightRef.current++;
+    logEvent(`← call ${msg.id} ${msg.op}`);
+    try {
+      const res = await api.plugins.call(plugin.id, {
+        op: msg.op,
+        args,
+        context: { projectId: s.project.id },
+      });
+      if (res.ok) {
+        postToFrame(buildResultMessage(msg.id, true, res.result));
+      } else {
+        postToFrame(buildResultMessage(msg.id, false, res.error ?? { code: 'upstream', message: 'Сервер не ответил' }));
+        // Отказ по праву — плашка «Нет права {key}» поверх контента (не ломает панель)
+        if (res.error?.code === 'denied') {
+          const key = deniedKeyOf(res.error.message);
+          if (key) setDeniedKey(key);
+        }
+      }
+    } catch (e) {
+      // Сам запрос к серверу не дошёл (сеть/гейт) — для панели это upstream
+      postToFrame(buildResultMessage(msg.id, false, {
+        code: 'upstream',
+        message: e instanceof Error ? e.message : 'Сервер не ответил',
+      }));
+    } finally {
+      inflightRef.current--;
+    }
+  }, [postToFrame, logEvent]);
+
+  // === Приём сообщений фрейма (ADR-031 §3.2: все четыре условия) ===
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const msg = validateFrameMessage(e, iframeRef.current?.contentWindow);
+      if (!msg) return; // всё невалидное — тихий игнор
+      const s = stateRef.current;
+      if (msg.type === 'ready') {
+        if (s.bridge !== 'waiting' || initedRef.current) return; // повторный ready
+        initedRef.current = true;
+        if (s.panelPlugin) {
+          postToFrame(buildInitMessage({
+            plugin: { id: s.panelPlugin.id, version: s.panelPlugin.version },
+            slot: 'sidebar',
+            context: { projectId: s.project.id },
+            theme: s.theme,
+            locale: typeof navigator !== 'undefined' ? navigator.language : '',
+            granted: s.panelPlugin.granted,
+          }));
+        }
+        setBridge('alive');
+        logEvent('← ready → init');
+      } else if (msg.type === 'call') {
+        void handleCall(msg);
+      } else if (msg.type === 'resize') {
+        setHeight(clampPanelHeight(msg.height, s.isMobile));
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- актуальное через stateRef
+  }, [frameKey, postToFrame, logEvent, handleCall]);
+
+  // === Смена темы: сообщением, без перемонтирования (ADR-031 §3.3) ===
+  useEffect(() => {
+    if (bridge === 'alive') postToFrame(buildThemeMessage(theme));
+  }, [theme, bridge, postToFrame]);
+
+  // «Перезагрузить»: заново забрать html и перемонтировать iframe
+  const reload = useCallback(() => setReloadKey(k => k + 1), []);
+
+  // Выдать/изменить права (диалог согласия в режиме «изменить»)
+  const submitConsent = async (permissions: string[], secrets: { name: string; value: string }[]) => {
+    if (!panelPlugin) return;
+    await api.plugins.grant(panelPlugin.id, permissions, secrets);
+    setConsent(null);
+  };
+
+  // === Гейты: без плагинов слота нет вовсе (V5) ===
   if (!pluginsAvail) return null;
   if (!loading && plugins.length === 0) return null;
 
-  // Пока мост (пачка C) не подключён — тело показывает загрузку/нейтральную подложку.
-  // Первый плагин с панелью станет содержимым; здесь каркас.
-  const first = plugins[0];
-  const name = first ? (first.id.split('/').pop() ?? first.id) : '';
+  // === Шапка: плитка + имя + (reload | точка) + ⋯ ===
+  const isBridgeError = bridge === 'bridge_timeout' || bridge === 'bridge_bad_message' || bridge === 'bridge_version';
+  // Iframe монтируется, как только есть html (и в waiting, и в alive): шим внутри
+  // шлёт ready, и только host отвечает init. Скелет до ready — оверлеем поверх.
+  const showIframe = fetch.kind === 'html' && srcdoc !== null;
+
+  const headerActions = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      {isBridgeError && (
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: C.danger, flexShrink: 0 }} />
+      )}
+      {bridge === 'alive' && (
+        <IconButton size="xs" tone="muted" ariaLabel="Перезагрузить панель" onClick={reload}>
+          <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+      )}
+      <div style={{ position: 'relative' }}>
+        <IconButton size="xs" tone="muted" ariaLabel="Меню панели" onClick={() => setMenuOpen(o => !o)}>
+          <MoreHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        {menuOpen && (
+          <Menu onClose={() => setMenuOpen(false)} align="right" top={-2}>
+            <MenuItem label="Права…" onClick={() => { setMenuOpen(false); if (panelPlugin) setConsent(toConsentData(panelPlugin)); }} />
+            {onOpenPlugins && <MenuItem label="Открыть в «Плагинах»" onClick={() => { setMenuOpen(false); onOpenPlugins(); }} />}
+            {(panelPlugin || onOpenPlugins) && <MenuSep />}
+            {onClose && <MenuItem label="Скрыть панель" onClick={() => { setMenuOpen(false); onClose(); }} />}
+          </Menu>
+        )}
+      </div>
+    </div>
+  );
+
+  // Тело по состояниям макета (экран 3)
+  const body = (() => {
+    if (loading) {
+      return <LoadingSkeleton />;
+    }
+    if (fetch.kind === 'noPanel') {
+      return (
+        <div style={{
+          border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: SP.lg,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, textAlign: 'center',
+        }}>
+          <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Здесь будут панели плагинов</div>
+          <div style={{ fontSize: FS.sm, color: C.textMuted }}>У установленных плагинов панелей нет.</div>
+          {onOpenPlugins && (
+            <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button>
+          )}
+        </div>
+      );
+    }
+    if (fetch.kind === 'failed') {
+      return (
+        <Notice tone="danger" icon={AlertTriangle} title="Не удалось загрузить панель">
+          {fetch.message}
+        </Notice>
+      );
+    }
+    if (fetch.kind === 'fetching') {
+      return <LoadingSkeleton />;
+    }
+    if (isBridgeError) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <Notice tone="danger" icon={AlertTriangle} title="Панель не отвечает">
+            {bridgeErrorText(bridge as BridgeErrorCode)}
+          </Notice>
+          <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+            {bridge} · v{BRIDGE_VERSION}
+          </div>
+          <div style={{ display: 'flex', gap: SP.sm }}>
+            <Button variant="ghost" size="sm" leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={reload}>
+              Перезагрузить
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setLogOpen(true)}>Подробнее</Button>
+          </div>
+        </div>
+      );
+    }
+    if (showIframe) {
+      return (
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <iframe
+            ref={iframeRef}
+            key={frameKey}
+            srcDoc={srcdoc}
+            sandbox="allow-scripts"
+            title={`Панель плагина ${name}`}
+            style={{
+              width: '100%',
+              height: height ?? '100%',
+              border: 'none', display: 'block',
+              background: 'transparent',
+            }}
+          />
+          {/* Скелет до первого сообщения моста (ready); iframe уже смонтирован,
+              шим внутри живёт и шлёт ready — оверлей лишь закрывает контент */}
+          {bridge === 'waiting' && (
+            <div style={{
+              position: 'absolute', inset: 0, background: C.bgCard,
+              padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.sm,
+            }}>
+              <LoadingSkeleton />
+            </div>
+          )}
+          {deniedKey && bridge === 'alive' && (
+            <Notice
+              tone="warning" icon={ShieldAlert}
+              title={`Нет права ${deniedKey}`}
+              style={{ position: 'absolute', top: SP.sm, left: SP.sm, right: SP.sm }}
+              action={
+                <IconButton size="xs" tone="muted" ariaLabel="Закрыть" onClick={() => setDeniedKey(null)}>
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              }
+            >
+              Панель вызвала операцию, право на которую не выдано.{' '}
+              <button
+                onClick={() => { if (panelPlugin) setConsent(toConsentData(panelPlugin)); }}
+                style={{
+                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                  color: 'inherit', textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit',
+                }}
+              >
+                Выдать…
+              </button>
+            </Notice>
+          )}
+        </div>
+      );
+    }
+    // absent: плагины есть, но ни один не включён — как «панелей нет»
+    return (
+      <div style={{
+        border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: SP.lg,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, textAlign: 'center',
+      }}>
+        <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Здесь будут панели плагинов</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted }}>У установленных плагинов панелей нет.</div>
+        {onOpenPlugins && (
+          <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button>
+        )}
+      </div>
+    );
+  })();
 
   return (
     <Island>
       <IslandHeader
-        icon={<MiniTile name={name || 'P'} />}
-        title="Панели плагинов"
-        actions={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            {/* M8: перезагрузка панели доедет в пачке C (мост) — пока onClick пуст */}
-            <IconButton size="xs" tone="muted" ariaLabel="Перезагрузить панель" onClick={() => {}}>
-              <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            <div style={{ position: 'relative' }}>
-              <IconButton size="xs" tone="muted" ariaLabel="Меню панели" onClick={() => setMenuOpen(o => !o)}>
-                <MoreHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-              {menuOpen && (
-                <Menu onClose={() => setMenuOpen(false)} align="right" top={-2}>
-                  <MenuItem label="Права…" onClick={() => setMenuOpen(false)} />
-                  <MenuItem label="Открыть в «Плагинах»" onClick={() => setMenuOpen(false)} />
-                  <MenuSep />
-                  <MenuItem label="Скрыть панель" onClick={() => setMenuOpen(false)} />
-                </Menu>
-              )}
-            </div>
-          </div>
-        }
+        icon={panelPlugin ? <MiniTile name={name} /> : <Plug size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />}
+        title={panelPlugin ? name : 'Панели плагинов'}
+        actions={headerActions}
       />
 
-      {/* Тело: sandbox-iframe по мосту v1 (без allow-same-origin) — пачка C.
-          Здесь каркас: подложка C.bgCard + состояние (загрузка/плейсхолдер). */}
       <div style={{
         flex: 1, minHeight: 0, overflow: 'auto',
         background: C.bgCard, padding: SP.md,
         display: 'flex', flexDirection: 'column', gap: SP.sm,
       }}>
-        {loading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-            {[0, 1, 2, 3].map(i => (
-              <div key={i} style={{ height: 14, borderRadius: R.sm, background: C.bgInset, opacity: 0.6 + i * 0.1 }} />
-            ))}
-          </div>
-        ) : (
-          <Notice tone="info" icon={Plug}>
-            Панель плагина подключается по мосту v1 (пачка C). Содержимое появится после
-            подключения; права и версия — в футере.
-          </Notice>
-        )}
+        {body}
       </div>
 
-      {/* Футер: права + версия (макет, экран 3; В4 — на мобиле скрыть) */}
-      {!isMobile && first && (
+      {/* Футер: права + версия (макет, экран 3; на мобиле скрыт) */}
+      {!isMobile && panelPlugin && (
         <div style={{
           flexShrink: 0, padding: '6px 12px',
           background: C.bgInset, borderTop: `1px solid ${C.borderLight}`,
           fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
-          {footerText(first.granted, first.version)}
+          {`Права: ${panelPlugin.granted.length > 0 ? panelPlugin.granted.join(', ') : 'не выданы'} · v${panelPlugin.version}`}
         </div>
+      )}
+
+      {/* Журнал моста («Подробнее»): последние сообщения, моно */}
+      {logOpen && (
+        <Modal
+          width={440}
+          title="Журнал моста"
+          onClose={() => setLogOpen(false)}
+          footer={
+            <Button variant="ghost" size="md" fullWidth onClick={() => setLogOpen(false)}>Закрыть</Button>
+          }
+        >
+          <div style={{
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+            display: 'flex', flexDirection: 'column', gap: 2,
+            maxHeight: 320, overflow: 'auto',
+          }}>
+            {log.length === 0
+              ? <div style={{ color: C.textMuted }}>Событий пока нет</div>
+              : log.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+        </Modal>
+      )}
+
+      {/* Диалог «Права…» (режим «изменить») */}
+      {consent && (
+        <ConsentDialog
+          data={consent}
+          mode="modify"
+          onClose={() => setConsent(null)}
+          onSubmit={submitConsent}
+        />
       )}
     </Island>
   );

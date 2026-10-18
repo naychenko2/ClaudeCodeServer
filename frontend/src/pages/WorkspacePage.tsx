@@ -2138,7 +2138,13 @@ const windowWidth = useWindowWidth();
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
             // Панели плагинов (ADR-031, гейт V5): только когда есть установленные плагины
-            ...(hasPlugins ? { pluginPanels: <PluginFrame project={project} /> } : {}),
+            ...(hasPlugins ? {
+              pluginPanels: <PluginFrame
+                project={project}
+                onOpenPlugins={() => setEditProjectOpen(true)}
+                onClose={() => closePanelKey('pluginPanels')}
+              />
+            } : {}),
             ...(activeSession ? {
               chatContext: <ContextPanelHost session={activeSession} project={project}
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,

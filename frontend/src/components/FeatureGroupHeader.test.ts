@@ -130,13 +130,13 @@ describe('FeatureGroupHeader: тона', () => {
     expect(renderHeader(f).includes('data-feature-state="closed"')).toBe(true);
   });
 
-  it('смержена (closed + mergedAt): глиф merged, статус «смержена»', () => {
+  it('смержена (closed + mergedAt): глиф done (галочка), статус «смержена»', () => {
     const f = feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } });
     const st = featureDisplayState(f);
-    expect(st.kind).toBe('merged');
+    expect(st.kind).toBe('done');
     expect(st.alarm).toBeNull();
     expect(st.status).toBe('смержена');
-    expect(renderHeader(f).includes('data-feature-state="merged"')).toBe(true);
+    expect(renderHeader(f).includes('data-feature-state="done"')).toBe(true);
   });
 
   it('счётчик и название группы в заголовке', () => {

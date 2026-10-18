@@ -1,6 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, PromptCacheInfo } from '../../types';
-import { cacheNoteText, cacheWarnMaxSec, expiringThresholdMs, promptCacheState, rewriteCostUsd } from '../promptCache';
+import { cacheNoteText, cacheTipText, cacheWarnMaxSec, expiringThresholdMs, promptCacheState, rewriteCostUsd } from '../promptCache';
+
+describe('cacheTipText', () => {
+  it('состояние с остатком в минутах', () => {
+    expect(cacheTipText('warm', false, 42 * 60_000)).toBe('Кэш тёплый · 42 мин');
+    expect(cacheTipText('expiring', false, 90_000)).toBe('Кэш скоро остынет · 2 мин');
+    expect(cacheTipText('warm', false)).toBe('Кэш тёплый');
+  });
+
+  it('остывший — без остатка', () => {
+    expect(cacheTipText('cold', false, 0)).toBe('Кэш остыл');
+  });
+
+  it('пока идёт ход — без остатка при любом статусе', () => {
+    for (const status of ['warm', 'expiring', 'cold'] as const)
+      expect(cacheTipText(status, true, 42 * 60_000)).toBe('Кэш: идёт ход');
+  });
+});
 
 describe('cacheNoteText', () => {
   const rewrite = { tokens: '120.0k', usd: '$1.80', apiTariff: true };

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { rewriteCostUsd, cacheLeftText, cacheNoteText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { rewriteCostUsd, cacheLeftText, cacheNoteText, cacheTipText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
 import { handoffAvailability, handoffWarm } from '../../lib/chatHandoff';
 import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
@@ -772,6 +772,23 @@ function CacheClockFace({ items, isWaiting, isCompact, toastSessionId, handoff }
   );
 }
 
+// Строка кэша в подсказке пилюли при наведении: циферблат на месте пипа и состояние с
+// остатком. Свой компонент по той же причине, что CacheClockFace: тикает только он
+function CacheTipLine({ items, isWaiting }: { items: ChatItem[]; isWaiting: boolean }) {
+  const state = usePromptCache(items);
+  if (state.status === 'unknown') return null;
+  const { status, remainingMs } = state;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
+      <span style={{ width: 12, flexShrink: 0, display: 'inline-flex', justifyContent: 'center' }}>
+        <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
+          cold={!isWaiting && status === 'cold'} spin={isWaiting} />
+      </span>
+      <span>{cacheTipText(status, isWaiting, remainingMs)}</span>
+    </div>
+  );
+}
+
 // Тело попапа: срок, остаток, объём в кэше, последний промах и цена перезаписи остывшего кэша.
 // Пока идёт ход (isWaiting), остаток и прогноз перезаписи скрыты — как на лице пилюли:
 // они считаются от якоря прошлого хода и к начатому ходу уже не относятся
@@ -979,6 +996,7 @@ export function RingPillBadge(props: {
           <span>{p.text}</span>
         </div>
       )) : <div>Контекст и расход сессии</div>}
+      {cacheItems && <CacheTipLine items={cacheItems} isWaiting={props.isWaiting} />}
       <div style={{ color: C.textMuted, fontSize: FS.xs }}>Нажмите для деталей</div>
     </div>
   );

@@ -74,6 +74,15 @@ export function cacheLeftText(remainingMs: number): string {
   return `${Math.max(1, Math.ceil(remainingMs / 60_000))} мин`;
 }
 
+// Строка кэша в подсказке при наведении на пилюлю. Пока идёт ход — без остатка: он
+// считается от якоря прошлого хода (то же правило, что у лица пилюли и попапа)
+export function cacheTipText(status: Exclude<PromptCacheStatus, 'unknown'>, isWaiting: boolean, remainingMs?: number): string {
+  if (isWaiting) return 'Кэш: идёт ход';
+  if (status === 'cold') return 'Кэш остыл';
+  const left = remainingMs !== undefined ? ` · ${cacheLeftText(remainingMs)}` : '';
+  return status === 'expiring' ? `Кэш скоро остынет${left}` : `Кэш тёплый${left}`;
+}
+
 // Пояснение внизу секции кэша в поповере, одной строкой. Пока идёт ход, якорь вот-вот
 // сдвинется: ни остатка, ни прогноза перезаписи — они относились бы к уже начатому ходу.
 // tokens/usd — уже отформатированные значения (форматтеры живут у вёрстки).

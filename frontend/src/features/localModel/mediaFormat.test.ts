@@ -18,6 +18,7 @@ import {
   humanErrorPhrase, historySummaryLine, historyWaitSeconds, historyWaitLine, historyRowTime,
   seedFormatted, historyVariantCount, historyParamsRows, historyTimeRows,
   historyPeriodTail, historyPeriodFrom, liveCompletionMarker, historyOutcomeBadge,
+  pluralTasks,
 } from './mediaFormat';
 import type { LocalModelMedia, MediaDone, MediaRunning } from './api';
 
@@ -611,5 +612,34 @@ describe('historyOutcomeBadge: статус → бейдж', () => {
     expect(historyOutcomeBadge('queued')).toEqual({ label: 'ждёт', tone: 'neutral' });
     expect(historyOutcomeBadge('unknown')).toBeNull();
     expect(historyOutcomeBadge(null)).toBeNull();
+  });
+});
+
+describe('pluralTasks: склонение «задача/задачи/задач»', () => {
+  it('1 → «задача»', () => {
+    expect(pluralTasks(1)).toBe('задача');
+  });
+  it('2–4 → «задачи»', () => {
+    expect(pluralTasks(2)).toBe('задачи');
+    expect(pluralTasks(3)).toBe('задачи');
+    expect(pluralTasks(4)).toBe('задачи');
+  });
+  it('5–20, 25, … → «задач»', () => {
+    expect(pluralTasks(5)).toBe('задач');
+    expect(pluralTasks(10)).toBe('задач');
+    expect(pluralTasks(20)).toBe('задач');
+    expect(pluralTasks(25)).toBe('задач');
+    expect(pluralTasks(0)).toBe('задач');
+  });
+  it('11–14 → «задач» (исключение)', () => {
+    expect(pluralTasks(11)).toBe('задач');
+    expect(pluralTasks(12)).toBe('задач');
+    expect(pluralTasks(13)).toBe('задач');
+    expect(pluralTasks(14)).toBe('задач');
+  });
+  it('101 → «задача», 102 → «задачи», 111 → «задач»', () => {
+    expect(pluralTasks(101)).toBe('задача');
+    expect(pluralTasks(102)).toBe('задачи');
+    expect(pluralTasks(111)).toBe('задач');
   });
 });

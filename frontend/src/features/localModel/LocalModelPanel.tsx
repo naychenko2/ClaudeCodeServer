@@ -1,4 +1,5 @@
-// Панель «Локальные модели» — остров правого рельса (только админ).
+// Панель «Локальные модели» — остров правого рельса. Админ — вкладки
+// «LLM · Медиа»; не-админ — только «Медиа» (без переключателя, без опроса /stats).
 //
 // Каркас (остров, шапку с иконкой+названием и крестик) рисует контейнер панели
 // рельса (PanelShell зоны, как у «Персонажей»/«Голосов»/«Команды»): панель
@@ -75,9 +76,11 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // configured); не видна — опрос стоит, таймера нет
   const visible = isLocalModelPanelVisible({ flag, isAdmin, configured });
 
-  const [tab, setTab] = useState<Tab>(loadTab);
+  // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается
+  const [storedTab, setStoredTab] = useState<Tab>(loadTab);
+  const tab: Tab = isAdmin ? storedTab : 'media';
   const changeTab = useCallback((t: Tab) => {
-    setTab(t);
+    setStoredTab(t);
     try { localStorage.setItem(TAB_KEY, t); } catch { /* приватный режим */ }
   }, []);
 
@@ -116,7 +119,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
   // Без PanelShell-шапки (мобила) переключатель — фиксированной строкой в теле,
   // над прокручиваемым блоком: не скроллится вместе с ним.
-  const mobileSwitcher = !inHeader && (
+  const mobileSwitcher = !inHeader && isAdmin && (
     <div style={{ flexShrink: 0, padding: `${SP.md}px ${SP.md}px 0` }}>
       <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} />
     </div>
@@ -124,7 +127,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
   return (
     <>
-      {inHeader && (
+      {inHeader && isAdmin && (
         <PanelHeaderSlot side="left">
           <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} />
         </PanelHeaderSlot>

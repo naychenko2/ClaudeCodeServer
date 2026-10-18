@@ -34,11 +34,13 @@ function ownerPart(record: MediaHistoryRecord, meUsername: string | null): { tex
 
 // === Строка записи ===
 
-function HistoryRow({ record, isMobile, selected, meUsername, onOpen }: {
+function HistoryRow({ record, isMobile, selected, meUsername, hideOwner, onOpen }: {
   record: MediaHistoryRecord;
   isMobile: boolean;
   selected: boolean;
   meUsername: string | null;
+  // scope=self: колонка владельца скрыта (все записи — свои)
+  hideOwner?: boolean;
   onOpen: () => void;
 }) {
   const [hover, setHover] = useState(false);
@@ -52,7 +54,7 @@ function HistoryRow({ record, isMobile, selected, meUsername, onOpen }: {
     ? historyFileUrl(record.id, 0, 'thumb')
     : null;
 
-  const aria = `${title}, ${badge ? badge.label : 'в процессе'}, ${who.text}, ${time}. Открыть детали`;
+  const aria = `${title}, ${badge ? badge.label : 'в процессе'}${hideOwner ? '' : `, ${who.text}, `}${time}. Открыть детали`;
 
   // Плеер прямо в ленте: у завершённого звука. preload="none" — иначе лента в 50
   // записей закачает 50 файлов. Плеер — сосед кнопки, не внутри (клик по «play»
@@ -122,10 +124,16 @@ function HistoryRow({ record, isMobile, selected, meUsername, onOpen }: {
           <span style={{
             fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
-            <span style={who.me ? { color: C.textHeading, fontWeight: 600 } : { color: C.textSecondary }}>
-              {who.me ? 'вы' : who.text}
-            </span>
-            {' · '}{wait}
+            {hideOwner
+              ? wait
+              : (
+                <>
+                  <span style={who.me ? { color: C.textHeading, fontWeight: 600 } : { color: C.textSecondary }}>
+                    {who.me ? 'вы' : who.text}
+                  </span>
+                  {' · '}{wait}
+                </>
+              )}
           </span>
         </span>
       </button>
@@ -207,6 +215,8 @@ export function MediaHistory({ media, isMobile }: {
 }) {
   const h = useMediaHistory(true, media);
   const me = useMe();
+  // Не-админ: только свои генерации — своя пометка, без колонки владельца и фильтра по логину
+  const self = media != null && (media.scope ?? 'all') === 'self';
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
@@ -262,7 +272,11 @@ export function MediaHistory({ media, isMobile }: {
         color: C.textSecondary, background: C.bgInset, borderRadius: R.md, padding: '4px 8px',
       }}>
         <Eye size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>Видны генерации всех пользователей AI Home — промпты и результаты. Этот раздел доступен только администраторам.</span>
+        <span>
+          {self
+            ? 'Показаны только ваши генерации'
+            : 'Видны генерации всех пользователей AI Home — промпты и результаты. Этот раздел доступен только администраторам.'}
+        </span>
       </div>
 
       {/* Фильтры: вид (IconSegmented) + «Фильтры» */}
@@ -361,6 +375,7 @@ export function MediaHistory({ media, isMobile }: {
                   isMobile={isMobile}
                   selected={r.id === selectedId}
                   meUsername={me.username}
+                  hideOwner={self}
                   onOpen={() => setSelectedId(r.id)}
                 />
               ))}
@@ -400,6 +415,7 @@ export function MediaHistory({ media, isMobile }: {
           counters={h.counters}
           records={h.records}
           meUsername={me.username}
+          hideLogin={self}
           onPatch={p => { h.setFilters(p); }}
           onReset={() => { h.resetFilters(); setMenuRect(null); }}
           onClose={() => setMenuRect(null)}

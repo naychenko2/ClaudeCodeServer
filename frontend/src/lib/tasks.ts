@@ -2,7 +2,7 @@
 // Паттерн стора — как featureFlags.ts: модульное состояние + useSyncExternalStore.
 // Realtime: бэк шлёт task_changed в группу user_{userId} — стор обновляется сам.
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { BoardColumn, CreateTaskDto, Task, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskStatus, UpdateTaskDto } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
@@ -84,13 +84,86 @@ function wireRealtime() {
   subscribeOnline(() => { if (isOnline()) void drainTaskOutbox(); });
 }
 
+// Сохранить уже загруженный ПОЛНЫЙ текст при перезагрузке списка: серверный элемент
+// облегчённый (listItem), и слепая подмена затирала бы описание/итог открытой карточки.
+// Полную версию оставляем, только если задача не менялась на сервере (тот же updatedAt);
+// изменилась — берём облегчённую, полную догрузит ensureFullTask при следующем открытии.
+export function keepLoadedFull(list: Task[], current: Task[]): Task[] {
+  const full = new Map(current.filter(t => !t.listItem).map(t => [t.id, t]));
+  return list.map(t => {
+    const cur = full.get(t.id);
+    return t.listItem && cur && cur.updatedAt === t.updatedAt ? cur : t;
+  });
+}
+
 export async function reloadTasks(): Promise<void> {
-  const list = await api.tasks.listAll();
+  const list = keepLoadedFull(await api.tasks.listAll(), _tasks);
   // Поверх серверного списка накатываем ещё не синхронизированные офлайн-правки
   // (защита от reload при непустой очереди — напр. online-эффект опередил дренаж).
   _tasks = await mergePending(list, _tasks);
   _loaded = true;
   emit();
+}
+
+// === Догрузка полной карточки ===
+// Список приходит без Description/ResultMarkdown (listItem). Всё, что показывает или
+// редактирует полный текст (панель задачи, форма правки), сначала зовёт ensureFullTask.
+const _fullInflight = new Map<string, Promise<void>>();
+
+export function ensureFullTask(id: string): Promise<void> {
+  const cur = _tasks.find(t => t.id === id);
+  // Полная версия уже в сторе — грузить нечего. Задачи в сторе нет вовсе (снимок у родителя
+  // обогнал стор) — грузим всё равно: иначе панель вечно ждала бы «Загружаю…»
+  if (cur && !cur.listItem) return Promise.resolve();
+  const running = _fullInflight.get(id);
+  if (running) return running;
+  const known = !!cur;
+  const p = api.tasks.get(id).then(full => {
+    const now = _tasks.find(t => t.id === id);
+    // Заменена полной версией (realtime/ответ мутации) пока грузили — ничего не делаем
+    if (now && !now.listItem) return;
+    if (!now) {
+      // Была в сторе и пропала — удалена, пока грузили; не было вовсе — добавляем
+      if (!known) upsert(full);
+      return;
+    }
+    if (outboxHasPending(id)) {
+      // Есть несинхронизированная локальная правка — она новее серверной копии:
+      // подмешиваем только тексты, которых локально нет, остальное оставляем как есть
+      upsert({
+        ...now,
+        description: now.description || full.description,
+        resultMarkdown: now.resultMarkdown ?? full.resultMarkdown,
+        listItem: undefined,
+      });
+    } else {
+      upsert(full);
+    }
+  }).finally(() => { _fullInflight.delete(id); });
+  _fullInflight.set(id, p);
+  return p;
+}
+
+export type FullTaskState = 'ready' | 'loading' | 'error';
+
+// Состояние полной загрузки задачи для экрана, которому нужен полный текст.
+// ready — текст есть (задача не облегчённая); loading — идёт догрузка; error — не вышло
+// (retry() повторяет). Облегчённой задача перестаёт быть, когда стор получит полную версию.
+export function useEnsureFullTask(task: Task): { state: FullTaskState; retry: () => void } {
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const needsFull = !!task.listItem;
+  useEffect(() => {
+    if (!needsFull) return;
+    let alive = true;
+    setFailed(false);
+    ensureFullTask(task.id).catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [task.id, needsFull, attempt]);
+  return {
+    state: !needsFull ? 'ready' : failed ? 'error' : 'loading',
+    retry: () => setAttempt(a => a + 1),
+  };
 }
 
 // Регистрируем store-хуки очереди лениво — внутри ensureTasksLoaded, а не на

@@ -39,7 +39,8 @@ public class ProjectTasksController(
     public IActionResult GetAll(string projectId)
     {
         if (OwnProject(projectId) is null) return NotFound();
-        return Ok(tasks.GetByProject(projectId));
+        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}
+        return Ok(tasks.GetByProject(projectId).Select(TaskListItem.From).ToList());
     }
 
     [HttpPost]
@@ -299,7 +300,10 @@ public class TasksController(
                 t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 t.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 t.Labels.Any(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
-        return Ok(result.ToList());
+        // Фильтры (в т.ч. q по полному описанию) отработали на полных задачах; наружу уходит
+        // облегчённый элемент: без Description/ResultMarkdown (на проде это ~80% веса ответа).
+        // Полная карточка — GET /api/tasks/{taskId}.
+        return Ok(result.Select(TaskListItem.From).ToList());
     }
 
     [HttpGet("{taskId}")]

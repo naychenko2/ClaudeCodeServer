@@ -161,7 +161,13 @@ describe('F9: чип — геометрия', () => {
 // === Клик: stopPropagation + сигнал фокуса + меню пилюли ===
 
 describe('F9: чип — клик', () => {
-  beforeAll(() => { installFakeDom(); });
+  beforeAll(() => {
+    installFakeDom();
+    // Клик откладывает решение «открыть меню пилюли» на requestAnimationFrame (Глеб: гонка
+    // hasPlanCard). Node-окружение rAF не знает — стаб синхронный (выполняет колбэк сразу).
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (fn: () => void) => { fn(); return 1; };
+    (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = () => {};
+  });
   afterAll(() => { uninstallFakeDom(); });
 
   function mountChip(t: Task, sessionId: string | null) {

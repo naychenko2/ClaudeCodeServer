@@ -9,7 +9,7 @@ import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/perso
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useIsMobile } from '../../lib/breakpoints';
-import { focusFeatureStep, openPillMenu, useHasPlanCard } from '../../lib/featureRuns';
+import { focusFeatureStep, getHasPlanCard, openPillMenu } from '../../lib/featureRuns';
 import { laneOfChain } from './feature/PipelineFlow';
 import { Button } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -79,8 +79,9 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   // но чип показываем только когда режим «Исполнение фичи» включён.
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   // F9: есть ли в ленте живая карточка плана (пишет ChatPanel): есть — сигнал фокуса
-  // потребляется в ней, нет — клик по чипу открывает меню пилюли.
-  const hasPlanCard = useHasPlanCard(sessionId);
+  // потребляется в ней, нет — клик по чипу открывает меню пилюли. Флаг читаем императивно
+  // (getHasPlanCard) на следующем кадре ПОСЛЕ клика, а не из stale-значения хука (Глеб:
+  // гонка ремоунта ChatPanel — при клике эффект ещё не написал флаг).
   // Hover/фокус чипа: hover — подложка C.bgSelected + текст C.textPrimary, фокус — кольцо SHADOW.focus.
   const [chipHot, setChipHot] = useState(false);
   const [chipFocused, setChipFocused] = useState(false);
@@ -255,7 +256,13 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
                   e.stopPropagation();
                   if (task && sessionId) {
                     focusFeatureStep(sessionId, task.featureId!, task.id);
-                    if (!hasPlanCard) openPillMenu(sessionId);
+                    // Гонка (Глеб): при ремоунте ChatPanel флаг «живая карточка плана» может быть
+                    // ещё false в момент клика (эффект не отработал) → чип откроет меню пилюли,
+                    // а карточка в ленте тоже раскроется. Читаем флаг на следующем кадре (после
+                    // клика, когда эффект уже отработал), а не из stale-значения при клике.
+                    requestAnimationFrame(() => {
+                      if (!getHasPlanCard(sessionId)) openPillMenu(sessionId);
+                    });
                   }
                 }}
                 style={{

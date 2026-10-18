@@ -324,6 +324,24 @@ describe('StepDetails — 360 px (без горизонтального скро
   });
 });
 
+describe('StepDetails — звено круга: моно только у времени (Майя M4)', () => {
+  it('имя обычным шрифтом, время mono 11 (не вся строка «Имя · время»)', () => {
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+    const c = chain({
+      stepRef: 'D1c', taskIds: ['s1'],
+      rounds: [round({ n: 1, verdict: 'returned', personaId: 'p2', startedAt: '2026-10-16T07:36:00Z', completedAt: '2026-10-16T07:45:00Z' })],
+    });
+    const r = run({ steps: [task({ id: 's1', title: 'Шаг', role: 'step', stepRef: 'D1c', personaId: 'p1', status: 'done', createdAt: '2026-10-16T07:49:00Z', completedAt: '2026-10-16T08:09:00Z' })] });
+    const html = render(c, r);
+    expect(html, 'имя исполнителя витка').toContain('Глеб');
+    // Время «07:36–07:45» — в mono-спане (FONT.mono = 'JetBrains Mono', 'Courier New', monospace).
+    expect(html, 'время — mono').toMatch(/monospace[^>]*>07:36–07:45</);
+    // Имя «Глеб» — НЕ в mono-спане (обычный шрифт).
+    expect(html, 'имя — не mono').not.toMatch(/monospace[^>]*>Глеб/);
+  });
+});
+
 describe('StepDetails — пружина max=9 и +N', () => {
   it('12 витков: показывает 9 колец + «+3»', () => {
     const rounds: FeatureRound[] = Array.from({ length: 12 }, (_, i) =>

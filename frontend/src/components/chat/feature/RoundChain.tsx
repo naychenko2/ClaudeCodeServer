@@ -53,12 +53,12 @@ function buildLinks(chain: FeatureStepChain, run: FeatureRun): ChainLink[] {
 
 // === Время (mono 11, C.textMuted) ===
 
-// ISO → «ЧЧ:ММ»; невалидная/пустая → null.
+// ISO → «ЧЧ:ММ» (UTC, как в строке с Z); невалидная/пустая → null.
 function hhmm(iso?: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
 
 // Длительность «N мин» / «1 ч 10 мин»; min < 0 → 0.
@@ -210,14 +210,14 @@ function WorkLink({ t, now, isLast }: { t: FeatureTask; now: number; isLast: boo
   );
 }
 
-// Звено круга: глиф по вердикту + «Круг N» (600) + бусина вердикта + «Имя · ЧЧ:ММ–ЧЧ:ММ» (mono 11);
+// Звено круга: глиф по вердикту + «Круг N» (600) + бусина вердикта + «Имя · ЧЧ:ММ–ЧЧ:ММ»;
+// имя — обычным шрифтом, время — mono 11 (Майя: моно только у времени, не всей строки);
 // причина (reason) — второй строкой.
 function RoundLink({ r, now, isLast, isBack }: { r: FeatureRound; now: number; isLast: boolean; isBack: boolean }) {
   usePersonasVersion();
   const persona = r.personaId ? getPersonaById(r.personaId) : undefined;
   const name = persona?.name;
   const time = roundTime(r, now);
-  const meta = [name, time].filter(Boolean).join(' · ');
   return (
     <li
       style={{
@@ -233,7 +233,10 @@ function RoundLink({ r, now, isLast, isBack }: { r: FeatureRound; now: number; i
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 6px', alignItems: 'center' }}>
           <span style={{ fontWeight: 700, color: C.textHeading }}>Круг {r.n}</span>
           <VerdictBead verdict={r.verdict} />
-          {meta && <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>{meta}</span>}
+          {name && (
+            <span style={{ color: C.textMuted }}>{name}{time ? ' · ' : ''}</span>
+          )}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         {r.reason && (
           <div style={{ color: C.textSecondary, marginTop: 1, overflowWrap: 'anywhere' }}>{r.reason}</div>

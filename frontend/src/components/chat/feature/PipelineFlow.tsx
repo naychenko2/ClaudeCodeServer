@@ -1,9 +1,12 @@
 import { useContext, useEffect, useRef, useState } from 'react';
+import { ArrowRight } from 'lucide-react';
 import { C, FS, SP, R, FONT, TB } from '../../../lib/design';
 import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
 import { useIsMobile } from '../../../lib/breakpoints';
-import { getPersonaById } from '../../../lib/personas';
+import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
+import { openTaskInSection } from '../../../lib/tasks';
 import { useFeatureStepFocus } from '../../../lib/featureRuns';
+import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { Rounds } from './Rounds';
@@ -155,6 +158,17 @@ export function durationLabel(since: string | null | undefined, now: number): st
   return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
+// Длительность в минутах → «N мин» / «1 ч 10 мин»; min < 0 → 0. Числовой формат (в отличие
+// от durationLabel, который считает от ISO-момента): для строки шага, где длительность
+// приходит готовым числом (chain.durationMinutes) и тикает как база + прошедшее.
+export function minutesLabel(min: number): string {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
+}
+
 // Имена исполнителей линии: personaIds → имена (lib/personas), неизвестный id — пропускается
 // (не выводим сырой id). Пусто — нет исполнителей (линия без имён).
 export function laneNames(personaIds: string[]): string {
@@ -237,12 +251,14 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-// Исход стадии словами (макет .ms): «вернул» / «принял с правками» / «принял» / «снят» / «идёт».
+// Исход стадии словами (макет .ms) — БЕЗЛИЧНЫЕ формы (Майя: глагол мужского рода
+// «принял/вернул» не совпадает с родом имени исполнителя): «возврат» / «принято с правками»
+// / «принято» / «снято» / «идёт».
 const VERDICT_WORD: Record<FeatureRoundVerdict, string> = {
-  returned: 'вернул',
-  accepted_with_remarks: 'принял с правками',
-  accepted: 'принял',
-  withdrawn: 'снят',
+  returned: 'возврат',
+  accepted_with_remarks: 'принято с правками',
+  accepted: 'принято',
+  withdrawn: 'снято',
   running: 'идёт',
 };
 
@@ -253,10 +269,14 @@ const VERDICT_WORD: Record<FeatureRoundVerdict, string> = {
 export function stageMeta(stage: FeatureStage | null): string | null {
   if (!stage) return null;
   if (stage.state === 'pending' || stage.state === 'absent') return null;
-  const names = (stage.personaIds ?? [])
+  // Имена исполнителей: ≤2 — все через запятую; ≥3 — первые два + «+N» (Майя: не плодить
+  // длинный список в подписи-мета).
+  const allNames = (stage.personaIds ?? [])
     .map(id => getPersonaById(id)?.name)
-    .filter((n): n is string => !!n && n.trim() !== '')
-    .join(', ');
+    .filter((n): n is string => !!n && n.trim() !== '');
+  const names = allNames.length <= 2
+    ? allNames.join(', ')
+    : `${allNames.slice(0, 2).join(', ')} +${allNames.length - 2}`;
   let second: string | null = null;
   if (stage.verdict) second = VERDICT_WORD[stage.verdict] ?? null;
   else if (stage.taskCount != null && stage.taskCount > 0) {
@@ -447,8 +467,9 @@ function Chevron({ expanded, reduced }: { expanded: boolean; reduced: boolean })
 
 // === F8: строка шага (внутри «Производства») ===
 
-// Глиф строки шага 14: принят — «пройдено» (круг bgSelected + галка textMuted, как done);
-// снят — круг с чертой C.textMuted; идёт — пульс C.textHeading.
+// Глиф строки шага 14 (макет v2 stepsList): идёт — пульс C.textHeading; ждёт ревью (pending)
+// — спокойный круг БЕЗ пульса; принят/закрыт без повторного ревью (accepted/returned) —
+// «пройдено» (круг bgSelected + галка textMuted, как done); снят (withdrawn) — круг с чертой.
 function StepGlyph({ chain }: { chain: FeatureStepChain }) {
   if (chain.outcome === 'withdrawn') {
     return (
@@ -458,7 +479,7 @@ function StepGlyph({ chain }: { chain: FeatureStepChain }) {
       </svg>
     );
   }
-  if (chain.outcome === 'running' || chain.outcome === 'pending') {
+  if (chain.outcome === 'running') {
     return (
       <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
         <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" className="feature-pulse" />
@@ -466,7 +487,15 @@ function StepGlyph({ chain }: { chain: FeatureStepChain }) {
       </svg>
     );
   }
-  // accepted/done — «пройдено».
+  if (chain.outcome === 'pending') {
+    // «Ждёт ревью»: спокойный круг без пульса (не «идёт» и не «пройдено»).
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
+        <circle cx="8" cy="8" r="6" fill="none" stroke={C.textMuted} strokeWidth="1.5" />
+      </svg>
+    );
+  }
+  // accepted/returned — «пройдено» (закрыт: принят или закрыт без повторного ревью).
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
       <circle cx="8" cy="8" r="6.5" fill={C.bgSelected} />
@@ -484,7 +513,7 @@ function SourceTag({ source }: { source?: string | null }) {
   return (
     <span
       style={{
-        display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 700,
+        display: 'inline-flex', alignItems: 'center', fontSize: SOURCE_TAG_SIZE, fontWeight: 700,
         borderRadius: R.sm, padding: '0 6px', lineHeight: '17px', whiteSpace: 'nowrap',
         background: m.bg, color: m.fg,
       }}
@@ -494,31 +523,43 @@ function SourceTag({ source }: { source?: string | null }) {
   );
 }
 
-// Строка шага (макет v2 .step): кнопка, сетка 14px 1fr auto, зазор 7/12, minHeight 28 (десктоп)
-// / 40 (мобила, TB.iconHit*), hover и раскрытая — C.bgSelected, R.md, фокус SHADOW.focus.
+// Строка шага (макет v2 .step): кнопка, сетка 14px 1fr auto, зазор 7, minHeight 32 (десктоп,
+// TB.iconHitDesktop) / 40 (мобила, TB.iconHitMobile), hover и раскрытая — C.bgSelected, R.md.
 // Слева глиф 14 → номер шага (mono, muted) → название → метка источника → «· снят с выкладки».
-// Справа пружина (Rounds, >6 → +N) + mono 11: длительность идущего шага или «ждёт ревью».
+// Справа пружина (Rounds, >6 → +N) + mono 11: длительность идущего шага (тикает) или «ждёт ревью»;
+// у accepted/returned/withdrawn — только пружина, без текста (макет v2 stepsList).
 // На 360px пружина не переносится (правая колонка flexShrink 0), переносится название.
 function StepRow({ chain, expanded, onToggle, isMobile, now }: {
   chain: FeatureStepChain; expanded: boolean; onToggle: () => void; isMobile: boolean; now: number;
 }) {
-  const running = chain.outcome === 'running' || chain.outcome === 'pending';
-  // Длительность: у идущего — от старта (chain.durationMinutes как есть), иначе «ждёт ревью».
-  const right = running
-    ? (chain.durationMinutes > 0 ? durationLabel(new Date(Date.now() - chain.durationMinutes * 60000).toISOString(), now) : 'идёт')
-    : 'ждёт ревью';
+  const isRunning = chain.outcome === 'running';
+  const isPending = chain.outcome === 'pending';
+  // База длительности идущего шага: durationMinutes на момент получения агрегата + прошедшее
+  // с тех пор (тикает, как в деталях шага). Без обратного пересчёта new Date(Date.now() − …):
+  // значение бэка берём как есть, база фиксируется на первом рендере.
+  const baseRef = useRef<{ min: number; at: number } | null>(null);
+  if (baseRef.current === null) baseRef.current = { min: chain.durationMinutes, at: Date.now() };
+  // running — длительность (тикает); pending — «ждёт ревью»; accepted/returned/withdrawn —
+  // только пружина, без текста.
+  const right = isRunning
+    ? minutesLabel(baseRef.current.min + (now - baseRef.current.at) / 60000)
+    : isPending
+      ? 'ждёт ревью'
+      : null;
   const minH = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
   return (
     <button
-      // id — для scrollIntoView по сигналу фокуса (F9): document.getElementById
-      id={`step-row-${chain.stepRef}`}
+      // data-step-ref — для scrollIntoView по сигналу фокуса (F9): поиск ВНУТРИ СВОЕГО
+      // PipelineFlow (rootRef.querySelector), не document.getElementById (Глеб: два смонтированных
+      // PipelineFlow одной фичи дублировали id, getElementById брал первый).
+      data-step-ref={chain.stepRef}
       data-testid={`step-row-${chain.stepRef}`}
       aria-expanded={expanded}
       aria-controls={expanded ? `step-details-${chain.stepRef}` : undefined}
       onClick={onToggle}
       className="cc-step-row"
       style={{
-        display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: '7px 12px', alignItems: 'start',
+        display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: '7px 7px', alignItems: 'start',
         width: '100%', minHeight: minH, padding: `${SP.xs}px ${SP.xs}px`,
         border: '1px solid transparent', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
         font: 'inherit', color: 'inherit', background: expanded ? C.bgSelected : 'transparent',
@@ -535,7 +576,7 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, whiteSpace: 'nowrap' }}>
         {chain.rounds.length > 0 && <Rounds rounds={chain.rounds} max={6} />}
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{right}</span>
+        {right && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{right}</span>}
       </span>
     </button>
   );
@@ -545,23 +586,79 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
 
 // === F8: детали этапа (по ключу) ===
 
+// Размеры шрифта, которых нет в шкале FS (FS.xs=11, FS.sm=12) — именованные константы
+// с комментарием (Майя M5: не литералы 10/10.5 в разметке).
+// Заголовок секции деталей (макет .det .h): 10.
+const SECTION_H_SIZE = 10;
+// Метка источника возврата (макет .src): 10.5.
+const SOURCE_TAG_SIZE = 10.5;
+
 // Заголовок секции деталей (макет .det .h): 10, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionH({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
+    <div style={{ fontSize: SECTION_H_SIZE, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
       {children}
     </div>
   );
 }
 
-// Строка задачи этапа (разрез/план/проверка/финал): глиф + заголовок + исполнитель + статус/исход.
-// `verdict`/`reason` — из stages[].rounds (проверка/финал); `status` — для разреза/плана.
-function TaskLine({ t, verdict, reason }: {
-  t: FeatureTask; verdict?: string | null; reason?: string | null;
-}) {
+// ISO → «ЧЧ:ММ» (UTC, как в строке с Z); невалидная/пустая → null.
+function hhmm(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+// Диапазон времени «ЧЧ:ММ–ЧЧ:ММ»; только старт — «ЧЧ:ММ»; нет старта — null (без висячих
+// разделителей).
+function timeRange(startIso?: string | null, endIso?: string | null): string | null {
+  const s = hhmm(startIso);
+  if (!s) return null;
+  const e = hhmm(endIso);
+  return e ? `${s}–${e}` : s;
+}
+
+// Статус задачи словами (нейтральная форма: «закрыто»/«в работе»/«ожидает»).
+function taskStatus(t: FeatureTask): string {
+  return t.status === 'done' ? 'закрыто' : t.status === 'inProgress' ? 'в работе' : 'ожидает';
+}
+
+// Ссылка «Открыть задачу →» (как в StepDetails): 12/600 C.accent, ArrowRight 13,
+// minHeight 24 (мобила 40). Действие — openTaskInSection на задачу.
+function TaskOpenLink({ target, isMobile }: { target: { id: string; projectId?: string }; isMobile: boolean }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={() => openTaskInSection(target)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title="Открыть задачу"
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
+        alignSelf: 'flex-end', border: 'none', background: 'transparent', cursor: 'pointer',
+        minHeight: isMobile ? 40 : 24, padding: 0,
+        fontSize: 12, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+      }}
+    >
+      Открыть задачу
+      <span style={{ display: 'flex', transform: hovered ? 'translateX(3px)' : 'none', transition: 'transform 0.15s' }}>
+        <ArrowRight size={13} strokeWidth={2} />
+      </span>
+    </button>
+  );
+}
+
+// Строка задачи «Разреза»/«Плана» (Майя, «итог по макетам»): глиф по статусу + заголовок +
+// исполнитель (аватар 18 + имя) + статус + время (mono 11, «ЧЧ:ММ–ЧЧ:ММ») + ссылка «Открыть
+// задачу →». Данные — из run.cut/run.plan (FeatureTask): personaId, status,
+// claudeStartedAt/createdAt, completedAt, projectId.
+function TaskLine({ t, isMobile }: { t: FeatureTask; isMobile: boolean }) {
+  usePersonasVersion(); // реактивность: аватар/имя появятся, когда персона загрузится
   const persona = t.personaId ? getPersonaById(t.personaId) : undefined;
-  const who = persona?.name ?? (t.status === 'done' ? 'закрыто' : t.status === 'inProgress' ? 'в работе' : 'ожидает');
-  const verdictWord = verdict ? (VERDICT_WORD[verdict as FeatureRoundVerdict] ?? null) : null;
+  const name = persona?.name;
+  const status = taskStatus(t);
+  const time = timeRange(t.claudeStartedAt ?? t.createdAt, t.completedAt);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr', gap: SP.xs, alignItems: 'start', fontSize: FS.sm }}>
       <span style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
@@ -571,26 +668,46 @@ function TaskLine({ t, verdict, reason }: {
             ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill={C.bgSelected} /><path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.textMuted} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
             : <span style={{ width: 14, height: 14, borderRadius: '50%', border: `1.5px dashed ${C.dashed}`, display: 'inline-block' }} />}
       </span>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap' }}>
           <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{t.title || 'Без заголовка'}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>
-          <span>{who}</span>
-          {verdictWord && <span>· {verdictWord}</span>}
-          {reason && <span style={{ overflowWrap: 'anywhere' }}>— {reason}</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
+          {persona && <PersonaAvatar persona={persona} size={18} />}
+          {name && <span style={{ color: C.textSecondary }}>{name}</span>}
+          <span>{status}</span>
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
+        <TaskOpenLink target={{ id: t.id, projectId: t.projectId ?? undefined }} isMobile={isMobile} />
       </div>
     </div>
   );
 }
 
-// Строка прохода проверки/финала (stages[].rounds): глиф по вердикту + исполнитель + исход + причина.
-// Сырых задач не читает — всё из витка (personaId/verdict/reason).
-function RoundLine({ r }: { r: FeatureRound }) {
+// Цель ссылки на задачу витка: id = reviewTaskId, projectId — из задачи в агрегате.
+// null — задачи нет (ссылку не рисуем).
+function resolveRoundTarget(run: FeatureRun, id: string | null | undefined): { id: string; projectId?: string } | null {
+  if (!id) return null;
+  const all = [
+    ...(run.steps ?? []), ...(run.reviews ?? []), ...(run.qa ?? []),
+    ...(run.final ? [run.final] : []), ...(run.cut ?? []), ...(run.plan ?? []),
+  ];
+  const t = all.find(x => x.id === id);
+  return { id, projectId: t?.projectId ?? undefined };
+}
+
+// Строка прохода «Проверки»/«Финального ревью» (stages[].rounds, Майя «итог по макетам»):
+// глиф по вердикту + исполнитель (аватар 18 + имя) + исход + время (mono 11, «ЧЧ:ММ–ЧЧ:ММ»)
+// + ссылка «Открыть задачу →» на reviewTaskId. Нет задачи — ссылки нет; нет времени — без
+// висящих разделителей. Сырых списков задач не читает — всё из витка (personaId/verdict/
+// startedAt/completedAt/reviewTaskId/reason).
+function RoundLine({ r, run, isMobile }: { r: FeatureRound; run: FeatureRun; isMobile: boolean }) {
+  usePersonasVersion();
   const persona = r.personaId ? getPersonaById(r.personaId) : undefined;
-  const who = persona?.name;
+  const name = persona?.name;
   const verdictWord = VERDICT_WORD[r.verdict] ?? null;
+  const time = timeRange(r.startedAt, r.completedAt);
+  const target = resolveRoundTarget(run, r.reviewTaskId);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr', gap: SP.xs, alignItems: 'start', fontSize: FS.sm }}>
       <span style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
@@ -600,12 +717,15 @@ function RoundLine({ r }: { r: FeatureRound }) {
             ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" className="feature-pulse" /><circle cx="8" cy="8" r="3.5" fill={C.textHeading} /></svg>
             : <span style={{ width: 14, height: 14, borderRadius: '50%', border: `1.5px dashed ${C.dashed}`, display: 'inline-block' }} />}
       </span>
-      <div style={{ minWidth: 0, fontSize: FS.xs, color: C.textMuted }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
-          {who && <span>{who}</span>}
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
+          {persona && <PersonaAvatar persona={persona} size={18} />}
+          {name && <span style={{ color: C.textSecondary }}>{name}</span>}
           {verdictWord && <span>· {verdictWord}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
-        {r.reason && <div style={{ overflowWrap: 'anywhere', marginTop: 1, color: C.textSecondary }}>{r.reason}</div>}
+        {r.reason && <div style={{ overflowWrap: 'anywhere', color: C.textSecondary, fontSize: FS.xs }}>{r.reason}</div>}
+        {target && <TaskOpenLink target={target} isMobile={isMobile} />}
       </div>
     </div>
   );
@@ -633,6 +753,21 @@ function StageRounds({ stage, run }: { stage: FeatureStage; run: FeatureRun }) {
       {label && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{label}</span>}
       <Rounds rounds={rounds} max={6} />
     </div>
+  );
+}
+
+// Исполнитель мержа (из stages[merge].personaIds, как в других строках; нет — без аватара).
+// Аватар 18 + имя; реактивность — usePersonasVersion (аватар появится, когда персона загрузится).
+function MergeExecutor({ personaIds }: { personaIds?: string[] }) {
+  usePersonasVersion();
+  const id = (personaIds ?? [])[0];
+  const persona = id ? getPersonaById(id) : undefined;
+  if (!persona) return null;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
+      <PersonaAvatar persona={persona} size={18} />
+      <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{persona.name}</span>
+    </span>
   );
 }
 
@@ -719,7 +854,7 @@ function StageDetails({ id, stageKey, run, expandedStep, onStep, isMobile, now }
       <div id={id} className="stage-details-bgCard" style={surface}>
         <SectionH>{stageKey === 'qa' ? 'Проходы проверки' : 'Финальное ревью'}</SectionH>
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-          {rounds.map(r => <RoundLine key={r.n} r={r} />)}
+          {rounds.map(r => <RoundLine key={r.n} r={r} run={run} isMobile={isMobile} />)}
         </div>
       </div>
     );
@@ -732,7 +867,7 @@ function StageDetails({ id, stageKey, run, expandedStep, onStep, isMobile, now }
     return (
       <div id={id} className="stage-details-bgCard" style={surface}>
         <SectionH>Задачи этапа</SectionH>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>{tasks.map(t => <TaskLine key={t.id} t={t} />)}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>{tasks.map(t => <TaskLine key={t.id} t={t} isMobile={isMobile} />)}</div>
       </div>
     );
   }
@@ -748,7 +883,10 @@ function StageDetails({ id, stageKey, run, expandedStep, onStep, isMobile, now }
     return (
       <div id={id} className="stage-details-bgCard" style={surface}>
         <SectionH>Мерж</SectionH>
-        <div style={{ fontSize: FS.sm, color: C.textSecondary }}>{text}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
+          <MergeExecutor personaIds={stage?.personaIds} />
+          <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{text}</span>
+        </div>
       </div>
     );
   }
@@ -828,6 +966,9 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   // minHeight строки: тач-цель по TB (32 десктоп / 40 мобила).
   const rowMinH = isMobile ? ROW_MIN_H_MOBILE : ROW_MIN_H_DESKTOP;
+  // Корень конвейера: скролл к шагу (F9) ищет строку ВНУТРИ СВОЕГО PipelineFlow (Глеб:
+  // document.getElementById при двух смонтированных PipelineFlow одной фичи брал первый).
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // F9: сигнал фокуса: раскрыть «Производство» и шаг, чья цепочка содержит задачу
   // (taskIds ⊇ taskId); шаг не найден — раскрыто только «Производство». Одноразовый:
@@ -851,7 +992,9 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
     let tries = 0;
     let raf = 0;
     const tryScroll = () => {
-      const el = document.getElementById(`step-row-${stepRef}`);
+      // Свой корень (rootRef), не document: два PipelineFlow одной фичи (карточка плана +
+      // меню пилюли) — getElementById брал первый, скролл уходил не туда (Глеб).
+      const el = rootRef.current?.querySelector(`[data-step-ref="${stepRef}"]`);
       if (el) {
         el.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
       } else if (++tries < 30) {
@@ -873,6 +1016,7 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
 
   return (
     <div
+      ref={rootRef}
       role="group"
       aria-label="Конвейер фичи: стадии, линии бэк/фронт, возврат"
       style={{ display: 'flex', flexDirection: 'column' }}
@@ -1013,10 +1157,14 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                     <span style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 1, overflowWrap: 'anywhere' }}>{meta}</span>
                   )}
                 </span>
-                {/* Шеврон: только у нажимаемых строк (pending/absent — не кнопки), поворот при раскрытии. */}
-                <span style={{ display: 'inline-flex', alignItems: 'center', alignSelf: 'start', paddingTop: 2 }}>
-                  <Chevron expanded={isExpanded} reduced={reduced} />
-                </span>
+                {/* Шеврон: только у строк, у которых ЕСТЬ раскрытие (stageHasDetails) — у
+                    «Проверки»/«Финала» без проходов раскрывать нечего (Майя: шеврон без действия).
+                    pending/absent — и вовсе не кнопки. Поворот — при раскрытии. */}
+                {hasDetails && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', alignSelf: 'start', paddingTop: 2 }}>
+                    <Chevron expanded={isExpanded} reduced={reduced} />
+                  </span>
+                )}
               </button>
             )}
             {/* Линии бэк/фронт (prod): под кнопкой, не внутри; margin-left 25 (рядом с рельсой). */}

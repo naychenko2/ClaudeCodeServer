@@ -30,6 +30,7 @@ const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>()
 vi.mock('../../../lib/personas', () => ({
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
   usePersonasVersion: () => 0,
+  personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 // Карта общая на весь файл — сбрасываю перед каждым тестом (изоляция).
 beforeEach(() => { personaMap.clear(); });
@@ -264,19 +265,27 @@ describe('stageMeta', () => {
     expect(stageMeta({ key: 'plan', state: 'done', passes: 1, taskIds: [], rounds: [], personaIds: ['egor'], taskCount: 5 } as FeatureStage)).toBe('Егор · 5 задач');
   });
 
-  it('исход из verdict: «Александр · вернул»', () => {
+  it('исход из verdict: «Александр · возврат» (безличная форма, Майя)', () => {
     personaMap.set('alex', 'Александр');
     const s = { key: 'review', state: 'done', passes: 1, taskIds: [], rounds: [], personaIds: ['alex'], verdict: 'returned' as FeatureRoundVerdict } as FeatureStage;
-    expect(stageMeta(s)).toBe('Александр · вернул');
+    expect(stageMeta(s)).toBe('Александр · возврат');
   });
 
-  it('все слова verdict: принят / с правками / снят / идёт', () => {
+  it('все слова verdict безличными: принято / с правками / снято / идёт', () => {
     personaMap.set('alex', 'Александр');
     const mk = (v: FeatureRoundVerdict) => stageMeta({ key: 'review', state: 'done', passes: 1, taskIds: [], rounds: [], personaIds: ['alex'], verdict: v } as FeatureStage);
-    expect(mk('accepted')).toBe('Александр · принял');
-    expect(mk('accepted_with_remarks')).toBe('Александр · принял с правками');
-    expect(mk('withdrawn')).toBe('Александр · снят');
+    expect(mk('accepted')).toBe('Александр · принято');
+    expect(mk('accepted_with_remarks')).toBe('Александр · принято с правками');
+    expect(mk('withdrawn')).toBe('Александр · снято');
     expect(mk('running')).toBe('Александр · идёт');
+  });
+
+  it('≥3 исполнителей — первые два + «+N» (Майя: не плодить длинный список)', () => {
+    personaMap.set('a', 'Анна');
+    personaMap.set('b', 'Борис');
+    personaMap.set('c', 'Вера');
+    const s = { key: 'plan', state: 'done', passes: 1, taskIds: [], rounds: [], personaIds: ['a', 'b', 'c'], taskCount: 3 } as FeatureStage;
+    expect(stageMeta(s)).toBe('Анна, Борис +1 · 3 задачи');
   });
 
   it('нет данных (нет personaIds/taskCount/verdict) → null', () => {
@@ -882,19 +891,23 @@ describe('PipelineFlow: F8 (строка шага)', () => {
     expect(render(r)).toContain('· снят с выкладки');
   });
 
-  it('идущий шаг — длительность; ожидающий — «ждёт ревью»', () => {
+  it('идущий — длительность; pending — «ждёт ревью»; returned — только пружина (без текста)', () => {
     const r = run({
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [
         chain({ stepRef: 'D1', title: 'Идёт', outcome: 'running', durationMinutes: 45 }),
-        chain({ stepRef: 'D2', title: 'Ожидает', outcome: 'returned', durationMinutes: 0 }),
+        chain({ stepRef: 'D2', title: 'Ожидает', outcome: 'pending', durationMinutes: 0 }),
+        chain({ stepRef: 'D3', title: 'Закрыт', outcome: 'returned', durationMinutes: 0, rounds: [round({ n: 1, verdict: 'accepted' })] }),
       ],
     });
     const html = render(r);
     // Идущий — длительность (мин/ч; точное значение не фиксируем — зависит от миллисекунд).
     expect(html).toMatch(/\d+ мин/);
-    // Ожидающий (не running/pending) — «ждёт ревью».
+    // pending — «ждёт ревью».
     expect(html).toContain('ждёт ревью');
+    // returned — только пружина: «ждёт ревью» в строке D3 нет.
+    const d3 = html.slice(html.indexOf('data-step-ref="D3"'));
+    expect(d3, 'returned — без «ждёт ревью»').not.toContain('ждёт ревью');
   });
 
   it('пружина в строке шага: витки есть → Rounds; >6 колец → +N', () => {
@@ -964,12 +977,12 @@ describe('PipelineFlow: F8 (мета, поверхность, 360px)', () => {
     expect(html).toContain('Егор · 1 задача');
   });
 
-  it('мета с вердиктом: «Александр · вернул» в строке «Ревью»', () => {
+  it('мета с вердиктом: «Александр · возврат» (безличная) в строке «Ревью»', () => {
     personaMap.set('alex', 'Александр');
     const r = run({
       stages: stages({ review: { key: 'review', state: 'done', passes: 1, taskIds: [], personaIds: ['alex'], verdict: 'returned' } }),
     });
-    expect(render(r)).toContain('Александр · вернул');
+    expect(render(r)).toContain('Александр · возврат');
   });
 
   it('поверхность деталей: bgCard + borderLight + R.lg + margin-left 25px', () => {
@@ -1074,12 +1087,11 @@ describe('PipelineFlow: F9 (сигнал фокуса)', () => {
 
   it('сигнал: раскрыты «Производство» и шаг, чья цепочка содержит задачу (taskIds ⊇ taskId)', () => {
     const { root, container } = mountFlow('sess-1', focusRun());
-    // Фейковый document ищет getElementById от body, а контейнер от него отсоединён —
-    // стаб ищет по контейнеру; FNode без scrollIntoView — стаб-запись вызова.
-    const doc = (globalThis as { document: { getElementById: (id: string) => unknown } }).document;
-    const origGetById = doc.getElementById;
-    doc.getElementById = (id: string) => findNodeByAttr(container, 'id', id) ?? null;
-    const d1 = findNodeByAttr(container, 'id', 'step-row-D1');
+    // Строка шага — data-step-ref (не id): скролл ищет её rootRef.querySelector (Глеб:
+    // getElementById при двух PipelineFlow одной фичи брал первый). FNode без scrollIntoView —
+    // стаб-запись вызова.
+    const d1 = findNodeByAttr(container, 'data-step-ref', 'D1');
+    expect(d1, 'строка шага D1 (data-step-ref)').not.toBeNull();
     const scrolled: unknown[] = [];
     (d1 as unknown as { scrollIntoView: (o: unknown) => void }).scrollIntoView = (o: unknown) => { scrolled.push(o); };
 
@@ -1088,7 +1100,6 @@ describe('PipelineFlow: F9 (сигнал фокуса)', () => {
     expect(d1!.getAttribute('aria-expanded'), 'шаг D1 раскрыт (s2 в его цепочке)').toBe('true');
     expect(findNodeByAttr(container, 'data-testid', 'stage-row-prod')!.getAttribute('aria-expanded'), '«Производство» раскрыто').toBe('true');
     expect(scrolled, 'скролл на раскрытый шаг (block nearest, smooth — reduced-motion выключен)').toEqual([{ block: 'nearest', behavior: 'smooth' }]);
-    doc.getElementById = origGetById;
     root.unmount();
   });
 
@@ -1127,5 +1138,231 @@ describe('PipelineFlow: F9 (сигнал фокуса)', () => {
     act(() => { focusFeatureStep('sess-1', 'other-epic', 's2'); });
     expect(findNodeByAttr(container, 'data-testid', 'step-row-D1')!.getAttribute('aria-expanded'), 'D1 не раскрыт').toBe('false');
     root.unmount();
+  });
+});
+
+// === F9.1: четыре ветки исхода строки шага (текст, пульс, глиф) + мутация (а) ===
+// По бэку (FeatureProjector): running → пульс + длительность; pending → «ждёт ревью» +
+// спокойный глиф без пульса; accepted/returned/withdrawn → справа только пружина, без текста.
+describe('PipelineFlow: F9.1 (ветки исхода строки шага)', () => {
+  function oneStep(outcome: string, over: Partial<FeatureStepChain> = {}): FeatureRun {
+    return run({
+      stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
+      stepChains: [chain({ stepRef: 'D1', title: 'Шаг', outcome, durationMinutes: 30, ...over })],
+    });
+  }
+  // Срез HTML от строки шага D1 (одна цепочка — маркеры недвусмысленны).
+  const row = (html: string) => html.slice(html.indexOf('data-step-ref="D1"'));
+
+  it('running: пульс + длительность «N мин», без «ждёт ревью»', () => {
+    const r = row(render(oneStep('running')));
+    expect(r, 'running — пульс').toContain('feature-pulse');
+    expect(r, 'running — длительность').toMatch(/\d+ мин/);
+    expect(r, 'running — без «ждёт ревью»').not.toContain('ждёт ревью');
+  });
+
+  it('pending: «ждёт ревью», спокойный глиф БЕЗ пульса', () => {
+    const r = row(render(oneStep('pending')));
+    expect(r, 'pending — «ждёт ревью»').toContain('ждёт ревью');
+    expect(r, 'pending — без пульса').not.toContain('feature-pulse');
+  });
+
+  it('accepted: только пружина — без «ждёт ревью» и без длительности', () => {
+    const r = row(render(oneStep('accepted')));
+    expect(r, 'accepted — без «ждёт ревью»').not.toContain('ждёт ревью');
+    expect(r, 'accepted — без длительности').not.toMatch(/\d+ мин/);
+    expect(r, 'accepted — без пульса').not.toContain('feature-pulse');
+  });
+
+  it('returned: только пружина — без «ждёт ревью» и без длительности', () => {
+    const r = row(render(oneStep('returned')));
+    expect(r, 'returned — без «ждёт ревью»').not.toContain('ждёт ревью');
+    expect(r, 'returned — без длительности').not.toMatch(/\d+ мин/);
+    expect(r, 'returned — без пульса').not.toContain('feature-pulse');
+  });
+
+  it('withdrawn: только пружина + «· снят с выкладки»', () => {
+    const r = row(render(oneStep('withdrawn')));
+    expect(r, 'withdrawn — без «ждёт ревью»').not.toContain('ждёт ревью');
+    expect(r, 'withdrawn — без длительности').not.toMatch(/\d+ мин/);
+    expect(r, 'withdrawn — «· снят с выкладки»').toContain('· снят с выкладки');
+  });
+
+  // (а) мутация: верни старую трактовку pending (пульс у «ждёт ревью») → тест краснеет.
+  it('(а) pending — «ждёт ревью» БЕЗ пульса (мутация: пульс у «ждёт ревью» → краснеет)', () => {
+    const r = row(render(oneStep('pending')));
+    expect(r).toContain('ждёт ревью');
+    expect(r, 'pending — пульса нет (старая трактовка — пульс, тест краснеет)').not.toContain('feature-pulse');
+  });
+});
+
+// === F9.1: длительность running тикает (fake timers), без обратного пересчёта Date.now()−… ===
+describe('PipelineFlow: F9.1 (длительность running тикает)', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  it('база = durationMinutes; +2 мин (fake timers) → 47 мин (тикает, не пересчёт от Date.now()−…)', () => {
+    vi.useFakeTimers();
+    try {
+      const r = run({
+        stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
+        stepChains: [chain({ stepRef: 'D1', title: 'Идёт', outcome: 'running', durationMinutes: 45 })],
+      });
+      const { root, container } = mount(createElement(PipelineFlow, { run: r }));
+      const d1 = findNodeByAttr(container, 'data-step-ref', 'D1')!;
+      expect(textNodes(d1).join(' '), 'старт — 45 мин (база = durationMinutes)').toMatch(/45 мин/);
+      act(() => { vi.advanceTimersByTime(120000); });
+      expect(textNodes(d1).join(' '), 'после +2 мин — 47 мин (тикает)').toMatch(/47 мин/);
+      root.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// === F9.1: детали «Разреза»/«Плана» (исполнитель, статус, время, ссылка) ===
+describe('PipelineFlow: F9.1 (детали Разрез/План)', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  function cutRun(): FeatureRun {
+    return run({
+      stages: stages({ cut: { key: 'cut', state: 'done', passes: 1, taskIds: ['c1'] } }),
+      cut: [task({ id: 'c1', title: 'Разрез фичи', personaId: 'alex', status: 'done', projectId: 'proj-1', createdAt: '2026-10-15T07:49:00Z', completedAt: '2026-10-15T08:09:00Z' })],
+    });
+  }
+
+  it('строка задачи: исполнитель (имя) + статус + время mono «ЧЧ:ММ–ЧЧ:ММ» + ссылка «Открыть задачу»', () => {
+    personaMap.set('alex', 'Александр');
+    const { root, container } = mount(createElement(PipelineFlow, { run: cutRun() }));
+    const cut = findNodeByAttr(container, 'data-testid', 'stage-row-cut')!;
+    act(() => (reactProps(cut)!.onClick as () => void)());
+    const text = textNodes(container).join(' ');
+    expect(text, 'имя исполнителя').toContain('Александр');
+    expect(text, 'статус «закрыто»').toContain('закрыто');
+    expect(text, 'время «07:49–08:09»').toContain('07:49–08:09');
+    expect(text, 'ссылка «Открыть задачу»').toContain('Открыть задачу');
+    root.unmount();
+  });
+});
+
+// === F9.1: детали «Проверки»/«Финала» (время + ссылка на reviewTaskId) ===
+describe('PipelineFlow: F9.1 (детали Проверки/Финала)', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  function qaRun(): FeatureRun {
+    return run({
+      stages: stages({
+        qa: { key: 'qa', state: 'done', passes: 1, taskIds: ['q1'], rounds: [round({ n: 1, verdict: 'returned', personaId: 'vera', reviewTaskId: 'q1', startedAt: '2026-10-15T08:36:00Z', completedAt: '2026-10-15T08:45:00Z' })] },
+      }),
+      qa: [task({ id: 'q1', title: 'Проверка', personaId: 'vera', projectId: 'proj-1' })],
+    });
+  }
+
+  it('проход: время «ЧЧ:ММ–ЧЧ:ММ» + ссылка «Открыть задачу» на reviewTaskId', () => {
+    personaMap.set('vera', 'Вера');
+    const { root, container } = mount(createElement(PipelineFlow, { run: qaRun() }));
+    const qa = findNodeByAttr(container, 'data-testid', 'stage-row-qa')!;
+    act(() => (reactProps(qa)!.onClick as () => void)());
+    const text = textNodes(container).join(' ');
+    expect(text, 'время «08:36–08:45»').toContain('08:36–08:45');
+    expect(text, 'ссылка «Открыть задачу»').toContain('Открыть задачу');
+    root.unmount();
+  });
+
+  it('нет reviewTaskId — ссылки нет (без висящих разделителей)', () => {
+    const r = run({
+      stages: stages({
+        qa: { key: 'qa', state: 'done', passes: 1, taskIds: ['q1'], rounds: [round({ n: 1, verdict: 'accepted', reviewTaskId: null })] },
+      }),
+    });
+    const { root, container } = mount(createElement(PipelineFlow, { run: r }));
+    const qa = findNodeByAttr(container, 'data-testid', 'stage-row-qa')!;
+    act(() => (reactProps(qa)!.onClick as () => void)());
+    expect(textNodes(container).join(' '), 'без reviewTaskId — ссылки нет').not.toContain('Открыть задачу');
+    root.unmount();
+  });
+});
+
+// === F9.1: детали «Мержа» (аватар исполнителя) ===
+describe('PipelineFlow: F9.1 (детали Мержа)', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  it('мерж: аватар + имя исполнителя (из stages[merge].personaIds)', () => {
+    personaMap.set('mark', 'Марк');
+    const r = run({
+      stages: stages({ merge: { key: 'merge', state: 'done', passes: 1, taskIds: ['m1'], personaIds: ['mark'] } }),
+      summary: { mergedAt: '2026-10-15T21:09:00Z', durationMinutes: 100, tasks: 5, steps: 3, loops: 1 },
+    });
+    const { root, container } = mount(createElement(PipelineFlow, { run: r }));
+    const merge = findNodeByAttr(container, 'data-testid', 'stage-row-merge')!;
+    act(() => (reactProps(merge)!.onClick as () => void)());
+    const text = textNodes(container).join(' ');
+    expect(text, 'имя исполнителя мержа').toContain('Марк');
+    expect(text, 'текст «Смержено» остаётся').toContain('Смержено');
+    root.unmount();
+  });
+});
+
+// === F9.1: шеврон только при stageHasDetails ===
+describe('PipelineFlow: F9.1 (шеvron)', () => {
+  it('«Проверка» без проходов — шеврона нет; с проходами — есть', () => {
+    // Без проходов: stageHasDetails(qa)=false → шеврон (path M4 6l4 4 4-4) в строке нет.
+    const noRounds = run({
+      stages: stages({ qa: { key: 'qa', state: 'done', passes: 1, taskIds: ['q1'], rounds: [] } }),
+    });
+    const htmlNo = render(noRounds);
+    const qaNo = htmlNo.slice(htmlNo.indexOf('data-stage="qa"'), htmlNo.indexOf('data-stage="final"'));
+    expect(qaNo, 'без проходов — шеврона нет').not.toContain('M4 6l4 4 4-4');
+    // С проходами: stageHasDetails(qa)=true → шеврон есть.
+    const withRounds = run({
+      stages: stages({ qa: { key: 'qa', state: 'done', passes: 1, taskIds: ['q1'], rounds: [round({ n: 1, verdict: 'accepted' })] } }),
+    });
+    const htmlYes = render(withRounds);
+    const qaYes = htmlYes.slice(htmlYes.indexOf('data-stage="qa"'), htmlYes.indexOf('data-stage="final"'));
+    expect(qaYes, 'с проходами — шеврон есть').toContain('M4 6l4 4 4-4');
+  });
+});
+
+// === F9.1: скролл к шагу при ДВУХ смонтированных PipelineFlow одной фичи (мутация (б)) ===
+describe('PipelineFlow: F9.1 (скролл, два PipelineFlow)', () => {
+  beforeAll(() => {
+    installFakeDom();
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (fn: () => void) => { fn(); return 1; };
+    (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = () => {};
+  });
+  afterAll(() => { uninstallFakeDom(); });
+  beforeEach(() => { __test.reset(); });
+
+  function twoFlows() {
+    // Два PipelineFlow одной фичи (карточка плана + меню пилюли) — один sessionId.
+    const r = run({
+      stages: stages({ prod: { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [] } }),
+      stepChains: [chain({ stepRef: 'D1', title: 'Бэк-шаг', lane: 'back', taskIds: ['s1'] })],
+    });
+    const node1 = createElement(ChatSessionContext.Provider, { value: 'sess-1' }, createElement(PipelineFlow, { run: r }));
+    const node2 = createElement(ChatSessionContext.Provider, { value: 'sess-1' }, createElement(PipelineFlow, { run: r }));
+    const m1 = mount(node1);
+    const m2 = mount(node2);
+    return { c1: m1.container, c2: m2.container };
+  }
+
+  it('(б) скролл попадает в СВОЙ узел (мутация: getElementById вместо ref → краснеет)', () => {
+    const { c1, c2 } = twoFlows();
+    // Отмечаем scrollIntoView обоих D1: каждый PipelineFlow скроллит СВОЙ (rootRef.querySelector).
+    const d1a = findNodeByAttr(c1, 'data-step-ref', 'D1')!;
+    const d1b = findNodeByAttr(c2, 'data-step-ref', 'D1')!;
+    const scrolled: string[] = [];
+    (d1a as unknown as { scrollIntoView: (o: unknown) => void }).scrollIntoView = () => { scrolled.push('first'); };
+    (d1b as unknown as { scrollIntoView: (o: unknown) => void }).scrollIntoView = () => { scrolled.push('second'); };
+
+    act(() => { focusFeatureStep('sess-1', 'epic-1', 's1'); });
+
+    // Оба PipelineFlow скроллят СВОЙ узел (rootRef.querySelector), а не document.getElementById
+    // (тот брал бы первый — мутация (б): верни getElementById → один из узлов не скроллится).
+    expect(scrolled, 'оба PipelineFlow скроллят свой узел').toContain('first');
+    expect(scrolled).toContain('second');
   });
 });

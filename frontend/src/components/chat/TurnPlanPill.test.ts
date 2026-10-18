@@ -12,7 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { TurnPlanPill } from './TurnPlanPill';
 import { __test, openPillMenu } from '../../lib/featureRuns';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
-import { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from './__tests__/fakeDom';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './__tests__/fakeDom';
 
 const zeroRect = { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
 
@@ -37,10 +37,11 @@ describe('TurnPlanPill: F9 (сигнал «открыть меню»)', () => {
     return mount(node);
   }
 
-  // Меню-портал живёт в document.body, не в контейнере.
+  // Меню-портал живёт в document.body, не в контейнере. Ищем по role="menu" (Глеб:
+  // подстрока «План хода» могла зеленеть ложно, если этот текст есть в body вне открытого меню).
   function bodyHasMenu(): boolean {
-    const doc = (globalThis as { document: { body: unknown } }).document as { body: Parameters<typeof textNodes>[0] };
-    return textNodes(doc.body).join(' ').includes('План хода');
+    const doc = (globalThis as { document: { body: unknown } }).document as { body: Parameters<typeof findNodeByAttr>[0] };
+    return findNodeByAttr(doc.body, 'role', 'menu') !== null;
   }
 
   it('сигнал: меню открывается (появляется в body-портале)', () => {

@@ -203,6 +203,13 @@ export function useHasPlanCard(sessionId: string | null): boolean {
   );
 }
 
+// F9: прочитать флаг «живая карточка плана» императивно (не из stale-значения хука):
+// чип «Шаг N фичи» (TaskCreatedView) решает, открывать ли меню пилюли, на следующем кадре
+// ПОСЛЕ клика — когда эффект ChatPanel уже отработал (Глеб: гонка ремоунта).
+export function getHasPlanCard(sessionId: string | null): boolean {
+  return planCardFor(sessionId);
+}
+
 // F9: одноразовый сигнал «открыть меню пилюли» (per chat): чип «Шаг N фичи» открывает
 // меню, когда живой карточки плана в ленте нет. `seq` — монотонный счётчик: повторное
 // открытие — новая ссылка → подписчик (TurnPlanPill) срабатывает заново.

@@ -6,8 +6,8 @@ import { Rounds } from './Rounds';
 import { RoundChain } from './RoundChain';
 import type { FeatureRun, FeatureStepChain } from '../../../types/featureRun';
 
-// Детали шага (макет v2 .det + stepDetails): карточка на C.bgWhite (внутри «Производства»
-// на C.bgCard), R.lg, margin-left 0 на всех ширинах. Состав сверху вниз (gap 8):
+// Детали шага (макет v2 .det + stepDetails): карточка на C.bgWhite (светлее подложки —
+// сам «Производство» лежит на C.bgCard), R.lg, margin-left 0 на всех ширинах. Состав сверху вниз (gap 8):
 //   1. шапка — «D1c · 1 ч 10 мин · 3 круга · **принят**» (+ « · из: ревью»);
 //   2. пружина витков (Rounds, max 9);
 //   3. подпись «Цепочка кругов»;

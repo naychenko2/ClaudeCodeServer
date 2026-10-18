@@ -155,7 +155,9 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         style={{ position: 'fixed', inset: 0, zIndex: layer, pointerEvents: inertBackdrop ? 'none' : undefined }}
         onClick={onClose}
       />
-      <div style={{
+      <div
+        role="menu"
+        style={{
         zIndex: layer + 1,
         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
         boxShadow: SHADOW.dropdown, padding: 5, minWidth, display: 'flex', flexDirection: 'column',

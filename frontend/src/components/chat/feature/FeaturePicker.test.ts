@@ -23,8 +23,8 @@ function run(id: string, title: string, over: Partial<FeatureRun> = {}): Feature
   };
 }
 
-const render = (runs: FeatureRun[], selected: number, isMobile = false) =>
-  renderToStaticMarkup(createElement(FeaturePicker, { runs, selected, onSelect: () => {}, isMobile }));
+const render = (runs: FeatureRun[], selected: number, isMobile = false, inMenu = false) =>
+  renderToStaticMarkup(createElement(FeaturePicker, { runs, selected, onSelect: () => {}, isMobile, inMenu }));
 
 describe('FeaturePicker', () => {
   it('одна фича → пикера нет (null)', () => {
@@ -55,10 +55,10 @@ describe('FeaturePicker', () => {
     expect(html).toContain('var(--c-accent-muted)');
   });
 
-  it('имя фичи — title = ветка', () => {
+  it('имя фичи — title = полное название (текст чипа обрезается многоточием)', () => {
     const html = render([run('a', 'Фича A'), run('b', 'Фича B')], 0);
-    expect(html).toContain('title="feat/a"');
-    expect(html).toContain('title="feat/b"');
+    expect(html).toContain('title="Фича A"');
+    expect(html).toContain('title="Фича B"');
   });
 
   it('мобила (360 px): одна строка (nowrap), overflowX auto, скроллбар скрыт, чип maxWidth 220', () => {
@@ -67,6 +67,24 @@ describe('FeaturePicker', () => {
     expect(html).toContain('overflow-x:auto');
     expect(html).toContain('scrollbar-width:none');
     expect(html).toContain('max-width:220px');
+  });
+
+  // r-1: меню (десктоп, 380) — чип 160 (два в ряд) + потолок пикера два ряда (maxHeight 58)
+  // с вертикальной прокруткой. Мутация: верни maxWidth 220 / убери maxHeight → краснеет.
+  it('r-1: меню (десктоп) — чип maxWidth 160 (два в ряд) + потолок два ряда (maxHeight 58, overflowY auto)', () => {
+    const html = render([run('a', 'Фича A'), run('b', 'Фича B'), run('c', 'Фича C')], 0, false, true);
+    // Чип в меню — 160 (не 220): два влезут в ряд при 380.
+    expect(html).toContain('max-width:160px');
+    // Потолок пикера — два ряда (58) + вертикальная прокрутка внутри.
+    expect(html).toContain('max-height:58px');
+    expect(html).toContain('overflow-y:auto');
+  });
+
+  it('карточка (десктоп, не меню): чип maxWidth 220, без потолка (все чипы видны)', () => {
+    const html = render([run('a', 'Фича A'), run('b', 'Фича B'), run('c', 'Фича C')], 0, false, false);
+    expect(html).toContain('max-width:220px');
+    expect(html).not.toContain('max-height:58px');
+    expect(html).not.toContain('overflow-y:auto');
   });
 
   it('глиф по состоянию: wait → ромб, closed → круг с чертой', () => {

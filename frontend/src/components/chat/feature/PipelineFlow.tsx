@@ -6,7 +6,7 @@ import { useIsMobile } from '../../../lib/breakpoints';
 import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
 import { openTaskInSection } from '../../../lib/tasks';
 import { useFeatureStepFocus } from '../../../lib/featureRuns';
-import { stripStepRefPrefix } from '../../../lib/stepRef';
+import { stepDisplayName } from '../../../lib/stepRef';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
@@ -552,6 +552,9 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
       ? 'ждёт ревью'
       : null;
   const minH = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
+  // r-2: название шага (общий хелпер): ведущий «{stepRef}:» отрезается; пустое название
+  // или название = номеру («Ш8 Ш8») — не рисуем, остаётся только моно-номер.
+  const name = stepDisplayName(chain.title, chain.stepRef);
   return (
     <button
       // data-step-ref — для scrollIntoView по сигналу фокуса (F9): поиск ВНУТРИ СВОЕГО
@@ -574,8 +577,8 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
       <StepGlyph chain={chain} />
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0 }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{chain.stepRef}</span>
-        {/* m-6: ведущий «{stepRef}:» от названия отрезается (рядом уже моно-номер). */}
-        <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{stripStepRefPrefix(chain.title || 'Без названия', chain.stepRef)}</span>
+        {/* r-2: название (общий хелпер stepDisplayName); пусто/равно номеру — не рисуем. */}
+        {name && <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{name}</span>}
         <SourceTag source={chain.source} />
         {chain.outcome === 'withdrawn' && (
           <span style={{ color: C.textMuted, whiteSpace: 'nowrap' }}>· снят с выкладки</span>

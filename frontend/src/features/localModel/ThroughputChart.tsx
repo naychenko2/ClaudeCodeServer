@@ -185,7 +185,7 @@ function buildIntervalSegments(
   return segs;
 }
 
-// Главная линия «на агента, ток/с»: ΣgenTokens/ΣitlSeconds по интервалу,
+// Главная линия «на запрос, ток/с»: ΣgenTokens/ΣitlSeconds по интервалу,
 // null — обрыв.
 export function buildPerStreamSegments(
   intervals: Interval[],
@@ -393,13 +393,16 @@ export function avgTimeSharesOf(intervals: Interval[]): TimeShares | null {
   return { gen: gen / n, prefill: prefill / n, wait: wait / n, queue: queue / n };
 }
 
-// «Круглая» шкала (только график выработки): верх = ближайшее сверху число из ряда
-// 1, 2, 5 × 10ⁿ от максимума, НЕ МЕНЕЕ 10 (простой не схлопывает ось в 0/1).
-// Середина = верх / 2. Примеры: макс 37 → 50; 412 → 500; 980 → 1000; 0 → 10; 1 → 10.
+// «Круглая» шкала (только график выработки): верх = ближайшее сверху «круглое» число
+// от максимума, НЕ МЕНЕЕ 10 (простой не схлопывает ось в 0/1). От 100 ряд мельче
+// (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 × 10ⁿ), чтобы пик 210 давал ось 250, а не 500; ниже 100 —
+// 1, 2, 5 (середина оси остаётся целой). Середина = верх / 2.
+// Примеры: макс 37 → 50; 210 → 250; 260 → 300; 412 → 500; 980 → 1000; 0 → 10; 1 → 10.
 export function niceAxisMax(max: number): number {
   if (max <= 0) return 10;
   const pow = Math.pow(10, Math.floor(Math.log10(max)));
-  for (const m of [1, 2, 5, 10]) {
+  const steps = pow >= 100 ? [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10] : [1, 2, 5, 10];
+  for (const m of steps) {
     const v = m * pow;
     if (v >= max) return Math.max(v, 10);
   }
@@ -685,7 +688,7 @@ export function breakRuns(intervals: Interval[]): [number, number][] {
 }
 
 // Прогоны разрыва ВТОРОЙ линии (perStream == null): фон-«разрыв» для линии
-// «на агента» — отдельно от фона выработки, чтобы линии не смешивались.
+// «на запрос» — отдельно от фона выработки, чтобы линии не смешивались.
 export function perStreamBreakRuns(intervals: Interval[]): [number, number][] {
   const runs: [number, number][] = [];
   let start = -1;
@@ -716,19 +719,19 @@ export function chartAriaLabel(window: Window, avg: number | null, hit: number |
   return parts.join(', ');
 }
 
-// aria-label SVG «На одного агента, ток/с»: базовая сводка; при hover — время
+// aria-label SVG «На запрос, ток/с»: базовая сводка; при hover — время
 // интервала и значение главной серии, или «движок не отвечал» на разрыве.
 export function tpChartAriaLabel(
   window: Window, _avg: number | null, hit: number | null,
   hoverTime: string | null, hoverPerStream: number | null,
 ): string {
-  const parts = [`На агента, ток/с за ${WINDOW_LABEL[window]}`];
+  const parts = [`На запрос, ток/с за ${WINDOW_LABEL[window]}`];
   if (hit != null) parts.push(`кэш ${formatPerc(hit)}`);
   if (hoverTime != null) {
     if (hoverPerStream == null) {
       parts.push(`интервал ${hoverTime}: движок не отвечал`);
     } else {
-      parts.push(`интервал ${hoverTime}: на агента ${formatTps(hoverPerStream)}`);
+      parts.push(`интервал ${hoverTime}: на запрос ${formatTps(hoverPerStream)}`);
     }
   }
   return parts.join(', ');
@@ -864,9 +867,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   const tMax = grid.to;
   // Верх ОБЩЕЙ оси — по максимуму ОБЕИХ серий (обе на интервалах): ни одна не
   // уходит за верх поля. «Всего по стенду» (genThroughput) при нескольких агентах
-  // выше «на агента», поэтому в масштаб входит — иначе линия стенда ушла бы за верх.
+  // выше «на запрос», поэтому в масштаб входит — иначе линия стенда ушла бы за верх.
   const maxT = niceAxisMax(maxSeriesOf(intervals));
-  // «в среднем» — скорость генерации на агента за окно: ΣgenTokens/ΣitlSeconds.
+  // «в среднем» — скорость генерации на запрос за окно: ΣgenTokens/ΣitlSeconds.
   const avg = avgPerStreamOf(samples);
   // «всего по стенду» за окно: Σ genTokens / длина окна (сек) — честная сумма с паузами.
   const issuedAvg = avgIssuedOf(samples);
@@ -891,7 +894,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
   // интервал. null — ни один интервал не отдал долей.
   const avgShares = avgTimeSharesOf(intervals);
 
-  // Главная линия «на агента, ток/с»: из интервалов (ΣgenTokens/ΣitlSeconds), с заливкой.
+  // Главная линия «на запрос, ток/с»: из интервалов (ΣgenTokens/ΣitlSeconds), с заливкой.
   const tpSegments = useMemo(
     () => buildPerStreamSegments(intervals, tMin, tMax, maxT, geomTp),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -972,9 +975,9 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
       // Движок молчал (все серии null) — «не отвечал»; perStream здесь тоже null.
       summary = `${time} · движок не отвечал`;
     } else {
-      // «на агента N · <куда уходит время>»: shares — доли, idle — «простой».
+      // «на запрос N · <куда уходит время>»: shares — доли, idle — «простой».
       // «—» — скорости в интервале не было (idle: движок отвечал, но шагов не было).
-      summary = `${time} · на агента ${hover.perStream != null ? formatTps(hover.perStream) : '—'}`
+      summary = `${time} · на запрос ${hover.perStream != null ? formatTps(hover.perStream) : '—'}`
         + timeSharesSummary(hover.timeShares);
     }
   } else {
@@ -1101,7 +1104,7 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
           ? <NotReported engine={engine} />
           : (
             <>
-              <FieldLabel>На агента, ток/с</FieldLabel>
+              <FieldLabel>На запрос, ток/с</FieldLabel>
               <svg viewBox={`0 0 ${width} ${GEOM_TP.height}`} width={width} height={GEOM_TP.height} style={{ display: 'block' }}
                 aria-label={tpChartAriaLabel(window, avg, hitAvg, hoverTime, hover?.perStream ?? null)}>
                 {[0, 0.5, 1].map(f => {
@@ -1166,10 +1169,10 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
                 marginTop: SP.xxs, minHeight: FS.xs * 1.45, display: 'flex', flexWrap: 'wrap', alignItems: 'center',
                 columnGap: SP.md, rowGap: SP.xxs, fontSize: FS.xs, color: C.textSecondary,
               }}>
-                <span title="сколько токенов в секунду модель выдаёт одному агенту, без чтения промпта и пауз"
+                <span title="сколько токенов в секунду модель выдаёт на один запрос, без чтения промпта и пауз"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
                   <span style={{ width: 10, height: 0, borderTop: `2px solid ${C.accent}` }} />
-                  на агента, ток/с <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendPerStream}</b>
+                  на запрос, ток/с <b style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.textHeading }}>{legendPerStream}</b>
                 </span>
                 <span title="сколько токенов стенд выдаёт всего; выше линии агента — работали несколько агентов, ниже — стенд простаивал"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>

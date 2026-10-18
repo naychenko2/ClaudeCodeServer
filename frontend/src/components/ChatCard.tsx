@@ -1,7 +1,7 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
-import { C, R, SHADOW, FONT } from '../lib/design';
+import { C, R, SHADOW, FONT, FS } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
@@ -154,7 +154,7 @@ export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
       <FeatureGlyph kind={st.kind} size={11} />
       <span style={{
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-        fontSize: 10, color: C.textMuted,
+        fontSize: FS.xxs, color: C.textMuted,
       }}>
         {feature.title}
       </span>

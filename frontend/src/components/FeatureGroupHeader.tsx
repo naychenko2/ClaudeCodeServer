@@ -54,14 +54,15 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
         columnGap: 7, rowGap: 3,
         alignItems: 'center',
         width: '100%', boxSizing: 'border-box',
-        border: `1px solid ${C.borderLight}`,
+        // Компактная (закрытая): без рамки и заливки (макет .closed .fgh)
+        border: compact ? '1px solid transparent' : `1px solid ${C.borderLight}`,
         // Кромка тревоги: 3px слева (вместо 1px) у «ждёт вас»/«упала»
         borderLeft: alarmEdge ? `3px solid ${alarmEdge}` : undefined,
-        background: C.bgCard,
+        background: compact ? 'transparent' : C.bgCard,
         borderRadius: R.lg,
-        padding: `${SP.sm}px ${SP.sm}px`,
+        padding: compact ? `${SP.xs}px ${SP.sm}px` : `${SP.sm}px ${SP.sm}px`,
         cursor: 'pointer', textAlign: 'left',
-        minHeight: isMobile ? 44 : undefined,
+        minHeight: isMobile ? (compact ? 40 : 44) : undefined,
       }}
     >
       {/* Шеврон: поворот 90° при раскрытии (макет .fg.open .fgh .chev) */}
@@ -75,12 +76,14 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
       <span style={{ gridColumn: 2, display: 'flex', flexShrink: 0 }}>
         <FeatureGlyph kind={st.kind} size={13} />
       </span>
-      {/* Название фичи: одна строка, обрезка многоточием */}
+      {/* Название фичи: одна строка, обрезка многоточием. Компактное — вторичным (макет .closed .fgh .nm) */}
       <span
         title={feature.title}
         style={{
-          gridColumn: 3, gridRow: 1, fontSize: FS.base, fontWeight: 700,
-          color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          gridColumn: 3, gridRow: 1, fontSize: FS.base,
+          fontWeight: compact ? 600 : 700,
+          color: compact ? C.textSecondary : C.textHeading,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           minWidth: 0,
         }}
       >
@@ -90,21 +93,21 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
       <span style={{ gridColumn: 4, gridRow: 1, display: 'flex', flexShrink: 0 }}>
         <CountBadge inline tone="muted" value={count} />
       </span>
-      {/* Строка 2: мини-рельса + статус (span columns 3-5) */}
+      {/* Строка 2: мини-рельса + статус (span columns 3-5). Компактная — без рельсы */}
       <span style={{
         gridColumn: '3 / 5', gridRow: 2, display: 'flex', alignItems: 'center',
         gap: 7, minWidth: 0,
       }}>
-        <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />
+        {!compact && <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />}
         <span
           data-testid="feature-group-status"
           style={{
-            fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap',
+            fontSize: FS.xs, color: compact ? C.textMuted : C.textSecondary, whiteSpace: 'nowrap',
             overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
             fontFamily: FONT.sans,
           }}
         >
-          {st.status}
+          {status}
         </span>
       </span>
     </button>

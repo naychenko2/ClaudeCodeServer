@@ -124,6 +124,15 @@ public static class FeatureFlagCatalog
             Description: "Включает карточку фичи в чате и режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»).",
             Default: false,
             Stage: "dev"),
+
+        // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
+        // Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.FeaturesOverview,
+            Title: "Обзор фич",
+            Description: "Фасет «Фичи» в списке сессий и плашка фичи в чате: какие фичи ведутся, их стадии и ключевые чаты.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

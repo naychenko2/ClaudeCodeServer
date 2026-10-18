@@ -961,7 +961,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         int chatCount)
     {
         var featureTasks = FeatureTasks(run.Epic, owner);
-        var key = KeySession(run.Epic, featureTasks);
+        // Ключевой чат: первое живое звено цепочки (удалённый/чужой чат → следующее звено).
+        var key = KeySession(run.Epic, featureTasks, sessions);
         var keySession = key is null ? null : sessions.FirstOrDefault(s => s.Id == key);
         return new FeatureIndexRow(
             run.FeatureId,
@@ -983,21 +984,34 @@ public sealed class FeatureProjector(TaskManager tasks)
             chatCount);
     }
 
-    // Ключевой чат фичи (контракт §1): epic.SourceSessionId → epic.ExecutorLaunchedBySessionId
-    // → самый частый ExecutorLaunchedBySessionId у дочерних задач → null.
-    internal static string? KeySession(TaskItem epic, List<TaskItem> featureTasks)
+    // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
+    // epic.SourceSessionId → epic.ExecutorLaunchedBySessionId → самый частый
+    // ExecutorLaunchedBySessionId у дочерних. Удалённый/чужой чат (не в снимке владельца
+    // sessions) пропускается — берётся следующее звено; живых звеньев нет → null.
+    internal static string? KeySession(TaskItem epic, List<TaskItem> featureTasks,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
     {
-        if (epic.SourceSessionId is not null) return epic.SourceSessionId;
-        if (epic.ExecutorLaunchedBySessionId is not null) return epic.ExecutorLaunchedBySessionId;
-        // Самый частый ExecutorLaunchedBySessionId у дочерних (эпик исключён); при равенстве
-        // частот — лексикографически меньший id (детерминизм).
-        return featureTasks
+        var live = new HashSet<string>(sessions.Select(s => s.Id));
+        return KeyChain(epic, featureTasks).FirstOrDefault(live.Contains);
+    }
+
+    // Цепочка ключевого чата в порядке звеньев (без дублей): epic.SourceSessionId →
+    // epic.ExecutorLaunchedBySessionId → самый частый ExecutorLaunchedBySessionId у дочерних
+    // (эпик исключён; при равенстве частот — лексикографически меньший id, детерминизм).
+    internal static List<string> KeyChain(TaskItem epic, List<TaskItem> featureTasks)
+    {
+        var chain = new List<string>();
+        if (epic.SourceSessionId is not null) chain.Add(epic.SourceSessionId);
+        if (epic.ExecutorLaunchedBySessionId is not null) chain.Add(epic.ExecutorLaunchedBySessionId);
+        var mostFrequent = featureTasks
             .Where(t => !ReferenceEquals(t, epic) && t.ExecutorLaunchedBySessionId is not null)
             .GroupBy(t => t.ExecutorLaunchedBySessionId!)
             .OrderByDescending(g => g.Count())
             .ThenBy(g => g.Key)
             .Select(g => g.Key)
             .FirstOrDefault();
+        if (mostFrequent is not null) chain.Add(mostFrequent);
+        return chain.Distinct().ToList();
     }
 
     // Группа фичи (контракт §1): closed → attention → running → idle.
@@ -1052,9 +1066,18 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Рельса: ровно 7 стадий FeatureRun.Stages → сегменты {key, state, tone}.
+    // Нормализация закрытой фичи (контракт С0): у closed active нет — все стадии, кроме absent,
+    // приводятся к done, tone=null (merge в том числе: «честный мерж» epic Done без merge-задачи
+    // иначе даёт merge=active, tone=run). absent остаётся absent.
     internal static List<FeatureIndexRailSegment> RailOf(FeatureRun run) =>
         run.Stages
-            .Select(s => new FeatureIndexRailSegment(s.Key, s.State, s.Tone))
+            .Select(s =>
+            {
+                if (!run.Closed)
+                    return new FeatureIndexRailSegment(s.Key, s.State, s.Tone);
+                var state = s.State == "absent" ? "absent" : "done";
+                return new FeatureIndexRailSegment(s.Key, state, null);
+            })
             .ToList();
 
     // «Сейчас» (now0): первая InProgress-задача (Now[0], по убыванию ClaudeStartedAt); null — не идёт.

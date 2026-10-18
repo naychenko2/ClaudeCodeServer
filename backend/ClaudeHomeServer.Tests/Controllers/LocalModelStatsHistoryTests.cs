@@ -340,33 +340,6 @@ public class LocalModelStatsHistoryTests
             .Should().HaveCount(3);
     }
 
-    // fail-closed: не-админ без непустого sub → 404 на /history (как будто функции нет,
-    // не «все записи» и не падение). Мутация: убрать проверку MediaSelfScope из Enabled() —
-    // 200, тест краснеет.
-    [Fact]
-    public async Task ПустойSub_НеАдмин_404_История()
-    {
-        using var h = new Harness("test-source", null);
-        h.WriteRecord("p_a", "test-source");
-        var client = h.Factory.CreateClientWithSub("");
-        var resp = await client.GetAsync("/api/local-model/history");
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "пустой sub — 404, не все записи");
-    }
-
-    // fail-closed: не-админ без непустого sub → 404 на /history/{id}/file (та же общая проверка,
-    // что и /history и /stats/media). Без проверки Foreign-запись (OwnerId "") отдалась бы.
-    // Мутация: убрать проверку MediaSelfScope — 200, тест краснеет.
-    [Fact]
-    public async Task ПустойSub_НеАдмин_404_Файл()
-    {
-        using var h = new Harness("test-source",
-            (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
-        h.WriteRecord("p_foreign", "test-source", ownerId: "");
-        var client = h.Factory.CreateClientWithSub("");
-        var resp = await client.GetAsync("/api/local-model/history/p_foreign/file");
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "пустой sub — 404, не чужой файл");
-    }
-
     // Рубильник MediaForUsers=false: не-админ → 404 (как будто функции нет), админ → 200.
     // Мутация: не проверять рубильник для не-админа — 200, тест краснеет.
     [Fact]

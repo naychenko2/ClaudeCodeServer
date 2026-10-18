@@ -563,7 +563,8 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
         display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: '7px 7px', alignItems: 'start',
         width: '100%', minHeight: minH, padding: `${SP.xs}px ${SP.xs}px`,
         border: '1px solid transparent', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
-        font: 'inherit', color: 'inherit', background: expanded ? C.bgSelected : 'transparent',
+        // K-2: fontFamily наследуется (не Arial), размер явный FS.sm (12).
+        fontFamily: 'inherit', fontSize: FS.sm, color: 'inherit', background: expanded ? C.bgSelected : 'transparent',
       }}
     >
       <StepGlyph chain={chain} />

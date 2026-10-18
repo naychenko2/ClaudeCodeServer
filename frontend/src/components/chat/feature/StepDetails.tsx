@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { C, R, SP } from '../../../lib/design';
+import { C, R, SP, FS } from '../../../lib/design';
 import { openTaskInSection } from '../../../lib/tasks';
 import { ArrowRight } from 'lucide-react';
 import { Rounds } from './Rounds';
@@ -121,6 +121,8 @@ export function StepDetails({ chain, run, isMobile }: { chain: FeatureStepChain;
     <div
       style={{
         display: 'flex', flexDirection: 'column', gap: SP.sm,
+        // K-2: размер текста деталей шага — FS.sm (12), наследуется всеми блоками.
+        fontSize: FS.sm,
         background: C.bgWhite, border: `1px solid ${C.borderLight}`,
         borderRadius: R.lg, padding: `${SP.sm}px ${SP.sm + 2}px`,
         marginLeft: 0,

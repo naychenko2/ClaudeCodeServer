@@ -108,6 +108,8 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
           background: C.bgSelected, border: 'none', borderRadius: 8, padding: '4px 11px',
           display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
           maxWidth: 300, minWidth: 0, flexShrink: 1,
+          // R-8: высота пилюли на 360 — 28 (макет .app.m .tpp); на десктопе — по контенту.
+          ...(isMobile ? { minHeight: 28 } : {}),
         }}
       >
         {/* Значок (+ точка-сигнал, когда пилюля в режиме плана, а фича ждёт/упала). */}

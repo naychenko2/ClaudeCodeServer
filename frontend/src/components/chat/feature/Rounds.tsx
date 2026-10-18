@@ -28,7 +28,9 @@ export function roundVerdictLabel(v: FeatureRound['verdict']): string {
   }
 }
 
-export function Rounds({ rounds, max = 6 }: { rounds: FeatureRound[]; max?: number }) {
+// caption — подписывать ли кольца строкой «N витков · ↺N» (по умолчанию да, прежнее
+// поведение). Легенда рисует те же кольца БЕЗ подписи (caption={false}): только силуэт.
+export function Rounds({ rounds, max = 6, caption = true }: { rounds: FeatureRound[]; max?: number; caption?: boolean }) {
   if (!rounds.length) return null;
   const shown = rounds.slice(-max);
   const extra = rounds.length - shown.length;
@@ -67,9 +69,11 @@ export function Rounds({ rounds, max = 6 }: { rounds: FeatureRound[]; max?: numb
           );
         })}
       </svg>
-      <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
-        {label}
-      </span>
+      {caption && (
+        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+      )}
     </span>
   );
 }

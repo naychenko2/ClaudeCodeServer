@@ -7,10 +7,11 @@ import { C } from '../../../lib/design';
 //   run     — кольцо (идёт)
 //   closed  — круг с чертой (закрыта/смержена)
 //   done    — галочка (принято/пройдено)
+//   absent  — перечёркнутый круг (этапа/задачи нет в трекере)
 //
 // Пилюля для «идёт»/«закрыта» использует lucide `Route` (не эти глифы); ромб/квадрат
 // (wait/stopped) — отсюда. Выбор фичи (FeaturePicker) — все пять отсюда.
-export type FeatureGlyph = 'wait' | 'stopped' | 'run' | 'closed' | 'done';
+export type FeatureGlyph = 'wait' | 'stopped' | 'run' | 'closed' | 'done' | 'absent';
 
 export function FeatureGlyph({ kind, size = 12 }: { kind: FeatureGlyph; size?: number }) {
   const v = { width: size, height: size, viewBox: '0 0 16 16', 'aria-hidden': true as const };
@@ -38,6 +39,14 @@ export function FeatureGlyph({ kind, size = 12 }: { kind: FeatureGlyph; size?: n
         <svg {...v}>
           <circle cx="8" cy="8" r="7" fill={C.success} />
           <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.onAccent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    // Перечёркнутый круг: сплошной (не пунктирный) контур r 6 + косая черта — «нет в трекере».
+    case 'absent':
+      return (
+        <svg {...v}>
+          <circle cx="8" cy="8" r="6" fill="none" stroke={C.dashed} strokeWidth="1.5" />
+          <path d="M4 12 L12 4" stroke={C.dashed} strokeWidth="1.5" strokeLinecap="round" />
         </svg>
       );
   }

@@ -79,6 +79,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.LocalStats.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- RemoteCommands.Tests (шаг 3.12, пачка G): перенесённые RemoteProcessRunner-тесты (Loop/
+         SecretLeak/E2E) используют internal-хелперы TestKit — DeviceSecretScanner (G3-сканер),
+         FakeDeviceTurnGateway + InProcessDeviceExecChannel (петля раннер↔агент), FakeDeviceAgent
+         (фейковый CLI) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.RemoteCommands.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

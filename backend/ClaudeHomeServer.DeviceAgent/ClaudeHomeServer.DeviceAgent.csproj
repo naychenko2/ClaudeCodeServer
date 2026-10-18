@@ -133,6 +133,11 @@
     <!-- Mcp.Tests (шаг 3.6): OcrGatewayEndpointTests использует internal SidecarProxy
          (ClaudeHomeServer.DeviceAgent.Sidecar) — тот же шов, что у монолита. -->
     <InternalsVisibleTo Include="ClaudeHomeServer.Mcp.Tests" />
+    <!-- RemoteCommands.Tests (шаг 3.12, пачка G): E2E-тест хода на устройстве (ADR-016, задача 2.8)
+         гоняет настоящие стороны — internal TurnExecutor/ExecLink/SidecarHost/TurnJournal/
+         AgentPathPolicy/TurnGrants и internal-швы IAgentRoots/ICliLeaseSource/ICliHandle/
+         IExecSocketConnector. Main DeviceAgent не тянет, поэтому допуск нужен именно сюда. -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.RemoteCommands.Tests" />
   </ItemGroup>
 
 </Project>

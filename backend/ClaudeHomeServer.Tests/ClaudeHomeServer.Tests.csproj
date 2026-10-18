@@ -215,6 +215,16 @@
       (до финальной чистки) перенесённые тесты компилировались и новый проект был в графе сборки.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Deploy.Tests\ClaudeHomeServer.Deploy.Tests.csproj" />
+    <!--
+      RemoteCommands.Tests (шаг 3.12, пачка G): 6 RemoteCommands/RemoteProcessRunner*Tests
+      (Controllers/RemoteCommands + Services/RemoteCommands + Services/RemoteProcessRunner*)
+      переехали в отдельную тестовую сборку вертикали. RemoteCommands — папка Main
+      (ClaudeHomeServer/Services/RemoteCommands/), поэтому InternalsVisibleTo на RemoteCommands.Tests
+      стоит в Main (ClaudeHomeServer.csproj), а не в отдельной сборке. Монолит тянет
+      RemoteCommands.Tests как ProjectReference, чтобы в переходный период (до финальной чистки)
+      перенесённые тесты компилировались и новый проект был в графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.RemoteCommands.Tests\ClaudeHomeServer.RemoteCommands.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

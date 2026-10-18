@@ -50,6 +50,7 @@
   <Project Path="ClaudeHomeServer.Prompts.Tests/ClaudeHomeServer.Prompts.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Reader/ClaudeHomeServer.Reader.csproj" />
   <Project Path="ClaudeHomeServer.Reader.Tests/ClaudeHomeServer.Reader.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.RemoteCommands.Tests/ClaudeHomeServer.RemoteCommands.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Skills/ClaudeHomeServer.Skills.csproj" />
   <Project Path="ClaudeHomeServer.Skills.Tests/ClaudeHomeServer.Skills.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Spend/ClaudeHomeServer.Spend.csproj" />

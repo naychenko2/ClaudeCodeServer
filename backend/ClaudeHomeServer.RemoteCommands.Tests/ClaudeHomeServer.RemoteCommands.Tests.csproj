@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали RemoteCommands (шаг 3.12). По образцу Deploy.Tests (шаг 3.11) /
+         Team.Tests (шаг 3.5) / Llm.Tests (шаг 3.1): SDK=Web ради FrameworkReference Microsoft.AspNetCore.App
+         (RemoteCommandsControllerTests поднимает ASP.NET-хост через TestWebApplicationFactory; E2E-тест
+         гоняет шлюз LLM через WebApplication.UseTestServer), OutputType=Library ради отсутствия Main.
+         RemoteCommands — папка Main (ClaudeHomeServer/Services/RemoteCommands/), не отдельная сборка:
+         её типы (RemoteCommandsService/RemoteCommandAction/RemoteCommandsOptions/IShellCommandRunner/
+         ShellRunResult/ShellSpawnResult) приходят явной ссылкой на Main. RemoteProcessRunner — в
+         ClaudeHomeServer.Execution, Llm-типы (LlmProviderRegistry/ClaudeSession/LlmGatewayOptions/
+         DeviceTurnGateway/TurnTokenService/SubscriptionLimitRecorder) — в ClaudeHomeServer.Llm,
+         TurnEventBus — в ClaudeHomeServer.Turn: все три Main тянет как обычные ProjectReference,
+         поэтому явных ссылок на Execution/Llm/Turn здесь нет (как и в Deploy.Tests). -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core — спинка: Models (Session/Project), Protocol (DeviceExecControl/DeviceExecJson/
+         DeviceExecControlOps/DeviceExecGateway/DeviceExecPlaceholders/HandsMachineLock/HandsEndReason/
+         ResultMessage/ErrorMessage/DeviceExecStatus/DeviceCapabilities), Services.Execution
+         (ProcessSpec/IDeviceExecChannel/IDeviceExecStream/IDeviceTurnGateway/DeviceExecRefusedException/
+         DeviceExecRefusal), Services.McpEndpoints — на которые ссылаются using'и перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Main: RemoteCommands (Services/RemoteCommands) + транзитно ClaudeHomeServer.Execution
+         (RemoteProcessRunner), ClaudeHomeServer.Llm (LlmProviderRegistry/ClaudeSession/LlmGatewayOptions/
+         DeviceTurnGateway/TurnTokenService/SubscriptionLimitRecorder/UpstreamSelector),
+         ClaudeHomeServer.Turn (TurnEventBus), ClaudeHomeServer.Devices (DeviceRegistry/DeviceAuthHandler/
+         DeviceExecStream). Main тянет все как обычные ProjectReference, поэтому явных ссылок на них нет. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- TestKit — Core-only хелперы: TestConfig (Registry в Spec-тестах), DeviceSecretScanner (G3-сканер
+         в SecretLeak/E2E), FakeDeviceTurnGateway + InProcessDeviceExecChannel (петля раннер↔агент в
+         Loop/SecretLeak/E2E), FakeDeviceAgent (фейковый CLI в SecretLeak), FakeHostEnvironment.
+         Internal-хелперы доступны через InternalsVisibleTo в TestKit (добавлен в этом шаге). -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host — Main-зависимые хелперы: TestWebApplicationFactory (RemoteCommandsControllerTests)
+         и GatewayTestKit (E2E: пул/реестр/selector/Options). Mvc.Testing/TestHost приходят транзитно. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
+    <!-- DeviceAgent: E2E-тест (ADR-016, задача 2.8) гоняет НАСТОЯЩИЕ стороны в одном процессе —
+         TurnExecutor/ExecLink/DeviceExecStream/SidecarHost/TurnJournal/AgentPathPolicy/TurnGrants и
+         internal-швы IAgentRoots/ICliLeaseSource/ICliHandle/IExecSocketConnector. Main DeviceAgent
+         НЕ тянет (его нет в ProjectReferences Main), поэтому ссылка явная; internals — через
+         InternalsVisibleTo в DeviceAgent (добавлен в этом шаге). -->
+    <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent\ClaudeHomeServer.DeviceAgent.csproj" />
+    <!-- Mcp.Tests: E2E-тест использует GatewayTestDevice (учётка устройства: DeviceRegistry +
+         DeviceAuthHandler), который живёт в ClaudeHomeServer.Mcp.Tests (namespace
+         ClaudeHomeServer.Tests.Services.Gateway). Монолит получает его тем же путём (ссылка монолита
+         на Mcp.Tests), поэтому новый проект повторяет шов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Mcp.Tests\ClaudeHomeServer.Mcp.Tests.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <!-- [SkippableFact] в RemoteProcessRunnerDeviceAgentE2ETests (Unix-only: shebang-CLI, дерево процессов). -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+</Project>

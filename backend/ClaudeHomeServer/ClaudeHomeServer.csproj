@@ -48,6 +48,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- RemoteCommands.Tests (шаг 3.12, пачка G): перенесённые RemoteCommands/RemoteProcessRunner-тесты
+         читают internal-члены Main-типов (Services.RemoteCommands) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.RemoteCommands.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

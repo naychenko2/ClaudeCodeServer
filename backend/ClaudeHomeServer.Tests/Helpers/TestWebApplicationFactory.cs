@@ -256,6 +256,25 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         return client;
     }
 
+    /// <summary>
+    /// Клиент не-админа с заданным claim sub (fail-closed тесты, ADR-030): пользователь
+    /// добавляется в стор с этим Id, токен выдаётся напрямую через JwtService (мимо login).
+    /// sub = "" или " " — пустой/пробельный владелец. Username уникален на вызов, чтобы
+    /// повторные вызовы на общей фабрике (IClassFixture) не конфликтовали в UserStore.
+    /// </summary>
+    public HttpClient CreateClientWithSub(string sub, string? username = null)
+    {
+        var users = Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>();
+        var name = username ?? ("ws_" + Guid.NewGuid().ToString("N")[..8]);
+        var u = users.Add(name, "wspass", "user");
+        typeof(User).GetProperty("Id")!.SetValue(u, sub);
+        var jwt = Services.GetRequiredService<ClaudeHomeServer.Services.JwtService>();
+        var (token, _) = jwt.Issue(u);
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);

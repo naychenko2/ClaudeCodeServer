@@ -86,8 +86,8 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
             && (q.Outcome is null || StatusOf(r) == q.Outcome)
             && (q.Login is null || OwnerLogin(r) == q.Login)
             // Не-админ (scope "self"): фильтр по владельцу на уровне запроса (OwnerId == sub),
-            // не пост-фильтр после выдачи.
-            && (q.OwnerId is null || r.Origin?.OwnerId == q.OwnerId)
+            // не пост-фильтр после выдачи; fail-closed — см. OwnerMatches.
+            && OwnerMatches(r, q)
             && (q.From is null || SortTime(r) >= q.From)
             && (q.To is null || SortTime(r) <= q.To)
         ).ToList();
@@ -191,6 +191,17 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
 
     // Исход для фильтра: завершённые — по outcome, в процессе — running/queued
     private static string StatusOf(MediaHistoryRecord r) => r.Status;
+
+    // Фильтр по владельцу (ADR-030, fail-closed 2026-10-18): null — без фильтра (админ,
+    // scope "all"); пустой/пробельный владелец — ни одной записи: пустой владелец не
+    // расширяет выдачу (scope "self" без непустого sub иначе дал бы ВСЕ записи, а
+    // чужие Foreign-прогоны несут OwnerId "").
+    private static bool OwnerMatches(MediaHistoryRecord r, MediaHistoryQuery q)
+    {
+        if (q.OwnerId is null) return q.Scope != "self";
+        if (string.IsNullOrWhiteSpace(q.OwnerId)) return false;
+        return r.Origin?.OwnerId == q.OwnerId;
+    }
 
     // Логин владельца: OwnerId → username (UserStore); нет — null
     private string? OwnerLogin(MediaHistoryRecord r) =>

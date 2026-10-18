@@ -34,10 +34,12 @@ public class MediaHistoryController(
 
     // Доступ (ADR-030, 2026-10-18): админ — серверный флаг local-model-stats (как раньше);
     // не-админ — флаг не требуется, доступ даёт рубильник MediaForUsers. Без доступа — 404
-    // (UI-гейта мало: наружу чужие файлы).
+    // (UI-гейта мало: наружу чужие файлы). fail-closed: не-админ без непустого sub — 404
+    // (та же общая проверка, что и в /stats/media, через MediaSelfScope).
     private bool Enabled()
     {
         if (UserId is not { } id) return false;
+        if (!MediaSelfScope.HasOwner(User)) return false;
         return IsAdmin
             ? flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats)
             : mediaOptions.Value.MediaForUsers;

@@ -19,8 +19,11 @@ export type ChatOnlyFilter = 'pinned' | 'temp' | 'group';
 // вместе с ним. От фильтрующих полей отличаются тем, что не скрывают чаты, а лишь
 // перестраивают список: isDefaultFilters их не учитывает.
 // 'subjects' — темы чатов проекта: есть только у списка проекта; у
-// глобального списка значение из хранилища клампится в 'days' на месте рендера
-export type ChatGroupBy = 'days' | 'tags' | 'subjects' | 'none';
+// глобального списка значение из хранилища клампится в 'days' на месте рендера.
+// 'features' — фичи по индексу (фасет «Фичи»): секции в порядке features[] бэка,
+// «Без фичи» в конце; есть у обоих списков, пока флаг features-overview выключен
+// опция в тулбаре не появляется (клампится в 'days' на месте рендера)
+export type ChatGroupBy = 'days' | 'tags' | 'subjects' | 'features' | 'none';
 // Белый список значений оси: он же порядок цикла кнопки-переключателя и фильтр
 // мусора из localStorage (незнакомое значение вырождается в 'newest'). Список
 // неизменяем (as const), а тип оси выводится ИЗ НЕГО — иначе список и тип разошлись бы.
@@ -134,7 +137,7 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     ? readLegacyView(scopeKey)
     : {};
   const groupBy: ChatGroupBy =
-    p.groupBy === 'tags' || p.groupBy === 'subjects' || p.groupBy === 'none' || p.groupBy === 'days'
+    p.groupBy === 'tags' || p.groupBy === 'subjects' || p.groupBy === 'features' || p.groupBy === 'none' || p.groupBy === 'days'
       ? p.groupBy
       : legacyAxes.groupBy ?? 'days';
   return {

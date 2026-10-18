@@ -13,8 +13,9 @@ import { C } from '../../../lib/design';
 import type { FeatureNow, FeatureRun, FeatureTask } from '../../../types/featureRun';
 import { buildPillModel } from './pillModel';
 import { TurnPlanPill } from '../TurnPlanPill';
-import { __test, setSelectedFeatureId } from '../../../lib/featureRuns';
+import { __test, setSelectedFeatureId, setTurnPlanMode } from '../../../lib/featureRuns';
 import { installFakeDom, uninstallFakeDom } from '../__tests__/fakeDom';
+import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя. Исполнитель резолвится по имени.
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -297,6 +298,81 @@ describe('TurnPlanPill: всегда runs[0] (выбор фичи в сторе 
     // Пилюля показывает runs[0] (A): «Производство · Денис», не B («ждёт вас · мерж»).
     expect(html).toContain('Производство · Денис');
     expect(html).not.toContain('ждёт вас · мерж');
+  });
+});
+
+// ── F9.3: «все закрыты» — без счётчика плана хода ────────────────────────────────
+// Дефект из браузерного прогона Веры: в чате с двумя закрытыми фичами пилюля
+// показывала «фичи · 1/3 · 2 · все закрыты» — «1/3» это счётчик ПЛАНА ХОДА
+// (TodoWrite, 1 из 3 выполнено), он к фичам не относится. По макету v2 состояние
+// «все закрыты» — сводка «фичи · N · все закрыты» БЕЗ счётчика шагов. Счётчик
+// плана — только в режиме «План хода» или когда фич нет.
+//
+// Компонент рендерится через renderToStaticMarkup (окружение node, без jsdom):
+// window нет → isMobile=false → слово-метка режима рендерится (как на десктопе).
+
+describe('TurnPlanPill: «все закрыты» — без счётчика плана хода', () => {
+  // План хода: 1 из 3 выполнено → planCounter = '1/3'.
+  function planTodos(): TodoItem[] {
+    return [
+      { content: 'Готово', status: 'completed' },
+      { content: 'В работе', status: 'pending' },
+      { content: 'Дальше', status: 'pending' },
+    ];
+  }
+
+  it('N>1 закрытых фич + непустой план: «фичи · 2 · все закрыты», без «1/3», без ↺', () => {
+    __test.reset();
+    const runs = [1, 2].map(n => run({
+      featureId: `epic-${n}`,
+      epic: task({ id: `epic-${n}`, title: `Фича ${n}` }),
+      // ↺3 у первой фичи: в «все закрыты» он тоже не выводится.
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 3, withdrawn: 0, loops: 3 },
+      stepsAccepted: 9, stepsTotal: 9, closed: true,
+    }));
+    __test.setRuns('s1', runs); // режим берётся из среза стора, не из пропса
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: planTodos(), runs, sessionId: 's1' }));
+    expect(html).toContain('2 · все закрыты');
+    expect(html).toContain('>фичи<');
+    expect(html).not.toContain('1/3'); // счётчик плана хода не должен просочиться в пилюлю
+    expect(html).not.toContain('↺'); // возвратов в «все закрыты» нет
+  });
+
+  it('контроль: одна закрытая фича — счётчик шагов 9/9 и «Фича смержена»', () => {
+    __test.reset();
+    const r = run({ stepsAccepted: 9, stepsTotal: 9, closed: true });
+    __test.setRuns('s1', [r]);
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: planTodos(), runs: [r], sessionId: 's1' }));
+    expect(html).toContain('9/9');
+    expect(html).toContain('Фича смержена');
+    expect(html).not.toContain('1/3');
+  });
+
+  it('контроль: идёт — счётчик шагов 8/9, счётчика плана нет', () => {
+    setNames();
+    __test.reset();
+    const r = run({ stepsAccepted: 8, stepsTotal: 9, now: [now('prod', 'denis')] });
+    __test.setRuns('s1', [r]);
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: planTodos(), runs: [r], sessionId: 's1' }));
+    expect(html).toContain('8/9');
+    expect(html).toContain('Производство · Денис');
+    expect(html).not.toContain('1/3');
+  });
+
+  it('контроль: режим «План хода» — счётчик плана 1/3 как раньше (без регрессии)', () => {
+    __test.reset();
+    const r = run({ stepsAccepted: 8, stepsTotal: 9, now: [now('prod', 'denis')] });
+    __test.setRuns('s1', [r]);
+    setTurnPlanMode('s1', 'plan');
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: planTodos(), runs: [r], sessionId: 's1' }));
+    expect(html).toContain('1/3');
+    expect(html).not.toContain('8/9');
+  });
+
+  it('контроль: фич нет — счётчик плана 1/3 как раньше', () => {
+    __test.reset();
+    const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: planTodos(), runs: [], sessionId: 's1' }));
+    expect(html).toContain('1/3');
   });
 });
 

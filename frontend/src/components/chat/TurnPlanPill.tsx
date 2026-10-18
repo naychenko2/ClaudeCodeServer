@@ -67,11 +67,14 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
   const model = buildPillModel(runs);
 
   // Счётчик: по режиму. Фича — шаги принято/всего (8/9) + ↺ + +N; план — done/total.
+  // В режиме фичи берём featureCounter КАК ЕСТЬ, включая null: «все закрыты» (N>1)
+  // счётчика шагов не имеет (model.counter === null) — и ↺/+N тоже не выводятся.
+  // planCounter — только в режиме «План хода» или когда модели нет (фич нет).
   const planCounter = `${done}/${todos.length}`;
   const featureCounter = model && model.counter != null
     ? `${model.counter}${model.loops > 0 ? ` ↺${model.loops}` : ''}`
     : null;
-  const counter = featureMode && featureCounter != null ? featureCounter : planCounter;
+  const counter = featureMode && model ? featureCounter : planCounter;
 
   // Текст/цвет/вес кнопки-пилюли: по модели (фича) или по плану.
   const label = featureMode && model ? model.text : planLabel;

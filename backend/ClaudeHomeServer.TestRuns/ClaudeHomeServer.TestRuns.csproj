@@ -19,6 +19,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- TestRuns.Tests (шаг 3.7): перенесённые TestRuns-тесты используют internal-члены
+         ClaudeHomeServer.TestRuns (TestRunService.IsNodeBinShape и др.) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.TestRuns.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

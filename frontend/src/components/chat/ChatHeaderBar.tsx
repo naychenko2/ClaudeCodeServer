@@ -5,6 +5,7 @@ import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } f
 import { rewriteCostUsd, cacheLeftText, cacheNoteText, cacheTipText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
 import { handoffAvailability, handoffWarm } from '../../lib/chatHandoff';
 import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
+import { contextHandoffOffered, contextHandoffWarm, takeContextDangerToast } from '../../lib/contextHandoff';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -499,12 +500,13 @@ function ContextRow({ estimate, assistantName = 'Ассистент' }: { estima
   );
 }
 
-// Действия с контекстом — один ряд под чертой в конце поповера: «Сжать контекст» и «Пороги».
+// Действия с контекстом — один ряд под чертой в конце поповера: «Сжать контекст», при
+// warn/danger рядом «Перенести в новый чат» (две альтернативы «контекст распух») и «Пороги».
 // Пояснение к сжатию — подсказкой кнопки, а не абзацем над ней.
-function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент' }: {
+function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент', cacheItems, handoff }: {
   estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
-  assistantName?: string;
+  assistantName?: string; cacheItems?: ChatItem[]; handoff?: HandoffControl;
 }) {
   const [showThresholds, setShowThresholds] = useState(false);
   const hasPct = estimate.pct !== undefined;
@@ -512,6 +514,7 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
   // Кнопка сжатия недоступна: ход идёт, компакт идёт, оценки нет, контекст только что сжат,
   // или сжимать ещё нечего (слишком мало ходов — CLI вернёт «not enough messages»)
   const compactDisabled = isWaiting || isCompacting || !hasPct || estimate.fresh || !canCompact || !online;
+  const offered = handoff && contextHandoffOffered(estimate.level) ? handoff : undefined;
   const compactTitle = !canCompact && !isWaiting && !isCompacting
     ? 'Пока нечего сжимать — слишком мало сообщений'
     : isWaiting && !isCompacting ? 'Дождитесь завершения текущего хода'
@@ -524,15 +527,28 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
           {compactNote}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+      {/* flexWrap: на 320px три кнопки в строку не влезают — «Пороги» уходит вниз */}
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SP.sm }}>
         <Button variant="ghost" size="xs" disabled={compactDisabled} loading={isCompacting} onClick={onCompact} title={compactTitle}>
           {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
         </Button>
+        {/* Путь — по статусу кэша на момент клика; нет кэша (сторонний провайдер) — холодный */}
+        {offered && (
+          <Button variant="ghost" size="xs" disabled={!offered.enabled || isCompacting} loading={offered.busy}
+            onClick={() => offered.onClick(contextHandoffWarm(cacheItems))}
+            title={offered.enabled ? HANDOFF_HINT : offered.reason}>
+            {HANDOFF_LABEL}
+          </Button>
+        )}
         <Button variant="ghost" size="xs" onClick={() => setShowThresholds(true)} style={{ marginLeft: 'auto' }}
           leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
           Пороги
         </Button>
       </div>
+      {/* Причину выключенного переноса пишем и текстом: на мобиле подсказки по наведению нет */}
+      {offered && !offered.enabled && offered.reason && (
+        <div style={{ ...meterSubStyle, marginTop: SP.xs, color: C.textMuted }}>{offered.reason}</div>
+      )}
       {showThresholds && <ContextThresholdsDialog onClose={() => setShowThresholds(false)} />}
     </div>
   );
@@ -723,6 +739,26 @@ export interface HandoffControl {
 }
 const HANDOFF_LABEL = 'Перенести в новый чат';
 const HANDOFF_HINT = 'Новый чат начнётся с записки о разговоре — без перезаписи всей истории в кэш';
+
+// Тост «Контекст почти заполнен» — один раз на чат при переходе контекста в danger, только у
+// шапки открытого чата (toastSessionId), не во время хода и сжатия (lib/contextHandoff).
+// Ничего не рисует: свой компонент, потому что пилюля выходит до хуков ранним return
+function ContextDangerToast({ level, isWaiting, isCompacting, toastSessionId, cacheItems, handoff }: {
+  level: ContextEstimate['level']; isWaiting: boolean; isCompacting: boolean;
+  toastSessionId?: string; cacheItems?: ChatItem[]; handoff?: HandoffControl;
+}) {
+  useEffect(() => {
+    if (!takeContextDangerToast(toastSessionId, level, isWaiting, isCompacting)) return;
+    showToast('Контекст почти заполнен',
+      'На длинном контексте ответы хуже. Можно сжать историю или перенести разговор в новый чат с запиской.',
+      'info', handoff?.enabled && !handoff.busy
+        ? { label: HANDOFF_LABEL, onClick: () => handoff.onClick(contextHandoffWarm(cacheItems)) }
+        : undefined);
+    // handoff и cacheItems — на момент показа: тост один на чат
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toastSessionId, level, isWaiting, isCompacting]);
+  return null;
+}
 
 // Доля оставшегося срока: от якоря до момента остывания
 function cacheFrac(state: PromptCacheState): number {
@@ -1019,6 +1055,8 @@ export function RingPillBadge(props: {
         </span>
         {cacheItems && <CacheClockFace items={cacheItems} isWaiting={props.isWaiting} isCompact={isCompact}
           toastSessionId={props.cacheToastSessionId} handoff={props.handoff} />}
+        <ContextDangerToast level={estimate.level} isWaiting={props.isWaiting} isCompacting={isCompacting}
+          toastSessionId={props.cacheToastSessionId} cacheItems={cacheItems} handoff={props.handoff} />
       </>}
       isMobile={isMobile}
       isCompact={isCompact}

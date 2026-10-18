@@ -97,6 +97,10 @@ function round(over: Partial<FeatureRound> = {}): FeatureRound {
 }
 
 const render = (r: FeatureRun) => renderToStaticMarkup(createElement(PipelineFlow, { run: r }));
+// SSR с форсированным раскрытием «Производства»: строки шагов (data-step-ref) в разметке.
+// После F8 «свёрнуто по умолчанию» (initialExpandedStage=null) тестам строк шагов нужен
+// раскрытый prod — иначе SSR (читает только начальное состояние) их не отрендерит.
+const renderOpen = (r: FeatureRun) => renderToStaticMarkup(createElement(PipelineFlow, { run: r, initialExpandedStage: 'prod' }));
 
 // Ожидаемое «ЧЧ:ММ»: теми же локальными геттерами от той же Date, что и hhmm (featureTime) —
 // тест не зависит от пояса машины (CI в UTC, разработка в МСК).
@@ -757,15 +761,19 @@ describe('PipelineFlow: F8 (раскрытие этапов)', () => {
     expect(text).toContain('План шагов');
   });
 
-  it('«Производство» раскрывается по умолчанию: строки шагов (stepRef, название, линия)', () => {
+  it('«Производство» свёрнуто по умолчанию; по клику — строки шагов (stepRef, название, линия)', () => {
     personaMap.set('denis', 'Денис');
     personaMap.set('kira', 'Кира');
-    const html = render(fullRun());
-    expect(html).toContain('stage-details-prod');
-    expect(html).toContain('D1');
-    expect(html).toContain('Бэк-шаг');
-    expect(html).toContain('F1');
-    expect(html).toContain('Фронт-шаг');
+    // Без автораскрытия: в SSR-разметке контейнера деталей «Производства» (id=stage-details-prod)
+    // нет. Проверяем id, а не подстроку: кнопка несёт aria-controls="stage-details-prod" всегда.
+    const collapsed = render(fullRun());
+    expect(collapsed).not.toContain('id="stage-details-prod"');
+    // Клик раскрывает: строки шагов (stepRef, название, линия)
+    const text = clickStageText(fullRun(), 'prod');
+    expect(text).toContain('D1');
+    expect(text).toContain('Бэк-шаг');
+    expect(text).toContain('F1');
+    expect(text).toContain('Фронт-шаг');
   });
 
   it('«Ревью» раскрывается: «Круги ревью по шагам» + ID + бусины вердиктов', () => {
@@ -835,7 +843,11 @@ describe('PipelineFlow: F8 (раскрытие этапов)', () => {
     const review = findNodeByAttr(container, 'data-testid', 'stage-row-review');
     expect(prod, 'кнопка «Производство»').not.toBeNull();
     expect(review, 'кнопка «Ревью»').not.toBeNull();
-    expect(prod!.getAttribute('aria-expanded')).toBe('true');
+    // По умолчанию свёрнуто (без автораскрытия)
+    expect(prod!.getAttribute('aria-expanded'), '«Производство» свёрнуто по умолчанию').toBe('false');
+    // Раскрываем «Производство» вручную, затем клик по «Ревью» его закрывает (одиночное раскрытие)
+    act(() => (reactProps(prod!)!.onClick as () => void)());
+    expect(prod!.getAttribute('aria-expanded'), '«Производство» открыто').toBe('true');
     act(() => (reactProps(review!)!.onClick as () => void)());
     expect(prod!.getAttribute('aria-expanded'), '«Производство» закрылось').toBe('false');
     expect(review!.getAttribute('aria-expanded'), '«Ревью» открылось').toBe('true');
@@ -843,7 +855,7 @@ describe('PipelineFlow: F8 (раскрытие этапов)', () => {
   });
 
   it('шаг раскрывается одиночно внутри этапа', () => {
-    const { root, container } = mount(createElement(PipelineFlow, { run: fullRun() }));
+    const { root, container } = mount(createElement(PipelineFlow, { run: fullRun(), initialExpandedStage: 'prod' }));
     const d1 = findNodeByAttr(container, 'data-testid', 'step-row-D1');
     const f1 = findNodeByAttr(container, 'data-testid', 'step-row-F1');
     expect(d1, 'строка шага D1').not.toBeNull();
@@ -868,13 +880,13 @@ describe('PipelineFlow: F8 (строка шага)', () => {
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Шаг', source: 'review' })],
     });
-    const html = render(withSrc);
+    const html = renderOpen(withSrc);
     expect(html).toContain('с ревью');
     const noSrc = run({
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Шаг', source: null })],
     });
-    expect(render(noSrc)).not.toContain('с ревью');
+    expect(renderOpen(noSrc)).not.toContain('с ревью');
   });
 
   it('метки источника: «с проверки» (qa) и «с финала» (final)', () => {
@@ -885,7 +897,7 @@ describe('PipelineFlow: F8 (строка шага)', () => {
         chain({ stepRef: 'D2', title: 'B', source: 'final' }),
       ],
     });
-    const html = render(r);
+    const html = renderOpen(r);
     expect(html).toContain('с проверки');
     expect(html).toContain('с финала');
   });
@@ -895,7 +907,7 @@ describe('PipelineFlow: F8 (строка шага)', () => {
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Шаг', outcome: 'withdrawn' })],
     });
-    expect(render(r)).toContain('· снят с выкладки');
+    expect(renderOpen(r)).toContain('· снят с выкладки');
   });
 
   it('идущий — длительность; pending — «ждёт ревью»; returned — только пружина (без текста)', () => {
@@ -907,7 +919,7 @@ describe('PipelineFlow: F8 (строка шага)', () => {
         chain({ stepRef: 'D3', title: 'Закрыт', outcome: 'returned', durationMinutes: 0, rounds: [round({ n: 1, verdict: 'accepted' })] }),
       ],
     });
-    const html = render(r);
+    const html = renderOpen(r);
     // Идущий — длительность (мин/ч; точное значение не фиксируем — зависит от миллисекунд).
     expect(html).toMatch(/\d+ мин/);
     // pending — «ждёт ревью».
@@ -923,7 +935,7 @@ describe('PipelineFlow: F8 (строка шага)', () => {
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Шаг', outcome: 'accepted', rounds: many })],
     });
-    const html = render(r);
+    const html = renderOpen(r);
     // 8 витков → показано 6 колец + «+2».
     expect(html).toContain('+2');
   });
@@ -936,7 +948,7 @@ describe('PipelineFlow: F8 (строка шага)', () => {
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'Ш8', title: 'Ш8' })],
     });
-    const html = render(r);
+    const html = renderOpen(r);
     const count = (html.match(/>Ш8</g) ?? []).length;
     expect(count, 'текстовый узел «Ш8» ровно один (номер, без дубля названия)').toBe(1);
   });
@@ -1010,7 +1022,7 @@ describe('PipelineFlow: F8 (мета, поверхность, 360px)', () => {
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Шаг' })],
     });
-    const html = render(r);
+    const html = renderOpen(r);
     expect(html).toContain('stage-details-bgCard');
     expect(html).toContain('var(--c-bg-card)');
     expect(html).toContain('var(--c-border-light)');
@@ -1034,7 +1046,7 @@ describe('PipelineFlow: F8 (мета, поверхность, 360px)', () => {
       stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Очень длинное название шага для переноса', rounds: [round({ n: 1, verdict: 'returned' })] })],
     });
-    const html = render(r);
+    const html = renderOpen(r);
     // Правая колонка (пружина + длительность) — flexShrink:0 (не переносится).
     expect(html).toContain('flex-shrink:0');
     // Название шага — overflow-wrap:anywhere (переносится).
@@ -1101,7 +1113,9 @@ describe('PipelineFlow: F9 (сигнал фокуса)', () => {
   }
 
   function mountFlow(sessionId: string, r: FeatureRun) {
-    const node = createElement(ChatSessionContext.Provider, { value: sessionId }, createElement(PipelineFlow, { run: r }));
+    // «Производство» раскрыто на старте: тесты берут строки шагов (data-step-ref/step-row)
+    // ДО сигнала фокуса, а строки рендерятся только внутри раскрытого этапа.
+    const node = createElement(ChatSessionContext.Provider, { value: sessionId }, createElement(PipelineFlow, { run: r, initialExpandedStage: 'prod' }));
     return mount(node);
   }
 
@@ -1175,34 +1189,34 @@ describe('PipelineFlow: F9.1 (ветки исхода строки шага)', (
   const row = (html: string) => html.slice(html.indexOf('data-step-ref="D1"'));
 
   it('running: пульс + длительность «N мин», без «ждёт ревью»', () => {
-    const r = row(render(oneStep('running')));
+    const r = row(renderOpen(oneStep('running')));
     expect(r, 'running — пульс').toContain('feature-pulse');
     expect(r, 'running — длительность').toMatch(/\d+ мин/);
     expect(r, 'running — без «ждёт ревью»').not.toContain('ждёт ревью');
   });
 
   it('pending: «ждёт ревью», спокойный глиф БЕЗ пульса', () => {
-    const r = row(render(oneStep('pending')));
+    const r = row(renderOpen(oneStep('pending')));
     expect(r, 'pending — «ждёт ревью»').toContain('ждёт ревью');
     expect(r, 'pending — без пульса').not.toContain('feature-pulse');
   });
 
   it('accepted: только пружина — без «ждёт ревью» и без длительности', () => {
-    const r = row(render(oneStep('accepted')));
+    const r = row(renderOpen(oneStep('accepted')));
     expect(r, 'accepted — без «ждёт ревью»').not.toContain('ждёт ревью');
     expect(r, 'accepted — без длительности').not.toMatch(/\d+ мин/);
     expect(r, 'accepted — без пульса').not.toContain('feature-pulse');
   });
 
   it('returned: только пружина — без «ждёт ревью» и без длительности', () => {
-    const r = row(render(oneStep('returned')));
+    const r = row(renderOpen(oneStep('returned')));
     expect(r, 'returned — без «ждёт ревью»').not.toContain('ждёт ревью');
     expect(r, 'returned — без длительности').not.toMatch(/\d+ мин/);
     expect(r, 'returned — без пульса').not.toContain('feature-pulse');
   });
 
   it('withdrawn: только пружина + «· снят с выкладки»', () => {
-    const r = row(render(oneStep('withdrawn')));
+    const r = row(renderOpen(oneStep('withdrawn')));
     expect(r, 'withdrawn — без «ждёт ревью»').not.toContain('ждёт ревью');
     expect(r, 'withdrawn — без длительности').not.toMatch(/\d+ мин/);
     expect(r, 'withdrawn — «· снят с выкладки»').toContain('· снят с выкладки');
@@ -1210,7 +1224,7 @@ describe('PipelineFlow: F9.1 (ветки исхода строки шага)', (
 
   // (а) мутация: верни старую трактовку pending (пульс у «ждёт ревью») → тест краснеет.
   it('(а) pending — «ждёт ревью» БЕЗ пульса (мутация: пульс у «ждёт ревью» → краснеет)', () => {
-    const r = row(render(oneStep('pending')));
+    const r = row(renderOpen(oneStep('pending')));
     expect(r).toContain('ждёт ревью');
     expect(r, 'pending — пульса нет (старая трактовка — пульс, тест краснеет)').not.toContain('feature-pulse');
   });
@@ -1228,7 +1242,7 @@ describe('PipelineFlow: F9.1 (длительность running тикает)', (
         stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
         stepChains: [chain({ stepRef: 'D1', title: 'Идёт', outcome: 'running', durationMinutes: 45 })],
       });
-      const { root, container } = mount(createElement(PipelineFlow, { run: r }));
+      const { root, container } = mount(createElement(PipelineFlow, { run: r, initialExpandedStage: 'prod' }));
       const d1 = findNodeByAttr(container, 'data-step-ref', 'D1')!;
       expect(textNodes(d1).join(' '), 'старт — 45 мин (база = durationMinutes)').toMatch(/45 мин/);
       act(() => { vi.advanceTimersByTime(120000); });
@@ -1362,8 +1376,8 @@ describe('PipelineFlow: F9.1 (скролл, два PipelineFlow)', () => {
       stages: stages({ prod: { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [] } }),
       stepChains: [chain({ stepRef: 'D1', title: 'Бэк-шаг', lane: 'back', taskIds: ['s1'] })],
     });
-    const node1 = createElement(ChatSessionContext.Provider, { value: 'sess-1' }, createElement(PipelineFlow, { run: r }));
-    const node2 = createElement(ChatSessionContext.Provider, { value: 'sess-1' }, createElement(PipelineFlow, { run: r }));
+    const node1 = createElement(ChatSessionContext.Provider, { value: 'sess-1' }, createElement(PipelineFlow, { run: r, initialExpandedStage: 'prod' }));
+    const node2 = createElement(ChatSessionContext.Provider, { value: 'sess-1' }, createElement(PipelineFlow, { run: r, initialExpandedStage: 'prod' }));
     const m1 = mount(node1);
     const m2 = mount(node2);
     return { c1: m1.container, c2: m2.container };
@@ -1400,7 +1414,7 @@ describe('PipelineFlow: K-2 (строка шага: шрифт)', () => {
   }
 
   it('кнопка строки: font-size 12 (FS.sm) и font-family inherit', () => {
-    const { root, container } = mount(createElement(PipelineFlow, { run: runWithStep() }));
+    const { root, container } = mount(createElement(PipelineFlow, { run: runWithStep(), initialExpandedStage: 'prod' }));
     const row = findNodeByAttr(container, 'data-step-ref', 'D1');
     expect(row, 'строка шага D1 не найдена').not.toBeNull();
     expect(row!.style.fontSize, 'K-2: font-size 12px').toBe('12px');

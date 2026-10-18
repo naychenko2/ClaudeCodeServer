@@ -52,7 +52,7 @@ import { ToolUseView, HEAD_GAP, CHEVRON_W } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
 import { WidgetView, isWidgetShow } from './WidgetView';
-import { TaskCreatedView, isTasksCreate } from './TaskCreatedView';
+import { TaskRunExecutorView, isTasksCreate, isTasksRunExecutor } from './TaskCreatedView';
 import type { ActivityEntry } from './timeline';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
@@ -1495,9 +1495,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
       // HTML-виджет (widget_show) — рендер в sandbox-iframe
       if (isWidgetShow(item.name)) return <WidgetView item={item} />;
-      // Создание задачи (tasks_create) — карточка «Задача создана» с переходом к задаче
-      // (ошибка/непарсибельный ответ — фолбэк на ToolUseView внутри)
-      if (isTasksCreate(item.name)) return <TaskCreatedView item={item} online={online} onOpenFile={onOpenFile} />;
+      // Создание задачи (tasks_create) — карточку НЕ рисуем: задачи создаются заранее (все
+      // шаги фичи сразу в todo), и карточка засоряла ленту. Оставляем стандартную строку
+      // инструмента; карточка появится, когда задача будет отдана в исполнение (tasks_run_executor).
+      if (isTasksCreate(item.name)) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+      // Задача отдана в исполнение (tasks_run_executor) — карточка «Задача создана» по задаче:
+      // полная задача добирается по id; пока грузится/ошибка/404 — обычная строка инструмента.
+      if (isTasksRunExecutor(item.name)) return <TaskRunExecutorView item={item} online={online} onOpenFile={onOpenFile} />;
       // Сабагент Task/Agent: subagent_type = handle персоны → карточка консультации
       // (несовпадение — обычный ToolUseView, фолбэк внутри PersonaTaskView)
       if (isAgentToolUse(item.name))

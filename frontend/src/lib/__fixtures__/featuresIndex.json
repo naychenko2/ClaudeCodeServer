@@ -117,15 +117,15 @@
   ],
   "chats": {
     "chat-cur": [
-      { "featureId": "feat-closed", "kind": "key", "taskRole": null, "stepRef": null, "lane": null },
+      { "featureId": "feat-closed", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null },
       { "featureId": "feat-attention", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null },
       { "featureId": "feat-running", "kind": "orchestrator", "taskRole": null, "stepRef": null, "lane": null }
     ],
     "chat-key-arch": [
-      { "featureId": "feat-running", "kind": "key", "taskRole": null, "stepRef": null, "lane": null }
+      { "featureId": "feat-running", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null }
     ],
     "chat-key-other": [
-      { "featureId": "feat-idle", "kind": "key", "taskRole": null, "stepRef": null, "lane": null }
+      { "featureId": "feat-idle", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null }
     ],
     "chat-exec-1": [
       { "featureId": "feat-attention", "kind": "executor", "taskRole": "step", "stepRef": "Ш1", "lane": "бэк" }

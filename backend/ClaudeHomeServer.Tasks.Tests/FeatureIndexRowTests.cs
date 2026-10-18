@@ -49,6 +49,10 @@ public class FeatureIndexRowTests
         Status = status,
     };
 
+    // Живой чат владельца (снимок FeatureIndexSession): id + опционально taskId/projectId/archived.
+    private static FeatureIndexSession Session(string id, string? taskId = null,
+        string? projectId = null, bool archived = false) => new(id, taskId, projectId, archived);
+
     // ── 1. bucket: каждое из четырёх значений ────────────────────────────────────────────────
 
     // Строка на каждый bucket: attention (stopped) / running (идёт) / idle (стоит) / closed.
@@ -149,30 +153,34 @@ public class FeatureIndexRowTests
             "явный wait → чип «waiting» (не «wait»: словарь чипов ≠ словарь attention.kind)");
     }
 
-    // ── 4. цепочка ключевого чата: все 4 звена ───────────────────────────────────────────────
+    // ── 4. цепочка ключевого чата: первое ЖИВОЕ звено ────────────────────────────────────────
 
-    // 1) epic.SourceSessionId; 2) epic.ExecutorLaunchedBySessionId (SourceSessionId null);
+    // Ключевой чат — первое живое звено цепочки: 1) epic.SourceSessionId;
+    // 2) epic.ExecutorLaunchedBySessionId (SourceSessionId null);
     // 3) самый частый ExecutorLaunchedBySessionId у дочерних (оба поля эпика null);
-    // 4) null (кандидатов нет).
+    // 4) null (кандидатов нет). Живым считается чат из снимка владельца (sessions).
     [Fact]
     public void Строка_КлючевойЧат_ВсеЧетыреЗвена()
     {
-        // 1) epic.SourceSessionId.
+        // 1) epic.SourceSessionId (живой чат в снимке).
         var epic1 = Epic("epic1", sourceSessionId: "chat-src");
-        Row(epic1, [epic1, Child("t1", "epic1")]).KeySessionId.Should().Be("chat-src");
+        Row(epic1, [epic1, Child("t1", "epic1")],
+            [Session("chat-src")]).KeySessionId.Should().Be("chat-src");
 
-        // 2) epic.ExecutorLaunchedBySessionId (SourceSessionId null).
+        // 2) epic.ExecutorLaunchedBySessionId (SourceSessionId null; живой чат в снимке).
         var epic2 = Epic("epic2", executorLaunchedBy: "chat-exec");
-        Row(epic2, [epic2, Child("t2", "epic2")]).KeySessionId.Should().Be("chat-exec");
+        Row(epic2, [epic2, Child("t2", "epic2")],
+            [Session("chat-exec")]).KeySessionId.Should().Be("chat-exec");
 
         // 3) самый частый ExecutorLaunchedBySessionId у дочерних (оба поля эпика null).
-        //    chat-major — 2 задачи, chat-minor — 1 → ключевой = chat-major.
+        //    chat-major — 2 задачи, chat-minor — 1 → ключевой = chat-major (живой в снимке).
         var epic3 = Epic("epic3");
         var t3a = Child("t3a", "epic3", executorLaunchedBy: "chat-major");
         var t3b = Child("t3b", "epic3", executorLaunchedBy: "chat-major");
         var t3c = Child("t3c", "epic3", executorLaunchedBy: "chat-minor");
-        Row(epic3, [epic3, t3a, t3b, t3c]).KeySessionId.Should().Be("chat-major",
-            "самый частый ExecutorLaunchedBySessionId у дочерних");
+        Row(epic3, [epic3, t3a, t3b, t3c],
+            [Session("chat-major"), Session("chat-minor")]).KeySessionId
+            .Should().Be("chat-major", "самый частый ExecutorLaunchedBySessionId у дочерних");
 
         // 4) null: ни у эпика, ни у дочерних ExecutorLaunchedBySessionId/SourceSessionId.
         var epic4 = Epic("epic4");
@@ -182,7 +190,8 @@ public class FeatureIndexRowTests
     // ── 5. rail закрытой фичи ─────────────────────────────────────────────────────────────────
 
     // У смерженной (закрытой) фичи рельса: 7 стадий, active нет → tone = null у всех сегментов.
-    // (Закрыта = merge Done; «честный мерж» — epic Done без merge-задачи — merge active, tone ≠ null.)
+    // Закрыта = merge Done (или epic Done): нормализация RailOf приводит все стадии, кроме absent,
+    // к done (см. тест 5b для «честного мержа» без merge-задачи).
     [Fact]
     public void Строка_Rail_ЗакрытойФичи()
     {
@@ -204,6 +213,35 @@ public class FeatureIndexRowTests
             "у смерженной фичи active нет → tone = null у всех сегментов");
         row.Rail.Single(s => s.Key == "prod").State.Should().Be("done");
         row.Rail.Single(s => s.Key == "merge").State.Should().Be("done");
+    }
+
+    // ── 5b. rail «честного мержа»: epic Done, merge-задачи нет ─────────────────────────────────
+
+    // Закрытая эпиком фича БЕЗ merge-задачи (эпик Done, merge-задачи нет): в Build merge-стадия
+    // получает active (tone=run) — противоречие контракту С0 (у closed active нет, tone=null).
+    // Нормализация в RailOf: все стадии, кроме absent, → done, tone=null.
+    // Мутация: убрать нормализацию (RailOf копирует state/tone как есть) → merge=active, tone=run
+    // → NotContain(active) и Single(merge).State=done краснеют.
+    [Fact]
+    public void Строка_Rail_ЧестныйМержБезMergeЗадачи_ВсеDone()
+    {
+        const string epicId = "epic-honest-merge";
+        var epic = Epic(epicId);
+        epic.Status = TaskItemStatus.Done;
+        var step = Child("s1", epicId, status: TaskItemStatus.Done);
+        // merge-задачи НЕТ: только эпик (Done) + шаг (Done).
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+        var row = FeatureProjector.BuildRow(run, [epic, step], Array.Empty<FeatureIndexSession>(), 0);
+
+        row.Bucket.Should().Be("closed", "эпик Done — фича закрыта");
+        row.Rail.Should().OnlyContain(s => s.Tone == null,
+            "у закрытой фичи tone=null у всех сегментов (active нет)");
+        row.Rail.Should().NotContain(s => s.State == "active",
+            "у закрытой фичи active нет: merge не active, а done");
+        row.Rail.Single(s => s.Key == "merge").State.Should().Be("done",
+            "«честный мерж» (epic Done, merge-задачи нет) → merge done, не active");
+        row.Rail.Single(s => s.Key == "prod").State.Should().Be("done");
     }
 
     // ── 6. фикстура feat-curator-console.json: строка совпадает с FeatureRun ─────────────────
@@ -265,7 +303,8 @@ public class FeatureIndexRowTests
         var tA = Child("tA", "epic-mut-key", executorLaunchedBy: "chat-b");
         var tB = Child("tB", "epic-mut-key", executorLaunchedBy: "chat-a");
 
-        var row = Row(epic, [epic, tA, tB]);
+        // Оба чата живы в снимке; цепочка несёт только самый частый (равенство 1:1 → chat-a).
+        var row = Row(epic, [epic, tA, tB], [Session("chat-a"), Session("chat-b")]);
         row.KeySessionId.Should().Be("chat-a",
             "равенство частот → лексикографически меньший id (детерминизм)");
     }

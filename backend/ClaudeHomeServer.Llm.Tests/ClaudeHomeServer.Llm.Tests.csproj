@@ -31,6 +31,12 @@
          прямая ссылка на Main обязательна; хост (TestWebApplicationFactory) они не поднимают.
          Main транзитно приходит и через TestKit.Host, но явная ссылка — само-документирующая. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- AudioEditor/VideoEditor — динамические модули (ADR-021/022): Main тянет их с
+         ReferenceOutputAssembly=false, поэтому типы (AudioEditorStateContributor/
+         VideoEditorStateContributor) не приходят транзитно. ClaudeSessionPromptSectionsOrderTests
+         их использует напрямую — нужна прямая ссылка, как в монолите (ClaudeHomeServer.Tests.csproj). -->
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" />
   </ItemGroup>
 
   <ItemGroup>

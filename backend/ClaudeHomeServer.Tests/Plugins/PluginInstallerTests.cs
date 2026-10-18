@@ -293,6 +293,46 @@ public class PluginInstallerTests : IDisposable
         result.Problems.Should().Contain(p => p.Code == "no-symlink");
     }
 
+    // --- non-blocker: symlink-манифест (plugin.json → чужой файл) — 400 без утечки
+    // содержимого чужого файла. Манифест читается ПОСЛЕ валидатора: no-symlink отбивает
+    // symlink-манифест до ReadManifest, и JsonException с куском чужого файла (старый
+    // порядок: read → copy) не уходит в ответ. ---
+
+    [Fact]
+    public void SymlinkManifest_Утечка_ЧужогоСодержимого()
+    {
+        const string Secret = "SECRET-FOREIGN-CONTENT-XYZ-12345";
+        var slug = "pkg";
+        var root = _store.DraftDir(Owner, slug);
+        Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+        File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+
+        // Чужой файл (вне пакета) с характерным содержимым + symlink plugin.json → на него.
+        var foreign = Path.Combine(Path.GetTempPath(), "ccs_foreign_" + Path.GetRandomFileName() + ".txt");
+        File.WriteAllText(foreign, Secret);
+        File.CreateSymbolicLink(Path.Combine(root, "plugin.json"), foreign);
+
+        try
+        {
+            var result = _sut.Install(Owner, "draft:" + slug);
+            // no-symlink отбивает symlink-манифест (FailValidation), не Fail от ReadManifest.
+            result.Status.Should().Be(InstallStatus.Fail, "symlink-манифест → no-symlink");
+            result.Problems.Should().Contain(p => p.Code == "no-symlink");
+
+            // Утечка: содержимое чужого файла не в тексте ошибки и не в проблемах.
+            var leaked = new List<string>();
+            if (result.Error is not null) leaked.Add(result.Error);
+            foreach (var p in result.Problems ?? [])
+                leaked.Add(p.Message);
+            leaked.Should().NotContain(s => s.Contains(Secret),
+                "содержимое чужого файла (symlink-манифест) не уходит в ответ 400");
+        }
+        finally
+        {
+            try { File.Delete(foreign); } catch { }
+        }
+    }
+
     // --- manifest.Validate() при установке: неизвестное право → 400 (Fail) ---
 
     [Fact]

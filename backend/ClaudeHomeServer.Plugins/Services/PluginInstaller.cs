@@ -69,8 +69,18 @@ public class PluginInstaller
             Directory.CreateDirectory(stagingDir);
             CopyDirectoryNoSymlinks(sourceDir, stagingDir);
 
-            // 1) Манифест — из STAGING-копии (не источника): запись и пакет не разойдутся
+            // 1) Валидация КОПИИ (staging) — ДО чтения манифеста: symlink-манифест
+            // (plugin.json/ccs-plugin.json → чужой файл) отбивается no-symlink валидатором,
+            // и JsonException с куском содержимого чужого файла не уходит в ответ 400
+            // (non-blocker: leak через symlink manifest). sha256 — того, что будет перемещено.
+            var validation = _validator.Validate(stagingDir);
+            if (!validation.IsValid)
+                return InstallResult.FailValidation(validation.Problems);
+            sha256 = validation.Sha256!;
+
+            // 2) Манифест — из STAGING-копии (не источника): запись и пакет не разойдутся
             // (TOCTOU: источник мог измениться между чтением манифеста и копированием).
+            // Читается ПОСЛЕ валидации: symlink-манифест уже отбит (no-symlink).
             var (readManifest, manifestError) = ReadManifest(stagingDir);
             if (manifestError is not null)
                 return InstallResult.Fail(manifestError);
@@ -94,12 +104,6 @@ public class PluginInstaller
             if (!manifestValidation.IsValid)
                 return InstallResult.FailValidation(manifestValidation.Problems
                     .Select(p => new PluginPackageProblem(p.Code, p.Message)).ToList());
-
-            // Валидация копии (не источника): sha256 — того, что будет перемещено.
-            var validation = _validator.Validate(stagingDir);
-            if (!validation.IsValid)
-                return InstallResult.FailValidation(validation.Problems);
-            sha256 = validation.Sha256!;
 
             manifest = m;
 

@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -66,12 +65,10 @@ public class PluginPackageValidator
     // Единая точка разбора манифеста (rework C3): поля plugin.json/ccs-plugin.json.
     private readonly PluginManifestReader _manifestReader = new();
 
-    // M10: allowed-tools как КЛЮЧ (не подстрока в описании): `allowed-tools:` /
-    // `"allowed-tools":` (в кавычках и без, любой регистр) + двоеточие.
-    // `description: uses allowed-tools for X` (описание) — без двоеточия после ключа →
-    // не отбивается.
-    private static readonly Regex AllowedToolsKeyRegex =
-        new(@"[""']?allowed-tools[""']?\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // M10 (rework пакета 6): allowed-tools — Contains по всему тексту (M10.1) ИЛИ
+    // обратный слеш во фронтматтере (M10.2, экранированный ключ). Regex с «:» после
+    // ключа обходился explicit-key (`allowed-tools # c\n: Bash` → PyYAML парсит в
+    // `allowed-tools: Bash`, regex = false); Contains дешевле и не обходится.
 
     /// <summary>
     /// Валидирует пакет по корневому каталогу <paramref name="packageRoot"/>.
@@ -274,19 +271,48 @@ public class PluginPackageValidator
     // `---` посреди строки), и ключ может спрятаться в любой части файла. Спайк
     // plugin-dir-allowed-tools: оба механизма дают агенту Bash, нарушая «навык не даёт
     // новых возможностей» (ADR §4).
+    //
+    // Rework пакета 6:
+    //   M10.1 allowed-tools — Contains по всему тексту (не regex): regex с «:» после
+    //         ключа обходился explicit-key. Ложное срабатывание на упоминание в описании
+    //         — дешёвая цена (ключ и упоминание дают одно и то же: Bash без запроса).
+    //   M10.2 обратный слеш во фронтматтере — deny: экранированный ключ (YAML-эскейп,
+    //         напр. `\x2dllowed-tools` / `allowed-\x74ools`) обходит и Contains, и regex.
+    //         Ужесточение: `\` в description тоже отбивает (ложное срабатывание, цена низкая).
+    //   M10.3 `!$` — маркер живого исполнения после подстановки аргумента ($ARGUMENTS/$1):
+    //         CLI сам считает его исполняемым.
     private static void CheckExecutableMd(PackageFile file, List<PluginPackageProblem> problems)
     {
         string content;
         try { content = File.ReadAllText(file.FullPath); }
         catch (IOException) { return; } // битая symlink — уже no-symlink
 
-        if (AllowedToolsKeyRegex.IsMatch(content))
+        // allowed-tools: Contains по всему тексту (M10.1) ИЛИ обратный слеш во
+        // фронтматтере (M10.2, экранированный ключ). Одно срабатывание — один problem.
+        var hasAllowedTools = content.Contains("allowed-tools", StringComparison.OrdinalIgnoreCase);
+        var frontmatter = ExtractFrontmatter(content);
+        var hasEscapedKey = frontmatter is not null && frontmatter.Contains('\\');
+        if (hasAllowedTools || hasEscapedKey)
             problems.Add(new PluginPackageProblem("deny-allowed-tools",
                 $"Ключ allowed-tools (Bash без запроса): {file.RelativePath}"));
 
-        if (content.Contains("!`", StringComparison.Ordinal) || content.Contains("```!", StringComparison.Ordinal))
+        // !`cmd` / ```! (backtick-исполнение) и !$ (маркер подстановки аргумента, M10.3).
+        if (content.Contains("!`", StringComparison.Ordinal)
+            || content.Contains("```!", StringComparison.Ordinal)
+            || content.Contains("!$", StringComparison.Ordinal))
             problems.Add(new PluginPackageProblem("deny-backtick-exec",
                 $"Backtick-команда !`…` (исполняет shell): {file.RelativePath}"));
+    }
+
+    // M10.2: фронтматтер — между первым «---» (начало файла) и следующим «---»
+    // (IndexOf("---", 3), как у CLI). null — фронтматтера нет (файл не начинается с
+    // «---» или закрывающего «---» нет).
+    private static string? ExtractFrontmatter(string content)
+    {
+        if (!content.StartsWith("---", StringComparison.Ordinal)) return null;
+        var end = content.IndexOf("---", 3, StringComparison.Ordinal);
+        if (end < 0) return null;
+        return content.Substring(3, end - 3);
     }
 
     // Выход за корень: «..» как компонент пути (любым разделителем) или ведущий разделитель

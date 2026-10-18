@@ -356,10 +356,12 @@ public class PluginPackageValidatorTests
         Validate(root).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
     }
 
-    // --- M10: allowed-tools среди прочего текста (описание, не декларация) → НЕ отбивается ---
+    // --- M10.1: allowed-tools среди прочего текста (описание) → отбивается. Regex с «:»
+    // после ключа обходился explicit-key; Contains по всему тексту дешевле и не обходится.
+    // Ложное срабатывание на упоминание в описании — дешёвая цена. ---
 
     [Fact]
-    public void M10_AllowedTools_СредиПрочегоТекста_НеОтбивается()
+    public void M10_AllowedTools_СредиПрочегоТекста_Отбивается()
     {
         var root = NewPackage(
             ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
@@ -372,8 +374,8 @@ public class PluginPackageValidatorTests
                 Просто текст навыка.
                 """));
 
-        // «allowed-tools» в описании (без двоеточия после ключа) — не декларация.
-        Validate(root).Problems.Should().NotContain(p => p.Code == "deny-allowed-tools");
+        // «allowed-tools» в описании — Contains по всему тексту отбивает (M10.1).
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
     }
 
     // --- M10: !`cmd` в теле SKILL.md → deny-backtick-exec (исполняет shell) ---
@@ -430,6 +432,83 @@ public class PluginPackageValidatorTests
         Validate(root).Problems.Should().Contain(p => p.Code == "deny-backtick-exec");
     }
 
+    // --- M10.1: explicit-key — `allowed-tools # c\n: Bash` (PyYAML парсит в
+    // `allowed-tools: Bash`); regex с «:» сразу после ключа пропускал (между ключом и «:»
+    // комментарий + перенос), Contains ловит. ---
+
+    [Fact]
+    public void M10_AllowedTools_ExplicitKey_ДаетDenyAllowedTools()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                allowed-tools # c
+                : Bash
+                ---
+                Текст навыка
+                """));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
+    }
+
+    // --- M10.2: экранированный ключ (YAML-эскейп) обходит и Contains, и regex: любой
+    // обратный слеш во фронтматтере → deny-allowed-tools. Оба эскейпа: `\x2dllowed-tools`
+    // (Contains «allowed-tools» тоже ловит) и `allowed-\x74ools` (Contains не ловит — `t`
+    // экранирован; ловит только запрет обратного слеша). ---
+
+    [Fact]
+    public void M10_EscapedHyphen_ДаетDenyAllowedTools()
+    {
+        // Эскейп 1: `\x2dllowed-tools` (обратный слеш во фронтматтере).
+        var root1 = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                \x2dllowed-tools: Bash
+                ---
+                Текст навыка
+                """));
+        Validate(root1).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
+
+        // Эскейп 2: `allowed-\x74ools` — Contains «allowed-tools» не срабатывает (t экранирован),
+        // срабатывает только запрет обратного слеша во фронтматтере.
+        var root2 = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                allowed-\x74ools: Bash
+                ---
+                Текст навыка
+                """));
+        Validate(root2).Problems.Should().Contain(p => p.Code == "deny-allowed-tools");
+    }
+
+    // --- M10.3: `!$` (маркер $ARGUMENTS/$1) — CLI сам считает маркер живым исполнением
+    // после подстановки аргументов → deny-backtick-exec. ---
+
+    [Fact]
+    public void M10_Arguments_ДаетDenyBacktickExec()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md",
+                """
+                ---
+                name: a
+                ---
+                Навык: !$ARGUMENTS
+                """));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-backtick-exec");
+    }
+
     // --- M10: `---` посреди строки (не граница фронтматтера) → без флагов, зелёный ---
 
     [Fact]
@@ -443,7 +522,7 @@ public class PluginPackageValidatorTests
                 name: a
                 description: разделитель --- посреди строки
                 ---
-                Текст: a --- b, без allowed-tools и backtick.
+                Текст: a --- b, без флагов M10.
                 """));
 
         var r = Validate(root);
@@ -464,7 +543,7 @@ public class PluginPackageValidatorTests
                 name: a
                 description: обычный навык
                 ---
-                Просто текст навыка, без backtick и allowed-tools.
+                Просто текст навыка, без флагов M10.
                 """),
             ("commands/cmd.md", "Просто команда, без frontmatter-ловушек."));
 

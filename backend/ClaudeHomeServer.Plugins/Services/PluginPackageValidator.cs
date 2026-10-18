@@ -11,10 +11,12 @@ namespace ClaudeHomeServer.Services.Plugins;
 // (RCE/обход allow-list).
 //
 // Allow-list (из спайка, docs/research/plugin-dir-spike-2026-10.md):
-//   манифест  ccs-plugin.json / plugin.json / .claude-plugin/plugin.json
+//   манифест  ccs-plugin.json (наш) / .claude-plugin/plugin.json (нативный CLI, обязателен)
 //   skills/**/SKILL.md + вспомогательные .md
 //   commands/*.md
 //   panel/**  (статика панели)
+// R10-1: корневой plugin.json — НЕ нативный манифест (CLI имя пакета берёт только из
+// .claude-plugin/plugin.json, спайк plugin-dir-name-spike-2026-10.md), из allow-list убран.
 //
 // Deny-list (RCE/обход) — подмножество «не в allow-list» с отдельным кодом:
 //   hooks/ (исполняет shell), .mcp.json (регистрирует MCP-сервер), agents/ (сабагент),
@@ -37,11 +39,11 @@ public class PluginPackageValidator
     // minor 8: лимит числа каталогов (пустые каталоги не считаются в лимит файлов).
     public const int MaxDirCount = 200;
 
-    // Имена/каталоги allow-list.
+    // Имена/каталоги allow-list. R10-1: корневой plugin.json убран (не нативный манифест);
+    // нативный — .claude-plugin/plugin.json (обязателен, см. CheckNativeManifest).
     private static readonly string[] ManifestNames =
     [
         "ccs-plugin.json",
-        "plugin.json",
         ".claude-plugin/plugin.json",
     ];
 
@@ -63,7 +65,7 @@ public class PluginPackageValidator
         ("settings.json", "deny-settings",  "settings.json — глобальный override"),
     ];
 
-    // Единая точка разбора манифеста (rework C3): поля plugin.json/ccs-plugin.json.
+    // Единая точка разбора манифеста (rework C3): поля ccs-plugin.json/.claude-plugin/plugin.json.
     private readonly PluginManifestReader _manifestReader = new();
 
     // M10 (rework пакета 6): allowed-tools — Contains по всему тексту (M10.1) ИЛИ
@@ -91,9 +93,14 @@ public class PluginPackageValidator
         // перечисляет всё до конца.
         Walk(packageRoot, packageRoot, ref files, ref totalSize, ref dirCount, problems, ref limitHit);
 
-        // C3: поля манифеста (plugin.json/ccs-plugin.json) — deny-manifest-field.
+        // C3: поля манифеста (ccs-plugin.json/.claude-plugin/plugin.json) — deny-manifest-field.
         var (raws, manifestProblems) = _manifestReader.Read(packageRoot);
         problems.AddRange(manifestProblems);
+
+        // R10-1: нативный манифест .claude-plugin/plugin.json обязателен (CLI берёт из него
+        // имя пакета, спайк plugin-dir-name-spike-2026-10.md): нет файла → deny-native-manifest-missing,
+        // пустой/отсутствующий name → deny-name-missing.
+        CheckNativeManifest(packageRoot, problems);
 
         // M3: name == slug. CLI берёт имя пакета из .claude-plugin/plugin.json (спайк
         // plugin-dir-name-spike-2026-10.md), а Skill-привязка адресует навык по slug из id;
@@ -377,6 +384,33 @@ public class PluginPackageValidator
         }
         hash.TransformFinalBlock([0], 0, 1);
         return Convert.ToHexString(hash.Hash).ToLowerInvariant();
+    }
+
+    // R10-1: нативный манифест .claude-plugin/plugin.json обязателен. CLI берёт имя пакета
+    // ТОЛЬКО из него (спайк plugin-dir-name-spike-2026-10.md); без него имя = имя каталога
+    // (в проде {version}), и Skill-привязка по slug ломается. Корневой plugin.json — НЕ
+    // нативный манифест (из allow-list убран), проверяем только .claude-plugin/plugin.json:
+    //   * файла нет → deny-native-manifest-missing;
+    //   * name пуст/отсутствует (или JSON бит) → deny-name-missing (name обязателен;
+    //     равенство name == slug сверяет CheckNameEqualsSlug).
+    private static void CheckNativeManifest(string packageRoot, List<PluginPackageProblem> problems)
+    {
+        const string native = ".claude-plugin/plugin.json";
+        var path = Path.Combine(packageRoot, native);
+        if (!File.Exists(path))
+        {
+            problems.Add(new PluginPackageProblem("deny-native-manifest-missing",
+                $"В пакете нет нативного манифеста {native} (CLI берёт из него имя пакета; без него имя = имя каталога)"));
+            return;
+        }
+
+        string? raw;
+        try { raw = File.ReadAllText(path); }
+        catch (IOException) { return; } // битая symlink — уже no-symlink
+        var name = ReadStringProp(raw, "name");
+        if (string.IsNullOrEmpty(name))
+            problems.Add(new PluginPackageProblem("deny-name-missing",
+                $"В нативном манифесте {native} нет name (CLI берёт из него имя пакета)"));
     }
 
     // M3: name == slug. CLI берёт имя пакета ТОЛЬКО из .claude-plugin/plugin.json (спайк

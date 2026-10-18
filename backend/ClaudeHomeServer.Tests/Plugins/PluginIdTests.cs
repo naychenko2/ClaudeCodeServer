@@ -111,6 +111,11 @@ public class PluginIdTests : IDisposable
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест (name = slug) — чтобы файловый валидатор прошёл и
+        // проверка PluginId.IsValid добралась до недопустимого символа.
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }, new JsonSerializerOptions { WriteIndented = true }));
 
         var result = _installer.Install("owner-a", "draft:" + slug);
 

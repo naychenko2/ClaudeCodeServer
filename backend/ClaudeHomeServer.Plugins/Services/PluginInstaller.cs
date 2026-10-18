@@ -70,7 +70,7 @@ public class PluginInstaller
             CopyDirectoryNoSymlinks(sourceDir, stagingDir);
 
             // 1) Валидация КОПИИ (staging) — ДО чтения манифеста: symlink-манифест
-            // (plugin.json/ccs-plugin.json → чужой файл) отбивается no-symlink валидатором,
+            // (ccs-plugin.json/.claude-plugin/plugin.json → чужой файл) отбивается no-symlink валидатором,
             // и JsonException с куском содержимого чужого файла не уходит в ответ 400
             // (non-blocker: leak через symlink manifest). sha256 — того, что будет перемещено.
             var validation = _validator.Validate(stagingDir);
@@ -176,13 +176,14 @@ public class PluginInstaller
         return SlugRegex.IsMatch(param);
     }
 
-    // Манифест пакета: ccs-plugin.json → plugin.json → .claude-plugin/plugin.json (порядок
-    // allow-list валидатора). (null, null) — нет; (null, текст) — ошибка разбора (minor: не
+    // Манифест пакета: ccs-plugin.json (наш) → .claude-plugin/plugin.json (нативный) (порядок
+    // allow-list валидатора). R10-1: корневой plugin.json — не нативный манифест, из порядка убран.
+    // (null, null) — нет; (null, текст) — ошибка разбора (minor: не
     // глотаем, отдаём текстом, чтобы битый манифест не выглядел как «не найден»).
     // Публичный: контроллер использует его в grant (проверка requires.secrets).
     public static (PluginManifest? Manifest, string? Error) ReadManifest(string packageRoot)
     {
-        foreach (var name in new[] { "ccs-plugin.json", "plugin.json", ".claude-plugin/plugin.json" })
+        foreach (var name in new[] { "ccs-plugin.json", ".claude-plugin/plugin.json" })
         {
             var path = Path.Combine(packageRoot, name);
             if (!System.IO.File.Exists(path)) continue;

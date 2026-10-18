@@ -46,9 +46,10 @@ data/plugins/{ownerId}/
   _drafts/{slug}/            — черновики агента
 ```
 
-Пакет: `plugin.json` (нативный CLI) + `ccs-plugin.json` (наш манифест с `contributes` и
-`permissions`) + `skills/`, `commands/`, `panel/`. Всё прочее валидатор отклоняет. Формат
-манифеста — ADR-031 §2.2, allow-list файлов — §2.3.
+Пакет: `.claude-plugin/plugin.json` (нативный CLI, **обязателен** — из него CLI берёт имя
+пакета) + `ccs-plugin.json` (наш манифест с `id`/`contributes`/`permissions`) + `skills/`,
+`commands/`, `panel/`. Корневой `plugin.json` — не нативный манифест (R10-1). Всё прочее
+валидатор отклоняет. Формат манифеста — ADR-031 §2.2, allow-list файлов — §2.3.
 
 ## Мост панели v1 — коротко
 
@@ -103,6 +104,9 @@ data/plugins/{ownerId}/
 - Plugins не ссылается на Notes и Tasks: право регистрирует владелец данных через Core-шов.
 - Плагины профиля CLI (`installed_plugins.json`, читает `SkillsService`) и плагины владельца —
   разные источники, в API и UI метятся явно.
+- **TODO (пачка D, 4.x):** шаблон черновика build-yourself обязан сразу создавать
+  `.claude-plugin/plugin.json` с `name = slug` (R10-1: без нативного манифеста CLI назовёт
+  пакет именем каталога, и привязка навыка по slug ломается).
 
 ## Сторожа
 

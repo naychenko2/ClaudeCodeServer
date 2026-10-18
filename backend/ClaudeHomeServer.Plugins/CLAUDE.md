@@ -30,6 +30,11 @@
 6. **Отключаемость (ADR-014).** Тумблер `Subsystems:plugins:Enabled`; при выключенной
    подсистеме `Register` не вызывается и обязательного параметра конструктора от Plugins
    вне вертикали нет (потребители берут `IPluginDirSource` опциональной зависимостью).
+7. **Два манифеста, оба обязательны (R10-1).** Пакет несёт `ccs-plugin.json` (наш:
+   `id`/`contributes`/`permissions`) и `.claude-plugin/plugin.json` (нативный CLI — из него
+   CLI берёт имя пакета; валидатор отбивает отсутствие как `deny-native-manifest-missing`,
+   пустой/отсутствующий `name` — как `deny-name-missing`, `name` обязан равняться slug).
+   Корневой `plugin.json` — НЕ нативный манифест (из allow-list убран).
 
 Устройство, модель прав и мост — [ADR-031](../../docs/adr/ADR-031-plugins.md), карта фичи —
 [plugins.md](../../docs/architecture/plugins.md).

@@ -2,23 +2,25 @@ using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
-// Единая точка разбора манифеста пакета (rework C3): plugin.json / ccs-plugin.json /
-// .claude-plugin/plugin.json. Читает файл, парсит сырой JSON и проверяет топ-уровневые
-// поля по <see cref="ManifestFieldPolicy"/>. Отдельно от модели PluginManifest: та
-// forward-compat (неизвестные поля игнорирует), а здесь — строгий allow-list полей.
-// Stateless — singleton; вызывается валидатором пакета (PluginPackageValidator).
+// Единая точка разбора манифеста пакета (rework C3): ccs-plugin.json (наш) /
+// .claude-plugin/plugin.json (нативный CLI). Корневой plugin.json — НЕ нативный манифест
+// (R10-1: спайк plugin-dir-name-spike-2026-10.md — CLI берёт имя пакета только из
+// .claude-plugin/plugin.json), поэтому из списка убран. Читает файл, парсит сырой JSON и
+// проверяет топ-уровневые поля по <see cref="ManifestFieldPolicy"/>. Отдельно от модели
+// PluginManifest: та forward-compat (неизвестные поля игнорирует), а здесь — строгий
+// allow-list полей. Stateless — singleton; вызывается валидатором пакета (PluginPackageValidator).
 public class PluginManifestReader
 {
-    // Имена манифеста в порядке приоритета (совпадает с allow-list валидатора).
+    // Имена манифеста в порядке приоритета (совпадает с allow-list валидатора):
+    // наш ccs-plugin.json первым, нативный .claude-plugin/plugin.json вторым.
     private static readonly string[] ManifestNames =
     [
         "ccs-plugin.json",
-        "plugin.json",
         ".claude-plugin/plugin.json",
     ];
 
-    // Найти ВСЕ манифесты пакета (ccs-plugin.json → plugin.json → .claude-plugin/plugin.json),
-    // прочитать их и проверить топ-уровневые поля. Возвращает (список сырых JSON, проблемы).
+    // Найти ВСЕ манифесты пакета (ccs-plugin.json → .claude-plugin/plugin.json), прочитать их
+    // и проверить топ-уровневые поля. Возвращает (список сырых JSON, проблемы).
     // ([], []) — ни одного манифеста; ([raw1, ..], [..]) — разобраны все найденные, проблемы
     // по полям каждого. M3a: список (а не только первый) — чтобы валидатор сверял `name`
     // у каждого манифеста, а не только у ccs-plugin.json.

@@ -237,7 +237,7 @@ public class PluginStoreTests
         // data/plugins/{owner}/... — данные владельца, в основной (облачный) архив едут;
         // секреты (McpSecretStore) — отдельным локальным архивом (после 3.3).
         BackupPaths.ShouldInclude("plugins/owner-a/installed.json").Should().BeTrue();
-        BackupPaths.ShouldInclude("plugins/owner-a/packages/local-a/pkg/1.0.0/plugin.json").Should().BeTrue();
+        BackupPaths.ShouldInclude("plugins/owner-a/packages/local-a/pkg/1.0.0/.claude-plugin/plugin.json").Should().BeTrue();
         BackupPaths.ShouldInclude("plugins/owner-a/_drafts/slug/SKILL.md").Should().BeTrue();
     }
 }

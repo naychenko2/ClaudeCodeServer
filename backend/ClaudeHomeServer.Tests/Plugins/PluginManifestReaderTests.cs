@@ -3,7 +3,8 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Plugins;
 
-// Разбор манифеста пакета (rework C3): plugin.json / ccs-plugin.json / .claude-plugin/plugin.json.
+// Разбор манифеста пакета (rework C3): ccs-plugin.json / .claude-plugin/plugin.json
+// (корневой plugin.json — не нативный манифест, R10-1).
 // Топ-уровневые поля проверяются по ManifestFieldPolicy: каждый ключ вне белого списка →
 // deny-manifest-field с именем поля. Критерий: каждый запрещённый ключ (hooks, mcpServers,
 // agents, lspServers, ...) даёт свой тест.
@@ -86,13 +87,14 @@ public class PluginManifestReaderTests
         problems.Should().Contain(p => p.Code == "deny-manifest-field" && p.Message.Contains("hooks"));
     }
 
-    // --- Read: находит нативный plugin.json и проверяет его поля ---
+    // --- Read: находит нативный .claude-plugin/plugin.json и проверяет его поля (R10-1:
+    // корневой plugin.json — не нативный манифест, из списка ридера убран) ---
 
     [Fact]
-    public void Read_PluginJson_ПроверяетПоля()
+    public void Read_NativePluginJson_ПроверяетПоля()
     {
         var root = NewPackage(
-            ("plugin.json", """{"name":"P","version":"0.1.0","mcpServers":{}}"""));
+            (".claude-plugin/plugin.json", """{"name":"P","version":"0.1.0","mcpServers":{}}"""));
 
         var (_, problems) = Reader().Read(root);
 
@@ -106,11 +108,11 @@ public class PluginManifestReaderTests
     {
         var root = NewPackage(
             ("ccs-plugin.json", """{"name":"P","version":"0.1.0","hooks":{}}"""),
-            ("plugin.json", """{"name":"P","version":"0.1.0","mcpServers":{}}"""));
+            (".claude-plugin/plugin.json", """{"name":"P","version":"0.1.0","mcpServers":{}}"""));
 
         var (_, problems) = Reader().Read(root);
 
-        // C3: оба манифеста проверяются: hooks (ccs) и mcpServers (plugin.json) оба видны.
+        // C3: оба манифеста проверяются: hooks (ccs) и mcpServers (.claude-plugin/plugin.json) оба видны.
         problems.Should().Contain(p => p.Message.Contains("hooks"));
         problems.Should().Contain(p => p.Message.Contains("mcpServers"));
     }

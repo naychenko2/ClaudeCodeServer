@@ -95,6 +95,10 @@ public class PluginsRouteTests : IAsyncLifetime
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест обязателен; name = slug.
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }, new JsonSerializerOptions { WriteIndented = true }));
         new PluginInstaller(_store, new PluginPackageValidator()).Install(Owner, "draft:pkg")
             .Status.Should().Be(InstallStatus.Ok);
     }

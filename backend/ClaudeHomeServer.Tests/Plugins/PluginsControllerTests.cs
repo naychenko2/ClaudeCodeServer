@@ -87,8 +87,8 @@ public class PluginsControllerTests : IDisposable
     }
 
     // Пакет в каталоге черновика владельца (draft:<slug>): манифест ccs-plugin.json
-    // (id/version/permissions) + один навык (skills/a/SKILL.md — в allow-list валидатора).
-    // Возвращает метку источника (draft:<slug>).
+    // (id/version/permissions) + нативный .claude-plugin/plugin.json (R10-1, name = slug)
+    // + один навык (skills/a/SKILL.md — в allow-list валидатора). Возвращает метку источника (draft:<slug>).
     private string CreateDraftPackage(string ownerId, string id, string version, List<string> requested,
         List<(string Name, bool Required)>? secrets = null)
     {
@@ -114,6 +114,10 @@ public class PluginsControllerTests : IDisposable
         };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест обязателен; name = slug (CLI берёт из него имя пакета).
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = slug, version }, new JsonSerializerOptions { WriteIndented = true }));
         return "draft:" + slug;
     }
 

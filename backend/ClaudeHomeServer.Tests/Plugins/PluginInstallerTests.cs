@@ -41,8 +41,8 @@ public class PluginInstallerTests : IDisposable
             })
             .Build();
 
-    // Пакет в каталоге черновика: ccs-plugin.json (id/version) + файлы skills.
-    // Возвращает метку источника (draft:<slug>).
+    // Пакет в каталоге черновика: ccs-plugin.json (id/version) + нативный .claude-plugin/plugin.json
+    // (R10-1: обязателен, name = slug) + файлы skills. Возвращает метку источника (draft:<slug>).
     private string CreateDraft(string id, string version, params string[] extraFiles)
     {
         var slug = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
@@ -59,6 +59,10 @@ public class PluginInstallerTests : IDisposable
         var manifest = new { id, name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested = new[] { "notes:read" } } };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест обязателен; name = slug (CLI берёт из него имя пакета).
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = slug, version }, new JsonSerializerOptions { WriteIndented = true }));
         return "draft:" + slug;
     }
 
@@ -193,8 +197,18 @@ public class PluginInstallerTests : IDisposable
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true });
         }
+        // R10-1: нативный манифест чередуем вместе с ccs, чтобы name (= slug) оставался
+        // согласованным (иначе name != slug давал бы deny-name-not-equal-slug в гонке).
+        string MakeNativeJson(string id)
+        {
+            var slug = id[(id.LastIndexOf('/') + 1)..];
+            return JsonSerializer.Serialize(new { name = slug, version = "1.0.0" }, new JsonSerializerOptions { WriteIndented = true });
+        }
         var jsonOrig = MakeManifestJson(OrigId);
         var jsonOther = MakeManifestJson(OtherId);
+        var nativeOrig = MakeNativeJson(OrigId);
+        var nativeOther = MakeNativeJson(OtherId);
+        var nativePath = Path.Combine(_store.DraftDir(Owner, "pkg"), ".claude-plugin", "plugin.json");
 
         // .tmp-файл — в отдельном каталоге (не в source), чтобы CopyDirectoryNoSymlinks
         // не увидел его при перечислении source (гонка: rename ещё не завершён).
@@ -215,6 +229,9 @@ public class PluginInstallerTests : IDisposable
                     var tmp = Path.Combine(tmpDir, "ccs-plugin.json");
                     File.WriteAllText(tmp, toOther ? jsonOther : jsonOrig);
                     File.Move(tmp, manifestPath, overwrite: true); // замена (не атомарно между каталогами — ок для теста)
+                    var tmpNative = Path.Combine(tmpDir, "plugin.json");
+                    File.WriteAllText(tmpNative, toOther ? nativeOther : nativeOrig);
+                    File.Move(tmpNative, nativePath, overwrite: true);
                 }
                 catch { return; }
                 toOther = !toOther;
@@ -354,6 +371,11 @@ public class PluginInstallerTests : IDisposable
         };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест (name = slug) — чтобы файловый валидатор прошёл и
+        // manifest.Validate() добрался до неизвестного права.
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }, new JsonSerializerOptions { WriteIndented = true }));
 
         var result = _sut.Install(Owner, "draft:" + slug);
         result.Status.Should().Be(InstallStatus.Fail, "manifest.Validate(): неизвестное право");
@@ -377,6 +399,11 @@ public class PluginInstallerTests : IDisposable
         };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест (name = slug) — чтобы файловый валидатор прошёл и
+        // manifest.Validate() добрался до битого хоста.
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }, new JsonSerializerOptions { WriteIndented = true }));
 
         var result = _sut.Install(Owner, "draft:" + slug);
         result.Status.Should().Be(InstallStatus.Fail, "manifest.Validate(): net:bad/host — битый хост");

@@ -68,6 +68,7 @@ public class PluginPackageValidatorTests
     {
         var root = NewPackage(
             ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
             ("skills/myskill/SKILL.md", "# My skill\nТекст навыка"),
             ("skills/myskill/extra.md", "Вспомогательный .md"),
             ("commands/myskill.md", "Slash-команда"),
@@ -84,6 +85,7 @@ public class PluginPackageValidatorTests
     {
         var root = NewPackage(
             ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md", "текст"),
             ("panel/index.html", "<html></html>"));
 
@@ -100,9 +102,11 @@ public class PluginPackageValidatorTests
     [Fact]
     public void NameНеРавенSlug_ДаетDenyNameNotEqualSlug()
     {
-        // slug из id = "linear", name = "Linear из заметок" → не равны → отказ.
+        // slug из id = "linear", ccs name = "Linear из заметок" → не равны → отказ.
+        // Нативный манифест корректен (name = slug) — расхождение только в ccs.
         var root = NewPackage(
             ("ccs-plugin.json", """{"id":"local-x/linear","name":"Linear из заметок","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"linear","version":"0.1.0"}"""),
             ("skills/a/SKILL.md", "текст"));
 
         Validate(root).Problems.Should().Contain(p => p.Code == "deny-name-not-equal-slug");
@@ -111,9 +115,10 @@ public class PluginPackageValidatorTests
     [Fact]
     public void NameРавенSlug_БезDenyNameNotEqualSlug()
     {
-        // name = slug = "pkg" → проверка не срабатывает, пакет валиден.
+        // name = slug = "pkg" в обоих манифестах → проверка не срабатывает, пакет валиден.
         var root = NewPackage(
             ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md", "текст"));
 
         var r = Validate(root);
@@ -146,6 +151,62 @@ public class PluginPackageValidatorTests
         var root = NewPackage(
             ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             (".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        var r = Validate(root);
+        r.Problems.Should().NotContain(p => p.Code == "deny-name-not-equal-slug");
+        r.IsValid.Should().BeTrue();
+    }
+
+    // --- R10-1: нативный манифест .claude-plugin/plugin.json обязателен. CLI берёт из него
+    // имя пакета (спайк plugin-dir-name-spike-2026-10.md); без него имя = имя каталога
+    // ({version} в проде) → привязка навыка по slug ломается. ---
+
+    [Fact]
+    public void Validator_НетNativeManifest_Прошёл()
+    {
+        // Пакет БЕЗ .claude-plugin/plugin.json (только ccs) → deny-native-manifest-missing, невалиден.
+        // Мутация: убрать проверку наличия нативного манифеста → тест краснеет.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        var r = Validate(root);
+        r.Problems.Should().Contain(p => p.Code == "deny-native-manifest-missing");
+        r.IsValid.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validator_NameПустой_Прошёл()
+    {
+        // Нативный манифест есть, но name пуст ("") → deny-name-missing, невалиден.
+        // (Отсутствующий name — тот же путь: string.IsNullOrEmpty.)
+        // Мутация: разрешить пустой name → тест краснеет.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        var r = Validate(root);
+        r.Problems.Should().Contain(p => p.Code == "deny-name-missing");
+        r.IsValid.Should().BeFalse();
+    }
+
+    // --- minor: slug берётся из ПЕРВОГО манифеста, у которого есть id. Ридер возвращает
+    // манифесты в порядке [ccs, нативный], поэтому slug — из ccs-plugin.json (наш, первый),
+    // даже если нативный .claude-plugin/plugin.json тоже несёт id. name нативного сверяется
+    // по slug из ccs → совпадение, пакет валиден. ---
+
+    [Fact]
+    public void Slug_ИзПервогоМанифестаСИд_СовпадениеName()
+    {
+        // ccs: id=local-x/pkg (slug=pkg), name=pkg.
+        // нативный: id=local-x/other (slug=other, но НЕ первый), name=pkg (= slug из ccs).
+        // Если slug (ошибочно) взять из нативного (other) → name=pkg ≠ other → deny.
+        // Правильно: slug из ccs (pkg) → name=pkg == pkg → без deny, валиден.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"id":"local-x/other","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md", "текст"));
 
         var r = Validate(root);

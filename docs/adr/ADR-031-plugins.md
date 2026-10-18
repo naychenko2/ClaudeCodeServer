@@ -48,7 +48,11 @@
 
 ### 2.2. Манифест
 
-Манифест `ccs-plugin.json` лежит рядом с нативным `plugin.json` CLI:
+У пакета два манифеста: нативный CLI `.claude-plugin/plugin.json` (из него CLI берёт имя
+пакета — спайк plugin-dir-name-spike-2026-10.md) и наш `ccs-plugin.json` (источник правды
+схемы ниже; `id`/`contributes`/`permissions`). Корневой `plugin.json` — не нативный манифест
+(R10-1): без `.claude-plugin/plugin.json` CLI назовёт пакет именем каталога (`{version}`),
+что ломает привязку навыка по slug.
 
 ```json
 {
@@ -95,7 +99,7 @@ data/plugins/{ownerId}/
 
 - Запись установки ссылается на пакет по **id + version + sha256**, хранит **выданные** права (`granted`), `enabled` и источник.
 - **Источник установки — строка, а не enum** (`"draft"`, `"upload"`, позже `"catalog:{ref}"`); неизвестные значения при разборе терпим. Урок `McpCatalogRef`: новое значение enum при откате кода унесло бы файл владельца в `.corrupt`.
-- Пакет проходит **валидатор по allow-list файлов**: `plugin.json`, `ccs-plugin.json`, `skills/**/SKILL.md` и вспомогательные `.md`, `commands/*.md`, `panel/**` (статика). Отказ на всё остальное, прежде всего `hooks/`, `.mcp.json`, `bin/`, `settings.json`, `agents/` — это исполнение кода или обход allow-list MCP. Отказ на символические ссылки, выход за корень, превышение размера и числа файлов. Окончательный перечень запрещённого уточняет спайк (шаг 0).
+- Пакет проходит **валидатор по allow-list файлов**: `ccs-plugin.json` (наш), `.claude-plugin/plugin.json` (нативный CLI, **обязателен** — его отсутствие `deny-native-manifest-missing`, пустой/отсутствующий `name` — `deny-name-missing`), `skills/**/SKILL.md` и вспомогательные `.md`, `commands/*.md`, `panel/**` (статика). Корневой `plugin.json` в allow-list не входит (R10-1). Отказ на всё остальное, прежде всего `hooks/`, `.mcp.json`, `bin/`, `settings.json`, `agents/` — это исполнение кода или обход allow-list MCP. Отказ на символические ссылки, выход за корень, превышение размера и числа файлов. Окончательный перечень запрещённого уточняет спайк (шаг 0).
 - Каталог пакетов монтируется в песочницу **read-only**.
 
 ### 2.4. Вертикаль `ClaudeHomeServer.Plugins`

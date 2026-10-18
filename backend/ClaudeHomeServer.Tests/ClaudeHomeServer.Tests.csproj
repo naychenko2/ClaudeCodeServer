@@ -225,6 +225,17 @@
       перенесённые тесты компилировались и новый проект был в графе сборки.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.RemoteCommands.Tests\ClaudeHomeServer.RemoteCommands.Tests.csproj" />
+    <!--
+      Watchdog.Tests (шаг 3.13, пачка G): 5 Watchdog*Tests (Services/Watchdog:
+      WatchdogService/WatchdogStore/WatchdogCommandRunner/WatchdogCommandRunnerDevice/
+      WatchdogPresence) переехали в отдельную тестовую сборку вертикали. Watchdog — отдельная
+      сборка (ClaudeHomeServer.Watchdog), не папка Main, поэтому InternalsVisibleTo на
+      Watchdog.Tests стоит в ClaudeHomeServer.Watchdog.csproj (internal WatchdogService.ShouldPoll/
+      ClipOutput), а не в Main. Монолит тянет Watchdog.Tests как ProjectReference, чтобы в
+      переходный период (до финальной чистки) перенесённые тесты компилировались и новый проект
+      был в графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Watchdog.Tests\ClaudeHomeServer.Watchdog.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

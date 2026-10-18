@@ -53,6 +53,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.RemoteCommands.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Watchdog.Tests (шаг 3.13, пачка G): Watchdog — отдельная сборка (ClaudeHomeServer.Watchdog),
+         не папка Main, поэтому функциональный InternalsVisibleTo (internal WatchdogService.ShouldPoll/
+         ClipOutput) стоит в ClaudeHomeServer.Watchdog.csproj. Допуск в Main — по шагу 4 задачи, на
+         ровне с остальными вертикальными тестами; перенесённые тесты Main-типов не используют. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Watchdog.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

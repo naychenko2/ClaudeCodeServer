@@ -204,7 +204,10 @@ function handlePermanent(op: OutboxOp, e: unknown): void {
 
 let _draining = false;
 
-export async function drainTaskOutbox(): Promise<void> {
+// opts.reloadWhenEmpty — канонизировать стор (reload) даже при пустой очереди: триггеры
+// переподключения теряли realtime-события за время обрыва и им нужен reload, даже если
+// офлайн-очередь была пуста.
+export async function drainTaskOutbox(opts?: { reloadWhenEmpty?: boolean }): Promise<void> {
   if (!_hooks || !isOnline() || _draining) return;
   _draining = true;
   // Поставили на сервер хотя бы одну операцию (реально применили или сняли как
@@ -238,9 +241,11 @@ export async function drainTaskOutbox(): Promise<void> {
   } finally {
     _draining = false;
   }
-  // Канонизируем состояние только после реального дренажа и когда очередь пуста
-  // (иначе reload затрёт pending)
-  if (!applied) return;
+  // Канонизируем состояние (reload) после реального дренажа или — при флаге
+  // reloadWhenEmpty — после переподключения с пустой очередью: realtime-события
+  // за время обрыва потеряны, и reload нужен, даже если офлайн-очередь была пуста.
+  // Reload один (условие объединено) и только когда очередь пуста — иначе затрёт pending.
+  if (!applied && !opts?.reloadWhenEmpty) return;
   const rest = await outboxAll<OutboxOp>().catch(() => [] as OutboxOp[]);
   if (rest.length === 0) await _hooks.reload().catch(() => {});
 }

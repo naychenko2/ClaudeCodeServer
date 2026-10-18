@@ -77,11 +77,12 @@ function wireRealtime() {
     if (msg.action === 'deleted') remove(msg.task.id);
     else upsert(msg.task);
   });
-  // После разрыва соединения сначала проигрываем офлайн-очередь (reload внутри дренажа
-  // канонизирует состояние, когда очередь опустеет — иначе он затрёт pending-правки).
-  onReconnected(() => { joinUserGroup(); void drainTaskOutbox(); });
+  // После разрыва соединения сначала проигрываем офлайн-очередь. reloadWhenEmpty:
+  // realtime-события задач, пришедшие за время обрыва, потеряны — стор канонизируем
+  // reload'ом, даже если очередь была пуста (reload один — дренаж его не дублирует).
+  onReconnected(() => { joinUserGroup(); void drainTaskOutbox({ reloadWhenEmpty: true }); });
   // Связь может подняться и через probe в offline.ts (без WS-reconnected) — тоже дренажим.
-  subscribeOnline(() => { if (isOnline()) void drainTaskOutbox(); });
+  subscribeOnline(() => { if (isOnline()) void drainTaskOutbox({ reloadWhenEmpty: true }); });
 }
 
 export async function reloadTasks(): Promise<void> {

@@ -11,14 +11,59 @@
 // заполняются напрямую (__test.setIndex / setAllFlags) — useEffect-фетч в SSR
 // не идёт, компонент читает уже заполненный стор.
 
-import { createElement } from 'react';
+import { createElement, act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { FeatureBanner, featureBannerModel, backRoleLabel, moreFeaturesCount } from './FeatureBanner';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { FeatureBanner, PipelineCard, featureBannerModel, backRoleLabel, moreFeaturesCount } from './FeatureBanner';
 import { __test } from '../../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav, backNavFrom } from '../../../lib/featureBackNav';
 import { setAllFlags } from '../../../lib/featureFlags';
+import { mount, installFakeDom, uninstallFakeDom } from '../__tests__/fakeDom';
+import { __test as runsTest } from '../../../lib/featureRuns';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
+import type { FeatureRun } from '../../../types/featureRun';
+
+// m7: управляемый индекс фич — mock `api.tasks.featuresIndex` возвращает этот объект,
+// чтобы эффект useFeaturesIndex (live-перезапрос) не затирал синхронный сид стора.
+const mockIdx = vi.hoisted(() => ({
+  features: [] as FeatureIndexFeature[],
+  chats: {} as Record<string, FeatureChatLink[]>,
+}));
+// === Мок lib/api: featuresIndex → mockIdx, getFeatures → [] (m7: агрегат по ключевой сессии) ===
+vi.mock('../../../lib/api', () => ({
+  api: {
+    sessions: { list: async () => [] },
+    chats: { list: async () => [] },
+    tasks: {
+      execute: async () => {},
+      featuresIndex: async () => mockIdx,
+      getFeatures: async () => [],
+    },
+    personas: { list: async () => [] },
+  },
+}));
+// === Мок signalr: onMessage/onPreviewMessage — no-op (иначе getConnection() строит
+// реальное соединение '/hubs/session', которое в node не резолвится) ===
+vi.mock('../../../lib/signalr', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/signalr')>();
+  return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
+});
+// === Мок lib/personas: ensurePersonasLoaded — no-op (иначе joinUserGroup → localStorage) ===
+vi.mock('../../../lib/personas', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/personas')>();
+  return { ...orig, ensurePersonasLoaded: async () => {} };
+});
+
+// Минимальный агрегат фичи для PipelineCard (M2): достаточно полей, которые
+// FeatureModeBody/FeatureRunView читают для шапки (epic.title) и конвейера.
+const mockRun = {
+  featureId: 'f1',
+  epic: { id: 'f1', title: 'Эпик фичи', status: 'inProgress' as const },
+  steps: [], reviews: [], qa: [], final: null, merge: null,
+  awaitingHumanSince: null, awaitingHumanReason: null,
+  verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+  progress: 0, ready: false, now: [], attention: null, closed: false, summary: null,
+} as unknown as FeatureRun;
 
 // === Фикстуры ===
 
@@ -134,6 +179,14 @@ describe('featureBannerModel: тон, статус, счётчик, роль, к
   it('куратор без stepRef/lane: роль по виду (куратор)', () => {
     const m = featureBannerModel(feat(), link({ kind: 'curator', stepRef: null, lane: null }), 'chat-cur');
     expect(m.role).toBe('куратор');
+  });
+
+  it('m2: тон статуса — wait→wait, stop→stop, run/closed→run', () => {
+    expect(featureBannerModel(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec').statusTone).toBe('wait');
+    expect(featureBannerModel(feat({ bucket: 'attention', attention: attention('stopped') }), link(), 'chat-exec').statusTone).toBe('stop');
+    expect(featureBannerModel(feat(), link(), 'chat-exec').statusTone).toBe('run');
+    // смержена (closed) — обычный тон (не тревога)
+    expect(featureBannerModel(feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } }), link(), 'chat-exec').statusTone).toBe('run');
   });
 });
 
@@ -292,6 +345,32 @@ describe('FeatureBanner: рендер (SSR)', () => {
     setAllFlags({ 'turn-plan-feature-mode': false, 'features-overview': false });
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toBe('');
+  });
+
+  // === M1: десктоп — одна строка (nowrap + minHeight 36) ===
+  it('M1: десктоп — одна строка: nowrap + minHeight 36 (кнопка «Ключевой чат» не переносится)', () => {
+    seedIndex(feat(), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    // M1: строка плашки — без переноса (было flexWrap: 'wrap' → 84–100 px).
+    expect(html).toContain('flex-wrap:nowrap');
+    // M1: плашка — minHeight 36 (макет .fs), не 84–100 px.
+    expect(html).toContain('min-height:36px');
+  });
+
+  // === M2: карточка конвейера .fsx (max-height 430, overflow auto) ===
+  it('M2: карточка конвейера .fsx — max-height 430 + overflow auto (лента не вытесняется)', () => {
+    const html = renderToStaticMarkup(createElement(PipelineCard, { run: mockRun, sessionId: 'chat-key', isMobile: false }));
+    // M2: тело «Конвейер ▾» — отдельная карточка с ограничением высоты и прокруткой.
+    expect(html).toContain('max-height:430px');
+    expect(html).toContain('overflow:auto');
+  });
+
+  // === m2: тон текста статуса (ждёт → C.info, стоит → C.dangerText) ===
+  it('m2: тон текста статуса — «ждёт» C.info, «стоит» C.dangerText', () => {
+    seedIndex(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec', 'p1');
+    expect(renderBanner('chat-exec', 'p1')).toContain('color:var(--c-info)');
+    seedIndex(feat({ bucket: 'attention', attention: attention('stopped') }), link(), 'chat-exec', 'p1');
+    expect(renderBanner('chat-exec', 'p1')).toContain('color:var(--c-danger-text)');
   });
 
   // === Ф4: «Конвейер ▾» в ключевом чате ===
@@ -479,5 +558,90 @@ describe('FeatureBanner: мобильная ветка (SSR, 360 px)', () => {
   it('мобила: чат без фичи → плашки нет (null)', () => {
     seedIndex(feat(), link(), 'other-chat', 'p1');
     expect(renderBannerMobile('nope', 'p1')).toBe('');
+  });
+
+  it('m5: мультифича «· ещё N» видна в строке (360)', () => {
+    const f1 = feat({ keySessionId: 'chat-key' });
+    const f2 = feat({ featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
+    const index: FeaturesIndex = {
+      features: [f1, f2],
+      chats: { 'chat-exec': [
+        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+        { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
+      ] },
+    };
+    __test.setIndex('p1', index);
+    const html = renderBannerMobile('chat-exec', 'p1');
+    expect(html).toContain('data-testid="feature-more"');
+    expect(html).toContain('· ещё 1');
+  });
+});
+
+// === m7: агрегат фичи — по КЛЮЧЕВОЙ сессии (feature.keySessionId), не по сессии исполнителя ===
+//
+// Бэк отдаёт агрегат фичи (ProjectForSession) по SourceSessionId = keySessionId (ключевой
+// чат), а не по сессии исполнителя — поэтому в чате исполнителя run = null, если запрашивать
+// по своей сессии. Фикс: useFeatureRuns(feature.keySessionId). Тест — реальный mount (не SSR):
+// после mount эффекты useFeaturesIndex/useFeatureRuns отработали, и _active (стор featureRuns)
+// содержит КЛЮЧЕВУЮ сессию, а не сессию исполнителя.
+
+describe('FeatureBanner: m7 — агрегат фичи по ключевой сессии (реальный mount)', () => {
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+    runsTest.reset();
+    backNavTest.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    runsTest.reset();
+    backNavTest.reset();
+    setAllFlags({});
+    uninstallFakeDom();
+  });
+
+  it('чат исполнителя: useFeatureRuns подписан на keySessionId (chat-key), не на свою (chat-exec)', async () => {
+    const f = feat({ keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: {
+        'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
+        'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }],
+      },
+    };
+    // Сидим стор синхронно (до mount): featureOf('chat-exec') находит фичу на первом рендере,
+    // и useFeatureRuns получает feature.keySessionId = 'chat-key'.
+    __test.setIndex('p1', index);
+    // mock api.tasks.featuresIndex возвращает тот же индекс (live-перезапрос не затирает сид).
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+
+    const { root } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: true }));
+    // Даём микротаскам (live-перезапрос) отработать, чтобы состояние стора было стабильным.
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // m7: подписка — на КЛЮЧЕВОЙ сессии (keySessionId), не на сессии исполнителя.
+    expect(runsTest.active().has('chat-key')).toBe(true);
+    expect(runsTest.active().has('chat-exec')).toBe(false);
+    root.unmount();
+  });
+
+  it('ключевой чат: useFeatureRuns подписан на свою сессию (keySessionId === sessionId)', async () => {
+    const f = feat({ keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+
+    const { root } = mount(createElement(FeatureBanner, { sessionId: 'chat-key', projectId: 'p1', isMobile: true }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // Ключевой чат: keySessionId === sessionId → подписка на свою сессию (как и раньше).
+    expect(runsTest.active().has('chat-key')).toBe(true);
+    root.unmount();
   });
 });

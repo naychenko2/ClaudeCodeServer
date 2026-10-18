@@ -1,7 +1,7 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
-import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, type ChatSortOrder } from './chatFilters';
+import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
 
 export interface ChatGroup {
   title: string;
@@ -290,4 +290,88 @@ export function groupByFeatures(
     groups.push({ feature: null, title: 'Без фичи', sessions: withEffectiveParent(rest) });
   }
   return groups;
+}
+
+// === Заголовок группы фичи (макет features-overview.html, .fgh) ===
+
+// Имя стадии конвейера по ключу — для статуса «{этап} · доработка/идёт».
+// Порядок и названия — те же, что в PipelineFlow/FeatureRail (STAGE_NAME).
+const STAGE_NAME: Record<FeatureRailKey, string> = {
+  cut: 'Разрез', plan: 'План', prod: 'Производство', review: 'Ревью',
+  qa: 'Проверка', final: 'Финальное ревью', merge: 'Мерж',
+};
+
+// Визуальное состояние фичи для заголовка группы: глиф, кромка тревоги, статус.
+// Бэк считает bucket/attention/rail/summary (контракт индекса фич); фронт только
+// раскладывает их в глиф/кромку/статус — не пересчитывает. Чистая функция.
+export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'merged';
+
+export interface FeatureDisplayState {
+  // Глиф (FeatureGlyph): wait — ромб, stopped — квадрат, run/loop/closed/merged.
+  kind: FeatureDisplayKind;
+  // Кромка тревоги 3px: 'wait' (ждёт вас, info) / 'stop' (упала, danger) / null.
+  alarm: 'wait' | 'stop' | null;
+  // Статус-подпись в заголовке.
+  status: string;
+}
+
+export function featureDisplayState(f: FeatureIndexFeature): FeatureDisplayState {
+  // Закрыта: смержена (summary.mergedAt) или закрыта без мержа.
+  if (f.bucket === 'closed') {
+    const merged = f.summary?.mergedAt != null;
+    return { kind: merged ? 'merged' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
+  }
+  // Тревога: упала (stopped) или ждёт человека (wait/merge).
+  if (f.attention) {
+    if (f.attention.kind === 'stopped') return { kind: 'stopped', alarm: 'stop', status: 'стоит' };
+    if (f.attention.kind === 'merge') return { kind: 'wait', alarm: 'wait', status: 'ждёт вас · мерж' };
+    return { kind: 'wait', alarm: 'wait', status: 'ждёт вас' };
+  }
+  // Идёт: по активной стадии рельсы — доработка (loop) или работа (run).
+  const active = f.rail.find(s => s.state === 'active');
+  if (active?.tone === 'loop') return { kind: 'loop', alarm: null, status: `${STAGE_NAME[active.key]} · доработка` };
+  if (active) return { kind: 'run', alarm: null, status: `${STAGE_NAME[active.key]} · идёт` };
+  return { kind: 'run', alarm: null, status: 'идёт' };
+}
+
+// Живые (идёт) и вставшие (упал) статусы чата: по ним чат выводится наружу из
+// свёрнутой группы. «Живой» совпадает с «дышащими» статусами (RUNNING_STATUSES в
+// chatTree); «вставший» — статусы ошибки/осиревшего.
+const LIVE_STATUSES: ReadonlySet<Session['status']> = new Set(['starting', 'working', 'waiting']);
+const STUCK_STATUSES: ReadonlySet<Session['status']> = new Set(['error', 'orphaned']);
+
+// Раскладка чатов группы фичи:
+//   ordered     — все чаты, ключевой первым (раскрытый вид);
+//   exposed     — ключевой + живые + вставшие (выведены наружу из свёрнутой группы);
+//   hiddenCount — «ещё N»: сколько чатов скрыто под свёрнутой группой.
+export interface FeatureGroupChats {
+  ordered: Session[];
+  exposed: Session[];
+  hiddenCount: number;
+}
+
+export function featureGroupChats(feature: FeatureIndexFeature, sessions: Session[]): FeatureGroupChats {
+  const keyId = feature.keySessionId;
+  // Ключевой чат — первым, остальные — в порядке группы (по дате, из groupByFeatures).
+  // Стабильная сортировка: при равенстве (оба не ключевые) порядок группы сохраняем.
+  const ordered = [...sessions].sort((a, b) =>
+    (a.id === keyId ? 0 : 1) - (b.id === keyId ? 0 : 1));
+  // Выведенные наружу: ключевой + живые + вставшие (без дублей, ключевой первым).
+  const exposed: Session[] = [];
+  const seen = new Set<string>();
+  for (const s of ordered) {
+    if (s.id === keyId || LIVE_STATUSES.has(s.status) || STUCK_STATUSES.has(s.status)) {
+      if (!seen.has(s.id)) { seen.add(s.id); exposed.push(s); }
+    }
+  }
+  return { ordered, exposed, hiddenCount: Math.max(0, sessions.length - exposed.length) };
+}
+
+// Пункты группировки для тулбара: 'features' — только в списке проекта и при
+// включённом флаге features-overview (у глобального списка реестра фич нет).
+export function featureGroupByOptions(inProject: boolean, featuresOverview: boolean): ChatGroupBy[] {
+  const base: ChatGroupBy[] = inProject ? ['days', 'tags', 'subjects'] : ['days'];
+  if (inProject && featuresOverview) base.push('features');
+  base.push('none');
+  return base;
 }

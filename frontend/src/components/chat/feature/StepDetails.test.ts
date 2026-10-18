@@ -16,6 +16,14 @@ import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '..
 import { StepDetails, openTaskTarget } from './StepDetails';
 import { RING } from './Rounds';
 
+// Ожидаемое «ЧЧ:ММ» — теми же локальными геттерами от той же Date, что и hhmm (featureTime),
+// но НЕ через hhmm: мутация hhmm (featureTime) должна краснить тест, а не сдвигать ожидание.
+// Тест не зависит от пояса машины (CI в UTC, разработка в МСК).
+function localHHMM(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (как в FeatureRunView.test.ts).
 // importOriginal — сохранить остальные экспорты (usePersonasVersion и др.).
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -335,8 +343,10 @@ describe('StepDetails — звено круга: моно только у вре
     const r = run({ steps: [task({ id: 's1', title: 'Шаг', role: 'step', stepRef: 'D1c', personaId: 'p1', status: 'done', createdAt: '2026-10-16T07:49:00Z', completedAt: '2026-10-16T08:09:00Z' })] });
     const html = render(c, r);
     expect(html, 'имя исполнителя витка').toContain('Глеб');
-    // Время «07:36–07:45» — в mono-спане (FONT.mono = 'JetBrains Mono', 'Courier New', monospace).
-    expect(html, 'время — mono').toMatch(/monospace[^>]*>07:36–07:45</);
+    // Время — в mono-спане (FONT.mono = 'JetBrains Mono', 'Courier New', monospace).
+    // Ожидаемое «ЧЧ:ММ–ЧЧ:ММ» — локальными геттерами от тех же меток (независимость от пояса).
+    const time = `${localHHMM('2026-10-16T07:36:00Z')}–${localHHMM('2026-10-16T07:45:00Z')}`;
+    expect(html, 'время — mono').toMatch(new RegExp(`monospace[^>]*>${time}<`));
     // Имя «Глеб» — НЕ в mono-спане (обычный шрифт).
     expect(html, 'имя — не mono').not.toMatch(/monospace[^>]*>Глеб/);
   });

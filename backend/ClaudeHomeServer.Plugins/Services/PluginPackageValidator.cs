@@ -266,21 +266,21 @@ public class PluginPackageValidator
         return false;
     }
 
-    // M10: исполняемый .md — проверка ВСЕГО текста, без разбора фронтматтера: парсер
-    // CLI 2.1.301 расходится с нашим (fenced ```!, `--- ` с пробелом, кавычечные ключи,
-    // `---` посреди строки), и ключ может спрятаться в любой части файла. Спайк
-    // plugin-dir-allowed-tools: оба механизма дают агенту Bash, нарушая «навык не даёт
-    // новых возможностей» (ADR §4).
-    //
-    // Rework пакета 6:
-    //   M10.1 allowed-tools — Contains по всему тексту (не regex): regex с «:» после
-    //         ключа обходился explicit-key. Ложное срабатывание на упоминание в описании
-    //         — дешёвая цена (ключ и упоминание дают одно и то же: Bash без запроса).
+    // M10: исполняемый .md (skills/**/SKILL.md, commands/*.md) — два независимых механизма
+    // дают агенту Bash, нарушая «навык не даёт новых возможностей» (ADR §4, спайк
+    // plugin-dir-allowed-tools):
+    //   M10.1 allowed-tools — Contains по ВСЕМУ тексту (не только фронтматтер): парсер
+    //         CLI 2.1.301 расходится с нашим (fenced ```!, `--- ` с пробелом, кавычечные
+    //         ключи, `---` посреди строки), и ключ может спрятаться в любой части файла.
+    //         Regex с «:» после ключа обходился explicit-key, поэтому Contains. Ложное
+    //         срабатывание на упоминание в описании — дешёвая цена (ключ и упоминание дают
+    //         одно и то же: Bash без запроса).
     //   M10.2 обратный слеш во фронтматтере — deny: экранированный ключ (YAML-эскейп,
     //         напр. `\x2dllowed-tools` / `allowed-\x74ools`) обходит и Contains, и regex.
-    //         Ужесточение: `\` в description тоже отбивает (ложное срабатывание, цена низкая).
-    //   M10.3 `!$` — маркер живого исполнения после подстановки аргумента ($ARGUMENTS/$1):
-    //         CLI сам считает его исполняемым.
+    //         Ужесточение: ЛЮБОЙ `\` во фронтматтере (включая description) отбивает
+    //         (ложное срабатывание, цена низкая).
+    //   M10.3 backtick-исполнение: `!`cmd` / ```! и `!$` (маркер живого исполнения после
+    //         подстановки аргумента $ARGUMENTS/$1, CLI сам считает его исполняемым).
     private static void CheckExecutableMd(PackageFile file, List<PluginPackageProblem> problems)
     {
         string content;
@@ -288,13 +288,19 @@ public class PluginPackageValidator
         catch (IOException) { return; } // битая symlink — уже no-symlink
 
         // allowed-tools: Contains по всему тексту (M10.1) ИЛИ обратный слеш во
-        // фронтматтере (M10.2, экранированный ключ). Одно срабатывание — один problem.
+        // фронтматтере (M10.2, экранированный ключ). Одно срабатывание — один problem;
+        // формулировки раздельные: «allowed-tools» и «обратный слеш» — разные причины
+        // отказа (ревью пачки A: единое сообщение «Ключ allowed-tools» вводило в заблуждение,
+        // когда сработал только слеш).
         var hasAllowedTools = content.Contains("allowed-tools", StringComparison.OrdinalIgnoreCase);
         var frontmatter = ExtractFrontmatter(content);
         var hasEscapedKey = frontmatter is not null && frontmatter.Contains('\\');
-        if (hasAllowedTools || hasEscapedKey)
+        if (hasAllowedTools)
             problems.Add(new PluginPackageProblem("deny-allowed-tools",
                 $"Ключ allowed-tools (Bash без запроса): {file.RelativePath}"));
+        else if (hasEscapedKey)
+            problems.Add(new PluginPackageProblem("deny-allowed-tools",
+                $"Обратный слеш во фронтматтере (экранированный ключ, M10.2): {file.RelativePath}"));
 
         // !`cmd` / ```! (backtick-исполнение) и !$ (маркер подстановки аргумента, M10.3).
         if (content.Contains("!`", StringComparison.Ordinal)

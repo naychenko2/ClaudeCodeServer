@@ -63,11 +63,16 @@ public sealed class SandboxManager
     // Хостовые каталоги данных песочницы (bind-mount в контейнер)
     public string ProfilesHostDir { get; }
     public string TmpHostDir { get; }
+    // Корень пакетов плагинов владельца (data/plugins, ADR-031 §2.5): монтируется в /plugins (ro)
+    // и мапится DockerPathMapper'ом одной правкой (тот же хостовый каталог).
+    public string PluginsHostDir { get; }
     // Точки монтирования внутри контейнера
     public const string ProjectsMount = "/projects";
     public const string ProfilesMount = "/sandbox-profiles";
     public const string TmpMount = "/turn-tmp";
     public const string SystemPromptsMount = "/app/SystemPrompts";
+    // Каталоги плагинов владельца (read-only): --plugin-dir указывает сюда в контейнере.
+    public const string PluginsMount = "/plugins";
     // Каталог версий нативного claude CLI хоста (read-only)
     public const string HostCliMount = "/opt/claude-host/versions";
 
@@ -79,6 +84,7 @@ public sealed class SandboxManager
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         ProfilesHostDir = Path.Combine(dataDir, "sandbox-profiles");
         TmpHostDir = Path.Combine(dataDir, "sandbox-tmp");
+        PluginsHostDir = Path.Combine(dataDir, "plugins");
     }
 
     // Убедиться, что контейнер поднят и соответствует образу/параметрам.
@@ -158,13 +164,17 @@ public sealed class SandboxManager
         string profilesHostDir,
         string tmpHostDir,
         string confHash,
-        string? hostCliVersions = null)
+        string? hostCliVersions = null,
+        string? pluginsHostDir = null)
     {
         var portEnd = opts.PortRangeStart + opts.PortRangeSize - 1;
         // Каталога нет (поставка без карты — bareProvider.SystemPromptFile пустой или
         // BareMode не используется) — bind-mount подавляем, чтобы не плодить пустой
         // каталог в контейнере.
         var systemPromptsExists = Directory.Exists(systemPromptsHost);
+        // Пакеты плагинов (ADR-031 §2.5): read-only, только при наличии каталога —
+        // пустой /plugins в контейнере без пакетов не нужен.
+        var pluginsExists = pluginsHostDir is not null && Directory.Exists(pluginsHostDir);
         var args = new List<string>
         {
             "run", "-d",
@@ -179,6 +189,8 @@ public sealed class SandboxManager
         };
         if (systemPromptsExists)
             args.AddRange(["-v", $"{systemPromptsHost}:{SystemPromptsMount}"]);
+        if (pluginsExists)
+            args.AddRange(["-v", $"{pluginsHostDir}:{PluginsMount}:ro"]);
         if (hostCliVersions is { Length: > 0 })
             args.AddRange(["-v", $"{hostCliVersions}:{HostCliMount}:ro"]);
         // Токен подписки в контейнер здесь НЕ кладём: он запёкся бы в момент создания и не
@@ -227,7 +239,7 @@ public sealed class SandboxManager
 
     private List<string> BuildRunArgs(string confHash) =>
         BuildRunArgsForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, confHash,
-            DefaultHostCliVersionsDir(Options));
+            DefaultHostCliVersionsDir(Options), PluginsHostDir);
 
     // Хеш параметров запуска: несовпадение метки на контейнере → пересоздать
     // (смена диапазона портов/mount'ов/прокси не применяется к живому контейнеру)
@@ -237,21 +249,26 @@ public sealed class SandboxManager
         string profilesHostDir,
         string tmpHostDir,
         string imageId,
-        string? hostCliVersions = null)
+        string? hostCliVersions = null,
+        string? pluginsHostDir = null)
     {
         var systemPromptsExists = Directory.Exists(systemPromptsHost);
+        // Появление/исчезновение каталога плагинов меняет состав mount'ов → пересоздать
+        // контейнер, чтобы новый -v /plugins:ro (или его отсутствие) применился.
+        var pluginsExists = pluginsHostDir is not null && Directory.Exists(pluginsHostDir);
         var payload = string.Join("\n",
             imageId, opts.ProjectsRoot, profilesHostDir, tmpHostDir,
             opts.PortRangeStart.ToString(), opts.PortRangeSize.ToString(),
             opts.Proxy, opts.Memory, opts.Cpus,
             systemPromptsExists ? systemPromptsHost : "",
+            pluginsExists ? pluginsHostDir : "",
             hostCliVersions ?? "");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..16];
     }
 
     private string ConfigHash(string imageId) =>
         ConfigHashForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, imageId,
-            DefaultHostCliVersionsDir(Options));
+            DefaultHostCliVersionsDir(Options), PluginsHostDir);
 
     // Команда сборки образа песочницы. uid передаём явно: без --build-arg APP_UID
     // пользователь app получает дефолт Dockerfile, а bind-mount на Linux сверяет права

@@ -83,4 +83,49 @@ public class PluginDirSourceTests : IDisposable
         var source = new PluginDirSource(_store, Mock.Of<IPersonaSkillBindingLookup>());
         source.GetPluginDirs("owner-a", null, project: null).Should().HaveCount(1);
     }
+
+    // Локальный проект (ADR-016/ADR-031 §5.8, MVP): плагины выключены — каталог пакетов и
+    // секреты на устройство не едут. ProjectCapabilities.PluginsFor — единственная проверка
+    // локальности. Мутация «убрать фильтр локального проекта» → этот тест красный.
+    [Fact]
+    public void GetPluginDirs_ЛокальныйПроект_НеДаетКаталоги()
+    {
+        var pkg = _store.PackageDir("owner-a", "local-a/x", "1.0.0");
+        Directory.CreateDirectory(pkg);
+        _store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/x", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        var source = new PluginDirSource(_store, Mock.Of<IPersonaSkillBindingLookup>());
+        // Локальный проект: DeviceId != null → плагины выключены → [].
+        var localProject = new Project { Id = "p1", DeviceId = "device-1" };
+        source.GetPluginDirs("owner-a", null, localProject).Should().BeEmpty(
+            "у локального проекта в MVP плагинов нет (ProjectCapabilities.PluginsFor)");
+    }
+
+    // СТОРОЖ (инвариант 4, ADR-031 §2.5): набор каталогов --plugin-dir зависит ТОЛЬКО от
+    // свойств сессии (владелец, персона, проект), не от хода. Два вызова с теми же
+    // свойствами дают тот же набор — иначе сигнатура запуска CLI «мерцает» между ходами и
+    // каждый переход убивает процесс claude вместе со всеми MCP-серверами.
+    // Мутация «набор начал зависеть от хода» (например, GetPluginDirs читает ambient-состояние
+    // хода) → два вызова расходятся → тест красный.
+    [Fact]
+    public void PluginDirSource_НаборНеЗависитОтХода()
+    {
+        var pkg = _store.PackageDir("owner-a", "local-a/x", "1.0.0");
+        Directory.CreateDirectory(pkg);
+        _store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/x", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        var source = new PluginDirSource(_store, Mock.Of<IPersonaSkillBindingLookup>());
+        var project = ServerProject();
+        // Два «хода» с теми же свойствами сессии → тот же набор.
+        var first = source.GetPluginDirs("owner-a", null, project);
+        var second = source.GetPluginDirs("owner-a", null, project);
+        first.Should().BeEquivalentTo(second,
+            "набор --plugin-dir не должен зависеть от хода: иначе сигнатура запуска мерцает");
+    }
 }

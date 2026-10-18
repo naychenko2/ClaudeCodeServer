@@ -49,6 +49,13 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly string? _turnOwnerId;
     internal string? TurnOwnerId => _turnOwnerId;
 
+    // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): шов IPluginDirSource
+    // (опциональная зависимость — null, если подсистема Plugins выключена) и проект чата для
+    // проверки локальности. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект),
+    // не от хода: установка/удаление/смена версии вступают в силу со следующего старта процесса CLI.
+    private readonly ClaudeHomeServer.Services.Plugins.IPluginDirSource? _pluginDirSource;
+    private readonly Models.Project? _pluginProject;
+
     // Модель для --model / set_model. Хранится семейство (opus/fable/sonnet/haiku), окно 1M
     // дописывает пул по плану подписки хода (ClaudeSubscriptionPool.LaunchModel): Max получает
     // opus[1m], Pro — opus с объявленным окном 200K, и CLI сожмёт контекст вовремя.
@@ -1044,6 +1051,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _turnOwnerId = context.OwnerId ?? info.OwnerId;
+        _pluginDirSource = context.PluginDirSource;
+        _pluginProject = context.Project;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
         _serverContent = context.ServerContent;
@@ -3369,6 +3378,27 @@ public class ClaudeSession : ILlmSessionAdapter
             catch (InvalidOperationException ex)
             {
                 Console.Error.WriteLine($"[ClaudeSession] MCP-конфиг недоступен в песочнице, ход без него: {ex.Message}");
+            }
+        }
+
+        // Каталоги плагинов владельца (ADR-031 §2.4/§2.5): --plugin-dir на каждый включённый
+        // пакет. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект), не от
+        // хода — установка/удаление/смена версии вступают в силу со следующего старта процесса
+        // CLI (инвариант 4), поэтому аргумент стабилен в пределах сессии и не мерцает в
+        // сигнатуре запуска. Путь — в среде исполнения: в песочнице data/plugins смонтирована
+        // в /plugins (ro), ToRuntime переводит; локально — identity. Локальный проект
+        // (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [], аргументов нет.
+        // _pluginDirSource null — подсистема Plugins выключена (опциональная зависимость).
+        if (_pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
+        {
+            var pluginDirs = _pluginDirSource.GetPluginDirs(pluginOwnerId, Info.PersonaId, _pluginProject);
+            foreach (var dir in pluginDirs)
+            {
+                try { args.AddRange(["--plugin-dir", _launcher.Paths.ToRuntime(dir)]); }
+                catch (InvalidOperationException ex)
+                {
+                    Console.Error.WriteLine($"[ClaudeSession] Каталог плагина недоступен в песочнице, ход без него: {ex.Message}");
+                }
             }
         }
 

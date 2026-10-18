@@ -777,9 +777,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Composition.SubsystemStateStore? subsystemStates = null,
         // Опционально (в тестах без сфер не передаётся): справочник сфер для зоны персон; без него
         // персона сферы нигде не видна (fail-closed)
-        ISphereDirectory? spheres = null)
+        ISphereDirectory? spheres = null,
+        // Опционально (ADR-031, шаг 2.1): шов каталогов плагинов владельца для --plugin-dir.
+        // null — подсистема Plugins выключена (IPluginDirSource не в DI): ход идёт без --plugin-dir.
+        Plugins.IPluginDirSource? pluginDirSource = null)
     {
         _spheres = spheres;
+        _pluginDirSource = pluginDirSource;
         _deviceGate = deviceGate;
         _services = services;
         _subsystemStates = subsystemStates;
@@ -3394,6 +3398,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     private readonly ISphereDirectory? _spheres;
+    // Шов каталогов плагинов владельца для --plugin-dir (ADR-031, шаг 2.1); null — подсистема
+    // Plugins выключена (опциональная зависимость, ход идёт без --plugin-dir).
+    private readonly Plugins.IPluginDirSource? _pluginDirSource;
 
     private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
 
@@ -4488,7 +4495,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ServerContent: ServerContentFor(session.ProjectId),
             TranscriptOnServer: TranscriptOnServer(session),
             HandsEnabled: hands,
-            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId)));
+            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId),
+            // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
+            // для проверки локальности (у локального проекта в MVP плагинов нет).
+            PluginDirSource: _pluginDirSource,
+            Project: session.ProjectId is { } pluginProjectId ? _projects.GetById(pluginProjectId) : null));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -6067,7 +6078,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 TurnContextMcp: turnContextMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null,
-                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId),
+                // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально);
+                // чат вне проекта — локальности нет (все включённые пакеты владельца).
+                PluginDirSource: _pluginDirSource,
+                Project: null);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -6151,7 +6166,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
                 TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
                 HandsEnabled: hands,
-                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId));
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId),
+                // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
+                // для проверки локальности (у локального проекта в MVP плагинов нет).
+                PluginDirSource: _pluginDirSource,
+                Project: project);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Plugins;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -458,4 +459,12 @@ public sealed record LlmSessionContext(
     // MCP-сервер «Контекст чата» (ADR-023 §3.2)
     TurnContextMcpContext? TurnContextMcp = null,
     // Владелец хода (SessionManager.ResolveOwnerId); у проектной сессии Session.OwnerId пуст по контракту.
-    string? OwnerId = null);
+    string? OwnerId = null,
+    // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): набор считается
+    // ТОЛЬКО от свойств сессии (владелец, персона, проект), не от хода — установка/удаление/
+    // смена версии вступают в силу со следующего старта процесса CLI (инвариант 4). null —
+    // подсистема выключена (IPluginDirSource не в DI) или у владельца нет включённых пакетов.
+    IPluginDirSource? PluginDirSource = null,
+    // Проект чата (null — чат вне проекта): уходит в IPluginDirSource для проверки локальности
+    // (у локального проекта в MVP плагинов нет, ADR-016/ADR-031 §5.8).
+    Project? Project = null);

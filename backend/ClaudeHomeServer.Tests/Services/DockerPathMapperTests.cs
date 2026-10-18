@@ -113,6 +113,34 @@ public class DockerPathMapperTests
     // Достаём хостовый корень /projects через ToHost (внутренние правила приватны)
     private static string RootProjectsHost(DockerPathMapper m) => m.ToHost("/projects");
 
+    // СТОРОЖ правила плагинов (ADR-031 §2.5): data/plugins → /plugins. --plugin-dir в
+    // container-сборке обязан указывать на /plugins/… (а не на хостовый путь data/plugins,
+    // которого в контейнере нет). Правило добавляется одной правкой с bind-mount'ом
+    // SandboxManager.BuildRunArgs (тот же хостовый каталог PluginsHostDir).
+    // Мутация удаления Add(sandbox.PluginsHostDir, PluginsMount) → ToRuntime бросает на
+    // пути плагина (правила нет) → тест красный.
+    [Fact]
+    public void ToRuntime_КаталогПлагинов_МапитсяВPlugins()
+    {
+        var m = Make();
+        // Хостовый корень /plugins = data/plugins (PluginsHostDir из SandboxManager);
+        // извлекаем round-trip'ом (внутренние правила приватны).
+        var hostRoot = m.ToHost(SandboxManager.PluginsMount);
+        // Прямая проверка: путь пакета внутри data/plugins мапится в /plugins/…
+        var pkg = Path.Combine(hostRoot, "owner-a", "packages", "local-a/x", "1.0.0");
+        m.ToRuntime(pkg).Should().Be("/plugins/owner-a/packages/local-a/x/1.0.0");
+    }
+
+    // CanMap для пути внутри data/plugins — true (правило существует).
+    [Fact]
+    public void CanMap_ПутьКПлагинам_True()
+    {
+        var m = Make();
+        var hostRoot = m.ToHost(SandboxManager.PluginsMount);
+        m.CanMap(Path.Combine(hostRoot, "owner-a", "packages", "x", "1.0.0")).Should().BeTrue(
+            "правило data/plugins → /plugins обязано быть в DockerPathMapper; иначе CanMap вернёт false");
+    }
+
     // СТОРОЖ отсутствия дубля правила SystemPrompts: на /app/SystemPrompts должно быть
     // РОВНО одно правило в _rules. Два правила на один runtime-путь ломают round-trip
     // стабильность ToHost (первое всегда побеждает, репо-правило становится мёртвым

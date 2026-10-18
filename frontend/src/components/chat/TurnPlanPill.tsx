@@ -92,8 +92,8 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
   const ariaLabel = (featureMode ? 'Показать исполнение фичи' : 'Показать план хода')
     + (showDot && model?.ariaExtra ? ` · ${model.ariaExtra}` : '');
 
-  // Потолок меню: режим фичи выше (520 десктоп / 560 мобила, во всю ширину left/right 8),
-  // план — как раньше (340, обычная ширина).
+  // Потолок меню: режим фичи выше (520 десктоп / 560 мобила; во всю ширину left/right 8 —
+  // только мобила, на десктопе меню карточкой 280–380, как режим «План»), план — как раньше (340).
   const menuMaxHeight = isMobile ? (featureMode ? 560 : 340) : (featureMode ? 520 : 340);
 
   return (
@@ -164,7 +164,8 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
             minWidth={280}
             maxWidth={380}
             maxHeight={menuMaxHeight}
-            fullWidth={featureMode}
+            // K-3: во всю ширину (left/right 8) — только мобила; на десктопе меню карточкой 280–380.
+            fullWidth={featureMode && isMobile}
           >
             <FeatureModeBody
               sessionId={sessionId}

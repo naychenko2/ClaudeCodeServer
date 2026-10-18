@@ -92,6 +92,8 @@ export interface LocalModelStats {
   // только projectId (и только для своих чатов) — имя проекта резолвит фронт из
   // стора проектов; для чужого чата подстроки нет вовсе.
   chats?: { own: boolean; sessionId?: string; projectId?: string; title?: string; phase: string; genTps?: number }[];
+  // Сводка «Железо» (только админ): для строки-ссылки «Видеокарты» и точки на вкладке.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   unsupported?: string[];
 }
 
@@ -121,6 +123,8 @@ export interface LocalModelMedia {
   slots: { used: number; limit: number };
   // Видеокарта медиа; null до шага 31 (данные карты — с узла ComfyUI, не с хоста)
   gpus?: MediaGpu[] | null;
+  // Сводка «Железо» (только админ): строка-ссылка «Видеокарты» по картам с ролью media.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   // «Загружено сейчас»: имена моделей в памяти узла (basename, ≤ 96 символов);
   // null/отсутствует — узел не сообщает (маршрут /ccs/stats не установлен)
   loadedModels?: string[] | null;
@@ -686,6 +690,11 @@ export const api = {
       if (since != null) qs.set('since', String(since));
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);
     },
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;
+    // 403 не-админу, 404 без флага). window — окно графика «Температуры» (дефолт 15m).
+    // Тип ответа — в feature-слое (hardwareTypes.ts); type-only импорт, без цикла рантайма.
+    hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m') =>
+      request<import('../features/localModel/hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}`),
     // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
     lastTurn: (sessionId: string) =>
       request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`),

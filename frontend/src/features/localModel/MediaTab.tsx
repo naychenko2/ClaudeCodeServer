@@ -22,7 +22,7 @@ import {
   remainingLine, isOwnJob, jobOwnerLabel, pluralTasks, slotsLine, queueJobLabel,
 } from './mediaFormat';
 import { MediaHistory } from './MediaHistory';
-import { GpuCard } from './GpuCard';
+import { HwLinkRow } from './HwLinkRow';
 import { gpuCountLabel } from './format';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
@@ -116,29 +116,17 @@ function LoadedModelLine({ media }: { media: LocalModelMedia }) {
   );
 }
 
-// === Видеокарта медиа ===
-// gpus есть — карточка (GpuCard, «RTX 3090 · медиа»); gpus==null — деградация.
-function MediaGpuCard({ media }: { media: LocalModelMedia }) {
-  const gpus = media.gpus;
-  if (gpus == null || gpus.length === 0) {
-    return (
-      <Card title="Видеокарта">
-        <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
-          Карта не сообщает
-        </p>
-      </Card>
-    );
-  }
-  return (
-    <Card title="Видеокарта">
-      {/* auto-fit, а не auto-fill: одна карта тянется на всю ширину, несколько делят её поровну */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: SP.sm }}>
-        {gpus.map(g => (
-          <GpuCard key={g.uuid || g.index} gpu={g} total={gpus.length} kind="media" />
-        ))}
-      </div>
-    </Card>
-  );
+// === Видеокарта медиа: строка-ссылка на «Железо» (только админ) ===
+// GpuCard ушёл на «Железо»; здесь — строка-ссылка только по картам с ролью media
+// (пересечение hardware-сводки и media.gpus по uuid). Не-админу (scope=self)
+// строки нет: gpus=null и hardware-сводки нет (ADR-030).
+function MediaGpuCard({ media, onOpenHardware }: { media: LocalModelMedia; onOpenHardware: () => void }) {
+  const brief = media.hardware;
+  if (!brief || brief.gpus.length === 0) return null;
+  const mediaUuids = new Set((media.gpus ?? []).filter(g => g.roles.includes('media')).map(g => g.uuid));
+  const mediaBrief = { ...brief, gpus: brief.gpus.filter(g => mediaUuids.has(g.uuid)) };
+  if (mediaBrief.gpus.length === 0) return null;
+  return <HwLinkRow brief={mediaBrief} onOpen={onOpenHardware} />;
 }
 
 // === Плитка вида (вид прогона) ===
@@ -461,12 +449,13 @@ function MediaTabSkeleton() {
 }
 
 // === Вкладка ===
-export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
+export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpenHardware }: {
   data: LocalModelMedia | null;
   loading: boolean;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
+  onOpenHardware?: () => void;
 }) {
   // Первое открытие до первого ответа — скелетоны
   if (loading && !data) return <MediaTabSkeleton />;
@@ -487,7 +476,7 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
       <ComfySubline media={data} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <LoadedModelLine media={data} />
-        {!self && <MediaGpuCard media={data} />}
+        {!self && <MediaGpuCard media={data} onOpenHardware={onOpenHardware ?? (() => {})} />}
         {data.running.length === 0 && data.queue.length === 0
           ? <GpuFreeCard />
           : <>

@@ -24,11 +24,20 @@ function renderMediaTab(data: Parameters<typeof MediaTab>[0]['data']): string {
 }
 
 describe('MediaTab: scope=self скрывает видеокарту', () => {
-  it('all — карточка «Видеокарта» есть', () => {
-    expect(renderMediaTab(mockLocalModelMedia('run'))).toContain('Видеокарта');
+  // GpuCard ушёл на «Железо» (GpuDetailCard); на «Медиа» у админа — только
+  // строка-ссылка HwLinkRow (title «Видеокарта»/«Видеокарты» + «Железо →»).
+  it('all — строка-ссылка «Видеокарта» есть, карточек карт нет', () => {
+    const html = renderMediaTab(mockLocalModelMedia('run'));
+    expect(html).toContain('Видеокарта');
+    expect(html).toContain('Железо →');
   });
-  it('self — карточки «Видеокарта» нет', () => {
-    expect(renderMediaTab(mockLocalModelMediaSelf('run'))).not.toContain('Видеокарта');
+  it('self — ни строки-ссылки, ни слова «Видеокарта»', () => {
+    // Инвариант приватности (ADR-030): у не-админа видеокарт нет вовсе.
+    // Фикстура hardware намеренно есть — guard `!self` в MediaTab её и скрывает;
+    // мутация (убрать guard) рендерит строку и тест краснеет.
+    const html = renderMediaTab(mockLocalModelMediaSelf('run'));
+    expect(html).not.toContain('Видеокарта');
+    expect(html).not.toContain('Железо →');
   });
 });
 

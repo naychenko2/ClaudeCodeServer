@@ -1,0 +1,120 @@
+import { C, R, SP } from '../../../lib/design';
+import type { FeatureRailSegment } from '../../../types/featureIndex';
+
+// Мини-рельса фичи: PipelineFlow, «положенный набок» (макет features-overview.html,
+// .mr; proposal §«Общее для всех вариантов: плашка фичи»). 7 сегментов по массиву
+// rail[] индекса — бэк считает состояния (state/tone), фронт только раскладывает:
+//   done    — пройден        → C.success
+//   active  — активный       → длиннее (15 против 8) и в цвет тона
+//                                (run→C.textHeading, wait→C.info, stopped→C.danger, loop→C.warning)
+//   pending — впереди        → C.progressTrack
+//   absent  — нет в трекере → прозрачный + inset 1px dashed C.dashed
+// У закрытой фичи (closed) вся рельса приглушена: C.textMuted, opacity .5
+// (absent — только пунктирный контур, без заливки).
+//
+// Рельса ничего не считает сама: rail[] и closed даёт бэк (контракт индекса фич).
+// Компактная: inline-flex, gap 2px, не сжимается (flex-shrink:0) — на 360 px живёт
+// в одной строке плашки.
+
+// Геометрия сегмента (макет .mr i): высота 5px, скругление pill (R.max).
+// 8px — обычный сегмент, 15px — активный. Значений 8/15/5 в шкале SP нет (SP.xs=4,
+// SP.sm=8) — это размеры макета, константы (не magic numbers в разметке).
+const SEG_H = 5;
+const SEG_W = 8;
+const SEG_ACTIVE_W = 15;
+
+// Имя этапа по ключу (порядок и названия — те же, что в PipelineFlow, STAGES).
+const STAGE_NAME: Record<FeatureRailSegment['key'], string> = {
+  cut: 'Разрез',
+  plan: 'План',
+  prod: 'Производство',
+  review: 'Ревью',
+  qa: 'Проверка',
+  final: 'Финальное ревью',
+  merge: 'Мерж',
+};
+
+// Слово состояния для title сегмента: «{этап} — {пройден|сейчас|впереди|нет в трекере}».
+function stateWord(seg: FeatureRailSegment): string {
+  switch (seg.state) {
+    case 'done': return 'пройден';
+    case 'active': return 'сейчас';
+    case 'absent': return 'нет в трекере';
+    case 'pending':
+    default: return 'впереди';
+  }
+}
+
+// Цвет активной стадии по tone (макет .mr i.a.*): run→textHeading, wait→info,
+// stopped→danger, loop→warning. tone null у active — редкость (бэк обычно даёт тон),
+// но дефолт (textHeading) держим, чтобы рельса не «провалилась» в прозрачность.
+function activeColor(tone: FeatureRailSegment['tone']): string {
+  switch (tone) {
+    case 'wait': return C.info;
+    case 'stopped': return C.danger;
+    case 'loop': return C.warning;
+    case 'run':
+    default: return C.textHeading;
+  }
+}
+
+// Сегмент рельсы. Закрытая фича: заливка/контур → C.textMuted + opacity .5,
+// absent — прозрачный (только пунктирный контур, без заливки).
+function segmentStyle(seg: FeatureRailSegment, closed: boolean): React.CSSProperties {
+  const base: React.CSSProperties = {
+    display: 'block',
+    height: SEG_H,
+    borderRadius: R.max,
+    flexShrink: 0,
+  };
+  if (closed) {
+    if (seg.state === 'absent') {
+      // Прозрачный: только пунктирный контур (inset 1px), без заливки.
+      return { ...base, width: SEG_W, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}`, opacity: 0.5 };
+    }
+    // done/active/pending — приглушённая заливка C.textMuted, opacity .5.
+    return { ...base, width: seg.state === 'active' ? SEG_ACTIVE_W : SEG_W, background: C.textMuted, opacity: 0.5 };
+  }
+  switch (seg.state) {
+    case 'done':
+      return { ...base, width: SEG_W, background: C.success };
+    case 'active':
+      return { ...base, width: SEG_ACTIVE_W, background: activeColor(seg.tone) };
+    case 'absent':
+      return { ...base, width: SEG_W, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}` };
+    case 'pending':
+    default:
+      return { ...base, width: SEG_W, background: C.progressTrack };
+  }
+}
+
+// aria-label всей рельсы: «Этап: {активный этап}» (макет) или «Этап: закрыта».
+// Активного нет (все pending/absent) — «Этап: не начат».
+function railAriaLabel(rail: FeatureRailSegment[], closed: boolean): string {
+  if (closed) return 'Этап: закрыта';
+  const active = rail.find(s => s.state === 'active');
+  if (!active) return 'Этап: не начат';
+  return `Этап: ${STAGE_NAME[active.key]}`;
+}
+
+// props: rail — 7 сегментов индекса (бэк); closed — фича закрыта (приглушить рельсу).
+export function FeatureRail({ rail, closed = false }: { rail: FeatureRailSegment[]; closed?: boolean }) {
+  // Рельса «глупая»: не считает, только раскладывает rail[].
+  const label = railAriaLabel(rail, closed);
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      data-testid="feature-rail"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs, flexShrink: 0 }}
+    >
+      {rail.map(seg => (
+        <i
+          key={seg.key}
+          title={`${STAGE_NAME[seg.key]} — ${stateWord(seg)}`}
+          style={segmentStyle(seg, closed)}
+        />
+      ))}
+    </span>
+  );
+}

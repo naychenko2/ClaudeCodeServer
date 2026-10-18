@@ -21,8 +21,8 @@ export type FeatureRailTone = 'run' | 'loop' | 'wait' | 'stopped';
 // Семь стадий конвейера в порядке жизненного цикла (контракт: «ровно 7»).
 export type FeatureRailKey = 'cut' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
 
-// Сегмент рельсы. У закрытой фичи `active` нет: стадия — `absent` (задач нет)
-// или `pending` (задачи есть), tone = null.
+// Сегмент рельсы. У закрытой фичи `active` нет: стадия — `done` (задачи есть,
+// пройдены) или `absent` (задач нет), tone = null (не `pending` — всё завершено).
 export interface FeatureRailSegment {
   key: FeatureRailKey;
   state: FeatureRailState;
@@ -101,6 +101,8 @@ export interface FeatureIndexFeature {
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:
 // key > curator > orchestrator > executor; на паре «чат × фича» одна запись
 // с сильнейшим видом.
+// `key` — зарезервирован: бэк его в chats НЕ отдаёт (ADR-031 §1) — ключевой чат
+// берётся из строки feature.keySessionId, а в chats он приходит как curator/orchestrator.
 export type FeatureChatKind = 'key' | 'curator' | 'orchestrator' | 'executor';
 
 // Связь «чат × фича» (запись в chats).

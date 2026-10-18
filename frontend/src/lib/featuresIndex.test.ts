@@ -114,10 +114,13 @@ describe('лукап featureOf по фикстуре', () => {
   });
   afterEach(() => __test.reset());
 
-  it('мультифичевый куратор: все фичи чата, в порядке силы (key > curator > orchestrator)', () => {
+  it('мультифичевый чат: все фичи, порядок — как в chats[] бэка; виды curator/curator/orchestrator', () => {
     const entries = featureOf('chat-cur');
+    // featureOf не пересортировывает: порядок = порядок links в chats[chat-cur] (бэк
+    // отдаёт по силе). feat-closed — curator (chat-cur — ключевой/создавший эпик),
+    // feat-attention — curator, feat-running — orchestrator.
     expect(entries.map(e => e.feature.featureId)).toEqual(['feat-closed', 'feat-attention', 'feat-running']);
-    expect(entries.map(e => e.link.kind)).toEqual(['key', 'curator', 'orchestrator']);
+    expect(entries.map(e => e.link.kind)).toEqual(['curator', 'curator', 'orchestrator']);
   });
 
   it('исполнитель: роль executor с taskRole/stepRef/lane', () => {
@@ -134,7 +137,8 @@ describe('лукап featureOf по фикстуре', () => {
     const arch = featureOf('chat-key-arch');
     expect(arch).toHaveLength(1);
     expect(arch[0].feature.featureId).toBe('feat-running');
-    expect(arch[0].link.kind).toBe('key');
+    // ключевой чат в chats приходит не как 'key' (зарезервирован), а как curator
+    expect(arch[0].link.kind).toBe('curator');
     // ключевой чат фичи feat-idle живёт в другом проекте (keyProjectId = p2)
     const other = featureOf('chat-key-other');
     expect(other[0].feature.featureId).toBe('feat-idle');

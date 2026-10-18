@@ -236,6 +236,10 @@ interface Props {
   // строкой над ней): «ключевой» (ключевой чат фичи) и/или «ещё N» (чат принадлежит
   // ещё N фичам). Не задано — метки нет.
   featureRole?: string;
+  // Карточка внутри группы фичи (режим «Фичи»): метку фичи (FeatureLabel) не рисуем —
+  // её уже несёт заголовок группы (n1: дубль имени внутри группы). Не задано — метка
+  // по featureLabelFor (плоский список, «Дни», «Теги», «Темы»)
+  inFeatureGroup?: boolean;
   // === Свайп-действия (мобильная раскладка) ===
   // Эта карточка раскрыта свайпом (список держит ОДНУ раскрытую — открытие другой
   // закрывает предыдущую). Не задан/undefined — свайп-механика выключена
@@ -302,7 +306,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole,
+  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -1024,8 +1028,9 @@ function ChatCardView({
           <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
           {/* Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
-              Глиф + название (обрезка с title); в «Днях» — вместо имени персоны */}
-          {feature && <FeatureLabel feature={feature} />}
+              Глиф + название (обрезка с title); в «Днях» — вместо имени персоны.
+              Внутри группы фичи (inFeatureGroup) — не рисуем: имя уже в заголовке (n1) */}
+          {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}
           {/* Роль чата в фиче (режим «Фичи»): «ключевой»/«ещё N» — в подстроке
               карточки, а не отдельной строкой над ней (макет, минор m6) */}
           {featureRole && (

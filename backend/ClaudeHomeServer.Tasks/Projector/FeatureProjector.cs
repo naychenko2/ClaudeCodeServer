@@ -779,4 +779,167 @@ public sealed class FeatureProjector(TaskManager tasks)
         all.AddRange(owner.Where(t => t.FeatureId == epic.Id));
         return all;
     }
+
+    // ─── Б1: индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index) ────────────────
+
+    // Обёртка для REST (Б3): owner = задачи владельца (per-owner, fail-closed), сессии — узкий
+    // снимок от контроллера (SessionManager). Ядро — чистая функция <see cref="BuildIndexCore"/>.
+    public FeatureIndex BuildIndex(
+        string ownerId,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        string? projectId = null,
+        DateTime? now = null)
+        => BuildIndexCore(tasks.GetByOwner(ownerId).ToList(), sessions, projectId, now);
+
+    // Чистое ядро индекса (на нём золотые тесты, как на <see cref="Build"/>): задачи владельца
+    // (owner) + узкий снимок сессий (sessions) → карта членства (Chats) и строки-заготовки фич
+    // (Features). Хранилище сессий внутри проектора НЕ трогает (шов решён в С0).
+    //
+    // Членство чата в фиче F — сильнейший вид на пару «чат × фича» (key > curator > orchestrator
+    // > executor; key добавит Б2):
+    //   executor     — Session.TaskId → задача с FeatureId == F (или сама эпик F: Role=feature);
+    //   curator      — epic.SourceSessionId == чат;
+    //   orchestrator — epic.ExecutorLaunchedBySessionId == чат ИЛИ ExecutorLaunchedBySessionId
+    //                  дочерней задачи фичи == чат.
+    // SourceSessionId дочерних задач — НЕ членство (слабая связь: чат, создавший задачу, в фичу
+    // не «входит» — показывает только плашку).
+    //
+    // Задачи группируются по FeatureId ОДИН раз (ToLookup) — уходит O(E×T) старого FeatureTasks.
+    internal static FeatureIndex BuildIndexCore(
+        List<TaskItem> owner,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        string? projectId = null,
+        DateTime? now = null)
+    {
+        ArgumentNullException.ThrowIfNull(sessions);
+        _ = now ?? DateTime.UtcNow; // «сейчас» — для длительностей (Б2); Б1 пока не трогает
+
+        // Задача по id — для executor-членства (Session.TaskId → задача).
+        var byId = owner.ToDictionary(t => t.Id);
+        // Эпики (role=feature) — источники curator/orchestrator-членства.
+        var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
+
+        // curator: кто создал эпик (SourceSessionId) → фичи.
+        var curatorBySession = new Dictionary<string, HashSet<string>>();
+        foreach (var epic in epics)
+            if (epic.SourceSessionId is not null)
+                AddToSet(curatorBySession, epic.SourceSessionId, epic.Id);
+
+        // orchestrator: кто запускал исполнителя эпика (ExecutorLaunchedBySessionId эпика)
+        // ИЛИ дочерней задачи фичи (ExecutorLaunchedBySessionId задачи) → фичи.
+        var orchestratorBySession = new Dictionary<string, HashSet<string>>();
+        foreach (var epic in epics)
+            if (epic.ExecutorLaunchedBySessionId is not null)
+                AddToSet(orchestratorBySession, epic.ExecutorLaunchedBySessionId, epic.Id);
+        foreach (var t in owner)
+            if (t.FeatureId is not null && t.ExecutorLaunchedBySessionId is not null)
+                AddToSet(orchestratorBySession, t.ExecutorLaunchedBySessionId, t.FeatureId);
+
+        // Область: сессии проекта (или все, если projectId не задан).
+        var inScope = projectId is null
+            ? sessions
+            : sessions.Where(s => s.ProjectId == projectId);
+
+        // sessionId → featureId → (сила, вид, role, stepRef, lane); на пару «чат × фича» —
+        // сильнейший вид (Add держит минимум по Strength).
+        var map = new Dictionary<string,
+            Dictionary<string, (int Strength, string Kind, string? Role, string? StepRef, string? Lane)>>();
+
+        foreach (var s in inScope)
+        {
+            // executor: Session.TaskId → задача с FeatureId == F (или сама эпик F).
+            if (s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
+            {
+                var featureId = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
+                if (featureId is not null)
+                    Add(map, s.Id, featureId, KindStrength("executor"), "executor",
+                        task.Role, task.StepRef, task.Lane);
+            }
+
+            // curator: epic.SourceSessionId == чат.
+            if (curatorBySession.TryGetValue(s.Id, out var curators))
+                foreach (var f in curators)
+                    Add(map, s.Id, f, KindStrength("curator"), "curator", null, null, null);
+
+            // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
+            if (orchestratorBySession.TryGetValue(s.Id, out var orchestrators))
+                foreach (var f in orchestrators)
+                    Add(map, s.Id, f, KindStrength("orchestrator"), "orchestrator", null, null, null);
+        }
+
+        // Строки-заготовки фич (Features). Область фич: эпик в проекте ИЛИ хотя бы один чат
+        // фичи в области (map). Эпик, которого нет в owner (удалён), строку не даёт — фича
+        // исчезает целиком (висячий FeatureId дочерних не поднимает её).
+        var featureIdsInScope = new HashSet<string>();
+        foreach (var epic in epics)
+            if (projectId is null || epic.ProjectId == projectId)
+                featureIdsInScope.Add(epic.Id);
+        foreach (var feats in map.Values)
+            foreach (var f in feats.Keys)
+                featureIdsInScope.Add(f);
+
+        // Порядок Features: по FeatureId (детерминизм); Б2 пересортирует по OrderRuns.
+        var survivingEpics = featureIdsInScope
+            .Select(id => epics.FirstOrDefault(e => e.Id == id))
+            .Where(e => e is not null)
+            .Cast<TaskItem>()
+            .ToList();
+        var rows = survivingEpics
+            .Select(epic => new FeatureIndexRow(epic.Id, epic.Title, epic.ProjectId))
+            .OrderBy(r => r.FeatureId)
+            .ToList();
+        var featureOrder = new Dictionary<string, int>();
+        for (var i = 0; i < rows.Count; i++)
+            featureOrder[rows[i].FeatureId] = i;
+
+        // Chats: sessionId → записи, упорядоченные по силе связи (key > curator > orchestrator
+        // > executor); при равенстве — по порядку фичи в Features. Членство в фичу, чей эпик
+        // исчез (удалён), не показываем — фича «исчезает целиком», чат за ней не тянется.
+        var surviving = new HashSet<string>(rows.Select(r => r.FeatureId));
+        var chats = new Dictionary<string, List<FeatureIndexChatEntry>>();
+        foreach (var (sessionId, feats) in map)
+        {
+            var entries = feats
+                .Where(kv => surviving.Contains(kv.Key))
+                .OrderBy(kv => kv.Value.Strength)
+                .ThenBy(kv => featureOrder.TryGetValue(kv.Key, out var i) ? i : int.MaxValue)
+                .Select(kv => new FeatureIndexChatEntry(
+                    kv.Key, kv.Value.Kind, kv.Value.Role, kv.Value.StepRef, kv.Value.Lane))
+                .ToList();
+            if (entries.Count > 0)
+                chats[sessionId] = entries;
+        }
+
+        return new FeatureIndex { Chats = chats, Features = rows };
+    }
+
+    // Сила связи вида: key(0) > curator(1) > orchestrator(2) > executor(3).
+    // key добавит Б2 (цепочка ключевого чата); пока в членстве не участвует.
+    private static int KindStrength(string kind) => kind switch
+    {
+        "key" => 0,
+        "curator" => 1,
+        "orchestrator" => 2,
+        _ => 3, // executor
+    };
+
+    // Добавляет (или усиливает) членство чата в фичу: на пару «чат × фича» держим сильнейший
+    // вид (минимум по Strength) и его данные (role/stepRef/lane — только у executor).
+    private static void Add(
+        Dictionary<string, Dictionary<string, (int, string, string?, string?, string?)>> map,
+        string sessionId, string featureId, int strength, string kind,
+        string? role, string? stepRef, string? lane)
+    {
+        if (!map.TryGetValue(sessionId, out var feats))
+            map[sessionId] = feats = new();
+        if (!feats.TryGetValue(featureId, out var cur) || strength < cur.Item1)
+            feats[featureId] = (strength, kind, role, stepRef, lane);
+    }
+
+    private static void AddToSet(Dictionary<string, HashSet<string>> map, string key, string value)
+    {
+        if (!map.TryGetValue(key, out var set))
+            map[key] = set = new();
+        set.Add(value);
+    }
 }

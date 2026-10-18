@@ -158,6 +158,95 @@ public class HardwareTests : IDisposable
             .Read().Should().BeNull("чужая машина без hwmon — не исключение");
     }
 
+    // ─── Диски: used/total — пара с одной ФС (DriveInfo подменяется делегатом) ─────
+
+    // Фейковый DriveInfo: «точка монтирования → (всего, свободно) в ГБ»; неизвестная → (0,0) → null.
+    private static Func<string, (long total, long free)> FakeFsSize(Dictionary<string, (long totalGb, long freeGb)> map) =>
+        mp => map.TryGetValue(mp, out var v)
+            ? (v.totalGb * 1024L * 1024 * 1024, v.freeGb * 1024L * 1024 * 1024)
+            : (0, 0);
+
+    // hwmon с двумя nvme-контроллерами (nvme0 — system, nvme1 — kv) + mountinfo и fsSize на подмену.
+    private (HwmonReader reader, string mountinfo) BuildFakeHwmonDisks(string mountinfoContent, Func<string, (long, long)> fsSize)
+    {
+        var hw = Dir("hwmon-disk");
+        var nvme1 = Dir("hwmon-disk", "hwmon1");
+        Put(nvme1, "name", "nvme\n");
+        File.CreateSymbolicLink(Path.Combine(nvme1, "device"), "../../nvme1");
+        var nvme0 = Dir("hwmon-disk", "hwmon0");
+        Put(nvme0, "name", "nvme\n");
+        File.CreateSymbolicLink(Path.Combine(nvme0, "device"), "../../nvme0");
+
+        var mountinfo = Path.Combine(_root, "mountinfo-disk");
+        File.WriteAllText(mountinfo, mountinfoContent);
+        return (new HwmonReader(hw, Dir("block-disk"), mountinfo, fsSize), mountinfo);
+    }
+
+    [Fact]
+    public void Hwmon_KvDisk_UsesKvdiskFs_NotLargestOnController()
+    {
+        // Один контроллер (nvme1) с ДВУМЯ ФС: большая «не kvdisk» (/mnt/big) и меньшая в kvdisk.
+        var map = new Dictionary<string, (long, long)>
+        {
+            ["/"] = (500, 100),
+            ["/home/an/llm/kvdisk"] = (492, 122),
+            ["/mnt/big"] = (1000, 500),
+        };
+        var content =
+            "36 1 8:1 / / rw - ext4 /dev/nvme0n1p2 rw\n" +
+            "364 43 259:1 / /home/an/llm/kvdisk rw shared:197 - ext4 /dev/nvme1n1p1 rw\n" +
+            "365 44 259:2 / /mnt/big rw - ext4 /dev/nvme1n1p2 rw\n";
+        var (reader, _) = BuildFakeHwmonDisks(content, FakeFsSize(map));
+        var snap = reader.Read()!;
+
+        var kv = snap.Disks!.Single(d => d.Role == "kv");
+        kv.Controller.Should().Be("nvme1");
+        kv.UsedGb.Should().Be(370, "kv — ФС kvdisk (492−122), а не наибольшая на контроллере /mnt/big");
+        kv.TotalGb.Should().Be(492, "total — той же ФС kvdisk, не из /sys/block");
+
+        var sys = snap.Disks.Single(d => d.Role == "system");
+        sys.UsedGb.Should().Be(400, "system — наибольшая ФС контроллера (/)");
+        sys.TotalGb.Should().Be(500);
+    }
+
+    [Theory]
+    [InlineData(492, 122)]   // used=370, total=492
+    [InlineData(500, 100)]   // used=400, total=500
+    [InlineData(100, 99)]    // почти полная: used=1, total=100
+    [InlineData(1000, 0)]    // полная: used=1000, total=1000
+    public void Hwmon_UsedLeqTotal_Always(long totalGb, long freeGb)
+    {
+        var map = new Dictionary<string, (long, long)>
+        {
+            ["/home/an/llm/kvdisk"] = (totalGb, freeGb),
+        };
+        var content = "364 43 259:1 / /home/an/llm/kvdisk rw shared:197 - ext4 /dev/nvme1n1p1 rw\n";
+        var (reader, _) = BuildFakeHwmonDisks(content, FakeFsSize(map));
+        var snap = reader.Read()!;
+
+        var kv = snap.Disks!.Single(d => d.Role == "kv");
+        kv.UsedGb.Should().NotBeNull();
+        kv.TotalGb.Should().NotBeNull();
+        kv.UsedGb!.Value.Should().BeLessOrEqualTo(kv.TotalGb!.Value, "used ≤ total всегда");
+    }
+
+    [Fact]
+    public void Hwmon_NoMountedFs_UsedTotalNull()
+    {
+        // nvme1 — kv (kvdisk смонтирован, ФС читается); nvme0 — system, но ни одной ФС не смонтировано.
+        var map = new Dictionary<string, (long, long)>
+        {
+            ["/home/an/llm/kvdisk"] = (492, 122),
+        };
+        var content = "364 43 259:1 / /home/an/llm/kvdisk rw shared:197 - ext4 /dev/nvme1n1p1 rw\n";
+        var (reader, _) = BuildFakeHwmonDisks(content, FakeFsSize(map));
+        var snap = reader.Read()!;
+
+        var sys = snap.Disks!.Single(d => d.Role == "system");
+        sys.UsedGb.Should().BeNull("контроллер без смонтированных ФС → null, не 0");
+        sys.TotalGb.Should().BeNull();
+    }
+
     // ─── Уровни по таблице порогов (границы) ─────────────────────────────────────
 
     [Theory]

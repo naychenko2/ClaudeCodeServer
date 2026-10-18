@@ -234,16 +234,14 @@ public class JwtService
         if (principal.FindFirstValue(TokenKindClaim) == ServiceTokenKind) return true;
 
         var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (string.IsNullOrEmpty(userId)) return false;
 
         // Токена без claim tv (выпущен до введения версий) достаточно, чтобы отказать:
         // именно такие токены смена пароля и не отзывала
         var raw = principal.FindFirstValue(TokenVersionClaim);
         if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var version)) return false;
 
-        // fail-closed (ADR-030): пустой sub не отсекаем здесь (401), а пускаем в контроллер —
-        // там fail-closed-проверка вернёт 404 «функции нет». Отсутствующий в store пустой sub
-        // всё равно даёт 401 (IsTokenVersionCurrent не находит пользователя).
-        return _users.IsTokenVersionCurrent(userId ?? "", version);
+        return _users.IsTokenVersionCurrent(userId, version);
     }
 
     // Валидирует обычный пользовательский/сервисный JWT и возвращает sub (userId) или null.

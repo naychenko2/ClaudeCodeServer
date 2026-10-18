@@ -105,6 +105,11 @@ export interface LocalModelStats {
 // gpus=null — данные карты медиа ещё не приходят с узла ComfyUI (шаг 31).
 export interface LocalModelMedia {
   configured: boolean;
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
+  // Сколько задач стоит перед текущим пользователем в очереди; null — сервер не сообщает
+  queueAhead?: number | null;
   comfy: {
     // working | busy | down | disabled
     status: 'working' | 'busy' | 'down' | 'disabled';
@@ -237,6 +242,9 @@ export interface MediaHistoryRecord {
 // ленты), счётчики для меню фильтров (с учётом остальных активных фильтров).
 export interface MediaHistoryPage {
   records: MediaHistoryRecord[];
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
   nextCursor: string | null;
   counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
 }

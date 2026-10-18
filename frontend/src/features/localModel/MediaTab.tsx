@@ -3,6 +3,8 @@
 // «Медиа · спецификация для Киры»): жив ли ComfyUI и что в памяти → карта →
 // что считается → очередь → последний час. Только просмотр: отменять/переставлять
 // чужие задачи отсюда нельзя (свою — из её карточки в чате).
+// Не-админ (scope=self): карта скрыта (gpus=null), только свои строки,
+// подпись «перед вами в очереди: N».
 //
 // Состояния: configured:false (comfy.status=disabled) — «не подключено»;
 // down — баннер «не отвечает с HH:MM» + последние данные приглушённые;
@@ -17,7 +19,7 @@ import type { LocalModelMedia, MediaQueue, MediaRunning } from './api';
 import {
   type ComfyTone, comfyStatusInfo, loadedModelLine, formatClockTime,
   queueStartLine, runningProgress,
-  remainingLine, isOwnJob, jobOwnerLabel, slotsLine, queueJobLabel,
+  remainingLine, isOwnJob, jobOwnerLabel, pluralTasks, slotsLine, queueJobLabel,
 } from './mediaFormat';
 import { MediaHistory } from './MediaHistory';
 import { GpuCard } from './GpuCard';
@@ -390,6 +392,11 @@ function QueueCard({ media, isMobile, onOpen }: { media: LocalModelMedia; isMobi
           ))}
         </div>
       )}
+      {media.queueAhead != null && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, marginTop: SP.xs }}>
+          Перед вами в очереди: {media.queueAhead} {pluralTasks(media.queueAhead)}
+        </div>
+      )}
       <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, marginTop: SP.xs }}>
         Мест {limit} на всех. У одного человека до 2 задач, из них 1 тяжёлая.
       </div>
@@ -470,6 +477,8 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
   const stale: CSSProperties = down
     ? { opacity: 0.55, filter: 'grayscale(0.6)', pointerEvents: 'none' }
     : {};
+  // Не-админ: только свои данные — карта не показывается (gpus=null)
+  const self = (data.scope ?? 'all') === 'self';
 
   return (
     <>
@@ -478,7 +487,7 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch }: {
       <ComfySubline media={data} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <LoadedModelLine media={data} />
-        <MediaGpuCard media={data} />
+        {!self && <MediaGpuCard media={data} />}
         {data.running.length === 0 && data.queue.length === 0
           ? <GpuFreeCard />
           : <>

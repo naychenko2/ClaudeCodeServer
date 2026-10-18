@@ -485,12 +485,15 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
 
     // ─── Медиа: GET /api/local-model/stats/media ─────────────────────────────────
 
-    // Не-админ (роль user) → 403. Мутация: убрать [Authorize(Roles="admin")] — тест краснеет.
+    // Не-админ (роль user) → 200 (ADR-030, 2026-10-18: «Медиа» — любой аутентифицированный),
+    // scope "self". Мутация: вернуть [Authorize(Roles="admin")] на /stats/media — 403, тест краснеет.
     [Fact]
-    public async Task Media_НеАдмин_403()
+    public async Task Media_НеАдмин_200_ScopeSelf()
     {
         var resp = await _user.GetAsync("/api/local-model/stats/media");
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("scope").GetString().Should().Be("self");
     }
 
     // Медиа-стенд не настроен (IComfyStats отдаёт снимок Configured:false, status:disabled)
@@ -754,6 +757,162 @@ public class LocalModelStatsControllerTests : IClassFixture<TestWebApplicationFa
         // пометка «не сообщает» проходит в unsupported
         body.GetProperty("unsupported").EnumerateArray().Select(e => e.GetString()!)
             .Should().Contain("узел не сообщает загруженные модели");
+    }
+
+    // ─── Медиа: изоляция не-админа (ADR-030, 2026-10-18) ─────────────────────────────
+
+    // Снимок с двумя владельцами: myId (testuser/админ) и otherId (seconduser/не-админ).
+    // running: по одному своему/чужому; queue: 4 строки (2 чужих, 2 своих, чередуясь);
+    // lastHour: по одной. Не-админ — otherId.
+    private static ComfyMediaStatsSnapshot TwoOwnerSnapshot(string myId, string otherId)
+    {
+        var t0 = new DateTimeOffset(2026, 10, 13, 12, 0, 0, TimeSpan.Zero);
+        return new ComfyMediaStatsSnapshot(
+            Configured: true,
+            Status: "working",
+            DownSince: null,
+            Version: "1.0",
+            Gpus: [new ComfyGpuInfo(0, "", "RTX 3090", 97, 21874, 24576, 71, 338, 350)],
+            LoadedModels: ["qwen_image.safetensors"],
+            SlotsUsed: 2,
+            SlotsLimit: 4,
+            Running:
+            [
+                new ComfyJobRow("image", "t2i", false, otherId, "sess-mine", "proj-1", null, null, 40, true, 120, 80, null, t0),
+                new ComfyJobRow("video", "t2v", true, myId, "sess-other", "proj-2", null, null, null, false, 600, null, null, t0),
+            ],
+            Queue:
+            [
+                new ComfyJobRow("audio", "tts", false, myId, "sess-a1", "proj-a1", null, null, null, false, 90, null, 30, null),
+                new ComfyJobRow("image", "t2i", false, otherId, "sess-a2", "proj-a2", null, null, null, false, 90, null, 30, null),
+                new ComfyJobRow("video", "t2v", false, myId, "sess-a3", "proj-a3", null, null, null, false, 90, null, 30, null),
+                new ComfyJobRow("image", "t2i", false, otherId, "sess-a4", "proj-a4", null, null, null, false, 90, null, 30, null),
+            ],
+            LastHour:
+            [
+                new ComfyDoneRow("image", "t2i", otherId, "completed", 60, 120, t0),
+                new ComfyDoneRow("video", "t2v", myId, "failed", 300, 600, t0),
+            ],
+            Unsupported: []);
+    }
+
+    // Не-админ видит только свои строки (OwnerId == sub, не Foreign): чужие (running/queue/lastHour)
+    // не попадают в ответ вовсе. Мутация: не фильтровать по OwnerId/Foreign — чужая строка
+    // просочится, тест краснеет.
+    [Fact]
+    public async Task Media_НеАдмин_ТолькоСвоиСтроки()
+    {
+        var fake = new FakeComfyStats();
+        var factory = BuildFactoryWithComfyStats(fake);
+        using var nonAdmin = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
+        fake.Snapshot = TwoOwnerSnapshot(myId, otherId);
+
+        var resp = await nonAdmin.GetAsync("/api/local-model/stats/media");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        // running: только своя (1 строка), own=true; чужая (admin) не попала.
+        var running = body.GetProperty("running");
+        running.GetArrayLength().Should().Be(1, "не-админ видит только свои прогоны");
+        running[0].GetProperty("own").GetBoolean().Should().BeTrue();
+        running[0].GetProperty("sessionId").GetString().Should().Be("sess-mine");
+
+        // queue: только свои (2 строки), позиции — в ПОЛНОЙ очереди (2 и 4), не перенумерованные.
+        var queue = body.GetProperty("queue");
+        queue.GetArrayLength().Should().Be(2, "не-админ видит только свои задачи в очереди");
+        queue[0].GetProperty("position").GetInt32().Should().Be(2, "позиция в полной очереди, не в отфильтрованном");
+        queue[1].GetProperty("position").GetInt32().Should().Be(4);
+        queue[0].GetProperty("sessionId").GetString().Should().Be("sess-a2");
+
+        // lastHour: только свой (1 строка), own=true; чужая (admin) не попала.
+        var lastHour = body.GetProperty("lastHour");
+        lastHour.GetArrayLength().Should().Be(1, "не-админ видит только свои завершённые");
+        lastHour[0].GetProperty("own").GetBoolean().Should().BeTrue();
+        lastHour[0].GetProperty("outcome").GetString().Should().Be("completed");
+    }
+
+    // Не-админ: gpus null (скрыты), queueAhead — по ПОЛНОЙ очереди (1 задача перед первой своей).
+    // Мутация: gpus отдавать не-админу (или queueAhead считать по отфильтрованному) — тест краснеет.
+    [Fact]
+    public async Task Media_НеАдмин_GpusNull_И_QueueAhead()
+    {
+        var fake = new FakeComfyStats();
+        var factory = BuildFactoryWithComfyStats(fake);
+        using var nonAdmin = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
+        fake.Snapshot = TwoOwnerSnapshot(myId, otherId);
+
+        var resp = await nonAdmin.GetAsync("/api/local-model/stats/media");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        // gpus скрыты у не-админа (null, не пустой массив).
+        body.GetProperty("gpus").ValueKind.Should().Be(JsonValueKind.Null, "gpus у не-админа — null");
+        // queueAhead: первая своя задача в полной очереди — позиция 2, перед ней 1 (чужая a1).
+        body.GetProperty("queueAhead").GetInt32().Should().Be(1, "задач перед первой своей в полной очереди");
+        // loadedModels/slots/comfy — как есть (не скрыты).
+        body.GetProperty("loadedModels").GetArrayLength().Should().Be(1);
+        body.GetProperty("slots").GetProperty("used").GetInt32().Should().Be(2);
+    }
+
+    // Админ: scope "all", gpus на месте, ВСЕ строки (свои и чужие), queueAhead по своим.
+    // Мутация: scope "self" у админа (или фильтровать чужие) — тест краснеет.
+    [Fact]
+    public async Task Media_Админ_ScopeAll_ВсеСтроки()
+    {
+        var fake = new FakeComfyStats();
+        var factory = BuildFactoryWithComfyStats(fake);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
+        fake.Snapshot = TwoOwnerSnapshot(myId, otherId);
+
+        var resp = await admin.GetAsync("/api/local-model/stats/media");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("scope").GetString().Should().Be("all");
+        // gpus на месте (1 карта).
+        body.GetProperty("gpus").GetArrayLength().Should().Be(1);
+        // ВСЕ строки: running 2, queue 4, lastHour 2.
+        body.GetProperty("running").GetArrayLength().Should().Be(2);
+        body.GetProperty("queue").GetArrayLength().Should().Be(4);
+        body.GetProperty("lastHour").GetArrayLength().Should().Be(2);
+        // queueAhead: первая СВОЯ (admin) задача в полной очереди — позиция 1, перед ней 0.
+        body.GetProperty("queueAhead").GetInt32().Should().Be(0);
+    }
+
+    // Рубильник MediaForUsers=false: не-админ → 404 (как будто функции нет), админ работает (200).
+    // Мутация: не проверять рубильник для не-админа — 200, тест краснеет.
+    [Fact]
+    public async Task Media_MediaForUsersFalse_НеАдмин404_Админ200()
+    {
+        var fake = new FakeComfyStats();
+        var factory = BuildFactoryWithComfyStats(fake);
+        factory.ExtraConfig["LocalModelStats:MediaForUsers"] = "false";
+        using var nonAdmin = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
+        fake.Snapshot = TwoOwnerSnapshot(myId, otherId);
+
+        var respUser = await nonAdmin.GetAsync("/api/local-model/stats/media");
+        respUser.StatusCode.Should().Be(HttpStatusCode.NotFound, "не-админ без MediaForUsers — 404");
+
+        var respAdmin = await admin.GetAsync("/api/local-model/stats/media");
+        respAdmin.StatusCode.Should().Be(HttpStatusCode.OK, "админ не зависит от MediaForUsers");
+        var body = await respAdmin.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("scope").GetString().Should().Be("all");
     }
 
     // ─── Хелперы ─────────────────────────────────────────────────────────────────

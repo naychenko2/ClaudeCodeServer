@@ -45,12 +45,16 @@ public class LocalModelStatsHistoryTests
         // Реальный id админа (testuser): записи журнала ведутся от его имени, чтобы
         // OwnerLogin резолвил логин, а не null
         public string AdminId { get; }
+        // Реальный id не-админа (seconduser): для тестов изоляции «только свои записи»
+        public string NonAdminId { get; }
 
         public Harness(string source, Func<MediaHistoryRef, int, MediaHistoryResolution?>? resolve,
-            TimeProvider? time = null, DateTimeOffset? processStart = null)
+            TimeProvider? time = null, DateTimeOffset? processStart = null, bool? mediaForUsers = null)
         {
             Fake = new FakeHistorySource { Source = source, Resolve = resolve };
             Factory = new TestWebApplicationFactory();
+            if (mediaForUsers is { } mfu)
+                Factory.ExtraConfig["LocalModelStats:MediaForUsers"] = mfu ? "true" : "false";
             Factory.ExtraServices = s =>
             {
                 s.AddSingleton<IMediaHistoryResultSource>(Fake);
@@ -66,19 +70,22 @@ public class LocalModelStatsHistoryTests
             // Админу (testuser) включаем флаг local-model-stats
             var users = Factory.Services.GetRequiredService<UserStore>();
             AdminId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+            NonAdminId = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
             users.SetFeatureFlag(AdminId, "local-model-stats", true);
             Admin = Factory.CreateAuthenticatedClient();
             NonAdmin = Factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         }
 
-        // Запись в журнал: строка v:1 (enqueued + finished) с заданным origin
-        public void WriteRecord(string promptId, string source, string? model = "sdxl", string? op = "generate_image")
+        // Запись в журнал: строка v:1 (enqueued + finished) с заданным origin.
+        // ownerId — владелец (по умолчанию админ); для тестов изоляции — id не-админа.
+        public void WriteRecord(string promptId, string source, string? model = "sdxl", string? op = "generate_image",
+            string? ownerId = null)
         {
             var dir = Path.Combine(Factory.TempDir, "local-media-history");
             Directory.CreateDirectory(dir);
             var day = DateTime.UtcNow.ToString("yyyy-MM-dd");
             var origin = new LocalJobOrigin(
-                OwnerId: AdminId, SessionId: "chat-1", Kind: "image", Op: op ?? "generate_image",
+                OwnerId: ownerId ?? AdminId, SessionId: "chat-1", Kind: "image", Op: op ?? "generate_image",
                 Heavy: false, ProjectId: "proj-1", Source: source, SourceJobId: "job-1");
             var line = new JsonObject
             {
@@ -207,13 +214,117 @@ public class LocalModelStatsHistoryTests
         public void Dispose() => Factory.Dispose();
     }
 
-    // Не-админ (seconduser, роль user) — 403. Мутация: убрать Roles="admin" — тест краснеет
+    // Не-админ (seconduser, роль user) — 200 (ADR-030, 2026-10-18: история — любой
+    // аутентифицированный), scope "self". Мутация: вернуть [Authorize(Roles="admin")] — 403,
+    // тест краснеет.
     [Fact]
-    public async Task НеАдмин_403()
+    public async Task НеАдмин_200_ScopeSelf()
     {
         using var h = new Harness("test-source", null);
         var resp = await h.NonAdmin.GetAsync("/api/local-model/history");
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("scope").GetString().Should().Be("self");
+    }
+
+    // ─── Изоляция не-админа (ADR-030, 2026-10-18) ───────────────────────────────────
+
+    // Не-админ видит только свои записи (OwnerId == sub на уровне индекса): чужие не попадают.
+    // Админ — все. Мутация: не фильтровать по OwnerId — чужая запись просочится, тест краснеет.
+    [Fact]
+    public async Task НеАдмин_ТолькоСвоиЗаписи()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteRecord("p_admin", "test-source");                       // админа
+        h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // не-админа
+
+        // Не-админ: только своя (1), scope self.
+        var respUser = await h.NonAdmin.GetAsync("/api/local-model/history");
+        respUser.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyUser = await respUser.Content.ReadFromJsonAsync<JsonElement>();
+        bodyUser.GetProperty("scope").GetString().Should().Be("self");
+        Ids(bodyUser).Should().BeEquivalentTo("p_nonadmin");
+
+        // Админ: обе (2), scope all.
+        var respAdmin = await h.Admin.GetAsync("/api/local-model/history");
+        respAdmin.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyAdmin = await respAdmin.Content.ReadFromJsonAsync<JsonElement>();
+        bodyAdmin.GetProperty("scope").GetString().Should().Be("all");
+        Ids(bodyAdmin).Should().BeEquivalentTo("p_admin", "p_nonadmin");
+    }
+
+    // Не-админ: логин владельца в своих записях не раскрывается (owner null); админ видит логин.
+    // Мутация: отдавать логин не-админу — тест краснеет.
+    [Fact]
+    public async Task НеАдмин_ЛогинНеРаскрывается()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId);
+
+        // Не-админ: owner null (своя запись, логин не раскрываем).
+        var respUser = await h.NonAdmin.GetAsync("/api/local-model/history");
+        var bodyUser = await respUser.Content.ReadFromJsonAsync<JsonElement>();
+        bodyUser.GetProperty("records")[0].GetProperty("owner").ValueKind
+            .Should().Be(JsonValueKind.Null, "не-админ: логин владельца не раскрывается");
+
+        // Админ: owner = логин не-админа (seconduser).
+        var respAdmin = await h.Admin.GetAsync("/api/local-model/history");
+        var bodyAdmin = await respAdmin.Content.ReadFromJsonAsync<JsonElement>();
+        bodyAdmin.GetProperty("records")[0].GetProperty("owner").GetString()
+            .Should().Be(TestWebApplicationFactory.SecondUsername);
+    }
+
+    // Не-админ: параметр login=чужой не расширяет выдачу (фильтр — только по OwnerId).
+    // Мутация: учитывать login у не-админа — чужая запись просочится, тест краснеет.
+    [Fact]
+    public async Task НеАдмин_LoginЧужой_НеРасширяет()
+    {
+        using var h = new Harness("test-source", null);
+        h.WriteRecord("p_admin", "test-source");                        // админа (login=testuser)
+        h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // не-админа
+
+        // Не-админ с login=testuser (логин админа): всё равно только своя запись.
+        var resp = await h.NonAdmin.GetAsync("/api/local-model/history?login=" + TestWebApplicationFactory.TestUsername);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        // login не расширяет выдачу не-админа: только своя запись
+        Ids(body).Should().BeEquivalentTo("p_nonadmin");
+    }
+
+    // Не-админ: чужая запись (id) → 404 (не 403 — не подтверждаем существование чужой).
+    // Мутация: 403 вместо 404 (или не проверять владельца) — тест краснеет.
+    [Fact]
+    public async Task НеАдмин_ЧужойId_404()
+    {
+        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
+        // Обе записи ДО первого запроса: индекс грузится один раз (Load идемпотентна).
+        h.WriteRecord("p_admin", "test-source");                        // чужая (админа)
+        h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // своя
+
+        // Не-админ просит файл чужой (админской) записи → 404 (не 403).
+        var resp = await h.NonAdmin.GetAsync("/api/local-model/history/p_admin/file");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "чужая запись — 404, не 403");
+
+        // Своя запись → 200 (файл отдаётся).
+        var respOwn = await h.NonAdmin.GetAsync("/api/local-model/history/p_nonadmin/file");
+        respOwn.StatusCode.Should().Be(HttpStatusCode.OK, "своя запись — 200");
+    }
+
+    // Рубильник MediaForUsers=false: не-админ → 404 (как будто функции нет), админ → 200.
+    // Мутация: не проверять рубильник для не-админа — 200, тест краснеет.
+    [Fact]
+    public async Task MediaForUsersFalse_НеАдмин404_Админ200()
+    {
+        using var h = new Harness("test-source", null, mediaForUsers: false);
+        h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId);
+
+        var respUser = await h.NonAdmin.GetAsync("/api/local-model/history");
+        respUser.StatusCode.Should().Be(HttpStatusCode.NotFound, "не-админ без MediaForUsers — 404");
+
+        var respAdmin = await h.Admin.GetAsync("/api/local-model/history");
+        respAdmin.StatusCode.Should().Be(HttpStatusCode.OK, "админ не зависит от MediaForUsers");
+        var body = await respAdmin.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("scope").GetString().Should().Be("all");
     }
 
     // Админ без флага local-model-stats — 404. Мутация: убрать серверную проверку флага — краснеет

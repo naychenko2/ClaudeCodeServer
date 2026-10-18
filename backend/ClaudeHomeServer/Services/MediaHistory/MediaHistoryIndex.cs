@@ -85,6 +85,9 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
             && (q.Model is null || r.Model == q.Model)
             && (q.Outcome is null || StatusOf(r) == q.Outcome)
             && (q.Login is null || OwnerLogin(r) == q.Login)
+            // Не-админ (scope "self"): фильтр по владельцу на уровне запроса (OwnerId == sub),
+            // не пост-фильтр после выдачи.
+            && (q.OwnerId is null || r.Origin?.OwnerId == q.OwnerId)
             && (q.From is null || SortTime(r) >= q.From)
             && (q.To is null || SortTime(r) <= q.To)
         ).ToList();
@@ -115,9 +118,11 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
 
         return new MediaHistoryPage
         {
-            Records = page.Select(ToDto).ToList(),
+            // scope "self" (не-админ) — логин владельца не раскрываем (только свои записи).
+            Records = page.Select(r => ToDto(r, q.Scope == "self")).ToList(),
             NextCursor = nextCursor,
             Counters = counters,
+            Scope = q.Scope,
         };
     }
 
@@ -191,7 +196,8 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
     private string? OwnerLogin(MediaHistoryRecord r) =>
         r.Origin?.OwnerId is { } owner ? _users.GetById(owner)?.Username : null;
 
-    private MediaHistoryRecordDto ToDto(MediaHistoryRecord r) => new()
+    // hideOwner — не-админ (scope "self"): логин владельца не раскрываем (только свои).
+    private MediaHistoryRecordDto ToDto(MediaHistoryRecord r, bool hideOwner) => new()
     {
         Id = r.PromptId,
         Kind = r.Kind,
@@ -199,7 +205,7 @@ public sealed class MediaHistoryIndex : IMediaHistoryEventSink, IDisposable
         Model = r.Model,
         Prompt = r.Prompt,
         Params = r.Params,
-        Owner = OwnerLogin(r),
+        Owner = hideOwner ? null : OwnerLogin(r),
         Status = r.Status,
         Outcome = r.FinishedAt is not null ? r.Outcome : null,
         Error = r.Error,

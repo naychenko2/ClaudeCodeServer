@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 namespace ClaudeHomeServer.Services.MediaHistory;
 
-// Запрос к истории: фильтры (вид, модель, исход, логин, период) + курсорная пагинация.
+// Запрос к истории: фильтры (вид, модель, исход, логин, владелец, период) + курсорная пагинация.
 // Пустое значение фильтра — «не задан». Лимит страницы — 50 (ADR-030 §7).
 public sealed class MediaHistoryQuery
 {
@@ -18,6 +18,12 @@ public sealed class MediaHistoryQuery
     public string? Outcome { get; init; }
     // Логин владельца
     public string? Login { get; init; }
+    // Владелец (id): фильтр на уровне индекса — только записи этого владельца.
+    // Для не-админа обязателен (OwnerId == sub); админ — null (все).
+    public string? OwnerId { get; init; }
+    // Охват (ADR-030, 2026-10-18): "all" — админ (все, логин владельца раскрывается),
+    // "self" — не-админ (только свои, логин не раскрывается).
+    public string Scope { get; init; } = "all";
     // Период: от/до (UTC)
     public DateTimeOffset? From { get; init; }
     public DateTimeOffset? To { get; init; }
@@ -61,4 +67,6 @@ public sealed record MediaHistoryPage
     [JsonPropertyName("records")] public IReadOnlyList<MediaHistoryRecordDto> Records { get; init; } = [];
     [JsonPropertyName("nextCursor")] public string? NextCursor { get; init; }
     [JsonPropertyName("counters")] public MediaHistoryCounters Counters { get; init; } = new();
+    // Охват (ADR-030, 2026-10-18): "all" — админ (все), "self" — не-админ (только свои).
+    [JsonPropertyName("scope")] public string Scope { get; init; } = "all";
 }

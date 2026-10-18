@@ -211,12 +211,13 @@ function GoButton({ testId, onClick, children, ariaExpanded, tone = 'go', style 
 }
 
 // m3: чип роли по макету .role: mono, фон C.bgSelected; у ключевого C.accentLight /
-// C.accent 700. Тот же вид, что в шторке (FeatureBannerSheet) — плашка и шторка не
-// расходятся внутри фичи.
+// C.accent. n2: у ключевого вес 700 (макет .role.key: font-weight:700). Тот же вид,
+// что в шторке (FeatureBannerSheet) — плашка и шторка не расходятся внутри фичи.
 function RoleChip({ label, isKey }: { label: string; isKey: boolean }) {
   return (
     <span style={{
       fontFamily: FONT.mono, fontSize: FS.xs,
+      fontWeight: isKey ? 700 : 400,
       color: isKey ? C.accent : C.textSecondary,
       background: isKey ? C.accentLight : C.bgSelected,
       borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0,
@@ -348,7 +349,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // (обрезка) + рельса + счётчик + [· ещё N]; справа тач-цель 40×40 («→» / «▾»). Тап по
   // телу плашки открывает шторку (FeatureBannerSheet). Статус/роль-текст скрыты (у
   // «← назад» — только иконка); горизонтального скролла нет (nowrap + ellipsis).
-  // m6: тело БЕЗ рамки (не «коробка в коробке»), высота строки 44 (не 54).
+  // m6: тело БЕЗ рамки (не «коробка в коробке»). n4: высота плашки 48 (не 52):
+  // кнопка-тач-цель 40 + отступы 4/4 (border-box, пересчёт макета .app.m .fs).
   if (isMobile) {
     return (
       <div
@@ -364,14 +366,14 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
           borderRadius: R.lg,
           padding: '4px 4px 4px 10px',
           margin: '0 8px',
-          minHeight: 44,
+          minHeight: 48,
           boxSizing: 'border-box',
           fontFamily: FONT.sans,
         }}
       >
         <div
           data-testid="feature-banner-row"
-          style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minHeight: 44 }}
+          style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minHeight: 40 }}
         >
           {/* «← назад»: иконка (без текста), только после перехода из плашки (ключевой чат). */}
           {backLabel && (
@@ -410,9 +412,10 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
               {model.counter}
             </span>
           </GoButton>
-          {/* m5: мультифича «· ещё N» в строке (N = другие фичи) — выбор следующей. */}
+          {/* m5: мультифича «· ещё N» в строке (N = другие фичи) — выбор следующей.
+              n3: тач-цель ≥ 40 по высоте (было 20): minHeight 40, текст по центру. */}
           {more > 0 && (
-            <GoButton testId="feature-more" tone="back" onClick={cycleFeature} style={{ fontSize: FS.xs }}>
+            <GoButton testId="feature-more" tone="back" onClick={cycleFeature} style={{ fontSize: FS.xs, minHeight: 40 }}>
               · ещё {more}
             </GoButton>
           )}
@@ -458,100 +461,105 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // Десктоп (макет .fs): ОДНА строка ≈36 px — глиф · название (обрезка) · [· ещё N] ·
   // рельса · статус (с тоном) · счётчик · роль-чип · кнопка .go. Без переноса:
   // nowrap + ellipsis у названия/статуса, у кнопки/рели/счётчика flex-shrink:0.
+  // n1: карточка «Конвейер ▾» (.fsx) — РЯДОМ с плашкой, а не внутри её div:
+  // фон, рамка и отступ плашки её не обнимают (в макете .fs и .fsx — соседи).
+  // Плашка при открытом «Конвейере» остаётся 36 px.
   return (
-    <div
-      role="region"
-      aria-label="Фича этого чата"
-      data-testid="feature-banner"
-      data-banner-tone={model.tone}
-      style={{
-        ...toneStyle(model.tone),
-        display: 'flex',
-        flexDirection: 'column',
-        borderRadius: R.lg,
-        padding: '5px 10px 5px 12px',
-        margin: '0 14px',
-        minHeight: 36,
-        boxSizing: 'border-box',
-        fontFamily: FONT.sans,
-      }}
-    >
-      {/* Строка плашки: одна строка, без переноса */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minWidth: 0, flex: 1 }}>
-        {/* «← назад»: слева, только после перехода из плашки (ключевой чат). */}
-        {backLabel && (
-          <GoButton testId="feature-back" tone="back" onClick={goBack}>
-            ← {backLabel}
-          </GoButton>
-        )}
-        {/* Глиф состояния фичи */}
-        <FeatureGlyph kind={model.glyph} size={13} />
-        {/* Название фичи: одна строка, обрезка многоточием (m4: FS.base 13) */}
-        <span
-          title={feature.title}
-          style={{
-            fontSize: FS.base, fontWeight: 700, color: C.textHeading,
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            minWidth: 40, flex: 1,
-          }}
-        >
-          {feature.title}
-        </span>
-        {/* Мультифича: «· ещё N» (N = другие фичи) — выбор следующей. */}
-        {more > 0 && (
-          <GoButton testId="feature-more" tone="back" onClick={cycleFeature}>
-            · ещё {more}
-          </GoButton>
-        )}
-        {/* Мини-рельса (7 сегментов) */}
-        <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />
-        {/* Статус (m2: тон текста — ждёт C.info 600, стоит C.dangerText 600, иначе обычный) */}
-        <span style={{
-          fontSize: FS.sm,
-          color: model.statusTone === 'wait' ? C.info : model.statusTone === 'stop' ? C.dangerText : C.textHeading,
-          fontWeight: model.statusTone === 'run' ? 400 : 600,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
-        }}>
-          {model.status}
-        </span>
-        {/* Счётчик шагов + возвраты */}
-        <span style={{
-          fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap',
-          fontFamily: FONT.mono, flexShrink: 0,
-        }}>
-          {model.counter}
-        </span>
-        {/* Роль этого чата (m3: чип .role, как в шторке): «ключевой» или «· этот чат: {чип}» */}
-        {model.isKey
-          ? <RoleChip label={model.role} isKey />
-          : (
-            <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', flexShrink: 0 }}>
-              · этот чат: <RoleChip label={model.role} isKey={false} />
-            </span>
+    <>
+      <div
+        role="region"
+        aria-label="Фича этого чата"
+        data-testid="feature-banner"
+        data-banner-tone={model.tone}
+        style={{
+          ...toneStyle(model.tone),
+          display: 'flex',
+          flexDirection: 'column',
+          borderRadius: R.lg,
+          padding: '5px 10px 5px 12px',
+          margin: '0 14px',
+          minHeight: 36,
+          boxSizing: 'border-box',
+          fontFamily: FONT.sans,
+        }}
+      >
+        {/* Строка плашки: одна строка, без переноса */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minWidth: 0, flex: 1 }}>
+          {/* «← назад»: слева, только после перехода из плашки (ключевой чат). */}
+          {backLabel && (
+            <GoButton testId="feature-back" tone="back" onClick={goBack}>
+              ← {backLabel}
+            </GoButton>
           )}
-        {/* Кнопка (m1: .go — C.accent, без рамки, 12/600): «Конвейер ▾» / «Ключевой чат →» / «Открыть фичу» */}
-        <GoButton
-          testId={model.button.kind === 'pipeline' ? 'feature-pipeline' : 'feature-go'}
-          ariaExpanded={model.button.kind === 'pipeline' ? fxOpen : undefined}
-          tone="go"
-          style={{ marginLeft: 'auto' }}
-          onClick={() => {
-            if (model.button.kind === 'pipeline') toggleFx();
-            else if (model.button.kind === 'key') goKey();
-            else openTaskInSection({ id: feature.featureId, projectId: feature.projectId ?? undefined });
-          }}
-        >
-          {model.button.label}
-          {model.button.kind === 'pipeline'
-            ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-            : <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-        </GoButton>
+          {/* Глиф состояния фичи */}
+          <FeatureGlyph kind={model.glyph} size={13} />
+          {/* Название фичи: одна строка, обрезка многоточием (m4: FS.base 13) */}
+          <span
+            title={feature.title}
+            style={{
+              fontSize: FS.base, fontWeight: 700, color: C.textHeading,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              minWidth: 40, flex: 1,
+            }}
+          >
+            {feature.title}
+          </span>
+          {/* Мультифича: «· ещё N» (N = другие фичи) — выбор следующей. */}
+          {more > 0 && (
+            <GoButton testId="feature-more" tone="back" onClick={cycleFeature}>
+              · ещё {more}
+            </GoButton>
+          )}
+          {/* Мини-рельса (7 сегментов) */}
+          <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />
+          {/* Статус (m2: тон текста — ждёт C.info 600, стоит C.dangerText 600, иначе обычный) */}
+          <span style={{
+            fontSize: FS.sm,
+            color: model.statusTone === 'wait' ? C.info : model.statusTone === 'stop' ? C.dangerText : C.textHeading,
+            fontWeight: model.statusTone === 'run' ? 400 : 600,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
+          }}>
+            {model.status}
+          </span>
+          {/* Счётчик шагов + возвраты */}
+          <span style={{
+            fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap',
+            fontFamily: FONT.mono, flexShrink: 0,
+          }}>
+            {model.counter}
+          </span>
+          {/* Роль этого чата (m3: чип .role, как в шторке): «ключевой» или «· этот чат: {чип}» */}
+          {model.isKey
+            ? <RoleChip label={model.role} isKey />
+            : (
+              <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                · этот чат: <RoleChip label={model.role} isKey={false} />
+              </span>
+            )}
+          {/* Кнопка (m1: .go — C.accent, без рамки, 12/600): «Конвейер ▾» / «Ключевой чат →» / «Открыть фичу» */}
+          <GoButton
+            testId={model.button.kind === 'pipeline' ? 'feature-pipeline' : 'feature-go'}
+            ariaExpanded={model.button.kind === 'pipeline' ? fxOpen : undefined}
+            tone="go"
+            style={{ marginLeft: 'auto' }}
+            onClick={() => {
+              if (model.button.kind === 'pipeline') toggleFx();
+              else if (model.button.kind === 'key') goKey();
+              else openTaskInSection({ id: feature.featureId, projectId: feature.projectId ?? undefined });
+            }}
+          >
+            {model.button.label}
+            {model.button.kind === 'pipeline'
+              ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+              : <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          </GoButton>
+        </div>
       </div>
 
-      {/* M2: «Конвейер ▾» (ключевой чат) — отдельная карточка .fsx ПОД плашкой. */}
+      {/* n1: «Конвейер ▾» (ключевой чат) — карточка .fsx РЯДОМ с плашкой (вне её div). */}
       {isKey && fxOpen && run && (
         <PipelineCard run={run} sessionId={sessionId} isMobile={isMobile} />
       )}
-    </div>
+    </>
   );
 }

@@ -19,7 +19,9 @@ import type { FeatureBannerModel } from './FeatureBanner';
 import {
   FeatureBannerSheet, linkRank, featureChatLinks, chatRoleLabel, sheetChatRows,
 } from './FeatureBannerSheet';
-import { installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
+// fakeDom не экспортирует FNode — тип узла берём из сигнатуры findNodeByAttr.
+type FNode = Parameters<typeof findNodeByAttr>[0];
 
 // === Мок api: список чатов (sessions.list / chats.list) — управляемый ===
 const { sessionList } = vi.hoisted(() => ({ sessionList: [] as Session[] }));
@@ -249,6 +251,24 @@ describe('FeatureBannerSheet: рендер (fakeDom)', () => {
     expect(text).toContain('Этот чат:');
     expect(text).toContain('ключевой');
     expect(text).not.toContain('В ключевой чат фичи');
+  });
+
+  // === n2: чип «ключевой» в шторке — вес 700 (макет .role.key), как в плашке ===
+  it('n2: чип «ключевой» (строка «Этот чат») — font-weight 700', async () => {
+    mount(createElement(FeatureBannerSheet, {
+      feature: feat(), model: modelKey(), projectId: 'p1', index: index(), run: null,
+      onGoKey: () => {}, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const doc = (globalThis as { document: { body: unknown } }).document as { body: FNode };
+    const role = findNodeByAttr(doc.body, 'data-testid', 'feature-sheet-role');
+    expect(role, 'нет строки «Этот чат»').not.toBeNull();
+    // Чип — единственный элемент-потомок строки (span с ролью).
+    const chip = role!.childNodes.find(n => n.nodeType === 1) as FNode | undefined;
+    expect(chip, 'в строке «Этот чат» нет чипа').toBeDefined();
+    // React в fakeDom кладёт style в camelCase (как в остальных тестах: style.fontSize).
+    expect(chip!.style.fontWeight, 'у чипа «ключевой» нет font-weight 700').toBe('700');
   });
 
   it('конвейер: run есть → карточка фичи (FeatureRunView) в шторке', async () => {

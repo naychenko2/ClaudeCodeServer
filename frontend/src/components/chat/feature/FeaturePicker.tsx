@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { C, R, SHADOW } from '../../../lib/design';
+import { C, R, SHADOW, FS } from '../../../lib/design';
 import type { FeatureRun } from '../../../types/featureRun';
 import { FeatureGlyph, type FeatureGlyph as FeatureGlyphKind } from './FeatureGlyphs';
 
@@ -63,7 +63,7 @@ function FeatureChip({ run, on, isPill, isMobile, onPick }: {
         // M-1: у <button> браузер не наследует font-family → без inherit чипы были Arial
         // среди Hanken Grotesk; ● унаследует сам.
         fontFamily: 'inherit',
-        minHeight: isMobile ? 40 : 26, fontSize: 12,
+        minHeight: isMobile ? 40 : 26, fontSize: FS.sm,
         cursor: 'pointer', fontWeight: on ? 600 : 400,
         boxShadow: focused ? SHADOW.focus : 'none',
       }}

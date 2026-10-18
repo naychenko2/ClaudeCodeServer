@@ -88,11 +88,24 @@ function stoppedPhrase(mins: number | null): string {
   return `Исполнитель упал ${mins} мин назад.`;
 }
 
+// m-6: заголовок задачи в трекере часто начинается с «{stepRef}: …» (напр. «Ш1: парсер»).
+// При показе рядом с моно-номером (stepRef) ведущий «{stepRef}:» (с пробелом) отрезается,
+// чтобы не было «Ш1 Ш1: парсер».
+function stripStepRefPrefix(title: string, stepRef: string | null | undefined): string {
+  const ref = (stepRef ?? '').trim();
+  if (!ref) return title;
+  const prefix = `${ref}:`;
+  if (title.startsWith(prefix)) return title.slice(prefix.length).replace(/^\s+/, '');
+  return title;
+}
+
 // Строка плашки «упал»: «{Имя} · {stepRef} {название} — {reason}» (Майя M8).
 // Пустые части не дают «Денис — . Отчёта нет.»: имя и шаг склеиваются « · », reason — « — {…}»,
 // только когда он есть; step не найден по att.taskId → его часть опускается.
 function stoppedLine(name: string, step: FeatureTask | undefined, reason: string): string {
-  const stepPart = step ? `${(step.stepRef ?? '').trim()} ${step.title}`.trim() : '';
+  const stepPart = step
+    ? `${(step.stepRef ?? '').trim()} ${stripStepRefPrefix(step.title, step.stepRef)}`.trim()
+    : '';
   const who = [name, stepPart].filter(Boolean).join(' · ');
   const reasonPart = reason ? ` — ${reason}` : '';
   return (who + reasonPart).trim();
@@ -125,7 +138,7 @@ function summaryLine(s: FeatureSummary): string {
 // Итог закрытой фичи: фон C.successBg, глиф «готово» 18, «Фича смержена» + строка из summary.
 function SummaryBlock({ summary }: { summary: FeatureSummary }) {
   return (
-    <div style={{ background: C.successBg, borderRadius: R.lg, padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+    <div style={{ background: C.successBg, borderRadius: R.lg, padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'center' }}>
       <FeatureGlyph kind="done" size={18} />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: FS.base, fontWeight: 700, color: C.successText }}>Фича смержена</div>
@@ -148,7 +161,7 @@ function NowCard({ item }: { item: FeatureNow }) {
   const line1 = [persona?.name, item.stepRef].filter(Boolean).join(' · ');
   const elapsed = elapsedLabel(item.startedAt, now);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
       {persona && <PersonaAvatar persona={persona} size={22} />}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* line1 (имя + stepRef) пуст — строку 1 не рисуем, пустую подпись не оставляем (Глеб). */}
@@ -278,7 +291,7 @@ function EmptyState({ run }: { run: FeatureRun }) {
   const cutPersona = run.cut?.[0]?.personaId ? getPersonaById(run.cut[0].personaId) : undefined;
   const who = cutPersona?.name;
   return (
-    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '8px 10px', fontSize: 12.5, color: C.textSecondary }}>
+    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '10px 12px', fontSize: 12.5, color: C.textSecondary }}>
       Шагов пока нет. План появится, когда {who ? `${who} закончит разрез` : 'закончится разрез'} — тогда здесь будут шаги по линиям.
     </div>
   );

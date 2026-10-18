@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ListChecks, Route } from 'lucide-react';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, FS } from '../../lib/design';
 import { Menu } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { planHint, type TodoItem } from '../../hooks/useSessionArtifacts';
@@ -104,7 +104,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
         title={featureMode ? 'Показать исполнение фичи' : 'Показать план хода'}
         aria-label={ariaLabel}
         style={{
-          fontSize: 11, color: C.textMuted, fontFamily: FONT.mono,
+          fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono,
           background: C.bgSelected, border: 'none', borderRadius: 8, padding: '4px 11px',
           display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
           maxWidth: 300, minWidth: 0, flexShrink: 1,
@@ -142,7 +142,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
               }}>↺{loops}</span>
             )}
             {more > 0 && (
-              <span style={{ fontFamily: FONT.mono, fontSize: 11, opacity: 0.8, flexShrink: 0 }}>+{more}</span>
+              <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, opacity: 0.8, flexShrink: 0 }}>+{more}</span>
             )}
             <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
           </>
@@ -189,10 +189,10 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
                 display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,
                 borderBottom: `1px solid ${C.divider}`,
               }}>
-                <span style={{ fontFamily: FONT.serif, fontSize: 13, fontWeight: 700, color: C.textHeading }}>
+                <span style={{ fontFamily: FONT.serif, fontSize: FS.base, fontWeight: 700, color: C.textHeading }}>
                   План хода
                 </span>
-                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
                   {planCounter}
                 </span>
               </div>

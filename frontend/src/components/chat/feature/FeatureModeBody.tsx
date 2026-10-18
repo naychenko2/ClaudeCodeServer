@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight } from 'lucide-react';
-import { C, FONT, SHADOW, TB, Z } from '../../../lib/design';
+import { C, FONT, FS, SHADOW, TB, Z } from '../../../lib/design';
 import { openTaskInSection } from '../../../lib/tasks';
 import type { FeatureRun } from '../../../types/featureRun';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
@@ -108,7 +108,7 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
         hasFeatures={hasFeatures}
         isMobile={isMobile}
       />
-      <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+      <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>
         {counter}
       </span>
     </div>
@@ -164,7 +164,7 @@ function FeatureCardFooter({ run, isMobile }: { run: FeatureRun; isMobile: boole
         // M-7: на 360 тач-цель 40 (TB.iconHitMobile); отступы 8px 13px не трогаем.
         minHeight: isMobile ? TB.iconHitMobile : undefined,
         padding: '8px 13px', background: 'transparent', cursor: 'pointer',
-        fontSize: 12, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
         boxShadow: focused ? SHADOW.focus : 'none',
       }}
     >

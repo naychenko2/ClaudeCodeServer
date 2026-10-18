@@ -12,8 +12,8 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures } from '../chatGroups';
-import type { FeatureBucket, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
+import { groupByFeatures, featureChipCounts, filterFeaturesByChip } from '../chatGroups';
+import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
 // Минимальная строка фичи: для группировки важны featureId, title, bucket.
@@ -208,5 +208,38 @@ describe('groupByFeatures: мутация к порядку', () => {
     // Мутация: бэк отдаёт тот же набор, но в другом порядке — фронт следует за бэком
     const mutated = groupByFeatures([chat('a'), chat('b'), chat('c')], mk([feature('C'), feature('A'), feature('B')]));
     expect(mutated.map(g => g.feature?.featureId)).toEqual(['C', 'A', 'B']);
+  });
+});
+
+// Фича с произвольными chips[] (базовый feature() привязывает chips к bucket).
+const withChips = (id: string, chips: FeatureChip[]): FeatureIndexFeature => ({ ...feature(id), chips });
+
+describe('featureChipCounts: счётчики по chips[]', () => {
+  it('считает вхождения каждого чипа по features[].chips', () => {
+    const feats = [
+      withChips('A', ['open', 'waiting']),
+      withChips('B', ['open', 'stopped']),
+      withChips('C', ['closed']),
+    ];
+    expect(featureChipCounts(feats)).toEqual({ open: 2, waiting: 1, stopped: 1, merge: 0, closed: 1 });
+  });
+
+  it('пустой список — все нули', () => {
+    expect(featureChipCounts([])).toEqual({ open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0 });
+  });
+});
+
+describe('filterFeaturesByChip: фильтр по чипу', () => {
+  it('возвращает фичи, чьи chips[] содержат чип', () => {
+    const feats = [
+      withChips('A', ['open', 'waiting']),
+      withChips('B', ['open', 'stopped']),
+      withChips('C', ['closed']),
+    ];
+    expect(filterFeaturesByChip(feats, 'open').map(f => f.featureId)).toEqual(['A', 'B']);
+    expect(filterFeaturesByChip(feats, 'waiting').map(f => f.featureId)).toEqual(['A']);
+    expect(filterFeaturesByChip(feats, 'stopped').map(f => f.featureId)).toEqual(['B']);
+    expect(filterFeaturesByChip(feats, 'merge')).toEqual([]);
+    expect(filterFeaturesByChip(feats, 'closed').map(f => f.featureId)).toEqual(['C']);
   });
 });

@@ -284,6 +284,39 @@ describe('archivedOnly: ось, а не фильтр', () => {
   });
 });
 
+// featureFilter — ось режима (как archivedOnly): выбранный чип-фильтр фич
+// персистится, не красит триггер фильтров и переживает «Сбросить всё»
+describe('featureFilter: ось режима', () => {
+  it('дефолт — «open»', () => {
+    expect(loadChatFilters('p1').featureFilter).toBe('open');
+  });
+
+  it('выбранный чип персистится и читается обратно', () => {
+    persistChatFilters('p1', { ...defaultChatFilters(), featureFilter: 'stopped' });
+    expect(loadChatFilters('p1').featureFilter).toBe('stopped');
+    persistChatFilters('p1', { ...defaultChatFilters(), featureFilter: 'merge' });
+    expect(loadChatFilters('p1').featureFilter).toBe('merge');
+  });
+
+  it('незнакомое значение откатывается в «open», остальные поля целы', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'zzz', search: 'ревью' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureFilter).toBe('open');
+    expect(f.search).toBe('ревью');
+  });
+
+  it('isDefaultFilters не реагирует на чип (триггер фильтров не красится)', () => {
+    expect(isDefaultFilters({ ...defaultChatFilters(), featureFilter: 'stopped' })).toBe(true);
+  });
+
+  it('«Сбросить всё» сохраняет выбранный чип', () => {
+    const f: ChatFilters = { ...defaultChatFilters(), featureFilter: 'waiting', search: 'ревью' };
+    const r = defaultChatFiltersKeepingView(f);
+    expect(r.featureFilter).toBe('waiting');
+    expect(r.search).toBe('');
+  });
+});
+
 // Причина пустого списка: число, существительное и глагол согласованы между собой
 describe('buildHiddenReason: согласование числа', () => {
   it('один чат — «Единственный чат скрыт»', () => {

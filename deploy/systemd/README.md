@@ -22,6 +22,7 @@ Unit-файлы, drop-in'ы и sysctl для машины, на которой �
 | `../sysctl.d/60-inotify.conf` | **root.** `max_user_watches=1048576`, `max_user_instances=8192`. |
 | `install-user-units.sh` | Раскладка user-части в `~/.config/systemd/user/` и очистка `user.control/`. |
 | `install-system-tuning.sh` | Раскладка root-части (`/etc/systemd/system/user@.service.d/`, `/etc/sysctl.d/`). |
+| `ccs-gddr6.service` | **root.** Помощник температуры памяти GDDR6X и hotspot видеокарт — см. раздел «ccs-gddr6» ниже; ставится `../gddr6-helper/install.sh`. |
 
 `ccs.slice` и `ccs-agents.slice` как файлы отсутствуют: они создаются на лету
 при первом `systemd-run --slice=ccs-agents.slice`, а свойства держатся в
@@ -123,3 +124,53 @@ _PID=<pid user-systemd> | grep 'memory peak'`.
    упирались в потолок.
 3. Пики scope: `journalctl --user _PID=<pid user-systemd> | grep 'ccs-run.*memory peak'`.
 4. Правка в `deploy/systemd/…` → `install-user-units.sh` / `sudo install-system-tuning.sh`.
+
+## ccs-gddr6: температура памяти и hotspot видеокарт (root-помощник)
+
+Драйвер и NVML не отдают температуру памяти GDDR6X и hotspot (`N/A`), а в панели
+«Локальные модели → Железо» они нужны. Значения читаются прямо из регистров
+карты через `/dev/mem`, а это требует root (`CAP_SYS_RAWIO`); бэкенд работает
+от обычного пользователя. Поэтому — маленькая отдельная служба:
+
+- `ccs-gddr6-helper.py` (Python 3, только stdlib, запуск `python3 -I`) раз в 2 с
+  читает два 32-битных регистра у каждой RTX 3090 (vendor `0x10de`, device
+  `0x2204` — жёсткий список в константе) и атомарно пишет
+  `/run/ccs-gddr6/temps.json` (`0644`):
+  `{"v":1,"at":<unix мс>,"gpus":[{"busId","deviceId","memTempC","hotspotTempC"}]}`.
+  Значение вне 1…150 °C — `null`; сбой одной карты не влияет на остальные.
+  Метка `at` — признак свежести: устарела (служба стоит/зависла) — данных нет.
+- BAR0 берётся из первой строки `resource` в `/sys/bus/pci/devices/<bus>/`;
+  регистры: память — `BAR0+0xE2A8`, `(raw & 0xfff) // 0x20`; hotspot —
+  `BAR0+0x2046C`, `(raw >> 8) & 0xff`. Страница отображается `PROT_READ`.
+- Служба **только читает** (`/sys/bus/pci/devices` и `/dev/mem`): ни записей в
+  устройства, ни сокетов, ни запуска процессов. Unit жёсткий: единственная
+  привилегия `CAP_SYS_RAWIO`, `PrivateNetwork`, `ProtectSystem=strict`,
+  `DevicePolicy=closed` + `DeviceAllow=/dev/mem r`, фильтр системных вызовов.
+  `systemd-analyze security ccs-gddr6` → **1.8 OK**.
+
+Почему root, а не группа `kmem`/`setcap`: чтение `/dev/mem` и так равно
+привилегии RAWIO, а отдельная узкая служба с минимальным набором прав и файлом на
+выходе безопаснее, чем давать эту возможность процессу бэкенда.
+
+**Скрипт службы исполняется от root, поэтому в `/usr/local/lib/ccs-gddr6/` он
+принадлежит root и не записываем для остальных** — иначе это путь повышения
+прав. Из репозитория (где файл принадлежит `an`) служба его не запускает.
+
+```bash
+sudo ./deploy/gddr6-helper/install.sh             # установка / обновление (идемпотентно)
+sudo ./deploy/gddr6-helper/install.sh --dry-run   # показать шаги
+sudo ./deploy/gddr6-helper/install.sh --remove    # удалить службу и скрипт
+```
+
+Проверка:
+
+```bash
+systemctl status ccs-gddr6
+cat /run/ccs-gddr6/temps.json                 # «at» меняется каждые ~2 с
+systemd-analyze security ccs-gddr6
+python3 -I deploy/gddr6-helper/test_ccs_gddr6_helper.py   # unittest, без железа
+```
+
+Нужны `STRICT_DEVMEM=y` без `IO_STRICT_DEVMEM` и `lockdown=none` (как на этой
+машине); перезагрузка и `iomem=relaxed` не требуются. Если ядро запретит
+отображение BAR, служба останется живой и отдаст `null`.

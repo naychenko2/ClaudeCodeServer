@@ -839,6 +839,16 @@ public class PersonaBindingsService : IPersonaServerToolGate
                 }
             case PersonaBindingType.Skill:
                 {
+                    // Плагин владельца: target «plugin:{id}/{skill}» — навык из пакета владельца.
+                    // Плагин удалён/выключен → null: привязка тихо пропадает из промпта, без
+                    // исключения (ADR-031 §2.5). Обычный навык — как раньше, по имени из
+                    // глобального каталога.
+                    if (binding.Target.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var pluginSkill = _skills.ResolveOwnerPluginSkill(ownerId, binding.Target);
+                        if (pluginSkill is null) return null;
+                        return $"прочитай файл навыка {pluginSkill.FilePath} инструментом Read и следуй ему";
+                    }
                     var skill = _skills.GetGlobalSkills()
                         .FirstOrDefault(s => string.Equals(s.Name, binding.Target, StringComparison.OrdinalIgnoreCase));
                     if (skill is null) return null;
@@ -921,7 +931,11 @@ public class PersonaBindingsService : IPersonaServerToolGate
                 PersonaBindingType.Knowledge => await ExtractKnowledgeAsync(ownerId, binding, query),
                 PersonaBindingType.Notes => await ExtractNotesAsync(ownerId, binding, query),
                 PersonaBindingType.ProjectPath => ExtractProjectFile(ownerId, binding),
-                PersonaBindingType.Skill => _skills.GetSkillContent(binding.Target),
+                // Плагин владельца (target «plugin:{id}/{skill}») — содержимое из пакета;
+                // обычный навык — из глобального каталога.
+                PersonaBindingType.Skill => binding.Target.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase)
+                    ? _skills.GetOwnerPluginSkillContent(ownerId, binding.Target)
+                    : _skills.GetSkillContent(binding.Target),
                 _ => null, // Project/Tool — только строка индекса, выжимки нет
             };
             if (string.IsNullOrWhiteSpace(text)) return null;

@@ -51,6 +51,17 @@ describe('drainTaskOutbox — когда перезагружать стор', (
     expect(h.update).not.toHaveBeenCalled();
   });
 
+  it('пустая очередь + reloadWhenEmpty: true → reload ровно один раз (триггер переподключения)', async () => {
+    await drainTaskOutbox({ reloadWhenEmpty: true });
+    expect(hooks.reload).toHaveBeenCalledTimes(1);
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('пустая очередь без флага → reload 0 (семантика монтажа, не переподключения)', async () => {
+    await drainTaskOutbox();
+    expect(hooks.reload).toHaveBeenCalledTimes(0);
+  });
+
   it('одна применённая операция → reload ровно один раз, очередь пуста', async () => {
     h.store.set('t1', updateOp('t1'));
     h.update.mockResolvedValue({ id: 't1' } as Task);

@@ -939,6 +939,130 @@ class UsageИзОтветаTests(unittest.TestCase):
                 self.assertEqual(proxy.usage_totals(self.копилка(кусок)), (None, None))
 
 
+class НормализацияUsageTests(unittest.TestCase):
+    """Нормализация usage к семантике Anthropic: `input_tokens` — только то, что мимо кэша.
+
+    Роутер vLLM в финальном `message_delta` кладёт в `input_tokens` ВЕСЬ промпт, кэш включительно,
+    и CLI складывает `input + cache_read + cache_creation` вслепую, удваивая контекст. Нормализуем
+    только локальный ответ: облачный (MiniMax) уже в семантике Anthropic.
+    """
+
+    def setUp(self):
+        proxy.stats["usage_normalized"] = 0
+
+
+    def test_normalize_usage_полная_форма_нормализуется(self):
+        """Форма `message_delta` vLLM: `input` включает кэш — переписывается на `input − cache`."""
+        u = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
+             "cache_creation_input_tokens": 896, "output_tokens": 40}
+        n, changed = proxy.normalize_usage(u)
+        self.assertTrue(changed)
+        self.assertEqual(n["input_tokens"], 0)  # 129024 − 128128 − 896
+        self.assertEqual(n["cache_read_input_tokens"], 128128)
+        self.assertEqual(n["output_tokens"], 40)
+        self.assertEqual(u["input_tokens"], 129024, "вход не мутирует")
+
+    def test_normalize_usage_правильная_форма_не_трогается(self):
+        """Форма `message_start`: `input < cache_read` — уже Anthropic-семантика, менять нечего."""
+        u = {"input_tokens": 2000, "cache_read_input_tokens": 18000, "output_tokens": 40}
+        n, changed = proxy.normalize_usage(u)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_без_кэша_не_трогается(self):
+        u = {"input_tokens": 500, "output_tokens": 40}
+        n, changed = proxy.normalize_usage(u)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_облачный_ответ_не_трогается(self):
+        """Облачный (MiniMax) уже в семантике Anthropic: `input < cache_read` — не трогать."""
+        u = {"input_tokens": 100, "cache_read_input_tokens": 18000,
+             "cache_creation_input_tokens": 0, "output_tokens": 40}
+        n, changed = proxy.normalize_usage(u)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_не_ниже_ноля(self):
+        """`input ≥ cache_read` (полная форма), но `input − cache − creation` уходит в минус."""
+        u = {"input_tokens": 250, "cache_read_input_tokens": 200,
+             "cache_creation_input_tokens": 50, "output_tokens": 40}
+        n, changed = proxy.normalize_usage(u)
+        self.assertTrue(changed)
+        self.assertEqual(n["input_tokens"], 0)  # 250 − 200 − 50 = 0, не −0
+
+    def _sse(self, usage, тип="message_delta"):
+        if тип == "message_start":
+            data = {"type": "message_start", "message": {"usage": usage}}
+        else:
+            data = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage}
+        return ("event: " + тип + "\ndata: " + json.dumps(data) + "\n\n").encode()
+
+    def test_нормализатор_sse_message_delta_нормализуется(self):
+        полный = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
+                  "cache_creation_input_tokens": 896, "output_tokens": 40}
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
+        n.усвоить(self._sse(полный))
+        n.дослать()
+        self.assertEqual(len(собрано), 1)
+        self.assertIn(b'"input_tokens": 0', собрано[0])
+        self.assertEqual(proxy.stats["usage_normalized"], 1)
+
+    def test_нормализатор_sse_message_start_не_трогается(self):
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
+        n.усвоить(self._sse({"input_tokens": 2000, "output_tokens": 1}, "message_start"))
+        n.дослать()
+        self.assertIn(b'"input_tokens": 2000', собрано[0])
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_нормализатор_sse_message_stop_не_теряется(self):
+        """Два события в одном чанке: `message_delta` нормализуется, `message_stop` доходит."""
+        полный = {"input_tokens": 20000, "cache_read_input_tokens": 18000, "output_tokens": 40}
+        чанк = (self._sse(полный) + "event: message_stop\ndata: {}\n\n".encode())
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
+        n.усвоить(чанк)
+        n.дослать()
+        склейка = b"".join(собрано)
+        self.assertIn(b"message_stop", склейка, "message_stop не должен потеряться")
+        self.assertIn(b'"input_tokens": 2000', склейка)  # 20000 − 18000
+        self.assertEqual(proxy.stats["usage_normalized"], 1)
+
+    def test_нормализатор_json_нормализуется(self):
+        полный = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
+                  "cache_creation_input_tokens": 896, "output_tokens": 40}
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=False)
+        n.усвоить(json.dumps({"type": "message", "usage": полный}).encode())
+        n.дослать()
+        doc = json.loads(собрано[0])
+        self.assertEqual(doc["usage"]["input_tokens"], 0)
+        self.assertEqual(proxy.stats["usage_normalized"], 1)
+
+    def test_нормализатор_json_правильная_форма_не_трогается(self):
+        u = {"input_tokens": 2000, "cache_read_input_tokens": 18000, "output_tokens": 40}
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=False)
+        n.усвоить(json.dumps({"type": "message", "usage": u}).encode())
+        n.дослать()
+        doc = json.loads(собрано[0])
+        self.assertEqual(doc["usage"]["input_tokens"], 2000)
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_мутация_признака_формы_красит(self):
+        """Признак полной формы — тот же, что в `usage_totals`: сломаешь его, нормализация сломается."""
+        u = {"input_tokens": 129024, "cache_read_input_tokens": 128128,
+             "cache_creation_input_tokens": 896, "output_tokens": 40}
+        with unittest.mock.patch.object(proxy, "_полная_форма", lambda x: False):
+            _, changed = proxy.normalize_usage(u)
+            self.assertFalse(changed, "признак формы сломан — полная форма не распознана")
+        with unittest.mock.patch.object(proxy, "_полная_форма", lambda x: True):
+            n, changed = proxy.normalize_usage({"input_tokens": 2000, "cache_read_input_tokens": 18000})
+            self.assertTrue(changed, "признак формы сломан — правильная форма распознана как полная")
+
+
 class ОтправкаСобытияTests(unittest.TestCase):
     """Канал до бэкенда: выключен без адреса и без секрета, fail-open при любом отказе."""
 

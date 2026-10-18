@@ -403,7 +403,7 @@ IMAGE_TOKENS_CAP = 2048
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "images_pruned": 0, "images_kept": 0, "image_tokens_saved": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
-         "compact_preserved": 0, "compact_preserve_failed": 0,
+         "compact_preserved": 0, "compact_preserve_failed": 0, "usage_normalized": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
          "loops_truncated": 0, "loop_guard_errors": 0,
@@ -1364,6 +1364,13 @@ def merge_usage(копилка, chunk):
     return копилка
 
 
+def _полная_форма(usage):
+    """Признак полной формы usage: `input_tokens` уже включает кэш (роутер vLLM, финальный
+    `message_delta`). Та же развилка, что в `usage_totals` и `diff_miss.цифры`: `input_tokens`
+    не меньше `cache_read_input_tokens`. Одна проверка — и в карточке, и в нормализации."""
+    return (usage.get("input_tokens") or 0) >= (usage.get("cache_read_input_tokens") or 0)
+
+
 def usage_totals(usage):
     """`(cache_read_input_tokens, весь промпт)` из накопленного usage — для карточки.
 
@@ -1377,9 +1384,31 @@ def usage_totals(usage):
     """
     вход = usage.get("input_tokens") or 0
     чтение = usage.get("cache_read_input_tokens")
-    промпт = вход if вход >= (чтение or 0) else (
+    промпт = вход if _полная_форма(usage) else (
         вход + (чтение or 0) + (usage.get("cache_creation_input_tokens") or 0))
     return (чтение if isinstance(чтение, int) else None), (промпт or None)
+
+
+def normalize_usage(usage):
+    """Нормализует `usage` к семантике Anthropic: `input_tokens` — только то, что мимо кэша.
+
+    Роутер vLLM в финальном `message_delta` кладёт в `input_tokens` ВЕСЬ промпт, кэш включительно
+    (в `message_start` — только то, что мимо кэша). CLI складывает `input + cache_read +
+    cache_creation` и видит контекст вдвое больше. Признак полной формы — тот же, что в
+    `usage_totals` (`_полная_форма`): тогда `input_tokens` переписывается на
+    `input − cache_read − cache_creation` (не ниже 0).
+
+    Возвращает (новый usage, изменилось ли). Вход не мутирует.
+    """
+    if not isinstance(usage, dict) or not _полная_форма(usage):
+        return usage, False
+    вход = usage.get("input_tokens") or 0
+    чтение = usage.get("cache_read_input_tokens") or 0
+    создание = usage.get("cache_creation_input_tokens") or 0
+    новый_вход = max(0, вход - чтение - создание)
+    if новый_вход == вход:
+        return usage, False  # кэша нет — менять нечего
+    return dict(usage, input_tokens=новый_вход), True
 
 
 def post_event(payload, connector=None):
@@ -1957,6 +1986,116 @@ class ВставкаВJson:
         self.отдать(готовое)
 
 
+class НормализаторUsage:
+    """Нормализует `usage` ответа ЛОКАЛЬНОЙ модели к семантике Anthropic (см. `normalize_usage`).
+
+    Роутер vLLM в финальном `message_delta` кладёт в `input_tokens` весь промпт, кэш включительно,
+    и CLI складывает `input + cache_read + cache_creation` вслепую, удваивая контекст. Нормализуем
+    только локальный ответ: облачный (MiniMax) уже в семантике Anthropic, и его не трогаем.
+
+    SSE: правит `usage` в событии `message_delta` (единственное, где цифры кэша приходят).
+    Не-SSE: копиит тело целиком, правит верхнеуровневый `usage`.
+
+    Fail-open, как и всё в прокси: любой сбой разбора — сквозной режим, ход важнее цифры.
+    """
+
+    БУФЕР_МАКС = РелеПотока.БУФЕР_МАКС
+
+    def __init__(self, отдать, sse):
+        self.отдать = отдать
+        self.sse = sse
+        self.буфер = b""
+        self.сквозной = False
+
+    def усвоить(self, chunk):
+        if self.сквозной:
+            self.отдать(chunk)
+            return
+        if self.sse:
+            self._sse(chunk)
+        else:
+            self._json(chunk)
+
+    def _sse(self, chunk):
+        self.буфер += chunk
+        while True:
+            i = self.буфер.find(b"\n\n")
+            if i < 0:
+                if len(self.буфер) > self.БУФЕР_МАКС:
+                    self._сквозной()
+                    return
+                return
+            событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+            self._событие(событие)
+            if self.сквозной:
+                return
+
+    def _событие(self, сырое):
+        """Правит `usage` в `message_delta` и отдаёт событие (нормализованное или как есть).
+
+        Разбор целым событием, как у `РелеПотока`: правим только `data:` строку `message_delta`,
+        остальное (включая `event:`) пересобираем `_sse`. Событие ВСЕГДА уходит клиенту.
+        """
+        for строка in сырое.split(b"\n"):
+            if not строка.startswith(b"data:"):
+                continue
+            try:
+                данные = json.loads(строка[5:].strip())
+            except ValueError:
+                break
+            if isinstance(данные, dict) and данные.get("type") == "message_delta":
+                usage = данные.get("usage")
+                if isinstance(usage, dict):
+                    новый, изменилось = normalize_usage(usage)
+                    if изменилось:
+                        данные["usage"] = новый
+                        with lock:
+                            stats["usage_normalized"] += 1
+                        self.отдать(_sse("message_delta", данные))
+                        return
+            break
+        self.отдать(сырое)
+
+    def _json(self, chunk):
+        self.буфер += chunk
+
+    def дослать(self):
+        """Конец ответа: в не-SSE правеим верхнеуровневый `usage` и отдаём тело целиком."""
+        if self.сквозной:
+            return
+        if self.sse:
+            if self.буфер:
+                self.отдать(self.буфер)
+            self.буфер = b""
+            return
+        сырое, self.буфер = self.буфер, b""
+        if not сырое:
+            return
+        try:
+            doc = json.loads(сырое)
+            if not isinstance(doc, dict):
+                raise ValueError("ответ не объект")
+            usage = doc.get("usage")
+            if not isinstance(usage, dict):
+                raise ValueError("в ответе нет usage")
+            новый, изменилось = normalize_usage(usage)
+            if изменилось:
+                doc["usage"] = новый
+                with lock:
+                    stats["usage_normalized"] += 1
+                сырое = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+        except Exception as e:
+            print(f"нормализация usage не удалась ({e!r}) — ответ как есть",
+                  file=sys.stderr, flush=True)
+        self.отдать(сырое)
+
+    def _сквозной(self):
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+        self.сквозной = True
+
+
 def retry_body(body):
     """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать.
 
@@ -2266,7 +2405,9 @@ class Handler(BaseHTTPRequestHandler):
                             print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
                                   f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
                                   f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
-                                  f"опусти COMPACT_MIN_CONTEXT_TOKENS",
+                                  f"опусти COMPACT_MIN_CONTEXT_TOKENS; до нормализации usage "
+                                  f"(usage_normalized) раннее сжатие могло дать и удвоение "
+                                  f"input_tokens в message_delta",
                                   file=sys.stderr, flush=True)
                     if apply_sampling(doc):
                         stripped = True
@@ -2460,6 +2601,13 @@ class Handler(BaseHTTPRequestHandler):
                 _preserve_failed("ответ", RuntimeError(f"непонятный Content-Type {вид!r}"))
             if вставка is not None:
                 выход = вставка.усвоить
+        # Нормализация usage — только локальный ответ: облачный (MiniMax) уже в семантике
+        # Anthropic, и его не трогаем. Ставится до реле: реле и его повтор идут через него.
+        нормализатор = None
+        if первый is None:
+            sse = "text/event-stream" in (resp.getheader("Content-Type") or "")
+            нормализатор = НормализаторUsage(выход, sse)
+            выход = нормализатор.усвоить
         # Предохранитель — только на потоке локальной модели: облако (автосжатие) не петляет,
         # а ответы-ошибки и не-SSE идут как раньше, байт в байт.
         реле = None
@@ -2505,6 +2653,8 @@ class Handler(BaseHTTPRequestHandler):
                 реле.дослать()
             if вставка is not None:
                 вставка.дослать()
+            if нормализатор is not None:
+                нормализатор.дослать()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

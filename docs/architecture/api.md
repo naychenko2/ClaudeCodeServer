@@ -370,6 +370,27 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
      tensorParallel? — из секции Stats провайдера (vLLM --tensor-parallel-size); null — фронт
      показывает число карт (gpus.length)
+GET  /api/local-model/hardware     ?window=1m|5m|15m|1h   (только admin: роль на действии, не-админ — 403; флаг local-model-stats, без него 404)
+     → { at, status: ok|stale, staleSince?, level: ok|warn|danger,
+         gpus: [{ index, uuid, name, roles: ["text"], utilPerc?, memUsedMb?, memTotalMb?, memBusPerc?, coreTempC?, memTempC?,
+                  hotspotTempC?, fanPerc?, clockMhz?, clockMaxMhz?, memClockMhz?, powerW?, powerLimitW?,
+                  throttle: { powerCap, thermal }, pstate?, pcie: { gen?, width? }, busId, level,
+                  levels: { mem, core, hotspot: ok|warn|danger|none } }],
+         nodes: [{ key, kind: gpu|cpu|vrm|chipset|disk|ram, name, tempC?, sensor: ok|none|nodata, level: ok|warn|danger|none,
+                   warnC?, dangerC?, detail: { ccdC?, fanRpm?, role?: system|kv, temp2C?, critC?, usedGb?, totalGb? },
+                   spark15m: (number|null)[90] }],
+         caseFans: [{ label, rpm }], series: [{ key, family: mem|core|hotspot|cpu|chipset|disk, gpuIndex?, label, points: (number|null)[] }],
+         stepMs }
+     window по умолчанию 15m, иное — 400. Шаг бакета: 1m → 2 с (30 точек), 5m → 5 с, 15m → 10 с, 1h → 30 с;
+     в бакете МАКСИМУМ, шаг без данных — null (разрыв, не 0). История — кольцо 1 ч в памяти, снимок раз в 2 с.
+     Узлы идут в фиксированном порядке: карты, cpu, vrm, chipset, диск кэша, системный диск, ram; нет источника
+     (чужая машина) — узла нет, ответ status:"ok" с пустыми списками, не 500.
+     Уровни считает бэкенд (HardwareThresholds): память карты 95/105, ядро 85/92, hotspot —/100, Tctl 85/95, VRM 90/105,
+     чипсет 85/95, диск от critC (−10/−3 °C), без предела 70/80. При status:"stale" (снимок старше 10 с) всё "ok", а
+     staleSince — момент последнего живого снимка. memTempC/hotspotTempC — из файла помощника ccs-gddr6 (метка старше 10 с
+     или файла нет — null); плитка карты берёт память, нет — ядро. Узел ram: tempC null, sensor "none".
+     В stats и stats/media ТОЛЬКО админу добавляется hardware?: { level, gpus: [{ uuid, memTempC?, level, powerCap, thermal }] }
+     (для строки-ссылки и точки на вкладке); у не-админа (scope "self") поля нет. Подробнее — ADR-029, «Решения: вкладка «Железо»».
 GET  /api/local-model/stats/media  ?since=<unix ms>   (аутентифицированный; ADR-030 §9)
      → { scope: "all"|"self", queueAhead: number|null,
          configured, comfy: { status: working|busy|down|disabled, downSince?, version? },

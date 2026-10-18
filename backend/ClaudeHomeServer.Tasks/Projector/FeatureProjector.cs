@@ -220,6 +220,10 @@ public sealed class FeatureProjector(TaskManager tasks)
                 RunningSince = runningSince,
                 Rounds = stageRounds,
                 LongestStepRef = longestStepRef,
+                // Б5: исполнители, число задач и исход последней по времени закрытой задачи стадии.
+                PersonaIds = StagePersonaIds(tasks),
+                TaskCount = tasks.Count,
+                Verdict = StageVerdict(tasks),
             });
         }
 
@@ -655,6 +659,44 @@ public sealed class FeatureProjector(TaskManager tasks)
                 best = c.StepRef;
             }
         return best;
+    }
+
+    // Б5: исполнители стадии — уникальные PersonaId задач в порядке первого появления;
+    // пустые (null/"") id не включаются.
+    private static List<string> StagePersonaIds(List<TaskItem> tasks)
+    {
+        var ids = new List<string>();
+        foreach (var t in tasks)
+            if (!string.IsNullOrEmpty(t.PersonaId) && !ids.Contains(t.PersonaId))
+                ids.Add(t.PersonaId);
+        return ids;
+    }
+
+    // Б5: исход стадии — исход последней по времени закрытой (Done) задачи стадии.
+    // Порядок: 1) стадия без задач → null; 2) любая задача стадии идёт (InProgress) → "running";
+    // 3) иначе — Verification.Verdict последней по CompletedAt закрытой задачи, если он один из
+    //    четырёх (returned/accepted_with_remarks/accepted/withdrawn), иначе null.
+    // У стадий без вердиктов (cut/plan/merge/prod) это даёт null, кроме случая, когда у задачи
+    // есть Verification.Verdict (тогда он же) — ровно как требует постановка.
+    private static string? StageVerdict(List<TaskItem> tasks)
+    {
+        if (tasks.Count == 0)
+            return null;
+        if (tasks.Any(t => t.Status == TaskItemStatus.InProgress))
+            return "running";
+
+        var last = tasks
+            .Where(t => t.Status == TaskItemStatus.Done)
+            .OrderByDescending(t => t.CompletedAt ?? t.CreatedAt)
+            .FirstOrDefault();
+        if (last is null)
+            return null;
+
+        var v = last.Verification?.Verdict;
+        return v is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks
+            or TaskVerdicts.Accepted or TaskVerdicts.Withdrawn
+            ? v
+            : null;
     }
 
     // Одна фича по id эпика (владельца ownerId). null — эпика нет.

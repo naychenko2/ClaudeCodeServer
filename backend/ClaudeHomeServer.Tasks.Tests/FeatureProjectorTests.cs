@@ -834,4 +834,177 @@ public class FeatureProjectorTests
         run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = wait/мерж");
         run.Attention!.Reason.Should().Be("мерж");
     }
+
+    // ─── Б5: исполнители, число задач и исход у каждой стадии ────────────────────────────────
+
+    // Стадия конвейера по ключу.
+    private static FeatureStage Stage(FeatureRun run, string key) => run.Stages.Single(s => s.Key == key);
+
+    // Два исполнителя на prod (Денис, Кира) → оба в PersonaIds в порядке появления;
+    // пустой PersonaId не попадает; TaskCount = число задач стадии.
+    [Fact]
+    public void Build_Prod_ДваИсполнителя_PersonaIdsИTaskCount()
+    {
+        const string epicId = "epic-b5-prod";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.Done, PersonaId = "Кира",
+        };
+        var s3 = new TaskItem
+        {
+            Id = "s3", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш3",
+            Status = TaskItemStatus.Done, PersonaId = "", // пустой — не попадает
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, s2, s3]);
+
+        var prod = Stage(run, "prod");
+        prod.PersonaIds.Should().Equal(new[] { "Денис", "Кира" },
+            "оба исполнителя prod в порядке появления; пустой PersonaId не попадает");
+        prod.TaskCount.Should().Be(3, "prod: 3 задачи");
+    }
+
+    // Ревью: TaskCount = 2 (два ревью); PersonaIds — ревьюеры;
+    // ревью вернуло (r1, 10:00), затем приняло (r2, 11:00) → Verdict = accepted.
+    [Fact]
+    public void Build_Review_ДваРевью_TaskCount2_ВернулоЗатемПриняло()
+    {
+        const string epicId = "epic-b5-review";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned },
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            CompletedAt = new DateTime(2026, 10, 17, 11, 0, 0), // позже r1
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, r1, r2]);
+
+        var review = Stage(run, "review");
+        review.TaskCount.Should().Be(2, "ревью: 2 задачи");
+        review.PersonaIds.Should().Equal(new[] { "Глеб" }, "уникальные ревьюеры");
+        review.Verdict.Should().Be("accepted",
+            "последнее по времени ревью (r2, 11:00) приняло — исход = accepted");
+    }
+
+    // Последнее по времени ревью вернуло → Verdict = returned (а не accepted первого).
+    [Fact]
+    public void Build_Review_ПоследнееВернуло_Returned()
+    {
+        const string epicId = "epic-b5-review-ret";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned },
+            CompletedAt = new DateTime(2026, 10, 17, 11, 0, 0), // позже r1
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, r1, r2]);
+
+        Stage(run, "review").Verdict.Should().Be("returned",
+            "последнее по времени ревью (r2) вернуло — исход = returned");
+    }
+
+    // Идущая задача стадии (InProgress) → Verdict = running (даже если раньше было принято).
+    [Fact]
+    public void Build_Review_Идёт_Running()
+    {
+        const string epicId = "epic-b5-review-run";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress, PersonaId = "Глеб",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, r1, r2]);
+
+        Stage(run, "review").Verdict.Should().Be("running", "идущая задача стадии → running");
+    }
+
+    // Стадия без задач → PersonaIds пусто, TaskCount = 0, Verdict = null (все 5 таких стадий).
+    [Fact]
+    public void Build_СтадияБезЗадач_Пусто()
+    {
+        const string epicId = "epic-b5-empty";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        foreach (var key in new[] { "cut", "plan", "qa", "final", "merge" })
+        {
+            var st = Stage(run, key);
+            st.PersonaIds.Should().BeEmpty($"{key}: задач нет");
+            st.TaskCount.Should().Be(0, $"{key}: задач нет");
+            st.Verdict.Should().BeNull($"{key}: задач нет — исхода нет");
+        }
+    }
+
+    // Мутация (Б5): исход стадии берётся НЕ последней, а ПЕРВОЙ по времени закрытой задачей.
+    // Сломал: в StageVerdict `OrderByDescending` → `OrderBy` (первая по CompletedAt) →
+    // тест «вернуло, затем приняло → accepted» краснеет (будет returned). Без мутации зелёный.
+    [Fact]
+    public void Build_Мутация_ВердиктПоследнейНеПервой()
+    {
+        const string epicId = "epic-b5-mut";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        // r1 (10:00) вернуло, r2 (11:00) приняло.
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned },
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            CompletedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, r1, r2]);
+
+        // Вердикт — последней (r2, 11:00) = accepted, НЕ первой (r1, 10:00) = returned.
+        // Мутация (первая по CompletedAt) даст returned → краснеет.
+        Stage(run, "review").Verdict.Should().Be("accepted",
+            "исход стадии — последней по времени закрытой задачи, а не первой");
+    }
 }

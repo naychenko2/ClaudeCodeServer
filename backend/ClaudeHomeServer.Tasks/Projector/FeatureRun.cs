@@ -152,6 +152,18 @@ public sealed class FeatureStage
     // Шаг с наибольшим числом витков (Б2; только у стадии review) — для строки «дольше всех D1c».
     // null — витков нет ни у одного шага.
     public string? LongestStepRef { get; init; }
+    // Исполнители стадии (Б5): уникальные PersonaId задач стадии в порядке первого появления;
+    // пустые id не включаются. У cut/plan/merge — PersonaId их задач; у prod — исполнители шагов
+    // и доработок; у review/qa/final — ревьюеры/проверяющие. По ним фронт рисует подпись
+    // «Егор · 1 задача» (текст подписи — Кира, бэк отдаёт сырые данные).
+    public List<string> PersonaIds { get; init; } = [];
+    // Число задач стадии (Б5): для подписи «1 задача», «3 задачи».
+    public int TaskCount { get; init; }
+    // Исход последней по времени закрытой задачи стадии (Б5): returned | accepted_with_remarks |
+    // accepted | withdrawn; «running», если задача стадии идёт; null — стадия без задач или без
+    // вердикта (у стадий без вердиктов cut/plan/merge/prod — null, кроме случая, когда у задачи
+    // есть Verification.Verdict — тогда он же). Значения строго из пяти, как у rounds[].verdict.
+    public string? Verdict { get; init; }
 }
 
 // Виток: один круг ревью/проверки/финала. Живёт в цепочке шагов (FeatureStepChain.Rounds)

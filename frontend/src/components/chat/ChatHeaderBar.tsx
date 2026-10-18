@@ -697,15 +697,17 @@ const CACHE_STATUS_TEXT: Record<KnownCacheStatus, string> = { warm: 'тёплы�
 const CACHE_CLOCK_COLOR: Record<KnownCacheStatus, string> = { warm: C.success, expiring: RATE_COLORS.warn.fill, cold: RATE_COLORS.danger.fill };
 const CACHE_TEXT_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, expiring: RATE_COLORS.warn.text, cold: RATE_COLORS.danger.text };
 
-// Циферблат 14×14 в viewBox 20: контур, тающий сектор остатка и стрелка на его кромке —
-// как кухонный таймер. frac — доля оставшегося срока (0…1); остывший — пунктирный контур
-// и стрелка на нуле; spin — идёт ход, остаток неизвестен: крутится одна стрелка
+// Циферблат 14×14 в viewBox 20: контур, тающий сектор остатка и стрелка на его кромке.
+// Стрелка идёт ВПЕРЁД (по часовой): её угол — прошедшая доля срока, а сектор остатка лежит
+// перед ней, от стрелки по часовой до 12; к остыванию стрелка приходит на 12, сектор
+// исчезает (стрелка назад читалась как перемотка). frac — доля оставшегося срока (0…1);
+// остывший — пунктирный контур и стрелка на нуле; spin — идёт ход: крутится одна стрелка
 const CLOCK_C = 10;
 const CLOCK_SECTOR_R = 7;
 const CLOCK_HAND_R = 6.5;
 function CacheClock({ frac, color, cold, spin }: { frac: number; color: string; cold?: boolean; spin?: boolean }) {
   const reducedMotion = usePrefersReducedMotion();
-  const a = 2 * Math.PI * Math.min(1, Math.max(0, frac));
+  const a = 2 * Math.PI * (1 - Math.min(1, Math.max(0, frac)));
   const pt = (r: number) => `${CLOCK_C + r * Math.sin(a)} ${CLOCK_C - r * Math.cos(a)}`;
   const showSector = !cold && !spin && frac > 0;
   const hand = spin || cold ? `${CLOCK_C} ${CLOCK_C - CLOCK_HAND_R}` : pt(CLOCK_HAND_R);
@@ -717,7 +719,7 @@ function CacheClock({ frac, color, cold, spin }: { frac: number; color: string; 
         strokeDasharray={cold ? '3 2.2' : undefined} style={{ stroke: color }} />
       {showSector && (frac >= 0.999
         ? <circle cx={CLOCK_C} cy={CLOCK_C} r={CLOCK_SECTOR_R} fillOpacity={0.35} style={{ fill: color }} />
-        : <path d={`M${CLOCK_C} ${CLOCK_C} L${CLOCK_C} ${CLOCK_C - CLOCK_SECTOR_R} A${CLOCK_SECTOR_R} ${CLOCK_SECTOR_R} 0 ${frac > 0.5 ? 1 : 0} 1 ${pt(CLOCK_SECTOR_R)} Z`}
+        : <path d={`M${CLOCK_C} ${CLOCK_C} L${pt(CLOCK_SECTOR_R)} A${CLOCK_SECTOR_R} ${CLOCK_SECTOR_R} 0 ${frac > 0.5 ? 1 : 0} 1 ${CLOCK_C} ${CLOCK_C - CLOCK_SECTOR_R} Z`}
             fillOpacity={0.35} style={{ fill: color }} />)}
       <g style={{ transformOrigin: `${CLOCK_C}px ${CLOCK_C}px`, animation: spin && !reducedMotion ? 'cc-spin 2.4s linear infinite' : undefined }}>
         <path d={`M${CLOCK_C} ${CLOCK_C} L${hand}`} strokeWidth={1.8} strokeLinecap="round" style={{ stroke: color }} />

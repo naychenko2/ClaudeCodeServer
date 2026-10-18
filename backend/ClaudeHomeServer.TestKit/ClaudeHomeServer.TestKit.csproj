@@ -69,6 +69,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- ChatContext.Tests (шаг 3.8, пачка F): ChatContextControllerTests использует TestImages
+         (internal, ImageEditorFakes) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ChatContext.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

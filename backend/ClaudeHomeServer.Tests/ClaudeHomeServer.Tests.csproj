@@ -184,6 +184,13 @@
       и новый проект был в графе сборки монолита.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.TestRuns.Tests\ClaudeHomeServer.TestRuns.Tests.csproj" />
+    <!--
+      ChatContext.Tests (шаг 3.8, пачка F): 12 ChatContext*Tests + хелпер ChatContextTestSupport
+      переехали в отдельную тестовую сборку вертикали. Монолит тянет её как ProjectReference,
+      чтобы в переходный период (до финальной чистки) обе копии перенесённых тестов компилировались
+      и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.ChatContext.Tests\ClaudeHomeServer.ChatContext.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

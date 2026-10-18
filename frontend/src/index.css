@@ -1039,6 +1039,17 @@ body {
 .cc-chat-switch[aria-current="true"], .cc-chat-switch:active, .cc-pressable:active { background: var(--c-bg-selected); }
 @media (hover: hover) { .cc-chat-switch:hover, .cc-pressable:hover { background: var(--c-bg-selected); } }
 .cc-chat-switch:focus-visible, .cc-pressable:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+/* Строка конвейера фичи (PipelineFlow): hover/tap — подложка C.bgSelected,
+   фокус — общее кольцо (SHADOW.focus). Радиус задаёт инлайн (R.md). */
+.cc-stage-row { background: transparent; }
+.cc-stage-row:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-stage-row:hover { background: var(--c-bg-selected); } }
+.cc-stage-row:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+/* Строка шага (PipelineFlow, «Производство»): hover/tap/фокус — как у строки стадии. */
+.cc-step-row { background: transparent; }
+.cc-step-row:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-step-row:hover { background: var(--c-bg-selected); } }
+.cc-step-row:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 @media (prefers-reduced-motion: reduce) {
   .cc-role-card, .cc-tools-row-btn { transition: none; }
 }

@@ -607,6 +607,7 @@ export interface Task {
   // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
   featureId?: string | null;   // id задачи-эпика
   stepRef?: string | null;    // код шага из плана («Ш1», «D1c»)
+  lane?: string | null;       // линия шага («бэк», «фронт»); подпись берётся как есть
   // Роль задачи в фиче (бэк TaskItem.Role): feature · cut · plan · step · rework · review · qa · final · merge · consult.
   role?: string | null;
   // Чат, породивший задачу (бэк TaskItem.SourceSessionId). Для фичи — связь эпика с чатом:

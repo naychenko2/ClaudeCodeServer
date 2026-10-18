@@ -8,11 +8,13 @@ import { describe, it, expect } from 'vitest';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
+import type { FeatureRun } from '../../../types/featureRun';
 import { ChatItemView } from '../ChatItemView';
 import {
   ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext,
   SpeakingItemContext, AssistantNameContext,
 } from '../contexts';
+import { __test } from '../../../lib/featureRuns';
 
 // Минимальный элемент нужного kind. Нам интересно только поведение плашки «Ветка от …»
 function branchedFrom(sourceSessionId: string, sourceName = 'Старый чат'): ChatItem {
@@ -105,5 +107,104 @@ describe('ChatItemView — плашка «Ветка от …»', () => {
     const html = renderItem(branchedFrom('src-1'), new Set());
     expect(html).not.toContain('href="#/chats/src-1"');
     expect(html).toContain('Оригинал удалён');
+  });
+});
+
+// Карточка плана: живое тело (переключатель «План хода / Исполнение фичи» + выбор фичи)
+// рисуется ТОЛЬКО на текущей карточке плана (isCurrentPlan); прошлые — снимок TodoList.
+// Мутация: убрать проверку isCurrentPlan → не-текущая карточка тоже «живая» → тест краснеет.
+type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
+
+function renderTodoPlan(isCurrentPlan: boolean, sessionId: string): string {
+  const noop = () => {};
+  const item: ToolItem = {
+    kind: 'tool_use',
+    id: 'tw1',
+    name: 'TodoWrite',
+    input: { todos: [{ content: 'Шаг 1', status: 'pending' }] },
+    result: null,
+  };
+  const tree: ReactElement = createElement(
+    ChatProjectContext.Provider, { value: null },
+    createElement(
+      ChatTreePathContext.Provider, { value: null },
+      createElement(
+        ChatSessionContext.Provider, { value: sessionId },
+        createElement(
+          PersonaContext.Provider, { value: null },
+          createElement(
+            SpeakingItemContext.Provider, { value: null },
+            createElement(
+              AssistantNameContext.Provider, { value: 'Ассистент' },
+              createElement(ChatItemView, {
+                item,
+                index: 0,
+                online: true,
+                isCurrentPlan,
+                onToggleThinking: noop,
+                onAllowPermission: noop,
+                onDenyPermission: noop,
+                onAllowAlways: noop,
+                onAnswerQuestion: noop,
+                onRespondPlan: noop,
+                onSwitchMode: noop,
+                onRetry: noop,
+                onInterrupt: noop,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return renderToStaticMarkup(tree);
+}
+
+// Минимальный агрегат фичи (эпик + пустой конвейер) — для стора Ф1.
+function featureRun(): FeatureRun {
+  return {
+    featureId: 'epic-1',
+    epic: { id: 'epic-1', title: 'Пульт куратора', worktreeBranch: 'feat/curator-console' },
+    steps: [],
+    reviews: [],
+    qa: [],
+    final: null,
+    merge: null,
+    awaitingHumanSince: null,
+    awaitingHumanReason: null,
+    verdicts: { accepted: 2, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+    progress: 1,
+    ready: true,
+  };
+}
+
+describe('TodoPlanView — живое тело только на текущей карточке плана', () => {
+  const sid = 'plan-s1';
+
+  it('не-текущая карточка (есть фичи) — снимок, без переключателя', () => {
+    __test.reset();
+    __test.setRuns(sid, [featureRun()]);
+    const html = renderTodoPlan(false, sid);
+    // Снимок: заголовок «План хода» + чек-лист, переключателя режима нет.
+    expect(html).toContain('План хода');
+    expect(html).not.toContain('Исполнение фичи');
+  });
+
+  it('текущая карточка (есть фичи) — живая, с переключателем', () => {
+    __test.reset();
+    __test.setRuns(sid, [featureRun()]);
+    const html = renderTodoPlan(true, sid);
+    // Живое тело: переключатель «План хода / Исполнение фичи» присутствует.
+    expect(html).toContain('Исполнение фичи');
+  });
+
+  // Минор Р2 (Глеб): текущая карточка БЕЗ фич (runs=[]) — переключатель не рендерится,
+  // разметка прежняя: заголовок «План хода», без «Исполнение фичи».
+  it('текущая карточка (runs=[]) — без «Исполнение фичи», заголовок «План хода»', () => {
+    __test.reset();
+    __test.setRuns(sid, []);
+    const html = renderTodoPlan(true, sid);
+    expect(html).not.toContain('Исполнение фичи');
+    expect(html).toContain('План хода');
   });
 });

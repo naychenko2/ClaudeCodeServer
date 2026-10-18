@@ -1,90 +1,115 @@
-import { C, R } from '../../../lib/design';
+import { useState, type ReactNode } from 'react';
+import { C, R, SHADOW } from '../../../lib/design';
 import type { FeatureRun } from '../../../types/featureRun';
+import { FeatureGlyph, type FeatureGlyph as FeatureGlyphKind } from './FeatureGlyphs';
 
-// Выбор фичи, когда в чате их несколько: горизонтальный ряд чипов.
-// Каждый чип — глифа состояния + имя фичи; выбранная подсвечена. На мобиле
-// ряд скроллится горизонтально.
+// Выбор фичи, когда в чате их несколько (≥ 2): секция «Фичи чата · N» + горизонтальный
+// ряд чипов. Каждый чип — глиф состояния (12 px, общий с пилюлей) + имя фичи; выбранная
+// подсвечена. Точка `●` (C.accent) — у фичи, которую показывает пилюля (runs[0]).
+// На мобиле (360 px) ряд — одна строка с горизонтальной прокруткой (скроллбар скрыт).
+//
+// Роль: role="radiogroup" (группа) + role="radio" (чип), aria-checked — выбранный.
 
-// Состояние фичи для глифы: из полей бэкового агрегата (ждёт вас / готово / идёт).
-type GlyphState = 'wait' | 'done' | 'closed' | 'run';
-function glyphState(run: FeatureRun): GlyphState {
-  if (run.awaitingHumanSince) return 'wait';
-  if (run.ready || (run.merge && run.merge.status === 'done')) return 'done';
+// Состояние фичи для глифа: из полей бэкового агрегата. Приоритет:
+// wait (ждёт) → stopped (упал) → closed (закрыта) → done (пройдено) → run (идёт).
+function pickerGlyph(run: FeatureRun): FeatureGlyphKind {
+  const att = run.attention;
+  if (att && att.kind === 'wait') return 'wait';
+  if (att && att.kind === 'stopped') return 'stopped';
+  if (run.closed) return 'closed';
+  if (run.ready) return 'done';
   return 'run';
 }
 
-// Глифа состояния фичи: маленький SVG-знак (12 px).
-function StateGlyph({ state }: { state: GlyphState }) {
-  const common = { width: 12, height: 12, viewBox: '0 0 16 16', 'aria-hidden': true as const };
-  switch (state) {
-    case 'wait':
-      return (
-        <svg {...common}><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill={C.info} /></svg>
-      );
-    case 'done':
-      return (
-        <svg {...common}>
-          <circle cx="8" cy="8" r="7" fill={C.success} />
-          <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.onAccent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    case 'closed':
-      return (
-        <svg {...common}>
-          <circle cx="8" cy="8" r="6.5" fill={C.bgSelected} stroke={C.textMuted} strokeWidth="1" />
-          <path d="M5 8h6" stroke={C.textMuted} strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
-      );
-    default: // run
-      return (
-        <svg {...common}>
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.accent} strokeWidth="1.5" />
-          <circle cx="8" cy="8" r="3.5" fill={C.accent} />
-        </svg>
-      );
-  }
+// Подпись секции (как CellLabel/SectionLabel): 10 px, 700, uppercase, letter-spacing .06em.
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      color: C.textMuted, margin: '2px 0 4px',
+    }}>
+      {children}
+    </div>
+  );
 }
 
-export function FeaturePicker({ runs, selected, onSelect }: {
+// Один чип фичи: глиф состояния + имя (многоточие, title = ветка) + точка `●` (runs[0]).
+function FeatureChip({ run, on, isPill, isMobile, onPick }: {
+  run: FeatureRun;
+  on: boolean;
+  isPill: boolean;
+  isMobile: boolean;
+  onPick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const bg = on ? C.accentLight : (hovered ? C.bgSelected : C.bgCard);
+  return (
+    <button
+      role="radio"
+      aria-checked={on}
+      title={run.epic.worktreeBranch ?? run.epic.title}
+      onClick={onPick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, maxWidth: 220,
+        border: `1px solid ${on ? C.accentMuted : C.borderLight}`,
+        background: bg,
+        color: on ? C.textHeading : C.textSecondary,
+        borderRadius: R.md, padding: '2px 8px',
+        minHeight: isMobile ? 40 : 26, fontSize: 12,
+        cursor: 'pointer', fontWeight: on ? 600 : 400,
+        boxShadow: focused ? SHADOW.focus : 'none',
+      }}
+    >
+      <FeatureGlyph kind={pickerGlyph(run)} />
+      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+        {run.epic.title}
+      </span>
+      {isPill && (
+        <span
+          title="Эту фичу показывает пилюля"
+          style={{ fontSize: 10, fontWeight: 700, color: C.accent, flexShrink: 0 }}
+        >●</span>
+      )}
+    </button>
+  );
+}
+
+export function FeaturePicker({ runs, selected, onSelect, isMobile = false }: {
   runs: FeatureRun[];
   selected: number;
   onSelect: (index: number) => void;
+  isMobile?: boolean;
 }) {
-  if (runs.length <= 1) return null;
+  // Пикер — только при ≥ 2 фичах; при одной фиче выбор бессмыслен.
+  if (runs.length < 2) return null;
   return (
-    <div
-      role="radiogroup"
-      aria-label="Фича"
-      style={{
-        display: 'flex', gap: 4, overflowX: 'auto', scrollbarWidth: 'none',
-        paddingBottom: 2, marginBottom: 2,
-      }}
-    >
-      {runs.map((run, i) => {
-        const on = i === selected;
-        return (
-          <button
+    <div>
+      <SectionLabel>Фичи чата · {runs.length}</SectionLabel>
+      <div
+        role="radiogroup"
+        aria-label="Фича"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          flexWrap: 'nowrap', overflowX: 'auto', scrollbarWidth: 'none',
+          paddingBottom: 2, marginBottom: 2,
+        }}
+      >
+        {runs.map((run, i) => (
+          <FeatureChip
             key={run.featureId}
-            role="radio"
-            aria-checked={on}
-            title={run.epic.worktreeBranch ?? run.epic.title}
-            onClick={() => onSelect(i)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, maxWidth: 220,
-              border: `1px solid ${on ? C.accentMuted : C.borderLight}`,
-              background: on ? C.accentLight : C.bgCard,
-              color: on ? C.textHeading : C.textSecondary,
-              borderRadius: R.md, padding: '2px 8px', minHeight: 26, fontSize: 12,
-              cursor: 'pointer', fontWeight: on ? 600 : 400,
-            }}
-          >
-            <StateGlyph state={glyphState(run)} />
-            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-              {run.epic.title}
-            </span>
-          </button>
-        );
-      })}
+            run={run}
+            on={i === selected}
+            isPill={i === 0}
+            isMobile={isMobile}
+            onPick={() => onSelect(i)}
+          />
+        ))}
+      </div>
     </div>
   );
 }

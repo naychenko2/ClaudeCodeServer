@@ -118,12 +118,21 @@ describe('maxThroughputOf', () => {
   });
 });
 
-describe('niceAxisMax: «круглая» шкала (1, 2, 5 × 10ⁿ, не меньше 10)', () => {
+describe('niceAxisMax: «круглая» шкала (до 100 — 1, 2, 5; от 100 мельче; не меньше 10)', () => {
   it('0 → 10 (не 0: ось не схлопывается)', () => {
     expect(niceAxisMax(0)).toBe(10);
   });
   it('37 → 50 (ряд 1,2,5: 5×10=50 ≥ 37)', () => {
     expect(niceAxisMax(37)).toBe(50);
+  });
+  it('210 → 250, а не 500 (пик чуть выше 200 не раздувает ось вдвое)', () => {
+    expect(niceAxisMax(210)).toBe(250);
+  });
+  it('260 → 300', () => {
+    expect(niceAxisMax(260)).toBe(300);
+  });
+  it('101 → 150', () => {
+    expect(niceAxisMax(101)).toBe(150);
   });
   it('412 → 500', () => {
     expect(niceAxisMax(412)).toBe(500);
@@ -134,8 +143,9 @@ describe('niceAxisMax: «круглая» шкала (1, 2, 5 × 10ⁿ, не м�
   it('ровно 1000 → 1000', () => {
     expect(niceAxisMax(1000)).toBe(1000);
   });
-  it('1500 → 2000', () => {
-    expect(niceAxisMax(1500)).toBe(2000);
+  it('1500 → 1500, 1600 → 2000', () => {
+    expect(niceAxisMax(1500)).toBe(1500);
+    expect(niceAxisMax(1600)).toBe(2000);
   });
   it('1 → 10 (не меньше 10)', () => {
     expect(niceAxisMax(1)).toBe(10);
@@ -362,18 +372,18 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «На агента, ток/с» обновляется на hover', () => {
+describe('tpChartAriaLabel: SVG «На запрос, ток/с» обновляется на hover', () => {
   it('базовый: окно + кэш (среднее под графиком не дублируем)', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('На агента, ток/с за 15 минут');
+    expect(label).toContain('На запрос, ток/с за 15 минут');
     expect(label).toContain('кэш 87 %');
     expect(label).not.toContain('интервал');
     expect(label).not.toContain('в среднем');
   });
-  it('hover: интервал со скоростью на агента', () => {
+  it('hover: интервал со скоростью на запрос', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('на агента 250 ток/с');
+    expect(label).toContain('на запрос 250 ток/с');
   });
   it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
     const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
@@ -572,7 +582,7 @@ describe('buildIntervals: кэш — несение при «не спрашив
   });
 });
 
-// === Вторая линия «на агента, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
+// === Вторая линия «на запрос, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
 // Мутации: «суммы → среднее долей» красит тест на расчёт; «null → 0» — на разрыв;
 // «max одной серии → max обеих» — на ось.
 
@@ -584,7 +594,7 @@ function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput
     preemptions: null, hasData: { prefix: false, ram: false }, timeShares };
 }
 
-describe('buildIntervals: скорость на агента из СУММ приращений', () => {
+describe('buildIntervals: скорость на запрос из СУММ приращений', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
 
   it('ΣgenTokens/ΣitlSeconds по точкам интервала (не среднее долей точек)', () => {
@@ -661,7 +671,7 @@ describe('maxSeriesOf: верх общей оси по максимуму ОБЕ
   });
 });
 
-describe('avgPerStreamOf: средняя на агента за окно', () => {
+describe('avgPerStreamOf: средняя на запрос за окно', () => {
   it('ΣgenTokens/ΣitlSeconds по всем точкам окна', () => {
     const samples = [
       sample({ t: 1, genTokens: 100, itlSeconds: 10 }),

@@ -9,10 +9,11 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FeatureLabel, featureLabelFor } from './ChatCard';
+import { ChatCard, FeatureLabel, featureLabelFor } from './ChatCard';
 import { __test as featuresIndexTest } from '../lib/featuresIndex';
 import { setAllFlags } from '../lib/featureFlags';
 import type { FeatureIndexFeature, FeatureRailKey, FeatureRailSegment } from '../types/featureIndex';
+import type { Session } from '../types';
 
 // 7 стадий в порядке жизненного цикла; по умолчанию «идёт» (prod active run).
 const KEYS: FeatureRailKey[] = ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
@@ -101,5 +102,32 @@ describe('FeatureLabel', () => {
     const html = renderToStaticMarkup(createElement(FeatureLabel, { feature: f }));
     expect(html).toContain('data-testid="chat-feature-label"');
     // Мутация: если бы data-testid не было — тест бы упал (здесь мы проверяем его наличие)
+  });
+});
+
+// === n1: метка фичи не рисуется внутри группы (inFeatureGroup) ===
+// Внутри группы фичи имя фичи уже несёт заголовок группы; дубль в карточке убираем.
+// featureLabelFor по-прежнему отдаёт фичу (решение «есть ли фича» не меняется), но
+// ChatCard с inFeatureGroup=true метку не рисует.
+describe('n1: метка фичи внутри группы (inFeatureGroup)', () => {
+  // Минимальный чат: для метки важен id (featureOf читает индекс по id)
+  const session = (id: string): Session => ({
+    id, mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual',
+  } as Session);
+
+  const renderCard = (id: string, inFeatureGroup?: boolean): string =>
+    renderToStaticMarkup(createElement(ChatCard, {
+      session: session(id), isActive: false, isMobile: false, online: true,
+      onSelect: () => {}, onHover: () => {}, onDelete: () => {}, inFeatureGroup,
+    }));
+
+  it('чат фичи: метка есть вне группы, подавлена внутри', () => {
+    setupIndex();
+    setAllFlags({ 'features-overview': true });
+    // chat-1 — исполнитель f1 (setupIndex)
+    expect(renderCard('chat-1')).toContain('data-testid="chat-feature-label"');
+    expect(renderCard('chat-1', true)).not.toContain('data-testid="chat-feature-label"');
   });
 });

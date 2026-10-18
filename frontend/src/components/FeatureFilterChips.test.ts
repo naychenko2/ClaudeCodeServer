@@ -24,10 +24,17 @@ function feat(id: string, chips: FeatureChip[]): FeatureIndexFeature {
   };
 }
 
-function renderChips(features: FeatureIndexFeature[], selected: FeatureChip, isMobile = false): string {
+function renderChips(features: FeatureIndexFeature[], selected: FeatureChip, isMobile = false, closedCount?: number): string {
   return renderToStaticMarkup(
-    createElement(FeatureFilterChips, { features, selected, onSelect: () => {}, isMobile }),
+    createElement(FeatureFilterChips, { features, selected, onSelect: () => {}, isMobile, closedCount }),
   );
+}
+// Число после подписи чипа (span-счётчик следует за span-подписью)
+function chipCount(html: string, label: string): string {
+  const i = html.indexOf(`>${label}</span>`);
+  if (i === -1) return '';
+  const m = html.slice(i).match(/<span[^>]*>(\d+)<\/span>/);
+  return m ? m[1] : '';
 }
 
 describe('FeatureFilterChips: рендер', () => {
@@ -60,8 +67,17 @@ describe('FeatureFilterChips: рендер', () => {
     expect(html).toContain('background:transparent');
   });
 
-  it('мобила: тач-цель minHeight 36px, десктоп — без', () => {
-    expect(renderChips([], 'open', false)).not.toContain('min-height:36px');
+  it('n2: высота по макету .fch — мобила 36px (тач-цель), десктоп 26px', () => {
+    expect(renderChips([], 'open', false)).toContain('min-height:26px');
     expect(renderChips([], 'open', true)).toContain('min-height:36px');
+  });
+
+  it('n3: число «Закрытые» — из closedCount (нарисованные группы), не из всех закрытых фич', () => {
+    // 2 закрытые фичи в индексе; без closedCount «Закрытые»=2, с closedCount=1 → 1
+    const features = [feat('a', ['closed']), feat('b', ['closed'])];
+    expect(chipCount(renderChips(features, 'open'), 'Закрытые')).toBe('2');
+    expect(chipCount(renderChips(features, 'open', false, 1), 'Закрытые')).toBe('1');
+    // остальные чипы не затронуты: «Открытые» по-прежнему по features
+    expect(chipCount(renderChips(features, 'open', false, 1), 'Открытые')).toBe('0');
   });
 });

@@ -38,9 +38,12 @@ const _loading = new Set<string>();
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
-// «Активные» проекты — у них смонтирован useFeaturesIndex(enabled=true).
-// Только их task_changed перезапрашивает; чужие (неактивные) не трогаем.
-const _active = new Set<string>();
+// «Активные» проекты — у них смонтирован хотя бы один потребитель
+// useFeaturesIndex(enabled=true). Только их task_changed перезапрашивает; чужие
+// (неактивные) не трогаем. Счёт — по потребителям (R3, минор 5): выключенный
+// потребитель (enabled=false) срез не трогает и чужих не отписывает; срез чистится,
+// а проект снимается с «активных», только когда уходит ПОСЛЕДНИЙ включённый.
+const _activeCount = new Map<string, number>();
 // Дебаунс-таймеры по проекту: серия task_changed → один перезапрос.
 const _pending = new Map<string, ReturnType<typeof setTimeout>>();
 let _realtimeWired = false;
@@ -140,7 +143,7 @@ function handleTaskChanged(msg: ServerMessage) {
   if (!getFlag(FLAGS.featuresOverview)) return;
   const projectKey = affectedProjectKey(msg);
   if (projectKey === null) return;
-  if (!_active.has(projectKey)) return;
+  if ((_activeCount.get(projectKey) ?? 0) === 0) return;
   scheduleRefetch(projectKey);
 }
 
@@ -151,15 +154,23 @@ function wireRealtime() {
   onMessage(handleTaskChanged);
 }
 
-// Размонтирование наблюдателя проекта: снимаем его из активных и отменяем
-// pending-таймер перезапроса (M1, минор по Ф1). Иначе дебаунс task_changed,
-// поставленный ещё до размонтирования, ушёл бы в REST-запрос за проектом,
-// которого никто уже не смотрит. Вынесено в функцию — cleanup хука её вызывает,
-// а тест проверяет эффект напрямую (окружение node, без jsdom).
+// Размонтирование потребителя проекта: уменьшаем счёт (R3, минор 5). Последний
+// ушедший — снимает проект с «активных», отменяет pending-таймер перезапроса
+// (M1, минор по Ф1: иначе дебаунс task_changed, поставленный ещё до
+// размонтирования, ушёл бы в REST-запрос за проектом, которого никто уже не
+// смотрит) и чистит срез (его больше никто не смотрит). Пока другие потребители
+// смотрят проект, срез и живая подписка остаются. Вынесено в функцию — cleanup
+// хука её вызывает, а тест проверяет эффект напрямую (окружение node, без jsdom).
 function onUnmount(projectKey: string) {
-  _active.delete(projectKey);
+  const n = _activeCount.get(projectKey) ?? 0;
+  if (n > 1) {
+    _activeCount.set(projectKey, n - 1);
+    return;
+  }
+  _activeCount.delete(projectKey);
   const t = _pending.get(projectKey);
   if (t) { clearTimeout(t); _pending.delete(projectKey); }
+  if (_indexByProject.has(projectKey)) setIndex(projectKey, EMPTY);
 }
 
 // Хук: индекс фич проекта.
@@ -168,6 +179,10 @@ function onUnmount(projectKey: string) {
 //   `projectId` — область ответа; null — все проекты владельца и чаты вне проектов.
 // Запрос идемпотентен по (projectId, enabled): повторный fetch — только при смене
 // проекта или включении флага; cancel-метка не даёт позднему ответу затереть свежий.
+//
+// Потребители считаются по проекту (R3, минор 5): выключенный потребитель
+// (enabled=false) срез не трогает и чужих не отписывает; срез чистится, а проект
+// снимается с «активных», только когда уходит последний включённый потребитель.
 export function useFeaturesIndex(projectId: string | null, enabled: boolean): FeaturesIndex {
   const projectKey = projectId ?? '';
   const index = useSyncExternalStore(
@@ -178,11 +193,11 @@ export function useFeaturesIndex(projectId: string | null, enabled: boolean): Fe
   useEffect(() => {
     wireRealtime();
     if (!enabled) {
-      // выключили — чистим срез этого проекта (не весь стор)
-      if (_indexByProject.has(projectKey)) setIndex(projectKey, EMPTY);
+      // Выключенный потребитель: срез не трогает и чужих не отписывает (учёт
+      // по проекту; последний ушедший включённый чистит срез в onUnmount).
       return;
     }
-    _active.add(projectKey);
+    _activeCount.set(projectKey, (_activeCount.get(projectKey) ?? 0) + 1);
     let cancelled = false;
     setLoading(projectKey, true);
     void api.tasks.featuresIndex(projectKey || undefined)
@@ -202,7 +217,7 @@ export const __test = {
   reset() {
     _indexByProject = new Map();
     _loading.clear();
-    _active.clear();
+    _activeCount.clear();
     _pending.forEach(t => clearTimeout(t));
     _pending.clear();
     _listeners.clear();
@@ -216,8 +231,8 @@ export const __test = {
   featureOf,
   handleTaskChanged,
   affectedProjectKey,
-  setActive: (k: string) => _active.add(k),
-  active: () => new Set(_active),
+  setActive: (k: string) => { _activeCount.set(k, (_activeCount.get(k) ?? 0) + 1); },
+  active: () => new Set(_activeCount.keys()),
   pending: () => new Set(_pending.keys()),
   onUnmount,
 };

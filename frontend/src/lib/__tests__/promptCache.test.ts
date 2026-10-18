@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, PromptCacheInfo } from '../../types';
-import { cacheNoteText, cacheTipText, cacheWarnMaxSec, expiringThresholdMs, promptCacheState, rewriteCostUsd } from '../promptCache';
+import { cacheRewriteText, cacheTipText, cacheWarnMaxSec, expiringThresholdMs, promptCacheState, rewriteCostUsd } from '../promptCache';
 
 describe('cacheTipText', () => {
   it('подпись состояния и остаток значением в колонке', () => {
@@ -19,29 +19,17 @@ describe('cacheTipText', () => {
   });
 });
 
-describe('cacheNoteText', () => {
-  const rewrite = { tokens: '120.0k', usd: '$1.80', apiTariff: true };
-
-  it('пока идёт ход — ни остатка, ни цены, при любом статусе', () => {
-    for (const status of ['warm', 'expiring', 'cold'] as const) {
-      const text = cacheNoteText(status, true, rewrite);
-      expect(text).toBe('Обновится после хода.');
-      expect(text).not.toContain('$');
-    }
+describe('cacheRewriteText', () => {
+  it('объём и цена — коротко, без «по API-тарифу»', () => {
+    expect(cacheRewriteText('812.9k', '$4.01')).toBe('перезапись ≈812.9k токенов · ≈$4.01');
   });
 
-  it('тёплый и остывающий — одна короткая строка', () => {
-    expect(cacheNoteText('warm', false)).toBe('Ход до конца срока читает кэш в 10 раз дешевле. Каждый ход продлевает срок.');
-    expect(cacheNoteText('expiring', false, rewrite)).toBe(cacheNoteText('warm', false));
+  it('без цены — только объём', () => {
+    expect(cacheRewriteText('5.0k')).toBe('перезапись ≈5.0k токенов');
   });
 
-  it('остывший — объём и цена перезаписи', () => {
-    expect(cacheNoteText('cold', false, rewrite)).toBe('Следующий ход перепишет ≈120.0k токенов, ≈$1.80 по API-тарифу.');
-    expect(cacheNoteText('cold', false, { tokens: '5.0k', usd: '$0.10' })).toBe('Следующий ход перепишет ≈5.0k токенов, ≈$0.10.');
-  });
-
-  it('остывший без данных — без чисел', () => {
-    expect(cacheNoteText('cold', false)).toBe('Следующий ход перепишет кэш заново.');
+  it('без данных — без чисел', () => {
+    expect(cacheRewriteText()).toBe('следующий ход перепишет кэш');
   });
 });
 

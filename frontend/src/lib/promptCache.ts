@@ -84,18 +84,12 @@ export function cacheTipText(status: Exclude<PromptCacheStatus, 'unknown'>, isWa
   return { label: status === 'expiring' ? 'Кэш скоро остынет' : 'Кэш тёплый', value };
 }
 
-// Пояснение внизу секции кэша в поповере, одной строкой. Пока идёт ход, якорь вот-вот
-// сдвинется: ни остатка, ни прогноза перезаписи — они относились бы к уже начатому ходу.
-// tokens/usd — уже отформатированные значения (форматтеры живут у вёрстки).
-export function cacheNoteText(
-  status: Exclude<PromptCacheStatus, 'unknown'>, isWaiting: boolean,
-  rewrite?: { tokens?: string; usd?: string; apiTariff?: boolean },
-): string {
-  if (isWaiting) return 'Обновится после хода.';
-  if (status !== 'cold') return 'Ход до конца срока читает кэш в 10 раз дешевле. Каждый ход продлевает срок.';
-  const tokens = rewrite?.tokens ? ` ≈${rewrite.tokens} токенов` : ' кэш заново';
-  const usd = rewrite?.usd ? `, ≈${rewrite.usd}${rewrite.apiTariff ? ' по API-тарифу' : ''}` : '';
-  return `Следующий ход перепишет${tokens}${usd}.`;
+// Подпись строки остывшего кэша в поповере: цена следующего хода. Короткая, чтобы влезть
+// в одну строку поповера (≈240px) и при миллионах токенов; оговорка «по API-тарифу» —
+// подсказкой строки, а не текстом. tokens/usd — уже отформатированные значения
+export function cacheRewriteText(tokens?: string, usd?: string): string {
+  if (!tokens) return 'следующий ход перепишет кэш';
+  return `перезапись ≈${tokens} токенов${usd ? ` · ≈${usd}` : ''}`;
 }
 
 // Множители тарифа Anthropic к базовой цене входа: выход ×5, чтение кэша ×0,1, запись

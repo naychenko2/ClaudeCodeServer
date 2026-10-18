@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { rewriteCostUsd, cacheLeftText, cacheNoteText, cacheTipText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
+import { rewriteCostUsd, cacheLeftText, cacheRewriteText, cacheTipText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
 import { handoffAvailability, handoffWarm } from '../../lib/chatHandoff';
 import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
 import { contextHandoffOffered, contextHandoffWarm, takeContextDangerToast } from '../../lib/contextHandoff';
@@ -704,8 +704,6 @@ export function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenSt
 // unknown (сторонний провайдер, локальный движок, история до поля) — индикатора нет вовсе.
 // Отдельного чипа нет: кэш — циферблат справа в пилюле шапки, детали — секцией её поповера.
 type KnownCacheStatus = Exclude<PromptCacheStatus, 'unknown'>;
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
-
 // Уровень строки кэша в поповере — в шкале строк лимитов (цвет значения и полосы)
 const CACHE_LEVEL: Record<KnownCacheStatus, RateWindow['level']> = { warm: 'normal', expiring: 'warn', cold: 'danger' };
 // Тёплый — нейтральный, как пипы и полосы строк в норме (кэш тёплый почти всё время, и
@@ -876,13 +874,14 @@ function PromptCacheRow({ items, billing, isWaiting }: {
   const tokens = prefixTokens !== undefined ? fmtTokens(prefixTokens) : undefined;
   // Подписи строки — со строчной и без точки, как «сброс через…» у окон лимитов
   const sub = isWaiting ? 'обновится после хода'
-    : cold ? lowerFirst(cacheNoteText(status, false, { tokens, usd: rewrite !== undefined ? fmtUsd(rewrite) : undefined, apiTariff: billing === 'subscription' }).replace(/\.$/, ''))
+    : cold ? cacheRewriteText(tokens, rewrite !== undefined ? fmtUsd(rewrite) : undefined)
     : status === 'expiring' ? 'ход до остывания — в 10 раз дешевле'
     : tokens ? `${tokens} токенов в кэше` : undefined;
   const title = [
+    cold && 'Следующий ход перепишет кэш заново',
+    rewrite !== undefined && `Цена — ориентир${billing === 'subscription' ? ' по API-тарифу' : ''}: сабагенты на других моделях могут её занижать`,
     ttl && `Срок кэша — ${ttl === '1h' ? '1 час' : '5 минут'}, каждый ход продлевает его`,
     lastMiss && `Последний промах: ${lastMiss.label}${lastMiss.tokens ? `, переписано ${fmtTokens(lastMiss.tokens)} токенов` : ''}`,
-    rewrite !== undefined && 'Цена — ориентир: сабагенты на других моделях могут её занижать',
   ].filter(Boolean).join('\n');
 
   return (
@@ -893,7 +892,8 @@ function PromptCacheRow({ items, billing, isWaiting }: {
         label="Кэш" value={value} valueColor={RATE_COLORS[level].text}
         pct={!isWaiting && !cold ? Math.round(cacheFrac(state) * 100) : undefined}
         fill={RATE_COLORS[level].fill}
-        sub={sub && <div style={{ ...meterSubStyle, color: level === 'normal' ? C.textMuted : RATE_COLORS[level].text }}>{sub}</div>} />
+        // Подпись — строго в одну строку: тексты подобраны под ширину поповера
+        sub={sub && <div style={{ ...meterSubStyle, whiteSpace: 'nowrap', color: level === 'normal' ? C.textMuted : RATE_COLORS[level].text }}>{sub}</div>} />
     </div>
   );
 }

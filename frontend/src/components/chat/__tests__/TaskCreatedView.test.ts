@@ -369,4 +369,33 @@ describe('TaskRunExecutorView: карточка на месте запуска �
     expect(textNodes(container).join(' '), 'без карточки').not.toContain('Задача создана');
     root.unmount();
   });
+
+  it('подпись шапки — «tasks · run_executor» (не «tasks · create» от ветки tasks_create)', async () => {
+    const { promise, resolve } = deferred<Task>();
+    tasksGetMock.mockReturnValue(promise);
+    const { root, container } = mountRun(runItem());
+    await act(async () => { resolve(task()); });
+    // «tasks · {toolName}» рендерит две текстовые ноды; join(' ') даёт двойной пробел —
+    // схлопываем whitespace, чтобы проверка не зависала от артефакта склейки.
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text, 'подпись запуска').toContain('tasks · run_executor');
+    expect(text, 'не старая подпись').not.toContain('tasks · create');
+    root.unmount();
+  });
+});
+
+// === TaskCreatedView: подпись шапки по имени инструмента (дефолт tasks_create) ===
+
+describe('TaskCreatedView: подпись шапки по имени инструмента', () => {
+  it('дефолт (tasks_create) — «tasks · create»', () => {
+    expect(render(item(task()))).toContain('tasks · create');
+  });
+
+  it('toolName=run_executor — «tasks · run_executor»', () => {
+    const html = renderToStaticMarkup(
+      createElement(TaskCreatedView, { item: item(task()), online: true, toolName: 'run_executor' }),
+    );
+    expect(html).toContain('tasks · run_executor');
+    expect(html).not.toContain('tasks · create');
+  });
 });

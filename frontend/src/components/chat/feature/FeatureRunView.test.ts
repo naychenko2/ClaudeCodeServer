@@ -16,6 +16,7 @@ import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
 import { __test } from '../../../lib/featureRuns';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (как в PipelineFlow.test.ts).
 // importOriginal — сохранить остальные экспорты (personaInitials и др., их читает PersonaAvatar).
@@ -80,11 +81,13 @@ function nowItem(over: Partial<FeatureNow> = {}): FeatureNow {
 }
 
 describe('FeatureRunView — шапка', () => {
-  it('имя, ветка и прогресс на месте', () => {
+  it('имя и ветка в шапке; прогресс {pct}% убран (M-3: счётчик acc/tot — в шапке режима)', () => {
     const html = render(run());
     expect(html).toContain('Пульт куратора');
     expect(html).toContain('feat/curator-console');
-    expect(html).toContain('100%');
+    // M-3: «100%» из шапки фичи удалён (в макете .fh = имя + ветка); доля — в счётчике FeatureModeBody.
+    // Текстовый узел «100%» (не width:100% в стилях конвейера) — нет.
+    expect(html).not.toMatch(/>100%</);
   });
 });
 
@@ -163,6 +166,22 @@ describe('FeatureRunView — блок «Сейчас»', () => {
     const now: FeatureNow[] = [nowItem({ taskId: 'n1', title: 'не должно быть' })];
     const html = render(run({ closed: true, now, summary: { mergedAt: '2026-10-15T21:09:00Z', durationMinutes: 370, tasks: 14, steps: 9, loops: 3 } }));
     expect(html).not.toContain('>Сейчас<');
+  });
+
+  it('n-4: вторая строка — ведущий «{stepRef}:» отрезается (номер уже в строке 1)', () => {
+    const now: FeatureNow[] = [nowItem({ taskId: 'n1', stepRef: 'Ш1', title: 'Ш1: пересборка рендера' })];
+    const html = render(run({ ready: false, now }));
+    // Название без ведущего «Ш1:» (рядом уже моно-номер в строке 1).
+    expect(html).toContain('пересборка рендера');
+    expect(html).not.toContain('Ш1: пересборка');
+  });
+
+  it('n-4: название = номеру — номер не дублируется (не «Ш8 Ш8»)', () => {
+    const now: FeatureNow[] = [nowItem({ taskId: 'n1', stepRef: 'Ш8', title: 'Ш8' })];
+    const html = render(run({ ready: false, now }));
+    // «Ш8» — только в строке 1 (stepRef); вторая строка (название = номеру) не рисуется.
+    const count = (html.match(/Ш8/g) ?? []).length;
+    expect(count, '«Ш8» встречается ровно один раз').toBe(1);
   });
 });
 
@@ -274,14 +293,16 @@ function findButton(root: AnyNode, text: string, fullWidth: boolean): AnyNode | 
 }
 
 describe('FeatureRunView: F6.1 (плашка)', () => {
-  it('M3: кнопки плашки — md (minHeight 40) на мобиле, xs (minHeight 24) на десктопе', () => {
+  it('M-5: кнопки плашки — sm (13px) + minHeight 40 (тач-цель) на мобиле, xs (24px) на десктопе', () => {
     const att: FeatureAttention = { kind: 'wait', reason: 'мерж', since: '2026-10-17T10:00:00Z', taskId: 'f1' };
-    // Мобила: size md → min-height:40px.
+    // Мобила: size sm (font-size 13, не md 14) + inline minHeight 40 (тач-цель).
     mobileFlag.value = true;
     const htmlMobile = render(run({ ready: false, attention: att }));
     const atM = htmlMobile.indexOf('Попросить Марка');
-    expect(htmlMobile.slice(atM - 400, atM), 'мобила — md (40px)').toContain('min-height:40px');
-    // Десктоп: size xs → min-height:24px.
+    const segM = htmlMobile.slice(atM - 800, atM);
+    expect(segM, 'мобила — minHeight 40 (тач-цель)').toContain('min-height:40px');
+    expect(segM, 'мобила — sm (font-size 13, не md 14)').toContain('font-size:13px');
+    // Десктоп: size xs (min-height 24, font-size 12).
     mobileFlag.value = false;
     const htmlDesk = render(run({ ready: false, attention: att }));
     const atD = htmlDesk.indexOf('Попросить Марка');
@@ -357,5 +378,75 @@ describe('FeatureRunView: F6.1 (плашка)', () => {
     expect(toastMock.calls, 'тост при сбое перезапуска').toContain('Не удалось перезапустить исполнителя');
     root.unmount();
     uninstallFakeDom();
+  });
+});
+
+// === K-3: меню пилюли в режиме фичи — во всю ширину ТОЛЬКО на мобиле ===
+// На десктопе меню режима фичи — карточкой 280–380 (то же правило якоря, что у режима
+// «План хода»): fullWidth не включается. На мобиле — во всю ширину (left/right 8).
+// Карточка меню — портал в document.body; fullWidth отличим по `right:8px` в стиле.
+describe('FeatureRunView: K-3 (меню пилюли: fullWidth только на мобиле)', () => {
+  const sid = 'k3-sess';
+
+  // Кнопка-пилюля: единственный <button> с aria-label, начинающимся с «Показать».
+  function findPill(container: AnyNode): AnyNode | null {
+    let hit: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.nodeName === 'BUTTON') {
+        const al = x.getAttribute('aria-label') ?? '';
+        if (al.startsWith('Показать')) { hit = x; return; }
+      }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(container);
+    return hit;
+  }
+
+  // Карточка меню (портал в body): единственный элемент дерева body с non-empty `background`.
+  // Подложка (backdrop) `background` не имеет, поэтому карточка недвусмысленна.
+  function findMenuCard(): AnyNode | null {
+    const body = (globalThis as { document: AnyNode }).document.body;
+    let hit: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.style && typeof x.style.background === 'string' && x.style.background) { hit = x; return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(body);
+    return hit;
+  }
+
+  // Открывает меню пилюли (клик по кнопке) и возвращает карточку меню.
+  function openPillMenu(mobile: boolean): AnyNode | null {
+    mobileFlag.value = mobile;
+    __test.reset();
+    __test.setRuns(sid, [run()]);
+    installFakeDom();
+    const { root, container } = mount(createElement(TurnPlanPill, { todos: [], runs: [run()], sessionId: sid }));
+    const pill = findPill(container);
+    if (pill) {
+      act(() => {
+        (reactProps(pill)!.onClick as (e: unknown) => void)({
+          currentTarget: { getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }) },
+        });
+      });
+    }
+    const card = findMenuCard();
+    root.unmount();
+    uninstallFakeDom();
+    return card;
+  }
+
+  it('десктоп: fullWidth не включается — у карточки нет right (как у режима «План»)', () => {
+    const card = openPillMenu(false);
+    expect(card, 'карточка меню (десктоп) не найдена').not.toBeNull();
+    expect(card!.style.right, 'десктоп: right не задан (fullWidth off)').toBeUndefined();
+  });
+
+  it('мобила: fullWidth включён — у карточки right:8px (во всю ширину)', () => {
+    const card = openPillMenu(true);
+    expect(card, 'карточка меню (мобила) не найдена').not.toBeNull();
+    expect(card!.style.right, 'мобила: right:8px (fullWidth on)').toBe('8px');
   });
 });

@@ -365,3 +365,15 @@ describe('StepDetails — пружина max=9 и +N', () => {
     expect(html).toContain('12 витков');
   });
 });
+
+// === K-2: корень StepDetails — fontSize FS.sm (12), наследуется всеми блоками ===
+describe('StepDetails: K-2 (корень: font-size 12)', () => {
+  it('корневой div — font-size:12px (FS.sm)', () => {
+    const c = chain({ stepRef: 'D1', status: 'принят', taskIds: ['s1'] });
+    const r = run({ steps: [task({ id: 's1', title: 'Шаг', role: 'step', stepRef: 'D1', status: 'done' })] });
+    const html = render(c, r);
+    // Корневой div — первый <div style="…"> в выводе; его style обязан нести font-size:12px.
+    const rootStyle = html.match(/<div style="([^"]*)"/)?.[1] ?? '';
+    expect(rootStyle, 'K-2: корень — font-size 12px').toContain('font-size:12px');
+  });
+});

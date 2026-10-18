@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { C, R, SP } from '../../../lib/design';
+import { C, R, SP, FS } from '../../../lib/design';
 import { openTaskInSection } from '../../../lib/tasks';
 import { ArrowRight } from 'lucide-react';
 import { Rounds } from './Rounds';
@@ -57,9 +57,9 @@ function Header({ chain }: { chain: FeatureStepChain }) {
   const rounds = chain.rounds.length;
   const src = chain.source ? SOURCE_LABEL[chain.source] : null;
   return (
-    <div style={{ fontSize: 12, color: C.textSecondary, overflowWrap: 'anywhere' }}>
+    <div style={{ fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
       {chain.stepRef} · {durationLabel(chain.durationMinutes)} · {rounds} {plural(rounds, 'круг', 'круга', 'кругов')}
-      {' '}· <b style={{ color: C.textHeading, fontWeight: 600 }}>{chain.status}</b>
+      {' '}· <b style={{ color: C.textHeading, fontWeight: 700 }}>{chain.status}</b>
       {src ? ` · из: ${src}` : ''}
     </div>
   );
@@ -68,7 +68,7 @@ function Header({ chain }: { chain: FeatureStepChain }) {
 // Подпись секции «Цепочка кругов»: 10, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionLabel() {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
+    <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
       Цепочка кругов
     </div>
   );
@@ -102,7 +102,7 @@ function OpenTaskLink({ chain, run, isMobile }: { chain: FeatureStepChain; run: 
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
         alignSelf: 'flex-end', border: 'none', background: 'transparent', cursor: 'pointer',
         minHeight: isMobile ? 40 : 24, padding: 0,
-        fontSize: 12, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
       }}
     >
       Открыть задачу
@@ -121,6 +121,8 @@ export function StepDetails({ chain, run, isMobile }: { chain: FeatureStepChain;
     <div
       style={{
         display: 'flex', flexDirection: 'column', gap: SP.sm,
+        // K-2: размер текста деталей шага — FS.sm (12), наследуется всеми блоками.
+        fontSize: FS.sm,
         background: C.bgWhite, border: `1px solid ${C.borderLight}`,
         borderRadius: R.lg, padding: `${SP.sm}px ${SP.sm + 2}px`,
         marginLeft: 0,
@@ -134,7 +136,7 @@ export function StepDetails({ chain, run, isMobile }: { chain: FeatureStepChain;
       <RoundChain chain={chain} run={run} now={now} />
       {noRounds && (
         // Шаг без витков (ревью не было) — подпись под цепочкой.
-        <div style={{ fontSize: 12, color: C.textMuted }}>ревью ещё не было</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted }}>ревью ещё не было</div>
       )}
       <OpenTaskLink chain={chain} run={run} isMobile={isMobile} />
     </div>

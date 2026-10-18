@@ -31,6 +31,10 @@ public static class LlmGatewayEndpoints
     public const string HttpClientName = "llm-gateway";
     public const string Route = "/gw/t/{turnId}/llm/{**path}";
     public const string OAuthBeta = "oauth-2025-04-20";
+    // Маркер сжатия, который шлюз добавляет upstream: CLI-заголовок x-claude-code-compaction
+    // (ADR-029) вырезается (DropRequestHeaders), а прокси локальной модели маршрутизирует
+    // запрос-суммаризацию в облако по этому собственному маркеру, не разбирая тело.
+    public const string CompactionMarkerHeader = "x-ccs-compaction";
 
     // Заголовки, которые не пересылаются upstream: авторизация клиента (её заменяет шлюз),
     // токен хода и hop-by-hop. anthropic-beta собирается отдельно.
@@ -355,6 +359,15 @@ public static class LlmGatewayEndpoints
             else
                 request.Headers.TryAddWithoutValidation(name, values.ToArray());
         }
+
+        // Запрос-суммаризация: CLI помечает его x-claude-code-compaction (ADR-029), шлюз
+        // вырезает hint-заголовок (DropRequestHeaders) и ставит собственный маркер — прокси
+        // локальной модели по нему шлёт сжатие в облако, не глядя на тело. Значение уже
+        // провалидировано GatewayHintHeaders (CompactionKinds); облачному upstream лишний
+        // заголовок безвреден, поэтому не завязываем на вид upstream.
+        var hints = GatewayHintHeaders.From(ctx.Request.Headers);
+        if (hints?.Compaction is { } compaction)
+            request.Headers.TryAddWithoutValidation(CompactionMarkerHeader, compaction);
 
         var betas = ctx.Request.Headers["anthropic-beta"]
             .SelectMany(v => (v ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))

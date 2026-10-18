@@ -167,6 +167,22 @@ describe('FeatureRunView — блок «Сейчас»', () => {
     const html = render(run({ closed: true, now, summary: { mergedAt: '2026-10-15T21:09:00Z', durationMinutes: 370, tasks: 14, steps: 9, loops: 3 } }));
     expect(html).not.toContain('>Сейчас<');
   });
+
+  it('n-4: вторая строка — ведущий «{stepRef}:» отрезается (номер уже в строке 1)', () => {
+    const now: FeatureNow[] = [nowItem({ taskId: 'n1', stepRef: 'Ш1', title: 'Ш1: пересборка рендера' })];
+    const html = render(run({ ready: false, now }));
+    // Название без ведущего «Ш1:» (рядом уже моно-номер в строке 1).
+    expect(html).toContain('пересборка рендера');
+    expect(html).not.toContain('Ш1: пересборка');
+  });
+
+  it('n-4: название = номеру — номер не дублируется (не «Ш8 Ш8»)', () => {
+    const now: FeatureNow[] = [nowItem({ taskId: 'n1', stepRef: 'Ш8', title: 'Ш8' })];
+    const html = render(run({ ready: false, now }));
+    // «Ш8» — только в строке 1 (stepRef); вторая строка (название = номеру) не рисуется.
+    const count = (html.match(/Ш8/g) ?? []).length;
+    expect(count, '«Ш8» встречается ровно один раз').toBe(1);
+  });
 });
 
 describe('FeatureRunView — итог смерженной фичи', () => {

@@ -8,6 +8,7 @@ import { prefillComposer } from '../../../lib/ai/startChat';
 import { api } from '../../../lib/api';
 import { getPersonaById, usePersonasVersion, ensurePersonasLoaded } from '../../../lib/personas';
 import { showToast } from '../../../lib/toast';
+import { stripStepRefPrefix } from '../../../lib/stepRef';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary, FeatureTask } from '../../../types/featureRun';
 import { PipelineFlow } from './PipelineFlow';
@@ -88,17 +89,6 @@ function stoppedPhrase(mins: number | null): string {
   return `Исполнитель упал ${mins} мин назад.`;
 }
 
-// m-6: заголовок задачи в трекере часто начинается с «{stepRef}: …» (напр. «Ш1: парсер»).
-// При показе рядом с моно-номером (stepRef) ведущий «{stepRef}:» (с пробелом) отрезается,
-// чтобы не было «Ш1 Ш1: парсер».
-function stripStepRefPrefix(title: string, stepRef: string | null | undefined): string {
-  const ref = (stepRef ?? '').trim();
-  if (!ref) return title;
-  const prefix = `${ref}:`;
-  if (title.startsWith(prefix)) return title.slice(prefix.length).replace(/^\s+/, '');
-  return title;
-}
-
 // Строка плашки «упал»: «{Имя} · {stepRef} {название} — {reason}» (Майя M8).
 // Пустые части не дают «Денис — . Отчёта нет.»: имя и шаг склеиваются « · », reason — « — {…}»,
 // только когда он есть; step не найден по att.taskId → его часть опускается.
@@ -159,6 +149,12 @@ function NowCard({ item }: { item: FeatureNow }) {
   const now = useMinuteTick();
   const persona = item.personaId ? getPersonaById(item.personaId) : undefined;
   const line1 = [persona?.name, item.stepRef].filter(Boolean).join(' · ');
+  // n-4: вторая строка — заголовок задачи; ведущий «{stepRef}:» отрезается (номер уже в
+  // строке 1). Пустое название или название = номер шага дублируют строку 1 — строку 2
+  // не рисуем (не «Ш8 Ш8»).
+  const stripped = stripStepRefPrefix(item.title, item.stepRef);
+  const ref = (item.stepRef ?? '').trim();
+  const line2 = !stripped || stripped === ref ? null : stripped;
   const elapsed = elapsedLabel(item.startedAt, now);
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
@@ -168,7 +164,10 @@ function NowCard({ item }: { item: FeatureNow }) {
         {line1 && (
           <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line1}</div>
         )}
-        <div style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.title}</div>
+        {/* n-4: название = номер шага (или пусто) — строку 2 не рисуем, чтобы не было «Ш8 Ш8». */}
+        {line2 != null && (
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line2}</div>
+        )}
       </div>
       {elapsed && (
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>{elapsed}</span>

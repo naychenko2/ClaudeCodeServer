@@ -6,6 +6,7 @@ import { useIsMobile } from '../../../lib/breakpoints';
 import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
 import { openTaskInSection } from '../../../lib/tasks';
 import { useFeatureStepFocus } from '../../../lib/featureRuns';
+import { stripStepRefPrefix } from '../../../lib/stepRef';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
@@ -508,7 +509,7 @@ function StepGlyph({ chain }: { chain: FeatureStepChain }) {
   );
 }
 
-// Метка источника возврата (10.5/700, R.sm): «с ревью»/«с проверки»/«с финала».
+// Метка источника возврата (11/700, R.sm): «с ревью»/«с проверки»/«с финала».
 // Есть только если chain.source не null (догадок не делаем).
 function SourceTag({ source }: { source?: string | null }) {
   if (!source) return null;
@@ -525,17 +526,6 @@ function SourceTag({ source }: { source?: string | null }) {
       {m.label}
     </span>
   );
-}
-
-// m-6: заголовок задачи в трекере часто начинается с «{stepRef}: …» (напр. «Ш1: парсер»).
-// При показе рядом с моно-номером (stepRef) ведущий «{stepRef}:» (с пробелом) отрезается,
-// чтобы не было «Ш1 Ш1: парсер».
-function stripStepRefPrefix(title: string, stepRef: string | null | undefined): string {
-  const ref = (stepRef ?? '').trim();
-  if (!ref) return title;
-  const prefix = `${ref}:`;
-  if (title.startsWith(prefix)) return title.slice(prefix.length).replace(/^\s+/, '');
-  return title;
 }
 
 // Строка шага (макет v2 .step): кнопка, сетка 14px 1fr auto, зазор 7, minHeight 32 (десктоп,
@@ -604,8 +594,7 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
 
 // === F8: детали этапа (по ключу) ===
 
-// Размеры шрифта, которых нет в шкале FS (FS.xs=11, FS.sm=12) — именованные константы
-// с комментарием (Майя M5: не литералы 10/10.5 в разметке).
+// Кегли деталей шага — токены шкалы FS (Майя M5: не литералы 10/10.5 в разметке).
 // Заголовок секции деталей (макет .det .h): FS.xxs (10, Р-1).
 const SECTION_H_SIZE = FS.xxs;
 // Метка источника возврата (макет .src): FS.xs (11, Р-3); высота 17 та же.

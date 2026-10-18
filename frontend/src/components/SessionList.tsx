@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, ChevronRight, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
@@ -14,8 +14,10 @@ import { Modal, ModalActions, Button, IconButton } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
 import { FeatureGroupHeader } from './FeatureGroupHeader';
+import { FeatureFilterChips } from './FeatureFilterChips';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { useFeaturesIndex } from '../lib/featuresIndex';
+import { filterFeaturesByChip } from '../lib/chatGroups';
 import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
 import {
   SubjectDeleteDialog, SubjectPickMenu, SubjectRenameDialog, SubjectRunBar, SubjectSectionHeader,
@@ -662,6 +664,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
   // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
   const [expandedFeatureGroups, setExpandedFeatureGroups] = useState<Set<string>>(new Set());
+  // Секция «Закрытые · N · на втором плане»: свёрнута по умолчанию, без срока давности
+  // (закрытые фичи не исчезают со временем). Локальное состояние, не персистится.
+  const [closedSectionOpen, setClosedSectionOpen] = useState(false);
 
   // Возврат чата из архива: выходим из архивного вида и открываем этот чат — достают
   // из архива, чтобы продолжить работу, а не чтобы остаться в архивном списке
@@ -866,6 +871,148 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       </div>
     );
   };
+  // Режим «Фичи» (F8): чипы со счётчиками, открытые группы, отфильтрованные по
+  // выбранному чипу, секция «Закрытые · N · на втором плане» (свёрнута по умолчанию,
+  // сама раскрывается на чипе «Закрытые»), «Без фичи» и три пустых состояния
+  // (фич нет / все закрыты / под фильтр ничего не попало). Принадлежность фичи к чипу
+  // фронт НЕ считает — бэк отдаёт chips[] (контракт «Контракт индекса фич — утверждён
+  // (Александр, 18.10)»), фронт только фильтрует по chips[] и считает счётчики.
+  const renderFeaturesMode = () => {
+    if (!featureGroups) return null;
+    const chip = filters.featureFilter;
+    const allFeatures = featuresIndex.features;
+    const openFeatures = allFeatures.filter(f => f.bucket !== 'closed');
+    const closedFeatures = allFeatures.filter(f => f.bucket === 'closed');
+    const closedExpanded = closedSectionOpen || chip === 'closed';
+
+    // Пустое состояние: фич нет вовсе (индекс пуст)
+    if (allFeatures.length === 0) {
+      return (
+        <EmptyState
+          compact
+          icon={<Sparkles size={20} strokeWidth={2} />}
+          title="Фич пока нет"
+          subtitle="Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу."
+        />
+      );
+    }
+
+    // Чипы со счётчиками (только когда есть фичи)
+    const chips = (
+      <FeatureFilterChips
+        features={allFeatures}
+        selected={chip}
+        onSelect={c => patch({ featureFilter: c })}
+        isMobile={isMobile}
+      />
+    );
+
+    // Открытые группы: фича открытая и её чип совпадает с выбранным
+    const shownOpenIds = new Set(filterFeaturesByChip(openFeatures, chip).map(f => f.featureId));
+    const openGroups = featureGroups.filter(g =>
+      g.feature && g.feature.bucket !== 'closed' && shownOpenIds.has(g.feature.featureId));
+    const closedGroups = featureGroups.filter(g => g.feature && g.feature.bucket === 'closed');
+    const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
+
+    // «Смержена ДД.ММ» для спокойного состояния: последняя по дате мержа закрытая фича
+    const lastMerged = closedFeatures
+      .map(f => f.summary?.mergedAt)
+      .filter((d): d is string => !!d)
+      .sort()
+      .pop();
+    const lastMergedDate = lastMerged
+      ? (() => {
+          const d = new Date(lastMerged);
+          const p = (n: number) => String(n).padStart(2, '0');
+          return `${p(d.getDate())}.${p(d.getMonth() + 1)}`;
+        })()
+      : null;
+
+    // Спокойное состояние: все закрыты (фичи есть, открытых нет, фильтр не «Закрытые»)
+    const calm = openFeatures.length === 0 && chip !== 'closed' && (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm,
+        // Только вертикальные отступы: горизонтальный задаёт контейнер списка
+        margin: `0 0 ${SP.sm}px`, padding: `${SP.sm}px`,
+        borderRadius: R.lg, background: C.successBg, color: C.successText,
+        fontSize: FS.sm, fontFamily: FONT.sans,
+      }}>
+        <CheckCircle2 size={14} strokeWidth={2} />
+        <span>
+          Открытых фич нет.
+          {lastMergedDate && <> Последняя смержена {lastMergedDate}.</>}
+        </span>
+      </div>
+    );
+
+    // «Под фильтр ничего не попало»: открытые фичи есть, но ни одна не под чип
+    const noMatch = chip !== 'closed' && openFeatures.length > 0 && openGroups.length === 0 && (
+      <EmptyState
+        compact
+        icon={<FilterX size={20} strokeWidth={2} />}
+        title="Под фильтр ничего не попало"
+        subtitle={chip === 'stopped' ? 'Сейчас ни одна фича не стоит.'
+          : chip === 'merge' ? 'Сейчас ни одна фича не ждёт мержа.'
+          : 'Сейчас ни одна фича не ждёт вас.'}
+        action={
+          <Button variant="ghost" size="sm" onClick={() => patch({ featureFilter: 'open' })}>
+            Показать открытые
+          </Button>
+        }
+      />
+    );
+
+    // Секция «Закрытые · N · на втором плане»: заголовок-переключатель + (раскрыто)
+    // группы закрытых фич. Без срока давности: закрытые не исчезают со временем.
+    const closedSection = closedFeatures.length > 0 && (
+      <div style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
+        <button
+          type="button"
+          onClick={() => setClosedSectionOpen(o => !o)}
+          aria-expanded={closedExpanded}
+          title={closedExpanded ? 'Свернуть закрытые' : 'Развернуть закрытые'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+            border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+            padding: `${SP.xs}px ${SP.xs}px`, fontFamily: FONT.sans,
+          }}
+        >
+          <span style={{
+            display: 'flex', color: C.textMuted,
+            transform: closedExpanded ? 'rotate(90deg)' : undefined,
+            transition: 'transform 0.15s',
+          }}>
+            <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </span>
+          <span style={{ fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted }}>
+            Закрытые
+          </span>
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{closedFeatures.length}</span>
+          {!closedExpanded && (
+            <span style={{ marginLeft: 'auto', fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>
+              на втором плане
+            </span>
+          )}
+        </button>
+        {closedExpanded && (
+          <div>
+            {closedGroups.map(g => renderFeatureGroup(g))}
+          </div>
+        )}
+      </div>
+    );
+
+    return (
+      <>
+        {chips}
+        {calm}
+        {chip !== 'closed' && openGroups.map(g => renderFeatureGroup(g))}
+        {noMatch}
+        {closedSection}
+        {(chip === 'open' || allFeatures.length === 0) && noFeatureGroup && renderFeatureGroup(noFeatureGroup)}
+      </>
+    );
+  };
   // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
   // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
   // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
@@ -1034,7 +1181,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         )}
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
             {featureGroups ? (
-              featureGroups.map(g => renderFeatureGroup(g))
+              renderFeaturesMode()
             ) : subjectGroups ? (
               subjectGroups.map(g => renderSubjectSection(g,
                 g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (

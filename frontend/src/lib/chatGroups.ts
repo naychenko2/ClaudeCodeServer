@@ -1,7 +1,7 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
-import type { FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
+import { sortKeyOf, ALL_FEATURE_FILTER_CHIPS, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
 
 export interface ChatGroup {
   title: string;
@@ -374,4 +374,33 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
   if (inProject && featuresOverview) base.push('features');
   base.push('none');
   return base;
+}
+
+// === Чипы-фильтры фич (макет features-overview.html, .chips/.fch) ===
+// Ряд чипов над списком в режиме «Фичи»: Открытые · Ждут вас · Стоят · К мержу ·
+// Закрытые. Принадлежность фичи к чипу НЕ вычисляет фронт — бэк отдаёт готовый
+// chips[] (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»); фронт
+// только считает числа по chips[] и фильтрует список по выбранному чипу.
+
+// Подписи чипов: порядок = порядок ALL_FEATURE_FILTER_CHIPS (единый источник).
+const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
+  open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
+};
+
+// Определения чипов для рендера ряда: значение + подпись, в порядке ALL_FEATURE_FILTER_CHIPS.
+export const FEATURE_FILTER_CHIPS: { value: FeatureChip; label: string }[] =
+  ALL_FEATURE_FILTER_CHIPS.map(v => ({ value: v, label: FEATURE_CHIP_LABEL[v] }));
+
+// Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
+// Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
+export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
+  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0 };
+  for (const f of features) for (const c of f.chips) counts[c]++;
+  return counts;
+}
+
+// Фильтр фич по выбранному чипу: фича видна, если её chips[] содержит чип.
+// 'open' — все открытые (не закрытые), 'closed' — все закрытые, остальные — по тревоге.
+export function filterFeaturesByChip(features: FeatureIndexFeature[], chip: FeatureChip): FeatureIndexFeature[] {
+  return features.filter(f => f.chips.includes(chip));
 }

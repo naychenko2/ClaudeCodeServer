@@ -3,6 +3,7 @@
 // отдельно (scopeKey=projectId) — переключение проекта не смешивает настройки.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
+import type { FeatureChip } from '../types/featureIndex';
 
 // Чип статуса жизни чата (макет варианта А): маппинг фиксированный, покрывает все
 // 7 значений Session.status + признак готовности задачи.
@@ -67,6 +68,11 @@ export interface ChatFilters {
   // красит (isDefaultFilters её не учитывает — как groupBy/sortOrder/hierarchy),
   // а «Сбросить всё» из режима архива не выкидывает.
   archivedOnly: boolean;
+  // Фасет «Фичи»: выбранный чип-фильтр (какую группу фич показывать).
+  // ОСЬ РЕЖИМА, как archivedOnly: relevant только при groupBy='features',
+  // isDefaultFilters её не учитывает (триггер фильтров не красится),
+  // «Сбросить всё» её сохраняет. Дефолт 'open' — все открытые.
+  featureFilter: FeatureChip;
 }
 
 const KEY_PREFIX = 'cc_chat_filters:';
@@ -77,6 +83,9 @@ const LEGACY_VIEW_PREFIX = 'cc_chat_view:';
 
 export const ALL_ORIGINS: Session['origin'][] = ['manual', 'task', 'automation'];
 export const ALL_STATUS_CHIPS: ChatStatusChip[] = ['active', 'waiting', 'done', 'error'];
+// Белый список значений чипа-фильтра фич (фасет «Фичи»): он же порядок ряда чипов.
+// Незнакомое значение из localStorage вырождается в 'open' (нормализация ниже).
+export const ALL_FEATURE_FILTER_CHIPS: FeatureChip[] = ['open', 'waiting', 'stopped', 'merge', 'closed'];
 // Дефолт по макету А: активные срезы видны, архив (Готово) скрыт — список не зарастает
 export const DEFAULT_STATUSES: ChatStatusChip[] = ['active', 'waiting', 'error'];
 
@@ -91,6 +100,7 @@ function defaults(): ChatFilters {
     sortOrder: 'newest',
     hierarchy: true,
     archivedOnly: false,
+    featureFilter: 'open',
   };
 }
 
@@ -156,6 +166,11 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     hierarchy: true,
     // Запись старого формата (до режима архива) — начинаем с обычного списка
     archivedOnly: typeof p.archivedOnly === 'boolean' ? p.archivedOnly : false,
+    // Чип-фильтр фич: запись старого формата (без поля) — дефолт 'open';
+    // мусорное значение — тоже 'open' (белый список ALL_FEATURE_FILTER_CHIPS)
+    featureFilter: (typeof p.featureFilter === 'string' && (ALL_FEATURE_FILTER_CHIPS as string[]).includes(p.featureFilter))
+      ? (p.featureFilter as FeatureChip)
+      : 'open',
   };
 }
 
@@ -345,6 +360,8 @@ export function defaultChatFiltersKeepingView(f: ChatFilters): ChatFilters {
     sortOrder: f.sortOrder,
     hierarchy: f.hierarchy,
     archivedOnly: f.archivedOnly,
+    // Чип-фильтр фич — ось режима (как archivedOnly): сброс фильтров её не трогает
+    featureFilter: f.featureFilter,
   };
 }
 

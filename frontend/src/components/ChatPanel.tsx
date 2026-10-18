@@ -1311,20 +1311,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // Перенос в новый чат (docs/features/chat-handoff.md): записку пишет сам чат (warm —
   // путь выбрала шапка по статусу кэша) или дешёвая модель, сервер заводит чат-преемник без
-  // истории. Дальше — ровно как у ветки: записку в черновик нового чата (человек её
-  // поправит, автоотправки НЕТ) и навигация. Отказы 409/502 несут человеческий текст — тостом
+  // истории. Дальше: записку в черновик нового чата (человек её поправит, автоотправки НЕТ)
+  // и открытие чата через openChatById. Голый navPush тут не годится: он пишет только
+  // историю браузера, а экран переключают события cc-open-url/cc-open-chat — с ним новый
+  // чат приходилось открывать руками. Отказы 409/502 несут человеческий текст — тостом
   const handleHandoff = useCallback(async (warm: boolean) => {
     try {
       const result = await api.chats.handoff(session.id, warm);
       setDraft(result.chatId, result.draft);
-      const navDest: NavSnapshot = result.projectId
-        ? { screen: 'project', project: project!, chatId: result.chatId, view: 'chat', file: null }
-        : { screen: 'chats', chatId: result.chatId };
-      navPush(navDest);
+      await openChatById(result.chatId, { missingTitle: 'Перенос в новый чат' });
     } catch (err) {
       showToast('Перенос в новый чат', err instanceof Error ? err.message : 'Не удалось перенести разговор');
     }
-  }, [session.id, project]);
+  }, [session.id]);
 
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает

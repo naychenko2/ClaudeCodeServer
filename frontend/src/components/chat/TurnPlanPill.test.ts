@@ -37,11 +37,11 @@ describe('TurnPlanPill: F9 (сигнал «открыть меню»)', () => {
     return mount(node);
   }
 
-  // Меню-портал живёт в document.body, не в контейнере. Ищем по role="menu" (Глеб:
-  // подстрока «План хода» могла зеленеть ложно, если этот текст есть в body вне открытого меню).
+  // Меню-портал живёт в document.body, не в контейнере. Ищем по data-testid="turn-plan-menu"
+  // (обёртка, которую рисует TurnPlanPill; role="menu" в общем Menu.tsx откатили — Глеб).
   function bodyHasMenu(): boolean {
     const doc = (globalThis as { document: { body: unknown } }).document as { body: Parameters<typeof findNodeByAttr>[0] };
-    return findNodeByAttr(doc.body, 'role', 'menu') !== null;
+    return findNodeByAttr(doc.body, 'data-testid', 'turn-plan-menu') !== null;
   }
 
   it('сигнал: меню открывается (появляется в body-портале)', () => {

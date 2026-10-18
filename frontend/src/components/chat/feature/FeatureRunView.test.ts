@@ -63,6 +63,17 @@ function run(over: Partial<FeatureRun> = {}): FeatureRun {
 
 const render = (r: FeatureRun) => renderToStaticMarkup(createElement(FeatureRunView, { run: r }));
 
+// Ожидаемая дата-время итога: теми же локальными геттерами от той же Date, что и
+// dateTimeLabel (featureTime) — тест не зависит от пояса машины (CI в UTC, разработка в МСК).
+function localDateTime(iso: string): string {
+  const d = new Date(iso);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}.${mm} ${hh}:${mi}`;
+}
+
 // now[]-элемент для блока «Сейчас».
 function nowItem(over: Partial<FeatureNow> = {}): FeatureNow {
   return { taskId: 'n', stage: 'prod', title: 'Задача', ...over };
@@ -160,7 +171,7 @@ describe('FeatureRunView — итог смерженной фичи', () => {
     const summary: FeatureSummary = { mergedAt: '2026-10-15T21:09:00Z', durationMinutes: 370, tasks: 14, steps: 9, loops: 3 };
     const html = render(run({ closed: true, summary }));
     expect(html).toContain('Фича смержена');
-    expect(html).toContain('15.10 21:09');
+    expect(html).toContain(localDateTime('2026-10-15T21:09:00Z'));
     expect(html).toContain('6 ч 10 мин');
     expect(html).toContain('14');
     expect(html).toContain('9');

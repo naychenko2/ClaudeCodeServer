@@ -13,6 +13,7 @@ import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary, FeatureT
 import { PipelineFlow } from './PipelineFlow';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { Rounds } from './Rounds';
+import { dateTimeLabel } from './featureTime';
 
 // Карточка фичи в режиме «Исполнение фичи»: сводка по агрегату `FeatureRun`.
 //
@@ -109,14 +110,10 @@ function plural(n: number, one: string, few: string, many: string): string {
 function summaryLine(s: FeatureSummary): string {
   const parts: string[] = [];
   if (s.mergedAt) {
-    // UTC-геттеры: mergedAt приходит UTC-ISO, локальный таймзона не должен сдвигать
-    // дату (иначе «15.10 21:09» превращается в «16.10 00:09» в МСК).
-    const d = new Date(s.mergedAt);
-    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(d.getUTCDate()).padStart(2, '0');
-    const hh = String(d.getUTCHours()).padStart(2, '0');
-    const mi = String(d.getUTCMinutes()).padStart(2, '0');
-    parts.push(`${dd}.${mm} ${hh}:${mi}`);
+    // mergedAt приходит UTC-ISO; макет v2 считает по МСК (местный пояс) — dateTimeLabel
+    // (featureTime) форматирует локальными геттерами, не getUTC*.
+    const dt = dateTimeLabel(s.mergedAt);
+    if (dt) parts.push(dt);
   }
   parts.push(durationLabel(s.durationMinutes));
   parts.push(`${s.tasks} ${plural(s.tasks, 'задача', 'задачи', 'задач')}`);

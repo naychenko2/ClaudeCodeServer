@@ -11,6 +11,7 @@ import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { Rounds } from './Rounds';
 import { StepDetails } from './StepDetails';
+import { hhmm } from './featureTime';
 import type {
   FeatureRun, FeatureTask, FeatureStage, FeatureSourceReturns, FeatureStepChain,
   FeatureRound, FeatureRoundVerdict, StageKey, StageState, StageTone,
@@ -602,16 +603,8 @@ function SectionH({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ISO → «ЧЧ:ММ» (UTC, как в строке с Z); невалидная/пустая → null.
-function hhmm(iso?: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-}
-
 // Диапазон времени «ЧЧ:ММ–ЧЧ:ММ»; только старт — «ЧЧ:ММ»; нет старта — null (без висячих
-// разделителей).
+// разделителей). hhmm — общий форматтер (featureTime): ISO → «ЧЧ:ММ» в местном поясе.
 function timeRange(startIso?: string | null, endIso?: string | null): string | null {
   const s = hhmm(startIso);
   if (!s) return null;

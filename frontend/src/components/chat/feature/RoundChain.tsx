@@ -2,6 +2,7 @@ import { C, FONT, R } from '../../../lib/design';
 import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { FeatureGlyph } from './FeatureGlyphs';
+import { hhmm } from './featureTime';
 import type { FeatureRun, FeatureStepChain, FeatureRound, FeatureTask } from '../../../types/featureRun';
 
 // Цепочка кругов шага (макет v2 .tl2): вертикальная рельса, по которой в порядке
@@ -52,14 +53,7 @@ function buildLinks(chain: FeatureStepChain, run: FeatureRun): ChainLink[] {
 }
 
 // === Время (mono 11, C.textMuted) ===
-
-// ISO → «ЧЧ:ММ» (UTC, как в строке с Z); невалидная/пустая → null.
-function hhmm(iso?: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-}
+// hhmm — общий форматтер (featureTime): ISO → «ЧЧ:ММ» в местном поясе.
 
 // Длительность «N мин» / «1 ч 10 мин»; min < 0 → 0.
 function minutesLabel(min: number): string {

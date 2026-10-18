@@ -98,6 +98,13 @@ function round(over: Partial<FeatureRound> = {}): FeatureRound {
 
 const render = (r: FeatureRun) => renderToStaticMarkup(createElement(PipelineFlow, { run: r }));
 
+// Ожидаемое «ЧЧ:ММ»: теми же локальными геттерами от той же Date, что и hhmm (featureTime) —
+// тест не зависит от пояса машины (CI в UTC, разработка в МСК).
+function localHHMM(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 // Интерактив: смонтировать, кликнуть строку стадии, вернуть весь текст дерева (для проверок содержимого).
 function clickStageText(r: FeatureRun, key: string): string {
   const { root, container } = mount(createElement(PipelineFlow, { run: r }));
@@ -1240,7 +1247,7 @@ describe('PipelineFlow: F9.1 (детали Разрез/План)', () => {
     const text = textNodes(container).join(' ');
     expect(text, 'имя исполнителя').toContain('Александр');
     expect(text, 'статус «закрыто»').toContain('закрыто');
-    expect(text, 'время «07:49–08:09»').toContain('07:49–08:09');
+    expect(text, 'время (местный пояс)').toContain(`${localHHMM('2026-10-15T07:49:00Z')}–${localHHMM('2026-10-15T08:09:00Z')}`);
     expect(text, 'ссылка «Открыть задачу»').toContain('Открыть задачу');
     root.unmount();
   });
@@ -1266,7 +1273,7 @@ describe('PipelineFlow: F9.1 (детали Проверки/Финала)', () =
     const qa = findNodeByAttr(container, 'data-testid', 'stage-row-qa')!;
     act(() => (reactProps(qa)!.onClick as () => void)());
     const text = textNodes(container).join(' ');
-    expect(text, 'время «08:36–08:45»').toContain('08:36–08:45');
+    expect(text, 'время (местный пояс)').toContain(`${localHHMM('2026-10-15T08:36:00Z')}–${localHHMM('2026-10-15T08:45:00Z')}`);
     expect(text, 'ссылка «Открыть задачу»').toContain('Открыть задачу');
     root.unmount();
   });

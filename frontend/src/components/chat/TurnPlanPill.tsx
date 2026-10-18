@@ -177,7 +177,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
         ) : (
           // Без фич — прежняя разметка меню (байт-в-байт): заголовок «План хода» + чек-лист.
           <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={280} maxWidth={380} maxHeight={340}>
-            <div style={{ padding: '9px 12px 11px' }}>
+            <div data-testid="turn-plan-menu" style={{ padding: '9px 12px 11px' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,
                 borderBottom: `1px solid ${C.divider}`,

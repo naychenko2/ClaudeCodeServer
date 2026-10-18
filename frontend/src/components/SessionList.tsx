@@ -9,10 +9,13 @@ import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
-import { C, FONT, FS, GROUP_COLORS, MODAL_W, SP } from '../lib/design';
+import { C, FONT, FS, GROUP_COLORS, MODAL_W, R, SP } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
+import { FeatureGroupHeader } from './FeatureGroupHeader';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useFeaturesIndex } from '../lib/featuresIndex';
 import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
 import {
   SubjectDeleteDialog, SubjectPickMenu, SubjectRenameDialog, SubjectRunBar, SubjectSectionHeader,
@@ -39,7 +42,7 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, sortChatsFlat, chatTagsSorted, NO_SUBJECT_KEY, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, NO_SUBJECT_KEY, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
 import { useReadStateVersion } from '../lib/chatReadState';
@@ -74,8 +77,10 @@ interface Props {
   onAddToWall?: (s: Session) => void;
 }
 
-// Режимы группировки списка проекта: «Темы» есть только здесь, у глобального списка их нет
-const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'tags', 'subjects', 'none'];
+// Режимы группировки списка проекта: «Темы» есть только здесь, у глобального списка их
+// нет. «Фичи» — пятый пункт, появляется только при флаге features-overview (см.
+// featureGroupByOptions(true, featuresOn) в теле компонента); глобальный список его не
+// получает (реестра фич у него нет).
 // Зазор под секцией группы (дни, теги, темы). Нижний padding списка его вычитает
 // (не больше SP.sm − ROW_GAP, иначе padding уйдёт в минус)
 const GROUP_GAP = SP.xs + SP.xxs;
@@ -646,6 +651,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const groupBy: ChatGroupBy = filters.groupBy;
   const subjectsMode = groupBy === 'subjects';
   const subjectRun = useSubjectRun(project.id, subjectsMode);
+  // Режим «Фичи»: фасет по индексу фич (флаг features-overview, dark launch).
+  // Пункт «Фичи» в группировке появляется только при флаге; индекс фич проекта
+  // источник правды (бэк считает bucket/порядок/членство/ключевой чат), фронт
+  // только показывает. Флаг выключен — источник не зовётся (EMPTY, фасет не рисуется)
+  const featuresMode = groupBy === 'features';
+  const featuresOn = useFeature(FLAGS.featuresOverview);
+  const groupByOptions = featureGroupByOptions(true, featuresOn);
+  const featuresIndex = useFeaturesIndex(project.id, featuresOn);
+  // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
+  // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
+  const [expandedFeatureGroups, setExpandedFeatureGroups] = useState<Set<string>>(new Set());
 
   // Возврат чата из архива: выходим из архивного вида и открываем этот чат — достают
   // из архива, чтобы продолжить работу, а не чтобы остаться в архивном списке
@@ -743,6 +759,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const subjectGroups: SubjectChatGroup[] | null = subjectsMode
     ? groupBySubjects(treeRoots, subjects, sortOrder)
     : null;
+  // Режим «Фичи»: группы по индексу фич (порядок = порядок features[] бэка, «Без фичи»
+  // в конце). На вход — корни дерева, как у остальных секционеров
+  const featureGroups: FeatureChatGroup[] | null = featuresMode
+    ? groupByFeatures(treeRoots, featuresIndex, sortOrder)
+    : null;
   // Подсказка про залежи: чаты «без темы» старше нижней границы фона модель сама не тронет
   const sweepSince = project.subjectsSweepSince ? new Date(project.subjectsSweepSince).getTime() : null;
   const startRun = () => { void startSubjectRun(project.id); };
@@ -773,6 +794,75 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           </div>
         )}
         {body}
+      </div>
+    );
+  };
+  // Режим «Фичи»: заголовок группы (FeatureGroupHeader) + чаты. Группа свёрнута по
+  // умолчанию: наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»;
+  // раскрыта — все чаты (ключевой первым, с меткой «ключевой»). «Без фичи» — хвост
+  // без заголовка группы (простой разделитель + ветки)
+  const renderFeatureGroup = (g: FeatureChatGroup) => {
+    if (!g.feature) {
+      return (
+        <div key="no-feature" style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
+          <ListDateDivider title="Без фичи" plain />
+          {g.sessions.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
+            <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
+          )))}
+        </div>
+      );
+    }
+    const layout = featureGroupChats(g.feature, g.sessions);
+    const expanded = expandedFeatureGroups.has(g.feature.featureId);
+    // Свёрнуто — наружу ключевой + живые/вставшие; раскрыто — все (ключевой первым)
+    const shown = expanded ? layout.ordered : layout.exposed;
+    const keyId = g.feature.keySessionId;
+    const toggle = () => setExpandedFeatureGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(g.feature!.featureId)) next.delete(g.feature!.featureId);
+      else next.add(g.feature!.featureId);
+      return next;
+    });
+    return (
+      <div key={g.feature.featureId} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
+        <FeatureGroupHeader
+          feature={g.feature}
+          count={g.sessions.length}
+          expanded={expanded}
+          onToggle={toggle}
+          isMobile={isMobile}
+        />
+        <div style={{ marginLeft: 13, paddingLeft: 9, borderLeft: `1px solid ${C.divider}` }}>
+          {shown.map(root => (
+            <div key={root.id}>
+              {root.id === keyId && (
+                <span data-testid="feature-key-chat" style={{
+                  display: 'inline-block', fontSize: FS.xs, fontWeight: 700, color: C.accent,
+                  background: C.accentLight, borderRadius: R.max, padding: '1px 6px',
+                  margin: `2px 0 0 ${SP.xs}px`, fontFamily: FONT.sans,
+                }}>
+                  ключевой
+                </span>
+              )}
+              {nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
+                <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
+              ))}
+            </div>
+          ))}
+          {!expanded && layout.hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={toggle}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
+                background: 'transparent', color: C.textSecondary, fontFamily: FONT.sans,
+                fontSize: FS.xs, padding: `${SP.xs}px ${SP.xs}px`, marginTop: 2,
+              }}
+            >
+              ещё {layout.hiddenCount}
+            </button>
+          )}
+        </div>
       </div>
     );
   };
@@ -864,7 +954,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
-        groupByOptions={GROUP_BY_OPTIONS}
+        groupByOptions={groupByOptions}
       />
       {subjectsMode && <SubjectRunBar run={subjectRun} />}
 
@@ -943,7 +1033,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           />
         )}
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
-            {subjectGroups ? (
+            {featureGroups ? (
+              featureGroups.map(g => renderFeatureGroup(g))
+            ) : subjectGroups ? (
               subjectGroups.map(g => renderSubjectSection(g,
                 g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (
                   <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />

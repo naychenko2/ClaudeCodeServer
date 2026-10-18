@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HardwareReport, HardwareBrief, HwLevel } from './hardwareTypes';
 import {
   hwClosest, hwLevelLabel, hwMemMargin, hwScalePos, hwSummary, hwBriefMem, hwBriefLevel,
-  hwBriefFlags, familyChipDisabled, hwTileView, hwGpuOrdinal, hwRolesLabel,
+  hwBriefGpusLevel, hwBriefFlags, familyChipDisabled, hwTileView, hwGpuOrdinal, hwRolesLabel,
   type HwTileView,
 } from './hardwareFormat';
 import { HwTile } from './HwTile';
@@ -240,8 +240,27 @@ describe('HwLinkRow — строка-ссылка «Видеокарты»', () 
   it('hwBriefMem — «память N° · M°»', () => {
     expect(hwBriefMem(brief())).toBe('память 68° · 81°');
   });
-  it('hwBriefLevel — худший уровень', () => {
+  it('hwBriefLevel — уровень стенда (точка на вкладке «Железо»)', () => {
     expect(hwBriefLevel(brief({ level: 'warn' }))).toBe('warn');
+    expect(hwBriefLevel(brief({ level: 'danger' }))).toBe('danger');
+  });
+  it('hwBriefGpusLevel — худший уровень КАРТ (точка строки-ссылки), не стенда', () => {
+    // Диск danger (уровень стенда danger), но карты ok → строка-ссылка зелёная,
+    // а вкладка «Железо» — красная.
+    const b = brief({ level: 'danger' });
+    expect(hwBriefGpusLevel(b)).toBe('ok');
+    expect(hwBriefLevel(b)).toBe('danger');
+    // Карта warn → строка-ссылка warn.
+    const bWarn = brief({ gpus: [
+      { uuid: 'gpu-a', memTempC: 68, level: 'ok', powerCap: false, thermal: false },
+      { uuid: 'gpu-b', memTempC: 81, level: 'warn', powerCap: false, thermal: false },
+    ]});
+    expect(hwBriefGpusLevel(bWarn)).toBe('warn');
+    // Карта danger → danger.
+    const bDanger = brief({ gpus: [
+      { uuid: 'gpu-a', memTempC: 68, level: 'danger', powerCap: false, thermal: false },
+    ]});
+    expect(hwBriefGpusLevel(bDanger)).toBe('danger');
   });
   it('hwBriefFlags — thermal/powerCap', () => {
     expect(hwBriefFlags(brief())).toEqual({ thermal: false, powerCap: true });
@@ -293,9 +312,10 @@ describe('hwTileView — модели плиток', () => {
     const v = hwTileView(makeReport()).find(x => x.key === 'cpu')!;
     expect(v.detail).toBe('кристаллы 71 и 58');
   });
-  it('chipset: деталь «вентилятор 3846 об/мин»', () => {
+  it('chipset: деталь «вентилятор 3846 об/мин» (неразрывный пробел: число+единика неделимые)', () => {
     const v = hwTileView(makeReport()).find(x => x.key === 'chipset')!;
-    expect(v.detail).toBe('вентилятор 3846 об/мин');
+    //   — неразрывный пробел между числом и «об/мин»: перенос не рвёт единицу
+    expect(v.detail).toBe('вентилятор 3846 об/мин');
   });
   it('disk kv: «до предела 1,2 °C · занято 370 из 492 ГБ»', () => {
     const v = hwTileView(makeReport()).find(x => x.key === 'disk-0')!;

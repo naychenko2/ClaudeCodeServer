@@ -10,7 +10,7 @@
 
 import { C, FONT, FS, R, SP } from 'aihome_shell/kit';
 import type { HardwareBrief } from './hardwareTypes';
-import { hwBriefFlags, hwBriefMem, hwBriefLevel } from './hardwareFormat';
+import { hwBriefFlags, hwBriefMem, hwBriefGpusLevel } from './hardwareFormat';
 
 // Сколько карт: «Видеокарты» (мн.) / «Видеокарта» (ед.).
 function title(n: number): string {
@@ -23,7 +23,7 @@ export function HwLinkRow({ brief, stale, onOpen }: {
   onOpen: () => void;
 }) {
   if (brief.gpus.length === 0) return null;
-  const level = hwBriefLevel(brief);
+  const level = hwBriefGpusLevel(brief);
   const flags = hwBriefFlags(brief);
   const dotColor = stale ? C.track
     : level === 'danger' ? C.danger : level === 'warn' ? C.warning : C.success;

@@ -63,14 +63,25 @@ export function HwTile({ view, stale }: { view: HwTileView; stale?: boolean }) {
         <span style={{ width: 8, height: 8, borderRadius: R.full, background: t.dot, flex: 'none' }} />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{view.name}</span>
       </div>
-      {/* Значение: mono 20 px 600; нет данных — курсив C.textMuted */}
-      <div style={{
-        position: 'relative', fontFamily: FONT.mono,
-        fontSize: 20, fontWeight: 600, lineHeight: 1.2, margin: '2px 0 0', whiteSpace: 'nowrap',
-        color: t.value, fontStyle: noData ? 'italic' : 'normal',
-      }}>
-        {noData ? (view.sensor === 'none' ? 'датчика нет' : 'нет данных') : `${view.dec ? ruNum(view.value!) : Math.round(view.value!)} °C`}
-      </div>
+      {/* Значение: mono 20 px 600; нет данных — мельче (FS.sm, курсив, C.textMuted)
+          и с переносом: на 320 «датчика нет» не обрезается, цифры 20 px остаются крупными */}
+      {noData ? (
+        <div style={{
+          position: 'relative', fontFamily: FONT.mono,
+          fontSize: FS.sm, fontWeight: 600, lineHeight: 1.3, margin: '2px 0 0',
+          color: C.textMuted, fontStyle: 'italic',
+        }}>
+          {view.sensor === 'none' ? 'датчика нет' : 'нет данных'}
+        </div>
+      ) : (
+        <div style={{
+          position: 'relative', fontFamily: FONT.mono,
+          fontSize: 20, fontWeight: 600, lineHeight: 1.2, margin: '2px 0 0', whiteSpace: 'nowrap',
+          color: t.value,
+        }}>
+          {`${view.dec ? ruNum(view.value!) : Math.round(view.value!)} °C`}
+        </div>
+      )}
       {/* Подпись датчика */}
       {view.sensorLabel && (
         <div style={{ position: 'relative', fontSize: 10, color: C.textSecondary, marginTop: 2 }}>{view.sensorLabel}</div>

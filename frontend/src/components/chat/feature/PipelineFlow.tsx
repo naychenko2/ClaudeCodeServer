@@ -21,13 +21,17 @@ function useMinuteTick(): number {
 }
 
 // === Геометрия строки стадии (единый источник, чтобы рельса не рвалась) ===
-// Точка стадии — 16px (SVG). Строка несёт рамку 1px + паддинг SP.xs, поэтому
-// центр точки = SP.xs + 1 + 16/2 = 12px от верха строки (не зависит от высоты строки,
-// т.к. грид строки — align-items:start: точка всегда у верха, а не по центру).
+// Строка — <button> (макет v2 .row): рамка 1px + паддинг (SP.xs сверху/справа/снизу, 0 слева)
+// + minHeight тач-цели (TB.iconHitDesktop/Mobile). Точка стадии — 16px (SVG), грид строки
+// align-items:start, поэтому точка всегда у верха строки, а не по центру: центр точки =
+// паддинг-top + рамка 1 + 16/2 = SP.xs + 1 + 8 = 13px от верха кнопки (не зависит от высоты).
 // Сегмент рельсы: top = низ текущей точки (SP.xs + 1 + 16 = 21), bottom = -(SP.xs + 1)
 // (до верха следующей точки: её рамка 1 + паддинг SP.xs = 5). Тогда рельса непрерывна.
 const DOT = 16;
-const RAIL_TOP = SP.xs + 1 + DOT;     // 21 — низ текущей точки, от верха строки
+// Паддинг строки (макет v2 .row: 5px 4px 5px 0 → на шкале SP.xs сверху/справа/снизу, 0 слева).
+const ROW_PAD_Y = SP.xs;   // 4 — top/bottom
+const ROW_PAD_X = SP.xs;   // 4 — right (left = 0)
+const RAIL_TOP = ROW_PAD_Y + 1 + DOT; // 21 — низ текущей точки, от верха строки
 // Мин. высота строки стадии: тач-цель по шкале TB (макет v1: minHeight TB.iconHitDesktop/Mobile).
 // Десктоп 32 / мобила 40 — из TB, не литерал 34 (34 в шкале SP не было).
 const ROW_MIN_H_DESKTOP = TB.iconHitDesktop; // 32
@@ -40,11 +44,13 @@ const LABEL_LH = 18;
 // line-height 18px) — константы.
 const BADGE_PAD_X = 7;
 const BADGE_LH = 18;
-// X-центр сегмента рельсы (left + translateX(-50%)): отступ строки слева (padding-left
-// SP.xs) + половина колонки точки 16px. `left` считается от padding-box (внутренний край
-// рамки), поэтому рамку 1px не прибавляем: SP.xs + 16/2 = 4 + 8 = 12 — центр сегмента
-// совпадает с центром кольца.
-const RAIL_LEFT = SP.xs + 16 / 2; // 12
+// Зазор грида строки (макет v2 .row: gap 9px) — константа, не литерал (Майя M11).
+const ROW_GAP = 9;
+// X-центр сегмента рельсы (left + translateX(-50%)): `left` считается от левого края обёртки
+// (position:relative, без рамки/паддинга), а точка лежит в гриде кнопки, сдвинутой её рамкой
+// 1px вправо: 1 (рамка кнопки) + 16/2 (центр колонки точки) = 9 — центр сегмента совпадает
+// с центром кольца (Майя M2: рельса не рвётся и не сдвигается от центра точек).
+const RAIL_LEFT = 1 + 16 / 2; // 9
 
 // Стадии в порядке жизненного цикла. Ключи — как в бэке (FeatureStage.Key:
 // cut | plan | prod | review | qa | final | merge).
@@ -207,12 +213,13 @@ export function toggleExpanded(prev: StageKey | null, key: StageKey): StageKey |
 // === Рендер ===
 
 // Точка-индикатор стадии 16px: подложка — круг C.bgWhite поверх рельсы, поверх — глиф по
-// состоянию. done — круг C.bgSelected с галкой C.textMuted (финал фичи — зелёный); active по
-// tone: run — пульс C.textHeading (reduced-motion — статичен, opacity .5 — через .feature-pulse),
-// wait — ромб, stopped — квадрат, loop — петля C.warning (ромб/квадрат — из FeatureGlyphs);
-// pending — пунктирный круг C.dashed; absent — сплошной круг C.dashed с косой чертой (FeatureGlyphs).
-function StageDot({ state, tone, ready = false }: {
-  state: StageState; tone?: StageTone | null; ready?: boolean;
+// состоянию. done — круг C.bgSelected с галкой C.textMuted (зелёный — только у итога фичи,
+// не у строки «Мерж» — Майя M3); active по tone: run — пульс C.textHeading (reduced-motion —
+// статичен, opacity .5 — через .feature-pulse), wait — ромб, stopped — квадрат, loop — петля
+// C.warning (ромб/квадрат/петля — из FeatureGlyphs); pending — пунктирный круг C.dashed;
+// absent — сплошной круг C.dashed с косой чертой (FeatureGlyphs).
+function StageDot({ state, tone }: {
+  state: StageState; tone?: StageTone | null;
 }) {
   // Подложка: круг C.bgWhite r 7.5 — закрывает рельсу под точкой (viewBox 16).
   const bg = <circle cx="8" cy="8" r="7.5" fill={C.bgWhite} />;
@@ -221,27 +228,27 @@ function StageDot({ state, tone, ready = false }: {
   );
 
   if (state === 'done') {
-    // «Пройдено»: круг C.bgSelected + галка C.textMuted. Финал фичи (ready) — зелёный.
-    const fill = ready ? C.success : C.bgSelected;
-    const check = ready ? C.successText : C.textMuted;
+    // «Пройдено»: круг C.bgSelected + галка C.textMuted (не зелёный — зелёный только у итога).
     return svg(
       <>
-        <circle cx="8" cy="8" r="6.5" fill={fill} />
-        <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={check} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="8" cy="8" r="6.5" fill={C.bgSelected} />
+        <path d="M4.8 8.2 7 10.3l4.3-4.6" fill="none" stroke={C.textMuted} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       </>
     );
   }
 
   if (state === 'active') {
-    // wait — ромб, stopped — квадрат: из FeatureGlyphs (не дублируем); loop — петля C.warning;
+    // wait — ромб, stopped — квадрат, loop — петля: из FeatureGlyphs (не дублируем);
     // run (и дефолт active) — пульс C.textHeading (.feature-pulse; reduced-motion — CSS: opacity .5).
     if (tone === 'wait') return svg(<FeatureGlyph kind="wait" size={16} />);
     if (tone === 'stopped') return svg(<FeatureGlyph kind="stopped" size={16} />);
-    if (tone === 'loop') return svg(<circle cx="8" cy="8" r="6" fill="none" stroke={C.warning} strokeWidth="1.6" />);
+    if (tone === 'loop') return svg(<FeatureGlyph kind="loop" size={16} />);
+    // Пульс — только на внешнем кольце (r 6.5), не на всём <svg> с подложкой C.bgWhite:
+    // иначе сквозь точку видна рельса (Майя M4).
     return (
-      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="feature-pulse">
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
         {bg}
-        <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" />
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.textHeading} strokeWidth="1.6" className="feature-pulse" />
         <circle cx="8" cy="8" r="3.5" fill={C.textHeading} />
       </svg>
     );
@@ -270,7 +277,9 @@ function LaneBar({ info }: { info: LaneInfo }) {
   return (
     <div
       style={{
-        display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: SP.sm,
+        // minmax(0, max-content) — подпись не схлопывает дорожку при длинном списке исполнителей (Майя M7);
+        // minmax(40px, 1fr) — дорожка не уже 40px; auto — бейдж.
+        display: 'grid', gridTemplateColumns: 'minmax(0, max-content) minmax(40px, 1fr) auto', gap: SP.sm,
         alignItems: 'center', fontSize: FS.sm, color: C.textSecondary, minWidth: 0,
       }}
     >
@@ -282,7 +291,8 @@ function LaneBar({ info }: { info: LaneInfo }) {
         aria-valuemax={info.total}
         style={{
           height: trackH, minHeight: 2, background: C.progressTrack,
-          borderRadius: R.full, overflow: 'hidden', display: 'block',
+          // R.max (999px), не R.full ('50%'): дорожка 200×4 не должна давать «линзу» (Майя M1).
+          borderRadius: R.max, overflow: 'hidden', display: 'block',
         }}
       >
         <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: C.textMuted }} />
@@ -291,7 +301,7 @@ function LaneBar({ info }: { info: LaneInfo }) {
         <span
           style={{
             display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.xs, fontWeight: 700,
-            borderRadius: R.full, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
+            borderRadius: R.max, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
             // «Холодный» (r < 3) — textSecondary на bgSelected; «горячий» (r ≥ 3) —
             // warningText на warningBg (контраст по макету v2, .badge.hot).
             background: hot ? C.warningBg : C.bgSelected,
@@ -316,7 +326,7 @@ function ReturnBadgeView({ b }: { b: ReturnBadge }) {
     <span
       style={{
         display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.xs, fontWeight: 700,
-        borderRadius: R.full, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
+        borderRadius: R.max, padding: `0 ${BADGE_PAD_X}px`, lineHeight: `${BADGE_LH}px`, whiteSpace: 'nowrap',
         background: hot ? C.warningBg : C.bgSelected,
         color: hot ? C.warningText : C.textSecondary,
       }}
@@ -444,8 +454,9 @@ function laneOf(t: FeatureTask): 'back' | 'front' | null {
 // Поверхность (2.16.4, макет .det): фон C.bgCard, рамка C.borderLight, радиус R.md, паддинг SP.sm.
 function StageDetails({ id, stageKey, run }: { id: string; stageKey: StageKey; run: FeatureRun }) {
   if (stageKey !== 'prod') return null;
-  const steps = run.steps;
-  if (!steps.length) return null;
+  // run.steps может быть undefined (старый ответ/кэш) — нормализуем, чтобы рендер не падал (Глеб).
+  const steps = run.steps ?? [];
+  if (steps.length === 0) return null;
   const back = steps.filter(s => laneOf(s) === 'back');
   const front = steps.filter(s => laneOf(s) === 'front');
   const other = steps.filter(s => laneOf(s) === null);
@@ -483,7 +494,8 @@ function StageDetails({ id, stageKey, run }: { id: string; stageKey: StageKey; r
 // Есть ли у стадии раскрытие (детали): только «Производство» с хотя бы одним шагом (2.16.1).
 // Для aria-expanded: стадия без деталей не считается «раскрытой», даже если она — текущая expanded.
 function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
-  return key === 'prod' && run.steps.length > 0;
+  // run.steps может быть undefined (старый ответ/кэш) — ?? 0, чтобы рендер не падал (Глеб).
+  return key === 'prod' && (run.steps?.length ?? 0) > 0;
 }
 
 // Конвейер фичи (режим «Исполнение фичи») — строго по макету v2.
@@ -494,8 +506,9 @@ function stageHasDetails(key: StageKey, run: FeatureRun): boolean {
 //     `passes` — ЧИСЛО ПРОХОДОВ через стадию (бэк: у «Производства» = 1 + возвраты, у остальных
 //     — число их задач);
 //   • стадии pending/absent — пунктирный сегмент (2px dashed);
-//   • активная стадия — фон C.accentLight + жирная подпись + пульсирующая точка;
-//   • «идёт сейчас» (▶) — когда у стадии есть runningSince; «ждёт вас» (рамка + часы) — tone=wait;
+//   • активная стадия — метка (текст + тон по tone) + глиф/пульс; фон и рамку строка НЕ носит
+//     (текущую строку выделяют метка и глиф, не подсветка — Майя M3);
+//   • «идёт сейчас» (▶) — когда у стадии есть runningSince; «ждёт вас» — tone=wait;
 //   • под строкой «Производство» — полосы бэк/фронт (одна под другой) + бейджи возврата (на всех
 //     ширинах, из run.returnsBySource).
 //
@@ -531,29 +544,24 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
         const width = stageWidth(passes, state);
         const tone = stage?.tone;
         const isPendingOrAbsent = state === 'pending' || state === 'absent';
-        // run.ready + «Мерж» done → зелёная подсветка строки и точки (финал фичи зелёный).
-        const readyMerge = s.key === 'merge' && state === 'done' && run.ready;
         // Метка текущего этапа: только у active (текст + тон по tone).
         const label = active ? activeStageLabel(tone, stage?.runningSince, now) : null;
         const toneColors = active ? activeStageTone(tone) : null;
         // ×N: passes > 1, кроме стадии «Ревью».
         const showPasses = passes > 1 && s.key !== 'review';
+        // aria-controls — только когда у стадии есть детали (prod с шагами); иначе id не существует
+        // (Глеб: для остальных стадий и prod без шагов атрибута нет).
+        const hasDetails = stageHasDetails(s.key, run);
 
         return (
           <div
             key={s.key}
             data-stage={s.key}
             aria-current={active ? 'step' : undefined}
-            style={{
-              position: 'relative',
-              minHeight: rowMinH,
-              padding: `${SP.xs}px ${SP.xs}px`,
-              borderRadius: R.lg,
-              // active → подсветка C.accentLight; «Мерж» done + run.ready → зелёная (C.successBg).
-              background: active ? C.accentLight : readyMerge ? C.successBg : 'transparent',
-              // Состояние ожидания (tone=wait): поверх подсветки — рамка C.info.
-              border: active && tone === 'wait' ? `1px solid ${C.info}` : '1px solid transparent',
-            }}
+            // Обёртка — только позиционирование для сегмента рельсы (absolute). Паддинг, minHeight,
+            // рамка и фон — на <button> (макет v2 .row), чтобы строка держала тач-цель (Майя M2).
+            // Текущую строку выделяют метка и глиф, а не фон/рамка (Майя M3).
+            style={{ position: 'relative', width: '100%' }}
           >
             {/* Сегмент рельсы: своя толщина (width) или пунктир (pending/absent). */}
             {!isLast && (
@@ -563,9 +571,9 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                   position: 'absolute',
                   left: RAIL_LEFT,
                   // top = низ текущей точки (RAIL_TOP), bottom = до верха следующей
-                  // (-(SP.xs + 1): рамка+паддинг следующей строки) — рельса непрерывна.
+                  // (-(ROW_PAD_Y + 1): рамка+паддинг следующей строки) — рельса непрерывна.
                   top: RAIL_TOP,
-                  bottom: -(SP.xs + 1),
+                  bottom: -(ROW_PAD_Y + 1),
                   width: isPendingOrAbsent ? 0 : width,
                   background: isPendingOrAbsent ? 'none' : C.progressTrack,
                   borderLeft: isPendingOrAbsent ? `2px dashed ${C.dashed}` : 'none',
@@ -578,42 +586,52 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
             {isPendingOrAbsent ? (
               // Не-кнопка: без шеврона и onClick, имя C.textMuted, подпись обязательна
               // (pending «ещё не начат» / absent «…в трекере нет»), aria-label строки.
+              // Те же minHeight и паддинг, что у кнопки, — ритм строк не прыгает (Майя M2).
               <div
                 data-testid={`stage-row-${s.key}`}
                 role="group"
                 aria-label={stageAriaLabel(s.label, state)}
-                style={{ display: 'grid', gridTemplateColumns: '16px 1fr', gap: 9, alignItems: 'start', width: '100%', padding: 0 }}
+                style={{
+                  display: 'grid', gridTemplateColumns: '16px 1fr', gap: ROW_GAP, alignItems: 'start',
+                  width: '100%', minHeight: rowMinH,
+                  padding: `${ROW_PAD_Y}px ${ROW_PAD_X}px ${ROW_PAD_Y}px 0`,
+                  border: '1px solid transparent', borderRadius: R.md,
+                }}
               >
                 <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
                   <StageDot state={state} tone={tone} />
                 </span>
                 <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: C.textMuted }}>{s.label}</span>
+                  <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textMuted }}>{s.label}</span>
                   <span style={{ fontSize: FS.sm, color: C.textSecondary }}>
                     {state === 'absent' ? absentLabel(s.key) : 'ещё не начат'}
                   </span>
                 </span>
               </div>
             ) : (
-              // Кнопка: сетка 16px 1fr auto (точка + контент + шеврон), имя 13/600 C.textHeading,
+              // Кнопка = строка (макет v2 .row): minHeight тач-цели + паддинг + рамка + hover/фокус.
+              // Сетка 16px 1fr auto (точка + контент + шеврон), имя FS.base/600 C.textHeading,
               // метка текущего этапа (active), ×N (passes>1, не «Ревью»), бейджи возврата (prod).
               <button
                 data-testid={`stage-row-${s.key}`}
-                aria-expanded={expanded === s.key && stageHasDetails(s.key, run)}
-                aria-controls={`stage-details-${s.key}`}
+                aria-expanded={expanded === s.key && hasDetails}
+                aria-controls={hasDetails ? `stage-details-${s.key}` : undefined}
                 onClick={() => setExpanded(prev => toggleExpanded(prev, s.key))}
                 className="cc-stage-row"
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '16px 1fr auto',
-                  gap: 9,
-                  // 'start' (не 'center'): точка всегда у верха строки (центр = 12px от верха),
+                  gap: ROW_GAP,
+                  // 'start' (не 'center'): точка всегда у верха строки (центр = ROW_PAD_Y + 1 + 8 = 13px),
                   // независимо от высоты строки (иначе в высокой «Производство» точка
                   // центрировалась вниз и рельса рвалась над ней).
                   alignItems: 'start',
                   width: '100%',
-                  padding: 0,
-                  border: 'none',
+                  // minHeight тач-цели (TB.iconHitDesktop/Mobile) + паддинг макета (5px 4px 5px 0 → SP.xs)
+                  // на самой кнопке, а не на обёртке — строка держит цель (Майя M2).
+                  minHeight: rowMinH,
+                  padding: `${ROW_PAD_Y}px ${ROW_PAD_X}px ${ROW_PAD_Y}px 0`,
+                  border: '1px solid transparent',
                   // hover/tap/фокус — через .cc-stage-row (index.css); радиус R.md.
                   borderRadius: R.md,
                   cursor: 'pointer',
@@ -623,18 +641,18 @@ export function PipelineFlow({ run }: { run: FeatureRun }) {
                 }}
               >
                 <span style={{ display: 'flex', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
-                  <StageDot state={state} tone={tone} ready={readyMerge} />
+                  <StageDot state={state} tone={tone} />
                 </span>
                 <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 2 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{s.label}</span>
+                    <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{s.label}</span>
                     {showPasses && (
                       <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>×{passes}</span>
                     )}
                     {active && label && toneColors && (
                       <span
                         style={{
-                          fontSize: FS.xs, fontWeight: 700, borderRadius: R.full,
+                          fontSize: FS.xs, fontWeight: 700, borderRadius: R.max,
                           lineHeight: `${LABEL_LH}px`, padding: '0 8px', whiteSpace: 'nowrap',
                           border: `1px solid ${toneColors.border}`, background: toneColors.bg, color: toneColors.fg,
                         }}

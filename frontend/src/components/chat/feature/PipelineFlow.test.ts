@@ -353,7 +353,7 @@ describe('PipelineFlow: рендер', () => {
     expect(html).not.toContain('стоит сейчас');
   });
 
-  it('Ready_ФиналЗелёный: merge done + run.ready=true → «Мерж» done с зелёным акцентом', () => {
+  it('merge done + run.ready=true → «Мерж» done, но НЕ зелёный (зелёный только у итога, Майя M3)', () => {
     const r = run({
       ready: true,
       stages: stages({
@@ -364,12 +364,11 @@ describe('PipelineFlow: рендер', () => {
     const html = render(r);
     const from = html.indexOf('data-stage="merge"');
     expect(from).toBeGreaterThan(-1);
-    // Строка «Мерж» — зелёная подсветка (C.successBg) и зелёная точка (C.success/C.successText).
-    // Окно широкое: зелёное кольцо/галочка — в SVG точки, после длинного style кнопки.
+    // Строка «Мерж» — обычный done (bgSelected + textMuted), без зелёной подсветки и зелёной точки.
     const seg = html.slice(from, from + 1000);
-    expect(seg).toContain('var(--c-success-bg)');
-    expect(seg).toContain('var(--c-success)');
-    expect(seg).toContain('var(--c-success-text)');
+    expect(seg, '«Мерж» done — без зелёного фона строки').not.toContain('var(--c-success-bg)');
+    expect(seg, '«Мерж» done — точка не зелёная').not.toContain('var(--c-success)');
+    expect(seg, '«Мерж» done — галка не successText').not.toContain('var(--c-success-text)');
   });
 });
 
@@ -464,6 +463,93 @@ describe('PipelineFlow: Ф6 (строки и линии)', () => {
   });
 });
 
+// === F6.1: доработка по ревью Ф4–Ф6 (Майя M1/M2 + миноры 1/2/5, Глеб) ===
+describe('PipelineFlow: F6.1 (пилюли, тач-цель, глифы, защита)', () => {
+  it('M1: дорожка и бейдж — R.max (999px), не R.full (50%)', () => {
+    const r = run({
+      stages: stages(),
+      lanes: [{ lane: 'back', personaIds: [], total: 4, accepted: 3, returns: 2 }],
+    });
+    const html = render(r);
+    // Дорожка (progressbar) — border-radius:999px (R.max), не 50% (R.full → «линза»).
+    const track = html.match(/role="progressbar"[^>]*style="([^"]*)"/)?.[1] ?? '';
+    expect(track, 'дорожка — R.max').toContain('border-radius:999px');
+    expect(track, 'дорожка — не R.full').not.toContain('border-radius:50%');
+    // Бейдж ↺2 — тоже R.max.
+    const at = html.indexOf('↺2');
+    expect(at).toBeGreaterThan(-1);
+    const badge = html.slice(at - 200, at + 2);
+    expect(badge, 'бейдж ↺ — R.max').toContain('border-radius:999px');
+  });
+
+  it('M2: minHeight на <button> (32 десктоп) и на строке pending/absent', () => {
+    const r = run({
+      stages: stages({
+        merge: { key: 'merge', state: 'pending', passes: 0, taskIds: [] },
+      }),
+    });
+    const html = render(r);
+    // Кнопка (done-стадия) несёт minHeight 32 (TB.iconHitDesktop) в своём style.
+    const btn = html.match(/<button[^>]*data-testid="stage-row-prod"[^>]*style="([^"]*)"/)?.[1] ?? '';
+    expect(btn, 'кнопка — minHeight 32').toContain('min-height:32px');
+    // Не-кнопка (pending) — тот же minHeight, ритм строк не прыгает.
+    const pending = html.match(/<div[^>]*data-testid="stage-row-merge"[^>]*style="([^"]*)"/)?.[1] ?? '';
+    expect(pending, 'pending-строка — minHeight 32').toContain('min-height:32px');
+  });
+
+  it('минор 1: глиф absent — косая черта C.textMuted (круг C.dashed)', () => {
+    const r = run({
+      stages: stages({
+        cut: { key: 'cut', state: 'absent', passes: 0, taskIds: [] },
+      }),
+    });
+    const html = render(r);
+    const cut = html.slice(html.indexOf('data-stage="cut"'), html.indexOf('data-stage="plan"'));
+    // Круг — C.dashed, черта — C.textMuted (главный знак, в тёмной теме C.dashed сливается).
+    expect(cut).toContain('stroke="var(--c-dashed)"');
+    expect(cut).toContain('stroke="var(--c-text-muted)"');
+  });
+
+  it('минор 2: глиф done — у круга stroke C.textMuted (тёмная тема)', () => {
+    const r = run({
+      stages: stages({
+        cut: { key: 'cut', state: 'done', passes: 1, taskIds: ['c1'] },
+      }),
+    });
+    const html = render(r);
+    const cut = html.slice(html.indexOf('data-stage="cut"'), html.indexOf('data-stage="plan"'));
+    // Круг done — обводка C.textMuted (иначе в тёмной теме bgSelected≈bgWhite и круг невидим).
+    expect(cut).toContain('stroke="var(--c-text-muted)"');
+  });
+
+  it('минор 5: глиф loop — петля C.warning (дуга + стрелка), не круг', () => {
+    const r = run({
+      stages: stages({
+        prod: { key: 'prod', state: 'active', tone: 'loop', passes: 1, taskIds: [] },
+      }),
+    });
+    const html = render(r);
+    const prod = html.slice(html.indexOf('data-stage="prod"'), html.indexOf('data-stage="review"'));
+    // Петля: дуга (штрих 2.2) + стрелка (штрих 2), обе C.warning; не «просто круг».
+    expect(prod).toContain('M12.6 9.2A4.8 4.8 0 1 1 11.3 4.4');
+    expect(prod).toContain('M9.2 2.6 12.6 3.4 11.8 6.8');
+    expect(prod).toContain('stroke="var(--c-warning)"');
+  });
+
+  it('Глеб: run.steps=undefined → рендер не падает, раскрытия нет', () => {
+    const r = run({
+      stages: stages(),
+      steps: undefined as unknown as FeatureTask[],
+    });
+    expect(() => render(r)).not.toThrow();
+    // prod без шагов → aria-expanded=false и блока деталей нет.
+    const html = render(r);
+    const prodBtn = html.match(/<button[^>]*data-testid="stage-row-prod"[^>]*>/)?.[0] ?? '';
+    expect(prodBtn).toContain('aria-expanded="false"');
+    expect(html).not.toContain('id="stage-details-prod"');
+  });
+});
+
 // === Геометрия рельсы (SSR: из инлайн-стилей) ===
 describe('PipelineFlow: геометрия рельсы', () => {
   it('РельсаНепрерывна: align-start, top=низ точки, bottom=верх следующей', () => {
@@ -487,7 +573,7 @@ describe('PipelineFlow: геометрия рельсы', () => {
     expect(bottom).toBe(`-${pad}px`);         // -5 = до верха следующей точки (5)
   });
 
-  it('ЦентрСовпадаетСКольцом: left сегмента = центр точки (padding-left + 16/2)', () => {
+  it('ЦентрСовпадаетСКольцом: left сегмента = центр точки (рамка кнопки 1px + 16/2)', () => {
     const r = run({
       stages: stages({
         prod: { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [] },
@@ -499,8 +585,9 @@ describe('PipelineFlow: геометрия рельсы', () => {
     const left = segStyle.match(/left:([^;]+)/)?.[1]?.trim();
     expect(left).toBeTruthy();
     const segmentLeft = parseFloat(left!);
-    const dotCenter = SP.xs + 16 / 2;
-    expect(Math.abs(segmentLeft - dotCenter)).toBeLessThan(1);
+    // Точка лежит в гриде кнопки, сдвинутой её рамкой 1px вправо: центр = 1 + 16/2 = 9.
+    const dotCenter = 1 + 16 / 2;
+    expect(Math.abs(segmentLeft - dotCenter), `left=${segmentLeft}, центр точки=${dotCenter}`).toBeLessThan(1);
   });
 });
 

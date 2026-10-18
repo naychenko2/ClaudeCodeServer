@@ -7,8 +7,9 @@ import { openChatById } from '../../../lib/openChat';
 import { prefillComposer } from '../../../lib/ai/startChat';
 import { api } from '../../../lib/api';
 import { getPersonaById, usePersonasVersion, ensurePersonasLoaded } from '../../../lib/personas';
+import { showToast } from '../../../lib/toast';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
-import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary } from '../../../types/featureRun';
+import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary, FeatureTask } from '../../../types/featureRun';
 import { PipelineFlow } from './PipelineFlow';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { Rounds } from './Rounds';
@@ -73,6 +74,29 @@ function durationLabel(min: number): string {
   return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
+// «Ждёт вас …» (плашка wait): 0/нет since → без числа, >0 → «N мин»; без висящего пробела (Майя M9).
+function waitPhrase(mins: number | null): string {
+  if (mins == null || mins < 1) return 'Ждёт вас.';
+  return `Ждёт вас ${mins} мин.`;
+}
+
+// «Исполнитель упал …» (плашка stopped): нет since → без числа, 0 → «только что», >0 → «N мин назад» (Майя M9).
+function stoppedPhrase(mins: number | null): string {
+  if (mins == null) return 'Исполнитель упал.';
+  if (mins < 1) return 'Исполнитель упал только что.';
+  return `Исполнитель упал ${mins} мин назад.`;
+}
+
+// Строка плашки «упал»: «{Имя} · {stepRef} {название} — {reason}» (Майя M8).
+// Пустые части не дают «Денис — . Отчёта нет.»: имя и шаг склеиваются « · », reason — « — {…}»,
+// только когда он есть; step не найден по att.taskId → его часть опускается.
+function stoppedLine(name: string, step: FeatureTask | undefined, reason: string): string {
+  const stepPart = step ? `${(step.stepRef ?? '').trim()} ${step.title}`.trim() : '';
+  const who = [name, stepPart].filter(Boolean).join(' · ');
+  const reasonPart = reason ? ` — ${reason}` : '';
+  return (who + reasonPart).trim();
+}
+
 // Русские формы: задача/задачи/задач, шаг/шага/шагов.
 function plural(n: number, one: string, few: string, many: string): string {
   const n10 = n % 10, n100 = n % 100;
@@ -108,7 +132,8 @@ function SummaryBlock({ summary }: { summary: FeatureSummary }) {
       <FeatureGlyph kind="done" size={18} />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: FS.base, fontWeight: 700, color: C.successText }}>Фича смержена</div>
-        <div style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* Перенос разрешён (без nowrap/ellipsis): на 360px хвост «↺3» не обрезается (Майя M6). */}
+        <div style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
           {summaryLine(summary)}
         </div>
       </div>
@@ -129,7 +154,10 @@ function NowCard({ item }: { item: FeatureNow }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
       {persona && <PersonaAvatar persona={persona} size={22} />}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line1}</div>
+        {/* line1 (имя + stepRef) пуст — строку 1 не рисуем, пустую подпись не оставляем (Глеб). */}
+        {line1 && (
+          <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line1}</div>
+        )}
         <div style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.title}</div>
       </div>
       {elapsed && (
@@ -145,9 +173,9 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   const now = useMinuteTick();
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const size: 'xs' | 'sm' = isMobile ? 'sm' : 'xs';
+  // Мобила — md (minHeight 40), десктоп — xs (Майя M3: у sm minHeight 32, тач-цель 40 даёт md).
+  const size: 'xs' | 'md' = isMobile ? 'md' : 'xs';
   const mins = minutesSince(att.since, now);
-  const minsStr = mins != null ? `${mins} мин` : '';
 
   if (att.kind === 'wait') {
     // Мерж: все шаги приняты, мержа нет — «Отдать фичу Марку на мерж?». Явное: причина ожидания.
@@ -157,18 +185,32 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="wait" size={14} /></span>
           <span>
-            <b>Ждёт вас {minsStr}.</b>{' '}
+            <b>{waitPhrase(mins)}</b>{' '}
             {isMerge ? 'Все шаги приняты, мержа ещё нет. Отдать фичу Марку на мерж?' : att.reason}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {/* «Попросить Марка» — затравка в композере оркестратора; саму задачу Марку не создаёт. */}
-          <Button size={size} variant="secondary" onClick={() => prefillComposer(mergePrefill(run))}>
-            Попросить Марка
-          </Button>
-          <Button size={size} variant="ghost" onClick={() => { if (run.final) openTaskInSection({ id: run.final.id, projectId: run.final.projectId ?? undefined }); }}>
-            Итог финала
-          </Button>
+          {isMerge ? (
+            <>
+              {/* «Попросить Марка» — затравка в композере оркестратора; саму задачу Марку не создаёт. */}
+              <Button size={size} variant="secondary" onClick={() => prefillComposer(mergePrefill(run))}>
+                Попросить Марка
+              </Button>
+              {/* У мержа att.taskId — это финал: «Итог финала» открывает его; без taskId кнопки нет (Майя M4). */}
+              {att.taskId && (
+                <Button size={size} variant="ghost" onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
+                  Итог финала
+                </Button>
+              )}
+            </>
+          ) : (
+            // Явное ожидание (reason ≠ «мерж»): одна кнопка «Открыть задачу»; без taskId кнопок нет (Майя M4).
+            att.taskId && (
+              <Button size={size} variant="secondary" onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
+                Открыть задачу
+              </Button>
+            )
+          )}
         </div>
       </div>
     );
@@ -178,14 +220,16 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   // «Чат исполнителя» (ghost → openChatById); без linkedSessionId вторая кнопка не рендерится.
   const persona = att.personaId ? getPersonaById(att.personaId) : undefined;
   const name = persona?.name ?? '';
-  const reason = att.reason ?? '';
+  const reason = (att.reason ?? '').trim();
+  // Шаг упавшей задачи: att.taskId → run.steps → stepRef + title; не найден → его часть опускается (Майя M8).
+  const step = att.taskId ? (run.steps ?? []).find(t => t.id === att.taskId) : undefined;
   return (
     <div role="status" style={{ background: C.dangerBg, color: C.dangerText, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: 12.5 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="stopped" size={14} /></span>
         <span>
-          <b>Исполнитель упал {minsStr} назад.</b>{' '}
-          {name ? `${name} — ` : ''}{reason}. Отчёта нет.
+          <b>{stoppedPhrase(mins)}</b>{' '}
+          {stoppedLine(name, step, reason)}
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -207,7 +251,12 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
           onConfirm={async () => {
             if (!att.taskId) { setConfirmRestart(false); return; }
             setRestarting(true);
-            try { await api.tasks.execute(att.taskId); } catch { /* тост покажет вызывающий */ }
+            try {
+              await api.tasks.execute(att.taskId);
+            } catch {
+              // Тихий сбой: показать штатный тост, а не глотать (Майя M10, Глеб).
+              showToast('Не удалось перезапустить исполнителя', 'Попробуйте ещё раз.', 'error');
+            }
             setRestarting(false);
             setConfirmRestart(false);
           }}
@@ -263,8 +312,8 @@ export function FeatureRunView({ run }: { run: FeatureRun }) {
   const isMobile = useIsMobile();
   const pad = isMobile ? 8 : 10;
 
-  // Прогресс: доля решённых витков (0..1) → %.
-  const pct = Math.round(run.progress * 100);
+  // Прогресс: доля решённых витков (0..1) → %; ?? 0 — без ?? в HTML «NaN%» (Глеб).
+  const pct = Math.round((run.progress ?? 0) * 100);
   const hasSteps = (run.steps?.length ?? 0) > 0;
 
   return (

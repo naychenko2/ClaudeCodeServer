@@ -8,14 +8,29 @@
 //   • пустое состояние (шагов 0) и легенду (когда шаги есть);
 //   • что УШЛО: «Принять», «Изменить ход», «Финал зелёный», «Ревью не было».
 //   • гейт фич-флага (M2) и мобилу (M7).
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureRun, FeatureTask, FeatureNow, FeatureAttention, FeatureSummary } from '../../../types/featureRun';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
 import { __test } from '../../../lib/featureRuns';
+
+// Стор персон (lib/personas) — мок: hoisted-карта id→имя (как в PipelineFlow.test.ts).
+// importOriginal — сохранить остальные экспорты (personaInitials и др., их читает PersonaAvatar).
+const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+vi.mock('../../../lib/personas', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/personas')>();
+  return { ...orig, getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined) };
+});
+// useIsMobile — управляемый флаг (SSR по умолчанию false; M3 проверяет мобилу = true).
+const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { value: false } }));
+vi.mock('../../../lib/breakpoints', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/breakpoints')>();
+  return { ...orig, useIsMobile: () => mobileFlag.value };
+});
+beforeEach(() => { personaMap.clear(); mobileFlag.value = false; });
 
 // Задача-заглушка (подмножество TaskItem, как несёт GET /api/tasks/features).
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
@@ -64,13 +79,32 @@ describe('FeatureRunView — шапка', () => {
 
 describe('FeatureRunView — плашка «ждёт вас»', () => {
   it('мерж: «все шаги приняты, мержа нет» + действия [Попросить Марка] [Итог финала]', () => {
-    const att: FeatureAttention = { kind: 'wait', reason: 'мерж', since: '2026-10-17T10:00:00Z' };
+    // taskId у мержа — это финал: «Итог финала» рендерится только когда taskId есть (Майя M4).
+    const att: FeatureAttention = { kind: 'wait', reason: 'мерж', since: '2026-10-17T10:00:00Z', taskId: 'f1' };
     const html = render(run({ ready: false, attention: att }));
     expect(html).toContain('Ждёт вас');
     expect(html).toContain('Все шаги приняты, мержа ещё нет');
     expect(html).toContain('Отдать фичу Марку на мерж?');
     expect(html).toContain('Попросить Марка');
     expect(html).toContain('Итог финала');
+  });
+
+  it('мерж без taskId: [Итог финала] не рендерится, [Попросить Марка] остаётся (Майя M4)', () => {
+    const att: FeatureAttention = { kind: 'wait', reason: 'мерж', since: '2026-10-17T10:00:00Z' };
+    const html = render(run({ ready: false, attention: att }));
+    expect(html).toContain('Попросить Марка');
+    expect(html).not.toContain('Итог финала');
+  });
+
+  it('явное ожидание (reason ≠ мерж): одна кнопка [Открыть задачу]; без taskId кнопок нет (Майя M4)', () => {
+    const withTask: FeatureAttention = { kind: 'wait', reason: 'нужно решение о ревью', since: '2026-10-17T10:00:00Z', taskId: 't1' };
+    const html1 = render(run({ ready: false, attention: withTask }));
+    expect(html1).toContain('Открыть задачу');
+    expect(html1).not.toContain('Попросить Марка');
+    expect(html1).not.toContain('Итог финала');
+    const noTask: FeatureAttention = { kind: 'wait', reason: 'нужно решение о ревью', since: '2026-10-17T10:00:00Z' };
+    const html2 = render(run({ ready: false, attention: noTask }));
+    expect(html2).not.toContain('Открыть задачу');
   });
 
   it('явное ожидание: причина из attention, без текста про мерж', () => {
@@ -193,5 +227,124 @@ describe('Гейт фич-флага (M2)', () => {
     __test.setRuns(sid, [run()]);
     const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs: [run()], sessionId: sid }));
     expect(html).toContain('Показать исполнение фичи');
+  });
+});
+
+// === F6.1: доработка по ревью Ф4–Ф6 (Майя M3/M8/M9/M10, Глеб) ===
+// Мок тоста (lib/toast) и api (lib/api): hoisted-состояние, сбрасывается в beforeEach.
+const { toastMock, apiMock } = vi.hoisted(() => ({
+  toastMock: { calls: [] as string[] },
+  apiMock: { executeImpl: async (_id: string) => {} },
+}));
+vi.mock('../../../lib/toast', () => ({
+  showToast: (title: string) => { toastMock.calls.push(title); },
+}));
+vi.mock('../../../lib/api', () => ({
+  api: { tasks: { execute: (id: string) => apiMock.executeImpl(id) } },
+}));
+
+// <button> по тексту и fullWidth (триггер плашки не fullWidth, кнопка диалога — fullWidth).
+type AnyNode = { nodeType: number; nodeName: string; childNodes: AnyNode[]; style: Record<string, string> };
+function collectText(n: AnyNode): string {
+  let out = '';
+  const walk = (x: AnyNode) => { if (x.nodeType === 3) out += x.nodeValue ?? ''; for (const c of x.childNodes) walk(c); };
+  walk(n);
+  return out;
+}
+function findButton(root: AnyNode, text: string, fullWidth: boolean): AnyNode | null {
+  let hit: AnyNode | null = null;
+  const walk = (x: AnyNode) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.nodeName === 'BUTTON' && (x.style?.width === '100%') === fullWidth && collectText(x).includes(text)) { hit = x; return; }
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(root);
+  return hit;
+}
+
+describe('FeatureRunView: F6.1 (плашка)', () => {
+  it('M3: кнопки плашки — md (minHeight 40) на мобиле, xs (minHeight 24) на десктопе', () => {
+    const att: FeatureAttention = { kind: 'wait', reason: 'мерж', since: '2026-10-17T10:00:00Z', taskId: 'f1' };
+    // Мобила: size md → min-height:40px.
+    mobileFlag.value = true;
+    const htmlMobile = render(run({ ready: false, attention: att }));
+    const atM = htmlMobile.indexOf('Попросить Марка');
+    expect(htmlMobile.slice(atM - 400, atM), 'мобила — md (40px)').toContain('min-height:40px');
+    // Десктоп: size xs → min-height:24px.
+    mobileFlag.value = false;
+    const htmlDesk = render(run({ ready: false, attention: att }));
+    const atD = htmlDesk.indexOf('Попросить Марка');
+    expect(htmlDesk.slice(atD - 400, atD), 'десктоп — xs (24px)').toContain('min-height:24px');
+  });
+
+  it('M8: плашка «упал» — «{Имя} · {stepRef} {название} — {reason}»; пустой reason не даёт «— .»', () => {
+    personaMap.set('denis', 'Денис');
+    const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', since: '2026-10-17T10:00:00Z', taskId: 's1', personaId: 'denis' };
+    // run() по умолчанию несёт шаг s1 (stepRef Ш1, title «Шаг 1»).
+    const html = render(run({ ready: false, attention: att }));
+    expect(html).toContain('Денис · Ш1 Шаг 1 — auth_failed');
+    // Пустой reason: «{Имя} · {stepRef} {название}» без висящего «— .».
+    const att2: FeatureAttention = { kind: 'stopped', reason: '', since: '2026-10-17T10:00:00Z', taskId: 's1', personaId: 'denis' };
+    const html2 = render(run({ ready: false, attention: att2 }));
+    expect(html2).toContain('Денис · Ш1 Шаг 1');
+    expect(html2).not.toContain('— .');
+  });
+
+  it('M9: нулевые/отсутствующие минуты — «Ждёт вас.» / «только что», без «0 мин» и висящего пробела', () => {
+    // wait, since = now → 0 мин → «Ждёт вас.» (без «0 мин»).
+    const attWait: FeatureAttention = { kind: 'wait', reason: 'мерж', since: new Date().toISOString(), taskId: 'f1' };
+    const htmlWait = render(run({ ready: false, attention: attWait }));
+    expect(htmlWait).toContain('Ждёт вас.');
+    expect(htmlWait).not.toContain('0 мин');
+    // stopped, since = now → 0 мин → «только что».
+    const attStop: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', since: new Date().toISOString() };
+    const htmlStop = render(run({ ready: false, attention: attStop }));
+    expect(htmlStop).toContain('Исполнитель упал только что.');
+    expect(htmlStop).not.toContain('0 мин');
+    // wait без since → «Ждёт вас.» (без числа и висящего пробела).
+    const attNoSince: FeatureAttention = { kind: 'wait', reason: 'мерж', taskId: 'f1' };
+    const htmlNoSince = render(run({ ready: false, attention: attNoSince }));
+    expect(htmlNoSince).toContain('>Ждёт вас.<');
+  });
+
+  it('Глеб: run.progress=undefined → нет «NaN%»', () => {
+    const html = render(run({ progress: undefined as unknown as number }));
+    expect(html).not.toContain('NaN%');
+  });
+
+  it('Глеб: «Сейчас» — пустая строка 1 (нет имени и stepRef) не рисуется', () => {
+    personaMap.set('denis', 'Денис');
+    const withLine1: FeatureNow[] = [nowItem({ taskId: 'n1', stepRef: 'Ш7', title: 'Блокеры финала', personaId: 'denis' })];
+    const noLine1: FeatureNow[] = [nowItem({ taskId: 'n2', title: 'Блокеры финала' })]; // без personaId и stepRef
+    const htmlA = render(run({ ready: false, now: withLine1 }));
+    const htmlB = render(run({ ready: false, now: noLine1 }));
+    // line1 («Денис · Ш7») — строка 1 (font-weight:600 + ellipsis); без имени/stepRef её нет.
+    // font-weight:600 встречается и в шапке, поэтому сравниваем количество, а не наличие.
+    const c600 = (h: string) => (h.match(/font-weight:600/g) ?? []).length;
+    expect(c600(htmlA), 'с line1 — строка 1 на месте').toBeGreaterThan(c600(htmlB));
+    // Заголовок задачи (строка 2) остаётся в обоих случаях.
+    expect(htmlB).toContain('Блокеры финала');
+  });
+
+  it('M10: тихий сбой «Перезапустить» → тост «Не удалось перезапустить исполнителя»', async () => {
+    const { installFakeDom, mount, reactProps, uninstallFakeDom } = await import('../__tests__/fakeDom');
+    installFakeDom();
+    personaMap.set('denis', 'Денис');
+    apiMock.executeImpl = async () => { throw new Error('boom'); };
+    const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', since: '2026-10-17T10:00:00Z', taskId: 's1', personaId: 'denis' };
+    const { root, container } = mount(createElement(FeatureRunView, { run: run({ ready: false, attention: att }) }));
+    // 1) Клик по триггеру «Перезапустить» (не fullWidth) → ConfirmDialog (портал в document.body).
+    const trigger = findButton(container as AnyNode, 'Перезапустить', false);
+    expect(trigger, 'триггер «Перезапустить» не найден').not.toBeNull();
+    act(() => (reactProps(trigger!)!.onClick as () => void)());
+    // 2) Кнопка подтверждения в диалоге (fullWidth) → onConfirm → api.tasks.execute (бросает) → тост.
+    const body = (globalThis as { document: AnyNode }).document.body;
+    const confirm = findButton(body, 'Перезапустить', true);
+    expect(confirm, 'кнопка подтверждения в диалоге не найдена').not.toBeNull();
+    act(() => { (reactProps(confirm!)!.onClick as () => void)(); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(toastMock.calls, 'тост при сбое перезапуска').toContain('Не удалось перезапустить исполнителя');
+    root.unmount();
+    uninstallFakeDom();
   });
 });

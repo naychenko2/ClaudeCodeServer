@@ -1,7 +1,7 @@
 import { memo, useContext, useEffect, useMemo, useState } from 'react';
 import { SquareCheck, ArrowRight, Route } from 'lucide-react';
 import type { ChatItem, Task } from '../../types';
-import { C, FONT, SHADOW, TB } from '../../lib/design';
+import { C, FONT, FS, SHADOW, TB } from '../../lib/design';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { dueLabel, isDueUrgent, openTaskInSection, PRIORITY_LABEL } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
@@ -45,7 +45,7 @@ const CHIP_MIN_H = 28;
 function CellLabel({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
-      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
       color: C.textMuted, marginBottom: 4,
     }}>
       {children}
@@ -55,7 +55,7 @@ function CellLabel({ children }: { children: React.ReactNode }) {
 
 const cellValueStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6,
-  fontSize: 12.5, fontWeight: 600, color: C.textPrimary, minWidth: 0,
+  fontSize: FS.sm, fontWeight: 600, color: C.textPrimary, minWidth: 0,
 };
 
 // Карточка «Задача создана» — вызов MCP tasks_create в ленте чата (макет варианта C).

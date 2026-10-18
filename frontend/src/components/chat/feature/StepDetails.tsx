@@ -68,7 +68,7 @@ function Header({ chain }: { chain: FeatureStepChain }) {
 // Подпись секции «Цепочка кругов»: 10, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionLabel() {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
+    <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
       Цепочка кругов
     </div>
   );

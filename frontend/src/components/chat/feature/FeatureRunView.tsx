@@ -34,7 +34,7 @@ import { dateTimeLabel } from './featureTime';
 // Подпись секции (как CellLabel): 10 px, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, margin: '2px 0 -4px' }}>
+    <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, margin: '2px 0 -4px' }}>
       {children}
     </div>
   );
@@ -192,7 +192,7 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
     // Мерж: все шаги приняты, мержа нет — «Отдать фичу Марку на мерж?». Явное: причина ожидания.
     const isMerge = att.reason === 'мерж';
     return (
-      <div role="status" style={{ background: C.infoBg, color: C.info, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: 12.5 }}>
+      <div role="status" style={{ background: C.infoBg, color: C.info, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="wait" size={14} /></span>
           <span>
@@ -235,7 +235,7 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   // Шаг упавшей задачи: att.taskId → run.steps → stepRef + title; не найден → его часть опускается (Майя M8).
   const step = att.taskId ? (run.steps ?? []).find(t => t.id === att.taskId) : undefined;
   return (
-    <div role="status" style={{ background: C.dangerBg, color: C.dangerText, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: 12.5 }}>
+    <div role="status" style={{ background: C.dangerBg, color: C.dangerText, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="stopped" size={14} /></span>
         <span>
@@ -291,7 +291,7 @@ function EmptyState({ run }: { run: FeatureRun }) {
   const cutPersona = run.cut?.[0]?.personaId ? getPersonaById(run.cut[0].personaId) : undefined;
   const who = cutPersona?.name;
   return (
-    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '10px 12px', fontSize: 12.5, color: C.textSecondary }}>
+    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '10px 12px', fontSize: FS.sm, color: C.textSecondary }}>
       Шагов пока нет. План появится, когда {who ? `${who} закончит разрез` : 'закончится разрез'} — тогда здесь будут шаги по линиям.
     </div>
   );

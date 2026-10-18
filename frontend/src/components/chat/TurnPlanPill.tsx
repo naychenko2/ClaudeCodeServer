@@ -28,8 +28,8 @@ import { FeatureGlyph } from './feature/FeatureGlyphs';
 
 // Значок пилюли в режиме фичи: ромб (wait) / квадрат (stopped) / Route (идёт/закрыта).
 function FeaturePillIcon({ model }: { model: PillModel }) {
-  if (model.icon === 'diamond') return <FeatureGlyph kind="wait" />;
-  if (model.icon === 'square') return <FeatureGlyph kind="stopped" />;
+  if (model.icon === 'diamond') return <FeatureGlyph kind="wait" size={ICON_SIZE.xs} />;
+  if (model.icon === 'square') return <FeatureGlyph kind="stopped" size={ICON_SIZE.xs} />;
   return <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={model.iconColor} />;
 }
 
@@ -104,7 +104,8 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
         title={featureMode ? 'Показать исполнение фичи' : 'Показать план хода'}
         aria-label={ariaLabel}
         style={{
-          fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono,
+          // R-7: в режиме фичи текст и счётчик пилюли — C.textSecondary (4,02:1), не C.textMuted.
+          fontSize: FS.xs, color: featureMode ? C.textSecondary : C.textMuted, fontFamily: FONT.mono,
           background: C.bgSelected, border: 'none', borderRadius: 8, padding: '4px 11px',
           display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
           maxWidth: 300, minWidth: 0, flexShrink: 1,

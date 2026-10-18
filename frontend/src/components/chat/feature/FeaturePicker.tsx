@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { C, R, SHADOW, FS } from '../../../lib/design';
+import { ICON_SIZE } from '../../ui/icons';
 import type { FeatureRun } from '../../../types/featureRun';
 import { FeatureGlyph, type FeatureGlyph as FeatureGlyphKind } from './FeatureGlyphs';
 
@@ -25,7 +26,7 @@ function pickerGlyph(run: FeatureRun): FeatureGlyphKind {
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <div style={{
-      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
       color: C.textMuted, margin: '2px 0 4px',
     }}>
       {children}
@@ -68,14 +69,14 @@ function FeatureChip({ run, on, isPill, isMobile, onPick }: {
         boxShadow: focused ? SHADOW.focus : 'none',
       }}
     >
-      <FeatureGlyph kind={pickerGlyph(run)} />
+      <FeatureGlyph kind={pickerGlyph(run)} size={ICON_SIZE.xs} />
       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
         {run.epic.title}
       </span>
       {isPill && (
         <span
           title="Эту фичу показывает пилюля"
-          style={{ fontSize: 10, fontWeight: 700, color: C.accent, flexShrink: 0 }}
+          style={{ fontSize: FS.xxs, fontWeight: 700, color: C.accent, flexShrink: 0 }}
         >●</span>
       )}
     </button>

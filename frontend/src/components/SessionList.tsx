@@ -46,6 +46,7 @@ import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
 import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, NO_SUBJECT_KEY, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
+import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
 import { useReadStateVersion } from '../lib/chatReadState';
 import { autoNavigateToContinued } from '../lib/chatContinue';
@@ -650,16 +651,21 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // hierarchy в сторе осталась ради совместимости записей и здесь не читается
   const { filters, patch } = useChatFilters(project.id);
   const { sortOrder } = filters;
-  const groupBy: ChatGroupBy = filters.groupBy;
-  const subjectsMode = groupBy === 'subjects';
-  const subjectRun = useSubjectRun(project.id, subjectsMode);
   // Режим «Фичи»: фасет по индексу фич (флаг features-overview, dark launch).
   // Пункт «Фичи» в группировке появляется только при флаге; индекс фич проекта
   // источник правды (бэк считает bucket/порядок/членство/ключевой чат), фронт
   // только показывает. Флаг выключен — источник не зовётся (EMPTY, фасет не рисуется)
-  const featuresMode = groupBy === 'features';
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const groupByOptions = featureGroupByOptions(true, featuresOn);
+  // groupBy из хранилища может быть недоступен этому списку: 'features' при
+  // выключенном флаге (пункта «Фичи» в тулбаре нет, а режим фичи показал бы
+  // «Фич пока нет»). Клампим к опциям — как 'subjects' в глобальном списке
+  // (ChatList.tsx) — иначе ни одна ветка рендера не сработала бы. Хранилище не
+  // перезаписываем: первый явный выбор пользователя всё починит сам.
+  const groupBy: ChatGroupBy = groupByOptions.includes(filters.groupBy) ? filters.groupBy : 'days';
+  const subjectsMode = groupBy === 'subjects';
+  const subjectRun = useSubjectRun(project.id, subjectsMode);
+  const featuresMode = groupBy === 'features';
   const featuresIndex = useFeaturesIndex(project.id, featuresOn);
   // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
   // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
@@ -914,19 +920,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const closedGroups = featureGroups.filter(g => g.feature && g.feature.bucket === 'closed');
     const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
 
-    // «Смержена ДД.ММ» для спокойного состояния: последняя по дате мержа закрытая фича
+    // «Смержена ДД.ММ» для спокойного состояния: последняя по МОМЕНТУ мержа закрытая
+    // фича. Сортируем по времени (Date), а не строкой: выбор фичи не зависит от пояса,
+    // а дату показываем ЛОКАЛЬНО (dateOnly, как везде в режиме фичи) — в МСК 23:30Z
+    // это уже следующий день.
     const lastMerged = closedFeatures
       .map(f => f.summary?.mergedAt)
       .filter((d): d is string => !!d)
-      .sort()
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
       .pop();
-    const lastMergedDate = lastMerged
-      ? (() => {
-          const d = new Date(lastMerged);
-          const p = (n: number) => String(n).padStart(2, '0');
-          return `${p(d.getDate())}.${p(d.getMonth() + 1)}`;
-        })()
-      : null;
+    const lastMergedDate = lastMerged ? dateOnly(lastMerged) : null;
 
     // Спокойное состояние: все закрыты (фичи есть, открытых нет, фильтр не «Закрытые»)
     const calm = openFeatures.length === 0 && chip !== 'closed' && (

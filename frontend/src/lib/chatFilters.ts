@@ -24,7 +24,11 @@ export type ChatOnlyFilter = 'pinned' | 'temp' | 'group';
 // 'features' — фичи по индексу (фасет «Фичи»): секции в порядке features[] бэка,
 // «Без фичи» в конце; есть у обоих списков, пока флаг features-overview выключен
 // опция в тулбаре не появляется (клампится в 'days' на месте рендера)
-export type ChatGroupBy = 'days' | 'tags' | 'subjects' | 'features' | 'none';
+// Белый список значений оси: он же фильтр мусора из localStorage (незнакомое
+// значение вырождается в 'days'). Список неизменяем (as const), а тип ChatGroupBy
+// выводится ИЗ НЕГО — иначе список и тип разошлись бы (как ALL_SORT_ORDERS/ChatSortOrder).
+export const ALL_GROUP_BY = ['days', 'tags', 'subjects', 'features', 'none'] as const;
+export type ChatGroupBy = (typeof ALL_GROUP_BY)[number];
 // Белый список значений оси: он же порядок цикла кнопки-переключателя и фильтр
 // мусора из localStorage (незнакомое значение вырождается в 'newest'). Список
 // неизменяем (as const), а тип оси выводится ИЗ НЕГО — иначе список и тип разошлись бы.
@@ -146,9 +150,11 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
   const legacyAxes = p.groupBy === undefined && p.sortOrder === undefined && p.hierarchy === undefined && scopeKey
     ? readLegacyView(scopeKey)
     : {};
+  // Белый список ALL_GROUP_BY: знакомое значение читается как есть, мусорное
+  // (не в списке) — legacy-ось или дефолт 'days', не роняя остальные фильтры
   const groupBy: ChatGroupBy =
-    p.groupBy === 'tags' || p.groupBy === 'subjects' || p.groupBy === 'features' || p.groupBy === 'none' || p.groupBy === 'days'
-      ? p.groupBy
+    (typeof p.groupBy === 'string' && (ALL_GROUP_BY as readonly string[]).includes(p.groupBy))
+      ? (p.groupBy as ChatGroupBy)
       : legacyAxes.groupBy ?? 'days';
   return {
     origins: origins.length ? origins : [...ALL_ORIGINS],

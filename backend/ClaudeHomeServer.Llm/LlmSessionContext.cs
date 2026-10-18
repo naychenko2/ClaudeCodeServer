@@ -179,6 +179,11 @@ public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFact
 // модуль не загружен. Свойства сессии, владельца и процесса, не хода.
 public sealed record VideoEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера plugins (ADR-031, шаг 4.1): тулсет живёт в вертикали Plugins, сессия едет
+// хвостом URL (/mcp/plugins/{sessionId}), в любом чате владельца. null — подсистема plugins не
+// загружена (тулсета нет в реестре). Ограничения (флаг plugins-build-yourself, локальный проект) —
+// на вызове, не в составе. Свойства сессии, владельца и процесса, не хода.
+public sealed record PluginsMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 // Контекст MCP-сервера «Контекст чата» (ADR-023 §3.2): тулсет живёт в Main, сессия едет хвостом URL
 // (/mcp/turn-context/{sessionId}), в любом чате владельца. null — тулсета нет в реестре. Свойства сессии и владельца, не хода: от содержимого контекста состав не зависит.
 public sealed record TurnContextMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
@@ -456,6 +461,8 @@ public sealed record LlmSessionContext(
     AudioEditorMcpContext? AudioEditorMcp = null,
     // MCP-сервер модуля «Видео» (ADR-022 §5): null — флаг video-editor выключен или модуль не загружен
     VideoEditorMcpContext? VideoEditorMcp = null,
+    // MCP-сервер plugins (ADR-031, шаг 4.1): null — подсистема plugins не загружена
+    PluginsMcpContext? PluginsMcp = null,
     // MCP-сервер «Контекст чата» (ADR-023 §3.2)
     TurnContextMcpContext? TurnContextMcp = null,
     // Владелец хода (SessionManager.ResolveOwnerId); у проектной сессии Session.OwnerId пуст по контракту.

@@ -1,0 +1,346 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
+using ClaudeHomeServer.Models;
+
+namespace ClaudeHomeServer.Services.Plugins;
+
+// Черновики плагина build-it-yourself (ADR-031, шаг 4.1): агент собирает пакет в
+// data/plugins/{owner}/_drafts/{slug}/. Логика создания из шаблона, записи/удаления файлов,
+// валидации и сводки — одна; её используют и MCP-тулсет plugins (4.1), и наблюдение/«Принять»
+// (4.2/4.3). Валидатор пакета (PluginPackageValidator) — единственный арбитр: сервис не
+// ослабляет его правил (allow-list, deny-list, лимиты, нативный манифест), а лишь применяет
+// те же коды проблем на записи, чтобы агент не копил невалидные файлы.
+public class PluginDraftService
+{
+    // Шаблон черновика (R10-1): ccs-plugin.json (наш манифест, version 0.1.0, contributes пуст)
+    // + .claude-plugin/plugin.json (нативный, name = slug — иначе CLI назовёт пакет именем каталога).
+    public const string TemplateVersion = "0.1.0";
+
+    private static readonly Regex SlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
+
+    private readonly PluginStore _store;
+    private readonly PluginPackageValidator _validator;
+
+    public PluginDraftService(PluginStore store, PluginPackageValidator validator)
+    {
+        _store = store;
+        _validator = validator;
+    }
+
+    // slug — грамматика PluginId: [a-z0-9-]+ (часть id после '/').
+    public static bool IsValidSlug(string? slug) =>
+        slug is { Length: > 0 } && SlugRegex.IsMatch(slug);
+
+    // Каталог черновика; null — slug невалиден (SafePath.Join бросил бы 500, а не 400).
+    public string? DraftDir(string ownerId, string slug) =>
+        IsValidSlug(slug) ? _store.DraftDir(ownerId, slug) : null;
+
+    public bool Exists(string ownerId, string slug) =>
+        DraftDir(ownerId, slug) is { } dir && Directory.Exists(dir);
+
+    // ── draft_create ───────────────────────────────────────────────────────────
+    // Создать черновик из шаблона. Повторный create того же slug → already-exists (не перезапись).
+    public PluginDraftOpResult Create(string ownerId, string slug)
+    {
+        if (DraftDir(ownerId, slug) is not { } dir)
+            return PluginDraftOpResult.Fail("bad-slug", $"Недопустимый slug: {slug}");
+        if (Directory.Exists(dir))
+            return PluginDraftOpResult.Fail("already-exists", $"Черновик {slug} уже существует");
+        Directory.CreateDirectory(Path.Combine(dir, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(dir, "ccs-plugin.json"), CcsManifest(slug));
+        File.WriteAllText(Path.Combine(dir, ".claude-plugin", "plugin.json"), NativeManifest(slug));
+        return PluginDraftOpResult.OkResult($"Черновик {slug} создан из шаблона");
+    }
+
+    // ── draft_write_file ───────────────────────────────────────────────────────
+    // Записать файл в черновик. Путь относительный, только через SafePath.Join; запись в
+    // запрещённые места (deny-list, symlink, вне allow-list) и превышение лимитов — отказ
+    // с тем же кодом проблемы, что у валидатора. Перезапись существующего файла допустима
+    // (так агент правит).
+    public PluginDraftOpResult WriteFile(string ownerId, string slug, string relativePath, byte[] content)
+    {
+        if (DraftDir(ownerId, slug) is not { } dir)
+            return PluginDraftOpResult.Fail("bad-slug", $"Недопустимый slug: {slug}");
+        if (!Directory.Exists(dir))
+            return PluginDraftOpResult.Fail("not-found", $"Черновик {slug} не найден");
+
+        // 1) Путь: относительный, без ведущего разделителя; «..» отбивает SafePath.Join.
+        if (relativePath is null || relativePath.Length == 0)
+            return PluginDraftOpResult.Fail("bad-path", "Путь файла пуст");
+        if (relativePath.StartsWith('/') || relativePath.StartsWith('\\'))
+            return PluginDraftOpResult.Fail("within-root", $"Абсолютный путь (должен быть относительным): {relativePath}");
+        string full;
+        try { full = SafePath.Join(dir, relativePath); }
+        catch (Exception) { return PluginDraftOpResult.Fail("within-root", $"Путь выходит за корень черновика: {relativePath}"); }
+
+        // 2) Symlink: запись в существующую символическую ссылку (target может быть вне корня) —
+        //    no-symlink, тот же код, что у валидатора. GetAttributes бросает, если родительского
+        //    каталога ещё нет, поэтому смотрим атрибуты только существующих записей.
+        if ((File.Exists(full) || Directory.Exists(full))
+            && (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+            return PluginDraftOpResult.Fail("no-symlink", $"Символическая ссылка: {relativePath}");
+
+        // 3) Запрещённые места (deny-list) — тот же код, что у валидатора.
+        var norm = relativePath.Replace('\\', '/');
+        if (TryMatchDeny(norm, out var deny))
+            return PluginDraftOpResult.Fail(deny.Code, $"{deny.Why}: {norm}");
+
+        // 3) Allow-list: не в списке — не разрешён (тот же код, что у валидатора).
+        if (!IsAllowed(norm))
+            return PluginDraftOpResult.Fail("not-allowed", $"Файл не в allow-list пакета: {norm}");
+
+        // 4) Лимит размера отдельного файла.
+        if (content.Length > PluginPackageValidator.MaxSingleFileSizeBytes)
+            return PluginDraftOpResult.Fail("file-size-limit",
+                $"Файл больше {PluginPackageValidator.MaxSingleFileSizeBytes / 1024 / 1024} МБ: {norm}");
+
+        // 5) Лимиты пакета: общий размер и число файлов (после записи).
+        var (fileCount, totalSize) = CountAndSize(dir);
+        var existing = File.Exists(full);
+        var existingSize = existing ? new FileInfo(full).Length : 0;
+        if (totalSize - existingSize + content.Length > PluginPackageValidator.MaxTotalSizeBytes)
+            return PluginDraftOpResult.Fail("size-limit",
+                $"Пакет больше {PluginPackageValidator.MaxTotalSizeBytes / 1024 / 1024} МБ");
+        if (!existing && fileCount >= PluginPackageValidator.MaxFileCount)
+            return PluginDraftOpResult.Fail("file-count-limit",
+                $"Файлов в пакете {fileCount + 1}, лимит {PluginPackageValidator.MaxFileCount}");
+
+        // 6) Запись (перезапись допустима).
+        var parent = Path.GetDirectoryName(full);
+        if (parent is not null) Directory.CreateDirectory(parent);
+        File.WriteAllBytes(full, content);
+        return PluginDraftOpResult.OkResult($"Файл записан: {norm}");
+    }
+
+    // ── draft_delete_file ──────────────────────────────────────────────────────
+    // Убрать файл из черновика. Путь тем же правилам (SafePath.Join, внутри корня).
+    public PluginDraftOpResult DeleteFile(string ownerId, string slug, string relativePath)
+    {
+        if (DraftDir(ownerId, slug) is not { } dir)
+            return PluginDraftOpResult.Fail("bad-slug", $"Недопустимый slug: {slug}");
+        if (!Directory.Exists(dir))
+            return PluginDraftOpResult.Fail("not-found", $"Черновик {slug} не найден");
+        if (relativePath is null || relativePath.Length == 0)
+            return PluginDraftOpResult.Fail("bad-path", "Путь файла пуст");
+        if (relativePath.StartsWith('/') || relativePath.StartsWith('\\'))
+            return PluginDraftOpResult.Fail("within-root", $"Абсолютный путь: {relativePath}");
+        string full;
+        try { full = SafePath.Join(dir, relativePath); }
+        catch (Exception) { return PluginDraftOpResult.Fail("within-root", $"Путь выходит за корень черновика: {relativePath}"); }
+        if (!File.Exists(full))
+            return PluginDraftOpResult.Fail("not-found", $"Файл не найден: {relativePath}");
+        File.Delete(full);
+        return PluginDraftOpResult.OkResult($"Файл удалён: {relativePath}");
+    }
+
+    // ── draft_validate ─────────────────────────────────────────────────────────
+    // Валидатор пакета (тот же код, что при установке) по корню черновика.
+    public PluginPackageValidationResult Validate(string ownerId, string slug)
+    {
+        if (DraftDir(ownerId, slug) is not { } dir)
+            throw new ArgumentException($"Недопустимый slug: {slug}", nameof(slug));
+        if (!Directory.Exists(dir))
+            throw new FileNotFoundException($"Черновик {slug} не найден", nameof(slug));
+        return _validator.Validate(dir);
+    }
+
+    // ── draft_preview ──────────────────────────────────────────────────────────
+    // Сводка «что будет после установки» для карточки: вклады, запрошенные права и секреты
+    // (с признаком обязательного), дерево файлов, результат последней проверки. Без
+    // содержимого секретов, без хостовых путей (только относительные).
+    public PluginDraftPreview Preview(string ownerId, string slug)
+    {
+        if (DraftDir(ownerId, slug) is not { } dir)
+            throw new ArgumentException($"Недопустимый slug: {slug}", nameof(slug));
+        if (!Directory.Exists(dir))
+            throw new FileNotFoundException($"Черновик {slug} не найден", nameof(slug));
+
+        var manifest = ReadManifest(dir);
+        var files = new List<PluginDraftFile>();
+        var validation = _validator.Validate(dir);
+        AddTree(dir, dir, files);
+        files.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
+
+        return new PluginDraftPreview(
+            slug,
+            manifest?.Name ?? slug,
+            manifest?.Version ?? TemplateVersion,
+            manifest?.Contributes?.Panels?.Select(p => new PluginDraftPanel(p.Id, p.Slot, p.Title)).ToList() ?? [],
+            manifest?.Contributes?.Commands ?? [],
+            manifest?.Contributes?.Skills ?? [],
+            manifest?.Permissions?.Requested ?? [],
+            manifest?.Contributes?.Requires?.Secrets?.Select(s => new PluginDraftSecret(s.Name, s.Required)).ToList() ?? [],
+            files,
+            new PluginDraftValidation(validation.IsValid, validation.Problems.Select(p => new PluginDraftProblem(p.Code, p.Message)).ToList()));
+    }
+
+    // Дерево файлов черновика (рекурсивно): каталоги с «/» и размером 0, файлы с размером.
+    // <paramref name="root"/> — корень черновика (для относительных путей), <paramref name="current"/> — текущий.
+    private static void AddTree(string root, string current, List<PluginDraftFile> files)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+        {
+            var rel = Path.GetRelativePath(root, entry).Replace('\\', '/');
+            if (Directory.Exists(entry))
+            {
+                files.Add(new PluginDraftFile(rel + "/", true, 0));
+                AddTree(root, entry, files);
+            }
+            else
+            {
+                files.Add(new PluginDraftFile(rel, false, new FileInfo(entry).Length));
+            }
+        }
+    }
+
+    // Прочитать наш манифест ccs-plugin.json; null — файла нет или JSON бит (forward-compat).
+    private static PluginManifest? ReadManifest(string dir)
+    {
+        var path = Path.Combine(dir, "ccs-plugin.json");
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(path),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        }
+        catch (JsonException) { return null; }
+    }
+
+    // Число файлов и суммарный размер черновика (для лимитов записи).
+    private static (int FileCount, long TotalSize) CountAndSize(string dir)
+    {
+        int count = 0;
+        long total = 0;
+        foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+        {
+            count++;
+            try { total += new FileInfo(file).Length; } catch (IOException) { }
+        }
+        return (count, total);
+    }
+
+    // ── Шаблоны ────────────────────────────────────────────────────────────────
+
+    // Наш манифест: id/name = slug, version 0.1.0, contributes пуст (агент заполнит).
+    private static string CcsManifest(string slug) => JsonSerializer.Serialize(new
+    {
+        id = slug,
+        name = slug,
+        version = TemplateVersion,
+        contributes = new PluginContributes(),
+    }, JsonOpts);
+
+    // Нативный манифест CLI: name = slug (R10-1) — из него CLI берёт имя пакета.
+    private static string NativeManifest(string slug) => JsonSerializer.Serialize(new { name = slug }, JsonOpts);
+
+    private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = true,
+    };
+
+    // ── Правила валидатора (копии, чтобы коды совпадали 1:1) ─────────────────────
+    // Запрещённые каталоги (RCE/обход): префикс относительного пути → код проблемы.
+    // Те же префиксы/коды, что в PluginPackageValidator.DenyDirs.
+    private static readonly (string Prefix, string Code, string Why)[] DenyDirs =
+    [
+        ("hooks/",  "deny-hooks",  "hooks/ исполняет shell (RCE)"),
+        ("agents/", "deny-agents", "agents/ добавляет сабагента"),
+        ("bin/",    "deny-bin",    "bin/ — исполняемое в корне пакета"),
+    ];
+
+    // Запрещённые файлы в корне пакета (RCE/обход). Те же имена/коды, что в PluginPackageValidator.DenyFiles.
+    private static readonly (string Name, string Code, string Why)[] DenyFiles =
+    [
+        (".mcp.json",    "deny-mcp-json", ".mcp.json регистрирует MCP-сервер в обход allow-list"),
+        ("settings.json", "deny-settings", "settings.json — глобальный override"),
+    ];
+
+    private static bool TryMatchDeny(string rel, out (string Code, string Why) deny)
+    {
+        foreach (var (prefix, code, why) in DenyDirs)
+            if (rel.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                deny = (code, why);
+                return true;
+            }
+        var name = Path.GetFileName(rel);
+        foreach (var (n, code, why) in DenyFiles)
+            if (name == n)
+            {
+                deny = (code, why);
+                return true;
+            }
+        deny = default;
+        return false;
+    }
+
+    // Allow-list: манифест, навык (skills/**/SKILL.md + .md), команда (commands/*.md), панель (panel/**).
+    // Та же логика, что в PluginPackageValidator.IsAllowed.
+    private static bool IsAllowed(string rel)
+    {
+        foreach (var m in new[] { "ccs-plugin.json", ".claude-plugin/plugin.json" })
+            if (rel == m) return true;
+        if (rel.StartsWith("skills/", StringComparison.Ordinal))
+        {
+            var name = Path.GetFileName(rel);
+            if (name == "SKILL.md" || name.EndsWith(".md", StringComparison.Ordinal)) return true;
+        }
+        if (rel.StartsWith("commands/", StringComparison.Ordinal)
+            && !rel["commands/".Length..].Contains('/')
+            && rel.EndsWith(".md", StringComparison.Ordinal))
+            return true;
+        if (rel.StartsWith("panel/", StringComparison.Ordinal)) return true;
+        return false;
+    }
+}
+
+// Результат операции с черновиком: статус + машиночитаемый код + текст для человека.
+public sealed record PluginDraftOpResult(bool Ok, string? Code, string? Message)
+{
+    public static PluginDraftOpResult OkResult(string message) => new(true, null, message);
+    public static PluginDraftOpResult Fail(string code, string message) => new(false, code, message);
+}
+
+// Сводка черновика «что будет после установки» (draft_preview).
+public sealed class PluginDraftPreview
+{
+    public string Slug { get; }
+    public string Name { get; }
+    public string Version { get; }
+    public List<PluginDraftPanel> Panels { get; }
+    public List<string> Commands { get; }
+    public List<string> Skills { get; }
+    public List<string> RequestedPermissions { get; }
+    public List<PluginDraftSecret> Secrets { get; }
+    public List<PluginDraftFile> Files { get; }
+    public PluginDraftValidation Validation { get; }
+
+    public PluginDraftPreview(
+        string slug, string name, string version,
+        List<PluginDraftPanel> panels, List<string> commands, List<string> skills,
+        List<string> requestedPermissions, List<PluginDraftSecret> secrets,
+        List<PluginDraftFile> files, PluginDraftValidation validation)
+    {
+        Slug = slug; Name = name; Version = version;
+        Panels = panels; Commands = commands; Skills = skills;
+        RequestedPermissions = requestedPermissions; Secrets = secrets;
+        Files = files; Validation = validation;
+    }
+}
+
+public sealed record PluginDraftPanel(string Id, string Slot, string Title);
+public sealed record PluginDraftSecret(string Name, bool Required);
+public sealed record PluginDraftFile(string Path, bool IsDir, long Size);
+public sealed record PluginDraftProblem(string Code, string Message);
+public sealed class PluginDraftValidation
+{
+    public bool IsValid { get; }
+    public List<PluginDraftProblem> Problems { get; }
+    public PluginDraftValidation(bool isValid, List<PluginDraftProblem> problems)
+    {
+        IsValid = isValid;
+        Problems = problems;
+    }
+}

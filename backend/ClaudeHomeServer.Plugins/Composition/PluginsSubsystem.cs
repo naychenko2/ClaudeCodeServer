@@ -39,6 +39,13 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // Валидатор пакета (ADR-031 §2.3, шаг 1.3): allow-list файлов + sha256.
         // Stateless — singleton; вызывается PluginInstaller при установке.
         services.AddSingleton<PluginPackageValidator>();
+        // Черновики build-it-yourself (шаг 4.1): создание из шаблона, запись/удаление файлов,
+        // валидация, сводка. Stateless поверх PluginStore + PluginPackageValidator; его используют
+        // и MCP-тулсет plugins (4.1), и наблюдение/«Принять» (4.2/4.3).
+        services.AddSingleton<PluginDraftService>();
+        // MCP-тулсет plugins (шаг 4.1): POST /mcp/plugins/{sessionId}, реестр Main находит его
+        // среди IMcpToolset. Состав (5 инструментов) не зависит от флага/хода/сессии.
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.PluginsToolset>();
         // Ядро установки (шаг 1.4, C1/C2/M5/M6): метка источника, атомарное копирование,
         // no-op повтора. Stateless-логика поверх PluginStore + валидатора.
         services.AddSingleton<PluginInstaller>();

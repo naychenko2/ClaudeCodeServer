@@ -29,6 +29,9 @@ public static class McpEndpoints
     public const string AudioEditorName = "audio-editor";
     // Модуль «Видео» (ADR-022 §5): сервер есть в любом чате владельца при флаге video-editor
     public const string VideoEditorName = "video-editor";
+    // Плагины build-it-yourself (ADR-031, шаг 4.1): сервер в любом чате владельца,
+    // ограничения (флаг plugins-build-yourself, локальный проект) — на вызове, не в составе
+    public const string PluginsName = "plugins";
 
     // Контекст чата (ADR-023 §3.2): context_state / context_attach / context_detach, в любом чате владельца при флаге
     public const string TurnContextName = "turn-context";

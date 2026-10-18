@@ -868,6 +868,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер plugins (ADR-031, шаг 4.1): null — подсистема plugins не загружена
+    private readonly PluginsMcpContext? _pluginsMcp;
+    private bool PluginsHttpOn() => _pluginsMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер «Контекст чата»: null — тулсета нет в реестре (ADR-023 §3.2)
     private readonly TurnContextMcpContext? _turnContextMcp;
     private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
@@ -1089,6 +1092,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _imageEditorMcp = context.ImageEditorMcp;
         _audioEditorMcp = context.AudioEditorMcp;
         _videoEditorMcp = context.VideoEditorMcp;
+        _pluginsMcp = context.PluginsMcp;
         _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _testsMcp = context.TestsMcp;
@@ -1177,6 +1181,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasAudioEditor = AudioEditorHttpOn();
         // Видео: как у звука — stdio-ветки нет
         var hasVideoEditor = VideoEditorHttpOn();
+        // Плагины build-it-yourself (ADR-031, шаг 4.1): stdio-ветки нет, сервер в любом чате владельца
+        var hasPlugins = PluginsHttpOn();
         var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
@@ -1282,6 +1288,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasAudioEditor = hasAudioEditor && Keep(McpEndpoints.AudioEditorName);
             hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
+            hasPlugins = hasPlugins && Keep(McpEndpoints.PluginsName);
             hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasTests = hasTests && Keep(McpEndpoints.TestsName);
@@ -1295,7 +1302,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasPlugins && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -2016,6 +2023,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав — свойство инстанса (VideoEditor:AgentLaunch), вариативен только транспорт
                 shapes[McpEndpoints.VideoEditorName] = "t:http";
+            }
+
+            if (hasPlugins)
+            {
+                // Плагины build-it-yourself (ADR-031, шаг 4.1): тулсет вертикали, http-ветка только;
+                // сессия — хвостом URL. Состав фиксирован (5 инструментов), ограничения — на вызове.
+                servers[McpEndpoints.PluginsName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_pluginsMcp!.ApiUrl, McpEndpoints.PluginsName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_pluginsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (5 инструментов), вариативен только транспорт
+                shapes[McpEndpoints.PluginsName] = "t:http";
             }
 
             if (hasTurnContext)

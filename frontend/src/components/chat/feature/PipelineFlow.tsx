@@ -6,6 +6,7 @@ import { useIsMobile } from '../../../lib/breakpoints';
 import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
 import { openTaskInSection } from '../../../lib/tasks';
 import { useFeatureStepFocus } from '../../../lib/featureRuns';
+import { stepDisplayName } from '../../../lib/stepRef';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
@@ -278,6 +279,9 @@ export function stageMeta(stage: FeatureStage | null): string | null {
   const names = allNames.length <= 2
     ? allNames.join(', ')
     : `${allNames.slice(0, 2).join(', ')} +${allNames.length - 2}`;
+  // m-7: упавший исполнитель (tone=stopped) — исход в мете не показываем (только имя);
+  // тег «стоит · …» остаётся (activeStageLabel). Иначе verdict «running» читался «идёт».
+  if (stage.tone === 'stopped') return names || null;
   let second: string | null = null;
   if (stage.verdict) second = VERDICT_WORD[stage.verdict] ?? null;
   else if (stage.taskCount != null && stage.taskCount > 0) {
@@ -505,7 +509,7 @@ function StepGlyph({ chain }: { chain: FeatureStepChain }) {
   );
 }
 
-// Метка источника возврата (10.5/700, R.sm): «с ревью»/«с проверки»/«с финала».
+// Метка источника возврата (11/700, R.sm): «с ревью»/«с проверки»/«с финала».
 // Есть только если chain.source не null (догадок не делаем).
 function SourceTag({ source }: { source?: string | null }) {
   if (!source) return null;
@@ -548,6 +552,9 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
       ? 'ждёт ревью'
       : null;
   const minH = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
+  // r-2: название шага (общий хелпер): ведущий «{stepRef}:» отрезается; пустое название
+  // или название = номеру («Ш8 Ш8») — не рисуем, остаётся только моно-номер.
+  const name = stepDisplayName(chain.title, chain.stepRef);
   return (
     <button
       // data-step-ref — для scrollIntoView по сигналу фокуса (F9): поиск ВНУТРИ СВОЕГО
@@ -563,20 +570,23 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
         display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: '7px 7px', alignItems: 'start',
         width: '100%', minHeight: minH, padding: `${SP.xs}px ${SP.xs}px`,
         border: '1px solid transparent', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
-        font: 'inherit', color: 'inherit', background: expanded ? C.bgSelected : 'transparent',
+        // K-2: fontFamily наследуется (не Arial), размер явный FS.sm (12).
+        fontFamily: 'inherit', fontSize: FS.sm, color: 'inherit', background: expanded ? C.bgSelected : 'transparent',
       }}
     >
       <StepGlyph chain={chain} />
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0 }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{chain.stepRef}</span>
-        <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{chain.title || 'Без названия'}</span>
+        {/* r-2: название (общий хелпер stepDisplayName); пусто/равно номеру — не рисуем. */}
+        {name && <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>{name}</span>}
         <SourceTag source={chain.source} />
         {chain.outcome === 'withdrawn' && (
           <span style={{ color: C.textMuted, whiteSpace: 'nowrap' }}>· снят с выкладки</span>
         )}
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, whiteSpace: 'nowrap' }}>
-        {chain.rounds.length > 0 && <Rounds rounds={chain.rounds} max={6} />}
+        {/* M-6: на 360 — только кольца max=3 без подписи (caption=false); длительность (right) остаётся. */}
+        {chain.rounds.length > 0 && <Rounds rounds={chain.rounds} max={isMobile ? 3 : 6} caption={!isMobile} />}
         {right && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{right}</span>}
       </span>
     </button>
@@ -587,12 +597,11 @@ function StepRow({ chain, expanded, onToggle, isMobile, now }: {
 
 // === F8: детали этапа (по ключу) ===
 
-// Размеры шрифта, которых нет в шкале FS (FS.xs=11, FS.sm=12) — именованные константы
-// с комментарием (Майя M5: не литералы 10/10.5 в разметке).
-// Заголовок секции деталей (макет .det .h): 10.
-const SECTION_H_SIZE = 10;
-// Метка источника возврата (макет .src): 10.5.
-const SOURCE_TAG_SIZE = 10.5;
+// Кегли деталей шага — токены шкалы FS (Майя M5: не литералы 10/10.5 в разметке).
+// Заголовок секции деталей (макет .det .h): FS.xxs (10, Р-1).
+const SECTION_H_SIZE = FS.xxs;
+// Метка источника возврата (макет .src): FS.xs (11, Р-3); высота 17 та же.
+const SOURCE_TAG_SIZE = FS.xs;
 
 // Заголовок секции деталей (макет .det .h): 10, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionH({ children }: { children: React.ReactNode }) {
@@ -631,7 +640,7 @@ function TaskOpenLink({ target, isMobile }: { target: { id: string; projectId?: 
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
         alignSelf: 'flex-end', border: 'none', background: 'transparent', cursor: 'pointer',
         minHeight: isMobile ? 40 : 24, padding: 0,
-        fontSize: 12, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
       }}
     >
       Открыть задачу
@@ -669,7 +678,7 @@ function TaskLine({ t, isMobile }: { t: FeatureTask; isMobile: boolean }) {
           {persona && <PersonaAvatar persona={persona} size={18} />}
           {name && <span style={{ color: C.textSecondary }}>{name}</span>}
           <span>{status}</span>
-          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, whiteSpace: 'nowrap' }}>{time}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         <TaskOpenLink target={{ id: t.id, projectId: t.projectId ?? undefined }} isMobile={isMobile} />
       </div>
@@ -715,7 +724,7 @@ function RoundLine({ r, run, isMobile }: { r: FeatureRound; run: FeatureRun; isM
           {persona && <PersonaAvatar persona={persona} size={18} />}
           {name && <span style={{ color: C.textSecondary }}>{name}</span>}
           {verdictWord && <span>· {verdictWord}</span>}
-          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, whiteSpace: 'nowrap' }}>{time}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         {r.reason && <div style={{ overflowWrap: 'anywhere', color: C.textSecondary, fontSize: FS.xs }}>{r.reason}</div>}
         {target && <TaskOpenLink target={target} isMobile={isMobile} />}
@@ -906,14 +915,14 @@ function VerdictBeads({ rounds }: { rounds: FeatureRound[] }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
       {skip > 0 && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: C.bgSelected, color: C.textHeading, border: `1px dashed ${C.dashed}` }} title="ранние витки">
+        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: FS.xs, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: C.bgSelected, color: C.textHeading, border: `1px dashed ${C.dashed}` }} title="ранние витки">
           +{skip}
         </span>
       )}
       {shown.map((r) => {
         const b = BEAD[r.verdict] ?? BEAD.running;
         return (
-          <span key={r.n} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: b.bg, color: b.fg, border: b.border ? `1px dashed ${b.border}` : '1px solid transparent' }}>
+          <span key={r.n} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: FS.xs, fontWeight: 700, borderRadius: R.max, padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap', background: b.bg, color: b.fg, border: b.border ? `1px dashed ${b.border}` : '1px solid transparent' }}>
             {r.n} {b.text}
           </span>
         );

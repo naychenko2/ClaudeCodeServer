@@ -1,4 +1,4 @@
-import { C, FONT, R } from '../../../lib/design';
+import { C, FONT, R, FS } from '../../../lib/design';
 import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { FeatureGlyph } from './FeatureGlyphs';
@@ -159,7 +159,7 @@ function VerdictBead({ verdict }: { verdict: FeatureRound['verdict'] }) {
     <span
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 3,
-        fontSize: 11, fontWeight: 700, borderRadius: R.max,
+        fontSize: FS.xs, fontWeight: 700, borderRadius: R.max,
         padding: '0 7px', lineHeight: '18px', whiteSpace: 'nowrap',
         background: b.bg, color: b.fg,
         border: b.border ? `1px dashed ${b.border}` : '1px solid transparent',
@@ -183,7 +183,7 @@ function WorkLink({ t, now, isLast }: { t: FeatureTask; now: number; isLast: boo
     <li
       style={{
         position: 'relative', display: 'grid', gridTemplateColumns: '14px 1fr', gap: 7,
-        padding: '3px 0 5px', fontSize: 12, color: C.textPrimary,
+        padding: '3px 0 5px', fontSize: FS.sm, color: C.textPrimary,
       }}
     >
       {!isLast && <Rail />}
@@ -194,7 +194,7 @@ function WorkLink({ t, now, isLast }: { t: FeatureTask; now: number; isLast: boo
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 6px', alignItems: 'center' }}>
           {persona && <PersonaAvatar persona={persona} size={18} />}
           <span style={{ fontWeight: 600, color: C.textHeading }}>{workVerb(t)}</span>
-          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>{time}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         {t.title && (
           <div style={{ color: C.textSecondary, marginTop: 1, overflowWrap: 'anywhere' }}>{t.title}</div>
@@ -216,7 +216,7 @@ function RoundLink({ r, now, isLast, isBack }: { r: FeatureRound; now: number; i
     <li
       style={{
         position: 'relative', display: 'grid', gridTemplateColumns: '14px 1fr', gap: 7,
-        padding: '3px 0 5px', fontSize: 12, color: C.textPrimary,
+        padding: '3px 0 5px', fontSize: FS.sm, color: C.textPrimary,
       }}
     >
       {!isLast && <Rail back={isBack} />}
@@ -230,7 +230,7 @@ function RoundLink({ r, now, isLast, isBack }: { r: FeatureRound; now: number; i
           {name && (
             <span style={{ color: C.textMuted }}>{name}{time ? ' · ' : ''}</span>
           )}
-          {time && <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>{time}</span>}
+          {time && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{time}</span>}
         </div>
         {r.reason && (
           <div style={{ color: C.textSecondary, marginTop: 1, overflowWrap: 'anywhere' }}>{r.reason}</div>

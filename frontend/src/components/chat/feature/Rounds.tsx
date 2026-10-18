@@ -1,4 +1,4 @@
-import { C, FONT } from '../../../lib/design';
+import { C, FONT, FS, SP } from '../../../lib/design';
 import type { FeatureRound } from '../../../types/featureRun';
 
 // «Пружина» витков: каждый виток — кольцо, цвет и штрих кодируют исход
@@ -49,7 +49,7 @@ export function Rounds({ rounds, max = 6, caption = true }: { rounds: FeatureRou
       aria-label={rounds.map(r => `${r.n} — ${roundVerdictLabel(r.verdict)}`).join(', ')}
     >
       {extra > 0 && (
-        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>+{extra}</span>
+        <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>+{extra}</span>
       )}
       <svg width={w} height={16} viewBox={`0 0 ${w} 16`} aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
         {shown.map((r, i) => {
@@ -74,9 +74,10 @@ export function Rounds({ rounds, max = 6, caption = true }: { rounds: FeatureRou
       </svg>
       {caption && (
         // ↺N — C.warningText 700 (отдельный span), остальная подпись — C.textMuted.
-        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
+        // m-1: зазор gap между подписью и ↺N (вместо ведущего « · »).
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
           <span style={{ color: C.textMuted }}>{baseLabel}</span>
-          {rets > 0 && <span style={{ color: C.warningText, fontWeight: 700 }}> · ↺{rets}</span>}
+          {rets > 0 && <span style={{ color: C.warningText, fontWeight: 700 }}>↺{rets}</span>}
         </span>
       )}
     </span>

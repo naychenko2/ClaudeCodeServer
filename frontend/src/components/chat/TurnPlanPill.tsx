@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ListChecks, Route } from 'lucide-react';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, FS } from '../../lib/design';
 import { Menu } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { planHint, type TodoItem } from '../../hooks/useSessionArtifacts';
@@ -28,9 +28,24 @@ import { FeatureGlyph } from './feature/FeatureGlyphs';
 
 // Значок пилюли в режиме фичи: ромб (wait) / квадрат (stopped) / Route (идёт/закрыта).
 function FeaturePillIcon({ model }: { model: PillModel }) {
-  if (model.icon === 'diamond') return <FeatureGlyph kind="wait" />;
-  if (model.icon === 'square') return <FeatureGlyph kind="stopped" />;
+  if (model.icon === 'diamond') return <FeatureGlyph kind="wait" size={ICON_SIZE.xs} />;
+  if (model.icon === 'square') return <FeatureGlyph kind="stopped" size={ICON_SIZE.xs} />;
   return <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={model.iconColor} />;
+}
+
+// n-2/n-3: на десктопе меню пилюли — фиксированная ширина 380 в обоих режимах
+// («План хода» и «Исполнение фичи»), чтобы переключатель режима не дёргал ширину
+// (раньше фича 336, план 280–296 — по содержимому). min=max → ровно 380. На мобиле —
+// прежние min/max (280–380); фактическая ширина на мобиле — во всю (pillMenuFullWidth).
+export function pillMenuWidths(isMobile: boolean): { minWidth: number; maxWidth: number } {
+  return isMobile ? { minWidth: 280, maxWidth: 380 } : { minWidth: 380, maxWidth: 380 };
+}
+
+// r-3: fullWidth меню (left/right 8, min/max не действуют): на МОБИЛЕ — в обоих режимах
+// (фича и план), чтобы переключение режима не дёргало ширину (раньше фича fullWidth,
+// план по содержимому 280–296); на ДЕСКТОПЕ — false (фикс. 380 из pillMenuWidths).
+export function pillMenuFullWidth(isMobile: boolean, _featureMode: boolean): boolean {
+  return isMobile;
 }
 
 export function TurnPlanPill({ todos, runs = [], sessionId }: {
@@ -92,9 +107,11 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
   const ariaLabel = (featureMode ? 'Показать исполнение фичи' : 'Показать план хода')
     + (showDot && model?.ariaExtra ? ` · ${model.ariaExtra}` : '');
 
-  // Потолок меню: режим фичи выше (520 десктоп / 560 мобила, во всю ширину left/right 8),
-  // план — как раньше (340, обычная ширина).
+  // Потолок меню: режим фичи выше (520 десктоп / 560 мобила; во всю ширину left/right 8 —
+  // только мобила), план — как раньше (340).
   const menuMaxHeight = isMobile ? (featureMode ? 560 : 340) : (featureMode ? 520 : 340);
+  // n-2/n-3: ширина меню — одна у обоих режимов (380 на десктопе, 280–380 на мобиле).
+  const { minWidth: menuMin, maxWidth: menuMax } = pillMenuWidths(isMobile);
 
   return (
     <>
@@ -104,10 +121,13 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
         title={featureMode ? 'Показать исполнение фичи' : 'Показать план хода'}
         aria-label={ariaLabel}
         style={{
-          fontSize: 11, color: C.textMuted, fontFamily: FONT.mono,
+          // R-7: в режиме фичи текст и счётчик пилюли — C.textSecondary (4,02:1), не C.textMuted.
+          fontSize: FS.xs, color: featureMode ? C.textSecondary : C.textMuted, fontFamily: FONT.mono,
           background: C.bgSelected, border: 'none', borderRadius: 8, padding: '4px 11px',
           display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
           maxWidth: 300, minWidth: 0, flexShrink: 1,
+          // R-8: высота пилюли на 360 — 28 (макет .app.m .tpp); на десктопе — по контенту.
+          ...(isMobile ? { minHeight: 28 } : {}),
         }}
       >
         {/* Значок (+ точка-сигнал, когда пилюля в режиме плана, а фича ждёт/упала). */}
@@ -140,7 +160,7 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
               }}>↺{loops}</span>
             )}
             {more > 0 && (
-              <span style={{ fontFamily: FONT.mono, fontSize: 11, opacity: 0.8, flexShrink: 0 }}>+{more}</span>
+              <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, opacity: 0.8, flexShrink: 0 }}>+{more}</span>
             )}
             <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
           </>
@@ -161,10 +181,12 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
           <Menu
             onClose={() => setMenu(null)}
             anchor={menu}
-            minWidth={280}
-            maxWidth={380}
+            minWidth={menuMin}
+            maxWidth={menuMax}
             maxHeight={menuMaxHeight}
-            fullWidth={featureMode}
+            // r-3: во всю ширину (left/right 8) — на мобиле в обоих режимах (одна ширина);
+            // на десктопе — фикс. 380 (fullWidth=false).
+            fullWidth={pillMenuFullWidth(isMobile, featureMode)}
           >
             <FeatureModeBody
               sessionId={sessionId}
@@ -172,23 +194,25 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
               runs={runs}
               isMobile={isMobile}
               variant="pill"
-              headerPad="9px 12px 11px"
-              bodyPad="9px 12px 11px"
+              // M-2: шапка padding-bottom 7 + (margin-bottom 5 даёт bodyPad-top 5); тело top 0 (макет .hd/.in).
+              headerPad="9px 12px 7px"
+              bodyPad="5px 12px 11px"
               headerBorder={`1px solid ${C.divider}`}
             />
           </Menu>
         ) : (
           // Без фич — прежняя разметка меню (байт-в-байт): заголовок «План хода» + чек-лист.
-          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={280} maxWidth={380} maxHeight={340}>
+          // r-3: на мобиле — во всю ширину (одна ширина с режимом фичи); на десктопе — фикс. 380.
+          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={menuMin} maxWidth={menuMax} maxHeight={340} fullWidth={pillMenuFullWidth(isMobile, false)}>
             <div data-testid="turn-plan-menu" style={{ padding: '9px 12px 11px' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,
                 borderBottom: `1px solid ${C.divider}`,
               }}>
-                <span style={{ fontFamily: FONT.serif, fontSize: 13, fontWeight: 700, color: C.textHeading }}>
+                <span style={{ fontFamily: FONT.serif, fontSize: FS.base, fontWeight: 700, color: C.textHeading }}>
                   План хода
                 </span>
-                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
                   {planCounter}
                 </span>
               </div>

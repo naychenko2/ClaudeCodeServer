@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight } from 'lucide-react';
-import { C, FONT, SHADOW, Z } from '../../../lib/design';
+import { C, FONT, FS, SHADOW, TB, Z } from '../../../lib/design';
 import { openTaskInSection } from '../../../lib/tasks';
 import type { FeatureRun } from '../../../types/featureRun';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
@@ -72,17 +72,13 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
   const done = todos.filter(t => t.status === 'completed').length;
   let counter: string;
   if (featureMode && run) {
+    // M-3: обе поверхности (пилюля и карточка) — шаги принято/всего · ↺N;
+    // доля решённых витков (%) из шапки убрана. При нуле шагов «0/—».
     const loops = run.verdicts.loops;
-    if (variant === 'card') {
-      // Карточка: шаги принято/всего; при нуле шагов «0/—».
-      const total = run.stepsTotal ?? 0;
-      counter = total > 0
-        ? `${run.stepsAccepted ?? 0}/${total}${loops ? ` · ↺${loops}` : ''}`
-        : `0/—${loops ? ` · ↺${loops}` : ''}`;
-    } else {
-      // Пилюля: доля решённых витков (%).
-      counter = `${Math.round(run.progress * 100)}%${loops ? ` · ↺${loops}` : ''}`;
-    }
+    const total = run.stepsTotal ?? 0;
+    counter = total > 0
+      ? `${run.stepsAccepted ?? 0}/${total}${loops ? ` · ↺${loops}` : ''}`
+      : `0/—${loops ? ` · ↺${loops}` : ''}`;
   } else {
     counter = `${done}/${todos.length}`;
   }
@@ -90,7 +86,7 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
   const body = featureMode && run
     ? (
       <>
-        <FeaturePicker runs={runs} selected={sel} isMobile={isMobile} onSelect={i => {
+        <FeaturePicker runs={runs} selected={sel} isMobile={isMobile} inMenu={variant === 'pill'} onSelect={i => {
           const r = runs[i];
           if (r && sessionId) setSelectedFeatureId(sessionId, r.featureId);
         }} />
@@ -112,7 +108,7 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
         hasFeatures={hasFeatures}
         isMobile={isMobile}
       />
-      <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+      <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>
         {counter}
       </span>
     </div>
@@ -142,7 +138,7 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
       <div style={{ padding: bodyPad }}>
         {body}
       </div>
-      {featureMode && run && <FeatureCardFooter run={run} />}
+      {featureMode && run && <FeatureCardFooter run={run} isMobile={isMobile} />}
     </div>
   );
 }
@@ -150,7 +146,7 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
 // Футер карточки в режиме фичи: «Задачи фичи в трекере →» — стиль футера TaskCreatedView
 // (12/600 C.accent, ArrowRight 13, верхняя граница 1px C.divider, фокус SHADOW.focus).
 // Действие — openTaskInSection на эпик фичи (фильтр трекера по фиче — новый экран, за волной).
-function FeatureCardFooter({ run }: { run: FeatureRun }) {
+function FeatureCardFooter({ run, isMobile }: { run: FeatureRun; isMobile: boolean }) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const open = () => openTaskInSection({ id: run.epic.id, projectId: run.epic.projectId ?? undefined });
@@ -165,8 +161,10 @@ function FeatureCardFooter({ run }: { run: FeatureRun }) {
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
         width: '100%', border: 'none', borderTop: `1px solid ${C.divider}`,
+        // M-7: на 360 тач-цель 40 (TB.iconHitMobile); отступы 8px 13px не трогаем.
+        minHeight: isMobile ? TB.iconHitMobile : undefined,
         padding: '8px 13px', background: 'transparent', cursor: 'pointer',
-        fontSize: 12, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
         boxShadow: focused ? SHADOW.focus : 'none',
       }}
     >

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { C, FONT, R, FS, SP } from '../../../lib/design';
+import { C, FONT, R, FS, SP, TB } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { Button, ConfirmDialog } from '../../ui';
 import { openTaskInSection } from '../../../lib/tasks';
@@ -8,6 +8,7 @@ import { prefillComposer } from '../../../lib/ai/startChat';
 import { api } from '../../../lib/api';
 import { getPersonaById, usePersonasVersion, ensurePersonasLoaded } from '../../../lib/personas';
 import { showToast } from '../../../lib/toast';
+import { stripStepRefPrefix, stepDisplayName } from '../../../lib/stepRef';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary, FeatureTask } from '../../../types/featureRun';
 import { PipelineFlow } from './PipelineFlow';
@@ -34,7 +35,7 @@ import { dateTimeLabel } from './featureTime';
 // Подпись секции (как CellLabel): 10 px, 700, uppercase, letter-spacing .06em, C.textMuted.
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, margin: '2px 0 -4px' }}>
+    <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, margin: '2px 0 -4px' }}>
       {children}
     </div>
   );
@@ -92,7 +93,9 @@ function stoppedPhrase(mins: number | null): string {
 // Пустые части не дают «Денис — . Отчёта нет.»: имя и шаг склеиваются « · », reason — « — {…}»,
 // только когда он есть; step не найден по att.taskId → его часть опускается.
 function stoppedLine(name: string, step: FeatureTask | undefined, reason: string): string {
-  const stepPart = step ? `${(step.stepRef ?? '').trim()} ${step.title}`.trim() : '';
+  const stepPart = step
+    ? `${(step.stepRef ?? '').trim()} ${stripStepRefPrefix(step.title, step.stepRef)}`.trim()
+    : '';
   const who = [name, stepPart].filter(Boolean).join(' · ');
   const reasonPart = reason ? ` — ${reason}` : '';
   return (who + reasonPart).trim();
@@ -125,7 +128,7 @@ function summaryLine(s: FeatureSummary): string {
 // Итог закрытой фичи: фон C.successBg, глиф «готово» 18, «Фича смержена» + строка из summary.
 function SummaryBlock({ summary }: { summary: FeatureSummary }) {
   return (
-    <div style={{ background: C.successBg, borderRadius: R.lg, padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+    <div style={{ background: C.successBg, borderRadius: R.lg, padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'center' }}>
       <FeatureGlyph kind="done" size={18} />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: FS.base, fontWeight: 700, color: C.successText }}>Фича смержена</div>
@@ -146,16 +149,23 @@ function NowCard({ item }: { item: FeatureNow }) {
   const now = useMinuteTick();
   const persona = item.personaId ? getPersonaById(item.personaId) : undefined;
   const line1 = [persona?.name, item.stepRef].filter(Boolean).join(' · ');
+  // n-4/r-2: вторая строка — заголовок задачи (общий хелпер stepDisplayName): ведущий
+  // «{stepRef}:» отрезается (номер уже в строке 1); пустое название или название = номеру
+  // шага дублируют строку 1 — строку 2 не рисуем (не «Ш8 Ш8»).
+  const line2 = stepDisplayName(item.title, item.stepRef);
   const elapsed = elapsedLabel(item.startedAt, now);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
       {persona && <PersonaAvatar persona={persona} size={22} />}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* line1 (имя + stepRef) пуст — строку 1 не рисуем, пустую подпись не оставляем (Глеб). */}
         {line1 && (
           <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line1}</div>
         )}
-        <div style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.title}</div>
+        {/* n-4: название = номер шага (или пусто) — строку 2 не рисуем, чтобы не было «Ш8 Ш8». */}
+        {line2 != null && (
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line2}</div>
+        )}
       </div>
       {elapsed && (
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>{elapsed}</span>
@@ -170,15 +180,16 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   const now = useMinuteTick();
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  // Мобила — md (minHeight 40), десктоп — xs (Майя M3: у sm minHeight 32, тач-цель 40 даёт md).
-  const size: 'xs' | 'md' = isMobile ? 'md' : 'xs';
+  // M-5: кнопки sm (minHeight 32); на мобиле minHeight 40 (TB.iconHitMobile) — тач-цель.
+  const size: 'xs' | 'sm' = isMobile ? 'sm' : 'xs';
+  const btnStyle = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   const mins = minutesSince(att.since, now);
 
   if (att.kind === 'wait') {
     // Мерж: все шаги приняты, мержа нет — «Отдать фичу Марку на мерж?». Явное: причина ожидания.
     const isMerge = att.reason === 'мерж';
     return (
-      <div role="status" style={{ background: C.infoBg, color: C.info, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: 12.5 }}>
+      <div role="status" style={{ background: C.infoBg, color: C.info, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="wait" size={14} /></span>
           <span>
@@ -190,12 +201,12 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
           {isMerge ? (
             <>
               {/* «Попросить Марка» — затравка в композере оркестратора; саму задачу Марку не создаёт. */}
-              <Button size={size} variant="secondary" onClick={() => prefillComposer(mergePrefill(run))}>
+              <Button size={size} variant="secondary" style={btnStyle} onClick={() => prefillComposer(mergePrefill(run))}>
                 Попросить Марка
               </Button>
               {/* У мержа att.taskId — это финал: «Итог финала» открывает его; без taskId кнопки нет (Майя M4). */}
               {att.taskId && (
-                <Button size={size} variant="ghost" onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
+                <Button size={size} variant="ghost" style={btnStyle} onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
                   Итог финала
                 </Button>
               )}
@@ -203,7 +214,7 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
           ) : (
             // Явное ожидание (reason ≠ «мерж»): одна кнопка «Открыть задачу»; без taskId кнопок нет (Майя M4).
             att.taskId && (
-              <Button size={size} variant="secondary" onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
+              <Button size={size} variant="secondary" style={btnStyle} onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
                 Открыть задачу
               </Button>
             )
@@ -221,7 +232,7 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   // Шаг упавшей задачи: att.taskId → run.steps → stepRef + title; не найден → его часть опускается (Майя M8).
   const step = att.taskId ? (run.steps ?? []).find(t => t.id === att.taskId) : undefined;
   return (
-    <div role="status" style={{ background: C.dangerBg, color: C.dangerText, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: 12.5 }}>
+    <div role="status" style={{ background: C.dangerBg, color: C.dangerText, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="stopped" size={14} /></span>
         <span>
@@ -230,11 +241,11 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <Button size={size} variant="secondary" loading={restarting} onClick={() => setConfirmRestart(true)}>
+        <Button size={size} variant="secondary" style={btnStyle} loading={restarting} onClick={() => setConfirmRestart(true)}>
           Перезапустить
         </Button>
         {att.linkedSessionId && (
-          <Button size={size} variant="ghost" onClick={() => { if (att.linkedSessionId) void openChatById(att.linkedSessionId); }}>
+          <Button size={size} variant="ghost" style={btnStyle} onClick={() => { if (att.linkedSessionId) void openChatById(att.linkedSessionId); }}>
             Чат исполнителя
           </Button>
         )}
@@ -277,7 +288,7 @@ function EmptyState({ run }: { run: FeatureRun }) {
   const cutPersona = run.cut?.[0]?.personaId ? getPersonaById(run.cut[0].personaId) : undefined;
   const who = cutPersona?.name;
   return (
-    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '8px 10px', fontSize: 12.5, color: C.textSecondary }}>
+    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '10px 12px', fontSize: FS.sm, color: C.textSecondary }}>
       Шагов пока нет. План появится, когда {who ? `${who} закончит разрез` : 'закончится разрез'} — тогда здесь будут шаги по линиям.
     </div>
   );
@@ -307,23 +318,18 @@ function Legend() {
 // Главная карточка фичи.
 export function FeatureRunView({ run }: { run: FeatureRun }) {
   const isMobile = useIsMobile();
-  const pad = isMobile ? 8 : 10;
-
-  // Прогресс: доля решённых витков (0..1) → %; ?? 0 — без ?? в HTML «NaN%» (Глеб).
-  const pct = Math.round((run.progress ?? 0) * 100);
   const hasSteps = (run.steps?.length ?? 0) > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: pad }}>
-      {/* Шапка: имя + ветка + прогресс (baseline, перенос разрешён) */}
+    // M-2: собственный padding убран — поля задаёт поверхность (меню: headerPad/bodyPad);
+    // остаётся только вертикальный зазор 10 между блоками.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Шапка: имя + ветка (M-3: счётчик acc/tot · ↺N — в FeatureModeBody, % из шапки убран) */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{run.epic.title}</span>
         {run.epic.worktreeBranch && (
           <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{run.epic.worktreeBranch}</span>
         )}
-        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {pct}%
-        </span>
       </div>
 
       {/* Плашка-тревога: ждёт вас / исполнитель упал (с действиями) */}

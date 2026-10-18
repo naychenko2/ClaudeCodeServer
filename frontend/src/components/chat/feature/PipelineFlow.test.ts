@@ -927,6 +927,19 @@ describe('PipelineFlow: F8 (строка шага)', () => {
     // 8 витков → показано 6 колец + «+2».
     expect(html).toContain('+2');
   });
+
+  // r-2: название = номеру — «Ш8 Ш8» не дублируется (остаётся только моно-номер).
+  // Считаем текстовые узлы «>Ш8<» (не атрибуты data-step-ref/data-testid, где номер тоже есть).
+  // Мутация: верни название (stripStepRefPrefix без null-проверки) → «>Ш8<» два раза → краснеет.
+  it('r-2: название = номеру — «Ш8 Ш8» не дублируется (остаётся только номер)', () => {
+    const r = run({
+      stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
+      stepChains: [chain({ stepRef: 'Ш8', title: 'Ш8' })],
+    });
+    const html = render(r);
+    const count = (html.match(/>Ш8</g) ?? []).length;
+    expect(count, 'текстовый узел «Ш8» ровно один (номер, без дубля названия)').toBe(1);
+  });
 });
 
 // === F8: пружины-блоки (stg-rounds) у «Ревью»/«Проверки»/«Финального ревью» ===
@@ -1371,5 +1384,27 @@ describe('PipelineFlow: F9.1 (скролл, два PipelineFlow)', () => {
     // (тот брал бы первый — мутация (б): верни getElementById → один из узлов не скроллится).
     expect(scrolled, 'оба PipelineFlow скроллят свой узел').toContain('first');
     expect(scrolled).toContain('second');
+  });
+});
+
+// === K-2: строка шага — fontFamily inherit (не Arial) + явный fontSize FS.sm (12) ===
+describe('PipelineFlow: K-2 (строка шага: шрифт)', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  function runWithStep(): FeatureRun {
+    return run({
+      stages: stages({ prod: { key: 'prod', state: 'done', passes: 1, taskIds: [] } }),
+      stepChains: [chain({ stepRef: 'D1', title: 'Шаг', outcome: 'accepted', durationMinutes: 30 })],
+    });
+  }
+
+  it('кнопка строки: font-size 12 (FS.sm) и font-family inherit', () => {
+    const { root, container } = mount(createElement(PipelineFlow, { run: runWithStep() }));
+    const row = findNodeByAttr(container, 'data-step-ref', 'D1');
+    expect(row, 'строка шага D1 не найдена').not.toBeNull();
+    expect(row!.style.fontSize, 'K-2: font-size 12px').toBe('12px');
+    expect(row!.style.fontFamily, 'K-2: font-family inherit').toBe('inherit');
+    root.unmount();
   });
 });

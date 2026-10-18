@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, Layers, List, Check,
+  Plus, CalendarDays, Tags, Layers, List, Check, Sparkles,
   ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
   SlidersHorizontal, Archive,
 } from 'lucide-react';
@@ -29,6 +29,9 @@ const GROUP_BY_META: Record<ChatGroupBy, { label: string; title: string; Icon: t
   tags: { label: 'Теги', title: 'Группировка по тегам', Icon: Tags },
   // Темы чатов: опцию в groupByOptions передаёт только список проекта
   subjects: { label: 'Темы', title: 'Группировка по темам', Icon: Layers },
+  // Фичи: секции по индексу фич (фасет «Фичи», флаг features-overview); пока флаг
+  // выключен опцию в groupByOptions никто не передаёт — запись держит Record полным
+  features: { label: 'Фичи', title: 'Группировка по фичам', Icon: Sparkles },
   none: { label: 'Без', title: 'Без группировки', Icon: List },
 };
 

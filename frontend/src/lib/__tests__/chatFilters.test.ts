@@ -26,6 +26,18 @@ describe('loadChatFilters: groupBy=subjects (темы чатов)', () => {
   });
 });
 
+describe('loadChatFilters: groupBy=features (фичи)', () => {
+  it('значение переживает запись и чтение — оно в белом списке normalize', () => {
+    persistChatFilters('p-feat', { ...loadChatFilters('p-feat'), groupBy: 'features' });
+    expect(loadChatFilters('p-feat').groupBy).toBe('features');
+  });
+
+  it('старое значение из localStorage не ломается: features читается, а не откатывается в days', () => {
+    store.set('cc_chat_filters:p-feat', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    expect(loadChatFilters('p-feat').groupBy).toBe('features');
+  });
+});
+
 describe('loadChatFilters: оси вида и миграция cc_chat_view', () => {
   it('дефолт: groupBy=days, sortOrder=newest, hierarchy=true (список всегда деревом)', () => {
     const f = loadChatFilters('p1');

@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:audio-editor && npm run build:video-editor && npm run build:architecture",
     "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:audio-editor && npm run build:video-editor && npm run build:architecture",
     "lint": "eslint .",
+    "check:preload": "node scripts/check-preload-budget.mjs",
     "lint:design": "eslint --config eslint.design.config.js .",
     "test": "vitest run",
     "test:e2e": "playwright test",

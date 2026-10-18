@@ -766,6 +766,82 @@ public class FeatureProjectorTests
         runClosed.Summary.DurationMinutes.Should().Be(120, "2 часа от старта до закрытия");
     }
 
+    // ─── n4: mergedAt только у завершённой merge-задачи ──────────────────────────────────────
+
+    // Эпик закрыт (Done) БЕЗ merge-задачи → mergedAt = null (фронт: «закрыта», не «смержена»).
+    // Дефект n4: раньше сюда падал CompletedAt эпика → закрытая без мержа показывалась
+    // «смержена <дата закрытия эпика>».
+    [Fact]
+    public void Build_ЗакрытаБезМержа_MergedAtNull()
+    {
+        const string epicId = "epic-closed-no-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.Closed.Should().BeTrue("эпик Done — фича закрыта");
+        run.Summary.Should().NotBeNull("у закрытой фичи Summary есть");
+        run.Summary!.MergedAt.Should().BeNull(
+            "закрыта эпиком БЕЗ merge-задачи → mergedAt = null (не «смержена <дата эпика>»)");
+    }
+
+    // Эпик закрыт (Done) С завершённой merge-задачей → mergedAt = CompletedAt merge-задачи (как прежде).
+    [Fact]
+    public void Build_ЗакрытаСМержем_MergedAtКакПрежде()
+    {
+        const string epicId = "epic-closed-with-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 15, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, merge]);
+
+        run.Closed.Should().BeTrue();
+        run.Summary!.MergedAt.Should().Be(new DateTime(2026, 10, 18, 15, 0, 0),
+            "merge-задача Done → mergedAt = CompletedAt merge-задачи (не CompletedAt эпика)");
+    }
+
+    // Мутация к условию: вернуть старое поведение (mergedAt = epic.CompletedAt, когда мержа нет).
+    // Сломал: `: null` → `: epic.CompletedAt` → тест «ЗакрытаБезМержа_MergedAtNull» краснеет
+    // (mergedAt = CompletedAt эпика ≠ null). Без мутации зелёный.
+    [Fact]
+    public void Build_Мутация_ЗакрытаБезМержа_MergedAtNull()
+    {
+        const string epicId = "epic-mut-no-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        // Мутация: если mergedAt = epic.CompletedAt (старое) → 12:00 ≠ null → краснеет.
+        run.Summary!.MergedAt.Should().BeNull(
+            "закрыта эпиком без мержа → mergedAt = null (мутация: epic.CompletedAt красит)");
+    }
+
     // ─── Б3: порядок фич (правило v2) ────────────────────────────────────────────────────────
 
     // Порядок на трёх фичах (ждёт · идёт · спокойная) + закрытая — последней.

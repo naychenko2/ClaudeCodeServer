@@ -340,10 +340,14 @@ public sealed class FeatureProjector(TaskManager tasks)
         FeatureSummary? summary = null;
         if (closed)
         {
-            // МergedAt: CompletedAt merge-задачи; если мержа нет — CompletedAt эпика.
+            // МergedAt: CompletedAt merge-задачи; только когда merge-задача ЗАКРЫТА (Done).
+            // Закрытая эпиком БЕЗ merge-задачи (эпик Done, мержа нет) → mergedAt = null:
+            // фронт читает «закрыта» (bucket=closed && mergedAt=null), а не «смержена».
+            // (Раньше сюда падал CompletedAt эпика — дефект n4: закрытая без мержа
+            // показывалась «смержена <дата закрытия эпика>».)
             var mergedAt = merge is not null && merge.Status == TaskItemStatus.Done
                 ? merge.CompletedAt
-                : epic.CompletedAt;
+                : null;
             // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
             var firstStart = featureTasks
                 .Min(t => t.ClaudeStartedAt ?? t.CreatedAt);

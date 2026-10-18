@@ -319,23 +319,54 @@ export interface FeatureDisplayState {
   status: string;
 }
 
-export function featureDisplayState(f: FeatureIndexFeature): FeatureDisplayState {
+// Длительность в человекочитаемом виде: «25 мин», «2 ч 15 мин», «3 дн 6 ч».
+// Единый формат для статусов тревоги («стоит · … · 25 мин») и закрытых фич
+// («смержена … · 3 дн 6 ч»). Чистая функция — тестируется без React.
+export function formatDuration(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes < 1) return '1 мин';
+  if (minutes < 60) return `${Math.round(minutes)} мин`;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  if (h < 24) return m ? `${h} ч ${m} мин` : `${h} ч`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh ? `${d} дн ${rh} ч` : `${d} дн`;
+}
+
+// enrich — необязательное «кто · сколько» (макет: «стоит · Денис · 25 мин»):
+//   personaName — имя персоны (attention.personaId / now0.personaId, резолвит вызывающий);
+//   now         — «сейчас» в мс (для стабильных тестов; не задано — Date.now()).
+// Без enrich статус базовый («стоит», «ждёт вас») — поведение прежних вызовов не меняется.
+export function featureDisplayState(
+  f: FeatureIndexFeature,
+  enrich?: { now?: number; personaName?: string | null },
+): FeatureDisplayState {
+  const who = enrich?.personaName ?? null;
+  // «Сколько» — по attention.since (с какого момента стоит/ждёт); null — нет данных.
+  const sinceMin = f.attention?.since
+    ? Math.max(0, Math.round(((enrich?.now ?? Date.now()) - new Date(f.attention.since).getTime()) / 60000))
+    : null;
+  const dur = sinceMin != null ? formatDuration(sinceMin) : null;
+  const join = (base: string, w: string | null, d: string | null): string =>
+    `${base}${w ? ` · ${w}` : ''}${d ? ` · ${d}` : ''}`;
+
   // Закрыта: смержена (summary.mergedAt) или закрыта без мержа.
   if (f.bucket === 'closed') {
     const merged = f.summary?.mergedAt != null;
     return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
   }
-  // Тревога: упала (stopped) или ждёт человека (wait/merge).
+  // Тревога: упала (stopped) или ждёт человека (wait/merge) — «кто · сколько».
   if (f.attention) {
-    if (f.attention.kind === 'stopped') return { kind: 'stopped', alarm: 'stop', status: 'стоит' };
-    if (f.attention.kind === 'merge') return { kind: 'wait', alarm: 'wait', status: 'ждёт вас · мерж' };
-    return { kind: 'wait', alarm: 'wait', status: 'ждёт вас' };
+    if (f.attention.kind === 'stopped') return { kind: 'stopped', alarm: 'stop', status: join('стоит', who, dur) };
+    if (f.attention.kind === 'merge') return { kind: 'wait', alarm: 'wait', status: join('ждёт вас · мерж', null, dur) };
+    return { kind: 'wait', alarm: 'wait', status: join('ждёт вас', who, dur) };
   }
-  // Идёт: по активной стадии рельсы — доработка (loop) или работа (run).
+  // Идёт: по активной стадии рельсы — доработка (loop) или работа (run). «Кто» —
+  // исполнитель (now0.personaId); «сколько» для run/loop не ведётся (now0 без длительности).
   const active = f.rail.find(s => s.state === 'active');
-  if (active?.tone === 'loop') return { kind: 'loop', alarm: null, status: `${STAGE_NAME[active.key]} · доработка` };
-  if (active) return { kind: 'run', alarm: null, status: `${STAGE_NAME[active.key]} · идёт` };
-  return { kind: 'run', alarm: null, status: 'идёт' };
+  if (active?.tone === 'loop') return { kind: 'loop', alarm: null, status: join(`${STAGE_NAME[active.key]} · доработка`, who, null) };
+  if (active) return { kind: 'run', alarm: null, status: join(`${STAGE_NAME[active.key]} · идёт`, who, null) };
+  return { kind: 'run', alarm: null, status: join('идёт', who, null) };
 }
 
 // Живые (идёт) и вставшие (упал) статусы чата: по ним чат выводится наружу из
@@ -457,4 +488,15 @@ export function featureChipCounts(features: FeatureIndexFeature[]): Record<Featu
 // 'open' — все открытые (не закрытые), 'closed' — все закрытые, остальные — по тревоге.
 export function filterFeaturesByChip(features: FeatureIndexFeature[], chip: FeatureChip): FeatureIndexFeature[] {
   return features.filter(f => f.chips.includes(chip));
+}
+
+// Число ДРУГИХ фич, к которым принадлежит чат (кроме первой, в группе которой он
+// нарисован). Мультифичевый чат (оркестратор/куратор нескольких фич) — «ещё N» на
+// строке в группе первой фичи: след, где живут его ключевые чаты остальных фич
+// (контракт С0, п.5 — иначе вторая фича остаётся без следа своего ключевого чата).
+// Чат ровно в одной группе (первой фичи), поэтому «другие» = все связи минус первая.
+export function otherFeatureCount(chatId: string, index: FeaturesIndex): number {
+  const links = index.chats[chatId];
+  if (!links || links.length <= 1) return 0;
+  return links.length - 1;
 }

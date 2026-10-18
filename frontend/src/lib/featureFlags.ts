@@ -21,6 +21,8 @@ export const FLAGS = {
   localModelStats: 'local-model-stats',
   // Режим «Исполнение фичи» в «Плане хода»: переключатель + карточка фичи (этап 2).
   turnPlanFeatureMode: 'turn-plan-feature-mode',
+  // «Обзор фич»: фасет «Фичи» в списке сессий + плашка фичи в чате (волна 1, dark launch).
+  featuresOverview: 'features-overview',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

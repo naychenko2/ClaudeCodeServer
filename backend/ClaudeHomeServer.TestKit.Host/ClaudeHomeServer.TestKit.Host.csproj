@@ -69,6 +69,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): FakeLlmSessionAdapterFactory (internal) используется
+         ProjectSessionPersonaLayerGuardTests. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

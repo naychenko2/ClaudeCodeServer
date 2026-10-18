@@ -26,6 +26,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): PersonaLightContextTests/ProjectSessionPersonaLayerGuardTests
+         читают internal ClaudeSession.BuildBareModeArgs. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

@@ -32,6 +32,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): перенесённые Persona-тесты читают internal-члены Main-типов
+         (PersonaMemoryAutolearnService.Parse/AutolearnItem, PersonaAutomationService.InQuietWindow,
+         PersonaBindingsService.IsDatasetVisibleToUser, PersonaPromptBuilder.BuildCore). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

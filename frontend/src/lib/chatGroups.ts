@@ -2,6 +2,7 @@ import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import { sortTagsByRegistry } from './tagRegistry';
 import { sortKeyOf, ALL_FEATURE_FILTER_CHIPS, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
+import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
 
 export interface ChatGroup {
   title: string;
@@ -368,6 +369,56 @@ export function featureGroupChats(feature: FeatureIndexFeature, sessions: Sessio
     }
   }
   return { ordered, exposed, hiddenCount: Math.max(0, sessions.length - exposed.length) };
+}
+
+// Дерево группы фичи (макет features-overview.html, .fg .kids): строки для рендера
+// ChatTreeBranch. Строится по ЭФФЕКТИВНЫМ родителям (sessions — результат groupByFeatures:
+// межфичевые рёбра обрезаны, через границу фичи ребёнок всплывает корнем — контракт С0,
+// §3). Это и есть «своё дерево» группы: исполнители разных фич оркестратора не висят
+// одним деревом, а расходятся по своим группам (C1).
+//   exposedIds — какие чаты вывести (null = все): свёрнуто — ключевой + живые/вставшие;
+//     скрытый «прокалывается» (buildChatTreeRows поднимает его видимых детей), как в
+//     основном дереве. isVisible — фильтры чата (поиск/статус/персона + архивный срез).
+//   keyId — ключевой чат: его поддерево (если он корень) переставляется в начало
+//     (макет: ключевой первым).
+// Чистая функция — тестируется без React (окружение node).
+export function featureGroupTreeRows(
+  sessions: Session[],
+  keyId: string | null,
+  exposedIds: Set<string> | null,
+  opts: {
+    isVisible: (c: Session) => boolean;
+    collapsedIds: Set<string>;
+    expandedIds?: Set<string>;
+    activeId: string | null;
+    sortOrder?: ChatSortOrder;
+    bgWorkIds?: ReadonlySet<string>;
+  },
+): ChatTreeRowData[] {
+  const visible = exposedIds
+    ? (c: Session) => opts.isVisible(c) && exposedIds.has(c.id)
+    : opts.isVisible;
+  let rows = buildChatTreeRows(sessions, {
+    isVisible: visible,
+    collapsedIds: opts.collapsedIds,
+    expandedIds: opts.expandedIds,
+    activeId: opts.activeId,
+    sortOrder: opts.sortOrder,
+    bgWorkIds: opts.bgWorkIds,
+  }).rows;
+  // Ключевой чат первым: его поддерево (только если оно корень, depth 0) — в начало.
+  // Иначе (вложенный) перестановка оторвёт его от родителя — оставляем как есть.
+  if (keyId) {
+    const idx = rows.findIndex(r => r.chat.id === keyId);
+    if (idx > 0 && rows[idx].depth === 0) {
+      const d = rows[idx].depth;
+      let end = idx + 1;
+      while (end < rows.length && rows[end].depth > d) end++;
+      const subtree = rows.slice(idx, end);
+      rows = [...subtree, ...rows.slice(0, idx), ...rows.slice(end)];
+    }
+  }
+  return rows;
 }
 
 // Пункты группировки для тулбара: 'features' — только в списке проекта и при

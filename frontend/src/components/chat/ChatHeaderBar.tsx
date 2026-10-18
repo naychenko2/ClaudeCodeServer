@@ -241,8 +241,10 @@ function hasClaudeCostInfo(stats: CostStats, windows: RateWindow[]): boolean {
 // Тело поповера стоимости Claude (лимиты подписки + свёрнутая разбивка токенов/ходов).
 // Вынесено отдельно: секция поповера кольцевой пилюли. Режим оплаты здесь только читается —
 // переключатель живёт в «Модели и расход» (настройка серверная, общая на всех).
-function ClaudeCostPopoverBody({ stats, billing, windows }: {
-  stats: CostStats; billing: ClaudeBilling; windows: RateWindow[];
+// afterWindows — строка сразу под окнами лимитов, до свёрнутого расхода (строка кэша:
+// на пилюле циферблат стоит последним, и в поповере кэш идёт последней строкой списка)
+function ClaudeCostPopoverBody({ stats, billing, windows, afterWindows }: {
+  stats: CostStats; billing: ClaudeBilling; windows: RateWindow[]; afterWindows?: ReactNode;
 }) {
   const sub = billing === 'subscription';
   const [costOpen, setCostOpen] = useState(false);
@@ -278,6 +280,7 @@ function ClaudeCostPopoverBody({ stats, billing, windows }: {
           <RateRow key={w.limitType} w={w}
             pip={i < RING_WINDOWS ? <MeterPip slot={(i + 1) as 1 | 2} level={w.level} /> : undefined} />
         ))}
+      {afterWindows}
       {/* Расход по API-тарифу — справка, свёрнута одной строкой под лимитами; расхода нет — нет и строки */}
       {stats.cost > 0 && <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
         style={{
@@ -500,6 +503,9 @@ function ContextRow({ estimate, assistantName = 'Ассистент' }: { estima
   );
 }
 
+// Пустая лента для usePromptCache, когда кэша нет (стабильная ссылка — без лишних пересчётов)
+const NO_ITEMS: ChatItem[] = [];
+
 // Действия с контекстом — один ряд под чертой в конце поповера: «Сжать контекст», при
 // warn/danger рядом «Перенести в новый чат» (две альтернативы «контекст распух») и «Пороги».
 // Пояснение к сжатию — подсказкой кнопки, а не абзацем над ней.
@@ -510,11 +516,16 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 }) {
   const [showThresholds, setShowThresholds] = useState(false);
   const hasPct = estimate.pct !== undefined;
+  // Статус кэша — повод предложить перенос наравне с порогом контекста; нет ленты кэша
+  // (сторонний провайдер) — unknown
+  const cache = usePromptCache(cacheItems ?? NO_ITEMS);
 
   // Кнопка сжатия недоступна: ход идёт, компакт идёт, оценки нет, контекст только что сжат,
   // или сжимать ещё нечего (слишком мало ходов — CLI вернёт «not enough messages»)
   const compactDisabled = isWaiting || isCompacting || !hasPct || estimate.fresh || !canCompact || !online;
-  const offered = handoff && contextHandoffOffered(estimate.level) ? handoff : undefined;
+  // Перенос — одна кнопка на оба повода: контекст в warn/danger или кэш остывает/остыл
+  const cacheReason = !isWaiting && (cache.status === 'expiring' || cache.status === 'cold');
+  const offered = handoff && (contextHandoffOffered(estimate.level) || cacheReason) ? handoff : undefined;
   const compactTitle = !canCompact && !isWaiting && !isCompacting
     ? 'Пока нечего сжимать — слишком мало сообщений'
     : isWaiting && !isCompacting ? 'Дождитесь завершения текущего хода'
@@ -527,23 +538,25 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
           {compactNote}
         </div>
       )}
-      {/* flexWrap: на 320px три кнопки в строку не влезают — «Пороги» уходит вниз */}
-      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SP.sm }}>
-        <Button variant="ghost" size="xs" disabled={compactDisabled} loading={isCompacting} onClick={onCompact} title={compactTitle}>
-          {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
+      {/* Один ряд без переноса строки: при предложенном переносе «Сжать контекст» короче
+          («Сжать», полный смысл — в подсказке), «Пороги» — иконкой */}
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: SP.xs + 2 }}>
+        <Button variant="ghost" size="xs" disabled={compactDisabled} loading={isCompacting} onClick={onCompact} title={compactTitle}
+          style={{ flexShrink: 0 }}>
+          {isCompacting ? 'Сжимаю…' : offered ? 'Сжать' : 'Сжать контекст'}
         </Button>
-        {/* Путь — по статусу кэша на момент клика; нет кэша (сторонний провайдер) — холодный */}
+        {/* Главное действие ситуации — выделено. Путь — по статусу кэша на момент клика;
+            нет кэша (сторонний провайдер) — холодный */}
         {offered && (
-          <Button variant="ghost" size="xs" disabled={!offered.enabled || isCompacting} loading={offered.busy}
-            onClick={() => offered.onClick(contextHandoffWarm(cacheItems))}
-            title={offered.enabled ? HANDOFF_HINT : offered.reason}>
+          <Button variant="primary" size="xs" disabled={!offered.enabled || isCompacting} loading={offered.busy}
+            onClick={() => offered.onClick(handoffWarm(cache.status))}
+            title={offered.enabled ? HANDOFF_HINT : offered.reason} style={{ flexShrink: 0 }}>
             {HANDOFF_LABEL}
           </Button>
         )}
-        <Button variant="ghost" size="xs" onClick={() => setShowThresholds(true)} style={{ marginLeft: 'auto' }}
-          leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
-          Пороги
-        </Button>
+        <IconButton size="xs" title="Пороги контекста и кэша" onClick={() => setShowThresholds(true)} style={{ marginLeft: 'auto', flexShrink: 0 }}>
+          <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
       </div>
       {/* Причину выключенного переноса пишем и текстом: на мобиле подсказки по наведению нет */}
       {offered && !offered.enabled && offered.reason && (
@@ -691,10 +704,15 @@ export function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenSt
 // unknown (сторонний провайдер, локальный движок, история до поля) — индикатора нет вовсе.
 // Отдельного чипа нет: кэш — циферблат справа в пилюле шапки, детали — секцией её поповера.
 type KnownCacheStatus = Exclude<PromptCacheStatus, 'unknown'>;
-const CACHE_STATUS_TEXT: Record<KnownCacheStatus, string> = { warm: 'тёплый', expiring: 'скоро остынет', cold: 'остыл' };
-// Тёплый — зелёный, остывающий — тоном предупреждения, остывший — тревожным: следующий
-// ход перепишет весь кэш по полной цене записи
-const CACHE_CLOCK_COLOR: Record<KnownCacheStatus, string> = { warm: C.success, expiring: RATE_COLORS.warn.fill, cold: RATE_COLORS.danger.fill };
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+
+// Уровень строки кэша в поповере — в шкале строк лимитов (цвет значения и полосы)
+const CACHE_LEVEL: Record<KnownCacheStatus, RateWindow['level']> = { warm: 'normal', expiring: 'warn', cold: 'danger' };
+// Тёплый — нейтральный, как пипы и полосы строк в норме (кэш тёплый почти всё время, и
+// постоянный цвет в шапке был бы шумом без информации: остаток и так виден по сектору);
+// остывающий — тоном предупреждения, остывший — тревожным: следующий ход перепишет весь
+// кэш по полной цене записи. Цвет появляется, только когда есть что решать
+const CACHE_CLOCK_COLOR: Record<KnownCacheStatus, string> = { warm: RATE_COLORS.normal.fill, expiring: RATE_COLORS.warn.fill, cold: RATE_COLORS.danger.fill };
 const CACHE_TEXT_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, expiring: RATE_COLORS.warn.text, cold: RATE_COLORS.danger.text };
 
 // Циферблат 14×14 в viewBox 20: контур, тающий сектор остатка и стрелка на его кромке.
@@ -705,7 +723,7 @@ const CACHE_TEXT_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, 
 const CLOCK_C = 10;
 const CLOCK_SECTOR_R = 7;
 const CLOCK_HAND_R = 6.5;
-function CacheClock({ frac, color, cold, spin }: { frac: number; color: string; cold?: boolean; spin?: boolean }) {
+function CacheClock({ frac, color, cold, spin, size = 14 }: { frac: number; color: string; cold?: boolean; spin?: boolean; size?: number }) {
   const reducedMotion = usePrefersReducedMotion();
   const a = 2 * Math.PI * (1 - Math.min(1, Math.max(0, frac)));
   const pt = (r: number) => `${CLOCK_C + r * Math.sin(a)} ${CLOCK_C - r * Math.cos(a)}`;
@@ -713,7 +731,7 @@ function CacheClock({ frac, color, cold, spin }: { frac: number; color: string; 
   const hand = spin || cold ? `${CLOCK_C} ${CLOCK_C - CLOCK_HAND_R}` : pt(CLOCK_HAND_R);
   // Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся
   return (
-    <svg width={14} height={14} viewBox="0 0 20 20" aria-hidden shapeRendering="geometricPrecision"
+    <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden shapeRendering="geometricPrecision"
       style={{ flexShrink: 0, display: 'block' }}>
       <circle cx={CLOCK_C} cy={CLOCK_C} r={8.5} fill="none" strokeWidth={1.8}
         strokeDasharray={cold ? '3 2.2' : undefined} style={{ stroke: color }} />
@@ -820,7 +838,7 @@ function CacheTipLine({ items, isWaiting }: { items: ChatItem[]; isWaiting: bool
   return (
     <TipRow label={label} value={value} icon={
       <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
-        cold={!isWaiting && status === 'cold'} spin={isWaiting} />} />
+        cold={!isWaiting && status === 'cold'} spin={isWaiting} size={12} />} />
   );
 }
 
@@ -836,65 +854,48 @@ function TipRow({ icon, label, value }: { icon: ReactNode; label: string; value?
   );
 }
 
-// Тело попапа: срок, остаток, объём в кэше, последний промах и цена перезаписи остывшего кэша.
-// Пока идёт ход (isWaiting), остаток и прогноз перезаписи скрыты — как на лице пилюли:
-// они считаются от якоря прошлого хода и к начатому ходу уже не относятся
-function PromptCacheDetails({ items, state, billing, isWaiting, handoff }: { items: ChatItem[]; state: PromptCacheState; billing: ClaudeBilling; isWaiting: boolean; handoff?: HandoffControl }) {
+// Кэш промпта в поповере — обычная строка общего списка (как контекст и окна лимитов):
+// циферблат на месте пипа, остаток значением справа, полоса — доля оставшегося срока.
+// Строка только сообщает: остывает — чем выгоден ход сейчас, остыл — цена следующего хода.
+// Действие (перенос в новый чат) — в общем ряду действий внизу поповера (ContextActions).
+// Срок, промах и оговорка о цене — подсказкой строки. Пока идёт ход, остаток и прогноз
+// скрыты: они от якоря прошлого хода. Свой компонент — тикает по таймеру только он
+function PromptCacheRow({ items, billing, isWaiting }: {
+  items: ChatItem[]; billing: ClaudeBilling; isWaiting: boolean;
+}) {
+  const state = usePromptCache(items);
   const { status, ttl, prefixTokens, lastMiss, remainingMs } = state;
   const cold = status === 'cold';
   const rewrite = useMemo(
     () => (cold && !isWaiting && ttl && prefixTokens ? rewriteCostUsd(items, ttl, prefixTokens) : undefined),
     [items, cold, isWaiting, ttl, prefixTokens]);
   if (status === 'unknown') return null;
-  const note = cacheNoteText(status, isWaiting, {
-    tokens: prefixTokens !== undefined ? fmtTokens(prefixTokens) : undefined,
-    usd: rewrite !== undefined ? fmtUsd(rewrite) : undefined,
-    apiTariff: billing === 'subscription',
-  });
-  return (
-    <>
-      <div style={badgeTitleStyle}>Кэш промпта</div>
-      <BadgeRow k="Состояние" v={isWaiting ? 'идёт ход' : CACHE_STATUS_TEXT[status]} />
-      {!isWaiting && !cold && remainingMs !== undefined && <BadgeRow k="Осталось" v={cacheLeftText(remainingMs)} />}
-      {ttl && <BadgeRow k="Срок кэша" v={ttl === '1h' ? '1 час' : '5 минут'} />}
-      {/* prefixTokens — неизменное начало запроса: системный промпт, инструменты и история */}
-      {prefixTokens !== undefined && <BadgeRow k="В кэше" v={`${fmtTokens(prefixTokens)} токенов`} />}
-      <div style={badgeSectionStyle}>Последний промах</div>
-      <div style={{ ...meterSubStyle, color: lastMiss ? C.textSecondary : C.textMuted }}>
-        {lastMiss
-          ? <>{lastMiss.label}{lastMiss.tokens ? ` · переписано ${fmtTokens(lastMiss.tokens)} токенов` : ''}</>
-          : 'в этом чате не было'}
-      </div>
-      {/* База цены — стоимость прошлого хода целиком: сабагенты на других моделях её искажают,
-          поэтому оговорка — подсказкой, а не текстом плашки */}
-      <div title={rewrite !== undefined ? 'Цена — ориентир: сабагенты на других моделях могут её занижать' : undefined}
-        style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.bgInset, borderRadius: R.md }}>
-        {note}
-      </div>
-      {/* Перенос: новый чат стартует с записки о разговоре и не переписывает историю в кэш.
-          Выключенная кнопка объясняет причину подсказкой */}
-      {handoff && (
-        <>
-          <Button size="sm" variant="ghostFilled" fullWidth style={{ marginTop: SP.sm }}
-            disabled={!handoff.enabled} loading={handoff.busy} onClick={() => handoff.onClick(handoffWarm(status))}
-            title={handoff.enabled ? HANDOFF_HINT : handoff.reason}>
-            {HANDOFF_LABEL}
-          </Button>
-          {/* Причину пишем и текстом: на мобиле подсказки по наведению нет */}
-          {!handoff.enabled && handoff.reason && (
-            <div style={{ ...meterSubStyle, marginTop: SP.xs, color: C.textMuted }}>{handoff.reason}</div>
-          )}
-        </>
-      )}
-    </>
-  );
-}
 
-// Детали кэша — секцией поповера пилюли шапки
-function PromptCacheSection({ items, billing, isWaiting, style, handoff }: { items: ChatItem[]; billing: ClaudeBilling; isWaiting: boolean; style: React.CSSProperties; handoff?: HandoffControl }) {
-  const state = usePromptCache(items);
-  if (state.status === 'unknown') return null;
-  return <div style={style}><PromptCacheDetails items={items} state={state} billing={billing} isWaiting={isWaiting} handoff={handoff} /></div>;
+  const level = isWaiting ? 'normal' : CACHE_LEVEL[status];
+  const value = isWaiting ? 'идёт ход' : cold ? 'остыл' : remainingMs !== undefined ? cacheLeftText(remainingMs) : '—';
+  const tokens = prefixTokens !== undefined ? fmtTokens(prefixTokens) : undefined;
+  // Подписи строки — со строчной и без точки, как «сброс через…» у окон лимитов
+  const sub = isWaiting ? 'обновится после хода'
+    : cold ? lowerFirst(cacheNoteText(status, false, { tokens, usd: rewrite !== undefined ? fmtUsd(rewrite) : undefined, apiTariff: billing === 'subscription' }).replace(/\.$/, ''))
+    : status === 'expiring' ? 'ход до остывания — в 10 раз дешевле'
+    : tokens ? `${tokens} токенов в кэше` : undefined;
+  const title = [
+    ttl && `Срок кэша — ${ttl === '1h' ? '1 час' : '5 минут'}, каждый ход продлевает его`,
+    lastMiss && `Последний промах: ${lastMiss.label}${lastMiss.tokens ? `, переписано ${fmtTokens(lastMiss.tokens)} токенов` : ''}`,
+    rewrite !== undefined && 'Цена — ориентир: сабагенты на других моделях могут её занижать',
+  ].filter(Boolean).join('\n');
+
+  return (
+    <div title={title || undefined}>
+      <MeterRow
+        pip={<CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
+          cold={!isWaiting && cold} spin={isWaiting} size={12} />}
+        label="Кэш" value={value} valueColor={RATE_COLORS[level].text}
+        pct={!isWaiting && !cold ? Math.round(cacheFrac(state) * 100) : undefined}
+        fill={RATE_COLORS[level].fill}
+        sub={sub && <div style={{ ...meterSubStyle, color: level === 'normal' ? C.textMuted : RATE_COLORS[level].text }}>{sub}</div>} />
+    </div>
+  );
 }
 
 // Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
@@ -1057,6 +1058,11 @@ export function RingPillBadge(props: {
   const sectionDivider: React.CSSProperties = {
     marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.bgInset}`,
   };
+  // Строка кэша — последняя в общем списке поповера (под окнами лимитов)
+  const windowsList = showCost && !isCliProvider && windows.length > 0;
+  const cacheRow = cacheItems
+    ? <PromptCacheRow items={cacheItems} billing={billing} isWaiting={props.isWaiting} />
+    : null;
 
   return (
     <BadgeShell
@@ -1094,12 +1100,15 @@ export function RingPillBadge(props: {
       {/* Строки идут в порядке колец пилюли: контекст (внешнее) → окна лимитов. У Claude с
           лимитами это один список без заголовков секций; у CLI-провайдера и оплаты по ключу
           ниже идёт своя секция расхода */}
-      {(showCtx || (showCost && !isCliProvider && windows.length > 0)) && (
+      {(showCtx || windowsList) && (
         <div style={wfActive ? sectionDivider : undefined}>
           {showCtx && <ContextRow estimate={estimate} assistantName={props.assistantName} />}
-          {showCost && !isCliProvider && windows.length > 0 && <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} />}
+          {windowsList
+            ? <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} afterWindows={cacheRow} />
+            : cacheRow}
         </div>
       )}
+      {!showCtx && !windowsList && cacheRow && <div style={wfActive ? sectionDivider : undefined}>{cacheRow}</div>}
       {showCost && (isCliProvider || windows.length === 0) && (
         <div style={(wfActive || showCtx) ? sectionDivider : undefined}>
           {isCliProvider
@@ -1109,7 +1118,6 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {cacheItems && <PromptCacheSection items={cacheItems} billing={billing} isWaiting={props.isWaiting} style={sectionDivider} handoff={props.handoff} />}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />

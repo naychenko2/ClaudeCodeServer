@@ -27,9 +27,10 @@ function humanizeId(id: string): string {
     .join(' ') || id;
 }
 
-// Данные диалога согласия из записи установки. Вклады (contributes) и флаг «обязательный»
-// в DTO бэка нет — вкладов не показываем, required считаем false (бэк всё равно проверит
-// обязательные секреты в grant и ответит 400).
+// Данные диалога согласия из записи установки. Вклады (contributes) в DTO бэка нет —
+// не показываем. Флаг «обязательный» (В2) DTO тоже не отдаёт (только {name, set, updatedAt}),
+// поэтому считаем ВСЕ секреты обязательными — строгое чтение В2: пока любой не задан,
+// «Установить» заблокирован. (Открытый вопрос: бэку стоит выводить required из манифеста.)
 function toConsentData(info: PluginInfo, mode: 'install' | 'modify'): PluginConsentData {
   return {
     id: info.id,
@@ -39,7 +40,12 @@ function toConsentData(info: PluginInfo, mode: 'install' | 'modify'): PluginCons
     sha256: info.sha256 ? info.sha256.slice(0, 8) : undefined,
     contributions: [],
     requested: info.requested,
-    secrets: info.secrets.map(s => ({ name: s.name, required: false, set: s.set })),
+    secrets: info.secrets.map(s => ({
+      name: s.name,
+      required: true,
+      set: s.set,
+      setAt: s.updatedAt ?? null,
+    })),
     granted: mode === 'modify' ? info.granted : undefined,
   };
 }
@@ -393,6 +399,8 @@ export function PluginsProjectSection({ project, onUpdated }: {
           mode={consent.mode}
           onClose={() => setConsent(null)}
           onSubmit={submitConsent}
+          // «Сохранить» в строке секрета — PUT /secrets/{name}; возвращает updatedAt для бейджа
+          onSaveSecret={async (name, value) => (await api.plugins.setSecret(consent.data.id, name, value)).updatedAt}
         />
       )}
 

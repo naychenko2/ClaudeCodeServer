@@ -14,11 +14,13 @@ import {
 
 export interface PluginConsentSecret {
   name: string;
+  // «Обязательный» (решение В2 макетов): не заданный блокирует кнопку «Установить».
+  // Бэкенд-DTO его не отдаёт (только {name, set, updatedAt}), поэтому источник —
+  // манифест; пока бэк не выводит флаг, фронт считает все секреты обязательными.
   required: boolean;
-  // Текущее состояние: значение введено? (режим «изменить» — с сервера;
-  // режим «установить» — всегда false, секрет ещё не вводился)
+  // Значение введено на сервере (режим «изменить» — из DTO; «установить» — false)
   set?: boolean;
-  // Когда введено (режим «изменить»): для бейджа «задан · {дата}»
+  // Когда введено: ISO-дата для бейджа «задан · {дата}»
   setAt?: string | null;
 }
 
@@ -51,8 +53,57 @@ interface Props {
   // Режим: «установить» (при установке) или «изменить» (со строки установленного)
   mode: 'install' | 'modify';
   onClose: () => void;
-  // Выдать права (подмножество requested) + значения введённых секретов
+  // Выдать права (подмножество requested) + подтверждённые значения секретов
   onSubmit: (permissions: string[], secrets: { name: string; value: string }[]) => Promise<void>;
+  // Сохранить один секрет (PUT /secrets/{name}); возвращает updatedAt.
+  // Родитель реализует через api.plugins.setSecret; не передан — «Сохранить» лишь
+  // подтверждает значение локально (оно уедет с grant).
+  onSaveSecret?: (name: string, value: string) => Promise<string>;
+}
+
+// === Чистые хелперы (тестируются в ConsentDialog.test.ts) ===
+
+// Умолчание галок (решение В1 макетов): все права отмечены, кроме net:* (сняты).
+// Режим «изменить» — по уже выданным (granted).
+export function defaultCheckedState(
+  requested: string[],
+  mode: 'install' | 'modify',
+  granted?: string[],
+): Record<string, boolean> {
+  const init: Record<string, boolean> = {};
+  for (const p of requested) {
+    if (mode === 'modify') init[p] = (granted ?? []).includes(p);
+    else init[p] = !isNetPermission(p);
+  }
+  return init;
+}
+
+// Решение В2: первый обязательный секрет, который ещё не «задовлен». null — ничего не
+// блокирует. «Задовлен» = задан на сервере (set), только что сохранён в этой сессии
+// (justSaved) или (в режиме «установить») есть подтверждённое значение (values) — оно
+// уедет с grant.
+export function findBlockingSecret(
+  secrets: PluginConsentSecret[],
+  values: Record<string, string>,
+  justSaved: Record<string, string>,
+  mode: 'install' | 'modify',
+): PluginConsentSecret | null {
+  for (const s of secrets) {
+    if (!s.required) continue;
+    const satisfied = !!s.set
+      || justSaved[s.name] !== undefined
+      || (mode === 'install' && (values[s.name] ?? '').trim().length > 0);
+    if (!satisfied) return s;
+  }
+  return null;
+}
+
+// Подпись основной кнопки по числу отмеченных прав (макет, экран 2).
+export function submitLabelFor(mode: 'install' | 'modify', checkedCount: number, totalCount: number): string {
+  if (mode === 'modify') return 'Сохранить';
+  if (checkedCount === 0) return 'Установить без прав';
+  if (checkedCount === totalCount) return 'Установить';
+  return `Установить · прав ${checkedCount} из ${totalCount}`;
 }
 
 // Инициалы для плитки: первые буквы слов имени (до 2)
@@ -87,23 +138,24 @@ function shortDate(iso: string | null | undefined): string | null {
 
 // === Диалог согласия: права с чекбоксами, секреты «задан/не задан»,
 // === подпись основной кнопки по числу выданных прав.
-export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
+export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret }: Props) {
   const isMobile = useIsMobile();
 
-  // Умолчание галок (В1): все права, кроме net:*, отмечены; net:* — снят.
-  // Режим «изменить» — по уже выданным (granted).
-  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    for (const p of data.requested) {
-      if (mode === 'modify') init[p] = (data.granted ?? []).includes(p);
-      else init[p] = !isNetPermission(p);
-    }
-    return init;
-  });
-  // Введённые значения секретов (локально, серверу уходят только при отправке)
-  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  // Умолчание галок (В1) / в «изменить» — по granted
+  const [checked, setChecked] = useState<Record<string, boolean>>(
+    () => defaultCheckedState(data.requested, mode, data.granted),
+  );
+  // Черновик поля ввода: что человек печатает прямо сейчас. Чистится по «Сохранить»/крестику,
+  // поэтому при повторном открытии строки поле всегда пустое.
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  // Подтверждённые значения (по «Сохранить»): уезжают на сервер с grant
+  const [values, setValues] = useState<Record<string, string>>({});
+  // name → updatedAt после успешного PUT в этой сессии (бейдж «задан · {дата}»)
+  const [justSaved, setJustSaved] = useState<Record<string, string>>({});
   // Какой секрет развёрнут в поле ввода
   const [expandedSecret, setExpandedSecret] = useState<string | null>(null);
+  // Какой секрет сейчас сохраняется (PUT в полёте)
+  const [savingSecret, setSavingSecret] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,26 +165,59 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
   );
   const totalCount = data.requested.length;
 
-  // V2: обязательный секрет, не заданный владельцем, блокирует установку.
-  // В режиме «установить» — пока в поле нет значения; в «изменить» — по признаку set.
-  const blockingSecret = useMemo(() => {
-    for (const s of data.secrets) {
-      if (!s.required) continue;
-      const hasValue = mode === 'install'
-        ? (secretValues[s.name] ?? '').trim().length > 0
-        : !!s.set;
-      if (!hasValue) return s;
-    }
-    return null;
-  }, [data.secrets, secretValues, mode]);
+  // V2: обязательный секрет, не задовленный, блокирует «Установить» (не «Сохранить»).
+  const blockingSecret = useMemo(
+    () => findBlockingSecret(data.secrets, values, justSaved, mode),
+    [data.secrets, values, justSaved, mode],
+  );
 
-  const submitLabel = mode === 'modify'
-    ? 'Сохранить'
-    : checkedCount === 0
-      ? 'Установить без прав'
-      : checkedCount === totalCount
-        ? 'Установить'
-        : `Установить · прав ${checkedCount} из ${totalCount}`;
+  const submitLabel = submitLabelFor(mode, checkedCount, totalCount);
+
+  // «Задан» для бейджа: на сервере, сохранён в этой сессии или (установить) подтверждён.
+  const isSet = (s: PluginConsentSecret): boolean =>
+    !!s.set || justSaved[s.name] !== undefined
+    || (mode === 'install' && (values[s.name] ?? '').trim().length > 0);
+
+  // Дата бейджа: из этой сессии (PUT) или из DTO
+  const setAtOf = (s: PluginConsentSecret): string | null =>
+    shortDate(justSaved[s.name] ?? s.setAt ?? null);
+
+  // «Сохранить» в строке секрета: подтвердить значение (уедет с grant) + PUT (плагин в
+  // обоих режимах уже установлен). Значение из поля уходит из состояния — поле пустеет.
+  const saveSecret = async (s: PluginConsentSecret) => {
+    const v = (draft[s.name] ?? '').trim();
+    if (!v) return;
+    setSavingSecret(s.name);
+    setError(null);
+    try {
+      setValues(prev => ({ ...prev, [s.name]: v }));
+      if (onSaveSecret) {
+        const updatedAt = await onSaveSecret(s.name, v);
+        setJustSaved(prev => ({ ...prev, [s.name]: updatedAt }));
+      }
+      setDraft(prev => {
+        const n = { ...prev };
+        delete n[s.name];
+        return n;
+      });
+      setExpandedSecret(null);
+    } catch (e: unknown) {
+      // Сервисные 400/403/409 — текстом сервера; значение секрета в нём не бывает
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить секрет');
+    } finally {
+      setSavingSecret(null);
+    }
+  };
+
+  // Крестик: свернуть строку и выбросить черновик (значение не подтверждено)
+  const collapseSecret = (name: string) => {
+    setDraft(prev => {
+      const n = { ...prev };
+      delete n[name];
+      return n;
+    });
+    setExpandedSecret(null);
+  };
 
   const submit = async () => {
     setLoading(true);
@@ -140,8 +225,8 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
     try {
       const permissions = data.requested.filter(p => checked[p]);
       const secrets = data.secrets
-        .filter(s => (secretValues[s.name] ?? '').trim().length > 0)
-        .map(s => ({ name: s.name, value: secretValues[s.name].trim() }));
+        .filter(s => (values[s.name] ?? '').trim().length > 0)
+        .map(s => ({ name: s.name, value: values[s.name].trim() }));
       await onSubmit(permissions, secrets);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Не получилось');
@@ -183,8 +268,10 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
             size="md"
             fullWidth={isMobile}
             loading={loading}
-            disabled={!!blockingSecret}
-            title={blockingSecret ? `Сначала задайте обязательный секрет ${blockingSecret.name}` : undefined}
+            disabled={mode === 'install' && !!blockingSecret}
+            title={mode === 'install' && blockingSecret
+              ? `Сначала задайте обязательный секрет ${blockingSecret.name}`
+              : undefined}
             onClick={() => void submit()}
           >
             {submitLabel}
@@ -265,10 +352,10 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
           <SectionLabel>Секреты</SectionLabel>
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
             {data.secrets.map(s => {
-              const value = secretValues[s.name] ?? '';
               const expanded = expandedSecret === s.name;
-              const isSet = mode === 'install' ? value.trim().length > 0 : !!s.set;
-              const date = shortDate(s.setAt);
+              const set = isSet(s);
+              const date = setAtOf(s);
+              const saving = savingSecret === s.name;
               return (
                 <div key={s.name} style={{
                   background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
@@ -278,23 +365,25 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
                     <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {s.name}
                     </span>
-                    {isSet
+                    {set
                       ? <Badge tone="success" dot>задан{date ? ` · ${date}` : ''}</Badge>
                       : <Badge tone="warning" dot>не задан</Badge>}
                     <Button
                       variant="ghost" size="xs"
+                      disabled={saving}
                       onClick={() => setExpandedSecret(expanded ? null : s.name)}
                     >
-                      {isSet ? 'Заменить' : 'Задать'}
+                      {set ? 'Заменить' : 'Задать'}
                     </Button>
                   </div>
                   {expanded && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, padding: '0 12px 10px' }}>
                       <input
                         type="password"
-                        value={value}
-                        onChange={e => setSecretValues(v => ({ ...v, [s.name]: e.target.value }))}
+                        value={draft[s.name] ?? ''}
+                        onChange={e => setDraft(v => ({ ...v, [s.name]: e.target.value }))}
                         placeholder="••••••••••••••••"
+                        aria-label={`Значение секрета ${s.name}`}
                         style={{
                           flex: 1, minWidth: 0, height: 34, padding: '0 12px',
                           borderRadius: R.xl, border: `1px solid ${C.border}`,
@@ -302,11 +391,16 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
                           fontFamily: FONT.mono, fontSize: FS.sm, outline: 'none',
                         }}
                       />
-                      <Button variant="primary" size="sm" onClick={() => { setExpandedSecret(null); }}>
+                      <Button
+                        variant="primary" size="sm"
+                        loading={saving}
+                        disabled={(draft[s.name] ?? '').trim().length === 0}
+                        onClick={() => void saveSecret(s)}
+                      >
                         Сохранить
                       </Button>
                       <button
-                        onClick={() => setExpandedSecret(null)}
+                        onClick={() => collapseSecret(s.name)}
                         style={{
                           width: 28, height: 28, borderRadius: R.md, border: 'none', background: 'transparent',
                           color: C.textMuted, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -337,7 +431,7 @@ export function ConsentDialog({ data, mode, onClose, onSubmit }: Props) {
         </div>
       </div>
 
-      {/* Ошибка (валидация/установка) */}
+      {/* Ошибка (валидация/установка): текст сервера, значения секретов в нём не бывает */}
       {error && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: SP.sm,

@@ -566,6 +566,8 @@ export function setStoredToken(token: string) {
 export interface PluginSecretView {
   name: string;
   set: boolean;
+  // Время последнего изменения (шаг 3.3): для бейджа «задан · {дата}». Значение не едет.
+  updatedAt?: string | null;
 }
 export interface PluginInfo {
   id: string;
@@ -882,6 +884,19 @@ export const api = {
       request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/grant`, {
         method: 'POST', body: JSON.stringify({ permissions, secrets }),
       }),
+    // Значение секрета (шаг 3.3, UI 3.4): PUT /secrets/{name}, значение в теле.
+    // Сервер вернул {name, set, updatedAt} — значение наружу не уходит.
+    setSecret: (id: string, name: string, value: string) =>
+      request<{ name: string; set: boolean; updatedAt: string }>(
+        `/plugins/${pluginUrlId(id)}/secrets/${encodeURIComponent(name)}`,
+        { method: 'PUT', body: JSON.stringify({ value }) },
+      ),
+    // Убрать значение секрета: DELETE /secrets/{name} → {name, set:false}
+    deleteSecret: (id: string, name: string) =>
+      request<{ name: string; set: boolean }>(
+        `/plugins/${pluginUrlId(id)}/secrets/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
     // Удалить пакет и запись (каскад)
     uninstall: (id: string) =>
       request<{ id: string; removed: boolean }>(`/plugins/${pluginUrlId(id)}/uninstall`, { method: 'POST' }),

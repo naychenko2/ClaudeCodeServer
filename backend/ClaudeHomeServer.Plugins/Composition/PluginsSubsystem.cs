@@ -50,5 +50,11 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // список обработчиков (Notes/Tasks) резолвится DI'ем из вертикалей-владельцев.
         // PluginBridgeController — ApplicationPart (Web SDK), регистрируется MVC'ом.
         services.AddSingleton<PluginBridge>();
+        // Прокси net:{host} (шаг 3.3): обработчик net.fetch. Stateless — singleton;
+        // HttpClient — shared-инстанс (IHttpClientFactory не нужен: один клиент на инстанс).
+        services.AddSingleton<PluginNetProxy>(sp => new PluginNetProxy(
+            sp.GetRequiredService<PluginSecretsStore>(), new HttpClient()));
+        // Обработчик прав: мост резолвит IEnumerable<IPluginCapability> (net: + Notes/Tasks).
+        services.AddSingleton<IPluginCapability>(sp => sp.GetRequiredService<PluginNetProxy>());
     }
 }

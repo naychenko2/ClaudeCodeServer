@@ -145,9 +145,11 @@ public class PluginsController(
             var oldSecretNames = record.Secrets.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
             record.Granted = req.Permissions;
             // M7: значения секретов — в per-owner архиве plugin-secrets.json, в installed.json
-            // остаётся только имя + признак «заполнен» (Set), без значения.
+            // остаётся только имя + признак «заполнен» (Set) + время изменения (UpdatedAt, шаг 3.3),
+            // без значения.
+            var now = DateTime.UtcNow;
             record.Secrets = req.Secrets
-                .Select(s => new PluginInstallSecret { Name = s.Name, Set = true })
+                .Select(s => new PluginInstallSecret { Name = s.Name, Set = true, UpdatedAt = now })
                 .ToList();
 
             // minor 5: секреты, выданные ранее, но НЕ в этом grant — убрать их значения из
@@ -229,6 +231,91 @@ public class PluginsController(
         if (!found) return NotFound();
         return Ok(new { id = pluginId, enabled });
     }
+
+    // --- PUT /api/plugins/{id}/secrets/{name} — значение секрета (шаг 3.3, для UI 3.4) ---
+    //
+    // Значение в теле; user JWT (сервисный → 403). Значение — в per-owner архиве
+    // plugin-secrets.json (PluginSecretsStore), в installed.json — имя + set + updatedAt.
+    // Имя обязано быть заявлено в манифесте (requires.secrets) и покрыто правом secret:{name}.
+
+    [HttpPut("{id}/secrets/{name}")]
+    public IActionResult PutSecret(string id, string name, [FromBody] PluginSecretValueRequest req)
+    {
+        var gate = Gate(); if (gate is not null) return gate;
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: секрет вводит только пользовательский токен" });
+
+        var pluginId = NormalizeId(id);
+        var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == pluginId);
+        if (record is null) return NotFound();
+
+        // Имя секрета — из манифеста (requires.secrets) и покрыто правом secret:{name} (minor 4).
+        var (manifest, _) = PluginInstaller.ReadManifest(store.PackageDir(UserId, pluginId, record.Version));
+        var declared = manifest?.Contributes?.Requires?.Secrets
+            ?.Select(s => s.Name).ToHashSet(StringComparer.Ordinal) ?? [];
+        if (!declared.Contains(name, StringComparer.Ordinal))
+            return BadRequest(new { error = $"Секрет не заявлен в манифесте (requires.secrets): {name}" });
+        if (!record.Requested.Contains($"secret:{name}", StringComparer.Ordinal))
+            return BadRequest(new { error = $"Секрет не покрыт запрошенным правом secret:{name}" });
+
+        // Значение — в per-owner архиве; в запись установки — set + updatedAt (load→save под lock).
+        secrets!.Set(UserId, pluginId, name, req.Value);
+        var now = DateTime.UtcNow;
+        store!.Update(UserId, records =>
+        {
+            var rec = records.FirstOrDefault(r => r.Id == pluginId);
+            if (rec is not null)
+            {
+                var s = rec.Secrets.FirstOrDefault(x => x.Name == name);
+                if (s is null)
+                    rec.Secrets.Add(new PluginInstallSecret { Name = name, Set = true, UpdatedAt = now });
+                else
+                {
+                    s.Set = true;
+                    s.UpdatedAt = now;
+                }
+            }
+            return records;
+        });
+        return Ok(new { name, set = true, updatedAt = now });
+    }
+
+    // --- DELETE /api/plugins/{id}/secrets/{name} — убрать значение секрета (шаг 3.3) ---
+
+    [HttpDelete("{id}/secrets/{name}")]
+    public IActionResult DeleteSecret(string id, string name)
+    {
+        var gate = Gate(); if (gate is not null) return gate;
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: секрет вводит только пользовательский токен" });
+
+        var pluginId = NormalizeId(id);
+        var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == pluginId);
+        if (record is null) return NotFound();
+
+        secrets!.RemoveSecret(UserId, pluginId, name);
+        store!.Update(UserId, records =>
+        {
+            var rec = records.FirstOrDefault(r => r.Id == pluginId);
+            if (rec is not null)
+            {
+                var s = rec.Secrets.FirstOrDefault(x => x.Name == name);
+                if (s is not null)
+                {
+                    s.Set = false;
+                    s.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+            return records;
+        });
+        return Ok(new { name, set = false });
+    }
+}
+
+/// <summary>Тело <c>PUT /api/plugins/{id}/secrets/{name}</c> (шаг 3.3): значение секрета.</summary>
+public class PluginSecretValueRequest
+{
+    public string Value { get; set; } = "";
 }
 
 // Исход grant-операции (minor 1: возвращается из PluginStore.Update<T>, а не список записей).

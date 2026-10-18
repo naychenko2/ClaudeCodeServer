@@ -17,7 +17,8 @@ public class PluginResponse
     [JsonPropertyName("source")] public string Source { get; set; } = "";
     [JsonPropertyName("secrets")] public List<PluginSecretView> Secrets { get; set; } = [];
 
-    // Из записи установки: значения секретов не несутся, только имя + признак «заполнен».
+    // Из записи установки: значения секретов не несутся, только имя + признак «заполнен»
+    // + время последнего изменения (шаг 3.3: {name, set, updatedAt}).
     public static PluginResponse From(PluginInstall record) => new()
     {
         Id = record.Id,
@@ -28,14 +29,18 @@ public class PluginResponse
         Enabled = record.Enabled,
         Source = record.Source,
         Secrets = record.Secrets
-            .Select(s => new PluginSecretView { Name = s.Name, Set = s.Set })
+            .Select(s => new PluginSecretView { Name = s.Name, Set = s.Set, UpdatedAt = s.UpdatedAt })
             .ToList(),
     };
 }
 
-/// <summary>Секрет в ответе: имя (из манифеста) + признак «значение введено» (без самого значения).</summary>
+/// <summary>
+/// Секрет в ответе: имя (из манифеста) + признак «значение введено» + время последнего
+/// изменения (шаг 3.3). Значение секрета наружу не уходит никогда.
+/// </summary>
 public class PluginSecretView
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("set")] public bool Set { get; set; }
+    [JsonPropertyName("updatedAt")] public DateTime? UpdatedAt { get; set; }
 }

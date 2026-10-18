@@ -49,6 +49,13 @@ public class BackupRoundTripTests : IDisposable
         // M7: секреты плагинов — per-owner архив; в основной (облачный) архив не едет.
         File.WriteAllText(Path.Combine(DataDir, "plugin-secrets.json"),
             """{ "owner-a": { "local-a/pkg": { "LINEAR_TOKEN": "секрет-плагина" } } }""");
+        // Запись установки (шаг 3.3): в installed.json — имя + set + updatedAt, БЕЗ значения
+        // (значение — в plugin-secrets.json). installed.json в основной архив едет, поэтому
+        // значение секрета в нём не должно просочиться.
+        var pluginsOwner = Path.Combine(DataDir, "plugins", "owner-a");
+        Directory.CreateDirectory(pluginsOwner);
+        File.WriteAllText(Path.Combine(pluginsOwner, "installed.json"),
+            """[{"id":"local-a/pkg","version":"1.0.0","sha256":"abc","requested":["secret:LINEAR_TOKEN"],"granted":["secret:LINEAR_TOKEN"],"enabled":true,"source":"draft:pkg","secrets":[{"name":"LINEAR_TOKEN","set":true,"updatedAt":"2026-10-18T00:00:00Z"}]}]""");
         // Транскрипт стороннего провайдера — единственный источник --resume для таких чатов
         var transcripts = Path.Combine(DataDir, "claude-profiles", "glm", "projects", "C--repo");
         Directory.CreateDirectory(transcripts);
@@ -118,9 +125,11 @@ public class BackupRoundTripTests : IDisposable
         // Транскрипты профилей нужны для --resume и восстанавливаются только отсюда
         entries.Should().Contain(e => e.Contains("claude-profiles/glm/projects/"));
 
-        // Основной архив уезжает в облачную папку — ни креденшалов, ни секретов в нём
+        // Основной архив уезжает в облачную папку — ни креденшалов, ни секретов в нём.
+        // Синканные plugins профиля CLI (claude-profiles/**/plugins) — за бортом; data/plugins/
+        // (установки владельца, шаг 3.3) — в архив едет (installed.json без значений секретов).
         entries.Should().NotContain(e => e.Contains(".credentials.json"));
-        entries.Should().NotContain(e => e.Contains("plugins/"));
+        entries.Should().NotContain(e => e.StartsWith("claude-profiles/") && e.Contains("/plugins/"));
         entries.Should().NotContain("jwt-secret.txt");
         entries.Should().NotContain("vapid-keys.json");
 
@@ -159,6 +168,21 @@ public class BackupRoundTripTests : IDisposable
         var secrets = Directory.GetFiles(SecretsDir, "*.zip").Should().ContainSingle().Subject;
         EntriesOf(secrets).Should().Contain("data/plugin-secrets.json",
             "plugin-secrets.json — в зашифрованном архиве секретов (M7)");
+
+        // installed.json (в основном архиве) — метаданные секрета (name/set/updatedAt, шаг 3.3),
+        // но НЕ значение: M7 держит значение в plugin-secrets.json, а не в installed.json.
+        main.Should().Contain("plugins/owner-a/installed.json",
+            "installed.json — в основном архиве (метаданные установки)");
+        using (var zip = ZipFile.OpenRead(result.ArchivePath!))
+        {
+            var entry = zip.GetEntry("plugins/owner-a/installed.json")!;
+            using var stream = entry.Open();
+            using var reader = new StreamReader(stream);
+            var installed = reader.ReadToEnd();
+            installed.Should().Contain("LINEAR_TOKEN", "имя секрета в installed.json");
+            installed.Should().Contain("updatedAt", "время изменения секрета в installed.json (шаг 3.3)");
+            installed.Should().NotContain("секрет-плагина", "значение секрета НЕ в installed.json (M7)");
+        }
     }
 
     [Fact]

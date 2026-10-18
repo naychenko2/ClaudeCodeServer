@@ -472,6 +472,94 @@ public class PluginsControllerTests : IDisposable
         obj.StatusCode.Should().Be(403);
     }
 
+    // --- Секреты (шаг 3.3): PUT/DELETE /secrets/{name}, значение не уходит наружу ---
+
+    // PUT /secrets/{name}: сервисный JWT → 403 (секрет вводит только пользовательский токен).
+    [Fact]
+    public void PutSecret_СервисныйJwt_Отдаёт403()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+
+        var res = ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
+            new PluginSecretValueRequest { Value = "super-secret" });
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
+    }
+
+    // PUT /secrets/{name}: user JWT → 200, значение в store, в списке — {name,set,updatedAt}
+    // без значения (M7: значение не в installed.json, а в plugin-secrets.json).
+    [Fact]
+    public void PutSecret_UserJwt_ЗаписываетЗначение_СписокБезЗначения()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+
+        var res = ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
+            new PluginSecretValueRequest { Value = "super-secret-value" });
+        res.Should().BeOfType<OkObjectResult>();
+
+        // Значение записано в per-owner архив.
+        _secrets.Get(OwnerA, "local-a/pkg", "LINEAR_TOKEN").Should().Be("super-secret-value");
+
+        // Список: {name, set, updatedAt} — без значения.
+        var ok = (OkObjectResult)ctl.List();
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("LINEAR_TOKEN", "имя секрета в списке");
+        json.Should().Contain("\"set\":true", "секрет помечен заданным");
+        json.Should().Contain("updatedAt", "время изменения в списке");
+        json.Should().NotContain("super-secret-value", "значение секрета наружу не уходит");
+    }
+
+    // PUT /secrets/{name}: имя не заявлено в манифесте → 400.
+    [Fact]
+    public void PutSecret_ИмяНеЗаявлено_Отдаёт400()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+
+        var res = ctl.PutSecret("local-a~pkg", "GHOST_SECRET",
+            new PluginSecretValueRequest { Value = "x" });
+        var bad = (BadRequestObjectResult)res;
+        JsonSerializer.Serialize(bad.Value).Should().Contain("GHOST_SECRET");
+    }
+
+    // DELETE /secrets/{name}: user JWT → 200, значение убрано, set=false.
+    [Fact]
+    public void DeleteSecret_UserJwt_УбираетЗначение()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.PutSecret("local-a~pkg", "LINEAR_TOKEN",
+            new PluginSecretValueRequest { Value = "super-secret-value" })
+            .Should().BeOfType<OkObjectResult>();
+
+        ctl.DeleteSecret("local-a~pkg", "LINEAR_TOKEN").Should().BeOfType<OkObjectResult>();
+
+        _secrets.Get(OwnerA, "local-a/pkg", "LINEAR_TOKEN").Should().BeNull("значение убрано");
+        var ok = (OkObjectResult)ctl.List();
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"set\":false", "после удаления set=false");
+        json.Should().NotContain("super-secret-value");
+    }
+
+    // DELETE /secrets/{name}: сервисный JWT → 403.
+    [Fact]
+    public void DeleteSecret_СервисныйJwt_Отдаёт403()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+
+        var res = ctl.DeleteSecret("local-a~pkg", "LINEAR_TOKEN");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
+    }
+
     // --- Тестовые заглушки ---
 
     // IFeatureFlagGate: единственный интересующий флаг — plugins-mvp.

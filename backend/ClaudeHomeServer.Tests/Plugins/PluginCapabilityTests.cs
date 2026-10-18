@@ -23,7 +23,7 @@ public class PluginCapabilityTests
 
         var handler = new StubCapability();
         var args = JsonDocument.Parse("{}").RootElement;
-        _ = handler.HandleAsync(ctx, "notes.read", args, CancellationToken.None).GetAwaiter().GetResult();
+        _ = handler.HandleAsync(ctx, "notes.read", args, ["notes:read"], CancellationToken.None).GetAwaiter().GetResult();
 
         handler.ReceivedOwner.Should().Be("owner-a", "контекст передаёт владельца (M8)");
         handler.ReceivedPluginId.Should().Be("local-a/pkg", "контекст передаёт id плагина (M8)");
@@ -37,7 +37,7 @@ public class PluginCapabilityTests
         public string? ReceivedPluginId;
 
         public Task<PluginCapabilityResult> HandleAsync(
-            PluginCallContext context, string op, JsonElement args, CancellationToken ct)
+            PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct)
         {
             ReceivedOwner = context.OwnerId;
             ReceivedPluginId = context.PluginId;

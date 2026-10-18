@@ -14,12 +14,16 @@ namespace ClaudeHomeServer.Services.Plugins;
 public interface IPluginCapability
 {
     // Право, за которое отвечает обработчик (например "notes:read").
+    // Для параметризованных прав (net:{host}) — префикс ("net:"); точное право
+    // проверяет сам обработчик по granted.
     string Permission { get; }
 
     // Обработать операцию моста {область}.{глагол}, требующую этого права.
     // context — владелец + id плагина (из JWT) + контекст слота; op — имя операции;
-    // args — аргументы операции (сырой JSON из моста, M8).
-    Task<PluginCapabilityResult> HandleAsync(PluginCallContext context, string op, JsonElement args, CancellationToken ct);
+    // args — аргументы операции (сырой JSON из моста, M8); granted — выданные права
+    // установки (обработчик сверяет точное право: для net:{host} — хост из URL).
+    Task<PluginCapabilityResult> HandleAsync(
+        PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct);
 }
 
 /// <summary>

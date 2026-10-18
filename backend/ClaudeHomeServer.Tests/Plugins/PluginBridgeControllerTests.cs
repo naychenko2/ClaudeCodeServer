@@ -379,7 +379,7 @@ public class PluginBridgeControllerTests : IDisposable
         public string Permission { get; }
         public StubCapability(string permission) => Permission = permission;
         public Task<PluginCapabilityResult> HandleAsync(
-            PluginCallContext context, string op, JsonElement args, CancellationToken ct)
+            PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct)
             => Task.FromResult(new PluginCapabilityResult(Ok: true, Data: "ok"));
     }
 }

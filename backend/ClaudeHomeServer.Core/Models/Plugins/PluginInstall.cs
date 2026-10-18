@@ -47,11 +47,14 @@ public sealed class PluginInstall
 }
 
 /// <summary>
-/// Секрет плагина в записи установки (M7): имя (из манифеста) + признак «значение введено».
-/// Значение живёт в <c>PluginSecretsStore</c>, не здесь.
+/// Секрет плагина в записи установки (M7): имя (из манифеста) + признак «значение введено»
+/// + время последнего изменения <see cref="UpdatedAt"/> (шаг 3.3: GET /api/plugins отдаёт
+/// {name, set, updatedAt}). Значение живёт в <c>PluginSecretsStore</c> (plugin-secrets.json),
+/// не здесь — поэтому <c>updatedAt</c> в installed.json не секрет.
 /// </summary>
 public sealed class PluginInstallSecret
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("set")] public bool Set { get; set; }
+    [JsonPropertyName("updatedAt")] public DateTime? UpdatedAt { get; set; }
 }

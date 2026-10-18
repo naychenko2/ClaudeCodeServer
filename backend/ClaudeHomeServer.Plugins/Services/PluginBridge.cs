@@ -49,10 +49,16 @@ public class PluginBridge
                 Error: new PluginCallError("unavailable", $"Обработчик не зарегистрирован: {domain}"));
 
         // Проверка granted (ADR-031 §4): право обработчика должно быть в выданных.
-        if (!granted.Contains(handler.Permission, StringComparer.Ordinal))
+        // Точное право (notes:read) — Contains; параметризованное (net:{host}, Permission
+        // = префикс "net:") — любое выданное право с этим префиксом. Точное сверение
+        // хоста делает сам обработчик (у него granted).
+        var covered = handler.Permission.EndsWith(":", StringComparison.Ordinal)
+            ? granted.Any(g => g.StartsWith(handler.Permission, StringComparison.Ordinal))
+            : granted.Contains(handler.Permission, StringComparer.Ordinal);
+        if (!covered)
             return new PluginCapabilityResult(false,
                 Error: new PluginCallError("denied", $"Нет права: {handler.Permission}"));
 
-        return await handler.HandleAsync(context, capability, args ?? default, ct);
+        return await handler.HandleAsync(context, capability, args ?? default, granted, ct);
     }
 }

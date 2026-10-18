@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -69,6 +70,31 @@ public class PluginSecretsStore
             if (_byOwner.TryGetValue(ownerId, out var byPlugin) && byPlugin.Remove(pluginId))
                 Save();
         }
+    }
+
+    // Плейсхолдер секрета в аргументах запроса (ADR-031 §3.4, шаг 3.3): {{secret:NAME}}.
+    // Имя — [A-Za-z0-9_-]+ (как имя секрета в манифесте requires.secrets).
+    private static readonly Regex PlaceholderPattern =
+        new(@"\{\{secret:([A-Za-z0-9_-]+)\}\}", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Подставить значения секретов в <paramref name="text"/> (шаг 3.3): каждый плейсхолдер
+    /// <c>{{secret:NAME}}</c> заменяется значением из хранилища, только если <c>NAME</c> входит
+    /// в <paramref name="allowedNames"/> (выданные права <c>secret:{name}</c> плагина). Нерешённый
+    /// плейсхолдер (нет права) остаётся как есть — значение не подставляется, значит и не утекает.
+    /// </summary>
+    public string Resolve(string ownerId, string pluginId, string text, IReadOnlyCollection<string> allowedNames)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains("{{secret:", StringComparison.Ordinal))
+            return text;
+        return PlaceholderPattern.Replace(text, m =>
+        {
+            var name = m.Groups[1].Value;
+            return allowedNames.Contains(name, StringComparer.Ordinal)
+                && Get(ownerId, pluginId, name) is { } value
+                ? value
+                : m.Value;
+        });
     }
 
     private void Save() => JsonFileStore.Save(_filePath, _byOwner, JsonOptions);

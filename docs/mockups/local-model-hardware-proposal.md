@@ -1,3 +1,5 @@
+> Итоговая версия — [v2](local-model-hardware-v2.html) и [spec](local-model-hardware-spec.md).
+
 # «Железо» стенда и карточка видеокарты — предложение v1
 
 Макет: [local-model-hardware-v1.html](local-model-hardware-v1.html). В шапке макета переключаются

@@ -198,6 +198,14 @@
       чистки) перенесённые тесты компилировались и новый проект был в графе сборки монолита.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Architecture.Tests\ClaudeHomeServer.Architecture.Tests.csproj" />
+    <!--
+      LocalStats.Tests (шаг 3.10, пачка F, последний): 8 LocalStats*Tests
+      (1 LocalStats/ + 7 Services/LocalStats) переехали в отдельную тестовую сборку
+      вертикали. Монолит тянет её как ProjectReference, чтобы в переходный период (до
+      финальной чистки) перенесённые тесты компилировались и новый проект был в графе
+      сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.LocalStats.Tests\ClaudeHomeServer.LocalStats.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

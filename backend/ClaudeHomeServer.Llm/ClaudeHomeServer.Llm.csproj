@@ -36,6 +36,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- LocalStats.Tests (шаг 3.10): перенесённые LocalStats-тесты (PrometheusTextParser/
+         VllmMetricsSource/GpuSampler/LocalModelStatsPoller/SseUsageObserver/LocalModelTurnMeter/
+         LocalModelLiveSink/CoreContracts) читают internal-члены ClaudeHomeServer.Llm/LocalStats —
+         тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.LocalStats.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

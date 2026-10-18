@@ -74,6 +74,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.ChatContext.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- LocalStats.Tests (шаг 3.10, пачка F): LocalModelLiveSinkTests использует
+         TestLauncherFactory (internal) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.LocalStats.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

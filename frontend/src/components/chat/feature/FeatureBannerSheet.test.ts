@@ -230,6 +230,15 @@ describe('FeatureBannerSheet: рендер (fakeDom)', () => {
     expect(iKey).toBeLessThan(iExec);
   });
 
+  it('архивный ключевой чат: кнопка «В ключевой чат фичи (в архиве)» (R3, минор 1)', async () => {
+    mount(createElement(FeatureBannerSheet, {
+      feature: feat({ keyArchived: true }), model: modelNonKey(), projectId: 'p1', index: index(), run: null,
+      onGoKey: () => {}, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(bodyText()).toContain('В ключевой чат фичи (в архиве)');
+  });
+
   it('ключевой чат: кнопки «В ключевой чат фичи» нет (этот чат и есть ключевой)', async () => {
     mount(createElement(FeatureBannerSheet, {
       feature: feat(), model: modelKey(), projectId: 'p1', index: index(), run: null,

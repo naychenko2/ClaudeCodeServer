@@ -168,7 +168,9 @@ export function FeatureBannerSheet({ feature, model, projectId, index, run, onGo
         </span>
       </div>
 
-      {/* В ключевой чат фичи: только когда этот чат — не ключевой и живой ключевой есть */}
+      {/* В ключевой чат фичи: только когда этот чат — не ключевой и живой ключевой есть.
+          Архивный ключевой (keyArchived) помечен в подписи — человек не попадает в
+          архив без предупреждения (R3, минор 1). */}
       {!model.isKey && model.button.kind === 'key' && (
         <Button
           variant="primary"
@@ -177,7 +179,7 @@ export function FeatureBannerSheet({ feature, model, projectId, index, run, onGo
           leftIcon={<Route size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           onClick={onGoKey}
         >
-          В ключевой чат фичи
+          {feature.keyArchived ? 'В ключевой чат фичи (в архиве)' : 'В ключевой чат фичи'}
         </Button>
       )}
 

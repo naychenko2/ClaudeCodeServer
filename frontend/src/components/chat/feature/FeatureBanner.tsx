@@ -124,12 +124,14 @@ export function featureBannerModel(
   // Кнопка: в КЛЮЧЕВОМ чате — «Конвейер ▾» (раскрывает тело фичи); в другом
   // чате фичи — есть живой ключевой чат → «Ключевой чат →» (openChatById, сам
   // переключает проект), живого нет (keySessionId = null) → «Открыть фичу»
-  // (openTaskInSection на эпик, без перехода в чат).
+  // (openTaskInSection на эпик, без перехода в чат). Архивный ключевой
+  // (keyArchived, контракт §1) помечен в подписи — человек не попадает в
+  // архив без предупреждения (R3, минор 1).
   let button: BannerButton;
   if (isKey) {
     button = { label: 'Конвейер', kind: 'pipeline' };
   } else if (feature.keySessionId != null) {
-    button = { label: 'Ключевой чат', kind: 'key' };
+    button = { label: feature.keyArchived ? 'Ключевой чат (в архиве)' : 'Ключевой чат', kind: 'key' };
   } else {
     button = { label: 'Открыть фичу', kind: 'feature' };
   }
@@ -229,15 +231,14 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // Кламп, если фич стало меньше; сброс выбора/раскрытия при смене чата.
   const idx = Math.min(selIdx, Math.max(0, entries.length - 1));
 
-  // Сброс «← назад» при обычном открытии чата (не из плашки): записанный переход
-  // ведёт в ДРУГОЙ чат, а не в этот — мажет S.prev = null (макет).
+  // При смене чата одним эффектом сбрасываем: «← назад» (записанный переход
+  // ведёт в ДРУГОЙ чат, а не в этот — мажем S.prev = null, макет) и локальное
+  // состояние (выбор/раскрытие/шторка — иначе новый чат наследовал бы их).
   useEffect(() => {
     const back = getBackNav();
     if (back && back.to !== sessionId) clearBackNav();
+    setSelIdx(0); setFxOpen(false); setSheetOpen(false);
   }, [sessionId]);
-
-  // Сброс раскрытия/выбора/шторки при смене чата (иначе новое чат наследовало бы состояние).
-  useEffect(() => { setSelIdx(0); setFxOpen(false); setSheetOpen(false); }, [sessionId]);
 
   if (!enabled || entries.length === 0) return null;
 

@@ -1,23 +1,35 @@
 // Индекс фич (фасет «Фичи» и плашка в чате): стор.
 //
-// Окружение node (без jsdom): effects не идут, поэтому тестируем ЛОГИКУ стора
-// через тестовые швы `__test`, а не React-хук. Три блока:
+// Окружение node (без jsdom): блоки 1–3 тестируют ЛОГИКУ стора через тестовые
+// швы `__test`, а не React-хук (effects не идут); блок 4 — сам хук с эффектами
+// (fakeDom + mount, паттерн FeatureBannerSheet.test.ts):
 //   1 — стор разделён по проекту: срез по проекту, стабильная ссылка, загрузка;
 //   2 — лукап featureOf по фикстуре: мультифичевый куратор, исполнитель,
 //      дедупликация по (чат × фича) между срезами;
 //   3 — живой режим: task_changed → перезапрос затронутого проекта (дебаунс
-//        1,5 с), событие без фичи игнорируется, флаг выключен → запросов нет.
+//        1,5 с), событие без фичи игнорируется, флаг выключен → запросов нет;
+//   4 — несколько потребителей (R3, минор 5): выключенный потребитель не
+//        стирает срез и не отписывает чужую подписку; последний ушедший — чистит.
 //
 // Тесты независимы от пояса: время — только fake timers и ISO-строки фикстуры.
 
+import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test, featureOf } from './featuresIndex';
+import { __test, featureOf, useFeaturesIndex } from './featuresIndex';
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
 import { setAllFlags } from './featureFlags';
+import { installFakeDom, mount, uninstallFakeDom } from '../components/chat/__tests__/fakeDom';
 import type { FeaturesIndex, FeatureIndexFeature } from '../types/featureIndex';
 import type { Task } from '../types';
 import fixture from './__fixtures__/featuresIndex.json';
+
+// signalr: onMessage — no-op (иначе getConnection() строит реальное соединение
+// '/hubs/session', которое в node не резолвится; паттерн FeatureBannerSheet.test.ts).
+vi.mock('./signalr', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./signalr')>();
+  return { ...orig, onMessage: () => () => {} };
+});
 
 const FLAG = 'features-overview';
 // Фикстура — по утверждённому контракту: все bucket, закрытая с summary.mergedAt,
@@ -269,5 +281,73 @@ describe('live-режим: перезапрос затронутого прое�
     // Таймер мёртв — даже по истечении окна дебаунса запрос не уйдёт
     vi.advanceTimersByTime(1500);
     expect(featuresIndexSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── 4: несколько потребителей (R3, минор 5) — хук с эффектами (fakeDom + mount) ──
+
+// Тестовый потребитель: та же подписка, что FeatureBanner/SessionList/ChatCard.
+function Consumer(props: { projectId: string | null; enabled: boolean }) {
+  useFeaturesIndex(props.projectId, props.enabled);
+  return null;
+}
+
+// Дождаться, пока асинхронная цепочка fetch → setIndex/emit отработает (fetch —
+// уже решённый промис; макрозадача даёт очередь микрозадач дойти до конца).
+async function flush() {
+  await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+}
+
+describe('несколько потребителей: выключенный не стирает чужой срез (R3, минор 5)', () => {
+  let featuresIndexSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+    setAllFlags({ [FLAG]: true });
+    featuresIndexSpy = vi.spyOn(api.tasks, 'featuresIndex').mockResolvedValue(FIXTURE);
+  });
+  afterEach(() => {
+    featuresIndexSpy.mockRestore();
+    __test.reset();
+    setAllFlags({});
+    uninstallFakeDom();
+  });
+
+  it('один enabled=true, другой enabled=false: срез не стирается, данные доходят', async () => {
+    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    await flush();
+    // Включённый потребитель загрузил срез (фикстура — глобальная область, но срез
+    // кладётся по projectKey запроса).
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    // Выключенный потребитель того же проекта: его монтирование срез не стирает.
+    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: false }));
+    await flush();
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    // Данные доходят: лукап видит чаты фикстуры (сценарий — фасет «Фичи» SessionList
+    // при выключенной плашке: dark launch, turn-plan-feature-mode off).
+    expect(featureOf('chat-cur').map(e => e.feature.featureId)).toEqual(['feat-closed', 'feat-attention', 'feat-running']);
+    // Проект остаётся «активным» (включённый потребитель на месте).
+    expect(__test.active().has('p1')).toBe(true);
+    // Размонтирование ВЫКЛЮЧЕННОГО потребителя срез тоже не трогает.
+    b.root.unmount();
+    await flush();
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    // Последний включённый ушёл — срез очищен, проект неактивен.
+    a.root.unmount();
+    await flush();
+    expect(__test.snapshotFor('p1').features).toHaveLength(0);
+    expect(__test.active().has('p1')).toBe(false);
+  });
+
+  it('оба выключены: ничего не грузится и не подписывается (как в Ф1)', async () => {
+    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: false }));
+    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: false }));
+    await flush();
+    expect(featuresIndexSpy).not.toHaveBeenCalled();
+    expect(__test.snapshotFor('p1').features).toHaveLength(0);
+    expect(__test.active().has('p1')).toBe(false);
+    a.root.unmount();
+    b.root.unmount();
   });
 });

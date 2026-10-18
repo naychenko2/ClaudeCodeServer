@@ -126,6 +126,11 @@ describe('featureBannerModel: тон, статус, счётчик, роль, к
     expect(m.button).toEqual({ label: 'Ключевой чат', kind: 'key' });
   });
 
+  it('архивный ключевой чат (keyArchived): кнопка «Ключевой чат (в архиве)» (R3, минор 1)', () => {
+    const m = featureBannerModel(feat({ keySessionId: 'chat-key', keyArchived: true }), link(), 'chat-exec');
+    expect(m.button).toEqual({ label: 'Ключевой чат (в архиве)', kind: 'key' });
+  });
+
   it('куратор без stepRef/lane: роль по виду (куратор)', () => {
     const m = featureBannerModel(feat(), link({ kind: 'curator', stepRef: null, lane: null }), 'chat-cur');
     expect(m.role).toBe('куратор');
@@ -307,6 +312,12 @@ describe('FeatureBanner: рендер (SSR)', () => {
     expect(html).toContain('data-testid="feature-go"');
     expect(html).toContain('Ключевой чат');
     expect(html).not.toContain('data-testid="feature-pipeline"');
+  });
+
+  it('архивный ключевой чат: кнопка «Ключевой чат (в архиве)» (R3, минор 1)', () => {
+    seedIndex(feat({ keySessionId: 'chat-key', keyArchived: true }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).toContain('Ключевой чат (в архиве)');
   });
 
   // === Ф4: «← назад» только после перехода из плашки ===

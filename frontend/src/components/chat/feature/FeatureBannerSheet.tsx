@@ -160,6 +160,8 @@ export function FeatureBannerSheet({ feature, model, projectId, index, run, onGo
         Этот чат:
         <span style={{
           fontFamily: FONT.mono, fontSize: FS.xs,
+          // n2: у ключевого вес 700 (макет .role.key) — совпадает с чипом плашки.
+          fontWeight: model.isKey ? 700 : 400,
           color: model.isKey ? C.accent : C.textSecondary,
           background: model.isKey ? C.accentLight : C.bgSelected,
           borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',
@@ -221,6 +223,8 @@ export function FeatureBannerSheet({ feature, model, projectId, index, run, onGo
                 </span>
                 <span style={{
                   fontFamily: FONT.mono, fontSize: FS.xs, flexShrink: 0,
+                  // n2: у ключевого вес 700 (макет .role.key) — совпадает с чипом плашки.
+                  fontWeight: isKey ? 700 : 400,
                   color: isKey ? C.accent : C.textSecondary,
                   background: isKey ? C.accentLight : C.bgSelected,
                   borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',

@@ -18,7 +18,7 @@ import { FeatureBanner, PipelineCard, featureBannerModel, backRoleLabel, moreFea
 import { __test } from '../../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav, backNavFrom } from '../../../lib/featureBackNav';
 import { setAllFlags } from '../../../lib/featureFlags';
-import { mount, installFakeDom, uninstallFakeDom } from '../__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps } from '../__tests__/fakeDom';
 import { __test as runsTest } from '../../../lib/featureRuns';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
@@ -29,7 +29,10 @@ const mockIdx = vi.hoisted(() => ({
   features: [] as FeatureIndexFeature[],
   chats: {} as Record<string, FeatureChatLink[]>,
 }));
-// === Мок lib/api: featuresIndex → mockIdx, getFeatures → [] (m7: агрегат по ключевой сессии) ===
+// n1: управляемый список агрегатов (getFeatures → mockRuns), чтобы в mount-тесте
+// карточка «Конвейер» отрисовалась (run ≠ null).
+const mockRuns = vi.hoisted(() => [] as FeatureRun[]);
+// === Мок lib/api: featuresIndex → mockIdx, getFeatures → mockRuns (m7: агрегат по ключевой сессии) ===
 vi.mock('../../../lib/api', () => ({
   api: {
     sessions: { list: async () => [] },
@@ -37,7 +40,7 @@ vi.mock('../../../lib/api', () => ({
     tasks: {
       execute: async () => {},
       featuresIndex: async () => mockIdx,
-      getFeatures: async () => [],
+      getFeatures: async () => mockRuns,
     },
     personas: { list: async () => [] },
   },
@@ -498,6 +501,14 @@ describe('FeatureBanner: рендер (SSR)', () => {
     const html = renderBanner('chat-exec', 'p1');
     expect(html).not.toContain('data-testid="feature-more"');
   });
+
+  // === n2: чип «ключевой» — вес 700 (макет .role.key) ===
+  it('n2: чип «ключевой» — font-weight 700 + accent/accentLight (макет .role.key)', () => {
+    seedIndex(feat({ keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
+    const html = renderBanner('chat-key', 'p1');
+    // Чип «ключевой»: font-weight:700 + color accent + background accentLight (макет .role.key).
+    expect(html).toContain('font-weight:700;color:var(--c-accent);background:var(--c-accent-light)');
+  });
 });
 
 // === Ф5: мобильная ветка (360 px) — одна строка 44 px, тач-цель 40×40, тап → шторка ===
@@ -523,8 +534,30 @@ describe('FeatureBanner: мобильная ветка (SSR, 360 px)', () => {
     // Тач-цель 40×40 (TB.iconHitMobile): width/height 40px в стиле кнопки.
     expect(html).toContain('width:40px');
     expect(html).toContain('height:40px');
-    // Строка 44 px.
-    expect(html).toContain('min-height:44px');
+    // n4: плашка 48 (кнопка 40 + отступы 4/4, border-box), строка 40.
+    expect(html).toContain('min-height:48px');
+    expect(html).toContain('min-height:40px');
+  });
+
+  // === n3: тач-цель «· ещё N» на 360 ≥ 40 по высоте (было 20) ===
+  it('n3: «· ещё N» — minHeight 40 (тач-цель ≥ 40 на 360)', () => {
+    const f1 = feat({ keySessionId: 'chat-key' });
+    const f2 = feat({ featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
+    const index: FeaturesIndex = {
+      features: [f1, f2],
+      chats: { 'chat-exec': [
+        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+        { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
+      ] },
+    };
+    __test.setIndex('p1', index);
+    const html = renderBannerMobile('chat-exec', 'p1');
+    // Кнопка «· ещё 1»: её style обязан нести min-height:40px (тач-цель ≥ 40).
+    // Проверяем именно атрибут кнопки (не строки): от data-testid="feature-more" до '>'.
+    const i = html.indexOf('data-testid="feature-more"');
+    expect(i, 'нет кнопки «· ещё»').not.toBe(-1);
+    const tag = html.slice(i, html.indexOf('>', i) + 1);
+    expect(tag, 'у кнопки «· ещё» нет min-height:40px').toContain('min-height:40px');
   });
 
   it('мобила: статус и роль чата скрыты (в строке только глиф+название+рельса+счётчик)', () => {
@@ -642,6 +675,62 @@ describe('FeatureBanner: m7 — агрегат фичи по ключевой с
 
     // Ключевой чат: keySessionId === sessionId → подписка на свою сессию (как и раньше).
     expect(runsTest.active().has('chat-key')).toBe(true);
+    root.unmount();
+  });
+});
+
+// === n1: карточка «Конвейер» — СНАРУЖИ div плашки (сосед, не потомок) ===
+//
+// Мутация: вернуть PipelineCard внутрь div плашки (как было) → banner.contains(card) = true
+// → тест краснеет. Реальный mount: клик по «Конвейер ▾» раскрывает карточку, и мы
+// проверяем её положение в дереве (FNode.contains), а не строку SSR.
+describe('FeatureBanner: n1 — карточка «Конвейер» — сосед плашки (mount, 1280)', () => {
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+    runsTest.reset();
+    backNavTest.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    runsTest.reset();
+    backNavTest.reset();
+    setAllFlags({});
+    mockRuns.length = 0;
+    uninstallFakeDom();
+  });
+
+  it('карточка (feature-pipeline-body) — СОСЕД плашки (feature-banner), не её потомок', async () => {
+    const f = feat({ keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+    // Агрегат фичи — чтобы карточка отрисовалась (run ≠ null).
+    mockRuns.length = 0;
+    mockRuns.push(mockRun);
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-key', projectId: 'p1', isMobile: false }));
+    // Даём эффекту useFeatureRuns (getFeatures → setRuns) отработать.
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // Раскрываем «Конвейер ▾» (feature-pipeline) — карточка появляется.
+    const btn = findNodeByAttr(container, 'data-testid', 'feature-pipeline');
+    expect(btn, 'нет кнопки «Конвейер»').not.toBeNull();
+    const props = reactProps(btn!);
+    expect(props?.onClick, 'у «Конвейер» нет onClick').toBeDefined();
+    act(() => { (props!.onClick as () => void)(); });
+
+    // Карточка отрисована и — главное — НЕ внутри div плашки (n1: сосед, а не потомок).
+    const banner = findNodeByAttr(container, 'data-testid', 'feature-banner');
+    const card = findNodeByAttr(container, 'data-testid', 'feature-pipeline-body');
+    expect(card, 'карточка «Конвейер» не отрисована').not.toBeNull();
+    expect(banner, 'плашка не найдена').not.toBeNull();
+    expect(banner!.contains(card!), 'карточка — потомок плашки (n1: должна быть соседом)').toBe(false);
     root.unmount();
   });
 });

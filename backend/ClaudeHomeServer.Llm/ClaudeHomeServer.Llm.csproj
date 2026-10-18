@@ -31,6 +31,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): TurnTokenAdapterBranchesTests читает internal
+         FallbackLlmSessionAdapter.HandleMessageAsync — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

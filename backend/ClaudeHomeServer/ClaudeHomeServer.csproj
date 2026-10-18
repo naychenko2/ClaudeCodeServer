@@ -43,6 +43,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Team.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): перенесённые Mcp/Gateway-тесты читают internal-члены Main-типов
+         (Services.Mcp/Services.Gateway: internal-члены, на которые опираются Mcp*Tests/Gateway*Tests). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

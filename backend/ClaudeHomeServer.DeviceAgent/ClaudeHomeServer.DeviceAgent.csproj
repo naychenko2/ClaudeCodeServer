@@ -130,6 +130,9 @@
          с настоящим ExecLink (internal) поверх loopback WebSocket. Main DeviceAgent не
          тянет, поэтому допуск нужен именно сюда, а не в Main. -->
     <InternalsVisibleTo Include="ClaudeHomeServer.TestKit.Host" />
+    <!-- Mcp.Tests (шаг 3.6): OcrGatewayEndpointTests использует internal SidecarProxy
+         (ClaudeHomeServer.DeviceAgent.Sidecar) — тот же шов, что у монолита. -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.Mcp.Tests" />
   </ItemGroup>
 
 </Project>

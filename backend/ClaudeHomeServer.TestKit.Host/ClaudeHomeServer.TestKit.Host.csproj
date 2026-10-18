@@ -74,6 +74,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): TestsToolsetTests использует internal SessionManagerTestAccess
+         (расширение AccumulatorOf → TurnAccumulator) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

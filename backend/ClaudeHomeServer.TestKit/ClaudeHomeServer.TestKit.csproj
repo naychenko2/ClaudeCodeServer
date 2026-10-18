@@ -64,6 +64,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Team.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): DevToolsetTests/LocalMediaToolsetTests/TestsToolsetTests используют
+         TestLauncherFactory (internal) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

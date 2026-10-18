@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -91,8 +92,12 @@ public class PluginPackageValidator
         Walk(packageRoot, packageRoot, ref files, ref totalSize, ref dirCount, problems, ref limitHit);
 
         // C3: поля манифеста (plugin.json/ccs-plugin.json) — deny-manifest-field.
-        var (_, manifestProblems) = _manifestReader.Read(packageRoot);
+        var (raw, manifestProblems) = _manifestReader.Read(packageRoot);
         problems.AddRange(manifestProblems);
+
+        // M3: name == slug. CLI берёт пространство имён плагина из name, а Skill-привязка
+        // адресует навык по slug из id; name != slug → привязка указывает в никуда.
+        CheckNameEqualsSlug(raw, problems);
 
         // M9: хеш — только валидного пакета (нет проблем), до лимита (limitHit → null).
         // Невалидный пакет хеш не несёт: sha256 = null.
@@ -371,6 +376,44 @@ public class PluginPackageValidator
         }
         hash.TransformFinalBlock([0], 0, 1);
         return Convert.ToHexString(hash.Hash).ToLowerInvariant();
+    }
+
+    // M3: name == slug. CLI берёт пространство имён плагина из `name` в .claude-plugin/plugin.json
+    // (спайк plugin-dir-spike-2026-10.md: source = <name>@inline, skill/команда = <name>:<skill>),
+    // а Skill-привязка адресует навык по slug из id ({publisher}/{slug}). name != slug → привязка
+    // указывает в никуда. Код deny-name-not-equal-slug. <paramref name="rawJson"/> — первый манифест
+    // (ccs-plugin.json, несёт и id, и name); без id или name проверка не применима (не отказ).
+    private static void CheckNameEqualsSlug(string? rawJson, List<PluginPackageProblem> problems)
+    {
+        if (rawJson is null) return;
+        string? name = null;
+        string? id = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+            if (doc.RootElement.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                name = n.GetString();
+            if (doc.RootElement.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String)
+                id = i.GetString();
+        }
+        catch (JsonException)
+        {
+            return; // битый JSON — deny-manifest-field/модель отчитаются отдельно
+        }
+
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(id)) return;
+        var slash = id!.LastIndexOf('/');
+        if (slash < 0 || slash == id!.Length - 1) return; // slug не извлекаем (id не по формату)
+        var slug = id[(slash + 1)..];
+        if (!string.Equals(name, slug, StringComparison.Ordinal))
+            problems.Add(new PluginPackageProblem(
+                "deny-name-not-equal-slug",
+                $"name манифеста «{name}» не равен slug пакета «{slug}» (CLI берёт пространство имён из name, привязка — по slug)"));
     }
 
     // Файл пакета: относительный путь (через «/»), полный путь (для symlink), метаданные.

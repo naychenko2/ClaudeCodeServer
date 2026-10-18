@@ -67,7 +67,7 @@ public class PluginPackageValidatorTests
     public void ВалидныйПакет_МанифестSkillsPanel_ДаетIsValidИSha256()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/myskill/SKILL.md", "# My skill\nТекст навыка"),
             ("skills/myskill/extra.md", "Вспомогательный .md"),
             ("commands/myskill.md", "Slash-команда"),
@@ -83,7 +83,7 @@ public class PluginPackageValidatorTests
     public void Sha256_Детерминирован_ДляОдинаковогоПакета()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md", "текст"),
             ("panel/index.html", "<html></html>"));
 
@@ -92,6 +92,33 @@ public class PluginPackageValidatorTests
 
         first.Sha256.Should().NotBeNullOrEmpty();
         first.Sha256.Should().Be(second.Sha256);
+    }
+
+    // --- M3: name == slug. CLI берёт пространство имён плагина из name, а Skill-привязка
+    // адресует навык по slug из id; name != slug → привязка указывает в никуда. ---
+
+    [Fact]
+    public void NameНеРавенSlug_ДаетDenyNameNotEqualSlug()
+    {
+        // slug из id = "linear", name = "Linear из заметок" → не равны → отказ.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/linear","name":"Linear из заметок","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "deny-name-not-equal-slug");
+    }
+
+    [Fact]
+    public void NameРавенSlug_БезDenyNameNotEqualSlug()
+    {
+        // name = slug = "pkg" → проверка не срабатывает, пакет валиден.
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        var r = Validate(root);
+        r.Problems.Should().NotContain(p => p.Code == "deny-name-not-equal-slug");
+        r.IsValid.Should().BeTrue();
     }
 
     // --- Запрещённые файлы (RCE/обход) ---
@@ -287,7 +314,7 @@ public class PluginPackageValidatorTests
     public void M10_AllowedTools_ВSkillFrontmatter_ДаетDenyAllowedTools()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -306,7 +333,7 @@ public class PluginPackageValidatorTests
     public void M10_AllowedTools_ВCommandFrontmatter_ДаетDenyAllowedTools()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("commands/cmd.md",
                 """
                 ---
@@ -324,7 +351,7 @@ public class PluginPackageValidatorTests
     public void M10_AllowedTools_КавычечныйКлюч_ДаетDenyAllowedTools()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -343,7 +370,7 @@ public class PluginPackageValidatorTests
     public void M10_AllowedTools_ДругойРегистр_ДаетDenyAllowedTools()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -364,7 +391,7 @@ public class PluginPackageValidatorTests
     public void M10_AllowedTools_СредиПрочегоТекста_Отбивается()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -384,7 +411,7 @@ public class PluginPackageValidatorTests
     public void M10_Backtick_ВSkillBody_ДаетDenyBacktickExec()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -402,7 +429,7 @@ public class PluginPackageValidatorTests
     public void M10_Backtick_ВCommandBody_ДаетDenyBacktickExec()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("commands/cmd.md",
                 """
                 Тело: !`bash -c "echo hi"`
@@ -418,7 +445,7 @@ public class PluginPackageValidatorTests
     public void M10_FencedBacktick_ВSkillBody_ДаетDenyBacktickExec()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -440,7 +467,7 @@ public class PluginPackageValidatorTests
     public void M10_AllowedTools_ExplicitKey_ДаетDenyAllowedTools()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -464,7 +491,7 @@ public class PluginPackageValidatorTests
     {
         // Эскейп 1: `\x2dllowed-tools` (обратный слеш во фронтматтере).
         var root1 = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -478,7 +505,7 @@ public class PluginPackageValidatorTests
         // Эскейп 2: `allowed-\x74ools` — Contains «allowed-tools» не срабатывает (t экранирован),
         // срабатывает только запрет обратного слеша во фронтматтере.
         var root2 = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -497,7 +524,7 @@ public class PluginPackageValidatorTests
     public void M10_Arguments_ДаетDenyBacktickExec()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -515,7 +542,7 @@ public class PluginPackageValidatorTests
     public void M10_ТриТочкиПосредиСтроки_БезФлагов()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---
@@ -536,7 +563,7 @@ public class PluginPackageValidatorTests
     public void M10_ЧистыйMd_БезM10Проблем()
     {
         var root = NewPackage(
-            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"P","version":"0.1.0"}"""),
+            ("ccs-plugin.json", """{"id":"local-x/pkg","name":"pkg","version":"0.1.0"}"""),
             ("skills/a/SKILL.md",
                 """
                 ---

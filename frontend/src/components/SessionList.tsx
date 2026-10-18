@@ -855,21 +855,45 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       );
     }
     // Закрытая фича — компактная строка «на втором плане» (макет .closed, минор m4):
-    // не полным деревом/карточками, а строкой «название · смержена {дата} · {длительность}»
-    // (статус считает FeatureGroupHeader в режиме compact). Дерево/«ключевой» не рисуем.
+    // по умолчанию строка «название · смержена {дата} · {длительность}» (статус считает
+    // FeatureGroupHeader в режиме compact); раскрытие (M4) — по featureId через
+    // expandedFeatureGroups, как у открытых групп: дерево buildGroupTree + «ключевой».
     if (g.feature.bucket === 'closed') {
+      const fid = g.feature.featureId;
+      const keyId = g.feature.keySessionId;
+      const expanded = expandedFeatureGroups.has(fid);
+      const toggle = () => setExpandedFeatureGroups(prev => {
+        const next = new Set(prev);
+        if (next.has(fid)) next.delete(fid);
+        else next.add(fid);
+        return next;
+      });
+      const rows = expanded ? buildGroupTree(g, null) : [];
       return (
-        <div key={g.feature.featureId} style={{ marginBottom: GROUP_GAP }}>
+        <div key={fid} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
           <FeatureGroupHeader
             feature={g.feature}
             count={g.feature.chatCount}
-            expanded={false}
-            onToggle={() => {}}
+            expanded={expanded}
+            onToggle={toggle}
             isMobile={isMobile}
             compact
             personaName={personaNameOf(g.feature)}
             now={nowMs}
           />
+          {expanded && (
+            <div style={{ marginLeft: 13, paddingLeft: 9, borderLeft: `1px solid ${C.divider}` }}>
+              {nestTreeRows(rows).map(node => (
+                <ChatTreeBranch
+                  key={node.row.chat.id}
+                  node={node}
+                  isMobile={isMobile}
+                  onToggleCollapse={toggleCollapse}
+                  renderCard={(s, inset) => renderCard(s, inset, featureRoleFor(s.id, keyId, featuresIndex), true)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       );
     }

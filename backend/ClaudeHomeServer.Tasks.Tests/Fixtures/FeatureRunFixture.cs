@@ -40,10 +40,18 @@ internal static class FeatureRunFixture
         Lane = f.Lane,
         ReviewOf = f.ReviewOf,
         WorktreeBranch = f.WorktreeBranch,
+        PersonaId = f.Persona,
+        CreatedAt = ParseDate(f.Created),
+        CompletedAt = ParseDate(f.Completed),
         Verification = f.Verification is not null
-            ? new TaskVerification { Verdict = f.Verification.Verdict }
+            ? new TaskVerification { Verdict = f.Verification.Verdict, Notes = f.Verification.Notes }
             : null,
     };
+
+    // created/completed в фикстурах — строка «YYYY-MM-DDTHH:MM» (без таймзоны); парсим как есть.
+    // Пусто/не распарсилось → DateTime.MinValue (сортируется первым, на счётчики не влияет).
+    private static DateTime ParseDate(string? s) =>
+        DateTime.TryParse(s, out var d) ? d : DateTime.MinValue;
 
     private sealed record FixtureTask(
         string Id, string Title, string? Persona, string? Status,
@@ -51,5 +59,5 @@ internal static class FeatureRunFixture
         string? FeatureId, string? WorktreeBranch, string? StepRef, string? Lane,
         List<string>? ReviewOf, FixtureVerification? Verification);
 
-    private sealed record FixtureVerification(string? Verdict);
+    private sealed record FixtureVerification(string? Verdict, string? Notes);
 }

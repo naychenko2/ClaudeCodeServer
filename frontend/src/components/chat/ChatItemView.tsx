@@ -11,6 +11,8 @@ import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
+import { FeatureModeBody } from './feature/FeatureModeBody';
+import { useFeatureRunsSnapshot } from '../../lib/featureRuns';
 import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useSpheres } from '../../lib/useSpheres';
@@ -66,11 +68,58 @@ function parseTodoWriteInput(input: unknown): TodoItem[] {
 }
 
 // Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
-// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos)
-function TodoPlanView({ todos }: { todos: TodoItem[] }) {
+// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos).
+//
+// Текущая карточка плана (isCurrentPlan) — ЖИВАЯ: общее тело FeatureModeBody (то же, что
+// в меню пилюли) — переключатель «План хода / Исполнение фичи» + выбор фичи + тело
+// (FeatureRunView/TodoList); режим и выбор — из стора Ф1, общий с меню. Прошлые карточки —
+// снимок TodoList, как раньше (решение Майи: раскрытое «Производство» большой фичи тонет
+// в N копиях в ленте, живое — только на последней).
+function TodoPlanView({ todos, isMobile, isCurrentPlan }: {
+  todos: TodoItem[];
+  isMobile: boolean;
+  isCurrentPlan: boolean;
+}) {
+  const sessionId = useContext(ChatSessionContext);
+  const runs = useFeatureRunsSnapshot(sessionId);
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
+  const hasFeatures = runs.length > 0;
 
+  // Живое тело (общее с меню пилюли) — только на ТЕКУЩЕЙ карточке плана, когда есть фичи.
+  // Без фич — прежняя разметка (байт-в-байт); прошлые карточки — снимок TodoList.
+  if (isCurrentPlan && hasFeatures) {
+    // Заголовок: SquareCheck + «План хода» (на 360 px слово скрыто, остаются значок,
+    // переключатель и счётчик).
+    const title = (
+      <>
+        <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
+        {!isMobile && (
+          <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
+        )}
+      </>
+    );
+    return (
+      <div style={{
+        border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
+        overflow: 'hidden', boxShadow: SHADOW.card,
+      }}>
+        <FeatureModeBody
+          sessionId={sessionId}
+          todos={todos}
+          runs={runs}
+          isMobile={isMobile}
+          variant="card"
+          headerPad="10px 13px"
+          bodyPad="7px 13px 10px"
+          headerBorder={`1px solid ${C.divider}`}
+          title={title}
+        />
+      </div>
+    );
+  }
+
+  // Без фич или прошлая карточка — снимок TodoList, как раньше (байт-в-байт).
   return (
     <div style={{
       border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
@@ -663,6 +712,9 @@ interface ItemProps {
   availableChatIds?: Set<string>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // Текущая карточка плана (последняя пачка): живое тело (переключатель + выбор фичи +
+  // FeatureRunView/TodoList) рисуется только на ней; прошлые карточки — снимок TodoList.
+  isCurrentPlan?: boolean;
   // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
   // тогда она встаёт в один ряд с итогом хода, а не висит отдельной строкой ниже.
   // Пока ход идёт, пилюлю рисует ChatPanel рядом с индикатором ожидания.
@@ -1047,10 +1099,12 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, onContinue, availableChatIds, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, onContinue, availableChatIds, taskPlan, isCurrentPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
+  // Мобильная раскладка: тач-цель переключателя 40, заголовок «План хода» скрыт на 360 px.
+  const isMobile = useIsMobile();
   // Кто сейчас звучит (индекс реплики + цвет персоны) — им подсвечивается аватар
   const speakingItem = useContext(SpeakingItemContext);
   const asstName = useAssistantName();
@@ -1431,8 +1485,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
       // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
       // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
-      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
-      if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} />;
       // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
       if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
       // HTML-виджет (widget_show) — рендер в sandbox-iframe

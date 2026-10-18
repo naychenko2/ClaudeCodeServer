@@ -1,15 +1,20 @@
 import { memo, useContext, useEffect, useMemo, useState } from 'react';
-import { SquareCheck, ArrowRight } from 'lucide-react';
+import { SquareCheck, ArrowRight, Route } from 'lucide-react';
 import type { ChatItem, Task } from '../../types';
-import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
+import { C, FONT, SHADOW, TB } from '../../lib/design';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { dueLabel, isDueUrgent, openTaskInSection, PRIORITY_LABEL } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { useIsMobile } from '../../lib/breakpoints';
+import { focusFeatureStep, getHasPlanCard, openPillMenu } from '../../lib/featureRuns';
+import { laneOfChain } from './feature/PipelineFlow';
+import { Button } from '../ui';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolUseView } from './ToolUseView';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, ChatSessionContext } from './contexts';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -27,6 +32,14 @@ function parseTask(result: string): Task | null {
   } catch { /* не JSON — деградация в обычный блок инструмента */ }
   return null;
 }
+
+// Геометрия чипа «Шаг N фичи» (макет v1 .featchip): значения вне шкалы SP (gap 6,
+// padding 3/9, margin-top 11, minHeight 28) — константы; minHeight мобилы — TB.iconHitMobile (40).
+const CHIP_GAP = 6;
+const CHIP_PAD_Y = 3;
+const CHIP_PAD_X = 9;
+const CHIP_MARGIN_TOP = 11;
+const CHIP_MIN_H = 28;
 
 // Подпись ячейки сетки деталей
 function CellLabel({ children }: { children: React.ReactNode }) {
@@ -58,10 +71,20 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
   const project = useContext(ChatProjectContext);
+  // Id сессии чата: чип «Шаг N фичи» (F9) шлёт по ней сигнал фокуса в стор Ф1.
+  const sessionId = useContext(ChatSessionContext);
+  const isMobile = useIsMobile();
   const [hovered, setHovered] = useState(false);
   // Чип «Шаг N фичи» — за гейтом фич-флага: разметка (featureId/stepRef) уже в проде,
   // но чип показываем только когда режим «Исполнение фичи» включён.
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
+  // F9: есть ли в ленте живая карточка плана (пишет ChatPanel): есть — сигнал фокуса
+  // потребляется в ней, нет — клик по чипу открывает меню пилюли. Флаг читаем императивно
+  // (getHasPlanCard) на следующем кадре ПОСЛЕ клика, а не из stale-значения хука (Глеб:
+  // гонка ремоунта ChatPanel — при клике эффект ещё не написал флаг).
+  // Hover/фокус чипа: hover — подложка C.bgSelected + текст C.textPrimary, фокус — кольцо SHADOW.focus.
+  const [chipHot, setChipHot] = useState(false);
+  const [chipFocused, setChipFocused] = useState(false);
 
   const running = item.result === undefined;
   const task = useMemo(
@@ -87,6 +110,12 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   // Описание клампится в 2 строки — блочный markdown ломает кламп, показываем плоский текст
   const description = markdownToPlain(task?.description ?? '');
   const dueUrgent = task ? isDueUrgent(task) : false;
+  // F9: подпись чипа. Линия — из task.lane с той же нормализацией, что в конвейере
+  // (back/бэк → бэк, front/фронт → фронт); линии нет или она другая — суффикса нет.
+  const chipLane = task?.lane ? laneOfChain(task.lane) : 'other';
+  const chipLabel = task?.stepRef
+    ? `Шаг ${task.stepRef} фичи · Производство${chipLane === 'back' ? ', бэк' : chipLane === 'front' ? ', фронт' : ''}`
+    : '';
 
   return (
     <div
@@ -204,18 +233,53 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
             {labels.map(l => <LabelChip key={l} label={l} />)}
           </div>
         )}
-        {/* Чип «Шаг N фичи»: только когда режим «Исполнение фичи» включён И в ответе
-            tasks_create есть featureId И stepRef (Major 3 Глеба: без них чипа нет, чтобы
-            не врать про неразмеченные задачи) */}
+        {/* Чип «Шаг N фичи» (макет v1 п. 5): кнопка, открывающая план на этом шаге.
+            Только когда режим «Исполнение фичи» включён И в ответе tasks_create есть
+            featureId И stepRef (Major 3 Глеба: без них чипа нет, чтобы не врать про
+            неразмеченные задачи). Клик — stopPropagation: вся карточка — ссылка на задачу,
+            а чип открывает план (сигнал фокуса в сторе Ф1; без живой карточки плана —
+            меню пилюли). */}
         {featureMode && task?.featureId && task?.stepRef && (
-          <div style={{ marginTop: SP.md }}>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm,
-              color: C.textSecondary, background: C.bgCard, border: `1px solid ${C.borderLight}`,
-              borderRadius: R.md, padding: `${SP.xxs}px ${SP.sm}px`,
-            }}>
-              <span style={{ color: C.accent, fontWeight: 700 }}>●</span>
-              Шаг {task.stepRef} фичи
+          <div style={{ marginTop: CHIP_MARGIN_TOP }}>
+            <span
+              onMouseEnter={() => setChipHot(true)}
+              onMouseLeave={() => setChipHot(false)}
+              onFocus={() => setChipFocused(true)}
+              onBlur={() => setChipFocused(false)}
+            >
+              <Button
+                size="xs"
+                variant="ghost"
+                title="Открыть план фичи на этом шаге"
+                leftIcon={<Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (task && sessionId) {
+                    focusFeatureStep(sessionId, task.featureId!, task.id);
+                    // Гонка (Глеб): при ремоунте ChatPanel флаг «живая карточка плана» может быть
+                    // ещё false в момент клика (эффект не отработал) → чип откроет меню пилюли,
+                    // а карточка в ленте тоже раскроется. Читаем флаг на следующем кадре (после
+                    // клика, когда эффект уже отработал), а не из stale-значения при клике.
+                    requestAnimationFrame(() => {
+                      if (!getHasPlanCard(sessionId)) openPillMenu(sessionId);
+                    });
+                  }
+                }}
+                style={{
+                  display: 'inline-flex',
+                  gap: CHIP_GAP,
+                  padding: `${CHIP_PAD_Y}px ${CHIP_PAD_X}px`,
+                  minHeight: isMobile ? TB.iconHitMobile : CHIP_MIN_H,
+                  height: 'auto',
+                  background: chipHot ? C.bgSelected : C.bgCard,
+                  color: chipHot ? C.textPrimary : C.textSecondary,
+                  border: `1px solid ${C.borderLight}`,
+                  boxShadow: chipFocused ? SHADOW.focus : 'none',
+                  fontWeight: 400,
+                }}
+              >
+                {chipLabel}
+              </Button>
             </span>
           </div>
         )}

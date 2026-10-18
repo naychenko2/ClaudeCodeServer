@@ -14,12 +14,15 @@ import type { FeatureChip, FeatureIndexFeature } from '../types/featureIndex';
 // одна строка с горизонтальной прокруткой, высота 36 (тач-цель, TB.iconHitMobile
 // округлён вниз под компактный ряд: 36 ≥ минимума досягаемости пальцем).
 export function FeatureFilterChips({
-  features, selected, onSelect, isMobile = false,
+  features, selected, onSelect, isMobile = false, closedCount,
 }: {
   features: FeatureIndexFeature[];
   selected: FeatureChip;
   onSelect: (chip: FeatureChip) => void;
   isMobile?: boolean;
+  // Число «Закрытые» — из нарисованных групп (n3): единый источник с заголовком
+  // секции. Не задано — все закрытые фичи индекса (featureChipCounts)
+  closedCount?: number;
 }) {
   const counts = featureChipCounts(features);
   return (
@@ -48,20 +51,22 @@ export function FeatureFilterChips({
             key={value}
             variant="toggle"
             selected={isSel}
-            minHeight={isMobile ? 36 : undefined}
+            // Макет .fch: 26px на десктопе, 36px (тач-цель) на мобиле
+            minHeight={isMobile ? 36 : 26}
             onClick={() => onSelect(value)}
           >
             {/* Подпись без переноса: на 360 чип «Ждут вас»/«К мержу» не должен
                 распадаться на две строки (высота 36, одна строка с прокруткой) */}
             <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
             {/* Число: на заливке выбранного чипа (C.accent) — onAccent (читается);
-                не выбран — приглушённый textMuted (макет .fch .cnt) */}
+                не выбран — приглушённый textMuted (макет .fch .cnt). «Закрытые» —
+                из нарисованных групп (n3), если задано, иначе все закрытые фичи */}
             <span style={{
               fontFamily: FONT.mono, fontSize: FS.xs,
               color: isSel ? C.onAccent : C.textMuted,
               opacity: isSel ? 0.9 : 0.75,
             }}>
-              {counts[value]}
+              {value === 'closed' ? (closedCount ?? counts.closed) : counts[value]}
             </span>
           </Chip>
         );

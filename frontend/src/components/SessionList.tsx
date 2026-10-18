@@ -970,6 +970,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // Фич нет вовсе (индекс пуст): спокойный EmptyState — но БЕЗ раннего return (M1):
     // ниже остаются обычные чаты без фичи (группа «Без фичи»), иначе список пустел
     const noFeatures = allFeatures.length === 0;
+    // Нарисованные группы закрытых фич — ЕДИНЫЙ источник числа «Закрытые»: и в чипе,
+    // и в заголовке секции (n3). Фича без чатов группой не рисуется, поэтому это не
+    // «все закрытые фичи индекса», а только те, что реально на экране
+    const closedGroups = featureGroups.filter(g => g.feature && g.feature.bucket === 'closed');
 
     // Чипы со счётчиками (только когда есть фичи)
     const chips = !noFeatures && (
@@ -978,13 +982,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         selected={chip}
         onSelect={c => patch({ featureFilter: c })}
         isMobile={isMobile}
+        closedCount={closedGroups.length}
       />
     );
 
-    // Пустое: фич нет — спокойный EmptyState (рядом, а не вместо чатов)
+    // Пустое: фич нет — спокойный EmptyState (рядом, а не вместо чатов). inline (M1′):
+    // по содержимому, а не height:100% — иначе плашка тянулась на всю высоту панели,
+    // а под ней (в «Без фичи») ещё стояли обычные чаты
     const noFeaturesState = noFeatures && (
       <EmptyState
         compact
+        inline
         icon={<Sparkles size={20} strokeWidth={2} />}
         title="Фич пока нет"
         subtitle="Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу."
@@ -995,7 +1003,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const shownOpenIds = new Set(filterFeaturesByChip(openFeatures, chip).map(f => f.featureId));
     const openGroups = featureGroups.filter(g =>
       g.feature && g.feature.bucket !== 'closed' && shownOpenIds.has(g.feature.featureId));
-    const closedGroups = featureGroups.filter(g => g.feature && g.feature.bucket === 'closed');
     const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
 
     // «Смержена ДД.ММ» для спокойного состояния: последняя по МОМЕНТУ мержа закрытая

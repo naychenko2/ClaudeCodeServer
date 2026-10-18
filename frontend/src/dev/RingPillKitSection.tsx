@@ -58,7 +58,7 @@ interface Sample {
   empty?: boolean;                      // пилюли нет: на её месте — пояснение
   cache?: keyof typeof CACHE;           // циферблат кэша промпта
   waiting?: boolean;                    // идёт ход
-  handoff?: HandoffControl;             // кнопка «Перенести в новый чат» в секции кэша
+  handoff?: HandoffControl;             // «Перенести в новый чат»: секция кэша и, при warn/danger, ряд контекста
 }
 
 // Перенос в новый чат: в витрине клик ничего не делает; выключенный — с причиной текстом
@@ -75,6 +75,9 @@ const SAMPLES: Sample[] = [
   { caption: 'идёт ход — стрелка крутится', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', waiting: true },
   { caption: 'перенос в новый чат — кнопка в поповере', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'expiring', handoff: HANDOFF_ON },
   { caption: 'перенос выключен (групповой чат)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', handoff: HANDOFF_OFF },
+  { caption: 'контекст danger — «Перенести» рядом со сжатием', estimate: ctx(91), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', handoff: HANDOFF_ON },
+  { caption: 'контекст danger (мобила) — кнопки переносятся', estimate: ctx(91), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', compact: true, handoff: HANDOFF_ON },
+  { caption: 'DeepSeek, контекст warn — перенос без кэша (холодный)', estimate: ctx(72), cost: SOME_COST, provider: { name: 'DeepSeek', balance: DS_OK }, handoff: HANDOFF_ON },
   { caption: '5.1 обычное — худшее окно', estimate: ctx(62), windows: wins({ five_hour: 0.81, seven_day: 0.34, seven_day_opus: 0.12 }) },
   { caption: '5.1 контекст danger перебивает', estimate: ctx(92), windows: wins({ five_hour: 0.41, seven_day: 0.12 }) },
   { caption: '5.1 окно вне колец (Opus 95%) красит рамку', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.3, seven_day_opus: 0.95 }) },

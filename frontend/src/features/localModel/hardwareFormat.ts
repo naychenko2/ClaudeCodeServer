@@ -72,7 +72,9 @@ export function hwTileView(report: HardwareReport): HwTileView[] {
     } else if (node.kind === 'vrm') {
       sensorLabel = 'цепи питания на плате';
     } else if (node.kind === 'chipset') {
-      if (node.detail.fanRpm != null) detail = `вентилятор ${node.detail.fanRpm} об/мин`;
+      // Неразрывный пробел: «3859 об/мин» — неделимое, перенос (если не
+      // помещается) — перед «вентилятор», не внутри единицы «об/мин».
+      if (node.detail.fanRpm != null) detail = `вентилятор ${node.detail.fanRpm} об/мин`;
     } else if (node.kind === 'disk') {
       dec = true;
       if (node.detail.role === 'kv') {
@@ -199,9 +201,17 @@ export function hwBriefMem(brief: HardwareBrief): string {
   return `память ${parts.join(' · ')}`;
 }
 
-// Худший уровень по сводке (для точки на вкладке).
+// Уровень всего стенда по сводке (для точки на самой вкладке «Железо»:
+// там красная верна, если, например, перегрет диск кэша).
 export function hwBriefLevel(brief: HardwareBrief): HwLevel {
   return brief.level;
+}
+
+// Худший уровень КАРТ по сводке (для точки строки-ссылки «Видеокарты»).
+// Точка строки = худший уровень карт, а не уровень стенда: красный диск кэша
+// не должен красить строку карт (память карт 70/88 °C — норма → точка зелёная).
+export function hwBriefGpusLevel(brief: HardwareBrief): HwLevel {
+  return hwWorst(brief.gpus.map(g => g.level));
 }
 
 // «перегрев» (thermal) / «в лимите мощности» (powerCap) по сводке.

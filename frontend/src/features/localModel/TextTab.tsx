@@ -40,13 +40,21 @@ function Card({ title, right, children }: { title: string; right?: React.ReactNo
   );
 }
 
-// «Движок {имя} это не сообщает» — вместо блока, чьё поле движок не отдал
-// (не рисовать нули: ноль — это значение, а не отсутствие данных)
+// Текст «не сообщает»: с именем движка — «Движок {имя} это не сообщает»,
+// без имени — «Движок этого не сообщает» (иначе было бы «Движок движок»).
+// Чистая функция — тестируется отдельно (TextTab.test.ts).
+export function notReportedText(engine: string | null | undefined): string {
+  const name = engine?.trim();
+  return name ? `Движок ${name} это не сообщает` : 'Движок этого не сообщает';
+}
+
+// «Движок {имя} это не сообщает» / «Движок этого не сообщает» — вместо блока,
+// чьё поле движок не отдал (не рисовать нули: ноль — это значение, а не
+// отсутствие данных).
 function NotReported({ data }: { data: LocalModelStats }) {
-  const engine = data.engine?.trim() || 'движок';
   return (
     <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
-      Движок {engine} это не сообщает
+      {notReportedText(data.engine)}
     </p>
   );
 }

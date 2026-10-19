@@ -336,6 +336,25 @@ public class TeamImplementPromptsTests
             "агентские сборки должны подавлять лишний шум — иначе контекст забивается");
     }
 
+    // Шаг 5.3 пачки I: блок «Тестирование» ссылается на scripts/tests-affected.sh
+    // (шаг 5.1 Марка) точным именем, а не placeholder. Подмена placeholder на мусор
+    // ловится здесь: тест краснеет и на возврате placeholder, и на чужом имени.
+    // Тест читает вывод функции SubtaskDescription — это и есть контракт для исполнителя.
+    [Fact]
+    public void SubtaskDescription_НеСодержитPlaceholderСкрипта_И_ЗоветСкриптПоТочномуИмени()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().NotContain("<скрипт из 5.1>",
+            "placeholder сдан после шага 5.1 — заменить на scripts/tests-affected.sh");
+        text.Should().Contain("bash scripts/tests-affected.sh",
+            "исполнитель должен звать скрипт по точному имени (шаг 5.1), не абстрактно «scripts/»");
+        text.Should().NotContain("bash scripts/wrong.sh",
+            "конкретное «мусорное» имя в блоке — явный сигнал отката placeholder");
+        text.Should().NotContain("scripts/<",
+            "синтаксис вида `scripts/<…>` в сданном коде недопустим — placeholder не должен вернуться");
+    }
+
     [Fact]
     public void SubtaskDescription_СодержитБлокСверкиЧерезTrx()
     {

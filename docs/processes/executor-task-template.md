@@ -30,7 +30,7 @@
 > его от случая к случаю: текст общий, изменения — только в `SubtaskDescription`.
 
 На итерации запускай **только** затронутые тест-проекты.
-Определить их: `bash scripts/<скрипт из 5.1>` (по `git diff` + графу `ProjectReference`,
+Определить их: `bash scripts/tests-affected.sh` (по `git diff` + графу `ProjectReference`,
 включая транзитивное замыкание).
 Полный прогон `dotnet test backend/ClaudeHomeServer.slnx` — только перед мержем в master.
 Агентские сборки: `dotnet build -v q -clp:ErrorsOnly` (минимум шума, максимум сигнала).
@@ -49,6 +49,5 @@
 
 - [team-implement-mode.md](../architecture/team-implement-mode.md) — режим «Командная реализация» целиком.
 - [tests-by-module-plan-2026-10.md](../research/tests-by-module-plan-2026-10.md) — пачка I, шаг 5.3.
-- [tests-affected скрипт](../../scripts/) — результат шага 5.1 (имя скрипта уточняется
-  после сдачи шага 5.1 Марком; до этого в тексте блока «Тестирование» стоит
-  `<скрипт из 5.1>`).
+- [tests-affected скрипт](../../scripts/tests-affected.sh) — результат шага 5.1 (подан
+  в блоке «Тестирование» как `bash scripts/tests-affected.sh`).

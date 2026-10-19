@@ -577,14 +577,13 @@ public static class TeamImplementPrompts
             : subtask.DoneCriteria.Trim());
 
         // Шаг 5.3 фичи «Модульные тесты»: отвязать от монолита и разнести по вертикалям.
-        // На итерации — только затронутые тест-проекты (скрипт из 5.1), полный slnx —
-        // перед мержем, агентские сборки — с `-v q -clp:ErrorsOnly`. Имя скрипта — placeholder
-        // до сдачи шага 5.1 Марком; после — обновить в этом методе и в
-        // docs/processes/executor-task-template.md синхронно.
+        // На итерации — только затронутые тест-проекты (scripts/tests-affected.sh, шаг 5.1),
+        // полный slnx — перед мержем, агентские сборки — с `-v q -clp:ErrorsOnly`.
+        // Имя скрипта синхронизировано с docs/processes/executor-task-template.md.
         sb.AppendLine();
         sb.AppendLine("## Тестирование");
         sb.AppendLine("На итерации запускай **только** затронутые тест-проекты. " +
-                      "Определить их: `bash scripts/<скрипт из 5.1>` (по `git diff` + графу " +
+                      "Определить их: `bash scripts/tests-affected.sh` (по `git diff` + графу " +
                       "`ProjectReference`). Полный прогон `dotnet test backend/ClaudeHomeServer.slnx` " +
                       "— только перед мержем в master. Агентские сборки: " +
                       "`dotnet build -v q -clp:ErrorsOnly` (минимум шума, максимум сигнала).");

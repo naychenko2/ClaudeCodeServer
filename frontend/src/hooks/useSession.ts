@@ -34,6 +34,27 @@ const MAX_CACHED_SESSIONS = 20;
 const loadHistory = (sid: string, projectId?: string) =>
   projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
 
+// Общий in-flight promise истории на sid: параллельные запросы одного чата
+// (joinAndLoadHistory + reloadHistory при монтировании, hover-warm, reconnect)
+// сливаются в один fetch. HAR: 28 вызова history за 1,5 мин навигации — дубли.
+const _historyInFlight = new Map<string, Promise<unknown[]>>();
+// fresh=true — нужен снимок НЕ СТАРШЕ момента вызова (конец хода, вход в группу): запрос,
+// уже летящий, мог стартовать раньше и снимок не покрыть, поэтому ждём его и берём
+// следующий. Параллельные fresh-вызовы схлопываются во ВТОРОЙ общий запрос.
+function loadHistoryOnce(sid: string, projectId?: string, fresh = false): Promise<unknown[]> {
+  const existing = _historyInFlight.get(sid);
+  if (existing) {
+    if (!fresh) return existing;
+    const next = () => loadHistoryOnce(sid, projectId);
+    return existing.then(next, next);
+  }
+  const p = loadHistory(sid, projectId).finally(() => {
+    if (_historyInFlight.get(sid) === p) _historyInFlight.delete(sid);
+  });
+  _historyInFlight.set(sid, p);
+  return p;
+}
+
 // Нормализация истории с опциями текущей сессии (derive разделителей в групповом чате)
 const normalizeFor = (sid: string, raw: unknown[]) =>
   normalizeHistory(raw, { deriveSpeakers: getState(sid).isGroup });
@@ -55,9 +76,9 @@ function historyTurnFinished(items: ChatItem[]): boolean {
 // (сервер — источник истины, сверка — serverHistoryNewer). Заодно лечит залипший
 // isWaiting: у завершённого хвоста ход точно кончился, даже если событие result
 // прошло мимо клиента, пока он был вне SignalR-группы.
-async function reloadHistory(sid: string, projectId?: string) {
+async function reloadHistory(sid: string, projectId?: string, fresh = false) {
   try {
-    const raw = await loadHistory(sid, projectId);
+    const raw = await loadHistoryOnce(sid, projectId, fresh);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       if (serverHistoryNewer(items, prev.items))
@@ -345,7 +366,11 @@ function ensureHandler() {
     if (msg.type === 'status_changed') {
       // Флаг сверяем ДО применения редьюсера — prev держит клиентское состояние
       noteReconcileResult(sid, prev.isWaiting, msg.status);
-      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId);
+      // Ход только что кончился (prev.isWaiting=true) — нужен fresh-снимок: запрос,
+      // летящий с момента открытия, стартовал ДО конца хода и его снимок устарел.
+      // Replay active у простаивающего чата (prev.isWaiting=false) схлопывается с
+      // загрузкой открытия — нового fetch не плодим.
+      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId, prev.isWaiting);
     }
   });
 
@@ -388,7 +413,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
   const joinedBeforeHistory = joinDone;
 
   try {
-    const raw = await loadHistory(sid, projectId);
+    const raw = await loadHistoryOnce(sid, projectId);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       // Сервер — источник истины: используем его данные, если история новее
@@ -411,7 +436,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // Снимок ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют».
       // Нужен только когда в группу мы вошли уже ПОСЛЕ снятия истории (join не уложился
       // в JOIN_WAIT_MS): иначе история и так снята из-под живой подписки.
-      if (!joinedBeforeHistory) return reloadHistory(sid, projectId);
+      if (!joinedBeforeHistory) return reloadHistory(sid, projectId, true);
     })
     .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
@@ -436,7 +461,7 @@ export function warmSession(sid: string, projectId?: string, isGroup?: boolean) 
   // не старее серверной и не заменила.
   if (isGroup !== undefined && getState(sid).isGroup !== isGroup)
     setState(sid, prev => ({ ...prev, isGroup }));
-  loadHistory(sid, projectId)
+  loadHistoryOnce(sid, projectId)
     .then(raw => {
       const items = normalizeFor(sid, raw);
       setState(sid, prev => {

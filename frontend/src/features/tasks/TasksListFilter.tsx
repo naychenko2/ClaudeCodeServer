@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom';
 import { Funnel } from 'lucide-react';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { IconButton } from '../../components/ui';
+import { IconButton, Chip } from '../../components/ui';
 import {
   STATUS_DOT, STATUS_LABEL, PRIORITY_COLOR, PRIORITY_LABEL, PRIORITY_ORDER, daysFromToday,
 } from '../../lib/tasks';
@@ -307,7 +307,9 @@ function FilterBadge({ count, style }: { count: number; style: CSSProperties }) 
 
 // === Секции фильтров ===
 
-function FilterSections({ filters, onFilters, mobile }: {
+// Экспортируется для рендер-теста: чи́пы-фильтры (статус/приоритет/срок) — общий ui/Chip
+// variant="toggle"; клик переключает группу. «Исполнитель» — отдельный сегмент, не чип.
+export function FilterSections({ filters, onFilters, mobile }: {
   filters: TaskListFilters;
   onFilters: (f: TaskListFilters) => void;
   mobile: boolean;
@@ -318,13 +320,14 @@ function FilterSections({ filters, onFilters, mobile }: {
       <FilterSection label="Статус">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           {STATUS_FILTER_ORDER.map(s => (
-            <FilterChip
-              key={s} mobile={mobile} active={filters.status.includes(s)}
-              dot={STATUS_DOT[s]}
+            <Chip
+              key={s} variant="toggle" large={mobile}
+              selected={filters.status.includes(s)}
               onClick={() => onFilters({ ...filters, status: toggleIn(filters.status, s) })}
             >
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATUS_DOT[s], flexShrink: 0 }} />
               {STATUS_LABEL[s]}
-            </FilterChip>
+            </Chip>
           ))}
         </div>
       </FilterSection>
@@ -355,13 +358,14 @@ function FilterSections({ filters, onFilters, mobile }: {
       <FilterSection label="Приоритет">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           {PRIORITY_ORDER.map(p => (
-            <FilterChip
-              key={p} mobile={mobile} active={filters.priorities.includes(p)}
-              dot={PRIORITY_COLOR[p]}
+            <Chip
+              key={p} variant="toggle" large={mobile}
+              selected={filters.priorities.includes(p)}
               onClick={() => onFilters({ ...filters, priorities: toggleIn(filters.priorities, p) })}
             >
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: PRIORITY_COLOR[p], flexShrink: 0 }} />
               {PRIORITY_LABEL[p]}
-            </FilterChip>
+            </Chip>
           ))}
         </div>
       </FilterSection>
@@ -370,13 +374,14 @@ function FilterSections({ filters, onFilters, mobile }: {
       <FilterSection label="Срок">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           {DUE_FILTER_OPTIONS.map(o => (
-            <FilterChip
-              key={o.key} mobile={mobile} active={filters.due.includes(o.key)}
-              dot={o.dot}
+            <Chip
+              key={o.key} variant="toggle" large={mobile}
+              selected={filters.due.includes(o.key)}
               onClick={() => onFilters({ ...filters, due: toggleIn(filters.due, o.key) })}
             >
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: o.dot, flexShrink: 0 }} />
               {o.label}
-            </FilterChip>
+            </Chip>
           ))}
         </div>
       </FilterSection>
@@ -390,28 +395,6 @@ function FilterSection({ label, children }: { label: string; children: ReactNode
       <span style={SECTION_LABEL}>{label}</span>
       {children}
     </div>
-  );
-}
-
-// Чип мультивыбора: точка-цвет + лейбл; активный — accentLight + accent-рамка.
-function FilterChip({ active, dot, mobile, onClick, children }: {
-  active: boolean; dot: string; mobile: boolean; onClick: () => void; children: ReactNode;
-}) {
-  return (
-    <button
-      type="button" onClick={onClick}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-        padding: mobile ? '7px 12px' : '5px 10px',
-        border: `1px solid ${active ? C.accent : C.border}`, borderRadius: R.max,
-        background: active ? C.accentLight : C.bgWhite,
-        fontFamily: FONT.sans, fontSize: mobile ? 12.5 : 12, fontWeight: active ? 700 : 500,
-        color: active ? C.textHeading : C.textPrimary,
-      }}
-    >
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
-      {children}
-    </button>
   );
 }
 

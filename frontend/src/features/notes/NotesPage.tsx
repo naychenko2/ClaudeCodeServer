@@ -7,7 +7,7 @@ import {
   api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG,
   useOnline, OfflineError, createNoteOffline,
   parseHash, navPush, navReplace, getNav,
-  Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE,
+  Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
 } from 'aihome_shell/kit';
 import type { NavSnapshot } from 'aihome_shell/kit';
@@ -43,19 +43,6 @@ function toggleToken(query: string, token: string, exclusivePrefix?: string): st
     parts.push(token);
   }
   return parts.join(' ');
-}
-
-function FilterChip({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      border: `1px solid ${on ? C.accent : C.border}`, borderRadius: 12,
-      padding: '2px 9px', fontSize: 11, cursor: 'pointer', fontFamily: FONT.sans,
-      background: on ? C.accentMuted : 'transparent',
-      color: on ? C.textHeading : C.textMuted, fontWeight: on ? 600 : 400,
-      maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    }}>{label}</button>
-  );
 }
 
 const filterCap: React.CSSProperties = {
@@ -318,11 +305,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           ради одного клика фича и делалась, за раскрытием «Фильтров» она бы потерялась */}
       {listMode && favoriteCount > 0 && (
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-          <FilterChip
-            on={hasToken(query, FAVORITE_TOKEN)}
-            label={`★ Избранное · ${favoriteCount}`}
+          <Chip
+            variant="toggle"
+            selected={hasToken(query, FAVORITE_TOKEN)}
             onClick={() => setQuery(toggleToken(query, FAVORITE_TOKEN))}
-          />
+          >
+            ★ Избранное · {favoriteCount}
+          </Chip>
         </div>
       )}
       {/* Фильтры списка — свёрнутая группа (бейдж показывает активные, когда закрыта).
@@ -351,13 +340,20 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                 {(tagsExpanded ? allTags : allTags.slice(0, TAGS_COLLAPSED)).map(([tag, count]) => {
                   const token = `tag:${tag}`;
                   return (
-                    <FilterChip key={tag} on={hasToken(query, token)} label={`#${tag} · ${count}`}
-                      onClick={() => setQuery(toggleToken(query, token))} />
+                    <Chip key={tag} variant="toggle" maxW="100%"
+                      selected={hasToken(query, token)}
+                      onClick={() => setQuery(toggleToken(query, token))}
+                    >
+                      #{tag} · {count}
+                    </Chip>
                   );
                 })}
                 {allTags.length > TAGS_COLLAPSED && (
-                  <FilterChip on={false} label={tagsExpanded ? 'Свернуть' : `+${allTags.length - TAGS_COLLAPSED}`}
-                    onClick={() => setTagsExpanded(v => !v)} />
+                  <Chip variant="toggle" selected={false}
+                    onClick={() => setTagsExpanded(v => !v)}
+                  >
+                    {tagsExpanded ? 'Свернуть' : `+${allTags.length - TAGS_COLLAPSED}`}
+                  </Chip>
                 )}
               </div>
             </div>
@@ -374,9 +370,12 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                   ['status:resolved', 'Решённые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'resolved').length],
                   ['status:orphaned', 'Сироты', null],
                 ] as const).map(([token, label, count]) => (
-                  <FilterChip key={token} on={hasToken(query, token)}
-                    label={count != null && count > 0 ? `${label} · ${count}` : label}
-                    onClick={() => setQuery(toggleToken(query, token, 'status:'))} />
+                  <Chip key={token} variant="toggle"
+                    selected={hasToken(query, token)}
+                    onClick={() => setQuery(toggleToken(query, token, 'status:'))}
+                  >
+                    {count != null && count > 0 ? `${label} · ${count}` : label}
+                  </Chip>
                 ))}
               </div>
             </div>

@@ -7048,12 +7048,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!IsTailIntactForResume(sessionId))
             return new RestartResumeResult(false, "Хвост транскрипта повреждён");
 
-        // 3. Гидратация аккумулятора ДО карточки: карточка пишется в историю.
-        await EnsureAccumulatorAsync(entry);
-
-        // 4. Карточка в ленту: человек видит, что сервер перезапущен и ход продолжается.
-        await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "server_restart",
-            "Сервер был перезапущен — продолжаю ход с того же места");
+        // 3. Явная гидратация аккумулятора + карточка в ленту.
+        //    EnsureAccumulatorAsync создаёт аккумулятор из существующей истории, но в
+        //    сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор может
+        //    остаться null, если LoadAsync вернул пустой список и TurnAccumulator не создан.
+        //    Явная гидратация гарантирует, что карточка дописана в _history и сохранена.
+        await AppendServerRestartCardAsync(sessionId, entry);
 
         // 5. Счётчик попыток + сохранение. UpdatedAt не двигаем: SaveSessions лишь
         //    персистит, Touch/UpdatedAt=now здесь не вызываем (служебная операция).
@@ -7198,6 +7198,32 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task AddWorkLoopStoppedNoticeAsync(string sessionId, SessionEntry entry, string reason, string text)
     {
         if (entry.Accumulator is not { } acc) return;
+        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
+        await acc.SaveSnapshotAsync(_history);
+        await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
+    }
+
+    // Явная гидратация аккумулятора + идемпотентная карточка server_restart (B-cards).
+    // В отличие от AddWorkLoopStoppedNoticeAsync (молча выходит при null), здесь аккумулятор
+    // создаётся явно: в сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор
+    // после LoadSessions может быть null, и AddWorkLoopStoppedNoticeAsync просто выходил.
+    // Идемпотентность: если карточка с reason=server_restart уже в _history (повторный вызов
+    // после рестарта), не дублируем.
+    private async Task AppendServerRestartCardAsync(string sessionId, SessionEntry entry)
+    {
+        const string reason = "server_restart";
+        const string text = "Сервер был перезапущен — продолжаю ход с того же места";
+
+        // Явная гидратация: если аккумулятор null — создаём из существующей истории.
+        if (entry.Accumulator is null)
+            await EnsureAccumulatorAsync(entry);
+
+        if (entry.Accumulator is not { } acc) return;
+
+        // Идемпотентность: карточка с таким reason уже есть — не дублируем.
+        if (acc.GetAll().Any(m => m is StoredWorkLoopStoppedMessage w && w.Reason == reason))
+            return;
+
         acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
         await acc.SaveSnapshotAsync(_history);
         await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));

@@ -142,11 +142,13 @@ public class ResumeAfterRestartAsyncTests : IDisposable
         File.WriteAllText(_sessionsJsonPath, json);
     }
 
-    private Session MakeSession(SessionStatus status, string projectId = "proj-1") =>
+    private Session MakeSession(SessionStatus status, string projectId = "proj-1",
+        string? claudeSessionId = null) =>
         new Session
         {
             Id = Guid.NewGuid().ToString(),
             ProjectId = projectId,
+            ClaudeSessionId = claudeSessionId,
             Status = status,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -246,5 +248,49 @@ public class ResumeAfterRestartAsyncTests : IDisposable
         sut.OpLog.Should().Equal(["card_before_send"],
             "карточка server_restart пишется в историю ДО отправки resume-хода " +
             "(Append раньше OnUserMessage; перестановка шагов даёт send_before_card)");
+    }
+
+    // --- 6. Карточка work_loop_stopped на ДИСКЕ (history.json) ---
+    // Тест 1 проверяет in-memory (GetHistoryAsync читает аккумулятор). V1 нашёл, что
+    // карточка теряется именно на диске: user-директива в истории, а карточки нет.
+    // Сценарий 1: чат уже имел ClaudeSessionId (реальный ход шёл), после рестарта
+    // история пишется под ClaudeSessionId, не под Id. Мутация: убрать гидратацию
+    // (EnsureAccumulatorAsync) или AddWorkLoopStoppedNoticeAsync → карточки на диске нет.
+    [Fact]
+    public async Task ResumeAfterRestart_КарточкаНаДиске()
+    {
+        var csid = "csid-" + Guid.NewGuid().ToString("N");
+        var session = MakeSession(SessionStatus.Orphaned, claudeSessionId: csid);
+        WriteSessions([session]);
+        var sut = CreateSpySessionManager();
+
+        var result = await sut.ResumeAfterRestartAsync(session.Id);
+        result.Sent.Should().BeTrue("кандидат Orphaned — возобновлён");
+
+        // history.json: data/sessions/{ClaudeSessionId}/history.json (ключ = HistoryKeyOf = ClaudeSessionId)
+        var historyPath = Path.Combine(_tempDir, "sessions", csid, "history.json");
+        File.Exists(historyPath).Should().BeTrue("history.json под ClaudeSessionId создан после resume");
+        var raw = File.ReadAllText(historyPath);
+        raw.Should().Contain("\"work_loop_stopped\"", "карточка work_loop_stopped на диске");
+        raw.Should().Contain("\"server_restart\"", "reason=server_restart на диске");
+    }
+
+    // --- 7. RestartResumeAttempts == 1 на ДИСКЕ (sessions.json) ---
+    // Тест 3 проверяет in-memory (GetById). V1 нашёл, что счётчик остаётся 0 на диске.
+    // Мутация: убрать += 1 или SaveSessions() → счётчик 0 на диске → тест краснеет.
+    [Fact]
+    public async Task ResumeAfterRestart_СчётчикНаДиске()
+    {
+        var session = MakeSession(SessionStatus.Orphaned);
+        WriteSessions([session]);
+        var sut = CreateSpySessionManager();
+
+        var result = await sut.ResumeAfterRestartAsync(session.Id);
+        result.Sent.Should().BeTrue("кандидат Orphaned — возобновлён");
+
+        // sessions.json: SaveSessions сериализует с _jsonOpts (без PropertyNamingPolicy → PascalCase)
+        var raw = File.ReadAllText(_sessionsJsonPath);
+        raw.Should().Contain("\"RestartResumeAttempts\":1",
+            "RestartResumeAttempts=1 записан в sessions.json");
     }
 }

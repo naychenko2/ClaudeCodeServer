@@ -122,6 +122,16 @@ export function refetchFeaturePage(fid: string) {
   fetchPage(fid, true);
 }
 
+// «Показать все» (макет §5): перезапрос ленты БЕЗ лимита (eventsLimit='all').
+// Не сбрасывает в loading: данные уже есть, просто обновляем events/eventsTotal.
+// Действует, только пока страница открыта (_fid === fid).
+export function refetchFeaturePageAll(fid: string) {
+  if (_fid !== fid) return;
+  void api.tasks.getFeature(fid, 'all')
+    .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
+    .catch(() => {});
+}
+
 // Хук: данные страницы фичи.
 //   `fid` — id эпика; null — страница закрыта (сброс в loading, запрос не идёт).
 // Один первичный запрос на открытие/смену fid; live-перезапрос по task_changed (дебаунс).

@@ -33,10 +33,12 @@ const mockIndex = vi.hoisted(() => ({
 // Управляемые ответы api.chats.get: id чата → Session (name).
 const mockChats = vi.hoisted(() => new Map<string, Session>());
 // Управляемый ответ api.tasks.getFeature: pending (загрузка) / error (статус) / result (ok).
+// calls — журнал вызовов (fid + eventsLimit) для проверки «Показать все».
 const mockGetFeature = vi.hoisted(() => ({
   pending: false,
   result: null as FeaturePageData | null,
   error: null as (Error & { status?: number }) | null,
+  calls: [] as { fid: string; eventsLimit?: string }[],
 }));
 
 vi.mock('../../lib/api', () => ({
@@ -44,7 +46,8 @@ vi.mock('../../lib/api', () => ({
     chats: { get: async (id: string) => mockChats.get(id) ?? null },
     tasks: {
       featuresIndex: async () => mockIndex,
-      getFeature: () => {
+      getFeature: (fid: string, eventsLimit?: string) => {
+        mockGetFeature.calls.push({ fid, eventsLimit });
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});
         if (mockGetFeature.error) return Promise.reject(mockGetFeature.error);
         return Promise.resolve(mockGetFeature.result!);
@@ -109,8 +112,10 @@ function render(props: { featureId?: string; projectId?: string | null; isMobile
 }
 
 // Дождаться разрешения fetch (fake timers + microtasks) → финальное состояние страницы.
+// advanceTimersByTime(2000): прогоняет debounce 1,5 с и microtasks, но НЕ interval 60 с
+// (useMinuteTick в PipelineFlow — иначе 10000 ререндеров = infinite loop).
 async function settle() {
-  await act(async () => { await vi.runAllTimersAsync(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
 }
 
 describe('FeaturePage: пять состояний + шапка + тревога', () => {
@@ -127,6 +132,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     mockGetFeature.pending = false;
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
+    mockGetFeature.calls = [];
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   });
   afterEach(() => {
@@ -324,5 +330,111 @@ describe('FeaturePage: пять состояний + шапка + тревога
     const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', onBack: () => {} }));
     expect(html).toContain('cc-feature-page-crumb');
     expect(html).toContain('Hanken Grotesk');
+  });
+
+  // === Ф2.5: чаты фичи — ключевой первым ===
+  it('Ф2.5: чаты фичи — ключевой чат первым, остальные по порядку индекса', async () => {
+    // Два чата: 'chat-key' (ключевой) и 'chat-other'.
+    // В индексе 'chat-other' идёт ПЕРЕД 'chat-key' (Object.entries порядок).
+    mockIndex.chats = {
+      'chat-other': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'back' }],
+      'chat-key':   [{ featureId: 'f1', kind: 'curator',  taskRole: null,  stepRef: null,  lane: null }],
+    };
+    mockIndex.features = [feat({ keySessionId: 'chat-key', keyArchived: false })];
+    const c = render({});
+    await settle();
+    // Ключевой чат — первым.
+    const keyRow = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key');
+    const otherRow = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-other');
+    expect(keyRow).not.toBeNull();
+    expect(otherRow).not.toBeNull();
+    // Ключевой — раньше в DOM: рекурсивный обход childNodes, собираем data-testid.
+    const order: string[] = [];
+    const walk = (n: { childNodes: unknown[]; attributes?: Record<string, string> }) => {
+      const at = (n as { attributes?: Record<string, string> }).attributes;
+      if (at && at['data-testid'] && at['data-testid'].startsWith('feature-chat-')) {
+        order.push(at['data-testid']);
+      }
+      for (const ch of (n.childNodes as { childNodes: unknown[]; attributes?: Record<string, string> }[])) {
+        walk(ch as never);
+      }
+    };
+    walk(c as never);
+    expect(order.indexOf('feature-chat-chat-key')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('feature-chat-chat-key')).toBeLessThan(order.indexOf('feature-chat-chat-other'));
+  });
+
+  // === Ф2.5: архивный ключевой чат помечен ===
+  it('Ф2.5: архивный ключевой чат — метка «архив»', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    mockIndex.features = [feat({ keySessionId: 'chat-key', keyArchived: true })];
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    expect(textNodes(row).join('')).toContain('архив');
+  });
+
+  // === Ф2.5: «Показать все» — перезапрос без лимита ===
+  it('Ф2.5: «Показать все» перезапрашивает getFeature с eventsLimit=all', async () => {
+    // Лента обрезана: 2 события, всего 5.
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
+        { at: '2026-10-19T11:00:00Z', kind: 'completed', taskId: 't2', personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 5,
+    });
+    const c = render({});
+    await settle();
+    // Кнопка «Показать все» есть (лента обрезана).
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-show-all');
+    expect(btn).not.toBeNull();
+    // Клик.
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    await settle();
+    // Запрос с eventsLimit='all' (последний вызов).
+    const lastCall = mockGetFeature.calls[mockGetFeature.calls.length - 1];
+    expect(lastCall).toBeDefined();
+    expect(lastCall!.eventsLimit).toBe('all');
+  });
+
+  // === Ф2.5: событие без sessionId не даёт ссылки на чат ===
+  it('Ф2.5: событие без sessionId — нет ссылки «открыть чат»', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 1,
+    });
+    const c = render({});
+    await settle();
+    // Ссылка на чат — нет (sessionId = null).
+    const link = findNodeByAttr(c, 'data-testid', 'feature-event-chat-link-null');
+    expect(link).toBeNull();
+  });
+
+  // === Ф2.5: событие С sessionId даёт ссылку ===
+  it('Ф2.5: событие с sessionId — ссылка «открыть чат» на месте', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
+      ],
+      eventsTotal: 1,
+    });
+    const c = render({});
+    await settle();
+    const link = findNodeByAttr(c, 'data-testid', 'feature-event-chat-link-chat-x');
+    expect(link).not.toBeNull();
+  });
+
+  // === Ф2.5: «шагов нет» — пустое состояние ===
+  it('Ф2.5: «шагов нет» — пустое состояние в блоке Шаги', async () => {
+    // stepChains = [] (нет в pageData по умолчанию).
+    const c = render({});
+    await settle();
+    const all = textNodes(c).join('');
+    expect(all).toContain('Шагов пока нет');
   });
 });

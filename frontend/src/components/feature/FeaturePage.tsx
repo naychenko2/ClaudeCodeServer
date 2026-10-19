@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, refetchFeaturePageAll } from '../../lib/featurePage';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
@@ -16,6 +16,7 @@ import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../ui/Button';
 import { FeaturePageHeader, type FeatureStatusTag } from './FeaturePageHeader';
+import { FeaturePageBody, FeaturePageEvents } from './FeaturePageBody';
 import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 
@@ -190,8 +191,24 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       </Notice>
     );
   } else {
-    // ok: блок тревоги/итог (макет §5.3); конвейер/шаги/чаты/задачи/лента — шаг Ф2.5.
-    body = <AlarmBlock feature={feature} onMainAction={onMainAction} />;
+    // ok: блок тревоги/итог + конвейер/шаги/чаты/задачи/лента (макет §5, Ф2.5).
+    body = (
+      <>
+        <AlarmBlock feature={feature} onMainAction={onMainAction} />
+        <FeaturePageBody
+          run={page.page.run}
+          index={index}
+          feature={feature}
+          isMobile={isMobile}
+        />
+        <FeaturePageEvents
+          events={page.page.events}
+          eventsTotal={page.page.eventsTotal}
+          onShowAll={() => refetchFeaturePageAll(featureId)}
+          isMobile={isMobile}
+        />
+      </>
+    );
   }
 
   return (

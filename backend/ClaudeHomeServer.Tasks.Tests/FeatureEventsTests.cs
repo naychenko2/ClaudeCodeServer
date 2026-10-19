@@ -34,7 +34,8 @@ public class FeatureEventsTests
         DateTime? stoppedAt = null, string? stopReason = null,
         DateTime? droppedAt = null, string? linkedSessionId = null,
         string? verdict = null, string? notes = null,
-        DateTime? awaitingSince = null, string? awaitingReason = null) => new()
+        DateTime? awaitingSince = null, string? awaitingReason = null,
+        string? personaId = null, List<string>? reviewOf = null) => new()
     {
         Id = id,
         FeatureId = epicId,
@@ -51,6 +52,8 @@ public class FeatureEventsTests
         Verification = verdict is null ? null : new TaskVerification { Verdict = verdict, Notes = notes },
         AwaitingHumanSince = awaitingSince,
         AwaitingHumanReason = awaitingReason,
+        PersonaId = personaId,
+        ReviewOf = reviewOf,
     };
 
     // FeatureRun из эпика + дочерних (чистое ядро Build).
@@ -76,10 +79,13 @@ public class FeatureEventsTests
     public void BuildEvents_КаждыйВидСобытия()
     {
         var epic = Epic("epic", status: TaskItemStatus.Done, completedAt: new DateTime(2026, 10, 5, 12, 0, 0));
-        var s1 = Child("s1", "epic", status: TaskItemStatus.Done,
-            completedAt: new DateTime(2026, 10, 3, 10, 0, 0),
+        // s1 — InProgress: несёт started + stopped (stopped — только у незакрытой задачи).
+        var s1 = Child("s1", "epic", status: TaskItemStatus.InProgress,
             startedAt: new DateTime(2026, 10, 2, 9, 0, 0),
             stoppedAt: new DateTime(2026, 10, 2, 9, 30, 0), stopReason: "auth_failed");
+        // s2 — Done без вердикта: несёт completed.
+        var s2 = Child("s2", "epic", status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 3, 10, 0, 0));
         var r1 = Child("r1", "epic", role: TaskRoles.Review, status: TaskItemStatus.Done,
             completedAt: new DateTime(2026, 10, 4, 9, 0, 0), verdict: TaskVerdicts.Accepted, notes: "ok");
         var r2 = Child("r2", "epic", role: TaskRoles.Review, status: TaskItemStatus.Done,
@@ -94,14 +100,14 @@ public class FeatureEventsTests
             completedAt: new DateTime(2026, 10, 5, 11, 0, 0));
         var d1 = Child("d1", "epic", droppedAt: new DateTime(2026, 10, 3, 11, 0, 0));
 
-        var run = Run(epic, s1, r1, r2, r3, r4, f1, m1, d1);
+        var run = Run(epic, s1, s2, r1, r2, r3, r4, f1, m1, d1);
         var events = FeatureProjector.BuildEvents(run, Sessions());
 
-        // created — у каждой задачи (9 задач: эпик + 8 дочерних).
+        // created — у каждой задачи (10 задач: эпик + 9 дочерних).
         events.Should().Contain(e => e.Kind == "created" && e.TaskId == "epic" && e.At == T0);
         events.Should().Contain(e => e.Kind == "created" && e.TaskId == "s1" && e.At == T0);
 
-        // started/stopped — s1.
+        // started/stopped — s1 (InProgress).
         Find(events, "started", "s1").At.Should().Be(new DateTime(2026, 10, 2, 9, 0, 0));
         var stopped = Find(events, "stopped", "s1");
         stopped.At.Should().Be(new DateTime(2026, 10, 2, 9, 30, 0));
@@ -118,8 +124,8 @@ public class FeatureEventsTests
         waiting.At.Should().Be(new DateTime(2026, 10, 4, 13, 0, 0));
         waiting.Reason.Should().Be("decision");
 
-        // completed — s1 (Done, без вердикта); merged — m1; closed — эпик; dropped — d1.
-        Find(events, "completed", "s1").At.Should().Be(new DateTime(2026, 10, 3, 10, 0, 0));
+        // completed — s2 (Done, без вердикта); merged — m1; closed — эпик; dropped — d1.
+        Find(events, "completed", "s2").At.Should().Be(new DateTime(2026, 10, 3, 10, 0, 0));
         Find(events, "merged", "m1").At.Should().Be(new DateTime(2026, 10, 5, 11, 0, 0));
         Find(events, "closed", "epic").At.Should().Be(new DateTime(2026, 10, 5, 12, 0, 0));
         Find(events, "dropped", "d1").At.Should().Be(new DateTime(2026, 10, 3, 11, 0, 0));
@@ -211,8 +217,8 @@ public class FeatureEventsTests
     {
         var epic = Epic("epic");
         var longReason = new string('x', 250);
-        var stopped = Child("s", "epic", stoppedAt: new DateTime(2026, 10, 2, 9, 30, 0),
-            stopReason: longReason);
+        var stopped = Child("s", "epic", status: TaskItemStatus.InProgress,
+            stoppedAt: new DateTime(2026, 10, 2, 9, 30, 0), stopReason: longReason);
 
         var events = FeatureProjector.BuildEvents(Run(epic, stopped), Sessions());
         var e = Find(events, "stopped", "s");
@@ -237,5 +243,79 @@ public class FeatureEventsTests
         var completed = events.Where(e => e.Kind == "completed").ToList();
         // Восходя по taskId: aa, bb (order-sensitive).
         completed.Select(e => e.TaskId).Should().Equal("aa", "bb");
+    }
+
+    // ── 7. Новые поля: role / stepRef / personaId (атрибуты задачи, у всех видов) ───────────
+
+    // created несёт role/stepRef/personaId задачи; round — только у вердиктов (у created null).
+    [Fact]
+    public void BuildEvents_НовыеПоля_RoleStepRefPersona()
+    {
+        var epic = Epic("epic");
+        var step = Child("step1", "epic", role: TaskRoles.Step, stepRef: "B1",
+            personaId: "denis", status: TaskItemStatus.InProgress);
+
+        var events = FeatureProjector.BuildEvents(Run(epic, step), Sessions());
+
+        var created = Find(events, "created", "step1");
+        created.Role.Should().Be("step");
+        created.StepRef.Should().Be("B1");
+        created.PersonaId.Should().Be("denis");
+        created.Round.Should().BeNull();
+    }
+
+    // ── 8. round: номер витка из FeatureRound (стадия qa + цепочка шага) ─────────────────────
+
+    // qa-вердикт → номер витка из стадии qa (N=1); ревью-вердикт (ReviewOf→шаг) → из цепочки
+    // шага (N=1). Арифметику N не дублируем — берём из уже вычисленных FeatureRound.
+    [Fact]
+    public void BuildEvents_Вердикт_Round_ИзFeatureRound()
+    {
+        var epic = Epic("epic");
+        var qa = Child("qa1", "epic", role: TaskRoles.Qa, status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 4, 9, 0, 0), verdict: TaskVerdicts.Accepted, notes: "ok");
+        var step = Child("step1", "epic", role: TaskRoles.Step, stepRef: "B1",
+            status: TaskItemStatus.Done, completedAt: new DateTime(2026, 10, 3, 9, 0, 0));
+        var review = Child("rv1", "epic", role: TaskRoles.Review, status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 4, 10, 0, 0), verdict: TaskVerdicts.Returned,
+            notes: "вернул", reviewOf: new List<string> { "step1" });
+
+        var events = FeatureProjector.BuildEvents(Run(epic, qa, step, review), Sessions());
+
+        Find(events, "accepted", "qa1").Round.Should().Be(1);
+        Find(events, "returned", "rv1").Round.Should().Be(1);
+        // created того же ревью — без round (round только у вердиктов).
+        Find(events, "created", "rv1").Round.Should().BeNull();
+    }
+
+    // ── 9. stopped: только у незакрытой (InProgress) и только когда ExecutorStoppedAt > ClaudeStartedAt ─
+
+    // Закрытая (Done) задача со стопом — stopped НЕ показываем; InProgress со stale-стопом
+    // (ExecutorStoppedAt < ClaudeStartedAt) — тоже. Правило то же, что у Attention.
+    [Fact]
+    public void BuildEvents_Stopped_ТолькоНезакрытая_ИПослеСтарта()
+    {
+        var epic = Epic("epic");
+        // Done + ExecutorStoppedAt > ClaudeStartedAt → stopped отсутствует (закрыта).
+        var closed = Child("closed", "epic", status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 3, 10, 0, 0),
+            startedAt: new DateTime(2026, 10, 2, 9, 0, 0),
+            stoppedAt: new DateTime(2026, 10, 2, 9, 30, 0), stopReason: "auth_failed");
+        // InProgress, но ExecutorStoppedAt < ClaudeStartedAt (stale) → stopped отсутствует.
+        var stale = Child("stale", "epic", status: TaskItemStatus.InProgress,
+            startedAt: new DateTime(2026, 10, 2, 9, 30, 0),
+            stoppedAt: new DateTime(2026, 10, 2, 9, 0, 0), stopReason: "stale");
+        // InProgress, ExecutorStoppedAt > ClaudeStartedAt → stopped есть.
+        var live = Child("live", "epic", status: TaskItemStatus.InProgress,
+            startedAt: new DateTime(2026, 10, 2, 9, 0, 0),
+            stoppedAt: new DateTime(2026, 10, 2, 9, 30, 0), stopReason: "auth_failed");
+
+        var events = FeatureProjector.BuildEvents(Run(epic, closed, stale, live), Sessions());
+
+        events.Should().NotContain(e => e.Kind == "stopped" && e.TaskId == "closed");
+        events.Should().NotContain(e => e.Kind == "stopped" && e.TaskId == "stale");
+        var stopped = Find(events, "stopped", "live");
+        stopped.At.Should().Be(new DateTime(2026, 10, 2, 9, 30, 0));
+        stopped.Reason.Should().Be("auth_failed");
     }
 }

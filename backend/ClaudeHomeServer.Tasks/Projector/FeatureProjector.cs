@@ -410,6 +410,26 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Живые сессии владельца: sessionId события наружу только если в этом множестве.
         var live = new HashSet<string>(sessions.Select(s => s.Id));
 
+        // Номер витка: из УЖЕ вычисленных FeatureRound (цепочки шагов + стадии qa/final) —
+        // N берём, арифметику (N = i + 1) не пересчитываем. Ревью, попавшее в несколько цепочек
+        // (связка многие-ко-многие), даёт минимальный N (детерминизм).
+        var roundByTask = new Dictionary<string, int>();
+        void AddRound(FeatureRound r)
+        {
+            if (r.ReviewTaskId is null) return;
+            if (roundByTask.TryGetValue(r.ReviewTaskId, out var cur))
+                roundByTask[r.ReviewTaskId] = Math.Min(cur, r.N);
+            else
+                roundByTask[r.ReviewTaskId] = r.N;
+        }
+        foreach (var chain in run.StepChains)
+            foreach (var r in chain.Rounds)
+                AddRound(r);
+        foreach (var stage in run.Stages)
+            foreach (var r in stage.Rounds)
+                AddRound(r);
+        int? RoundOf(TaskItem t) => roundByTask.TryGetValue(t.Id, out var n) ? n : null;
+
         // Все задачи фичи: эпик + шаги/доработки + ревью + проверки + финал + мерж + cut + plan.
         var tasks = new List<TaskItem> { run.Epic };
         tasks.AddRange(run.Steps);
@@ -421,35 +441,44 @@ public sealed class FeatureProjector(TaskManager tasks)
         tasks.AddRange(run.Plan);
 
         var events = new List<FeatureEvent>();
+        // sessionId: LinkedSessionId задачи, наружу только если в снимке владельца (fail-closed).
+        string? SessionOf(TaskItem t) => t.LinkedSessionId is not null && live.Contains(t.LinkedSessionId)
+            ? t.LinkedSessionId : null;
+        // Событие задачи: kind/at/reason/round задаёт вид, остальное (role/stepRef/personaId/
+        // sessionId) — атрибуты самой задачи. Порядок аргументов — контракт §2:
+        // at, kind, taskId, role, stepRef?, personaId?, sessionId?, round?, reason?.
+        void Add(TaskItem t, string kind, DateTime at, string? reason, int? round = null) =>
+            events.Add(new FeatureEvent(at, kind, t.Id, t.Role, t.StepRef, t.PersonaId,
+                SessionOf(t), round, reason));
+
         foreach (var t in tasks)
         {
-            // sessionId: LinkedSessionId задачи, наружу только если в снимке владельца.
-            string? SessionOf() => t.LinkedSessionId is not null && live.Contains(t.LinkedSessionId)
-                ? t.LinkedSessionId : null;
-
             // created — всегда (момент создания задачи).
-            events.Add(new FeatureEvent("created", t.CreatedAt, t.Id, SessionOf(), null));
+            Add(t, "created", t.CreatedAt, null);
 
             // started — последний старт исполнителя (ClaudeStartedAt); журнал не заводим.
             if (t.ClaudeStartedAt is not null)
-                events.Add(new FeatureEvent("started", t.ClaudeStartedAt.Value, t.Id, SessionOf(), null));
+                Add(t, "started", t.ClaudeStartedAt.Value, null);
 
-            // stopped — последний стоп (ExecutorStoppedAt); reason = ExecutorStopReason.
-            if (t.ExecutorStoppedAt is not null)
-                events.Add(new FeatureEvent("stopped", t.ExecutorStoppedAt.Value, t.Id, SessionOf(),
-                    Truncate(t.ExecutorStopReason)));
+            // stopped — только у незакрытой (InProgress) задачи и только когда ExecutorStoppedAt >
+            // ClaudeStartedAt (то же правило, что у Attention: guard от stale-пометки).
+            // reason = ExecutorStopReason.
+            if (t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStoppedAt is not null
+                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
+                Add(t, "stopped", t.ExecutorStoppedAt.Value, Truncate(t.ExecutorStopReason));
 
             // waiting — «ждёт вас» (AwaitingHumanSince); reason = AwaitingHumanReason.
             if (t.AwaitingHumanSince is not null)
-                events.Add(new FeatureEvent("waiting", t.AwaitingHumanSince.Value, t.Id, SessionOf(),
-                    Truncate(t.AwaitingHumanReason)));
+                Add(t, "waiting", t.AwaitingHumanSince.Value, Truncate(t.AwaitingHumanReason));
 
             // dropped — снято человеком (DroppedByHumanAt); причины в модели нет.
             if (t.DroppedByHumanAt is not null)
-                events.Add(new FeatureEvent("dropped", t.DroppedByHumanAt.Value, t.Id, SessionOf(), null));
+                Add(t, "dropped", t.DroppedByHumanAt.Value, null);
 
             // Терминальное событие задачи — одно, по приоритету:
-            //   вердикт (accepted/awr/returned/withdrawn) — ревью/проверка/финал с вердиктом;
+            //   вердикт (accepted/awr/returned/withdrawn) — ревью/проверка/финал с вердиктом
+            //     (+ номер витка из FeatureRound);
             //   merged — мерж закрыт; closed — эпик закрыт; completed — прочая задача Done.
             if (t.CompletedAt is not null)
             {
@@ -457,20 +486,19 @@ public sealed class FeatureProjector(TaskManager tasks)
                 if (verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks
                     or TaskVerdicts.Returned or TaskVerdicts.Withdrawn)
                 {
-                    events.Add(new FeatureEvent(verdict, t.CompletedAt.Value, t.Id, SessionOf(),
-                        Truncate(t.Verification!.Notes)));
+                    Add(t, verdict, t.CompletedAt.Value, Truncate(t.Verification!.Notes), RoundOf(t));
                 }
                 else if (t.Role == TaskRoles.Merge)
                 {
-                    events.Add(new FeatureEvent("merged", t.CompletedAt.Value, t.Id, SessionOf(), null));
+                    Add(t, "merged", t.CompletedAt.Value, null);
                 }
                 else if (t.Role == TaskRoles.Feature)
                 {
-                    events.Add(new FeatureEvent("closed", t.CompletedAt.Value, t.Id, SessionOf(), null));
+                    Add(t, "closed", t.CompletedAt.Value, null);
                 }
                 else
                 {
-                    events.Add(new FeatureEvent("completed", t.CompletedAt.Value, t.Id, SessionOf(), null));
+                    Add(t, "completed", t.CompletedAt.Value, null);
                 }
             }
         }

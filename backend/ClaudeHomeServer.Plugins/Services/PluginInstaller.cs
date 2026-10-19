@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Plugins;
@@ -172,14 +171,10 @@ public class PluginInstaller
 
     // minor 2: параметр метки (slug после «draft:»/«upload:») — по грамматике slug
     // (как slug в PluginId, [a-z0-9-]+): непустой, без разделителей пути, без «..» и «.»
-    // (иначе SafePath.Join даст 500, а не 400).
-    private static readonly Regex SlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
-
-    private static bool IsLabelParamValid(string? param)
-    {
-        if (string.IsNullOrWhiteSpace(param)) return false;
-        return SlugRegex.IsMatch(param);
-    }
+    // (иначе SafePath.Join даст 500, а не 400). Единый источник правды — PluginId.IsValidSlug
+    // (minor 14, D2): та же проверка, что у черновиков (PluginDraftService.IsValidSlug).
+    private static bool IsLabelParamValid(string? param) =>
+        !string.IsNullOrWhiteSpace(param) && PluginId.IsValidSlug(param);
 
     // Манифест пакета: ccs-plugin.json (наш) → .claude-plugin/plugin.json (нативный) (порядок
     // allow-list валидатора). R10-1: корневой plugin.json — не нативный манифест, из порядка убран.

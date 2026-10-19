@@ -303,6 +303,30 @@ public class PluginDraftServiceTests : IDisposable
             .Should().NotContain("hooks", "манифест на диске не переписан");
     }
 
+    // ── minor 14 (D2): ВСЕ проблемы содержимого в отказе, не только первая ─────────
+
+    [Fact]
+    public void WriteFile_ДвеПроблемыСодержимого_ОбаКодаВОтказе()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        // SKILL.md с allowed-tools (M10.1) И !`cmd` (M10.3) одновременно → две проблемы:
+        // code — первой, message — склейка «код: текст» каждой.
+        const string content = """
+        ---
+        name: a
+        allowed-tools: [Bash]
+        ---
+        Навык: !`bash -c "echo hi"`
+        """;
+        var result = _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md", Encoding.UTF8.GetBytes(content));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-allowed-tools", "код — первой проблемы");
+        result.Message!.Should().Contain("deny-allowed-tools", "код первой проблемы в сообщении");
+        result.Message!.Should().Contain("deny-backtick-exec", "код второй проблемы в сообщении");
+        File.Exists(Path.Combine(DraftDir(Owner, "my-plugin"), "skills", "a", "SKILL.md"))
+            .Should().BeFalse("файл на диск не записан");
+    }
+
     [Fact]
     public void WriteFile_201_Каталог_Отказ()
     {

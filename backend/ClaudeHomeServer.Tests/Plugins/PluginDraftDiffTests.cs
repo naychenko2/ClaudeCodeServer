@@ -296,6 +296,46 @@ public class PluginDraftDiffTests : IDisposable
         modBig.Size.Should().Be(bigNew.Length, "размер в байтах");
     }
 
+    // ── Symlink-файл в черновике: не в diff, содержимое не читается (minor 14, D2) ──
+
+    [SkippableFact]
+    public void Diff_SymlinkВЧерновике_НеВDiff_ИНеЧитается()
+    {
+        // Установленная версия: обычный файл; черновик: тот же файл + symlink на внешний файл.
+        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null,
+            new() { ["A.txt"] = "a\n" });
+        var draftRoot = _store.DraftDir(Owner, "pkg");
+        WriteManifest(draftRoot, "local-a/pkg", "2.0.0", [], null);
+        WriteTextFile(draftRoot, "A.txt", "a\n");
+
+        // Внешний файл с характерным содержимым + symlink на него в черновике (panel/** — allow-list).
+        var outside = Path.Combine(_dir, "outside-" + Path.GetRandomFileName() + ".txt");
+        File.WriteAllText(outside, "OUTSIDE-CONTENT-XYZ\n");
+        Directory.CreateDirectory(Path.Combine(draftRoot, "panel"));
+        var link = Path.Combine(draftRoot, "panel", "link.txt");
+        bool linkCreated;
+        try { File.CreateSymbolicLink(link, outside); linkCreated = true; }
+        catch (PlatformNotSupportedException) { linkCreated = false; }
+        // Ссылку создать нельзя (напр. Windows без привилегий) — тест пропускается, а не падает.
+        Skip.IfNot(linkCreated, "symlink не удалось создать на этой платформе");
+
+        try
+        {
+            var res = _diff.Diff(Owner, "pkg");
+
+            // Symlink не в diff: содержимое target не читается, путь ни в одном списке.
+            res.Added.Select(f => f.Path).Should().NotContain("panel/link.txt",
+                "symlink не попадает в diff (содержимое target не читается)");
+            res.Removed.Select(f => f.Path).Should().NotContain("panel/link.txt");
+            res.Modified.Select(f => f.Path).Should().NotContain("panel/link.txt");
+        }
+        finally
+        {
+            try { File.Delete(link); } catch { }
+            try { File.Delete(outside); } catch { }
+        }
+    }
+
     // ── Манифест: права и секреты ───────────────────────────────────────────────
 
     [Fact]

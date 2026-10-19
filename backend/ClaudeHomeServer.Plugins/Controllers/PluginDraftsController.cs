@@ -191,19 +191,24 @@ public class PluginDraftsController(
         // (содержимое изменилось, версию не подняли). Если существующая запись — ДРУГАЯ версия
         // (bump) → это обновление, не конфликт: запись собираем сами (Install при Conflict её не
         // возвращает) — sha256 из валидатора (тот же, что в Install), requested/id/version из манифеста.
+        // Права: первая установка → granted = []; обновление → granted = старые ∩ новые запрошенные
+        // (minor 14, D2: считаем сразу, без обходной записи Granted = [], которую потом перезаписывали).
         PluginInstall record;
         if (result.Status == InstallStatus.Conflict)
         {
             if (oldSameVersion is not null)
                 return Conflict(new { error = result.Error });
             var validation = drafts.Validate(UserId, slug);
+            var requested = manifest.Permissions?.Requested ?? [];
             record = new PluginInstall
             {
                 Id = manifest!.Id,
                 Version = manifest.Version,
                 Sha256 = validation.Sha256 ?? "",
-                Requested = manifest.Permissions?.Requested ?? [],
-                Granted = [],
+                Requested = requested,
+                Granted = oldById is null ? [] : oldById.Granted
+                    .Where(p => requested.Contains(p, StringComparer.Ordinal))
+                    .ToList(),
                 Enabled = true,
                 Source = "draft:" + slug,
             };
@@ -212,26 +217,22 @@ public class PluginDraftsController(
         {
             if (result.Status is not (InstallStatus.Ok or InstallStatus.NoOp))
                 return BadRequest(new { error = result.Error, problems = result.Problems });
-            // Ok: новая запись, NoOp: существующая (granted/secrets уже на месте).
+            // Ok: новая запись (granted = [] по C2, старой записи того же id нет),
+            // NoOp: существующая (granted/secrets уже на месте, новые права не появляются).
             record = result.Record!;
         }
 
-        // Права: первая установка → granted = []; обновление → granted = старые ∩ новые запрошенные.
         // consentRequired + newPermissions — только если обновление добавило новые запрошенные права.
         bool consentRequired;
         List<string> newPermissions;
         if (oldById is null)
         {
-            record.Granted = [];
             consentRequired = false;
             newPermissions = [];
         }
         else
         {
             var newRequested = record.Requested.Except(oldById.Requested, StringComparer.Ordinal).ToList();
-            record.Granted = oldById.Granted
-                .Where(p => record.Requested.Contains(p, StringComparer.Ordinal))
-                .ToList();
             consentRequired = newRequested.Count > 0;
             newPermissions = newRequested;
         }

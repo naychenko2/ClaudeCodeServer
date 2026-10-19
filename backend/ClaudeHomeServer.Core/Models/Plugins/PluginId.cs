@@ -18,7 +18,16 @@ public sealed record PluginId
     /// <summary>Формат id: <c>{publisher}/{slug}</c>, обе части <c>[a-z0-9-]+</c>.</summary>
     public const string Pattern = "^[a-z0-9-]+/[a-z0-9-]+$";
 
+    /// <summary>
+    /// Грамматика slug <c>[a-z0-9-]+</c> (часть id после '/'). Единый источник правды
+    /// (minor 14, D2): <see cref="IsValidSlug"/> используют и черновики
+    /// (<c>PluginDraftService.IsValidSlug</c>), и проверка параметра метки источника
+    /// (<c>PluginInstaller.IsLabelParamValid</c>) — два места не разъезжаются.
+    /// </summary>
+    public const string SlugPattern = "^[a-z0-9-]+$";
+
     private static readonly Regex Regex = new(Pattern, RegexOptions.Compiled);
+    private static readonly Regex SlugRegex = new(SlugPattern, RegexOptions.Compiled);
 
     /// <summary>Каноническая форма id: <c>publisher/slug</c>.</summary>
     public string Value { get; }
@@ -45,4 +54,10 @@ public sealed record PluginId
 
     /// <summary>Проверка формата (M3): <c>true</c> — id валиден.</summary>
     public static bool IsValid(string? raw) => TryNormalize(raw, out _);
+
+    /// <summary>
+    /// Проверка slug (грамматика <see cref="SlugPattern"/>): <c>true</c> — непустой и по формату.
+    /// </summary>
+    public static bool IsValidSlug(string? slug) =>
+        slug is { Length: > 0 } && SlugRegex.IsMatch(slug);
 }

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Plugins;
@@ -16,8 +15,6 @@ public class PluginDraftService
     // Шаблон черновика (R10-1): ccs-plugin.json (наш манифест, version 0.1.0, contributes пуст)
     // + .claude-plugin/plugin.json (нативный, name = slug — иначе CLI назовёт пакет именем каталога).
     public const string TemplateVersion = "0.1.0";
-
-    private static readonly Regex SlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
 
     private readonly PluginStore _store;
     private readonly PluginPackageValidator _validator;
@@ -37,9 +34,9 @@ public class PluginDraftService
         _time = time ?? TimeProvider.System;
     }
 
-    // slug — грамматика PluginId: [a-z0-9-]+ (часть id после '/').
-    public static bool IsValidSlug(string? slug) =>
-        slug is { Length: > 0 } && SlugRegex.IsMatch(slug);
+    // slug — грамматика PluginId: [a-z0-9-]+ (часть id после '/'). Единый источник правды —
+    // PluginId.IsValidSlug (его же проверяет параметр метки источника в PluginInstaller, minor 14).
+    public static bool IsValidSlug(string? slug) => PluginId.IsValidSlug(slug);
 
     // Каталог черновика; null — slug невалиден (SafePath.Join бросил бы 500, а не 400).
     public string? DraftDir(string ownerId, string slug) =>
@@ -101,14 +98,18 @@ public class PluginDraftService
 
         // 4) Проверки содержимого (rework D1): M10 (allowed-tools/backtick-exec) для исполняемых
         //    .md и deny-manifest-field для манифестов — тот же метод CheckContent, что у валидатора.
-        //    Запись отбивается с тем же кодом и путём, файл на диск не пишется.
+        //    ВСЕ проблемы (minor 14, D2): code — первой, message — склейка «код: текст» каждой
+        //    (M10-сообщения уже несут путь; у манифеста путь добавляем, чтобы отказ был «с кодом
+        //    и путём»). Запись отбивается, файл на диск не пишется.
         var contentProblems = _validator.CheckContent(norm, content);
         if (contentProblems.Count > 0)
         {
-            var p = contentProblems[0];
-            // M10-сообщения уже несут путь; у манифеста путь добавляем, чтобы отказ был «с кодом и путём».
-            var msg = p.Message.Contains(norm, StringComparison.Ordinal) ? p.Message : $"{p.Message} ({norm})";
-            return PluginDraftOpResult.Fail(p.Code, msg);
+            var msg = string.Join("; ", contentProblems.Select(p =>
+            {
+                var m = p.Message.Contains(norm, StringComparison.Ordinal) ? p.Message : $"{p.Message} ({norm})";
+                return $"{p.Code}: {m}";
+            }));
+            return PluginDraftOpResult.Fail(contentProblems[0].Code, msg);
         }
 
         // 5) Лимит размера отдельного файла.

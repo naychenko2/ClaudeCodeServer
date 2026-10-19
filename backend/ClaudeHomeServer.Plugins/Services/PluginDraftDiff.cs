@@ -221,12 +221,16 @@ public class PluginDraftDiff
 
     // Все файлы корня (рекурсивно) → словарь «относительный путь (внутри пакета) → запись».
     // Корня нет → пустой словарь (установленный пакет мог быть удалён).
+    // Symlink-файл (ReparsePoint) — пропуск, содержимое не читаем (minor 14, D2): target
+    // может лежать вне пакета (валидатор и так отбивает его no-symlink, diff ссылку не следует).
     private static Dictionary<string, FileEntry> EnumerateFiles(string root)
     {
         var result = new Dictionary<string, FileEntry>(StringComparer.Ordinal);
         if (!Directory.Exists(root)) return result;
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                continue;
             var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
             result[rel] = new FileEntry(File.ReadAllBytes(file));
         }

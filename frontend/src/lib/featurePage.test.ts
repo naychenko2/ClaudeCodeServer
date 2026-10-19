@@ -138,10 +138,10 @@ describe('живое обновление по task_changed', () => {
     // до окна — запрос ещё не ушёл
     vi.advanceTimersByTime(1499);
     expect(getFeatureSpy).not.toHaveBeenCalled();
-    // после окна — один запрос
+    // после окна — один запрос (signal не передаётся: live-перезапрос не отменяется)
     vi.advanceTimersByTime(1);
     expect(getFeatureSpy).toHaveBeenCalledTimes(1);
-    expect(getFeatureSpy).toHaveBeenCalledWith('epic-1');
+    expect(getFeatureSpy).toHaveBeenCalledWith('epic-1', undefined, undefined);
   });
 
   it('сам эпик (id === fid) — перезапрос', () => {
@@ -219,5 +219,50 @@ describe('мутация: сломанный фильтр красит «чуж�
     __test.setFid('epic-1');
     expect(__test.isOwnEvent({ type: 'task_changed', action: 'updated', task: task({ id: 'step-1', featureId: 'epic-1' }) }, 'epic-1')).toBe(true);
     expect(__test.isOwnEvent({ type: 'task_changed', action: 'updated', task: task({ id: 'epic-1', role: 'feature' }) }, 'epic-1')).toBe(true);
+  });
+});
+
+// ── 4. Смена fid: устаревший первичный запрос отменяется (AbortSignal), не плодим GET ──
+//
+// Быстрая смена fid: cleanup эффекта abort'ит в-полёте запрос. AbortError отменённого
+// запроса не должен ронять состояние в error (fid сменился → _fid ≠ fid), а signal —
+// реально уходить в api.tasks.getFeature (иначе запрос не отменяется).
+
+describe('смена fid: устаревший запрос отменяется (AbortSignal)', () => {
+  let getFeatureSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __test.reset();
+    setAllFlags({ [FLAG]: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    vi.useRealTimers();
+  });
+
+  it('signal уходит в getFeature; AbortError отменённого запроса не роняет состояние', async () => {
+    const seen: Array<{ fid: string; signal?: AbortSignal }> = [];
+    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockImplementation((fid: string, _lim?: string, signal?: AbortSignal) => {
+      seen.push({ fid, signal });
+      // Pending-Promise: отклоняется только по signal (как живой fetch при abort).
+      return new Promise((_resolve, reject) => {
+        if (signal) signal.addEventListener('abort', () => {
+          const e = new Error('aborted') as Error; e.name = 'AbortError'; reject(e);
+        });
+      });
+    });
+    const c1 = new AbortController();
+    __test.setFid('epic-1');
+    __test.fetchPage('epic-1', true, c1.signal);
+    // Смена fid: cleanup эффекта abort'ит первый запрос и ставит _fid = 'epic-2'.
+    __test.setFid('epic-2');
+    c1.abort();
+    await vi.runAllTimersAsync();
+    // signal реально передан в api (не плодим запросов без отмены).
+    expect(seen[0].signal, 'signal не ушёл в getFeature').toBe(c1.signal);
+    // AbortError отменённого запроса не роняет состояние в error (fid сменился → _fid ≠ fid).
+    expect(__test.state(), 'состояние упало в error после отмены').toEqual({ status: 'loading' });
   });
 });

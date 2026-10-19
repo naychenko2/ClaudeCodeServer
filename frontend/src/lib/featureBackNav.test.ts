@@ -36,6 +36,15 @@ describe('featureBackNav', () => {
     expect(getBackNav()).toBeNull();
   });
 
+  it('смена проекта: clearBackNav сбрасывает указатель (не перескакивает через границу проекта)', () => {
+    // Указатель из старого проекта (чат → фича) записан; WorkspacePage при перемонтировании
+    // (смена проекта, key={project.id}) зовёт clearBackNav, чтобы он не применился к новому.
+    recordBackNav('chatA', { kind: 'feature', id: 'f1' });
+    expect(getBackNav(), 'указатель не записан').not.toBeNull();
+    clearBackNav();
+    expect(getBackNav(), 'указатель из старого проекта не сброшен').toBeNull();
+  });
+
   it('recordBackNav поверх прежнего — заменяет указатель (один «← назад»)', () => {
     recordBackNav('chat-a', 'chat-key');
     recordBackNav('chat-b', 'chat-key');

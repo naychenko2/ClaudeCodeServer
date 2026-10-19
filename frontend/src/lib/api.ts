@@ -1413,9 +1413,12 @@ export const api = {
     // Страница фичи (волна 2 «Обзор фич»): агрегат `FeatureRun` одной фичи + лента событий.
     // fid — id эпика; eventsLimit — «all»/«0» → все, N (целое > 0) → N, иначе 100 (бэк).
     // 404 — фичи нет/чужая/удалена (один 404); 503 — подсистема Tasks выключена.
-    getFeature: (fid: string, eventsLimit?: string) =>
+    // signal — отмена в-полёте запроса (быстрая смена fid в useFeaturePage): не плодим
+    // параллельных GET, устаревший отменяется (AbortError игнорируется в featurePage).
+    getFeature: (fid: string, eventsLimit?: string, signal?: AbortSignal) =>
       request<FeaturePage>(
         `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
+        signal ? { signal } : undefined,
       ),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>

@@ -66,12 +66,13 @@ function setState(s: FeaturePageState) {
 // сначала loading, чтобы скелет показался; live — не сбрасывает в loading (старые
 // данные держим до прихода новых). Ответ: 200 → ok, 404 → notFound, 503 → disabled,
 // прочее → error.
-function fetchPage(fid: string, initial: boolean) {
+function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
   if (initial) setState({ status: 'loading' });
-  void api.tasks.getFeature(fid)
+  void api.tasks.getFeature(fid, undefined, signal)
     .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
     .catch((e: Error & { status?: number }) => {
       if (_fid !== fid) return; // страница сменилась/закрыта — поздний ответ не затирает
+      if (e.name === 'AbortError') return; // запрос отменён (fid сменился) — не сбой, а отмена
       if (e.status === 404) setState({ status: 'notFound' });
       else if (e.status === 503) setState({ status: 'disabled' });
       else setState({ status: 'error' });
@@ -131,11 +132,14 @@ export function useFeaturePage(fid: string | null): FeaturePageState {
       return;
     }
     _fid = fid;
-    // Первичный запрос: один, пока страница открыта. cancel-метка не даёт позднему
-    // ответу (fid сменился/страница закрыта) затереть свежий срез.
-    fetchPage(fid, true);
+    // Первичный запрос: один, пока страница открыта. AbortController отменяет в-полёте
+    // запрос при быстрой смене fid (не плодим параллельных GET); cancel-метка _fid не
+    // даёт позднему ответу (fid сменился/страница закрыта) затереть свежий срез.
+    const controller = new AbortController();
+    fetchPage(fid, true, controller.signal);
     return () => {
       if (_pending) { clearTimeout(_pending); _pending = null; }
+      controller.abort();
     };
   }, [fid]);
   return state;

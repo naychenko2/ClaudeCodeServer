@@ -9,6 +9,8 @@
 // Все поля аддитивны и nullable-терпимы: UI обязан пережить отсутствие любого
 // (старые ответы не несут новых полей).
 
+import type { FeatureRun } from './featureRun';
+
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
 export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
@@ -134,4 +136,46 @@ export interface FeatureChatLink {
 export interface FeaturesIndex {
   features: FeatureIndexFeature[];
   chats: Record<string, FeatureChatLink[]>;
+}
+
+// ── Страница фичи (волна 2 «Обзор фич», разрез §2) ─────────────────────────────
+//
+// Событие ленты фичи: зеркало бэкового `FeatureEvent`
+// (backend/ClaudeHomeServer.Tasks/Projector/FeatureEvents.cs). Один факт из жизни
+// фичи, выведенный из полей TaskItem/витков без хранилища. Контракт:
+// { at, kind, taskId, role?, stepRef?, personaId?, sessionId?, round?, reason? }.
+// Все поля nullable-терпимы: UI обязан пережить отсутствие любого.
+export interface FeatureEvent {
+  // Момент события (UTC, ISO-строка): CreatedAt / ClaudeStartedAt /
+  // ExecutorStoppedAt / AwaitingHumanSince / DroppedByHumanAt / CompletedAt.
+  at: string;
+  // Вид: created | started | stopped | waiting | accepted | accepted_with_remarks |
+  // returned | withdrawn | completed | dropped | merged | closed.
+  kind: string;
+  // Id задачи, к которой относится событие.
+  taskId: string;
+  // Роль задачи: feature · cut · plan · step · rework · review · qa · final · merge · consult.
+  role?: string | null;
+  // Код шага («Ш1», «D1c»); у step/rework, иначе null.
+  stepRef?: string | null;
+  // Исполнитель (PersonaId задачи); null — без персоны.
+  personaId?: string | null;
+  // Чат исполнителя (task.LinkedSessionId); наружу только если в снимке сессий
+  // владельца, иначе null (fail-closed).
+  sessionId?: string | null;
+  // Номер витка (1-based); только у вердиктов, у остальных null.
+  round?: number | null;
+  // Причина (≤200): ExecutorStopReason / AwaitingHumanReason / Verification.Notes; иначе null.
+  reason?: string | null;
+}
+
+// Ответ страницы фичи `GET /api/tasks/features/{featureId}` (волна 2 «Обзор фич»):
+// агрегат `FeatureRun` одной фичи + лента событий.
+//   run        — полный агрегат (Project, без новой арифметики);
+//   events     — лента событий, обрезанная по `eventsLimit` (по умолчанию 100);
+//   eventsTotal — общее число событий ДО обрезки (лента может быть короче).
+export interface FeaturePage {
+  run: FeatureRun;
+  events: FeatureEvent[];
+  eventsTotal: number;
 }

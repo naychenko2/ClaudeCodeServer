@@ -39,44 +39,7 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 
 ## Среда исполнения пользователей (local / container)
 
-Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` | `container` (общая
-docker-песочница `cc-sandbox`); бэкенд всегда НА ХОСТЕ. Все запуски идут через
-`ILauncherFactory.ForOwner(ownerId)`, системные one-shot — всегда local; домашние папки —
-[UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs). Инварианты:
-
-- Бэкенд работает ТОЛЬКО с хостовыми путями, `IPathMapper` переводит их в контейнерные в
-  момент запуска; смена `ExecutionEnvironment` при существующих чатах запрещена; токен
-  подписки доставляется в песочницу per-exec, а не запекается при создании контейнера.
-- Local-процессы изолированы по памяти systemd-scope'ом в `ccs-agents.slice`
-  (`Execution:Isolation`): реюз узлов MSBuild внутри scope, сторож сирот при старте, прогрев
-  свежего worktree — всё в `sandbox.md`.
-- **Основная защита от OOM — жёсткий потолок cgroup на `ccs-agents.slice`**, а не гейт: лимит
-  наследуется ВСЕМУ поддереву scope, включая сборки, которые агент запускает внутри хода своим
-  Bash (ровно они дали инцидент 21.09). `BuildConcurrencyGate` считает только spec с меткой
-  `ProcessSpec.Heavy` — дополнение, не замена лимитов; счётчик **единственный на процесс**,
-  второй семафор где-то ещё делает потолок неправдой.
-- **`MemoryHigh` не ставим ни на slice, ни per-scope** (разбор 2026-09-22): под systemd-oomd
-  дроссель сам становится источником PSI-давления и убивает наш же scope. Почему именно так —
-  [sandbox.md](docs/architecture/sandbox.md) и [deploy/systemd/README.md](deploy/systemd/README.md),
-  там же правило расчёта машинно-специфичных значений; unit-файлы и drop-in'ы — в
-  [deploy/systemd/](deploy/systemd/).
-
-**Наблюдение за деревом файлов не подписывается на служебные каталоги.** Оба потребителя
-(ватчер хода и `FileWatcherService`) наблюдают через Core-примитив
-[RecursiveDirectoryWatcher](backend/ClaudeHomeServer.Core/Services/Files/RecursiveDirectoryWatcher.cs):
-ОДИН экземпляр inotify на наблюдателя и слежка по перечню каталогов, а не на всё дерево
-(`FileSystemWatcher` с `IncludeSubdirectories` ставил её на КАЖДЫЙ каталог — 16 390 на этом
-репозитории при 438 неслужебных). Сбои различаются намеренно: потеря событий лечится
-пересинхронизацией, смерть наблюдения — пересозданием (отказ на отдельном каталоге —
-частичный и пересоздания не поднимает: ровно оно дало рекурсию 19.09).
-
-**Перед правками в примитиве или у его потребителей — прочитай
-[docs/architecture/file-watching.md](docs/architecture/file-watching.md)** (обход шириной под
-потолком слежек, списки исключений, символические ссылки, пересинхронизация на переполнении
-очереди, идемпотентность гашения, маска событий).
-
-**Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
-[docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
+Изоляция per-пользователь: `local` (процессы на хосте, systemd-scope `ccs-agents.slice`) или `container` (общая docker-песочница `cc-sandbox`). Запуск — через `ILauncherFactory.ForOwner`, OOM-защита — cgroup-лимит, файловое наблюдение — один inotify-экземпляр (`RecursiveDirectoryWatcher`). Перед правками: [sandbox.md](docs/architecture/sandbox.md), [file-watching.md](docs/architecture/file-watching.md).
 
 ## Локальные проекты (ADR-016)
 

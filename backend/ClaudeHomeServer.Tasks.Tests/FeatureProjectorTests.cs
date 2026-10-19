@@ -1243,8 +1243,8 @@ public class FeatureProjectorTests
             "merge без задач не active");
     }
 
-    // Consult done, шагов/плана/ревью нет → «Разрез» done, «План» pending (ещё не начат).
-    // Сценарий: между разрезом и планом.
+    // Consult done, шагов/плана/ревью нет → «Разрез» done, «План» active (фича ждёт плана),
+    // «Мерж» НЕ active. Сценарий: между разрезом и планом — ложного «Мерж · сейчас» быть не должно.
     [Fact]
     public void Build_ConsultDoneБезШагов_CutDone()
     {
@@ -1261,9 +1261,100 @@ public class FeatureProjectorTests
 
         Stage(run, "cut").State.Should().Be("done",
             "consult done → «Разрез» пройден");
-        // «План» — задач нет, но «Разрез» уже начат → pending (не absent, не active).
-        Stage(run, "plan").State.Should().Be("pending",
-            "план не начат, но разрез пройден → pending");
+        // «План» — задач нет, но «Разрез» пройден → active (фича ждёт плана), не pending.
+        Stage(run, "plan").State.Should().Be("active",
+            "разрез пройден, плана/шагов нет → активен «План» (ждём плана)");
+        Stage(run, "merge").State.Should().NotBe("active",
+            "ложного «Мерж · сейчас» между разрезом и планом быть не должно");
+    }
+
+    // Разрез done + План in progress → «План» active (первая непройденная стадия с задачами).
+    // До фикса это работало «случайно» (цикл находил plan) и не было покрыто.
+    [Fact]
+    public void Build_РазрезDone_ПланInProgress_PlanActive()
+    {
+        const string epicId = "epic-cut-done-plan-inprog";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done, PersonaId = "Александр",
+            CompletedAt = new DateTime(2026, 10, 19, 10, 0, 0),
+        };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan,
+            Status = TaskItemStatus.InProgress, PersonaId = "Егор",
+            ClaudeStartedAt = new DateTime(2026, 10, 19, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan]);
+
+        Stage(run, "cut").State.Should().Be("done");
+        Stage(run, "plan").State.Should().Be("active",
+            "разрез пройден, план идёт → «План» active");
+        Stage(run, "merge").State.Should().NotBe("active");
+    }
+
+    // Все задачи фичи dropped (Status=Done + DroppedByHumanAt) → стадии «пройдены»,
+    // ложного «Мерж · сейчас» быть не должно: активна стадия после последней заполненной.
+    [Fact]
+    public void Build_ВсеЗадачиDropped_НеМерж()
+    {
+        const string epicId = "epic-all-dropped";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done, PersonaId = "Александр",
+            CompletedAt = new DateTime(2026, 10, 19, 10, 0, 0),
+            DroppedByHumanAt = new DateTime(2026, 10, 19, 10, 30, 0),
+        };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan,
+            Status = TaskItemStatus.Done, PersonaId = "Егор",
+            CompletedAt = new DateTime(2026, 10, 19, 11, 0, 0),
+            DroppedByHumanAt = new DateTime(2026, 10, 19, 11, 30, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan]);
+
+        // cut/plan — Done (dropped считается пройденным); active = prod (после plan), merge НЕ active.
+        Stage(run, "cut").State.Should().Be("done");
+        Stage(run, "plan").State.Should().Be("done");
+        Stage(run, "prod").State.Should().Be("active",
+            "все задачи dropped → стадия после последней заполненной (prod), не Мерж");
+        Stage(run, "merge").State.Should().NotBe("active",
+            "ложного «Мерж · сейчас» при всех dropped быть не должно");
+    }
+
+    // План done, шагов (prod) нет → «Производство» active, «Мерж» НЕ active.
+    // Промежуточный случай: ложного «Мерж · сейчас» между планом и производством быть не должно.
+    [Fact]
+    public void Build_ПланDoneБезШагов_ProdActive()
+    {
+        const string epicId = "epic-plan-done-no-steps";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done, PersonaId = "Александр",
+            CompletedAt = new DateTime(2026, 10, 19, 10, 0, 0),
+        };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan,
+            Status = TaskItemStatus.Done, PersonaId = "Егор",
+            CompletedAt = new DateTime(2026, 10, 19, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan]);
+
+        Stage(run, "cut").State.Should().Be("done");
+        Stage(run, "plan").State.Should().Be("done");
+        Stage(run, "prod").State.Should().Be("active",
+            "план пройден, шагов нет → «Производство» active (ждём шагов), не Мерж");
         Stage(run, "merge").State.Should().NotBe("active");
     }
 

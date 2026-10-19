@@ -592,8 +592,9 @@ public static class TeamImplementPrompts
         sb.AppendLine("Сверять число тестов через **trx-сводку** прогона " +
                       "(`--logger \"trx;LogFileName=…\"`), не через stdout `--list-tests` " +
                       "(stdout теряет строки при параллельном выводе testhost). " +
-                      "Эталон baseline-файла: 15203 FQN " +
-                      "(см. docs/research/tests-by-module-baseline-2026-10.md).");
+                      "Эталон числа тестов: 15414 FQN (per-project `--list-tests`, `sort -u`; замер на 84856ba8c). " +
+                      "Исходный снимок шага 0.2 — 15203 FQN; разница и методика — " +
+                      "в docs/research/tests-by-module-baseline-2026-10.md.");
 
         sb.AppendLine();
         sb.AppendLine("## Контекст");

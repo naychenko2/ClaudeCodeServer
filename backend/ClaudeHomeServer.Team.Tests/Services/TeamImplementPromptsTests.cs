@@ -364,7 +364,7 @@ public class TeamImplementPromptsTests
             "блок «Сверка числа тестов» — часть шаблона задачи исполнителя (шаг 5.3)");
         text.Should().Contain("trx",
             "сверять число тестов через trx-сводку, не через stdout `--list-tests`");
-        text.Should().Contain("15203",
+        text.Should().Contain("15414",
             "baseline-число FQN должно быть в блоке как явный эталон");
     }
 }

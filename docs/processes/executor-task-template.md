@@ -40,8 +40,9 @@
 Сверять число тестов через **trx-сводку** прогона
 (`--logger "trx;LogFileName=…"`, читать `TotalCount`/`Executed`/`Passed`/`Failed`/`Inconclusive`),
 не через stdout `--list-tests` (stdout теряет строки при параллельном выводе testhost).
-Эталон baseline-файла: `docs/research/tests-by-module-baseline-tests.txt` (15203 FQN,
-см. [tests-by-module-baseline-2026-10.md](../research/tests-by-module-baseline-2026-10.md)).
+Эталон числа тестов: **15414 FQN** (per-project `--list-tests`, `sort -u`; замер на `84856ba8c`).
+Исходный снимок шага 0.2 — `docs/research/tests-by-module-baseline-tests.txt` (15203 FQN);
+разницу и методику см. в [tests-by-module-baseline-2026-10.md](../research/tests-by-module-baseline-2026-10.md).
 Совпадать должны **сумма И набор** имён (diff по сортированному списку) — иначе потеря
 одного теста маскируется дублем другого. После шага фичи эталон не переписывается.
 

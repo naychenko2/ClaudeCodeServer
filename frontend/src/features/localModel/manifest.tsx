@@ -4,13 +4,13 @@
 // и сама панель (то же условие внутри — null прячет кнопку).
 
 import { Cpu } from 'lucide-react';
-import { ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { FLAGS, getFlag } from '../../lib/featureFlags';
 import { getLocalModelAdmin, getLocalModelConfigured, isLocalModelPanelVisible } from './useLocalModelStats';
-import { LocalModelPanel } from './LocalModelPanel';
+import { lazy } from 'react';
+const LocalModelPanel = lazy(() => import('./LocalModelPanel').then(m => ({ default: m.LocalModelPanel })));
 
 // Ключ панели в каталоге (panelCatalog)
 export const LOCAL_MODEL_PANEL = 'localModel';
@@ -30,7 +30,7 @@ export const manifest: SubsystemManifest = {
         render: (ctx: WorkspacePanelDefCtx) => <LocalModelPanel ctx={ctx} />,
         action: {
           title: 'Локальные модели',
-          icon: <Cpu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          icon: <Cpu size={16} strokeWidth={2} />,
           // Геттеры вне React: isAvailable вызывается из рендера страницы
           isAvailable: (_projectId: string | null) => isLocalModelPanelVisible({
             flag: getFlag(FLAGS.localModelStats),

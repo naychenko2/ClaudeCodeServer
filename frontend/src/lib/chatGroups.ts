@@ -369,6 +369,30 @@ export function featureDisplayState(
   return { kind: 'run', alarm: null, status: join('идёт', who, null) };
 }
 
+// Тег статуса в шапке страницы фичи (волна 2, шаг Ф2.4; макет §5.1): короткое слово
+// + тон (run/wait/merge/stop/loop/merged/closed). Бэк считает bucket/attention/rail/
+// summary (контракт индекса фич); фронт только раскладывает в тег — не вычисляет.
+// Чистая функция. От `featureDisplayState` отличается: тот даёт длинный статус
+// («стоит · Денис · 25 мин») для плашки, здесь — короткое слово для тега шапки.
+export type FeatureStatusTone = 'run' | 'wait' | 'merge' | 'stop' | 'loop' | 'merged' | 'closed';
+export interface FeatureStatusTag { label: string; tone: FeatureStatusTone }
+
+export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
+  if (f.bucket === 'closed') {
+    return f.summary?.mergedAt != null
+      ? { label: 'Смержена', tone: 'merged' }
+      : { label: 'Без мержа', tone: 'closed' };
+  }
+  if (f.attention) {
+    if (f.attention.kind === 'stopped') return { label: 'Стоит', tone: 'stop' };
+    if (f.attention.kind === 'merge') return { label: 'К мержу', tone: 'merge' };
+    return { label: 'Ждёт вас', tone: 'wait' };
+  }
+  const active = f.rail.find(s => s.state === 'active');
+  if (active?.tone === 'loop') return { label: 'Доработка', tone: 'loop' };
+  return { label: 'Идёт', tone: 'run' };
+}
+
 // Живые (идёт) и вставшие (упал) статусы чата: по ним чат выводится наружу из
 // свёрнутой группы. «Живой» совпадает с «дышащими» статусами (RUNNING_STATUSES в
 // chatTree); «вставший» — статусы ошибки/осиревшего.

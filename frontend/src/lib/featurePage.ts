@@ -113,6 +113,15 @@ function wireRealtime() {
   onMessage(handleTaskChanged);
 }
 
+// Повторный запрос (кнопка «Повторить» в состоянии ошибки, макет §5.7): сброс в
+// loading + новый первичный запрос. Публичный шов (не __test) — UI его зовёт.
+// Действует, только пока страница открыта (_fid === fid): закрытая страница не
+// перезапрашивается (как и live-события).
+export function refetchFeaturePage(fid: string) {
+  if (_fid !== fid) return;
+  fetchPage(fid, true);
+}
+
 // Хук: данные страницы фичи.
 //   `fid` — id эпика; null — страница закрыта (сброс в loading, запрос не идёт).
 // Один первичный запрос на открытие/смену fid; live-перезапрос по task_changed (дебаунс).

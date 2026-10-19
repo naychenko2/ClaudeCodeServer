@@ -1,21 +1,23 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
-import { C, R, FS, FONT, SHADOW } from '../../lib/design';
+import type { ReactNode } from 'react';
+import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
+import { C, R, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage } from '../../lib/featurePage';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
-
-// Единый focus-visible ring (клавиатура) — инжектим один раз (паттерн IconButton, §0).
-const FOCUS_CLASS = 'cc-feature-crumb';
-if (typeof document !== 'undefined' && !document.getElementById('cc-feature-crumb-style')) {
-  const el = document.createElement('style');
-  el.id = 'cc-feature-crumb-style';
-  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
-  document.head.appendChild(el);
-}
+import { showToast } from '../../lib/toast';
+import { featureDisplayState, featureQuickAction, featureStatusTag, formatDuration } from '../../lib/chatGroups';
+import { dateOnly } from '../chat/feature/featureTime';
+import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
+import { Notice } from '../ui/Notice';
+import { EmptyState } from '../ui/EmptyState';
+import { Button } from '../ui/Button';
+import { FeaturePageHeader, type FeatureStatusTag } from './FeaturePageHeader';
+import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
+import type { FeatureIndexFeature } from '../../types/featureIndex';
 
 // Куда ведёт крошка «← …»:
 //   chat — в исходный чат (указатель back-nav «чат → фича»);
@@ -37,28 +39,76 @@ export interface FeaturePageProps {
   onBack: (target: FeaturePageBackTarget) => void;
 }
 
-// Страница фичи (волна 2 «Обзор фич», шаг Ф2.3): пока шапка-заглушка и крошка.
-// Крошка читает указатель возврата: пришли из чата — «← К чату «…»», иначе
-// «← К ключевому чату» (есть ключевой) или «← К списку».
+// «Сколько» фичи для шапки (макет §5.1): открытая — «идёт {возраст}» (от createdAt),
+// закрытая — «шла {длительность}» (summary.durationMinutes). Чистая функция: now —
+// «сейчас» в мс (стабильные тесты; не задано — Date.now()).
+function featureAgeLabel(f: FeatureIndexFeature | null, now?: number): string | null {
+  if (!f) return null;
+  if (f.bucket === 'closed') {
+    const dur = f.summary?.durationMinutes;
+    return dur != null ? `шла ${formatDuration(dur)}` : null;
+  }
+  const created = f.createdAt;
+  if (!created) return null;
+  const t = new Date(created).getTime();
+  if (Number.isNaN(t)) return null;
+  const min = Math.max(0, Math.round(((now ?? Date.now()) - t) / 60000));
+  return min > 0 ? `идёт ${formatDuration(min)}` : 'идёт';
+}
+
+// Скелет загрузки (макет §5.7): 6 полос 14 px разной ширины (bgSelected, R 6, gap 10,
+// пульс 1,4 с) + блок 120 (marginTop 6). При prefers-reduced-motion пульс выключен
+// (инжект в FeaturePageHeader).
+const SKELETON_WIDTHS = [70, 92, 84, 60, 88, 76];
+function LoadingSkeleton() {
+  return (
+    <div data-testid="feature-page-skeleton" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {SKELETON_WIDTHS.map((w, i) => (
+        <div
+          key={i}
+          className="cc-feature-page-skeleton"
+          style={{ height: 14, width: `${w}%`, background: C.bgSelected, borderRadius: R.sm }}
+        />
+      ))}
+      <div className="cc-feature-page-skeleton" style={{ height: 120, marginTop: 6, background: C.bgSelected, borderRadius: R.sm }} />
+    </div>
+  );
+}
+
+// Страница фичи (волна 2 «Обзор фич», шаг Ф2.4): шапка (глиф, название, статус, ветка,
+// возраст, «M задач», ⋯, главное действие) + блок тревоги + состояния страницы.
 //
-// Компонент самодостаточен: данные — из стора useFeaturePage (Ф2.2), название и
-// ключевой чат — из индекса фич. Крошка — единственная интерактивная точка шапки.
+// Компонент самодостаточен: данные — из стора useFeaturePage (Ф2.2), название/ветка/
+// задачи/тревога — из индекса фич (фолбэк — эпик страницы). Крошка читает указатель
+// возврата (featureBackNav). Тело — одно из пяти состояний: loading | ok | notFound |
+// disabled | error (макет §5.7).
 export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: FeaturePageProps) {
-  // Данные страницы (run + events) — из стора; здесь только для фолбэка заголовка.
+  // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
 
-  // Наведение на крошку (m3): фон bgSelected + цвет textPrimary (как у других ссылок-кнопок).
-  const [hover, setHover] = useState(false);
+  // Название: из индекса, фолбэк — эпик страницы, затем нейтральное.
+  const title = feature?.title ?? (page.status === 'ok' ? page.page.run.epic.title : 'Фича');
 
-  // Указатель возврата: «← назад» ведёт в чат, из которого перешли, только если
-  // записанный переход ведёт именно в ЭТУ страницу фичи.
+  // Глиф + тег статуса: из индекса (display state); нет фичи в индексе — нейтральные.
+  const display = feature ? featureDisplayState(feature) : null;
+  const glyph: GlyphKind = display ? display.kind : 'run';
+  const statusTag: FeatureStatusTag | null = feature ? featureStatusTag(feature) : null;
+
+  // Ветка, «M задач», «идёт/шла …».
+  const branch = feature?.branch ?? null;
+  const taskCount = feature?.taskCount ?? null;
+  const ageLabel = featureAgeLabel(feature);
+
+  // Главное действие (та же функция, что в Ф1.3: featureQuickAction).
+  const mainAction = feature ? featureQuickAction(feature) : null;
+
+  // Крошка: куда ведёт и как подписана. Из чата — в исходный чат («К чату «…»»);
+  // из списка/диплинк — в список: мобила «К списку», десктоп «Назад» (макет §6).
   const back = getBackNav();
   const fromChat = back && back.to.kind === 'feature' && back.to.id === featureId ? back.from : null;
-
-  // Название исходного чата (для «← К чату «…»»): один запрос по id, пока его нет.
   const [fromTitle, setFromTitle] = useState<string | null>(null);
   useEffect(() => {
     if (!fromChat) { setFromTitle(null); return; }
@@ -69,10 +119,6 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     return () => { cancelled = true; };
   }, [fromChat]);
 
-  // Крошка: куда ведёт и как подписана. Из чата — в исходный чат («К чату «…»»);
-  // из списка/диплинк — в список: мобила «К списку», десктоп «Назад» (макет §6).
-  // Ключевой чат — отдельная кнопка в теле страницы, а не крошка (m4: крошка и
-  // системное «назад» ведут в одно место, без «пустого шага»).
   let target: FeaturePageBackTarget;
   let label: string;
   if (fromChat) {
@@ -85,51 +131,147 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     target = { kind: 'list' };
     label = 'Назад';
   }
-
   const goBack = () => { onBack(target); clearBackNav(); };
 
-  // Заголовок: из индекса (title), фолбэк — из эпика страницы, затем нейтральное.
-  const title = feature?.title ?? (page.status === 'ok' ? page.page.run.epic.title : 'Фича');
+  // ⋯: «Скопировать ветку» — clipboard + тост; «Открыть эпик в «Задачах»» — тост
+  // (переход в раздел «Задачи» — за скобками шага, макет §5.2).
+  const copyBranch = () => {
+    if (!branch) return;
+    void navigator.clipboard?.writeText(branch)
+      .then(() => showToast('Ветка скопирована', branch, 'success'))
+      .catch(() => showToast('Ветка', 'Не удалось скопировать ветку', 'info'));
+  };
+  const openEpic = () => showToast('Задачи', 'Откроется эпик в «Задачах»', 'info');
+  // Главное действие: «Ответить»/«К мержу» — в ключевой чат; «Ключевой чат» — туда же.
+  const onMainAction = () => { if (feature?.keySessionId) onBack({ kind: 'key', chatId: feature.keySessionId }); };
+
+  // Тело: одно из пяти состояний (макет §5.7).
+  let body: ReactNode;
+  if (page.status === 'loading') {
+    body = <LoadingSkeleton />;
+  } else if (page.status === 'error') {
+    body = (
+      <Notice
+        tone="danger"
+        icon={AlertTriangle}
+        title="Не удалось загрузить фичу."
+        action={
+          <Button size="xs" variant="ghost" style={{ background: C.bgWhite }}
+            onClick={() => refetchFeaturePage(featureId)}>
+            <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            Повторить
+          </Button>
+        }
+      >
+        Сервер не ответил; список и чаты работают как обычно.
+      </Notice>
+    );
+  } else if (page.status === 'notFound') {
+    body = (
+      <EmptyState
+        compact
+        icon={<Inbox size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        iconRadius={R.full}
+        title="Фичи больше нет"
+        titleSize={FS.lg}
+        subtitle="Эпик удалён в «Задачах». Чаты остались на месте и снова живут без фичи."
+        action={
+          <Button size="sm" variant="ghost" style={isMobile ? { minHeight: 40 } : undefined}
+            onClick={() => onBack({ kind: 'list' })}>
+            К списку чатов
+          </Button>
+        }
+      />
+    );
+  } else if (page.status === 'disabled') {
+    body = (
+      <Notice tone="info" icon={Inbox} title="Подсистема задач выключена">
+        Страница фичи недоступна, чаты работают как обычно.
+      </Notice>
+    );
+  } else {
+    // ok: блок тревоги/итог (макет §5.3); конвейер/шаги/чаты/задачи/лента — шаг Ф2.5.
+    body = <AlarmBlock feature={feature} onMainAction={onMainAction} />;
+  }
 
   return (
     <div
       data-testid="feature-page"
       style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgMain }}
     >
-      {/* Крошка «← …» — единственная интерактивная точка шапки.
-          Таблица §5.1/§6: 12 textSecondary, поля 4 8 4 4, R 8, gap 5, maxWidth 260 +
-          многоточие; на 360 minHeight 40 (M2). Наведение bgSelected/textPrimary (m3),
-          фокус SHADOW.focus (m3, §0). */}
-      <div style={{ padding: isMobile ? '8px 8px 0' : '10px 14px 0' }}>
-        <button
-          type="button"
-          data-testid="feature-page-back"
-          className={FOCUS_CLASS}
-          onClick={goBack}
-          onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => setHover(false)}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            border: 'none', cursor: 'pointer',
-            color: hover ? C.textPrimary : C.textSecondary,
-            background: hover ? C.bgSelected : 'transparent',
-            fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 400,
-            padding: '4px 8px 4px 4px', borderRadius: R.md,
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            maxWidth: 260, boxSizing: 'border-box',
-            minHeight: isMobile ? 40 : undefined,
-          }}
-        >
-          <ArrowLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          {label}
-        </button>
+      <FeaturePageHeader
+        title={title}
+        glyph={glyph}
+        statusTag={statusTag}
+        branch={branch}
+        ageLabel={ageLabel}
+        taskCount={taskCount}
+        mainAction={mainAction}
+        backLabel={label}
+        onBack={goBack}
+        onCopyBranch={copyBranch}
+        onOpenEpic={openEpic}
+        onMainAction={onMainAction}
+        isMobile={isMobile}
+        loading={page.status === 'loading'}
+      />
+      {/* Тело: прокрутка, поля 14 16 20 (макет §5.4). */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '14px 16px 20px' }}>
+        {body}
       </div>
-      {/* Шапка-заглушка: название фичи + подпись, что тело появится в следующем шаге. */}
-      <div style={{ flex: 1, overflow: 'auto', padding: isMobile ? '8px 8px' : '12px 14px' }}>
-        <h2 style={{ margin: 0, fontFamily: FONT.serif, fontSize: FS.xl, color: C.textHeading }}>{title}</h2>
-        <p style={{ margin: '8px 0 0', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary }}>
-          Содержимое страницы появится в следующем шаге.
-        </p>
+    </div>
+  );
+}
+
+// Блок тревоги/итог (макет §5.3): «ждёт вас»/«к мержу» (infoBg), «стоит» (dangerBg),
+// «смержена» (successBg), «без мержа» (bgSelected). Глиф 14, выделение 700, кнопка-действие.
+// Нет фичи в индексе или нет тревоги/итога — блок не рисуется (тело заполнит Ф2.5).
+function AlarmBlock({ feature, onMainAction }: {
+  feature: FeatureIndexFeature | null;
+  onMainAction: () => void;
+}) {
+  if (!feature) return null;
+  const att = feature.attention;
+  const closed = feature.bucket === 'closed';
+  const merged = closed && feature.summary?.mergedAt != null;
+
+  // Закрытая: итог «смержена {дата} · за {длительность} · {M} задач» или «без мержа».
+  if (closed) {
+    const bg = merged ? C.successBg : C.bgSelected;
+    const hi = merged ? C.successText : C.textHeading;
+    const text = merged
+      ? `Смержена ${dateOnly(feature.summary?.mergedAt) ?? ''} · за ${formatDuration(feature.summary?.durationMinutes ?? 0)}${feature.taskCount != null ? ` · ${feature.taskCount} задач` : ''}`
+      : `Закрыта без мержа${feature.summary?.mergedAt ? ` ${dateOnly(feature.summary.mergedAt)}` : ''}`;
+    return (
+      <div data-testid="feature-page-alarm" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px', padding: '10px 12px', borderRadius: R.lg, background: bg, fontSize: FS.base, color: C.textPrimary }}>
+        <span style={{ display: 'flex', flexShrink: 0 }}><FeatureGlyph kind={merged ? 'done' : 'closed'} size={14} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}><b style={{ color: hi, fontWeight: 700 }}>{text}</b></span>
+      </div>
+    );
+  }
+
+  // Тревога: «ждёт вас»/«к мержу» (infoBg) или «стоит» (dangerBg).
+  if (!att) return null;
+  const isStop = att.kind === 'stopped';
+  const bg = isStop ? C.dangerBg : C.infoBg;
+  const glyphKind: GlyphKind = isStop ? 'stopped' : 'wait';
+  // «{с}» — с какого момента (attention.since), «{причина}» — attention.reason.
+  const since = att.since ? ` ${att.since}` : '';
+  const reason = att.reason ? `: ${att.reason}` : '';
+  const head = isStop ? `Исполнитель молчит${since}` : `Ждёт вашего решения${since}`;
+
+  return (
+    <div data-testid="feature-page-alarm" style={{ display: 'flex', gap: 9, alignItems: 'flex-start', margin: '0 0 16px', padding: '10px 12px', borderRadius: R.lg, background: bg, fontSize: FS.base, color: C.textPrimary }}>
+      <span style={{ display: 'flex', flexShrink: 0, paddingTop: 2 }}><FeatureGlyph kind={glyphKind} size={14} /></span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div><b style={{ color: C.textHeading, fontWeight: 700 }}>{head}</b>{reason}</div>
+        {att.sessionId && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            <Button size="xs" variant={isStop ? 'ghost' : 'primary'} style={isStop ? { background: C.bgWhite } : undefined} onClick={onMainAction}>
+              {isStop ? 'Открыть его чат' : 'Ответить'}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

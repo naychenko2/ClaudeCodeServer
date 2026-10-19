@@ -214,6 +214,10 @@ public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFac
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await response.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(RealPng());
+        // Дефект de740a5b: size > 256 → ступень null → оригинал с immutable-кэшем,
+        // а не попытка миниатюры «-0» с no-cache.
+        response.Headers.GetValues("Cache-Control").Should().ContainSingle()
+            .Which.Should().Be("max-age=604800, private, immutable");
     }
 
     [Fact]
@@ -227,6 +231,23 @@ public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFac
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await response.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(FakePng());
+    }
+
+    // Дефект (Перф-3 B10, п.0): при сбое генерации фолбэк на оригинал НЕ должен
+    // залипать в кэше браузера. До фикса заголовок immutable выставлялся до попытки
+    // генерации, и 1,5 МБ PNG с size=64 держался в кэше неделю. Теперь — no-cache:
+    // следующий запрос попробует миниатюру снова.
+    [Fact]
+    public async Task GetAvatar_СбойГенерации_ФолбэкБезImmutable()
+    {
+        var id = await CreatePersonaAsync();
+        await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(FakePng(), FakePng()));
+
+        var response = await _client.GetAsync($"/api/personas/{id}/avatar?size=40");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.GetValues("Cache-Control").Should().ContainSingle()
+            .Which.Should().Be("no-cache");
     }
 
     [Fact]

@@ -937,7 +937,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private void DeleteAsset(string personaId, string? file, string? keep)
     {
         if (string.IsNullOrEmpty(file) || file == keep) return;
-        try { File.Delete(Path.Combine(AssetsDir, personaId, file)); } catch { /* не критично */ }
+        try { File.Delete(SafePath.Join(AssetsDir, Path.Combine(personaId, file))); } catch { /* не критично */ }
     }
 
     // Удалить файл аватара и ВСЕ его миниатюры (64/128/256): зовётся при замене аватара
@@ -950,7 +950,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         {
             var thumb = ImageAssetHelper.AvatarThumbName(imageFile, step);
             if (thumb is null) continue;
-            try { File.Delete(Path.Combine(AssetsDir, personaId, thumb)); } catch { /* не критично */ }
+            try { File.Delete(SafePath.Join(AssetsDir, Path.Combine(personaId, thumb))); } catch { /* не критично */ }
         }
     }
 
@@ -978,7 +978,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Чистим ассеты персоны (аватар)
         try
         {
-            var dir = Path.Combine(AssetsDir, id);
+            var dir = SafePath.Join(AssetsDir, id);
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
         catch { /* не критично */ }

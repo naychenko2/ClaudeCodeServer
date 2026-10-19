@@ -88,10 +88,14 @@ public static class ImageAssetHelper
 
     // Ступень, покрывающая размер показа (device px): наименьшая ступень ≥ size; null —
     // миниатюра не нужна (size ≤ 0 или больше старшей ступени — нужен оригинал).
+    // FirstOrDefault без совпадения вернул бы 0 (default), а не null: size > 256 ушёл бы
+    // в генерацию «-0», а не в оригинал с immutable-кэшем (дефект de740a5b).
     public static int? AvatarThumbStep(int? size)
     {
         if (size is not { } s || s <= 0) return null;
-        return AvatarThumbSteps.FirstOrDefault(step => step >= s);
+        foreach (var step in AvatarThumbSteps)
+            if (step >= s) return step;
+        return null;
     }
 
     // Имя миниатюры детерминированно от имени оригинала: avatar-<guid>.jpg → avatar-<guid>-<step>.jpg.

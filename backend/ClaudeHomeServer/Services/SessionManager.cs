@@ -442,6 +442,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     /// </summary>
     private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
+    // Дебаунс лёгких мутаций (MarkRead): не писать sessions.json синхронно в запросе, а
+    // скопить изменения и записать один раз с короткой задержкой. Активен, когда включён
+    // автосейв (Session:AutoSaveSeconds > 0) — тот же гейт, что у _autoSaveTimer: в тестах
+    // (AutoSaveSeconds=0) отметка пишется синхронно, и фоновый таймер не гонит sweep-terminus
+    // между ассертами. Задержка — Session:MarkReadDebounceSeconds (дефолт 1с).
+    private readonly object _debounceLock = new();
+    private Timer? _pendingSaveTimer;
+    private readonly bool _debounceEnabled;
+    private readonly TimeSpan _debounceDelay;
     // Тик ожидания по маркеру `<waiting>` (фаза waiting И WaitingReason != null). Тикает
     // ТОЛЬКО ожидание модели — ожидание по живой делегированной задаче НЕ трогаем
     // (доклад придёт сам, смерть исполнителя ловит алерт молчания). Отдельный таймер
@@ -955,6 +964,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (autoSave > TimeSpan.Zero)
             _autoSaveTimer = new Timer(_ => SaveSessions(), null, autoSave, autoSave);
 
+        // Дебаунс лёгких мутаций: тот же гейт autoSave > 0, что у автосейва (см. поле).
+        // Задержка — Session:MarkReadDebounceSeconds (дефолт 1с).
+        _debounceEnabled = autoSave > TimeSpan.Zero;
+        _debounceDelay = TimeSpan.FromSeconds(
+            double.TryParse(config["Session:MarkReadDebounceSeconds"], out var debounceSecs) ? debounceSecs : 1);
+
         // Тик ожидания по маркеру `<waiting>`. Тот же гейт `autoSave > Zero` — чтобы тесты
         // с `Session:AutoSaveSeconds = 0` не оставляли тик работающим: фоновые таймеры
         // выполняют произвольный код в произвольный момент и между ассертами теста гонят
@@ -1453,6 +1468,55 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Счётчик вызовов SaveSessions — для тестов «пачка пишет файл один раз» (ApplySubjects)
     private int _saveSessionsCalls;
     internal int SaveSessionsCalls => Volatile.Read(ref _saveSessionsCalls);
+
+    // Дебаунс лёгких мутаций (MarkRead): не писать sessions.json синхронно в запросе.
+    // Быстрые повторные отметки (открытие чата на нескольких устройствах) сливаются в одну
+    // запись: первый вызов заводит one-shot таймер, следующие в окне задержки его не трогают.
+    // Таймер живёт, пока включён автосейв; в тестах (AutoSaveSeconds=0) — синхронная запись,
+    // как раньше. Запись сама идёт под _saveLock (SaveSessions), поэтому параллельность
+    // с автосейвом/другими мутациями безопасна.
+    private void ScheduleDebouncedSave()
+    {
+        if (!_debounceEnabled) { SaveSessions(); return; }
+        lock (_debounceLock)
+        {
+            if (_pendingSaveTimer is not null) return;
+            Timer? timer = null;
+            timer = new Timer(_ =>
+            {
+                // Гасим поле только если оно указывает на ЭТОТ таймер. В окне между
+                // срабатыванием и взятием замка FlushPendingSave мог уже снять этот таймер
+                // (и новый MarkRead завёл свежий): безусловная очистка затёрла бы чужой.
+                lock (_debounceLock)
+                    if (ReferenceEquals(_pendingSaveTimer, timer)) _pendingSaveTimer = null;
+                // Сработавший one-shot таймер освобождает себя: без Dispose он держал бы
+                // регистрацию в thread pool до конца процесса.
+                timer?.Dispose();
+                SaveSessions();
+            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingSaveTimer = timer;
+        }
+    }
+
+    // Синхронный сброс висящей записи (MarkRead-дебаунс) при остановке: штатный shutdown
+    // = перезапуск, и отложенная запись, если не сбросить её, потеряется (one-shot таймер
+    // Dispose'ится, не успев сработать). Вызывается из KillAllProcesses/Dispose ДО убийства
+    // процессов: SaveSessions() завершится на том же потоке, без гонки с диспозом адаптеров.
+    // Idempotent: после первого сброса _pendingSaveTimer = null, повторный вызов — no-op.
+    private void FlushPendingSave()
+    {
+        Timer? pending;
+        lock (_debounceLock)
+        {
+            pending = _pendingSaveTimer;
+            _pendingSaveTimer = null;
+            pending?.Dispose();
+        }
+        if (pending is not null) SaveSessions();
+    }
+
+    // Тестовый хук: наполнить стор сессиями без полного CreateAsync (бенчмарк MarkRead).
+    internal void AddSessionForTest(Session info) => _sessions[info.Id] = new SessionEntry { Info = info };
 
     // Публичный (волна В): TeamPlanService сохраняет каталог сессий после правки PlanCardId/
     // PlanVersion/Replanning — через тот же канал, что и TeamWaveService.
@@ -2204,14 +2268,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Отметить чат прочитанным (синк непрочитанности между устройствами).
     // UpdatedAt намеренно не трогаем (как в SetExpiry): прочтение — не активность чата.
     // false — сессии нет или она не принадлежит owner'у (контроллер отдаёт 404).
-    // Идемпотентность: LastReadAt уже >= UpdatedAt → true без перезаписи файла
-    // (SaveSessions пишет весь список — незачем гонять диск на повторных отметках).
+    // Идемпотентность: LastReadAt уже >= UpdatedAt → true без записи.
+    // Запись — дебаунсом (ScheduleDebouncedSave), а не синхронным SaveSessions: отметка
+    // прочитанности — лёгкая мутация, а SaveSessions сериализует ВЕСЬ sessions.json (на
+    // 600 сессий ~0,9с в проде) и fsync'ит файл — в запросе это незачем. In-memory
+    // состояние обновлено синхронно, поэтому ответ корректен сразу; на диск отметка
+    // уходит одним пакетом (быстрые повторные отметки сливаются) или автосейвом.
     public bool MarkRead(string sessionId, string ownerId)
     {
         if (GetOwned(sessionId, ownerId) is not { } s) return false;
         if (s.LastReadAt >= s.UpdatedAt) return true;
         s.LastReadAt = DateTime.UtcNow;
-        SaveSessions();
+        ScheduleDebouncedSave();
         return true;
     }
 
@@ -10318,9 +10386,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
         // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же
         // сценарий — для тика ожидания: в окне shutdown он бы мог послать директиву
-        // в умирающий адаптер, и SendMessageAsync не нашёл бы Process.
+        // в умирающий адаптер, и SendMessageAsync не нашёл бы Process. Дебаунс-таймер
+        // MarkRead сбрасываем синхронно (FlushPendingSave) ДО убийства: отложенная запись
+        // не теряется, а SaveSessions() завершается на этом же потоке, без гонки с диспозом.
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
+        FlushPendingSave();
 
         var tasks = _sessions.Values
             .Select(e => e.Process)
@@ -10337,10 +10408,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // IDisposable — для фоновых таймеров. Адаптеры (процессы claude) убивает
     // KillAllProcesses() из ApplicationStopping. Не дублируем — иначе два cleanup-пути.
+    // FlushPendingSave — idempotent: если KillAllProcesses уже сбросил запись, здесь no-op.
     public void Dispose()
     {
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
+        FlushPendingSave();
         GC.SuppressFinalize(this);
     }
 

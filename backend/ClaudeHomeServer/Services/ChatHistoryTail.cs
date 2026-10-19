@@ -140,22 +140,60 @@ public static class ChatHistoryTail
 // актуальности, что в ProjectFileSessionsIndex) + длина списка (страховка от живого
 // аккумулятора, который дописал запись ещё без записи на диск). Ключ — csid, а csid уникален
 // per-чат и per-владелец, поэтому изоляция per-owner не нарушается.
-public class PrefixFingerprintCache(ChatHistoryService history)
+public class PrefixFingerprintCache
 {
-    private sealed record Entry(DateTime? Version, int Count, string[] Fps);
+    // Потолок размера: кэш — оптимизация, не источник правды. Без него записи удалённых
+    // чатов жили бы вечно (Perf-3 B10, п.2). При переполнении вытесняем давно не
+    // пересчитанные (см. TrimIfOverLimit) — вытесненный чат просто пересчитает отпечатки
+    // при следующем доступе, корректность не страдает.
+    private const int DefaultMaxEntries = 1024;
+
+    private sealed record Entry(DateTime? Version, int Count, string[] Fps, long LastRecompute);
+
+    private readonly ChatHistoryService _history;
+    private readonly int _maxEntries;
 
     // Ключ — ClaudeSessionId (история лежит по нему, не по Session.Id); совпадает с
     // SessionManager.HistoryKeyOf. Сторож границ: ChatHistoryService — спинка, не вертикаль.
     private readonly ConcurrentDictionary<string, Entry> _cache = new();
+    // Монотонный счётчик пересчётов: метка «насколько свежа запись» для вытеснения
+    private long _recomputeCounter;
+
+    public PrefixFingerprintCache(ChatHistoryService history) : this(history, DefaultMaxEntries) { }
+
+    // Для тестов: свой потолок, чтобы вытеснение проверялось без тысячи записей
+    internal PrefixFingerprintCache(ChatHistoryService history, int maxEntries)
+    {
+        _history = history;
+        _maxEntries = maxEntries;
+    }
+
+    // Для тестов: наблюдаемый размер (в проде не читается)
+    internal int Count => _cache.Count;
 
     // Готовые отпечатки всех префиксов истории: из кэша при совпадении версии, иначе пересчёт.
     public string[] GetOrCompute(string csid, IReadOnlyList<StoredMessage> messages)
     {
-        var version = history.LastWriteUtc(csid);
+        var version = _history.LastWriteUtc(csid);
         if (_cache.TryGetValue(csid, out var entry) && entry.Version == version && entry.Count == messages.Count)
             return entry.Fps;
         var fps = ChatHistoryTail.AllPrefixFingerprints(messages);
-        _cache[csid] = new Entry(version, messages.Count, fps);
+        _cache[csid] = new Entry(version, messages.Count, fps, Interlocked.Increment(ref _recomputeCounter));
+        TrimIfOverLimit();
         return fps;
+    }
+
+    // Вытеснение при переполнении: убираем давно не пересчитанные (наименьшая метка) до
+    // половины лимита (гистерезис — не вытесняем на каждом запросе). Метка ставится на
+    // пересчёте, а не на чтении: стабильная (не пишущаяся) история — самая старая и первой
+    // уходит, а активно пишущаяся — свежая и остаётся. Per-read записи нет — hot-path дёшевый.
+    private void TrimIfOverLimit()
+    {
+        if (_cache.Count <= _maxEntries) return;
+        var target = _maxEntries / 2;
+        var snapshot = _cache.ToArray();
+        Array.Sort(snapshot, (a, b) => a.Value.LastRecompute.CompareTo(b.Value.LastRecompute));
+        for (var i = 0; i < snapshot.Length - target; i++)
+            _cache.TryRemove(snapshot[i].Key, out _);
     }
 }

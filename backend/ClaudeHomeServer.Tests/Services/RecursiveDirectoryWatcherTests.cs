@@ -126,6 +126,68 @@ public class RecursiveDirectoryWatcherTests : IDisposable
         watcher.WatchCount.Should().Be(2, "подписаны только корень и src — тяжёлые каталоги не обходятся");
     }
 
+    // Каталог с собственным .git — полная копия чужого дерева (worktree: .git файл; вложенный
+    // репозиторий: .git каталог). Правило по признаку, а не по имени (TreeExcludes.HasOwnGit):
+    // слежка на корень такого каталога стоит (удаление/правки в нём видны), но вглубь не
+    // заходят — иначе бюджет inotify ушёл бы на чужую копию. Обычный каталог обходится.
+    [SkippableFact]
+    public void ПодкаталогССобственнымGit_НеОбходится_АОбычныйДа()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "подписка по перечню каталогов — только Linux");
+
+        // worktree: .git — файл; вложенный репозиторий: .git — каталог. У обоих — подкаталог
+        // inner, в который обход не должен заходить. Обычный каталог — обходится.
+        var wt = Path.Combine(_root, "wt");
+        Directory.CreateDirectory(Path.Combine(wt, "inner"));
+        File.WriteAllText(Path.Combine(wt, ".git"), "gitdir: /main/.git/worktrees/wt\n");
+        var nested = Path.Combine(_root, "nested");
+        Directory.CreateDirectory(Path.Combine(nested, ".git", "objects"));
+        Directory.CreateDirectory(Path.Combine(nested, "inner"));
+        var plain = Path.Combine(_root, "plain");
+        Directory.CreateDirectory(Path.Combine(plain, "inner"));
+
+        using var watcher = new RecursiveDirectoryWatcher(_root, Excludes, (_, _) => { });
+        watcher.Start();
+
+        // Корень + три подкаталога (их корни) + inner обычного. В inner у wt/nested не зашли.
+        watcher.WatchCount.Should().Be(5,
+            "корень, три подкаталога и inner обычного; в inner worktree/вложенного репо не зашли");
+        watcher.Subscribed.Should().Contain(plain, "обычный каталог подписывается");
+        watcher.Subscribed.Should().Contain(Path.Combine(plain, "inner"), "в обычный каталог обход заходит");
+        watcher.Subscribed.Should().NotContain(Path.Combine(wt, "inner"),
+            "в worktree (файл .git) вглубь не зашли");
+        watcher.Subscribed.Should().NotContain(Path.Combine(nested, "inner"),
+            "во вложенный репозиторий (каталог .git) вглубь не зашли");
+    }
+
+    // Зеркало предыдущего теста, но для КОРНЯ: правило HasOwnGit бьёт только ПОДкаталоги.
+    // Корень с собственным .git (worktree/репозиторий) под него не попадает — обход заходит
+    // во ВСЕ обычные подкаталоги, а .git отсекается по имени. Мутация «проверять и корень»
+    // остановила бы обход на корневом .git, и обычные подкаталоги остались бы без подписки.
+    [SkippableFact]
+    public void КореньССобственнымGit_ПодПравилоНеПопадает_ОбходЗаходитВОбычныеПодкаталоги()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "подписка по перечню каталогов — только Linux");
+
+        var wt = Path.Combine(_root, "wt");
+        Directory.CreateDirectory(wt);
+        // worktree: .git — файл; вложенный репозиторий: .git — каталог. Оба — «свой .git»
+        // на КОРНЕ, и ни один не должен останавливать обход в обычные подкаталоги.
+        File.WriteAllText(Path.Combine(wt, ".git"), "gitdir: /main/.git/worktrees/wt\n");
+        Directory.CreateDirectory(Path.Combine(wt, "src", "inner"));
+        Directory.CreateDirectory(Path.Combine(wt, "docs"));
+
+        using var watcher = new RecursiveDirectoryWatcher(wt, Excludes, (_, _) => { });
+        watcher.Start();
+
+        // Корень + src + src/inner + docs: .git по имени, в обычные подкаталоги обход зашёл.
+        watcher.WatchCount.Should().Be(4,
+            "корень с .git под правило не попадает: обход заходит во все обычные подкаталоги");
+        watcher.Subscribed.Should().Contain(Path.Combine(wt, "src"), "в обычный подкаталог корня обход заходит");
+        watcher.Subscribed.Should().Contain(Path.Combine(wt, "src", "inner"), "вглубь обычного подкаталога обход заходит");
+        watcher.Subscribed.Should().Contain(Path.Combine(wt, "docs"), "второй обычный подкаталог тоже обходится");
+    }
+
     // Списки исключений у дерева файлов и у ватчера хода обязаны быть одним набором:
     // пополнили один — разъезд со вторым означает «подписались, но глушим» (или наоборот,
     // потратили бюджет слежек на то, что всё равно не показываем).

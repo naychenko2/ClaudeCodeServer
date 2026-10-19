@@ -272,7 +272,7 @@ public class PersonasController(
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
         var safe = Path.GetFileName(file);   // защита от path-traversal
-        var full = Path.Combine(_personas.AssetsDir, id, "candidates", safe);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, "candidates", safe));
         if (!System.IO.File.Exists(full)) return NotFound();
         return ImageAssetHelper.PhysicalFileByExt(full);
     }
@@ -294,18 +294,33 @@ public class PersonasController(
             || string.IsNullOrEmpty(persona.Avatar.ImageFile))
             return NotFound();
 
-        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, persona.Avatar.ImageFile));
         if (!System.IO.File.Exists(full)) return NotFound();
 
-        // Имя файла в URL (v) меняется при каждой смене аватара — кэш браузера может
-        // быть долгим и immutable (тот же приём, что у картинки-иконки проекта, ADR-009 §8)
-        Response.Headers.CacheControl = "private, max-age=604800, immutable";
-
         var step = ImageAssetHelper.AvatarThumbStep(size);
-        if (step is null) return ImageAssetHelper.PhysicalFileByExt(full);
+        if (step is null)
+        {
+            // Оригинал (большой вид): имя файла в URL (v) меняется при каждой смене аватара —
+            // кэш браузера может быть долгим и immutable (тот же приём, что у картинки-иконки
+            // проекта, ADR-009 §8)
+            Response.Headers.CacheControl = "private, max-age=604800, immutable";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
 
         var thumb = await _avatarThumbs.GetOrGenerateAsync(persona, full, step.Value);
-        return ImageAssetHelper.PhysicalFileByExt(thumb ?? full);
+        if (thumb is null)
+        {
+            // Фолбэк на оригинал: миниатюра не получилась (гонка/сбой генерации) — отдаём
+            // оригинал, но БЕЗ долгого кэша (no-cache), чтобы следующий запрос получил
+            // миниатюру, а не держал оригинал на этом URL неделю (дефект: 1,5 МБ PNG с
+            // immutable на size=64)
+            Response.Headers.CacheControl = "no-cache";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
+
+        // Миниатюра: имя стабильно до смены аватара — кэш долгий и immutable
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return ImageAssetHelper.PhysicalFileByExt(thumb);
     }
 
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
@@ -317,7 +332,7 @@ public class PersonasController(
         if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return NotFound();
 
-        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, persona.Avatar.OriginalFile));
         if (!System.IO.File.Exists(full)) return NotFound();
 
         Response.Headers.CacheControl = "private, max-age=604800, immutable";
@@ -344,12 +359,12 @@ public class PersonasController(
 
         var cropState = ImageAssetHelper.ParseCrop(crop);
 
-        var dir = Path.Combine(_personas.AssetsDir, id);
+        var dir = SafePath.Join(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(original, Path.Combine(dir, originalName));
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(original, SafePath.Join(dir, originalName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
         await Broadcast("updated", id);
@@ -371,10 +386,10 @@ public class PersonasController(
         var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
         if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
 
-        var dir = Path.Combine(_personas.AssetsDir, id);
+        var dir = SafePath.Join(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
         await Broadcast("updated", id);

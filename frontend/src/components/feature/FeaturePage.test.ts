@@ -11,6 +11,7 @@
 
 import { act } from 'react';
 import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { __test as pageTest } from '../../lib/featurePage';
@@ -133,5 +134,30 @@ describe('FeaturePage: крошка и шапка', () => {
     const page = findNodeByAttr(c, 'data-testid', 'feature-page');
     expect(page).not.toBeNull();
     expect(textNodes(page!).join('')).toContain('Моя фича');
+  });
+
+  // === M2: крошка на 360 — minHeight 40 (тач-цель, §6) ===
+  it('M2: крошка на 360 — minHeight 40 (тач-цель)', () => {
+    const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', isMobile: true, onBack: () => {} }));
+    expect(html).toContain('min-height:40px');
+  });
+
+  // === m2: крошка по таблице §5.1 — поля, gap, вес, maxWidth, многоточие ===
+  it('m2: крошка по таблице §5.1 — поля 4 8 4 4, gap 5, вес 400, maxWidth 260, многоточие', () => {
+    const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', onBack: () => {} }));
+    expect(html).toContain('padding:4px 8px 4px 4px');
+    expect(html).toContain('gap:5px');
+    expect(html).toContain('font-weight:400');
+    expect(html).toContain('max-width:260px');
+    expect(html).toContain('text-overflow:ellipsis');
+  });
+
+  // === m3: крошка — фокус SHADOW.focus (класс cc-feature-crumb, §0) + шрифт Hanken ===
+  it('m3: крошка несёт focus-класс (SHADOW.focus, §0) и шрифт Hanken (ловушка <button>)', () => {
+    const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', onBack: () => {} }));
+    // Фокус: кнопка несёт focus-класс (инжект :focus-visible → outline:none + SHADOW.focus).
+    expect(html).toContain('cc-feature-crumb');
+    // §0: нативная <button> не наследует шрифт — задаём Hanken явно.
+    expect(html).toContain('Hanken Grotesk');
   });
 });

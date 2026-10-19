@@ -873,9 +873,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             feature={g.feature}
             expanded={expanded}
             onToggle={toggle}
-            // Тело открывает страницу фичи (Ф2.3): указатель «чат → фича» (активный чат)
-            // + navPush исполняет WorkspacePage (cc-open-feature).
-            onOpen={() => { if (g.feature) window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: g.feature.featureId, fromChatId: activeSessionId } })); }}
+            // Тело открывает страницу фичи (Ф2.3): вход из СПИСКА (fromChat: false) —
+            // указатель возврата не пишется (крошка → ключевой чат/список, M3).
+            onOpen={() => { if (g.feature) window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: g.feature.featureId, fromChatId: activeSessionId, fromChat: false } })); }}
             isMobile={isMobile}
             compact
             personaName={personaNameOf(g.feature)}
@@ -916,9 +916,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           feature={g.feature}
           expanded={expanded}
           onToggle={toggle}
-          // Тело открывает страницу фичи (Ф2.3): указатель «чат → фича» (активный чат)
-          // + navPush исполняет WorkspacePage (cc-open-feature).
-          onOpen={() => { if (g.feature) window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: g.feature.featureId, fromChatId: activeSessionId } })); }}
+          // Тело открывает страницу фичи (Ф2.3): вход из СПИСКА (fromChat: false) —
+          // указатель возврата не пишется (крошка → ключевой чат/список, M3).
+          onOpen={() => { if (g.feature) window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: g.feature.featureId, fromChatId: activeSessionId, fromChat: false } })); }}
           isMobile={isMobile}
           // «Кто · сколько» в статусе: персона-исполнитель (attention.personaId) + «сейчас»
           personaName={personaNameOf(g.feature)}

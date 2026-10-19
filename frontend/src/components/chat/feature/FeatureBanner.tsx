@@ -350,7 +350,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // «Фича →» (Ф2.3): страница фичи. Указатель «чат → фича» и navPush исполняет
   // WorkspacePage (cc-open-feature); fromChatId = этот чат (крошка «← К чату «…»»).
   const openFeaturePage = () => {
-    window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: feature.featureId, fromChatId: sessionId } }));
+    // fromChat: true — вход из чата: WorkspacePage запишет указатель возврата (крошка
+    // «← К чату «…»»). В списке (SessionList) fromChat: false — указатель не пишется (M3).
+    window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: feature.featureId, fromChatId: sessionId, fromChat: true } }));
   };
 
   // Тело «Конвейер ▾»: FeatureModeBody (режим «Исполнение фичи») + легенда (внутри
@@ -450,8 +452,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
               : <ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           </GoButton>
           {/* «Фича →» (Ф2.3): страница фичи. Компактная текстовая кнопка — тач-цель
-              выше остаётся для основной роли; название плашки уступает место (обрезка). */}
-          <GoButton testId="feature-page-go" tone="go" onClick={openFeaturePage}>
+              выше остаётся для основной роли; название плашки уступает место (обрезка).
+              M2: на 360 minHeight 40 (тач-цель), десктоп — без minHeight. */}
+          <GoButton testId="feature-page-go" tone="go" onClick={openFeaturePage} style={{ minHeight: 40 }}>
             Фича
             <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </GoButton>

@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
-import { C, R, FS, FONT } from '../../lib/design';
+import { C, R, FS, FONT, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage } from '../../lib/featurePage';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+
+// Единый focus-visible ring (клавиатура) — инжектим один раз (паттерн IconButton, §0).
+const FOCUS_CLASS = 'cc-feature-crumb';
+if (typeof document !== 'undefined' && !document.getElementById('cc-feature-crumb-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-feature-crumb-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
 
 // Куда ведёт крошка «← …»:
 //   chat — в исходный чат (указатель back-nav «чат → фича»);
@@ -40,6 +49,9 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
+
+  // Наведение на крошку (m3): фон bgSelected + цвет textPrimary (как у других ссылок-кнопок).
+  const [hover, setHover] = useState(false);
 
   // Указатель возврата: «← назад» ведёт в чат, из которого перешли, только если
   // записанный переход ведёт именно в ЭТУ страницу фичи.
@@ -81,17 +93,28 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       data-testid="feature-page"
       style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgMain }}
     >
-      {/* Крошка «← …» — единственная интерактивная точка шапки. */}
+      {/* Крошка «← …» — единственная интерактивная точка шапки.
+          Таблица §5.1/§6: 12 textSecondary, поля 4 8 4 4, R 8, gap 5, maxWidth 260 +
+          многоточие; на 360 minHeight 40 (M2). Наведение bgSelected/textPrimary (m3),
+          фокус SHADOW.focus (m3, §0). */}
       <div style={{ padding: isMobile ? '8px 8px 0' : '10px 14px 0' }}>
         <button
           type="button"
           data-testid="feature-page-back"
+          className={FOCUS_CLASS}
           onClick={goBack}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            border: 'none', background: 'transparent', cursor: 'pointer',
-            color: C.textSecondary, fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
-            padding: '4px 6px', borderRadius: R.md, whiteSpace: 'nowrap',
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            border: 'none', cursor: 'pointer',
+            color: hover ? C.textPrimary : C.textSecondary,
+            background: hover ? C.bgSelected : 'transparent',
+            fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 400,
+            padding: '4px 8px 4px 4px', borderRadius: R.md,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            maxWidth: 260, boxSizing: 'border-box',
+            minHeight: isMobile ? 40 : undefined,
           }}
         >
           <ArrowLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

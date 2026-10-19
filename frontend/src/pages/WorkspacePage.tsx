@@ -43,7 +43,8 @@ import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
-import { FeaturePage, type FeaturePageBackTarget } from '../components/feature/FeaturePage';
+import { FeatureCenter } from '../components/feature/FeatureCenter';
+import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { openChatById } from '../lib/openChat';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
 import { getFlag, FLAGS } from '../lib/featureFlags';
@@ -1550,14 +1551,17 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- WorkspacePage перемонтируется на смену проекта (key={project.id} в App), подписка на весь жизненный цикл инстанса
   }, []);
 
-  // Страница фичи (Ф2.3): «Фича →» в плашке чата и тело группы в списке шлют
-  // cc-open-feature. Здесь: указатель возврата (чат → фича, только при входе из чата),
-  // показ страницы и запись истории. На мобиле страница занимает режим 'chat' (центр).
+  // Страница фичи (Ф2.3): «Фича →» в плашке чата (fromChat=true) и тело группы в
+  // списке (fromChat=false) шлют cc-open-feature. Указатель возврата (крошка «← К чату
+  // «…»») записывается ТОЛЬКО при входе из чата: при входе из списка крошка ведёт в
+  // ключевой чат/список (M3), а записанный из чата указатель мажём, чтобы не вёл в
+  // чат, которого пользователь не открывал. Показ страницы и запись истории — общие.
   useEffect(() => {
     const onOpenFeature = (e: Event) => {
-      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null }>).detail;
+      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean }>).detail;
       if (!d?.featureId) return;
-      if (d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
+      if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
+      else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);
       if (isMobileRef.current) setMobileView('chat');
       navPush({ screen: 'project', project, view: 'chat', file: null, task: null, feature: d.featureId, chatId: d.fromChatId ?? undefined });
@@ -1997,8 +2001,9 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
-              и черновик композера) пережил переход и возврат (Ф2.3). */}
-          <div style={{ flex: 1, display: openFeatureId ? 'none' : 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
+              с десктопом — FeatureCenter (не копипаста). */}
+          <FeatureCenter open={!!openFeatureId} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2017,11 +2022,7 @@ const windowWidth = useWindowWidth();
               )
               : NoSession
             }
-          </div>
-          {/* Страница фичи (Ф2.3): сосед центра, показана при openFeatureId. */}
-          {openFeatureId && (
-            <FeaturePage featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} />
-          )}
+          </FeatureCenter>
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
@@ -2103,6 +2104,8 @@ const windowWidth = useWindowWidth();
       {/* Тело десктопа и планшета: рельсы панелей по краям, центр между ними */}
         <DesktopWorkspace
           isTablet={isTablet}
+          openFeatureId={openFeatureId}
+          onFeatureBack={handleFeatureBack}
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}

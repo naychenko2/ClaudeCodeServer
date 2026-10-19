@@ -348,11 +348,11 @@ describe('WorkspacePage: центр — страница фичи соседом
     const draft = 'черновик хода';
     act(() => { (reactProps(ta!) as any).onChange({ target: { value: draft, selectionStart: 0 } }); });
 
-    // 3. Открываем страницу фичи (указатель чат → фича + navPush).
-    recordBackNav('chatA', { kind: 'feature', id: 'f1' });
+    // 3. Открываем страницу фичи из ЧАТА (fromChat: true): обработчик cc-open-feature
+    //    сам пишет указатель возврата (chatA → фича) — крошка «← К чату «…»».
     act(() => {
       (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
-        detail: { featureId: 'f1', fromChatId: 'chatA' },
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
       }));
     });
     await act(async () => { vi.advanceTimersByTime(100); });
@@ -388,8 +388,10 @@ describe('WorkspacePage: центр — страница фичи соседом
     const src = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
     // Обработчик popstate выставляет openFeatureId из снимка навигации.
     expect(src, 'popstate не выставляет openFeatureId').toContain('setOpenFeatureId(s.feature ?? null)');
-    // Обёртка центра прячет ChatPanel display:none (не размонтирует) при открытой странице.
-    expect(src, 'центр не прячет ChatPanel display:none').toContain("display: openFeatureId ? 'none' : 'flex'");
+    // Обёртка центра (FeatureCenter) прячет ChatPanel display:none (не размонтирует) при
+    // открытой странице: общий паттерн мобильной и десктопной раскладки.
+    const centerSrc = readFileSync(new URL('../components/feature/FeatureCenter.tsx', import.meta.url), 'utf8');
+    expect(centerSrc, 'центр не прячет ChatPanel display:none').toContain("display: open ? 'none' : 'flex'");
   });
 
   it('диплинк #/project/p1/feature/f1: страница открывается при первом монтировании (чат в DOM, крошка)', async () => {
@@ -460,5 +462,75 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(win.window.location.hash, 'feature остался в hash после возврата').not.toContain('/feature/');
     // Снимок истории (history.state) тоже без feature: «назад» ведёт туда же, что крошка.
     expect(win.window.history.state?.feature ?? null, 'feature остался в снимке истории').toBeNull();
+  });
+
+  // === C1: десктоп (1280) — страница фичи в DesktopWorkspace, не только мобильная ветка ===
+  it('C1: десктоп 1280 — страница фичи в DOM, ChatPanel в DOM (скрыт), возврат восстанавливает чат', async () => {
+    // Десктопная раскладка (DesktopWorkspace, не мобильная ветка): страница фичи — СОСЕД
+    // центра, ChatPanel прячется display:none (не размонтируется).
+    (globalThis as any).window.innerWidth = 1280;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    const chatPanelInDom = () => findNodeByAttr(container, 'data-testid', 'chat-panel') !== null;
+    // 1. ChatPanel смонтирован (activeSession задан).
+    expect(chatPanelInDom(), 'ChatPanel не смонтирован (десктоп)').toBe(true);
+
+    // 2. Открываем страницу фичи из чата (fromChat: true).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // 3. КЛЮЧЕВОЕ (C1): страница фичи в DOM на ДЕСКТОПЕ (было: только мобильная ветка).
+    //    Мутация «убрать вставку страницы в десктоп» (FeatureCenter из DesktopWorkspace)
+    //    красит этот тест: feature-page/feature-page-back пропадают из DOM.
+    const page = findNodeByAttr(container, 'data-testid', 'feature-page');
+    expect(page, 'страница фичи не в DOM на десктопе (C1)').not.toBeNull();
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back, 'крошка страницы фичи не найдена (C1)').not.toBeNull();
+
+    // 4. ChatPanel НЕ размонтирован (display:none): testid в DOM.
+    expect(chatPanelInDom(), 'ChatPanel размонтирован на десктопе (C1)').toBe(true);
+
+    // 5. Возврат: клик по крошке → страница закрывается, центр (чат) возвращается.
+    act(() => { (reactProps(back!) as any).onClick(); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не скрыта после возврата (C1)').toBeNull();
+    expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
+  });
+
+  // === M3: вход из списка (fromChat: false) — указатель возврата не пишется ===
+  it('M3: вход из списка — крошка «К ключевому чату», не в активный (не открытый) чат', async () => {
+    // Активный чат (chatA) ≠ ключевой чат фичи (chat-key). Если бы указатель возврата
+    // записался в chatA (как при входе из чата), крошка вела бы в chatA — чат, который
+    // пользователь не открывал (он был «активным» на мобиле, но на экране был список).
+    const idx = { features: [feat({ keySessionId: 'chat-key' })], chats: {} } as FeaturesIndex;
+    indexTest.setIndex('p1', idx);
+    mockData.index = idx;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Вход из СПИСКА: fromChat: false, fromChatId = активный чат (chatA).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: false },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back, 'крошка страницы фичи не найдена (M3)').not.toBeNull();
+    // Крошка ведёт в ключевой чат фичи (chat-key), НЕ в активный chatA.
+    const text = textNodes(back!).join('');
+    expect(text, 'крошка не «К ключевому чату» (M3: указатель не должен вести в chatA)').toContain('К ключевому чату');
+    expect(text, 'крошка ведёт в активный (не открытый) чат (M3)').not.toContain('К чату');
   });
 });

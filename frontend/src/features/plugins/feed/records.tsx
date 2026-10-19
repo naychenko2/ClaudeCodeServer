@@ -8,10 +8,10 @@ import type { ChatItem } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { DraftFeedCard } from './DraftFeedCard';
 
-export const MODULE = 'plugins';
-export const recordKey = (recordType: string) => `${MODULE}:${recordType}`;
-
-export const RECORD_DRAFT = 'plugin_draft';
+// Ключи записей — из лист-модуля (recordKeys): манифест берёт их напрямую (не через
+// records.tsx, чтобы не тянуть его в статический граф), а ре-экспорт держит публичную
+// поверхность модуля прежней.
+export { MODULE, recordKey, RECORD_DRAFT } from './recordKeys';
 
 export interface ModuleRecordView { recordType: string; data: Record<string, unknown>; fallback: string | null }
 

@@ -9,6 +9,7 @@ import type {
 } from '../../lib/subsystems/registryCore';
 import { FLAGS, getFlag } from '../../lib/featureFlags';
 import { C, ISLAND } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { getLocalModelAdmin, getLocalModelConfigured, isLocalModelPanelVisible } from './useLocalModelStats';
 import { lazy, Suspense } from 'react';
 const LocalModelPanel = lazy(() => import('./LocalModelPanel').then(m => ({ default: m.LocalModelPanel })));
@@ -49,7 +50,7 @@ export const manifest: SubsystemManifest = {
         ),
         action: {
           title: 'Локальные модели',
-          icon: <Cpu size={16} strokeWidth={2} />,
+          icon: <Cpu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           // Геттеры вне React: isAvailable вызывается из рендера страницы
           isAvailable: (_projectId: string | null) => isLocalModelPanelVisible({
             flag: getFlag(FLAGS.localModelStats),

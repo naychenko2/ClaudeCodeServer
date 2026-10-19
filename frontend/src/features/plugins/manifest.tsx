@@ -6,14 +6,12 @@
 // DraftAnchor — ленивый импорт (React.lazy): статический import './feed/records'
 // тянет DraftFeedCard → глубокую цепочку (api, signalr, …), которая транзитивно
 // возвращается в registry/registryCore и оставляет manifest неинициализированным
-// при top-level registerSubsystem (цикл M1). Константы RECORD_DRAFT/recordKey
-// продублированы здесь, чтобы не тянуть records.tsx в статический граф.
+// при top-level registerSubsystem (цикл M1). Константы RECORD_DRAFT/recordKey —
+// из лист-модуля feed/recordKeys (без тяжёлых импортов), чтобы не тянуть records.tsx.
 
 import { lazy, Suspense } from 'react';
 import type { ChatItemToolCtx, SubsystemManifest } from '../../lib/subsystems/registryCore';
-
-const RECORD_DRAFT = 'plugin_draft';
-const recordKey = (recordType: string) => `plugins:${recordType}`;
+import { RECORD_DRAFT, recordKey } from './feed/recordKeys';
 
 const DraftAnchor = lazy(() => import('./feed/records').then(m => ({ default: m.DraftAnchor })));
 

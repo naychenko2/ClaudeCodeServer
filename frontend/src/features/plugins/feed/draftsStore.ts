@@ -73,7 +73,10 @@ function loadList(): void {
       if (_listDirty) { _listDirty = false; _listLoaded = false; _listInflight = false; void loadList(); }
       else _listInflight = false;
     })
-    .catch(() => { _listLoaded = true; _listInflight = false; emit(); });
+    // Ошибка списка: _listLoaded = false (а не true) — иначе любая последующая попытка
+    // (монтирование/бамп/refreshDraft) блокируется гардом и карточки залипают в «Загружаем…».
+    // Ретрай только по новому триггеру, не по таймеру — шторма запросов при постоянной ошибке нет.
+    .catch(() => { _listLoaded = false; _listInflight = false; emit(); });
 }
 
 // Предпросмотр по slug: один запрос на slug (карточки одного slug делят результат).
@@ -92,12 +95,15 @@ function loadPreview(slug: string, force = false): void {
 }
 
 // Событие наблюдателя: черновик по slug поменялся → перечитать предпросмотр и список.
-// Как refreshDraft: если список грузится, ставим _listDirty — иначе void loadList() упрёт
-// в гард и обновление по событию потеряется (перечитаем после завершения идущей загрузки).
-function bump(slug: string): void {
+// Как refreshDraft: сбрасываем _listLoaded (иначе void loadList() упрёт в гард, если список
+// УЖЕ загружен — обновление по событию потеряется), а если список ещё грузится — ставим
+// _listDirty (перечитаем после завершения идущей загрузки).
+// Экспортируем для тестов (путь события): в проде bump зовёт только onMessage-подписка.
+export function bump(slug: string): void {
   const cur = _entries.get(slug) ?? EMPTY;
   put(slug, { preview: null, loading: true, revision: cur.revision + 1 });
   void loadPreview(slug, true);
+  _listLoaded = false;
   if (_listInflight) _listDirty = true;
   void loadList();
 }

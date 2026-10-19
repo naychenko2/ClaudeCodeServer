@@ -18,7 +18,7 @@ vi.mock('../../../lib/api', () => ({
 vi.mock('../../../lib/signalr', () => ({ onMessage: () => () => {} }));
 
 const { api } = await import('../../../lib/api');
-const { refreshDraft, getDraftSnapshot, __resetDraftsStore } = await import('./draftsStore');
+const { refreshDraft, bump, getDraftSnapshot, __resetDraftsStore } = await import('./draftsStore');
 
 const SLUG = 'my-plugin';
 
@@ -70,6 +70,30 @@ describe('draftsStore: перечитывание списка (m4)', () => {
     expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(2);
 
     d2.resolve([SUMMARY]); // закрыть вторую, чтобы не висело
+    await tick();
+  });
+
+  // Путь события (bump), а не refreshDraft: событие во время идущей loadList ставит
+  // _listDirty — иначе void loadList() упрёт в гард и перечитывание после полёта потеряется.
+  // Мутация: убрать `if (_listInflight) _listDirty = true` из bump → этот тест красный.
+  it('bump (событие) во время идущей loadList → _listDirty → второй вызов draftsList', async () => {
+    const d1 = deferred<PluginDraftSummary[]>();
+    const d2 = deferred<PluginDraftSummary[]>();
+    vi.mocked(api.plugins.draftsList)
+      .mockReturnValueOnce(d1.promise as never)
+      .mockReturnValueOnce(d2.promise as never);
+
+    refreshDraft(SLUG); // загрузка #1 в полёте
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1);
+
+    bump(SLUG); // событие во время полёта → _listDirty
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1);
+
+    d1.resolve([SUMMARY]); // завершение #1 → видит _listDirty → ре-чит → загрузка #2
+    await tick();
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(2);
+
+    d2.resolve([SUMMARY]);
     await tick();
   });
 });

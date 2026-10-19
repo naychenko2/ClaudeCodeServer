@@ -178,6 +178,94 @@ describe('DraftAnchor: событие plugin_draft_changed', () => {
   });
 });
 
+// === п. 1 (MAJOR): событие по НОВОМУ slug, когда список УЖЕ загружен ===
+// Сценарий: в чате уже есть черновик draft-1 (список владельца прочитан, _listLoaded=true).
+// Агент создаёт второй черновик draft-2 → запись монтирует его карточку; loadList() блокирован
+// гардом (список уже в кэше) → listResolved остаётся false → «Загружаем черновик…».
+// Событие plugin_draft_changed по draft-2 обязано перечитать список (draftsList повторно),
+// иначе карточка draft-2 залипает в «Загружаем…» навсегда.
+describe('DraftAnchor: событие по новому slug при уже загруженном списке (п. 1)', () => {
+  const SLUG1 = 'draft-1';
+  const SLUG2 = 'draft-2';
+  const SUMMARY1: PluginDraftSummary = {
+    slug: SLUG1, id: 'local-1/draft-1', version: '1.0.0', updatedAt: '2026-10-01T00:00:00Z',
+    problems: 0, installedSameVersion: false, rejected: false, expiresAt: null,
+  };
+  const SUMMARY2: PluginDraftSummary = {
+    slug: SLUG2, id: 'local-1/draft-2', version: '1.0.0', updatedAt: '2026-10-02T00:00:00Z',
+    problems: 0, installedSameVersion: false, rejected: false, expiresAt: null,
+  };
+  const PREVIEW1: PluginDraftPreview = {
+    slug: SLUG1, name: 'First Plugin', version: '1.0.0',
+    panels: [], commands: [], skills: [], requestedPermissions: [], secrets: [], files: [],
+    validation: { isValid: true, problems: [] },
+  };
+  const PREVIEW2: PluginDraftPreview = {
+    slug: SLUG2, name: 'Second Plugin', version: '1.0.0',
+    panels: [], commands: [], skills: [], requestedPermissions: [], secrets: [], files: [],
+    validation: { isValid: true, problems: [] },
+  };
+
+  it('список загружен → событие по новому slug → карточка нового черновика рисуется (draftsList повторно)', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    // draftsList: 1-й вызов (монтирование draft-1) — только draft-1;
+    // 2-й вызов (ре-чит после события) — уже и draft-1, и draft-2.
+    vi.mocked(api.plugins.draftsList)
+      .mockReturnValueOnce(Promise.resolve([SUMMARY1]))
+      .mockReturnValueOnce(Promise.resolve([SUMMARY1, SUMMARY2]));
+    vi.mocked(api.plugins.draftPreview).mockImplementation((slug: string) =>
+      Promise.resolve(slug === SLUG2 ? PREVIEW2 : PREVIEW1));
+
+    // 1) draft-1: список читается, карточка рисуется
+    const r1 = await renderAnchor(recordItem({ slug: SLUG1 }));
+    expect(r1.text()).toContain('First Plugin');
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1);
+
+    // 2) draft-2 (новый slug): список уже в кэше → loadList() заблокирован,
+    //    карточка в «Загружаем черновик…» (listResolved ещё false)
+    const r2 = await renderAnchor(recordItem({ slug: SLUG2 }));
+    expect(r2.text()).toContain('Загружаем черновик');
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1); // loadList не пошёл повторно
+
+    // 3) событие по draft-2 → bump → перечитать список
+    await act(async () => {
+      for (const h of handlers) h({ type: 'plugin_draft_changed', slug: SLUG2, revision: 2 } as ServerMessage);
+      await new Promise(r => setTimeout(r, 0));
+    });
+
+    // draftsList вызван повторно (2-й раз) — иначе обновление по событию потеряно
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(2);
+    // карточка draft-2 теперь рисуется (сводка из перечитанного списка)
+    expect(r2.text()).toContain('Second Plugin');
+  });
+});
+
+// === п. 2 (MINOR): первая загрузка списка ПАДАЕТ → следующий триггер перечитывает ===
+// .catch в loadList раньше ставил _listLoaded = true, из-за чего любая последующая попытка
+// (монтирование) блокировалась гардом и карточка залипала в «Загружаем…». При ошибке —
+// _listLoaded = false: следующий триггер (новое монтирование) повторит попытку.
+describe('DraftAnchor: первая загрузка списка упала (п. 2)', () => {
+  it('сбой первой загрузки → повторное монтирование перечитывает список и карточка рисуется', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    // 1-й вызов draftsList — сбой; 2-й (после повторного монтирования) — успех
+    vi.mocked(api.plugins.draftsList)
+      .mockRejectedValueOnce(new Error('Сбой списка'))
+      .mockResolvedValueOnce([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+
+    // 1) первое монтирование: список упал → «Загружаем черновик…» (listResolved ещё false)
+    const r1 = await renderAnchor(recordItem({ slug: SLUG }));
+    expect(r1.text()).toContain('Загружаем черновик');
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1);
+
+    // 2) повторное монтирование (новый корень, тот же slug): эффект снова зовёт loadList().
+    //    Без фикса (_listLoaded=true из catch) гард блокирует → залипает; с фиксом — перечитывает.
+    const r2 = await renderAnchor(recordItem({ slug: SLUG }));
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(2);
+    expect(r2.text()).toContain('My Plugin');
+  });
+});
+
 // === «Принять…» из ленты: сбой выдачи прав (grant) ===
 // Тип ноды fakeDom (класс не экспортируется) — через сигнатуру textNodes
 type FNode = Parameters<typeof textNodes>[0];

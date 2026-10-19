@@ -101,6 +101,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             GenTokens = p.GenTokens,
             ItlSeconds = p.ItlSeconds,
             ItlCount = p.ItlCount,
+            // База шага декода (мс) — глобальная величина, одинаковая во всех точках
+            // (ADR-029, v2.5): клиенту не нужно выбирать базу из своего окна.
+            CleanStepMs = current.CleanStepMs,
             PrefillSeconds = p.PrefillSeconds,
             QueueSeconds = p.QueueSeconds,
             PromptTokens = p.PromptTokens,
@@ -140,6 +143,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             Running = current.Running,
             Waiting = current.Waiting,
             OthersCount = othersCount,
+            // Стабильная база шага декода (мс): 10-й перцентиль времени шага по кольцу
+            // точек за час, опубликованный с гистерезисом (ADR-029, v2.5). Не зависит от
+            // окна запроса. null — данных ещё нет.
+            CleanStepMs = current.CleanStepMs,
             Speed = new SpeedDto
             {
                 GenPerStream = current.Kv?.GenPerStream,
@@ -442,6 +449,12 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         public SpeedDto Speed { get; init; } = new();
 
+        // Стабильная база шага декода (мс): 10-й перцентиль времени шага (ΔitlSeconds/ΔitlCount)
+        // по кольцу точек за час, опубликованный с гистерезисом (ADR-029, v2.5). Одно число на
+        // все окна (1 мин / 5 мин / 15 мин / 1 ч) — база не выбирается из окна запроса.
+        // null — данных ещё нет (клиент показывает долю «генерирует» без разделения).
+        public double? CleanStepMs { get; init; }
+
         public KvDto Kv { get; init; } = new();
 
         // Видеокарты; null — нет nvidia-smi (блок не показывать).
@@ -519,6 +532,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         public long? GenTokens { get; init; }
         public double? ItlSeconds { get; init; }
         public long? ItlCount { get; init; }
+        // База шага декода (мс) — глобальная величина, одинаковая во всех точках
+        // (ADR-029, v2.5): клиенту не нужно выбирать базу из интервалов своего окна.
+        public double? CleanStepMs { get; init; }
         // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefill/очередь (сек) и
         // прочитанный промпт (токены) — приращения с прошлой точки; null — нет данных/рестарт.
         public double? PrefillSeconds { get; init; }

@@ -335,10 +335,11 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 ```
 GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (только admin; иначе 403)
      → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
-         othersCount?, speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
+         othersCount?, cleanStepMs?,
+         speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
-         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, prefillSeconds?, queueSeconds?, promptTokens? }],
+         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, cleanStepMs?, prefillSeconds?, queueSeconds?, promptTokens? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
      window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
@@ -354,10 +355,16 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      скорость генерации на поток: ΣgenTokens/ΣitlSeconds (ток/с) — измерение vLLM, та же формула «генерации на
      поток» (ADR-029). Поле «Куда уходит время агентов» графика (v2.3, вместо «Шаг модели» и «Агентов в
      генерации»): составная полоса 100 % — генерирует (ΣitlCount×чистый шаг), читает промпт (ΔprefillSeconds),
-     ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); «чистый шаг» — 10-й перцентиль
-     времени шага по «чистым» интервалам (ADR-029, v2.3). genThroughput с графика убран (v2.2), но в истории
+     ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); «чистый шаг» берётся из
+     cleanStepMs (ADR-029, v2.5). genThroughput с графика убран (v2.2), но в истории
      остался (вторая линия «выдано стендом» и детект разрыва); «пик» в графике — по главной линии (скорость на
      поток), не по genThroughput. Поля busySeconds больше нет.
+     cleanStepMs (v2.5) — стабильная база шага декода, мс: 10-й перцентиль времени шага
+     (ΔitlSeconds/ΔitlCount) по кольцу точек за час, опубликованный с гистерезисом (не меняется, пока
+     новое значение отличается меньше чем на 10 %). Одно число на ВСЕ окна (1m/5m/15m/1h) — клиент
+     не выбирает базу из своего окна (раньше выбирал, и полоса «Куда уходит время агентов» прыгала:
+     58 мс на окне 1 мин, 455 мс на окне 5 мин). null — данных ещё нет (клиент показывает долю
+     «генерирует» без разделения на «ждёт соседа»). В history то же значение во всех точках.
      speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
      genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
      в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).

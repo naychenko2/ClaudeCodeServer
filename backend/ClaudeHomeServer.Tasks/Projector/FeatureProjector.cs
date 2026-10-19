@@ -393,6 +393,99 @@ public sealed class FeatureProjector(TaskManager tasks)
         };
     }
 
+    // ─── Б1.2: лента событий фичи (волна 2 «Обзор фич», разрез §2) ─────────────────────────
+    // Чистая проекция FeatureRun → события БЕЗ хранилища: каждое событие выводится из полей
+    // TaskItem/витков. На ней золотые тесты (FeatureEventsTests) — internal, как BuildIndexCore/
+    // BuildRow. sessionId наружу только если в снимке сессий владельца (иначе null — fail-closed,
+    // как KeySession/AttentionOf); reason ≤ 200 символов. Честное ограничение: видна ПОСЛЕДНЯЯ
+    // пара старт/стоп задачи (TaskItem держит одно ClaudeStartedAt/ExecutorStoppedAt) — журнал
+    // не заводим.
+    internal static List<FeatureEvent> BuildEvents(
+        FeatureRun run,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(sessions);
+
+        // Живые сессии владельца: sessionId события наружу только если в этом множестве.
+        var live = new HashSet<string>(sessions.Select(s => s.Id));
+
+        // Все задачи фичи: эпик + шаги/доработки + ревью + проверки + финал + мерж + cut + plan.
+        var tasks = new List<TaskItem> { run.Epic };
+        tasks.AddRange(run.Steps);
+        tasks.AddRange(run.Reviews);
+        tasks.AddRange(run.Qa);
+        if (run.Final is not null) tasks.Add(run.Final);
+        if (run.Merge is not null) tasks.Add(run.Merge);
+        tasks.AddRange(run.Cut);
+        tasks.AddRange(run.Plan);
+
+        var events = new List<FeatureEvent>();
+        foreach (var t in tasks)
+        {
+            // sessionId: LinkedSessionId задачи, наружу только если в снимке владельца.
+            string? SessionOf() => t.LinkedSessionId is not null && live.Contains(t.LinkedSessionId)
+                ? t.LinkedSessionId : null;
+
+            // created — всегда (момент создания задачи).
+            events.Add(new FeatureEvent("created", t.CreatedAt, t.Id, SessionOf(), null));
+
+            // started — последний старт исполнителя (ClaudeStartedAt); журнал не заводим.
+            if (t.ClaudeStartedAt is not null)
+                events.Add(new FeatureEvent("started", t.ClaudeStartedAt.Value, t.Id, SessionOf(), null));
+
+            // stopped — последний стоп (ExecutorStoppedAt); reason = ExecutorStopReason.
+            if (t.ExecutorStoppedAt is not null)
+                events.Add(new FeatureEvent("stopped", t.ExecutorStoppedAt.Value, t.Id, SessionOf(),
+                    Truncate(t.ExecutorStopReason)));
+
+            // waiting — «ждёт вас» (AwaitingHumanSince); reason = AwaitingHumanReason.
+            if (t.AwaitingHumanSince is not null)
+                events.Add(new FeatureEvent("waiting", t.AwaitingHumanSince.Value, t.Id, SessionOf(),
+                    Truncate(t.AwaitingHumanReason)));
+
+            // dropped — снято человеком (DroppedByHumanAt); причины в модели нет.
+            if (t.DroppedByHumanAt is not null)
+                events.Add(new FeatureEvent("dropped", t.DroppedByHumanAt.Value, t.Id, SessionOf(), null));
+
+            // Терминальное событие задачи — одно, по приоритету:
+            //   вердикт (accepted/awr/returned/withdrawn) — ревью/проверка/финал с вердиктом;
+            //   merged — мерж закрыт; closed — эпик закрыт; completed — прочая задача Done.
+            if (t.CompletedAt is not null)
+            {
+                var verdict = t.Verification?.Verdict;
+                if (verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks
+                    or TaskVerdicts.Returned or TaskVerdicts.Withdrawn)
+                {
+                    events.Add(new FeatureEvent(verdict, t.CompletedAt.Value, t.Id, SessionOf(),
+                        Truncate(t.Verification!.Notes)));
+                }
+                else if (t.Role == TaskRoles.Merge)
+                {
+                    events.Add(new FeatureEvent("merged", t.CompletedAt.Value, t.Id, SessionOf(), null));
+                }
+                else if (t.Role == TaskRoles.Feature)
+                {
+                    events.Add(new FeatureEvent("closed", t.CompletedAt.Value, t.Id, SessionOf(), null));
+                }
+                else
+                {
+                    events.Add(new FeatureEvent("completed", t.CompletedAt.Value, t.Id, SessionOf(), null));
+                }
+            }
+        }
+
+        // Порядок: at desc, при равенстве — taskId (детерминизм).
+        return events
+            .OrderByDescending(e => e.At)
+            .ThenBy(e => e.TaskId)
+            .ToList();
+    }
+
+    // reason ≤ 200 символов (обрезка по кодовым позициям; null — как есть).
+    private static string? Truncate(string? s) =>
+        s is null ? null : s.Length <= 200 ? s : s[..200];
+
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
     // Старт задачи: ClaudeStartedAt (запуск исполнителя), иначе CreatedAt.

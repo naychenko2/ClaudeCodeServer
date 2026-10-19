@@ -359,12 +359,12 @@ public class PersonasController(
 
         var cropState = ImageAssetHelper.ParseCrop(crop);
 
-        var dir = Path.Combine(_personas.AssetsDir, id);
+        var dir = SafePath.Join(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(original, Path.Combine(dir, originalName));
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(original, SafePath.Join(dir, originalName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
         await Broadcast("updated", id);
@@ -386,10 +386,10 @@ public class PersonasController(
         var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
         if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
 
-        var dir = Path.Combine(_personas.AssetsDir, id);
+        var dir = SafePath.Join(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
         await Broadcast("updated", id);

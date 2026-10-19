@@ -160,6 +160,34 @@ public class RecursiveDirectoryWatcherTests : IDisposable
             "во вложенный репозиторий (каталог .git) вглубь не зашли");
     }
 
+    // Зеркало предыдущего теста, но для КОРНЯ: правило HasOwnGit бьёт только ПОДкаталоги.
+    // Корень с собственным .git (worktree/репозиторий) под него не попадает — обход заходит
+    // во ВСЕ обычные подкаталоги, а .git отсекается по имени. Мутация «проверять и корень»
+    // остановила бы обход на корневом .git, и обычные подкаталоги остались бы без подписки.
+    [SkippableFact]
+    public void КореньССобственнымGit_ПодПравилоНеПопадает_ОбходЗаходитВОбычныеПодкаталоги()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "подписка по перечню каталогов — только Linux");
+
+        var wt = Path.Combine(_root, "wt");
+        Directory.CreateDirectory(wt);
+        // worktree: .git — файл; вложенный репозиторий: .git — каталог. Оба — «свой .git»
+        // на КОРНЕ, и ни один не должен останавливать обход в обычные подкаталоги.
+        File.WriteAllText(Path.Combine(wt, ".git"), "gitdir: /main/.git/worktrees/wt\n");
+        Directory.CreateDirectory(Path.Combine(wt, "src", "inner"));
+        Directory.CreateDirectory(Path.Combine(wt, "docs"));
+
+        using var watcher = new RecursiveDirectoryWatcher(wt, Excludes, (_, _) => { });
+        watcher.Start();
+
+        // Корень + src + src/inner + docs: .git по имени, в обычные подкаталоги обход зашёл.
+        watcher.WatchCount.Should().Be(4,
+            "корень с .git под правило не попадает: обход заходит во все обычные подкаталоги");
+        watcher.Subscribed.Should().Contain(Path.Combine(wt, "src"), "в обычный подкаталог корня обход заходит");
+        watcher.Subscribed.Should().Contain(Path.Combine(wt, "src", "inner"), "вглубь обычного подкаталога обход заходит");
+        watcher.Subscribed.Should().Contain(Path.Combine(wt, "docs"), "второй обычный подкаталог тоже обходится");
+    }
+
     // Списки исключений у дерева файлов и у ватчера хода обязаны быть одним набором:
     // пополнили один — разъезд со вторым означает «подписались, но глушим» (или наоборот,
     // потратили бюджет слежек на то, что всё равно не показываем).

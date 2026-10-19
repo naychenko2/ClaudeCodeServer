@@ -1450,11 +1450,20 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         lock (_debounceLock)
         {
             if (_pendingSaveTimer is not null) return;
-            _pendingSaveTimer = new Timer(_ =>
+            Timer? timer = null;
+            timer = new Timer(_ =>
             {
-                lock (_debounceLock) _pendingSaveTimer = null;
+                // Гасим поле только если оно указывает на ЭТОТ таймер. В окне между
+                // срабатыванием и взятием замка FlushPendingSave мог уже снять этот таймер
+                // (и новый MarkRead завёл свежий): безусловная очистка затёрла бы чужой.
+                lock (_debounceLock)
+                    if (ReferenceEquals(_pendingSaveTimer, timer)) _pendingSaveTimer = null;
+                // Сработавший one-shot таймер освобождает себя: без Dispose он держал бы
+                // регистрацию в thread pool до конца процесса.
+                timer?.Dispose();
                 SaveSessions();
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingSaveTimer = timer;
         }
     }
 

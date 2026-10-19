@@ -430,6 +430,76 @@ public class SessionManagerTests : IDisposable
         stored.UpdatedAt.Should().Be(updatedBefore, "отложенная запись MarkRead не двигает UpdatedAt");
     }
 
+    // B10 (гонка): сброс при остановке в окне между срабатыванием one-shot таймера и взятием
+    // им замка. Без фикса колбэк таймера гасил _pendingSaveTimer безусловно, затёрв таймер
+    // НОВОЙ отметки; следующий FlushPendingSave его не находил, и вторая отметка терялась.
+    // С фиксом колбэк гасит поле только если оно указывает на ЭТОТ таймер (ReferenceEquals),
+    // и сработавший one-shot освобождает себя (Dispose) — чужой таймер переживает.
+    //
+    // Детерминированный сценарий (все шаги на main-потоке, порядок захвата замка фиксирован):
+    //   1. MarkRead1 → T1 (200мс).
+    //   2. Sleep(201) → T1 срабатывает, колбэк в thread pool (ждёт _debounceLock).
+    //   3. KillAllProcesses → FlushPendingSave: main-поток забирает _debounceLock ПЕРВЫМ,
+    //      Dispose T1, SaveSessions. Колбэк T1 (thread pool) ждёт освобождения замка.
+    //   4. MarkRead2 → T2: main-поток снова забирает _debounceLock (колбэк T1 всё ещё ждёт),
+    //      создаёт T2, _pendingSaveTimer = T2.
+    //   5. Sleep: колбэк T1 (thread pool) забирает _debounceLock. Без фикса гасит поле
+    //      (затёрв T2); с фиксом ReferenceEquals(T2, T1) = false → не трогает.
+    //   6. KillAllProcesses → FlushPendingSave: с фиксом T2 жив → Dispose + SaveSessions
+    //      (вторая отметка на диске). Без фикса T2 затёрт → no-op, на диске первая отметка.
+    [Fact]
+    public void MarkRead_ГонкаСбросаПриОстановке_ВтораяОтметкаНеТеряется()
+    {
+        var sut = BuildDebounceManager();
+        var updatedBefore = DateTime.UtcNow.AddMinutes(-1);
+        var session = new Session { ProjectId = null, OwnerId = TestUserId, UpdatedAt = updatedBefore };
+        sut.AddSessionForTest(session);
+
+        // 1. Первая отметка: one-shot таймер T1 (200мс)
+        sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+
+        // 2. T1 срабатывает; колбэк в thread pool, ждёт _debounceLock
+        System.Threading.Thread.Sleep(210);
+
+        // 3. Подготовка: обнуляем LastReadAt ДО сброса, чтобы шаг 4 был минимальным
+        session.LastReadAt = DateTime.MinValue;
+
+        // 4. Сброс: main-поток забирает _debounceLock, Dispose T1, SaveSessions
+        sut.KillAllProcesses();
+
+        // 5. Новая отметка: main-поток сразу забирает _debounceLock (колбэк T1 ждёт),
+        //    создаёт T2. _pendingSaveTimer = T2.
+        sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+        var secondRead = session.LastReadAt;
+        secondRead.Should().NotBe(session.UpdatedAt, "вторая отметка имеет новое время");
+
+        // 6. Колбэк T1 (thread pool) забирает _debounceLock.
+        //    Без фикса: _pendingSaveTimer = null (затёрв T2). С фиксом: ReferenceEquals → no-op.
+        System.Threading.Thread.Sleep(100);
+
+        // 7. Финальный сброс: FlushPendingSave. С фиксом T2 жив → Dispose + SaveSessions.
+        sut.KillAllProcesses();
+
+        // 7. Вторая отметка на диске
+        var path = Path.Combine(_tempDir, "sessions.json");
+        var stored = JsonSerializer.Deserialize<List<Session>>(File.ReadAllText(path),
+            new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } })!
+            .Single(s => s.Id == session.Id);
+        stored.LastReadAt.Should().Be(secondRead, "вторая отметка прочитанности дописана, а не потеряна");
+    }
+
+    // Ожидание условия с дедлайном (таймеры гоняют колбэки на thread pool).
+    private static void WaitUntil(Func<bool> condition, string what, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"условие не выполнилось за {timeout?.TotalSeconds ?? 10}с: {what}");
+            System.Threading.Thread.Sleep(5);
+        }
+    }
+
     // --- CommittedFilePaths: пометки «правки чата уже зафиксированы в git» ---
 
     [Fact]

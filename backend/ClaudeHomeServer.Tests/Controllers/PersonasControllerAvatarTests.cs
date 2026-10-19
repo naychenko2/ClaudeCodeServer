@@ -214,6 +214,10 @@ public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFac
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await response.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(RealPng());
+        // Дефект de740a5b: size > 256 → ступень null → оригинал с immutable-кэшем,
+        // а не попытка миниатюры «-0» с no-cache.
+        response.Headers.GetValues("Cache-Control").Should().ContainSingle()
+            .Which.Should().Be("max-age=604800, private, immutable");
     }
 
     [Fact]

@@ -8,6 +8,10 @@
          хелперы здесь без [Fact]. IsTestProject=false явный, чтобы slnx/CI не
          пытались «прогнать» её как набор тестов. -->
     <IsTestProject>false</IsTestProject>
+    <!-- CA2255 (ModuleInitializer «только в app-коде»): guard'ы TestKit (TestTelemetryGuard,
+         TestEnvironmentGuard) намеренно используют [ModuleInitializer] — срабатывает при загрузке
+         сборки, раньше любого теста. Библиотека тест-поддержки, поэтому правило подавлено. -->
+    <NoWarn>$(NoWarn);CA2255</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

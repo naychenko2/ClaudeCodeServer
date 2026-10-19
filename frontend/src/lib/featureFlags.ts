@@ -23,6 +23,9 @@ export const FLAGS = {
   turnPlanFeatureMode: 'turn-plan-feature-mode',
   // «Обзор фич»: фасет «Фичи» в списке сессий + плашка фичи в чате (волна 1, dark launch).
   featuresOverview: 'features-overview',
+  // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы дотягиваются
+  // через Claude CLI resume. Dark launch, выключено по умолчанию.
+  turnAutoResume: 'turn-auto-resume',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

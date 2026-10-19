@@ -1483,6 +1483,19 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // TurnAutoResume — чистая функция отбора кандидатов на авто-возобновление ходов
+        // (флаг turn-auto-resume). Микро-вертикаль без IAppSubsystem: одна статическая
+        // функция + record результата. Зависимости — только Core (Models: Session, Project).
+        new object[]
+        {
+            new VerticalBoundary(
+                "TurnAutoResume",
+                "ClaudeHomeServer.Services.TurnAutoResume",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.TurnAutoResume" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
     };
 
     [Theory]

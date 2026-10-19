@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -299,5 +301,88 @@ public class SessionStatusTests : IDisposable
 
         projects.GetById("proj-desktop").Should().NotBeNull("запись с полем удалённого тумблера не должна теряться")
             .And.Subject.As<Project>().Name.Should().Be("Старый проект");
+    }
+
+    // --- B1: кандидаты на auto-resume (LoadSessions + TakeRestartResumeCandidates) ---
+
+    [Fact]
+    public void TakeRestartResumeCandidates_Working_ReturnsThenClears()
+    {
+        var working = MakeSession(SessionStatus.Working);
+        WriteSessions([working]);
+
+        var sut = CreateSessionManager();
+
+        var first = sut.TakeRestartResumeCandidates();
+        first.Should().Contain(working.Id, "исходный Working — ход оборван, кандидат на auto-resume");
+
+        var second = sut.TakeRestartResumeCandidates();
+        second.Should().BeEmpty("второй вызов не должен вернуть кандидатов повторно");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_Waiting_NotCandidate()
+    {
+        var waiting = MakeSession(SessionStatus.Waiting);
+        WriteSessions([waiting]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "Waiting — ход ещё не шёл, кандидатом не является");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_Starting_NotCandidate()
+    {
+        // Starting — CLI ещё не стартовал, ход не шёл: кандидатом не является.
+        var starting = MakeSession(SessionStatus.Starting);
+        WriteSessions([starting]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "Starting — ход ещё не шёл, кандидатом не является");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_OldOrphaned_NotCandidate()
+    {
+        // Старый Orphaned без снимка — «только последний рестарт»: кандидатом не является.
+        var orphaned = MakeSession(SessionStatus.Orphaned);
+        WriteSessions([orphaned]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "старый Orphaned — «только последний рестарт», кандидатом не является");
+    }
+
+    [Fact]
+    public async Task OnResult_ResetsRestartResumeAttempts()
+    {
+        var working = MakeSession(SessionStatus.Working);
+        working.RestartResumeAttempts = 5;
+        WriteSessions([working]);
+
+        var sut = CreateSessionManager();
+        var loaded = sut.GetById(working.Id)!;
+
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        await sut.OnMessageAsync(working.Id, acc, new ResultMessage("success", 100, 1, null, null));
+
+        loaded.RestartResumeAttempts.Should().Be(0, "result хода сбрасывает счётчик auto-resume");
+    }
+
+    [Fact]
+    public void ResetRestartResumeAttempts_DoesNotMoveUpdatedAt()
+    {
+        // Сброс счётчика — служебная операция: сама по себе UpdatedAt не двигает
+        // (сдвинет отдельная смена статуса, а не сброс).
+        var s = MakeSession(SessionStatus.Active);
+        var before = s.UpdatedAt;
+        s.RestartResumeAttempts = 5;
+        s.RestartResumeAttempts = 0; // то, что делает обработчик result
+        s.UpdatedAt.Should().Be(before, "сброс счётчика UpdatedAt не двигает");
     }
 }

@@ -349,6 +349,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
         SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
         ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
+        ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 
@@ -1383,6 +1384,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // --- Персистентность сессий ---
 
+    // Кандидаты на auto-resume, захваченные LoadSessions: исходный Working (ход оборван,
+    // result не пришёл). TakeRestartResumeCandidates возвращает и очищает список (второй
+    // вызов — пусто).
+    private readonly List<string> _restartResumeCandidates = [];
+
+    // Task записи маркеров обрыва ходов (LoadSessions). Не fire-and-forget: B2 дождётся его
+    // перед запуском resume, чтобы маркер не обогнал снимок. Task.CompletedTask — маркеров не было.
+    public Task AbortMarkersWritten { get; private set; } = Task.CompletedTask;
+
     private void LoadSessions()
     {
         var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
@@ -1391,24 +1401,33 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         foreach (var session in list)
         {
             // Процесс умер при рестарте — "живые" статусы переводим в orphaned
-            var wasLive = session.Status is SessionStatus.Working or SessionStatus.Waiting;
-            session.Status = session.Status switch
+            var originalStatus = session.Status;
+            var wasLive = originalStatus is SessionStatus.Working or SessionStatus.Waiting;
+            session.Status = originalStatus switch
             {
                 SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
                     => SessionStatus.Orphaned,
                 SessionStatus.Active => SessionStatus.Finished,
-                _ => session.Status,
+                _ => originalStatus,
             };
             if (wasLive && session.ClaudeSessionId is not null)
                 abortedMidTurn.Add(session.ClaudeSessionId);
+            // Кандидат на auto-resume — исходный Working из sessions.json: ход шёл,
+            // result не пришёл. Waiting/Starting/Orphaned не кандидаты: Waiting — ход
+            // ещё не шёл, Starting — CLI ещё не стартовал, Orphaned — уже был оборван
+            // раньше («только последний рестарт»).
+            if (originalStatus == SessionStatus.Working)
+                _restartResumeCandidates.Add(session.Id);
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
         // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
         if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
-        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт
+        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
+        // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
+        // запуском resume, чтобы маркер не обогнал снимок.
         if (abortedMidTurn.Count > 0)
-            _ = Task.Run(async () =>
+            AbortMarkersWritten = Task.Run(async () =>
             {
                 foreach (var csid in abortedMidTurn)
                     try { await _history.AppendTurnAbortedAsync(csid); }
@@ -1417,6 +1436,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                         Console.Error.WriteLine($"[SessionManager] Маркер обрыва хода ({csid}) не записан: {ex.Message}");
                     }
             });
+    }
+
+    // Выдача кандидатов на auto-resume: возвращает захваченный LoadSessions список и
+    // очищает его в памяти, чтобы второй вызов не получил кандидатов повторно.
+    public IReadOnlyList<string> TakeRestartResumeCandidates()
+    {
+        lock (_restartResumeCandidates)
+        {
+            var result = _restartResumeCandidates.ToList();
+            _restartResumeCandidates.Clear();
+            return result;
+        }
     }
 
     // Счётчик вызовов SaveSessions — для тестов «пачка пишет файл один раз» (ApplySubjects)
@@ -6959,6 +6990,69 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         finally { _turnRestarts.TryRemove(sessionId, out _); }
     }
 
+    // === Авто-возобновление ходов, оборванных рестартом сервера (фича turn-auto-resume) ===
+
+    // Исход возобновления. Sent=true — resume-ход отправлен (агент продолжит с того же
+    // места); false — отказ (статус не Orphaned / битый хвост), ход не шлём, в ленте
+    // остаётся карточка-баннер. Reason — человекочитаемая причина отказа для лога/отчёта.
+    public sealed record RestartResumeResult(bool Sent, string? Reason = null);
+
+    // Шов для тестов: целостность хвоста транскрипта (true — можно возобновлять).
+    // По умолчанию — та же проверка, что RestartStuckTurnAsync: файл не найден (локальный
+    // проект) — проверку пропускаем, иначе проверяем IsTailIntact.
+    protected virtual bool IsTailIntactForResume(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return true;
+        var transcript = FindResumeTranscript(entry);
+        return transcript is null || Llm.Claude.TranscriptProbe.IsTailIntact(transcript);
+    }
+
+    // Шов для тестов: фактическая отправка resume-хода. По умолчанию — обычный путь
+    // SendMessageAsync: auto — для прохода через DeviceWaitGate, cause — атрибуция доставки.
+    protected virtual Task<SendUserOutcome> SendRestartResumeTurnAsync(string sessionId, string text)
+        => SendMessageAsync(sessionId, text, [], auto: true, cause: DeliveryCause.ServerRestartResume);
+
+    // Возобновление хода, оборванного рестартом сервера (B3). Кандидат — сессия, чей ход
+    // шёл (Working) в момент падения: LoadSessions перевёл её в Orphaned. Шаги строго по
+    // порядку, отказ любого — не шлём, в ленте остаётся карточка-баннер:
+    //   1. статус Orphaned (кандидат, а не idle/упавший);
+    //   2. хвост транскрипта цел (битый — через --resume не продолжится);
+    //   3. гидратация аккумулятора (ДО карточки — карточка пишется в историю);
+    //   4. карточка «Сервер был перезапущен — продолжаю ход с того же места»;
+    //   5. RestartResumeAttempts += 1 + SaveSessions (UpdatedAt не двигаем);
+    //   6. resume-ход обычным путём (auto, cause=ServerRestartResume).
+    public async Task<RestartResumeResult> ResumeAfterRestartAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            return new RestartResumeResult(false, "Сессия не найдена");
+
+        // 1. Кандидат: исходный Working → Orphaned при рестарте.
+        if (entry.Info.Status != SessionStatus.Orphaned)
+            return new RestartResumeResult(false,
+                $"Статус {entry.Info.Status}, ход не оборван рестартом");
+
+        // 2. Целостность хвоста: битый транскрипт через --resume не продолжится.
+        if (!IsTailIntactForResume(sessionId))
+            return new RestartResumeResult(false, "Хвост транскрипта повреждён");
+
+        // 3. Явная гидратация аккумулятора + карточка в ленту.
+        //    EnsureAccumulatorAsync создаёт аккумулятор из существующей истории, но в
+        //    сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор может
+        //    остаться null, если LoadAsync вернул пустой список и TurnAccumulator не создан.
+        //    Явная гидратация гарантирует, что карточка дописана в _history и сохранена.
+        await AppendServerRestartCardAsync(sessionId, entry);
+
+        // 5. Счётчик попыток + сохранение. UpdatedAt не двигаем: SaveSessions лишь
+        //    персистит, Touch/UpdatedAt=now здесь не вызываем (служебная операция).
+        entry.Info.RestartResumeAttempts += 1;
+        SaveSessions();
+
+        // 6. Resume-ход обычным путём: auto — для прохода через DeviceWaitGate.
+        var prompt = TurnResumePrompts.ServerRestartResume();
+        await SendRestartResumeTurnAsync(sessionId, prompt);
+        return new RestartResumeResult(true);
+    }
+
     // Рабочая папка хода для поиска транскрипта: дерево чата, иначе корень проекта.
     // Точность тут не критична — TranscriptProbe при промахе по конвенции сканирует
     // все проекты зарегистрированных корней, cwd лишь сужает первый поиск.
@@ -7091,6 +7185,32 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task AddWorkLoopStoppedNoticeAsync(string sessionId, SessionEntry entry, string reason, string text)
     {
         if (entry.Accumulator is not { } acc) return;
+        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
+        await acc.SaveSnapshotAsync(_history);
+        await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
+    }
+
+    // Явная гидратация аккумулятора + идемпотентная карточка server_restart (B-cards).
+    // В отличие от AddWorkLoopStoppedNoticeAsync (молча выходит при null), здесь аккумулятор
+    // создаётся явно: в сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор
+    // после LoadSessions может быть null, и AddWorkLoopStoppedNoticeAsync просто выходил.
+    // Идемпотентность: если карточка с reason=server_restart уже в _history (повторный вызов
+    // после рестарта), не дублируем.
+    private async Task AppendServerRestartCardAsync(string sessionId, SessionEntry entry)
+    {
+        const string reason = "server_restart";
+        const string text = "Сервер был перезапущен — продолжаю ход с того же места";
+
+        // Явная гидратация: если аккумулятор null — создаём из существующей истории.
+        if (entry.Accumulator is null)
+            await EnsureAccumulatorAsync(entry);
+
+        if (entry.Accumulator is not { } acc) return;
+
+        // Идемпотентность: карточка с таким reason уже есть — не дублируем.
+        if (acc.GetAll().Any(m => m is StoredWorkLoopStoppedMessage w && w.Reason == reason))
+            return;
+
         acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
         await acc.SaveSnapshotAsync(_history);
         await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
@@ -9322,7 +9442,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // runId — прогон адаптера, чей read-loop прислал сообщение (0 у внутренних вызовов без
     // прогона): по нему отличаем exited ЭТОГО прогона от позднего exited доживающего
-    private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
+    // internal (InternalsVisibleTo): тесты гоняют сообщения (в т.ч. ResultMessage) через
+    // обработчик, чтобы проверить побочные эффекты (сброс RestartResumeAttempts, статус).
+    internal async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
     {
         _sessions.TryGetValue(sessionId, out var entry);
         // Волна 6: живая трансляция хода штаба фильтрует маркеры протокола (см. кейс ниже) —
@@ -9707,9 +9829,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.PendingInteraction = msg;
             }
             else if (msg is ResultMessage rm)
+            {
                 // Active (не Finished): клиент по active перезагружает историю хода;
                 // финальный Finished выставится по ExitedMessage ниже
                 newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;
+                // Result хода: сбрасываем счётчик auto-resume (B2). Поле служебное — UpdatedAt
+                // не двигаем сами (сдвинет ApplyStatusAsync ниже, как при любой смене статуса).
+                // Персистится тем же SaveSessions внутри ApplyStatusAsync.
+                entry.Info.RestartResumeAttempts = 0;
+            }
             else if (msg is ErrorMessage)
                 newStatus = SessionStatus.Error;
             else if (msg is ExitedMessage)

@@ -13,7 +13,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
-import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, projectColor, reminderLabel } from '../../lib/tasks';
+import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, markEditing, projectColor, reminderLabel, unmarkEditing } from '../../lib/tasks';
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
@@ -137,6 +137,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const subsJob = useAiJob<string[]>(subsKey);
   const aiSubsLoading = subsJob.status === 'running';
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // Пока форма смонтирована, задача «открыта на правку»: keepLoadedFull не подменяет
+  // её полную версию облегчённой при reloadTasks, иначе панель догрузит и размонтирует
+  // форму, потеряв несохранённые правки.
+  useEffect(() => {
+    markEditing(task.id);
+    return () => unmarkEditing(task.id);
+  }, [task.id]);
 
   // Описание от Claude: по названию + контекст проекта (личная — только название)
   const generateDescription = () => {

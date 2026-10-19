@@ -424,10 +424,10 @@ public class TestRunServiceTests : IDisposable
         var list = TestRunService.BuildSpec(TestRunPhase.List, request, "t2", "out");
         var test = TestRunService.BuildSpec(TestRunPhase.Test, request, "t3", "out");
 
-        build.Args.Should().Equal("build", "backend/App.Tests");
-        list.Args.Should().Equal("test", "backend/App.Tests", "--no-build", "--list-tests",
+        build.Args.Should().Equal("build", "backend/App.Tests", "-m:6");
+        list.Args.Should().Equal("test", "backend/App.Tests", "-m:6", "--no-build", "--list-tests",
             "--filter", "FullyQualifiedName~X");
-        test.Args.Should().Equal("test", "backend/App.Tests", "--no-build", "--filter", "FullyQualifiedName~X",
+        test.Args.Should().Equal("test", "backend/App.Tests", "-m:6", "--no-build", "--filter", "FullyQualifiedName~X",
             "--logger", "console;verbosity=normal", "--logger", "trx;LogFilePrefix=results",
             "--results-directory", "out");
         foreach (var spec in new[] { build, list, test })
@@ -441,6 +441,22 @@ public class TestRunServiceTests : IDisposable
             spec.SessionId.Should().Be("sess-1");
         }
         test.TurnId.Should().Be("t3");
+    }
+
+    // Явный ключ в командной строке — единственное, что реально держит потолок testhost
+    // (голый -maxcpucount от dotnet test перебивает .rsp), поэтому число обязано совпадать с .rsp
+    [Fact]
+    public void MaxCpuCountArg_СовпадаетСПотолкомВDirectoryBuildRsp()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "backend", "Directory.Build.rsp")))
+            dir = dir.Parent;
+        dir.Should().NotBeNull("Directory.Build.rsp лежит в backend/ репозитория");
+
+        var rsp = File.ReadAllLines(Path.Combine(dir!.FullName, "backend", "Directory.Build.rsp"))
+            .Select(l => l.Trim()).Single(l => l.StartsWith("-maxcpucount:", StringComparison.Ordinal));
+
+        TestRunService.MaxCpuCountArg.Should().Be("-m:" + rsp["-maxcpucount:".Length..]);
     }
 
     // Бой 2026-10-02: корень проекта записан как «c:\GIT\…», и vitest с таким cwd грузит модуль

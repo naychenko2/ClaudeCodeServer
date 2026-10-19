@@ -14,7 +14,9 @@ const listeners = new Set<() => void>();
 function load() {
   // Фоновая вкладка цифр не видит — не дёргаем сервер зря, догонит следующий тик
   if (typeof document !== 'undefined' && document.hidden && current) return;
-  api.usage.get()
+  // Лёгкий ответ (scope=limits): шапке нужен только последний снимок на окно, а не 8-дневная
+  // история — в десятки раз меньше, и сервер отдаёт его из кэша (перф-3 B6)
+  api.usage.getLimits()
     .then(u => { current = u; listeners.forEach(l => l()); })
     .catch(() => { /* лимиты — необязательная информация: остаются прежние цифры */ });
 }

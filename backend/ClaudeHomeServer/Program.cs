@@ -347,6 +347,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+// Кэш ответа /api/usage (перф-3 B6): лёгкий scope=limits отдаётся из кэша, пока не изменились
+// входы (версии снимков/пула/опроса + mtime тарифа) — см. UsageResponseCache.
+builder.Services.AddSingleton<UsageResponseCache>();
 // История медиа-генераций (ADR-030, шаг 3): индекс 7 дней (читает журнал, получает события
 // от ComfyRunHistory через IMediaHistoryEventSink) и кэш миниатюр. Флаг/роль проверяет контроллер
 builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>();

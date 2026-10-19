@@ -1458,6 +1458,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         }
     }
 
+    // Синхронный сброс висящей записи (MarkRead-дебаунс) при остановке: штатный shutdown
+    // = перезапуск, и отложенная запись, если не сбросить её, потеряется (one-shot таймер
+    // Dispose'ится, не успев сработать). Вызывается из KillAllProcesses/Dispose ДО убийства
+    // процессов: SaveSessions() завершится на том же потоке, без гонки с диспозом адаптеров.
+    // Idempotent: после первого сброса _pendingSaveTimer = null, повторный вызов — no-op.
+    private void FlushPendingSave()
+    {
+        Timer? pending;
+        lock (_debounceLock)
+        {
+            pending = _pendingSaveTimer;
+            _pendingSaveTimer = null;
+            pending?.Dispose();
+        }
+        if (pending is not null) SaveSessions();
+    }
+
     // Тестовый хук: наполнить стор сессиями без полного CreateAsync (бенчмарк MarkRead).
     internal void AddSessionForTest(Session info) => _sessions[info.Id] = new SessionEntry { Info = info };
 
@@ -10233,10 +10250,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же
         // сценарий — для тика ожидания: в окне shutdown он бы мог послать директиву
         // в умирающий адаптер, и SendMessageAsync не нашёл бы Process. Дебаунс-таймер
-        // MarkRead — то же: в окне shutdown он бы писал sessions.json под _saveLock.
+        // MarkRead сбрасываем синхронно (FlushPendingSave) ДО убийства: отложенная запись
+        // не теряется, а SaveSessions() завершается на этом же потоке, без гонки с диспозом.
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
-        lock (_debounceLock) _pendingSaveTimer?.Dispose();
+        FlushPendingSave();
 
         var tasks = _sessions.Values
             .Select(e => e.Process)
@@ -10253,11 +10271,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // IDisposable — для фоновых таймеров. Адаптеры (процессы claude) убивает
     // KillAllProcesses() из ApplicationStopping. Не дублируем — иначе два cleanup-пути.
+    // FlushPendingSave — idempotent: если KillAllProcesses уже сбросил запись, здесь no-op.
     public void Dispose()
     {
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
-        lock (_debounceLock) _pendingSaveTimer?.Dispose();
+        FlushPendingSave();
         GC.SuppressFinalize(this);
     }
 

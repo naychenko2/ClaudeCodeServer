@@ -404,6 +404,32 @@ public class SessionManagerTests : IDisposable
         session.LastReadAt.Should().BeAfter(first!.Value);
     }
 
+    // B10: штатная остановка (выкатка = перезапуск) не теряет отложенную запись MarkRead.
+    // Дебаунс-таймер (0,2с) ещё не сработал, а KillAllProcesses сбрасывает запись синхронно:
+    // sessions.json получает отметку, UpdatedAt при этом не сдвигается (служебная отметка).
+    [Fact]
+    public void MarkRead_ОтложеннаяЗапись_СбрасываетсяСинхронно_ПриОстановке()
+    {
+        var sut = BuildDebounceManager();
+        var updatedBefore = DateTime.UtcNow.AddMinutes(-1);
+        var session = new Session { ProjectId = null, OwnerId = TestUserId, UpdatedAt = updatedBefore };
+        sut.AddSessionForTest(session);
+
+        // MarkRead: in-memory + one-shot таймер, на диск запись ещё не ушла
+        sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+
+        // Немедленная штатная остановка: висящий таймер обязан сбросить запись синхронно
+        sut.KillAllProcesses();
+
+        var path = Path.Combine(_tempDir, "sessions.json");
+        File.Exists(path).Should().BeTrue("отложенная запись MarkRead должна уехать на диск при остановке");
+        var opts = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
+        var stored = JsonSerializer.Deserialize<List<Session>>(File.ReadAllText(path), opts)!
+            .Single(s => s.Id == session.Id);
+        stored.LastReadAt.Should().Be(session.LastReadAt, "sessions.json содержит отметку прочитанности");
+        stored.UpdatedAt.Should().Be(updatedBefore, "отложенная запись MarkRead не двигает UpdatedAt");
+    }
+
     // --- CommittedFilePaths: пометки «правки чата уже зафиксированы в git» ---
 
     [Fact]

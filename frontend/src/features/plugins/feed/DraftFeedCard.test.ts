@@ -386,3 +386,67 @@ describe('DraftFeedCard: «Установлен» → ссылка «Откры�
     expect(findButton(container, 'Открыть в «Плагинах»'), 'ссылка «Открыть в «Плагинах»» не найдена').not.toBeNull();
   });
 });
+
+// === Шаг 4: ошибки действий карточки не проглатываются (дефект 6035ec94) ===
+// «Принять…»/«Вернуть» при 409/сбое сети показывают текст сервера на карточке,
+// а не «ничего не произошло». Мутация «убрать показ ошибки» красит эти тесты.
+describe('DraftFeedCard: ошибки «Принять…» / «Вернуть» на карточке', () => {
+  const SUMMARY_REJECTED: PluginDraftSummary = { ...SUMMARY, rejected: true };
+
+  it('«Принять…» → 409 → текст ошибки сервера виден на карточке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftAccept).mockRejectedValue(new Error('Черновик уже существует'));
+
+    const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
+    const accept = findButton(container, 'Принять…');
+    expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { accept!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    // текст 409 на карточке (не только в консоли)
+    expect(text()).toContain('Черновик уже существует');
+  });
+
+  it('«Принять…» → сбой сети → понятный текст на карточке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftAccept).mockRejectedValue(new Error('Действие недоступно офлайн'));
+
+    const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
+    const accept = findButton(container, 'Принять…');
+    expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { accept!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    expect(text()).toContain('Действие недоступно офлайн');
+  });
+
+  it('«Вернуть» → 409 → текст ошибки виден на свёрнутой строке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_REJECTED]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftRestore).mockRejectedValue(new Error('Черновик уже существует'));
+
+    const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
+    const restore = findButton(container, 'Вернуть');
+    expect(restore, 'кнопка «Вернуть» не найдена').not.toBeNull();
+    await act(async () => { restore!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    expect(text()).toContain('Черновик уже существует');
+  });
+
+  it('«Вернуть» → сбой сети → понятный текст на свёрнутой строке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_REJECTED]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftRestore).mockRejectedValue(new Error('Действие недоступно офлайн'));
+
+    const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
+    const restore = findButton(container, 'Вернуть');
+    expect(restore, 'кнопка «Вернуть» не найдена').not.toBeNull();
+    await act(async () => { restore!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    expect(text()).toContain('Действие недоступно офлайн');
+  });
+});

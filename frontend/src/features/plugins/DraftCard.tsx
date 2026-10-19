@@ -396,6 +396,9 @@ export interface DraftCardProps {
   loading?: boolean;
   // Ошибка сервера (403/404/409) — понятным текстом
   error?: string | null;
+  // Ошибка действия («Принять…», «Вернуть»): сервер ответил 409/5xx или сбой сети —
+  // понятным текстом; null — нет. Показывается, пока действие не повторят.
+  actionError?: string | null;
   // Есть ли у этого id более новая версия (карточка «устарела»)
   staleNewerSlug?: string | null;
   // Действия
@@ -412,7 +415,7 @@ export interface DraftCardProps {
 
 export function DraftCard(props: DraftCardProps) {
   const {
-    summary, preview, diff, justUpdated, loading, error, staleNewerSlug,
+    summary, preview, diff, justUpdated, loading, error, actionError, staleNewerSlug,
     onAccept, onReject, onRestore, onEdit, onLoadDiff, onOpenInPlugins,
   } = props;
 
@@ -433,6 +436,7 @@ export function DraftCard(props: DraftCardProps) {
         stale={stale}
         name={preview?.name ?? summary.id}
         version={summary.version}
+        actionError={actionError}
         onRestore={onRestore}
         onOpenInPlugins={onOpenInPlugins}
       />
@@ -521,6 +525,13 @@ export function DraftCard(props: DraftCardProps) {
         </div>
       )}
 
+      {/* Ошибка действия («Принять…»): сервер ответил 409/5xx или сбой сети — текст сервера */}
+      {actionError && (
+        <div style={{ marginTop: SP.md }}>
+          <Notice tone="danger" icon={AlertTriangle} title="Принять не вышло">{actionError}</Notice>
+        </div>
+      )}
+
       {/* «Черновик обновлён агентом» */}
       {justUpdated && (
         <div style={{ marginTop: SP.md }}>
@@ -576,12 +587,14 @@ function cardShell(justUpdated?: boolean): React.CSSProperties {
 }
 
 // Свёрнутая строка: отклонён / установлен / устарел
-function CollapsedRow({ rejected, installed, stale, name, version, onRestore, onOpenInPlugins }: {
+function CollapsedRow({ rejected, installed, stale, name, version, actionError, onRestore, onOpenInPlugins }: {
   rejected: boolean;
   installed: boolean;
   stale: boolean;
   name: string;
   version: string;
+  // Ошибка действия (здесь — «Вернуть»): текст сервера, пока действие не повторят
+  actionError?: string | null;
   onRestore?: () => void;
   onOpenInPlugins?: () => void;
 }) {
@@ -589,22 +602,27 @@ function CollapsedRow({ rejected, installed, stale, name, version, onRestore, on
   const tone: 'neutral' | 'success' | 'plan' = stale ? 'plan' : installed ? 'success' : 'neutral';
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+      display: 'flex', flexDirection: 'column', gap: SP.xs,
       border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgCard, padding: SP.md,
     }}>
-      <Badge tone={tone} size="sm">{label}</Badge>
-      <span style={{ fontSize: FS.sm, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      <div style={{ flex: 1 }} />
-      {installed && onOpenInPlugins && (
-        <Button variant="ghost" size="xs" onClick={onOpenInPlugins}>Открыть в «Плагинах»</Button>
-      )}
-      {rejected && onRestore && (
-        <Button variant="ghost" size="xs" leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={onRestore}>
-          Вернуть
-        </Button>
-      )}
-      {stale && onOpenInPlugins && (
-        <Button variant="ghost" size="xs" onClick={onOpenInPlugins}>К новой версии</Button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Badge tone={tone} size="sm">{label}</Badge>
+        <span style={{ fontSize: FS.sm, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        <div style={{ flex: 1 }} />
+        {installed && onOpenInPlugins && (
+          <Button variant="ghost" size="xs" onClick={onOpenInPlugins}>Открыть в «Плагинах»</Button>
+        )}
+        {rejected && onRestore && (
+          <Button variant="ghost" size="xs" leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={onRestore}>
+            Вернуть
+          </Button>
+        )}
+        {stale && onOpenInPlugins && (
+          <Button variant="ghost" size="xs" onClick={onOpenInPlugins}>К новой версии</Button>
+        )}
+      </div>
+      {actionError && (
+        <Notice tone="danger" icon={AlertTriangle} title="Вернуть не вышло">{actionError}</Notice>
       )}
     </div>
   );

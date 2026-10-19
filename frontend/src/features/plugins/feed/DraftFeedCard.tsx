@@ -25,6 +25,11 @@ function humanizeId(id: string): string {
     .join(' ') || id;
 }
 
+// Текст ошибки действия: message сервера (409/5xx) или сбой сети; не-Error — общий текст
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : 'Не удалось выполнить действие';
+}
+
 // Результат «Принять» → данные существующего диалога согласия (режим «установить»)
 function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentData {
   return {
@@ -73,6 +78,8 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
 
   // «Принять…»: consentRequired → диалог согласия с newPermissions
   const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[] } | null>(null);
+  // Ошибка действия («Принять…», «Вернуть»): текст сервера, пока действие не повторят
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Без флага — нейтральная строка (как делают соседние модули), не карточка
   if (!buildYourself) return fallback ? <NeutralLine>{fallback}</NeutralLine> : null;
@@ -86,6 +93,7 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
   const summary = entry.summary;
 
   const handleAccept = async () => {
+    setActionError(null);
     try {
       const res = await api.plugins.draftAccept(slug);
       if (res.consentRequired) {
@@ -93,13 +101,14 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
       } else {
         refreshDraft(slug);
       }
-    } catch { /* ошибка accept: карточка остаётся активной (состояние не поменялось) */ }
+    } catch (e: unknown) { setActionError(errText(e)); }
   };
   const handleReject = async () => {
     try { await api.plugins.draftReject(slug); refreshDraft(slug); } catch { /* карточка остаётся */ }
   };
   const handleRestore = async () => {
-    try { await api.plugins.draftRestore(slug); refreshDraft(slug); } catch { /* вернуть не вышло */ }
+    setActionError(null);
+    try { await api.plugins.draftRestore(slug); refreshDraft(slug); } catch (e: unknown) { setActionError(errText(e)); }
   };
   // «Править»/«Попросить агента исправить»: готовая реплика → композер активного чата (cc-draft-reply)
   const handleEdit = (reply: string) => {
@@ -115,6 +124,7 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
         diff={null}
         loading={entry.loading}
         error={entry.error}
+        actionError={actionError}
         justUpdated={justUpdated}
         onAccept={() => void handleAccept()}
         onReject={() => void handleReject()}

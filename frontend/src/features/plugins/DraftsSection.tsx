@@ -49,13 +49,15 @@ function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentDat
 }
 
 // Одна карточка черновика: данные из useDraftCard, действия — колбэки секции.
-function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit, onOpenInPlugins }: {
+function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit, onOpenInPlugins, actionError }: {
   summary: PluginDraftSummary;
   onAccept: (slug: string) => void;
   onReject: (slug: string) => void;
   onRestore: (slug: string) => void;
   onEdit: (reply: string) => void;
   onOpenInPlugins?: () => void;
+  // Ошибка действия этого черновика (текст сервера), пока не повторят
+  actionError?: string | null;
 }) {
   const { preview, diff, loading, error, justUpdated, loadDiff } = useDraftCard(summary);
   return (
@@ -65,6 +67,7 @@ function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit, onOpenI
       diff={diff}
       loading={loading}
       error={error}
+      actionError={actionError}
       justUpdated={justUpdated}
       onAccept={() => onAccept(summary.slug)}
       onReject={() => onReject(summary.slug)}
@@ -90,6 +93,8 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
   const [error, setError] = useState<string | null>(null);
   // Диалог согласия для «Принять…» (consentRequired): данные + новые права
   const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[] } | null>(null);
+  // Ошибка действия («Принять…», «Вернуть») per slug: текст сервера, пока не повторят
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -122,7 +127,13 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
 
   // «Принять…»: accept → если consentRequired, диалог согласия с newPermissions;
   // иначе черновик сразу установлен.
+  const clearActionError = (slug: string) =>
+    setActionErrors(prev => { if (!(slug in prev)) return prev; const n = { ...prev }; delete n[slug]; return n; });
+  const setActionError = (slug: string, e: unknown) =>
+    setActionErrors(prev => ({ ...prev, [slug]: e instanceof Error ? e.message : 'Не удалось выполнить действие' }));
+
   const handleAccept = async (slug: string) => {
+    clearActionError(slug);
     try {
       const res = await api.plugins.draftAccept(slug);
       if (res.consentRequired) {
@@ -131,9 +142,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
         void loadList();
         onUpdated?.(project);
       }
-    } catch {
-      // ошибка accept: карточка останется активной (состояние не поменялось)
-    }
+    } catch (e: unknown) { setActionError(slug, e); }
   };
   const handleReject = async (slug: string) => {
     try {
@@ -143,11 +152,12 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
     } catch { /* отклонить не вышло — карточка остаётся */ }
   };
   const handleRestore = async (slug: string) => {
+    clearActionError(slug);
     try {
       await api.plugins.draftRestore(slug);
       void loadList();
       onUpdated?.(project);
-    } catch { /* вернуть не вышло */ }
+    } catch (e: unknown) { setActionError(slug, e); }
   };
 
   return (
@@ -183,6 +193,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
             onReject={handleReject}
             onRestore={handleRestore}
             onEdit={r => onEdit?.(r)}
+            actionError={actionErrors[s.slug] ?? null}
             onOpenInPlugins={() => window.dispatchEvent(new CustomEvent('cc-open-plugins', { detail: { project } }))}
           />
         ))

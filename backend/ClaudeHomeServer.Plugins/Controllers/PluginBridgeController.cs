@@ -31,9 +31,11 @@ namespace ClaudeHomeServer.Services.Plugins.Controllers;
 public class PluginBridgeController(
     IConfiguration config,
     IFeatureFlagGate flags,
-    PluginStore? store,
-    PluginBridge? bridge,
-    IProjectManager? projects) : ControllerBase
+    // `= null` — обязательность для DI: подсистема выключена → PluginStore/PluginBridge не в
+    // контейнере, и без явного значения по умолчанию активация контроллера падала (500, а не 503).
+    PluginStore? store = null,
+    PluginBridge? bridge = null,
+    IProjectManager? projects = null) : ControllerBase
 {
     // Claim'ы — литералы (как в PluginsController): MapInboundClaims=false оставляет raw-имена.
     private const string SubClaim = "sub";

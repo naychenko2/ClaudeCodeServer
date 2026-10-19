@@ -706,6 +706,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Контекст чата для агента (ADR-023 §3.2): context_state / context_attach / context_detach; сессия — хвостом
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.TurnContextToolset>();
+// Плагины (ADR-031): тулсет — НЕусловно (Main), а не в PluginsSubsystem.Register: при
+// выключенной подсистеме сервер plugins обязан остаться в наборе (состав tools/list стабилен,
+// вызов — честный отказ). PluginDraftService — опциональная зависимость тулсета (null при
+// выключенной подсистеме); остальные зависимости (IMcpSessionAccessor/IProjectManager) — спина.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Plugins.Mcp.PluginsToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают

@@ -39,7 +39,11 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
-    private readonly PluginDraftService _drafts;
+    // Опциональная зависимость: тулсет регистрируется в Main НЕусловно (чтобы MCP-сервер plugins
+    // оставался в наборе при выключенной подсистеме), а PluginDraftService — только в Register
+    // подсистемы. Подсистема выключена → _drafts = null; CallAsync отвечает гейтом подсистемы
+    // ДО того, как _drafts коснётся, поэтому `!` ниже безопасно (см. комментарий в CallAsync).
+    private readonly PluginDraftService? _drafts;
     private readonly IFeatureFlagGate? _flags;
     private readonly IConfiguration? _config;
     // Лента чата (Core-шов, адаптер ChatFeed в Main): якорь черновика пишет сюда.
@@ -50,7 +54,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
     public PluginsToolset(
         IMcpSessionAccessor sessions,
         IProjectManager projects,
-        PluginDraftService drafts,
+        PluginDraftService? drafts = null,
         IFeatureFlagGate? flags = null,
         IConfiguration? config = null,
         IChatFeed? feed = null,
@@ -78,7 +82,9 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
         if (!TryResolve(context, out var project, out var resolveError))
             return Deny(resolveError);
 
-        // Выключенная подсистема (belt-and-suspenders: обычно сервер просто не в конфиге).
+        // Выключенная подсистема: сервер plugins всё равно в конфиге (тулсет зарегистрирован
+        // неусловно), но PluginDraftService в контейнер не попал (_drafts = null) — отвечаем
+        // честным отказом ДО того, как _drafts коснётся, и не роняем tools/list.
         if (_config is not null && !SubsystemGate.IsEnabled(_config, SubsystemKey))
             return Deny("Подсистема плагинов выключена");
 
@@ -104,7 +110,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
             ToolWriteFile => WriteFile(arguments, context.OwnerId, slug),
             ToolValidate => Validate(context.OwnerId, slug),
             ToolPreview => Preview(context.OwnerId, slug),
-            ToolDeleteFile => Op(_drafts.DeleteFile(context.OwnerId, slug, Str(arguments, "path") ?? "")),
+            ToolDeleteFile => Op(_drafts!.DeleteFile(context.OwnerId, slug, Str(arguments, "path") ?? "")),
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
     }
@@ -117,7 +123,9 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
     // нет и ошибки нет. Сбой ленты не роняет создание: черновик уже на диске.
     private async Task<McpToolCallResult> Create(string ownerId, string slug, string? sessionId, CancellationToken ct)
     {
-        var result = _drafts.Create(ownerId, slug);
+        // _drafts! — не null: сюда доходят только когда подсистема включена (гейт выше),
+        // а PluginDraftService в контейнере только в этом случае.
+        var result = _drafts!.Create(ownerId, slug);
         if (result.Ok)
             await AppendDraftRecordAsync(sessionId, slug, ct);
         return Op(result);
@@ -218,7 +226,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
         var path = Str(args, "path");
         if (path is null) return Deny("Не указан path — относительный путь файла в черновике.");
         var content = Str(args, "content") ?? "";
-        var result = _drafts.WriteFile(ownerId, slug, path, System.Text.Encoding.UTF8.GetBytes(content));
+        var result = _drafts!.WriteFile(ownerId, slug, path, System.Text.Encoding.UTF8.GetBytes(content));
         return Op(result);
     }
 
@@ -227,7 +235,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
     private McpToolCallResult Validate(string ownerId, string slug)
     {
         PluginPackageValidationResult validation;
-        try { validation = _drafts.Validate(ownerId, slug); }
+        try { validation = _drafts!.Validate(ownerId, slug); }
         catch (Exception e) when (e is FileNotFoundException or ArgumentException)
         { return Deny(e.Message); }
         return Json(new
@@ -245,7 +253,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
     private McpToolCallResult Preview(string ownerId, string slug)
     {
         PluginDraftPreview p;
-        try { p = _drafts.Preview(ownerId, slug); }
+        try { p = _drafts!.Preview(ownerId, slug); }
         catch (Exception e) when (e is FileNotFoundException or ArgumentException)
         { return Deny(e.Message); }
         return Json(new

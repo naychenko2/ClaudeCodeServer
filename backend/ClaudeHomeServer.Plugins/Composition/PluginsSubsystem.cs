@@ -46,9 +46,11 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // Сравнение черновика с установленной версией (шаг 4.3b): stateless поверх PluginStore;
         // его использует REST-ручка GET /api/plugins/drafts/{slug}/diff.
         services.AddSingleton<PluginDraftDiff>();
-        // MCP-тулсет plugins (шаг 4.1): POST /mcp/plugins/{sessionId}, реестр Main находит его
-        // среди IMcpToolset. Состав (5 инструментов) не зависит от флага/хода/сессии.
-        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.PluginsToolset>();
+        // MCP-тулсет plugins (шаг 4.1) регистрируется в Main НЕусловно (Program.cs), а не здесь:
+        // при выключенной подсистеме Register не вызывается, и если бы тулсет жил только здесь,
+        // MCP-сервер plugins исчезал бы из набора (состав tools/list менялся, POST /mcp/plugins
+        // → 404). Неусловная регистрация держит сервер в наборе; PluginDraftService (зарегистрирован
+        // здесь) — опциональная зависимость тулсета, null при выключенной подсистеме.
         // Ядро установки (шаг 1.4, C1/C2/M5/M6): метка источника, атомарное копирование,
         // no-op повтора. Stateless-логика поверх PluginStore + валидатора.
         services.AddSingleton<PluginInstaller>();

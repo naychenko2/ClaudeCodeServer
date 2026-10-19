@@ -29,10 +29,12 @@ namespace ClaudeHomeServer.Services.Plugins.Controllers;
 public class PluginsController(
     IConfiguration config,
     IFeatureFlagGate flags,
-    PluginStore? store,
-    PluginInstaller? installer,
-    PluginUninstall? uninstall,
-    PluginSecretsStore? secrets) : ControllerBase
+    // `= null` — обязательность для DI: подсистема выключена → PluginStore/… не в контейнере,
+    // и без явного значения по умолчанию активация контроллера падала (500, а не честный 503 гейта).
+    PluginStore? store = null,
+    PluginInstaller? installer = null,
+    PluginUninstall? uninstall = null,
+    PluginSecretsStore? secrets = null) : ControllerBase
 {
     // Claim'ы — литералы: вертикаль не тянет JwtBearer-пакет, а MapInboundClaims=false
     // (Program.cs) оставляет raw-имена. Смысл 1:1 с JwtService (sub = id владельца,

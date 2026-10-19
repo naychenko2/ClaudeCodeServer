@@ -10,6 +10,7 @@ import { act } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatItem, Task } from '../../../types';
 import { TaskCreatedView, TaskRunExecutorView } from '../TaskCreatedView';
+import { upsertTaskLocal } from '../../../lib/tasks';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { __test } from '../../../lib/featureRuns';
 import { ChatSessionContext } from '../contexts';
@@ -28,7 +29,9 @@ vi.mock('../../../lib/breakpoints', async (importOriginal) => {
   return { ...orig, useIsMobile: () => mobileFlag.value };
 });
 // lib/tasks — spy openTaskInSection: клик по чипу (stopPropagation) задачу НЕ открывает,
-// клик по карточке — открывает.
+// клик по карточке — открывает. useTasks/ensureFullTask/upsertTaskLocal — реальные:
+// наполняем стор через upsertTaskLocal (20 карточек → 0 запросов) или оставляем пустым
+// (нет в сторе → добор через ensureFullTask с дедупом).
 const { openTaskSpy } = vi.hoisted(() => ({ openTaskSpy: vi.fn() }));
 vi.mock('../../../lib/tasks', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/tasks')>();
@@ -302,8 +305,10 @@ describe('F9: чип — hover и фокус', () => {
 // === TaskRunExecutorView: карточка «Задача создана» на месте запуска исполнителя ===
 //
 // Результат tasks_run_executor неполный ({id, title, status, executorSessionId, note}) —
-// полную задачу добираем по id (api.tasks.get). Пока грузится / ошибка / нет id — обычная
-// строка инструмента (ToolUseView), не падение. Все кейсы — fake-DOM (async useState+useEffect).
+// задачу берём из стора (useTasks); облегчённой (listItem) достаточно. Сетевой запрос —
+// только если задачи в сторе нет, через ensureFullTask (общий дедуп in-flight по id).
+// Пока задачи нет — обычная строка инструмента (ToolUseView), не падение.
+// Все кейсы — fake-DOM (async useEffect).
 
 describe('TaskRunExecutorView: карточка на месте запуска исполнителя', () => {
   beforeAll(() => { installFakeDom(); });
@@ -317,14 +322,16 @@ describe('TaskRunExecutorView: карточка на месте запуска �
     return { promise, resolve, reject };
   }
 
-  // Вызов tasks_run_executor: input.taskId (надёжный источник id) + неполный result
-  function runItem(over: Partial<ToolItem> = {}): ToolItem {
+  // Вызов tasks_run_executor: input.taskId (надёжный источник id) + неполный result.
+  // taskId — параметр: каждый тест использует уникальный id, чтобы _fullInflight/_tasks
+  // из предыдущего теста не мешали (ensureFullTask дедупит по id).
+  function runItem(taskId: string, over: Partial<ToolItem> = {}): ToolItem {
     return {
       kind: 'tool_use',
-      id: 't-run',
+      id: `t-run-${taskId}`,
       name: 'mcp__tasks__tasks_run_executor',
-      input: { taskId: 'task-1' },
-      result: JSON.stringify({ id: 'task-1', title: 'Шаг D1', status: 'inProgress', executorSessionId: 'sess-x', note: 'запущено' }),
+      input: { taskId },
+      result: JSON.stringify({ id: taskId, title: 'Шаг D1', status: 'inProgress', executorSessionId: 'sess-x', note: 'запущено' }),
       ...over,
     } as ToolItem;
   }
@@ -341,30 +348,30 @@ describe('TaskRunExecutorView: карточка на месте запуска �
   it('задача доборена по id → карточка «Задача создана» (название + чип шага фичи)', async () => {
     const { promise, resolve } = deferred<Task>();
     tasksGetMock.mockReturnValue(promise);
-    const { root, container } = mountRun(runItem());
+    const { root, container } = mountRun(runItem('task-a'));
     // Пока грузится — строка инструмента, карточки нет
     expect(textNodes(container).join(' '), 'пока грузится — без карточки').not.toContain('Задача создана');
     // Разрешаем добор полной задачи
-    await act(async () => { resolve(task()); });
+    await act(async () => { resolve(task({ id: 'task-a' })); });
     const text = textNodes(container).join(' ');
     expect(text, 'карточка «Задача создана»').toContain('Задача создана');
     expect(text, 'название задачи').toContain('Шаг D1');
     expect(text, 'чип «Шаг D1 фичи»').toContain('Шаг D1 фичи');
-    expect(tasksGetMock, 'dobor полной задачи по id').toHaveBeenCalledWith('task-1');
+    expect(tasksGetMock, 'добор полной задачи по id').toHaveBeenCalledWith('task-a');
     root.unmount();
   });
 
   it('ошибка/404 при доборе → строка инструмента (карточки нет, не падение)', async () => {
     const { promise, reject } = deferred<Task>();
     tasksGetMock.mockReturnValue(promise);
-    const { root, container } = mountRun(runItem());
+    const { root, container } = mountRun(runItem('task-b'));
     await act(async () => { reject(new Error('404')); });
     expect(textNodes(container).join(' '), 'после ошибки — без карточки').not.toContain('Задача создана');
     root.unmount();
   });
 
   it('старая запись без taskId/result → не падает, добор не зовут, карточки нет', () => {
-    const { root, container } = mountRun(runItem({ input: {}, result: undefined }));
+    const { root, container } = mountRun(runItem('task-c', { input: {}, result: undefined }));
     expect(tasksGetMock, 'без id — добор не зовут').not.toHaveBeenCalled();
     expect(textNodes(container).join(' '), 'без карточки').not.toContain('Задача создана');
     root.unmount();
@@ -373,14 +380,63 @@ describe('TaskRunExecutorView: карточка на месте запуска �
   it('подпись шапки — «tasks · run_executor» (не «tasks · create» от ветки tasks_create)', async () => {
     const { promise, resolve } = deferred<Task>();
     tasksGetMock.mockReturnValue(promise);
-    const { root, container } = mountRun(runItem());
-    await act(async () => { resolve(task()); });
+    const { root, container } = mountRun(runItem('task-d'));
+    await act(async () => { resolve(task({ id: 'task-d' })); });
     // «tasks · {toolName}» рендерит две текстовые ноды; join(' ') даёт двойной пробел —
     // схлопываем whitespace, чтобы проверка не зависала от артефакта склейки.
     const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
     expect(text, 'подпись запуска').toContain('tasks · run_executor');
     expect(text, 'не старая подпись').not.toContain('tasks · create');
     root.unmount();
+  });
+
+  // === Перф-2 F5: 20 карточек с задачами из стора → 0 запросов ===
+  // upsertTaskLocal наполняет реальный стор; useTasks() (useSyncExternalStore) их видит.
+  // ensureFullTask не зовётся (задача уже в сторе), api.tasks.get не трогается.
+
+  it('20 карточек с задачами из стора → 0 сетевых запросов', () => {
+    // 20 уникальных задач — наполняем реальный стор
+    for (let i = 0; i < 20; i++) {
+      upsertTaskLocal(task({ id: `perf-${i}`, title: `Задача ${i}` }));
+    }
+
+    const roots: Array<ReturnType<typeof mountRun>> = [];
+    for (let i = 0; i < 20; i++) {
+      roots.push(mountRun(runItem(`perf-${i}`)));
+    }
+    // Карточки отрендерились (задачи в сторе)
+    const firstText = textNodes(roots[0].container).join(' ');
+    expect(firstText, 'карточка из стора').toContain('Задача создана');
+    // Ни одного запроса
+    expect(tasksGetMock, '20 задач из стора — сеть не трогаем').not.toHaveBeenCalled();
+    roots.forEach(r => r.root.unmount());
+  });
+
+  // === Перф-2 F5: задача НЕ в сторе → 1 запрос ===
+
+  it('карточка задачи, которой нет в сторе → 1 запрос', async () => {
+    // Стор пуст (upsertTaskLocal не звали) — ensureFullTask делает запрос
+    const { promise, resolve } = deferred<Task>();
+    tasksGetMock.mockReturnValue(promise);
+    const { root, container } = mountRun(runItem('task-e'));
+    await act(async () => { resolve(task({ id: 'task-e' })); });
+    expect(tasksGetMock, 'один запрос на задачу вне стора').toHaveBeenCalledTimes(1);
+    expect(textNodes(container).join(' ')).toContain('Задача создана');
+    root.unmount();
+  });
+
+  // === Перф-2 F5: две карточки одной задачи (не в сторе) → 1 запрос (дедуп) ===
+
+  it('две карточки одной задачи, которой нет в сторе → 1 запрос (дедуп ensureFullTask)', async () => {
+    const { promise, resolve } = deferred<Task>();
+    tasksGetMock.mockReturnValue(promise);
+    const r1 = mountRun(runItem('task-f'));
+    const r2 = mountRun(runItem('task-f'));
+    // Оба компонента зовут ensureFullTask('task-f'); _fullInflight дедупит → 1 запрос
+    await act(async () => { resolve(task({ id: 'task-f' })); });
+    expect(tasksGetMock, 'дедуп: один запрос на две карточки').toHaveBeenCalledTimes(1);
+    r1.root.unmount();
+    r2.root.unmount();
   });
 });
 

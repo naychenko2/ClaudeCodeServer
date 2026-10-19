@@ -3,7 +3,7 @@ import { SquareCheck, ArrowRight, Route } from 'lucide-react';
 import type { ChatItem, Task } from '../../types';
 import { C, FONT, FS, SHADOW, TB } from '../../lib/design';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
-import { dueLabel, isDueUrgent, openTaskInSection, PRIORITY_LABEL } from '../../lib/tasks';
+import { dueLabel, ensureFullTask, isDueUrgent, openTaskInSection, PRIORITY_LABEL, useTasks } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { markdownToPlain } from '../../lib/markdownPlain';
@@ -15,7 +15,6 @@ import { Button } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolUseView } from './ToolUseView';
 import { ChatProjectContext, ChatSessionContext } from './contexts';
-import { api } from '../../lib/api';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -328,11 +327,12 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
 });
 
 // Карточка задачи на месте вызова tasks_run_executor: задача «отдана в исполнение».
-// Результат вызова неполный ({id, title, status, executorSessionId, note}) — полную задачу
-// добираем по id (GET /api/tasks/{id}); пока грузится или при ошибке/403/404/нет id —
-// обычная строка инструмента (ToolUseView), не падение. id — из input (taskId, надёжнее)
-// или из result (id, фолбэк). Поведение карточки (чип «Шаг N фичи», переход к задаче) —
-// то же, что у TaskCreatedView: рисуем её, передав полный Task в result.
+// Результат вызова неполный ({id, title, status, executorSessionId, note}) — задачу берём
+// из стора (useTasks); облегчённой (listItem) достаточно для карточки. Сетевой запрос —
+// только если задачи в сторе нет (чужая/удалённая/стор не загружен), через ensureFullTask
+// (общий дедуп in-flight по id). Карточка обновляется вместе со стором (realtime task_changed).
+// Пока задачи нет — обычная строка инструмента (ToolUseView), не падение.
+// id — из input (taskId, надёжнее) или из result (id, фолбэк).
 export const TaskRunExecutorView = memo(function TaskRunExecutorView({ item, online, onOpenFile }: {
   item: ToolUseItem; online: boolean; onOpenFile?: (path: string) => void;
 }) {
@@ -340,21 +340,26 @@ export const TaskRunExecutorView = memo(function TaskRunExecutorView({ item, onl
   const res = parseRunExecutorResult(item.result);
   const id = (typeof inp.taskId === 'string' && inp.taskId) || res?.id || null;
 
-  const [task, setTask] = useState<Task | null>(null);
+  // Задача из стора: облегчённой (listItem) достаточно. useTasks() — реактивная
+  // подписка: task_changed обновит карточку без отдельного запроса.
+  const tasks = useTasks();
+  const storeTask = id ? tasks.find(t => t.id === id) : undefined;
+
+  // Задачи в сторе нет — добираем через общий дедуп. Результат upsert'ится в стор,
+  // useTasks() перерендерит компонент. .catch — ошибка/404: карточки нет (строка инструмента),
+  // но rejection не должен улетать в unhandled.
   useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    api.tasks.get(id)
-      .then(t => { if (!cancelled) setTask(t); })
-      .catch(() => { if (!cancelled) setTask(null); });
-    return () => { cancelled = true; };
-  }, [id]);
+    if (!id || storeTask) return;
+    void ensureFullTask(id).catch(() => {});
+  }, [id, storeTask]);
 
-  // Пока грузится (task null) или задача не найдена/ошибка — обычная строка инструмента
-  if (!task) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+  // Пока задачи нет (ещё грузится) — обычная строка инструмента
+  if (!storeTask) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
-  // Полная задача готова — карточка «Задача создана» (result = полный Task, как у tasks_create).
-  // toolName — «run_executor»: карточка появляется на месте запуска, подпись шапки не хардкод.
-  const synth: ToolUseItem = { ...item, result: JSON.stringify(task) };
+  // Карточка: description из listItem — descriptionPreview, из полной — description.
+  const displayTask: Task = storeTask.listItem
+    ? { ...storeTask, description: storeTask.descriptionPreview ?? '' }
+    : storeTask;
+  const synth: ToolUseItem = { ...item, result: JSON.stringify(displayTask) };
   return <TaskCreatedView item={synth} online={online} onOpenFile={onOpenFile} toolName="run_executor" />;
 });

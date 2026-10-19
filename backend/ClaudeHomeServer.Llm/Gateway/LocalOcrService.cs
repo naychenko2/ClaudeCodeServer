@@ -152,7 +152,7 @@ public sealed class LocalOcrService(
             }
 
             // Разбор ответа: мусорный JSON / пустые choices / обрыв → BadResponse, не исключение.
-            (string? Text, int PromptTokens, int CompletionTokens)? parsed;
+            (string Text, int PromptTokens, int CompletionTokens)? parsed;
             try
             {
                 parsed = ParseResponse(body);
@@ -220,7 +220,7 @@ public sealed class LocalOcrService(
     }
 
     // Разбор ответа vLLM (OpenAI chat completions). null — пустые choices; исключение — мусорный JSON.
-    private static (string? Text, int PromptTokens, int CompletionTokens)? ParseResponse(string json)
+    private static (string Text, int PromptTokens, int CompletionTokens)? ParseResponse(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;

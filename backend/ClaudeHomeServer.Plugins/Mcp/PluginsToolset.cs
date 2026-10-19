@@ -88,6 +88,12 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
         if (_config is not null && !SubsystemGate.IsEnabled(_config, SubsystemKey))
             return Deny("Подсистема плагинов выключена");
 
+        // plugins-mvp off (дефект dcbd3609): черновик без возможности установки бессмыслен —
+        // человек не увидит его (REST 403). Проверяем ДО plugins-build-yourself: если mvp
+        // выключен, сборка плагина тоже бессмысленна, даже если build-yourself включён.
+        if (_flags is not null && !_flags.IsEnabled(context.OwnerId, FeatureFlagKeys.PluginsMvp))
+            return Deny("Плагины отключены для вашего аккаунта");
+
         // Флаг владельца: выключен — отказ с причиной.
         if (_flags is not null && !_flags.IsEnabled(context.OwnerId, BuildYourselfFlag))
             return Deny("Функция «Собрать плагин» выключена для вашего аккаунта");

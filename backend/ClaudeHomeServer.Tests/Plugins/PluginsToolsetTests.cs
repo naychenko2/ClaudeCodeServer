@@ -173,6 +173,28 @@ public class PluginsToolsetTests : IDisposable
         File.Exists(Path.Combine(_store.DraftDir(Owner, "my-plugin"), "ccs-plugin.json")).Should().BeFalse();
     }
 
+    // ── plugins-mvp off, plugins-build-yourself on → draft_create отказ (дефект dcbd3609) ──
+    //
+    // Черновик без возможности установки бессмыслен: человек не увидит его (REST 403).
+    // Отказ агенту — понятным текстом. Состав tools/list не меняется.
+
+    [Fact]
+    public async Task MvpOff_BuildYourselfOn_DraftCreate_Отказ()
+    {
+        var flags = new Mock<IFeatureFlagGate>();
+        // plugins-mvp off, plugins-build-yourself on.
+        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.PluginsMvp)).Returns(false);
+        flags.Setup(f => f.IsEnabled(Owner, PluginsToolset.BuildYourselfFlag)).Returns(true);
+        var toolset = Toolset(flags: flags.Object);
+
+        var result = await Call(toolset, PluginsToolset.ToolCreate, new JsonObject { ["slug"] = "my-plugin" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("Плагины отключены", "отказ с понятной причиной");
+        File.Exists(Path.Combine(_store.DraftDir(Owner, "my-plugin"), "ccs-plugin.json")).Should().BeFalse(
+            "mvp off — черновик не создан");
+    }
+
     // ── Чужая/несуществующая сессия: fail-closed ─────────────────────────────────
 
     [Fact]

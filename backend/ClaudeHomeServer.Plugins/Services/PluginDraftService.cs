@@ -306,6 +306,13 @@ public class PluginDraftService
         {
             Directory.CreateDirectory(Path.GetDirectoryName(draftDir)!);
             Directory.Move(rejectedDir, draftDir);
+            // Служебные метаданные отклонения (_rejected.json) — не файл пакета: убираем их из
+            // восстановленного черновика, иначе валидатор отбьёт файл not-allowed и «Принять»
+            // заблокируется (дефект c5afd409). 30-дневная очистка и чтение времени отклонения
+            // работают по _rejected/{slug} (RejectedMeta/List), а не по восстановленному
+            // _drafts/{slug} — файл больше не нужен; повторный Reject создаст новый.
+            var metaFile = Path.Combine(draftDir, RejectedMetaFile);
+            if (File.Exists(metaFile)) File.Delete(metaFile);
         });
         return PluginDraftOpResult.OkResult($"Черновик {slug} возвращён");
     }

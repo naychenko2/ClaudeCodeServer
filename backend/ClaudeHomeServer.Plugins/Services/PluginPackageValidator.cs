@@ -120,8 +120,7 @@ public class PluginPackageValidator
             problems.Count == 0, problems, sha256, files.Count);
     }
 
-    // Файловые проверки пакета (C4+M9+minor8): <paramref name="current"/> — текущий каталог,
-    // <paramref name="root"/> — корень пакета (для относительных путей).
+    // Файловые проверки пакета по корню <paramref name="packageRoot"/> (C4+M9+minor8):
     //   * symlink-каталог (ReparsePoint) → no-symlink, внутрь не заходить (C4);
     //   * каталог: лимит числа каталогов (minor 8, прерывает обход);
     //   * файл: лимиты (прерывают обход) + size + IsSymlink + EscapesRoot + deny + allow + size;

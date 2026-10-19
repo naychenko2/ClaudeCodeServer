@@ -583,6 +583,36 @@ public class PluginDraftServiceTests : IDisposable
         op.Code.Should().Be("not-found");
     }
 
+    // c5afd409: «Вернуть» убирает служебный _rejected.json (метаданные отклонения) из
+    // восстановленного черновика — иначе валидатор отбивает его not-allowed и «Принять»
+    // заблокировано. Мутация: не удалять файл (оставить в Restore) → тест красный.
+    // Черновик делаем валидным (вклад + известное право), чтобы единственной потенциальной
+    // проблемой после restore был именно служебный _rejected.json (no no-contribution).
+    [Fact]
+    public void Restore_УбираетСлужебныйRejectedJson_ЧерновикВалиден()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md",
+            System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
+            System.Text.Encoding.UTF8.GetBytes(
+                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["notes:read"]}}"""))
+            .Ok.Should().BeTrue();
+
+        _service.Reject(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.Restore(Owner, "my-plugin").Ok.Should().BeTrue();
+
+        // Служебный _rejected.json (метаданные отклонения) не остаётся в восстановленном черновике.
+        var dir = DraftDir(Owner, "my-plugin");
+        File.Exists(Path.Combine(dir, "_rejected.json")).Should().BeFalse(
+            "служебный _rejected.json не остаётся в восстановленном черновике");
+
+        // Черновик валиден (no not-allowed): «Принять» доступно.
+        var validation = _service.Validate(Owner, "my-plugin");
+        validation.IsValid.Should().BeTrue(
+            $"восстановленный черновик обязан быть валиден: {string.Join("; ", validation.Problems.Select(p => p.Code + ": " + p.Message))}");
+    }
+
     [Fact]
     public void List_Отклонённые_ПризнакRejected_ИExpiresAt()
     {

@@ -115,6 +115,14 @@ export function mockLocalModelMedia(state: LocalModelMediaMockState = 'run'): Lo
     gpus: [
       { uuid: 'gpu-media-0', index: 0, name: 'RTX 3090', roles: ['media'], utilPerc: 97, memUsedMb: 22464, memTotalMb: 24576, tempC: 74, powerW: 331, powerLimitW: 350, mediaMemMb: 22464 },
     ],
+    // Сводка «Железо» (только у админа, ADR-030): вкладка «Медиа» рендерит из неё
+    // строку-ссылку «Видеокарта» (HwLinkRow) по пересечению с media.gpus по uuid.
+    hardware: {
+      level: 'ok',
+      gpus: [
+        { uuid: 'gpu-media-0', memTempC: 74, level: 'ok', powerCap: false, thermal: false },
+      ],
+    },
     // Узел сообщает: модель идущего прогона лежит в его памяти
     loadedModels: ['MiniMax H3'],
     running: [
@@ -200,4 +208,23 @@ export function mockLocalModelMedia(state: LocalModelMediaMockState = 'run'): Lo
         unsupported: [],
       };
   }
+}
+
+// scope=self (не-админ): только свои строки, queueAhead — сколько задач перед
+// пользователем в очереди. База — то же состояние, но отфильтрованное по own
+// (чужие строки сервер не отдаёт). gpus/hardware — как в базе (НЕ null): в
+// реальном API сервер их не отдаёт не-админу (ADR-030), но тест
+// localModelSelfScope проверяет защитный guard `!self` в MediaTab — худший
+// случай, когда сервер данные всё же прислал: строка-ссылка должна скрыться
+// guard'ом, а не отсутствием данных.
+export function mockLocalModelMediaSelf(state: LocalModelMediaMockState = 'run'): LocalModelMedia {
+  const m = mockLocalModelMedia(state);
+  return {
+    ...m,
+    scope: 'self',
+    queueAhead: 3,
+    running: m.running.filter(r => r.own),
+    queue: m.queue.filter(q => q.own),
+    lastHour: m.lastHour.filter(d => d.own),
+  };
 }

@@ -353,6 +353,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistor
 builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryThumbService>();
 // ComfyRunHistory (Images) резолвит наблюдателя лениво: тот же экземпляр индекса
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaHistoryEventSink>(sp => sp.GetRequiredService<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>());
+// Рубильник «медиа-панель для обычных пользователей» (ADR-030, 2026-10-18): секция
+// LocalModelStats, по умолчанию true; false — не-админ получает 404 на медиа/историю.
+// Связывание — единственная точка чтения (не инлайн config.GetValue в контроллерах).
+builder.Services.Configure<ClaudeHomeServer.Models.LocalModelStatsMediaOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.LocalModelStatsMediaOptions.Section));
 // AppSettingsService реализует ITierModelResolver (Core-шов для слота модели).
 // DI сама по себе не резолвит concrete→interface — пробрасываем вручную, тот
 // же singleton-экземпляр. Отдельного адаптера не нужно: класс уже реализует шов.

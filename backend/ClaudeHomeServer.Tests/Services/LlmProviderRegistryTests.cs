@@ -985,6 +985,76 @@ public class LlmProviderRegistryTests
         reg.EffortFor(model, "   ").Should().BeNull();
     }
 
+    // Провайдер minimax с двумя моделями: у M3.1 в каталоге DefaultEffort=medium, у M3 — нет.
+    private static LlmProviderRegistry CreateMinimax() => Create(new()
+    {
+        ["LlmProviders:minimax:AnthropicBaseUrl"] = "https://api.minimax.io/anthropic",
+        ["LlmProviders:minimax:ApiKey"] = "mm-key",
+        ["LlmProviders:minimax:Models:0:Id"] = "MiniMax-M3[1m]",
+        ["LlmProviders:minimax:Models:1:Id"] = "MiniMax-M3.1-Flash[1m]",
+        ["LlmProviders:minimax:Models:1:DefaultEffort"] = "medium",
+    });
+
+    // Без выбора человека CLI шлёт high, и M3.1 на нём тонет в рассуждениях (A/B 19.10.2026):
+    // пустой запрос обязан превратиться в DefaultEffort модели
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EffortFor_ПустойEffort_DefaultEffortМодели(string? effort)
+    {
+        CreateMinimax().EffortFor("MiniMax-M3.1-Flash[1m]", effort).Should().Be("medium");
+    }
+
+    // Явный выбор человека DefaultEffort не перебивает — ровно поэтому поле каталога,
+    // а не env CLAUDE_CODE_EFFORT_LEVEL (тот перекрывает и --effort)
+    [Theory]
+    [InlineData("low")]
+    [InlineData("high")]
+    [InlineData("max")]
+    public void EffortFor_ЯвныйВыбор_ПобеждаетDefaultEffort(string effort)
+    {
+        CreateMinimax().EffortFor("MiniMax-M3.1-Flash[1m]", effort).Should().Be(effort);
+    }
+
+    // Соседняя модель того же провайдера без поля — прежнее поведение: флага нет
+    [Fact]
+    public void EffortFor_МодельБезDefaultEffort_ПрежнееПоведение()
+    {
+        CreateMinimax().EffortFor("MiniMax-M3[1m]", null).Should().BeNull();
+    }
+
+    // DefaultEffort проходит ту же подмену, что и выбор человека: у провайдера с
+    // SupportedEfforts [low, medium, xhigh] дефолт high становится ближайшим снизу medium
+    [Fact]
+    public void EffortFor_DefaultEffort_ПодменяетсяПоSupportedEfforts()
+    {
+        var reg = CreateLocal(new() { ["LlmProviders:local-qwen:Models:0:DefaultEffort"] = "high" });
+        reg.EffortFor("qwen38-27b", null).Should().Be("medium");
+    }
+
+    // Сторож на РЕАЛЬНЫЙ appsettings.json: поле читается из конфига, тесты выше проверяют
+    // только проводку — без этого DefaultEffort можно молча потерять, и M3.1 вернётся на high
+    [Fact]
+    public void Конфиг_M31_DefaultEffortMedium_УM3Нет()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        for (; dir is not null && path is null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json");
+            if (File.Exists(candidate)) path = candidate;
+        }
+        path.Should().NotBeNull();
+
+        var models = new ConfigurationBuilder()
+            .AddJsonFile(path!).Build()
+            .GetSection("LlmProviders:minimax:Models").GetChildren()
+            .ToDictionary(m => m["Id"]!, m => m["DefaultEffort"]);
+        models["MiniMax-M3.1-Flash[1m]"].Should().Be("medium");
+        models["MiniMax-M3[1m]"].Should().BeNull();
+    }
+
     // Родной Claude (модель не резолвится ни в какого провайдера) — пустой effort даёт null.
     [Theory]
     [InlineData(null)]

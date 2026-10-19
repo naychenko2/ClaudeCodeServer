@@ -340,6 +340,8 @@ public class LlmProviderRegistry
     // иначе CLI подставит свой дефолт (напр. «high» у qwen3.8-27b через vLLM → 400).
     // Для родного Claude и провайдеров с пустым SupportedEfforts (glm/kimi/minimax) — null,
     // флаг --effort не ставится: пусть CLI берёт свой дефолт, как было до подмены.
+    // Исключение — модель каталога с DefaultEffort: при пустом запросе берётся он
+    // (MiniMax-M3.1-Flash на дефолтном high CLI тонет в рассуждениях).
     //
     // Непустой effort — обычная подмена: EffortMap приоритетнее SupportedEfforts (конфиг
     // доверенный), затем точное совпадение, иначе ближайший снизу по шкале.
@@ -352,9 +354,13 @@ public class LlmProviderRegistry
 
         if (string.IsNullOrWhiteSpace(effort))
         {
-            // Пустой effort: для провайдера с SupportedEfforts — самый лёгкий уровень;
-            // иначе null (флаг не ставится).
-            return supported.Count > 0 ? PickLightestSupported(supported) : null;
+            // Пустой effort: у модели каталога с DefaultEffort — он (дальше через ту же
+            // подмену, что и выбор человека); иначе для провайдера с SupportedEfforts —
+            // самый лёгкий уровень; иначе null (флаг не ставится).
+            var modelDefault = p?.FindModel(model)?.DefaultEffort;
+            if (string.IsNullOrWhiteSpace(modelDefault))
+                return supported.Count > 0 ? PickLightestSupported(supported) : null;
+            effort = modelDefault.Trim();
         }
 
         // Непустой effort: родной Claude (провайдер не нашёлся) — отдать как есть,

@@ -50,7 +50,7 @@
 
 ### 4. Бэк считает, фронт показывает
 
-`bucket`, `chips`, рельса, тревога, порядок `features[]` (`OrderRuns`) и членство считает проектор; значения строки берутся из `FeatureRun`, а не пересчитываются рядом. `bucket` и порядок — одна точка правды (`BucketOf`). Фронт ([featuresIndex.ts](../../frontend/src/lib/featuresIndex.ts), [chatGroups.ts](../../frontend/src/lib/chatGroups.ts)) не пересортировывает и не пересчитывает; обновление — по существующему `task_changed` с дебаунсом, нового SignalR-события нет.
+`bucket`, `chips`, рельса, тревога, порядок `features[]` (`OrderRuns`) и членство считает проектор; значения строки берутся из `FeatureRun`, а не пересчитываются рядом. `bucket` и порядок — одна точка правды (`Bucket`). Фронт ([featuresIndex.ts](../../frontend/src/lib/featuresIndex.ts), [chatGroups.ts](../../frontend/src/lib/chatGroups.ts)) не пересортировывает и не пересчитывает; обновление — по существующему `task_changed` с дебаунсом, нового SignalR-события нет.
 
 ### 5. «Одна строка — одна группа» и правило дерева в «Фичах»
 

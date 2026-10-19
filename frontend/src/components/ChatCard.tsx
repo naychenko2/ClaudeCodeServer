@@ -335,8 +335,9 @@ function ChatCardView({
   // Значки подсистем в строке названия (чат картинки — миниатюра и «картинка»)
   const badges = useSlot<ChatCardBadgeCtx, ChatCardBadgeApi>('chat-card-badge');
   // Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
-  // useFeaturesIndex — реактивная подписка на индекс (fetch идемпотентен, дедуплицируется
-  // стором по проекту); featureLabelFor — чистое решение «показывать ли метку» (null — нет)
+  // useFeaturesIndex — реактивная подписка на индекс (один запрос на проект:
+  // первичная загрузка при 0→1 потребителях); featureLabelFor — чистое решение
+  // «показывать ли метку» (null — нет)
   const featuresOn = useFeature(FLAGS.featuresOverview);
   useFeaturesIndex(s.projectId ?? null, featuresOn);
   const feature = featureLabelFor(s.id, featuresOn);

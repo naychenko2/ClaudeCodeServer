@@ -129,7 +129,7 @@ id чата, которого нет в снимке (чужой, удалённ
 | `featureId` | string | id эпика |
 | `title` | string | название эпика |
 | `projectId` | string \| null | проект **эпика**; `null` — вне проектов |
-| `bucket` | `attention \| running \| idle \| closed` | группа; та же функция `BucketOf`, что задаёт порядок |
+| `bucket` | `attention \| running \| idle \| closed` | группа; та же функция `Bucket`, что задаёт порядок |
 | `attention` | объект \| null | тревога; `null` — нет |
 | `rail` | сегмент[7] | `cut, plan, prod, review, qa, final, merge` по порядку |
 | `chips` | string[] | `open`, `waiting`, `stopped`, `merge`, `closed` |

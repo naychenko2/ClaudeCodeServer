@@ -71,6 +71,7 @@ public class FrameStabilityTests
     [Fact]
     public void Null_hashes_throw()
     {
-        Assert.Throws<ArgumentNullException>(() => FrameStability.IsEndOfScroll(null));
+        // null! — намеренно: тест проверяет, что non-null параметр бросает ArgumentNullException
+        Assert.Throws<ArgumentNullException>(() => FrameStability.IsEndOfScroll(null!));
     }
 }

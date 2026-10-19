@@ -335,7 +335,7 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 ```
 GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (только admin; иначе 403)
      → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
-         othersCount?, speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
+         othersCount?, speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? }, cleanStepMs?,
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
          history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, prefillSeconds?, queueSeconds?, promptTokens? }],
@@ -353,12 +353,17 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      счётчиков с прошлой точки, правило null то же, что у серий кэша. Фронт сводит точки в интервалы и считает
      скорость генерации на поток: ΣgenTokens/ΣitlSeconds (ток/с) — измерение vLLM, та же формула «генерации на
      поток» (ADR-029). Поле «Куда уходит время агентов» графика (v2.3, вместо «Шаг модели» и «Агентов в
-     генерации»): составная полоса 100 % — генерирует (ΣitlCount×чистый шаг), читает промпт (ΔprefillSeconds),
-     ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); «чистый шаг» — 10-й перцентиль
-     времени шага по «чистым» интервалам (ADR-029, v2.3). genThroughput с графика убран (v2.2), но в истории
+     генерации»): составная полоса 100 % — генерирует (ΣitlCount×база шага), читает промпт (ΔprefillSeconds),
+     ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); база шага — из cleanStepMs
+     (ADR-029, п.14). genThroughput с графика убран (v2.2), но в истории
      остался (вторая линия «выдано стендом» и детект разрыва); «пик» в графике — по главной линии (скорость на
      поток), не по genThroughput. Поля busySeconds больше нет.
+     cleanStepMs? — база шага (мс): длительность прохода модели без помех; одна величина на весь стенд,
+     НЕ зависит от окна графика. Фронт берёт её как есть для полосы «Куда уходит время агентов»;
+     поля нет (или null) — «ждёт соседа» не выделяется, всё измеренное время декодирования — «генерирует».
      speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
+     prefillPerStream — ток/с чтения промпта С ОЖИДАНИЕМ очереди шагов (знаменатель — время prefill
+     запроса от старта до первого токена), поэтому величина ниже реальной скорости вычисления;
      genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
      в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).
      speculativeSpeedup (v2.3) — «ускорение угадыванием ×N»: Δgeneration_tokens/ΔitlCount за окно ~60 с (во сколько

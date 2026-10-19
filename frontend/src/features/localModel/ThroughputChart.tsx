@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { C, FIELD, FONT, FS, R, SP } from '../../lib/design';
 import { InlineSegmented } from '../../components/ui/InlineSegmented';
-import { formatPerc, formatTps } from './format';
+import { formatPerc, formatTps, notReportedText } from './format';
 import type { LocalModelStats } from './api';
 
 // === Типы ===
@@ -43,10 +43,9 @@ export interface ThroughputSample {
   itlSeconds: number | null;
   itlCount: number | null;
   // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefillSeconds/queueSeconds —
-  // приращения гистограмм (сек), promptTokens — прочитанный промпт (токены). null — разрыв.
+  // приращения гистограмм (сек). null — разрыв.
   prefillSeconds: number | null;
   queueSeconds: number | null;
-  promptTokens: number | null;
 }
 
 // Геометрия области построения в единицах SVG.
@@ -87,10 +86,13 @@ export interface Interval {
 }
 
 // Доли «куда уходит время» (0..1, в сумме 1). Порядок — порядок сегментов полосы.
+// wait = null — доля «ждёт соседа» НЕ РАЗДЕЛЕНА: базы шага (cleanStepMs) нет,
+// всё измеренное время декодирования отнесено к «генерирует». null — не ноль
+// (правило проекта: неизвестное значение не рисуется нулём).
 export interface TimeShares {
   gen: number;      // генерирует
   prefill: number;  // читает промпт
-  wait: number;     // ждёт соседа
+  wait: number | null; // ждёт соседа (null — не разделено)
   queue: number;    // в очереди
 }
 
@@ -232,7 +234,7 @@ const TIME_BAR_LABELS = ['генерирует', 'читает промпт', '�
 const TIME_BAR_TITLES = [
   'модель реально выдаёт токены',
   'стенд читает промпт (prefill)',
-  'генерация стоит, пока стенд читает чужой длинный промпт. Много — параллельных агентов слишком много',
+  'генерация стоит, пока стенд читает чужой длинный промпт. Много — параллельных агентов слишком много. Без базы шага от движка доля не выделяется',
   'запрос ещё не принят стендом',
 ] as const;
 
@@ -241,8 +243,10 @@ const TIME_IDLE_LABEL = 'простой';
 const TIME_IDLE_TITLE = 'движок отвечал, но шагов и запросов не было';
 
 // Полоса интервала «куда уходит время» (ADR-029, v2.4) на x-диапазоне [x0, x1].
-// shares — 4 сегмента пропорционально долям; idle — один нейтральный (простой) на всю
+// shares — сегменты пропорционально долям; idle — один нейтральный (простой) на всю
 // ширину; break — пусто (фон-разрыв рисует renderBreaks). Возвращает {x, w, color}.
+// «Ждёт соседа» (wait = null) — сегмента НЕТ: базы шага нет, доля не выделяется,
+// а остальные доли в сумме 1 (всё измеренное время декодирования — «генерирует»).
 export function buildTimeSharesBar(
   state: TimeState,
   x0: number,
@@ -250,12 +254,18 @@ export function buildTimeSharesBar(
 ): { x: number; w: number; color: string }[] {
   if (state.kind === 'break') return [];
   if (state.kind === 'idle') return [{ x: x0, w: x1 - x0, color: TIME_BAR_IDLE_COLOR }];
-  const order = [state.shares.gen, state.shares.prefill, state.shares.wait, state.shares.queue];
+  const s = state.shares;
+  const parts: { value: number; color: string }[] = [
+    { value: s.gen, color: TIME_BAR_COLORS[0] },
+    { value: s.prefill, color: TIME_BAR_COLORS[1] },
+  ];
+  if (s.wait != null) parts.push({ value: s.wait, color: TIME_BAR_COLORS[2] });
+  parts.push({ value: s.queue, color: TIME_BAR_COLORS[3] });
   const out: { x: number; w: number; color: string }[] = [];
   let x = x0;
-  for (let i = 0; i < 4; i++) {
-    const w = (x1 - x0) * order[i];
-    if (w > 0) out.push({ x, w, color: TIME_BAR_COLORS[i] });
+  for (const p of parts) {
+    const w = (x1 - x0) * p.value;
+    if (w > 0) out.push({ x, w, color: p.color });
     x += w;
   }
   return out;
@@ -280,7 +290,7 @@ export function timeSharesAriaLabel(
       parts.push(`интервал ${hoverTime}: `
         + `генерирует ${pct(s.gen)} · `
         + `читает промпт ${pct(s.prefill)} · `
-        + `ждёт соседа ${pct(s.wait)} · `
+        + `ждёт соседа ${s.wait == null ? '— (нет базы шага)' : pct(s.wait)} · `
         + `в очереди ${pct(s.queue)}`);
     }
   }
@@ -296,7 +306,7 @@ function timeSharesSummary(state: TimeState | null): string {
   const s = state.shares;
   return ` · генерирует ${pct(s.gen)}`
     + ` · читает промпт ${pct(s.prefill)}`
-    + ` · ждёт соседа ${pct(s.wait)}`
+    + ` · ждёт соседа ${s.wait == null ? '—' : pct(s.wait)}`
     + ` · в очереди ${pct(s.queue)}`;
 }
 
@@ -379,18 +389,28 @@ export function peakPerStreamOf(intervals: Interval[]): number {
 // Средние доли «куда уходит время» за окно: среднее по интервалам, у которых есть
 // доли (kind === 'shares'; каждая строка 0..1, сумма 1). null — ни один интервал не
 // отдал долей. Легенда без считывания показывает «типовой» интервал окна (средние доли).
+// «Ждёт соседа» не выделяется (wait = null) — средняя доля тоже null: неизвестное
+// значение не рисуется нулём.
 export function avgTimeSharesOf(intervals: Interval[]): TimeShares | null {
   let gen = 0, prefill = 0, wait = 0, queue = 0, n = 0;
+  let waitKnown = true;
   for (const it of intervals) {
     if (it.timeShares.kind !== 'shares') continue;
-    gen += it.timeShares.shares.gen;
-    prefill += it.timeShares.shares.prefill;
-    wait += it.timeShares.shares.wait;
-    queue += it.timeShares.shares.queue;
+    const s = it.timeShares.shares;
+    gen += s.gen;
+    prefill += s.prefill;
+    queue += s.queue;
+    if (s.wait == null) waitKnown = false;
+    else wait += s.wait;
     n++;
   }
   if (n === 0) return null;
-  return { gen: gen / n, prefill: prefill / n, wait: wait / n, queue: queue / n };
+  return {
+    gen: gen / n,
+    prefill: prefill / n,
+    wait: waitKnown ? wait / n : null,
+    queue: queue / n,
+  };
 }
 
 // «Круглая» шкала (только график выработки): верх = ближайшее сверху «круглое» число
@@ -453,7 +473,6 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
       itlCount: h.itlCount ?? null,
       prefillSeconds: h.prefillSeconds ?? null,
       queueSeconds: h.queueSeconds ?? null,
-      promptTokens: h.promptTokens ?? null,
     });
   }
   return out;
@@ -461,10 +480,13 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
 
 // === Сведение в интервалы (чистые функции, тестируются) ===
 
-// Число интервалов окна: 1 мин — 12 по 5 с, 5 мин — 20 по 15 с, 15 мин — 60 по 15 с,
+// Число интервалов окна: 1 мин — 4 по 15 с, 5 мин — 20 по 15 с, 15 мин — 60 по 15 с,
 // 1 ч — 60 по 60 с.
+// Клетка 1 мин — 15 с (а не 5 с): vLLM пишет время prefill и очереди при ЗАВЕРШЕНИИ
+// запроса, поэтому запрос с длинным prefill целиком попадает в одну клетку и даёт
+// всплеск «читает промпт» почти на всю её ширину. На 15 с всплеск размывается.
 export function intervalCountFor(window: Window): number {
-  if (window === '1m') return 12;
+  if (window === '1m') return 4;
   if (window === '5m') return 20;
   if (window === '15m') return 60;
   return 60;
@@ -490,8 +512,15 @@ export function intervalGrid(tMin: number, tMax: number, intervalMs: number): [n
 // === «Куда уходит время агентов» (ADR-029, v2.3) ===
 // Скорость генерации, разложенная на ПОЛЬЗОВАТЕЛЬСКИЕ доли: сколько времени модель
 // реально генерирует, сколько стенд читает чужой prefill (генерация стоит), сколько
-// запрос ждал в очереди. Все четыре — из уже собираемых счётчиков vLLM; «чистый шаг»
-// (базовая длительность прохода без помех) считается на уровне ОКНА, а не интервала.
+// запрос ждал в очереди. Все четыре — из уже собираемых счётчиков vLLM.
+//
+// БАЗА ШАГА (базовая длительность прохода модели без помех) приходит с БЭКЕНДА:
+// stats.cleanStepMs — одна величина на весь стенд, НЕ зависящая от окна графика.
+// Раньше база считалась на фронте по окну (перцентиль 10 шага в «чистых» интервалах),
+// и критерий «чистоты» был инвертирован: prompt_tokens растёт при ЗАВЕРШЕНИИ prefill,
+// поэтому prompt == 0 — это интервалы ОСТАНОВКИ декодирования (шаг 500–1000 мс), а не
+// быстрые шаги. Итог: окно 1 мин давало базу 58 мс, окно 5 мин — 455 мс, и полоса
+// меняла суть при сдвиге окна. Теперь база одна: сдвиг окна не перекрашивает полосу.
 
 // Сырые суммы интервала (промежуточный результат первого прохода buildIntervals).
 // has* — движок отдал хотя бы одну точку с этой серией; sum* — Σ приращений.
@@ -504,57 +533,41 @@ interface RawInterval {
   sumRH: number; sumRQ: number; hasRH: boolean;
   sumPre: number; hasPre: boolean;
   sumGen: number; sumItl: number; hasStream: boolean;
-  // «Куда уходит время»: шаги (itl), prefill/очередь (гистограммы), прочитанный промпт.
+  // «Куда уходит время»: шаги (itl), prefill/очередь (гистограммы).
   sumItlSec: number; sumItlCnt: number; hasStep: boolean;
   sumPrefillSec: number; hasPrefillSec: boolean;
   sumQueueSec: number; hasQueueSec: boolean;
-  sumPromptTokens: number; hasPromptTokens: boolean;
   // Движок отвечал в интервале: хотя бы одна non-null из itlSeconds/itlCount/prefillSeconds/
   // queueSeconds. Отличает «простой» (отвечал, суммы 0) от «разрыва» (молчал, всё null).
   hasAnyTime: boolean;
 }
 
-// 10-й перцентиль: 10 % значений не выше этого. null — пустой массив.
-// Копирует и сортирует (вход не мутируется).
-export function percentile10(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.floor(0.1 * sorted.length));
-  return sorted[idx];
-}
-
-// «Чистый шаг» окна (с): базовая длительность прохода без помех. Перцентиль 10 времени
-// шага (ΣitlSec/ΣitlCnt) по интервалам, где prefill НЕ шёл (ΔpromptTokens ≈ 0); нет
-// таких — среднее за окно (ΣitlSec/ΣitlCnt по всем интервалам с шагами). null — шагов не
-// было вовсе. Обоснование выбора (перцентиль vs среднее, fallback) — в ADR-029.
-function cleanStepOf(raw: RawInterval[]): number | null {
-  const clean: number[] = [];
-  let sumItlSec = 0, sumItlCnt = 0;
-  for (const r of raw) {
-    if (r.hasStep && r.sumItlCnt > 0) {
-      sumItlSec += r.sumItlSec;
-      sumItlCnt += r.sumItlCnt;
-      // prefill не шёл: прочитанного промпта в интервале не было (ΔpromptTokens ≈ 0)
-      if (r.sumPromptTokens <= 1e-6) clean.push(r.sumItlSec / r.sumItlCnt);
-    }
-  }
-  if (clean.length > 0) return percentile10(clean) ?? null;
-  return sumItlCnt > 0 ? sumItlSec / sumItlCnt : null;
-}
-
 // Состояние «куда уходит время» интервала (ADR-029, v2.4).
-// gen = ΣitlCnt × чистый шаг; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
-// гистограмм. Не-отчётные серии (null) — 0, не null: доля просто не участвует.
-// Сумма четырёх > 0 → shares (доли, сумма 1). Сумма = 0 → idle (движок отвечал)
+// База шага (с) — из ответа бэкенда (stats.cleanStepMs): gen = ΣitlCnt × база,
+// wait = max(0, ΣitlSec − gen); prefill/queue — приращения гистограмм.
+// Базы нет (null) — разделить «генерирует» и «ждёт соседа» нечем: всё измеренное
+// время декодирования относится к «генерирует», а «ждёт соседа» остаётся неразделенным
+// (wait = null в доле — «—», не ноль). База с фронта НЕ считается: любая оценка по
+// окну прыгала бы при сдвиге окна (см. ADR-029).
+// Не-отчётные серии (null) — 0, не null: доля просто не участвует.
+// Сумма > 0 → shares (доли, сумма 1). Сумма = 0 → idle (движок отвечал)
 // или break (молчал): простой ≠ нет данных (null = разрыв).
-function timeSharesOf(r: RawInterval, cleanStep: number | null): TimeState {
-  const gen = cleanStep != null && r.hasStep ? r.sumItlCnt * cleanStep : 0;
-  const wait = Math.max(0, r.sumItlSec - gen);
+function timeSharesOf(r: RawInterval, base: number | null): TimeState {
+  const gen = r.hasStep ? (base != null ? r.sumItlCnt * base : r.sumItlSec) : 0;
+  const wait = base != null ? Math.max(0, r.sumItlSec - gen) : null;
   const prefill = r.hasPrefillSec ? r.sumPrefillSec : 0;
   const queue = r.hasQueueSec ? r.sumQueueSec : 0;
-  const total = gen + wait + prefill + queue;
+  const total = gen + (wait ?? 0) + prefill + queue;
   if (total > 0) {
-    return { kind: 'shares', shares: { gen: gen / total, prefill: prefill / total, wait: wait / total, queue: queue / total } };
+    return {
+      kind: 'shares',
+      shares: {
+        gen: gen / total,
+        prefill: prefill / total,
+        wait: wait == null ? null : wait / total,
+        queue: queue / total,
+      },
+    };
   }
   return r.hasAnyTime ? { kind: 'idle' } : { kind: 'break' };
 }
@@ -564,9 +577,17 @@ function timeSharesOf(r: RawInterval, cleanStep: number | null): TimeState {
 // Серия null — только когда движок молчал (все точки интервала null) — разрыв;
 // отдал, но запросов не было (Σ queries = 0) — несётся предыдущее значение:
 // линия не рвётся и новое значение не выдумывается (решение по «рваному» кэшу).
-// «Куда уходит время» — ДВУХпроходно: сначала сырые суммы всех интервалов, потом
-// «чистый шаг» окна, из него — доли каждого интервала (чистый шаг общий для окна).
-export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: number, intervalMs: number): Interval[] {
+// «Куда уходит время» — база шага приходит СНАРУЖИ (cleanStepMs, мс, из ответа
+// бэкенда): она одна на весь стенд и не зависит от окна, поэтому доли интервалов
+// соизмеримы между собой и между окнами. null — базы нет: «ждёт соседа» не
+// выделяется (доля «—»), всё измеренное время декодирования — «генерирует».
+export function buildIntervals(
+  samples: ThroughputSample[],
+  tMin: number,
+  tMax: number,
+  intervalMs: number,
+  cleanStepMs: number | null = null,
+): Interval[] {
   const raw: RawInterval[] = [];
   for (const [tStart, tEnd] of intervalGrid(tMin, tMax, intervalMs)) {
     let sumTp = 0, nTp = 0;
@@ -579,7 +600,6 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
     let sumItlSec = 0, sumItlCnt = 0, hasStep = false;
     let sumPrefillSec = 0, hasPrefillSec = false;
     let sumQueueSec = 0, hasQueueSec = false;
-    let sumPromptTokens = 0, hasPromptTokens = false;
     let hasAnyTime = false;
     for (const s of samples) {
       if (s.t < tStart || s.t >= tEnd) continue;
@@ -593,7 +613,6 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       if (s.itlSeconds != null && s.itlCount != null) { sumItlSec += s.itlSeconds; sumItlCnt += s.itlCount; hasStep = true; }
       if (s.prefillSeconds != null) { sumPrefillSec += s.prefillSeconds; hasPrefillSec = true; }
       if (s.queueSeconds != null) { sumQueueSec += s.queueSeconds; hasQueueSec = true; }
-      if (s.promptTokens != null) { sumPromptTokens += s.promptTokens; hasPromptTokens = true; }
       // «Движок отвечал»: хотя бы одна non-null из четырёх серий поля (0 — ответ, null — молчание).
       if (s.itlSeconds != null || s.itlCount != null || s.prefillSeconds != null || s.queueSeconds != null) hasAnyTime = true;
     }
@@ -607,12 +626,11 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       sumItlSec, sumItlCnt, hasStep,
       sumPrefillSec, hasPrefillSec,
       sumQueueSec, hasQueueSec,
-      sumPromptTokens, hasPromptTokens,
       hasAnyTime,
     });
   }
-  // Второй проход: «чистый шаг» окна (общий для всех интервалов), из него — доли.
-  const cleanStep = cleanStepOf(raw);
+  // Второй проход: база шага (одна на стенд, из ответа бэкенда), из неё — доли.
+  const base = cleanStepMs != null && cleanStepMs > 0 ? cleanStepMs / 1000 : null;
   const out: Interval[] = [];
   let prevPrefix: number | null = null;
   let prevRam: number | null = null;
@@ -645,7 +663,7 @@ export function buildIntervals(samples: ThroughputSample[], tMin: number, tMax: 
       ram,
       preemptions: r.hasPre ? r.sumPre : null,
       hasData: { prefix: r.hasPH, ram: r.hasRH },
-      timeShares: timeSharesOf(r, cleanStep),
+      timeShares: timeSharesOf(r, base),
     });
   }
   return out;
@@ -845,10 +863,11 @@ function FieldLabel({ children, right }: { children: React.ReactNode; right?: Re
 }
 
 // «Движок {имя} это не сообщает» — заменяет поле, чьи серии движок не отдал.
-function NotReported({ engine }: { engine: string }) {
+// Текст — общий helper фичи (format.ts), его же берёт вкладка «LLM».
+function NotReported({ engine }: { engine?: string }) {
   return (
     <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
-      Движок {engine} это не сообщает
+      {notReportedText(engine)}
     </p>
   );
 }
@@ -860,7 +879,7 @@ function NotReported({ engine }: { engine: string }) {
 // x-координаты считаются от него, а не от [now − window, now] — иначе сетка
 // (кратная шагу) и поле (окно) расходились бы до шага вправо/влево.
 function CardBody({ samples, intervals, window, width, engine, grid }: {
-  samples: ThroughputSample[]; intervals: Interval[]; window: Window; width: number; engine: string;
+  samples: ThroughputSample[]; intervals: Interval[]; window: Window; width: number; engine?: string;
   grid: { from: number; to: number };
 }) {
   const tMin = grid.from;
@@ -1374,8 +1393,11 @@ export function chartNow(history: LocalModelStats['history'], fallback: number):
 // Тело карточки «Нагрузка и кэш»: график (или пустая заглушка). Окно — извне
 // (состояние держит LocalModelPanel, его же читает серверный опрос).
 // Ширина поля — ResizeObserver: SVG рисуется в реальных px, без preserveAspectRatio.
-export function ThroughputChart({ history, window, engine }: {
+export function ThroughputChart({ history, window, engine, cleanStepMs }: {
   history: LocalModelStats['history']; window: Window; engine?: string;
+  // База шага (мс) из ответа бэкенда: одна на весь стенд, не зависит от окна.
+  // null/нет поля — «ждёт соседа» не выделяется (доля «—», не ноль).
+  cleanStepMs?: number | null;
 }) {
   // now живёт: пересчитывается на каждом опросе (history меняется), окно
   // плывёт вправо; сетка при этом стоит на абсолютных кратных шагу (intervalGrid).
@@ -1385,9 +1407,9 @@ export function ThroughputChart({ history, window, engine }: {
   const tMax = now;
   const intervalMs = Math.round(WINDOW_MS[window] / intervalCountFor(window));
   const intervals = useMemo(
-    () => buildIntervals(samples, tMin, tMax, intervalMs),
+    () => buildIntervals(samples, tMin, tMax, intervalMs, cleanStepMs ?? null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [samples, tMin, tMax, intervalMs],
+    [samples, tMin, tMax, intervalMs, cleanStepMs],
   );
   // X-маппинг — на диапазон СЕТОК (не на [tMin, tMax]): сетка начинается на
   // кратном шагу моменте до tMin и кончается после tMax; за его пределами
@@ -1412,13 +1434,11 @@ export function ThroughputChart({ history, window, engine }: {
     return () => ro.disconnect();
   }, []);
 
-  const eng = (engine ?? '').trim() || 'движок';
-
   return (
     <div ref={wrapRef} style={{ minWidth: 0 }}>
       {samples.length === 0
         ? <EmptyChart />
-        : <CardBody samples={samples} intervals={intervals} window={window} width={width} engine={eng} grid={grid} />}
+        : <CardBody samples={samples} intervals={intervals} window={window} width={width} engine={engine} grid={grid} />}
     </div>
   );
 }

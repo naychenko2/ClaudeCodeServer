@@ -9,7 +9,7 @@ import {
   buildThroughputSegments, cacheHitAvg,
   chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
   kvChartAriaLabel, maxSeriesOf, maxThroughputOf,
-  niceAxisMax, peakPerStreamOf, percentile10,
+  niceAxisMax, peakPerStreamOf,
   perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
   timeSharesAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type TimeShares, type TimeState, type ThroughputSample,
@@ -218,7 +218,6 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     itlCount: p.itlCount ?? null,
     prefillSeconds: p.prefillSeconds ?? null,
     queueSeconds: p.queueSeconds ?? null,
-    promptTokens: p.promptTokens ?? null,
   };
 }
 
@@ -333,8 +332,8 @@ describe('preemptionTotal: сумма вытеснений по окну', () =>
 });
 
 describe('intervalCountFor: число интервалов окна', () => {
-  it('1m → 12 (по 5 с), 5m → 20 (по 15 с), 15m → 60 (по 15 с), 1h → 60 (по 60 с)', () => {
-    expect(intervalCountFor('1m')).toBe(12);
+  it('1m → 4 (по 15 с), 5m → 20 (по 15 с), 15m → 60 (по 15 с), 1h → 60 (по 60 с)', () => {
+    expect(intervalCountFor('1m')).toBe(4);
     expect(intervalCountFor('5m')).toBe(20);
     expect(intervalCountFor('15m')).toBe(60);
     expect(intervalCountFor('1h')).toBe(60);
@@ -796,34 +795,23 @@ describe('buildIssuedSegments: линия «всего по стенду» (genT
 });
 
 // === «Куда уходит время агентов» (ADR-029, v2.3): составная полоса долей ===
-// gen = ΣitlCount × чистый шаг; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
-// гистограмм. «Чистый шаг» — перцентиль 10 времени шага по «чистым» интервалам (без
-// prefill); доли = каждая / сумма четырёх. Мутации: «wait → gen» красит тест на доли;
-// «cleanStep → среднее» — на перцентиль.
+// gen = ΣitlCount × база шага; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
+// гистограмм. База шага приходит СНАРУЖИ (stats.cleanStepMs, мс) — одна на весь стенд,
+// не зависит от окна. Мутации: «wait → gen» красит тест на доли; «база из окна» —
+// на независимость долей от окна (см. ThroughputChart.live.test.ts).
 
-describe('percentile10: 10-й перцентиль', () => {
-  it('пусто → null; один элемент → он', () => {
-    expect(percentile10([])).toBeNull();
-    expect(percentile10([5])).toBe(5);
-  });
-  it('10 элементов → индекс floor(0.1×10)=1', () => {
-    expect(percentile10([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toBe(2);
-  });
-});
-
-describe('buildIntervals: «куда уходит время» — доли из сумм и чистого шага', () => {
+describe('buildIntervals: «куда уходит время» — доли из сумм и базы шага', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
 
-  it('чистый шаг = перцентиль 10; wait = ΣitlSec − ΣitlCnt×чистый шаг', () => {
+  it('база шага из ответа бэкенда: wait = ΣitlSec − ΣitlCnt×база', () => {
     const samples = [
-      // интервал 0: step = 10/20 = 0.5 (чистый), promptTokens=0
-      sample({ t: 5_000, itlSeconds: 10, itlCount: 20, promptTokens: 0 }),
-      // интервал 1: step = 40/20 = 2.0 (длинный — ждёт соседа), promptTokens=0
-      sample({ t: 35_000, itlSeconds: 40, itlCount: 20, promptTokens: 0 }),
+      // интервал 0: шаг 10/20 = 0.5 с — ровно база (чистая генерация)
+      sample({ t: 5_000, itlSeconds: 10, itlCount: 20 }),
+      // интервал 1: шаг 40/20 = 2.0 с — длинный (генерация стояла, ждёт соседа)
+      sample({ t: 35_000, itlSeconds: 40, itlCount: 20 }),
     ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // чистый шаг = percentile10([0.5, 2.0]) = 0.5
-    // интервал 0: gen = 20×0.5 = 10, wait = 10−10 = 0 → 100 % генерации
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, 500);
+    // база 500 мс: интервал 0: gen = 20×0.5 = 10, wait = 10−10 = 0 → 100 % генерации
     expect(intervals[0].timeShares).toEqual({ kind: 'shares', shares: { gen: 1, prefill: 0, wait: 0, queue: 0 } });
     // интервал 1: gen = 20×0.5 = 10, wait = 40−10 = 30 → 25 % генерации, 75 % ждёт
     expect(intervals[1].timeShares).toEqual({ kind: 'shares', shares: { gen: 0.25, prefill: 0, wait: 0.75, queue: 0 } });
@@ -831,10 +819,10 @@ describe('buildIntervals: «куда уходит время» — доли из
 
   it('prefill/очередь — приращения гистограмм; доли в сумме 1', () => {
     const samples = [
-      // step = 20/20 = 1.0 = чистый шаг (единственный интервал); gen = 20×1.0 = 20, wait = 0
-      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, promptTokens: 0, prefillSeconds: 5, queueSeconds: 3 }),
+      // база 1 с: gen = 20×1.0 = 20, wait = 20−20 = 0
+      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, prefillSeconds: 5, queueSeconds: 3 }),
     ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, 1000);
     const st = intervals[0].timeShares;
     expect(st.kind).toBe('shares');
     if (st.kind !== 'shares') return;
@@ -845,6 +833,23 @@ describe('buildIntervals: «куда уходит время» — доли из
     expect(s.prefill).toBeCloseTo(5 / 28, 6);
     expect(s.queue).toBeCloseTo(3 / 28, 6);
     expect(s.gen + s.wait + s.prefill + s.queue).toBeCloseTo(1, 6);
+  });
+
+  it('без базы шага: «ждёт соседа» не выделяется (wait = null), всё декодирование — «генерирует»', () => {
+    const samples = [
+      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, prefillSeconds: 5, queueSeconds: 3 }),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, null);
+    const st = intervals[0].timeShares;
+    expect(st.kind).toBe('shares');
+    if (st.kind !== 'shares') return;
+    const s = st.shares;
+    // total = 20 (всё декодирование — «генерирует») + 5 (prefill) + 3 (queue) = 28
+    expect(s.wait).toBeNull();
+    expect(s.gen).toBeCloseTo(20 / 28, 6);
+    expect(s.prefill).toBeCloseTo(5 / 28, 6);
+    expect(s.queue).toBeCloseTo(3 / 28, 6);
+    expect(s.gen + s.prefill + s.queue).toBeCloseTo(1, 6);
   });
 
   it('молчание (без itl) → break (заливки нет, фон-разрыв)', () => {
@@ -888,6 +893,15 @@ describe('buildTimeSharesBar: сегменты полосы на x-диапаз�
     expect(segs[0].x).toBe(0);
     expect(segs[0].w).toBeCloseTo(100, 6);
   });
+  it('wait = null (базы шага нет) — сегмента «ждёт соседа» нет, остальные дают всю ширину', () => {
+    const shares: TimeShares = { gen: 0.7, prefill: 0.2, wait: null, queue: 0.1 };
+    const segs = buildTimeSharesBar({ kind: 'shares', shares }, 0, 100);
+    expect(segs).toHaveLength(3);
+    expect(segs[0].w).toBeCloseTo(70, 6);
+    expect(segs[1].w).toBeCloseTo(20, 6);
+    expect(segs[2].w).toBeCloseTo(10, 6);
+    expect(segs.reduce((a, s) => a + s.w, 0)).toBeCloseTo(100, 6);
+  });
 });
 
 describe('avgTimeSharesOf: средние доли за окно (легенда без считывания)', () => {
@@ -902,6 +916,15 @@ describe('avgTimeSharesOf: средние доли за окно (легенда
     const avg = avgTimeSharesOf(intervals);
     expect(avg!.gen).toBeCloseTo(0.6, 6);
     expect(avgTimeSharesOf([mkIt(0, 1, null, null, { kind: 'break' })])).toBeNull();
+  });
+  it('«ждёт соседа» не выделяется (wait = null) — средняя доля тоже null, не ноль', () => {
+    const intervals = [
+      mkIt(0, 1, 10, null, { kind: 'shares', shares: { gen: 0.7, prefill: 0.2, wait: null, queue: 0.1 } }),
+      mkIt(1, 2, 10, null, { kind: 'shares', shares: { gen: 0.5, prefill: 0.4, wait: null, queue: 0.1 } }),
+    ];
+    const avg = avgTimeSharesOf(intervals);
+    expect(avg!.wait).toBeNull();
+    expect(avg!.gen).toBeCloseTo(0.6, 6);
   });
 });
 
@@ -918,5 +941,10 @@ describe('timeSharesAriaLabel: SVG «Куда уходит время» обно
     expect(label).toContain('в очереди 5 %');
     expect(timeSharesAriaLabel('15m', '14:32', { kind: 'break' })).toContain('движок не отвечал');
     expect(timeSharesAriaLabel('15m', '14:32', { kind: 'idle' })).toContain('простой');
+  });
+  it('hover без базы шага: «ждёт соседа» — «—», а не 0 %', () => {
+    const label = timeSharesAriaLabel('15m', '14:32', { kind: 'shares', shares: { gen: 0.7, prefill: 0.2, wait: null, queue: 0.1 } });
+    expect(label).toContain('ждёт соседа — (нет базы шага)');
+    expect(label).not.toContain('ждёт соседа 0 %');
   });
 });

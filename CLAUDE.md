@@ -523,3 +523,10 @@ worktree** (задача трекера с явно заданным `worktreePa
 локально сам, как только его критерии зелёные, не дожидаясь просьбы (`push`, PR и мерж — всё
 равно по просьбе). Причина — инцидент 2026-09-01: untracked-файлы не защищены ни git reflog,
 ни `fsck`, и окно до коммита равно окну необратимой потери.
+
+## Worktree
+
+Свежий worktree подготавливается скриптом `scripts/worktree-setup.sh` (symlink
+`frontend/node_modules` → primary checkout; без него `CodeGraph.Tests` падает —
+Node-экстрактор не находит `typescript`). Чек-лист и детали —
+[worktree.md](docs/operations/worktree.md).

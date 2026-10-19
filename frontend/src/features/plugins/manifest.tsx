@@ -9,7 +9,7 @@
 // при top-level registerSubsystem (цикл M1). Константы RECORD_DRAFT/recordKey
 // продублированы здесь, чтобы не тянуть records.tsx в статический граф.
 
-import { lazy } from 'react';
+import { lazy, Suspense } from 'react';
 import type { ChatItemToolCtx, SubsystemManifest } from '../../lib/subsystems/registryCore';
 
 const RECORD_DRAFT = 'plugin_draft';
@@ -23,9 +23,13 @@ export const manifest: SubsystemManifest = {
   order: 94,
   noPill: true,
   slots: {
-    // Запись черновика в ленте: ключ `plugins:plugin_draft` (module_record)
+    // Запись черновика в ленте: ключ `plugins:plugin_draft` (module_record).
+    // Граница Suspense здесь (не в ядре): ленточный слот рендерят прямым вызовом,
+    // а null-заглушка в ленте корректна (строка занимает своё место, макет не «мигает»).
     'chat-item-tool': [
-      { name: recordKey(RECORD_DRAFT), render: (ctx: ChatItemToolCtx) => <DraftAnchor ctx={ctx} /> },
+      { name: recordKey(RECORD_DRAFT), render: (ctx: ChatItemToolCtx) => (
+        <Suspense fallback={null}><DraftAnchor ctx={ctx} /></Suspense>
+      ) },
     ],
   },
 };

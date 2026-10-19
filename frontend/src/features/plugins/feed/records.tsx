@@ -36,9 +36,13 @@ function FallbackLine({ text }: { text: string }) {
   );
 }
 
-// Slug из ленты — недоверенный ввод: формат PluginId (`publisher/slug`, бэк: PluginId.Pattern),
-// длина 1..64. Невалидный → нейтральная строка без запросов и кнопок (slug в текст не подставляем).
-const SLUG_RE = /^[a-z0-9-]+\/[a-z0-9-]+$/;
+// Slug из ленты — недоверенный ввод: ГОЛЫЙ slug черновика (без publisher), грамматика
+// PluginId.SlugPattern `^[a-z0-9-]+$` (бэк: PluginId.IsValidSlug, PluginsToolset.Schemas).
+// Запись plugin_draft в ленте несёт именно голый slug (бэк пишет data = { slug } из аргумента
+// draft_create, чья схема запрещает «/»). Потолок длины 64 — клиентский: на сервере
+// (IsValidSlug) потолка нет. Невалидный → нейтральная строка без запросов и кнопок
+// (slug в текст не подставляем).
+const SLUG_RE = /^[a-z0-9-]+$/;
 export function isDraftSlug(s: unknown): s is string {
   return typeof s === 'string' && s.length >= 1 && s.length <= 64 && SLUG_RE.test(s);
 }

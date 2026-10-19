@@ -41,7 +41,9 @@ const { DraftAnchor } = await import('./records');
 const { __resetDraftsStore } = await import('./draftsStore');
 
 // === Фиксированные данные ===
-const SLUG = 'local-1/my-plugin';
+// Запись plugin_draft несёт ГОЛЫЙ slug (без publisher): isDraftSlug принимает
+// ^[a-z0-9-]+$. Полный id пакета (publisher/slug) — в SUMMARY.id, не в slug.
+const SLUG = 'my-plugin';
 
 const PREVIEW: PluginDraftPreview = {
   slug: SLUG,

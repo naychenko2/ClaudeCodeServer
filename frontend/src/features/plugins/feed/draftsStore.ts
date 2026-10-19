@@ -66,11 +66,14 @@ function loadList(): void {
       for (const slug of _entries.keys()) put(slug, { summary: bySlug.get(slug) ?? null, listResolved: true });
       _listLoaded = true;
       emit();
-      // refreshDraft во время идущей загрузки: перечитать, чтобы не потерять обновление
-      if (_listDirty) { _listDirty = false; _listLoaded = false; void loadList(); }
+      // refreshDraft/событие во время идущей загрузки: перечитать, чтобы не потерять обновление.
+      // _listInflight сбрасываем ДО ре-читы: иначе рекурсивный loadList() упрётся в гард
+      // (в .then флаг ещё true). .finally не используем — он сбрасывал бы _listInflight уже
+      // после старта ре-читы и затирал бы её флаг.
+      if (_listDirty) { _listDirty = false; _listLoaded = false; _listInflight = false; void loadList(); }
+      else _listInflight = false;
     })
-    .catch(() => { _listLoaded = true; emit(); })
-    .finally(() => { _listInflight = false; });
+    .catch(() => { _listLoaded = true; _listInflight = false; emit(); });
 }
 
 // Предпросмотр по slug: один запрос на slug (карточки одного slug делят результат).
@@ -89,10 +92,13 @@ function loadPreview(slug: string, force = false): void {
 }
 
 // Событие наблюдателя: черновик по slug поменялся → перечитать предпросмотр и список.
+// Как refreshDraft: если список грузится, ставим _listDirty — иначе void loadList() упрёт
+// в гард и обновление по событию потеряется (перечитаем после завершения идущей загрузки).
 function bump(slug: string): void {
   const cur = _entries.get(slug) ?? EMPTY;
   put(slug, { preview: null, loading: true, revision: cur.revision + 1 });
   void loadPreview(slug, true);
+  if (_listInflight) _listDirty = true;
   void loadList();
 }
 

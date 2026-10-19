@@ -319,16 +319,21 @@ export function FilterSections({ filters, onFilters, mobile }: {
       {/* Статус */}
       <FilterSection label="Статус">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-          {STATUS_FILTER_ORDER.map(s => (
-            <Chip
-              key={s} variant="toggle" large={mobile}
-              selected={filters.status.includes(s)}
-              onClick={() => onFilters({ ...filters, status: toggleIn(filters.status, s) })}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATUS_DOT[s], flexShrink: 0 }} />
-              {STATUS_LABEL[s]}
-            </Chip>
-          ))}
+          {STATUS_FILTER_ORDER.map(s => {
+            const selected = filters.status.includes(s);
+            return (
+              <Chip
+                key={s} variant="toggle" large={mobile} minHeight={mobile ? 40 : undefined}
+                selected={selected}
+                onClick={() => onFilters({ ...filters, status: toggleIn(filters.status, s) })}
+              >
+                {/* Точка: на включённом чипе (заливка accent) — currentColor (onAccent),
+                    иначе свой цвет; иначе accent-точка «В работе» тонула в accent-фоне */}
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: selected ? 'currentColor' : STATUS_DOT[s], flexShrink: 0 }} />
+                {STATUS_LABEL[s]}
+              </Chip>
+            );
+          })}
         </div>
       </FilterSection>
 
@@ -357,32 +362,38 @@ export function FilterSections({ filters, onFilters, mobile }: {
       {/* Приоритет */}
       <FilterSection label="Приоритет">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-          {PRIORITY_ORDER.map(p => (
-            <Chip
-              key={p} variant="toggle" large={mobile}
-              selected={filters.priorities.includes(p)}
-              onClick={() => onFilters({ ...filters, priorities: toggleIn(filters.priorities, p) })}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: PRIORITY_COLOR[p], flexShrink: 0 }} />
-              {PRIORITY_LABEL[p]}
-            </Chip>
-          ))}
+          {PRIORITY_ORDER.map(p => {
+            const selected = filters.priorities.includes(p);
+            return (
+              <Chip
+                key={p} variant="toggle" large={mobile} minHeight={mobile ? 40 : undefined}
+                selected={selected}
+                onClick={() => onFilters({ ...filters, priorities: toggleIn(filters.priorities, p) })}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: selected ? 'currentColor' : PRIORITY_COLOR[p], flexShrink: 0 }} />
+                {PRIORITY_LABEL[p]}
+              </Chip>
+            );
+          })}
         </div>
       </FilterSection>
 
       {/* Срок */}
       <FilterSection label="Срок">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-          {DUE_FILTER_OPTIONS.map(o => (
-            <Chip
-              key={o.key} variant="toggle" large={mobile}
-              selected={filters.due.includes(o.key)}
-              onClick={() => onFilters({ ...filters, due: toggleIn(filters.due, o.key) })}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: o.dot, flexShrink: 0 }} />
-              {o.label}
-            </Chip>
-          ))}
+          {DUE_FILTER_OPTIONS.map(o => {
+            const selected = filters.due.includes(o.key);
+            return (
+              <Chip
+                key={o.key} variant="toggle" large={mobile} minHeight={mobile ? 40 : undefined}
+                selected={selected}
+                onClick={() => onFilters({ ...filters, due: toggleIn(filters.due, o.key) })}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: selected ? 'currentColor' : o.dot, flexShrink: 0 }} />
+                {o.label}
+              </Chip>
+            );
+          })}
         </div>
       </FilterSection>
     </>

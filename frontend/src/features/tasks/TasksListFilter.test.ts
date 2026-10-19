@@ -35,10 +35,10 @@ function findButtonByText(container: AnyNode, text: string): AnyNode | null {
   return hit;
 }
 
-function mountFilters(initial: TaskListFilters) {
+function mountFilters(initial: TaskListFilters, mobile = false) {
   const onFilters = vi.fn();
   const { root, container } = mount(
-    createElement(FilterSections, { filters: initial, onFilters, mobile: false }),
+    createElement(FilterSections, { filters: initial, onFilters, mobile }),
   );
   return { onFilters, root, container };
 }
@@ -96,5 +96,51 @@ describe('FilterSections: клик по ui/Chip переключает филь�
     act(() => (reactProps(btn!)!.onClick as () => void)());
     expect(onFilters).toHaveBeenCalledWith({ ...EMPTY_TASK_FILTERS, status: ['inProgress', 'todo'] });
     root.unmount();
+  });
+
+  it('M1: на мобиле у чипов minHeight 40px, на десктопе — нет', () => {
+    const labels = [STATUS_LABEL.inProgress, PRIORITY_LABEL.urgent, 'Сегодня'];
+    // Мобила: minHeight 40px (тач-цель по таблице токенов §4 / guidelines п.4)
+    {
+      const { root, container } = mountFilters(EMPTY_TASK_FILTERS, true);
+      for (const label of labels) {
+        const btn = findButtonByText(container, label);
+        expect(btn, `чип «${label}» (мобила) найден`).not.toBeNull();
+        expect(btn!.style.minHeight, `чип «${label}» (мобила): minHeight 40px`).toBe('40px');
+      }
+      root.unmount();
+    }
+    // Десктоп: minHeight не задан (высота по padding+контенту)
+    {
+      const { root, container } = mountFilters(EMPTY_TASK_FILTERS, false);
+      for (const label of labels) {
+        const btn = findButtonByText(container, label);
+        expect(btn, `чип «${label}» (десктоп) найден`).not.toBeNull();
+        expect(btn!.style.minHeight, `чип «${label}» (десктоп): minHeight не задан`).toBeUndefined();
+      }
+      root.unmount();
+    }
+  });
+
+  it('m1: точка на включённом чипе — currentColor, на выключенном — свой цвет', () => {
+    // «В работе» (inProgress) включён: точка currentColor (onAccent на accent-заливке)
+    {
+      const { root, container } = mountFilters({ ...EMPTY_TASK_FILTERS, status: ['inProgress'] });
+      const btn = findButtonByText(container, STATUS_LABEL.inProgress);
+      expect(btn, 'чип «В работе» (включён) найден').not.toBeNull();
+      const dot = btn!.childNodes[0];
+      expect(dot.nodeName, 'точка — span').toBe('SPAN');
+      expect(dot.style.background, 'включённый чип: точка currentColor (видна на accent)').toBe('currentColor');
+      root.unmount();
+    }
+    // «В работе» выключен: точка var(--c-accent) (STATUS_DOT.inProgress)
+    {
+      const { root, container } = mountFilters(EMPTY_TASK_FILTERS);
+      const btn = findButtonByText(container, STATUS_LABEL.inProgress);
+      expect(btn, 'чип «В работе» (выключен) найден').not.toBeNull();
+      const dot = btn!.childNodes[0];
+      expect(dot.style.background, 'выключенный чип: точка var(--c-accent)').toBe('var(--c-accent)');
+      root.unmount();
+    }
   });
 });

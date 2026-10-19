@@ -306,7 +306,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       {listMode && favoriteCount > 0 && (
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
           <Chip
-            variant="toggle"
+            variant="toggle" large={isMobile} minHeight={isMobile ? 40 : undefined}
             selected={hasToken(query, FAVORITE_TOKEN)}
             onClick={() => setQuery(toggleToken(query, FAVORITE_TOKEN))}
           >
@@ -340,7 +340,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                 {(tagsExpanded ? allTags : allTags.slice(0, TAGS_COLLAPSED)).map(([tag, count]) => {
                   const token = `tag:${tag}`;
                   return (
-                    <Chip key={tag} variant="toggle" maxW="100%"
+                    <Chip key={tag} variant="toggle" maxW="100%" large={isMobile} minHeight={isMobile ? 40 : undefined}
                       selected={hasToken(query, token)}
                       onClick={() => setQuery(toggleToken(query, token))}
                     >
@@ -349,7 +349,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                   );
                 })}
                 {allTags.length > TAGS_COLLAPSED && (
-                  <Chip variant="toggle" selected={false}
+                  <Chip variant="toggle" selected={false} large={isMobile} minHeight={isMobile ? 40 : undefined}
                     onClick={() => setTagsExpanded(v => !v)}
                   >
                     {tagsExpanded ? 'Свернуть' : `+${allTags.length - TAGS_COLLAPSED}`}
@@ -370,7 +370,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                   ['status:resolved', 'Решённые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'resolved').length],
                   ['status:orphaned', 'Сироты', null],
                 ] as const).map(([token, label, count]) => (
-                  <Chip key={token} variant="toggle"
+                  <Chip key={token} variant="toggle" large={isMobile} minHeight={isMobile ? 40 : undefined}
                     selected={hasToken(query, token)}
                     onClick={() => setQuery(toggleToken(query, token, 'status:'))}
                   >

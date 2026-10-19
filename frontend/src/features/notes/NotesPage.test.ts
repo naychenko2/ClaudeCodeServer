@@ -158,4 +158,22 @@ describe('NotesPage: клик по ui/Chip переключает фильтр',
     expect(btn!.style.background, 'повторный клик — снято').toBe('transparent');
     root.unmount();
   });
+
+  it('M1: на мобиле у чипов minHeight 40px (Избранное, тег, статусы комментариев)', () => {
+    notesMock.push(note('n3', 'Н3', [], { status: 'open', isReply: false } as never));
+    const { root, container } = mountNotes();
+    // «Избранное» — всегда в сайдбаре (mobile: useIsMobile=true в этом тесте)
+    const fav = findButtonByText(container, 'Избранное');
+    expect(fav, 'чип «Избранное» найден').not.toBeNull();
+    expect(fav!.style.minHeight, '«Избранное»: minHeight 40px').toBe('40px');
+    // Раскрываем «Фильтры» → теги и статусы комментариев
+    expandFilters(container);
+    const tag = findButtonByText(container, 'идея');
+    expect(tag, 'чип тега «#идея» найден').not.toBeNull();
+    expect(tag!.style.minHeight, 'тег: minHeight 40px').toBe('40px');
+    const open = findButtonByText(container, 'Открытые');
+    expect(open, 'чип «Открытые» найден').not.toBeNull();
+    expect(open!.style.minHeight, 'статус комментария: minHeight 40px').toBe('40px');
+    root.unmount();
+  });
 });

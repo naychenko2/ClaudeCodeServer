@@ -350,6 +350,18 @@ public class PluginDraftsControllerTests : IDisposable
         ctl.Panel("../pkg").Should().BeOfType<NotFoundObjectResult>();
     }
 
+    // --- Preview: slug длиннее 64 (потолок PluginId.MaxSlugLength) → 404, не 500 ---
+    // Клиент isDraftSlug (frontend/src/features/plugins/feed/records.tsx) держит тот же 64:
+    // граница не разъезжается. Мутация: убрать потолок в PluginId.IsValidSlug → slug 65 проходит
+    // IsValidSlug → DraftDir не null → Preview не бросает ArgumentException → 200, а не 404 → тест красный.
+
+    [Fact]
+    public void Preview_SlugДлиннее64_Отдаёт404()
+    {
+        var ctl = NewController(OwnerA);
+        ctl.Preview(new string('a', 65)).Should().BeOfType<NotFoundObjectResult>();
+    }
+
     // --- Panel: symlink не следовать (→ 404) ---
 
     [Fact]

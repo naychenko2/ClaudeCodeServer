@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Mcp.Http;
 
 namespace ClaudeHomeServer.Services.Plugins.Mcp;
@@ -38,9 +39,15 @@ public sealed partial class PluginsToolset
         return schema;
     }
 
-    // slug — грамматика PluginId: [a-z0-9-]+ (часть id пакета после '/').
-    private static JsonObject Slug() =>
-        Str("slug плагина: строчные латинские буквы, цифры и дефис, без «/» (например my-plugin)");
+    // slug — грамматика PluginId: [a-z0-9-]+ (часть id пакета после '/'), потолок длины
+    // PluginId.MaxSlugLength (64) — тот же, что клиентская проверка isDraftSlug. maxLength
+    // меняет текст схемы, но не состав tools/list (число/имена инструментов те же).
+    private static JsonObject Slug()
+    {
+        var schema = Str("slug плагина: строчные латинские буквы, цифры и дефис, без «/» (например my-plugin)");
+        schema["maxLength"] = PluginId.MaxSlugLength;
+        return schema;
+    }
 
     internal static readonly IReadOnlyList<McpToolSchema> Schemas =
     [

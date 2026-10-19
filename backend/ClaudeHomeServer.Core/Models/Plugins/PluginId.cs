@@ -26,6 +26,16 @@ public sealed record PluginId
     /// </summary>
     public const string SlugPattern = "^[a-z0-9-]+$";
 
+    /// <summary>
+    /// Потолок длины slug: 64. Выровнен с клиентской проверкой <c>isDraftSlug</c>
+    /// (<c>frontend/src/features/plugins/feed/records.tsx</c>), которая держит тот же 64.
+    /// Единый источник правды: <see cref="IsValidSlug"/> применяет его и черновики, и
+    /// параметр метки источника. Slug как часть id установленного пакета валидируется
+    /// через <see cref="Pattern"/> (без потолка) — потолок здесь не ломает существующие
+    /// пакеты: повторная установка сверяет id через <see cref="IsValid"/>, а не <see cref="IsValidSlug"/>.
+    /// </summary>
+    public const int MaxSlugLength = 64;
+
     private static readonly Regex Regex = new(Pattern, RegexOptions.Compiled);
     private static readonly Regex SlugRegex = new(SlugPattern, RegexOptions.Compiled);
 
@@ -56,8 +66,9 @@ public sealed record PluginId
     public static bool IsValid(string? raw) => TryNormalize(raw, out _);
 
     /// <summary>
-    /// Проверка slug (грамматика <see cref="SlugPattern"/>): <c>true</c> — непустой и по формату.
+    /// Проверка slug (грамматика <see cref="SlugPattern"/>, потолок <see cref="MaxSlugLength"/>):
+    /// <c>true</c> — непустой, по формату и не длиннее <see cref="MaxSlugLength"/>.
     /// </summary>
     public static bool IsValidSlug(string? slug) =>
-        slug is { Length: > 0 } && SlugRegex.IsMatch(slug);
+        slug is { Length: > 0 and <= MaxSlugLength } && SlugRegex.IsMatch(slug);
 }

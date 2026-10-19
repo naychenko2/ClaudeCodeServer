@@ -80,6 +80,30 @@ public class PluginDraftServiceTests : IDisposable
         result.Code.Should().Be("bad-slug");
     }
 
+    // ── Потолок длины slug: 64 (выровнен с клиентской проверкой isDraftSlug) ─────────
+    // Клиент isDraftSlug (frontend/src/features/plugins/feed/records.tsx) держит тот же 64
+    // (s.length <= 64): граница не разъезжается — сервер не создаёт черновик со slug длиннее 64.
+    // Мутация (критерий): убрать потолок в PluginId.IsValidSlug (Length: > 0 and <= MaxSlugLength
+    // → Length: > 0) → slug 65/200 проходят IsValidSlug → Create не даёт bad-slug (создаёт) → тесты красные.
+
+    [Fact]
+    public void Create_Slug64_Принят()
+    {
+        var slug = new string('a', 64);
+        _service.Create(Owner, slug).Ok.Should().BeTrue("slug длиной 64 — на границе, принимается");
+    }
+
+    [Theory]
+    [InlineData(65)]
+    [InlineData(200)]
+    public void Create_SlugДлиннее64_BadSlug(int length)
+    {
+        var slug = new string('a', length);
+        var result = _service.Create(Owner, slug);
+        result.Ok.Should().BeFalse($"slug длиной {length} > 64 → bad-slug");
+        result.Code.Should().Be("bad-slug");
+    }
+
     // ── draft_write_file: путь ─────────────────────────────────────────────────
 
     [Fact]

@@ -8,21 +8,43 @@ import { api } from './api';
 const POLL_MS = 60_000;
 
 let current: UsageResponse | null = null;
+// время последней успешной загрузки (0 — ещё не грузили): повторная подписка в пределах
+// POLL_MS не дёргает сервер, а таймер ведёт следующий запрос по расписанию, а не сразу
+let lastLoadAt = 0;
+// в-полёте: один запрос на всех, пока он в пути (одновременные load() — один GET)
+let inflight: Promise<UsageResponse | null> | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 const listeners = new Set<() => void>();
 
 function load() {
   // Фоновая вкладка цифр не видит — не дёргаем сервер зря, догонит следующий тик
   if (typeof document !== 'undefined' && document.hidden && current) return;
-  api.usage.get()
-    .then(u => { current = u; listeners.forEach(l => l()); })
-    .catch(() => { /* лимиты — необязательная информация: остаются прежние цифры */ });
+  // в-полёте: запрос уже в пути — переиспользуем его, не дёргая сервер повторно
+  if (inflight) return inflight;
+  inflight = (async () => {
+    try {
+      const u = await api.usage.get();
+      current = u;
+      lastLoadAt = Date.now();
+      listeners.forEach(l => l());
+      return u;
+    } catch {
+      // лимиты — необязательная информация: остаются прежние цифры
+      return null;
+    } finally {
+      inflight = null;
+    }
+  })();
+  return inflight;
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   if (listeners.size === 1) {
-    load();
+    // повторная подписка: данные свежие (загружали < POLL_MS назад) — сервер не дёргаем
+    if (!(current && Date.now() - lastLoadAt < POLL_MS)) load();
+    // таймер: следующий запрос по расписанию (через POLL_MS), а не сразу
+    if (timer) clearInterval(timer);
     timer = setInterval(load, POLL_MS);
   }
   return () => {
@@ -49,3 +71,15 @@ export function accountSnapshotsFor(usage: UsageResponse | null, subscriptionKey
   const provKeys = new Set(Object.keys(usage.providers ?? {}));
   return usage.snapshots.filter(s => !s.subscriptionKey || !provKeys.has(s.subscriptionKey));
 }
+
+// Тестовые швы: подписка/отписка и сброс состояния между тестами.
+export const __test = {
+  subscribe,
+  reset() {
+    current = null;
+    lastLoadAt = 0;
+    if (timer) { clearInterval(timer); timer = null; }
+    inflight = null;
+    listeners.clear();
+  },
+};

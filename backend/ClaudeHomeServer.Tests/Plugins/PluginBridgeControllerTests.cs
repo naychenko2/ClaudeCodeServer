@@ -157,19 +157,22 @@ public class PluginBridgeControllerTests : IDisposable
         ctl.Disable(id.Replace('/', '~')).Should().BeOfType<OkObjectResult>();
     }
 
-    // --- Assets: 200 (файл существует) ---
+    // --- Assets: 200 (файл панели по новому контракту: path относительно корня пакета) ---
+    // Дефект a537ea41: фронт запрашивает /assets/panel/index.html (путь = entry из манифеста,
+    // относительно корня пакета), а бэк искал в panel/{path} (т.е. ждал /assets/index.html).
+    // Контракт: path — относительно корня версии пакета; отдаём ТОЛЬКО файлы под panel/**.
 
     [Fact]
-    public void Assets_ФайлСуществует_ОтдаётFileResult()
+    public void Assets_ПанельПоНовомуПути_ОтдаётFileResult()
     {
         InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "index.html");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
         res.Should().BeOfType<FileContentResult>("файл панели отдаётся FileContentResult (200)");
     }
 
-    // --- Assets: 404 (файла нет) ---
+    // --- Assets: 404 (файла нет под panel/) ---
 
     [Fact]
     public void Assets_ФайлаНет_Отдаёт404()
@@ -177,8 +180,21 @@ public class PluginBridgeControllerTests : IDisposable
         InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "missing.html");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/missing.html");
         res.Should().BeOfType<NotFoundResult>();
+    }
+
+    // --- Assets: 404 (старый путь index.html — не под panel/) ---
+    // Совместимость со старым контрактом не нужна: «index.html» (без panel/) — 404.
+
+    [Fact]
+    public void Assets_СтарыйПутьIndexHtml_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "index.html");
+        res.Should().BeOfType<NotFoundResult>("старый путь (без panel/) — 404, совместимость не нужна");
     }
 
     // --- Assets: 404 (чужой пакет) ---
@@ -189,7 +205,7 @@ public class PluginBridgeControllerTests : IDisposable
         InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerB);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "index.html");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
         res.Should().BeOfType<NotFoundResult>();
     }
 
@@ -202,7 +218,7 @@ public class PluginBridgeControllerTests : IDisposable
         Disable(OwnerA, "local-a/pkg");
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "index.html");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(409);
     }
@@ -215,9 +231,75 @@ public class PluginBridgeControllerTests : IDisposable
         InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA, subsystemEnabled: false);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "index.html");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(503);
+    }
+
+    // --- Assets: path traversal и файлы вне panel/ → 404 (дефект a537ea41) ---
+    // Путь строится только через SafePath.Join; «../», абсолютные пути, обратные слеши,
+    // symlink и ReparsePoint отбиваются. Всё, что не под panel/**, — 404.
+
+    [Fact]
+    public void Assets_ПутьTraversal_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // «../ccs-plugin.json» — выводит за корень пакета (path traversal).
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "../ccs-plugin.json");
+        res.Should().BeOfType<NotFoundResult>("«../» вывел за корень пакета → 404");
+    }
+
+    [Fact]
+    public void Assets_ПанельParentParent_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // «panel/../../x» — начинается с panel/, но разрешается в root/x (вне panel/).
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/../../x");
+        res.Should().BeOfType<NotFoundResult>("«panel/../../x» разрешается вне panel/ → 404");
+    }
+
+    [Fact]
+    public void Assets_ФайлВнеPanel_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // skills/a/SKILL.md — внутри пакета, но НЕ под panel/ → 404.
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "skills/a/SKILL.md");
+        res.Should().BeOfType<NotFoundResult>("файл вне panel/ → 404");
+    }
+
+    [Fact]
+    public void Assets_Манифест_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // ccs-plugin.json — манифест, не должен торчать наружу.
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "ccs-plugin.json");
+        res.Should().BeOfType<NotFoundResult>("манифест вне panel/ → 404");
+    }
+
+    [Fact]
+    public void Assets_Symlink_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // Symlink в panel/ на внешний файл → не следовать → 404.
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var outside = Path.Combine(_dir, "outside.html");
+        System.IO.File.WriteAllText(outside, "<html>outside</html>");
+        var link = Path.Combine(packageDir, "panel", "link.html");
+        try { System.IO.File.CreateSymbolicLink(link, outside); }
+        catch (PlatformNotSupportedException) { System.IO.File.Copy(outside, link); }
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/link.html");
+        res.Should().BeOfType<NotFoundResult>("symlink в panel/ → 404 (не следовать)");
     }
 
     // --- Call: 403 (сервисный JWT) ---
@@ -391,7 +473,7 @@ public class PluginBridgeControllerTests : IDisposable
             System.IO.Path.Combine(packageDir, "panel", "big.bin"),
             new byte[4 * 1024 * 1024 + 1]);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "big.bin");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/big.bin");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(413);
     }

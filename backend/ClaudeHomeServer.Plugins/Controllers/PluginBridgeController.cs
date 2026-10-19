@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Services.Plugins.Controllers;
 
 // Мост панели v1 (ADR-031 §3, шаг 3.1): раздача статики панели + эндпоинт call.
 //
-//   GET  /api/plugins/{id}/{ver}/assets/{**path} — статика панели из packages/{id}/{ver}/panel/
+//   GET  /api/plugins/{id}/{ver}/assets/{**path} — статика панели: path относительно корня
+//        пакета (entry из манифеста), отдаёт только файлы под panel/**
 //   GET  /api/plugins/{id}/{ver}/panel            — srcdoc-ready HTML (index.html + шим + CSP)
 //   POST /api/plugins/{id}/call                   — вызов capability {capability, args}
 //
@@ -71,6 +72,12 @@ public class PluginBridgeController(
         PluginId.TryNormalize(id, out var norm) ? norm.Value : id;
 
     // --- GET /api/plugins/{id}/{ver}/assets/{**path} — статика панели ---
+    //
+    // Контракт (ADR-031 §3.1, дефект a537ea41): {path} — относительно корня версии пакета
+    // (совпадает с contributes.panels[0].entry из манифеста, например "panel/index.html").
+    // Отдаём ТОЛЬКО файлы под panel/**: всё остальное внутри пакета (ccs-plugin.json,
+    // skills/, commands/, .claude-plugin/) не торчит наружу. Путь — только через
+    // SafePath.Join; «../», абсолютные пути, обратные слеши, symlink/ReparsePoint → 404.
 
     [HttpGet("{id}/{ver}/assets/{**path}")]
     public IActionResult Assets(string id, string ver, string path)
@@ -86,10 +93,29 @@ public class PluginBridgeController(
         if (!record.Enabled)
             return StatusCode(409, new { error = "Плагин выключен" });
 
-        // Файл: packages/{id}/{ver}/panel/{path} (SafePath.Join — защита от path traversal).
-        var panelDir = Path.Combine(store.PackageDir(UserId, pluginId, ver), "panel");
-        var filePath = SafePath.Join(panelDir, path);
-        if (!System.IO.File.Exists(filePath)) return NotFound();
+        var packageRoot = store.PackageDir(UserId, pluginId, ver);
+
+        // SafePath.Join: «../» вывел за корень пакета → UnauthorizedAccessException → 404.
+        string filePath;
+        try
+        {
+            filePath = SafePath.Join(packageRoot, path);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return NotFound();
+        }
+
+        // Разрешённый путь обязан остаться под panel/ (иначе «panel/../../x» → root/x).
+        var panelRoot = Path.GetFullPath(Path.Combine(packageRoot, "panel"));
+        if (!filePath.StartsWith(panelRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && !filePath.Equals(panelRoot, StringComparison.Ordinal))
+            return NotFound();
+
+        // symlink/ReparsePoint не следовать (как в PanelSrcdoc / Panel черновика).
+        if (!System.IO.File.Exists(filePath)
+            || (System.IO.File.GetAttributes(filePath) & System.IO.FileAttributes.ReparsePoint) != 0)
+            return NotFound();
 
         // Потолок размера (rework 12, minor 6): больше 4 MiB → 413.
         if (new System.IO.FileInfo(filePath).Length > MaxAssetBytes)

@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Монолит (ClaudeHomeServer.Tests) в переходный период (до финальной чистки)
+         держит временную ссылку на эту сборку (ClaudeHomeServer.Tests.csproj):
+         допуск internals Guards.Tests монолиту. BoundaryIlScanner — общий IL-скан
+         (internal), которым пользуются оставшиеся в монолите LauncherProjectContextGuardTests
+         и LocalLlmClientBoundaryTests; после переноса сторожей они видят его только через
+         InternalsVisibleTo. Тот же приём, что у Telemetry.Tests/LocalStats.Tests. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Main: все вертикальные сборки (Reader/CodeGraph/Git/Tts/Changelog/Execution/
+         Devices/Images/Prompts/Files/TestRuns/Deploy/Llm/... + Main-типы Mcp.Http/
+         ChatContext/McpEndpoints) приходят транзитно: Main ссылается на все вертикали,
+         и FrameworkReference Microsoft.AspNetCore.App течёт вместе с ним. Статические
+         конструкторы сторожей (SubsystemBoundaryTests/SubsystemBoundaryCoverageTests/
+         IlBoundaryRegressionTests/BoundaryIlScanner) форс-загружают эти сборки через
+         typeof(...).Assembly — без явной ссылки на Main типы вертикалей не резолвятся. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- Core — спинка: IAppSubsystem (сторож полноты SubsystemBoundaryTests.Boundaries)
+         и IGitRepoChecker (IlBoundaryRegressionTests). -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!--
+      Динамические модули: Main тянет их как ProjectReference с ReferenceOutputAssembly="false"
+      (сборка в графе, но output-сборка НЕ видна для компиляции), поэтому они НЕ текут
+      транзитно. Статические конструкторы сторожей форс-загружают их через
+      typeof(...).Assembly, а McpToolsetStabilityTests/ProjectMapHygieneGuardTests читают их
+      исходники — нужна явная ссылка (тот же приём, что в монолите ClaudeHomeServer.Tests.csproj).
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <!-- McpToolsetStabilityTests: [SkippableFact]/[SkippableTheory] + Skip.If —
+         тесты, которые скипаются, когда сборка вне дерева репозитория (нет node/
+         исходников). -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+</Project>

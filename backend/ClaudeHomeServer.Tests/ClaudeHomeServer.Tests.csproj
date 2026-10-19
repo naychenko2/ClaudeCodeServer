@@ -71,6 +71,14 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Guards.Tests (шаг 4.1): 5 guard-тестов + BoundaryIlScanner переехали в отдельную
+         тестовую сборку. Допуск internals монолита Guards.Tests: McpToolsetStabilityTests
+         использует internal HandsTurnHarness (живёт в монолите, HandsTurnTests.cs) —
+         harness «руки» для сквозного теста хода. Internal-члены монолита доступны
+         Guards.Tests через этот InternalsVisibleTo. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Guards.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
@@ -246,6 +254,17 @@
       графе сборки.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Telemetry.Tests\ClaudeHomeServer.Telemetry.Tests.csproj" />
+    <!--
+      Guards.Tests (шаг 4.1, пачка H): 5 guard-тестов (SubsystemBoundaryTests/
+      SubsystemBoundaryCoverageTests/IlBoundaryRegressionTests/McpToolsetStabilityTests/
+      ProjectMapHygieneGuardTests) + хелпер BoundaryIlScanner переехали в отдельную тестовую
+      сборку. Монолит тянет её как ProjectReference, чтобы в переходный период (до финальной
+      чистки) перенесённые тесты компилировались и новый проект был в графе сборки монолита.
+      Обратный допуск (Guards.Tests → монолит) стоит в Guards.Tests.csproj: оставшиеся в
+      монолите LauncherProjectContextGuardTests/LocalLlmClientBoundaryTests используют
+      internal BoundaryIlScanner.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Guards.Tests\ClaudeHomeServer.Guards.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

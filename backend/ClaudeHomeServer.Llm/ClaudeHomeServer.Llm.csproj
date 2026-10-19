@@ -43,6 +43,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.LocalStats.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Guards.Tests (шаг 4.1, пачка H): McpToolsetStabilityTests (через HandsTurnHarness)
+         читает internal ClaudeSession.LastLaunchSignature (сигнатура запуска) — тот же шов,
+         что у монолита; перенесённые сторожи Llm-типов не используют иначе. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Guards.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

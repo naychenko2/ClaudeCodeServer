@@ -25,6 +25,12 @@ public class IlBoundaryRegressionTests
     // не видит сборку, если ни один тип из неё не вызывался в этом процессе.
     static IlBoundaryRegressionTests()
     {
+        // Main (ClaudeHomeServer.dll): тест ищет DeployAgentLockAdapter (Services.Composition.Deploy)
+        // в Main. В монолите Main грузился побочно (746 файлов); в Guards.Tests — только если
+        // какой-то тип Main вызван. xunit гоняет классы параллельно, поэтому форс-загружаем Main
+        // явно — иначе прогон, где этот класс стартовал раньше SubsystemBoundaryTests, не видит
+        // тип и ложно краснеет.
+        _ = typeof(ClaudeHomeServer.Services.Composition.Deploy.DeployAgentLockAdapter).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Execution.DockerProcessRunner).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Deploy.DeployService).Assembly;
         // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы

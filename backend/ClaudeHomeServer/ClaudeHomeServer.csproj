@@ -67,6 +67,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Telemetry.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Guards.Tests (шаг 4.1, пачка H): McpToolsetStabilityTests читает internal-члены
+         Main-типов (TurnContextToolset.Schemas, TasksToolset.ProjectChatTools/PersonalTools) —
+         тот же шов, что у монолита; перенесённые сторожи Main-типов не используют иначе. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Guards.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

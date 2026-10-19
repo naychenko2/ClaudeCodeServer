@@ -131,3 +131,36 @@ describe('n1: метка фичи внутри группы (inFeatureGroup)', (
     expect(renderCard('chat-1', true)).not.toContain('data-testid="chat-feature-label"');
   });
 });
+
+// === Ф3.2: подсказка у метки «ключевой» (группа) ===
+// Метка «ключевой» — span в карточке; подсказка «что значит ключевой» — единый текст
+// (KEY_SESSION_TOOLTIP): aria-label (скринридер/клавиатура) + по наведению ui/Tooltip,
+// на тач — нативный title. Рендер — SSR (как остальные тесты файла).
+describe('Ф3.2: подсказка у метки «ключевой» (группа)', () => {
+  const session = (id: string): Session => ({
+    id, mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual',
+  } as Session);
+
+  const renderRoleCard = (role: string): string =>
+    renderToStaticMarkup(createElement(ChatCard, {
+      session: session('chat-1'), isActive: false, isMobile: false, online: true,
+      onSelect: () => {}, onHover: () => {}, onDelete: () => {},
+      featureRole: role,
+    }));
+
+  it('«ключевой» — метка несёт подсказку (единый текст, aria-label + Tooltip)', () => {
+    const html = renderRoleCard('ключевой');
+    // Метка «ключевой» есть.
+    expect(html).toContain('data-testid="chat-feature-role"');
+    // Подсказка «что значит ключевой» — единый текст (не два литерала).
+    expect(html).toContain('aria-label="Здесь управляют фичей: запускают шаги и принимают результат"');
+  });
+
+  it('«ещё N» (не ключевой) — подсказки «что значит ключевой» нет', () => {
+    const html = renderRoleCard('ещё 2');
+    expect(html).toContain('data-testid="chat-feature-role"');
+    expect(html).not.toContain('aria-label="Здесь управляют фичей: запускают шаги и принимают результат"');
+  });
+});

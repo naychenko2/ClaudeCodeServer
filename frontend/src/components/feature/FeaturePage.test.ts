@@ -20,6 +20,7 @@ import { __test as pageTest } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
+import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
 import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
@@ -848,6 +849,20 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(t).not.toContain('curator');
     // Фон строки — accentLight (не рамка/фон-карточки).
     expect((row as unknown as { style: Record<string, string> }).style.background).toBe('var(--c-accent-light)');
+  });
+
+  it('Ф3.2: метка «ключевой» — подсказка «что значит ключевой» (единый текст, aria-label + Tooltip)', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    // Подсказка «что значит ключевой» — единый источник KEY_SESSION_TOOLTIP: на метке
+    // aria-label (скринридер/клавиатура) + по наведению ui/Tooltip; на тач — нативный title.
+    const chip = findNodeByAttr(row, 'aria-label', KEY_SESSION_TOOLTIP);
+    expect(chip, 'метка «ключевой» несёт подсказку (aria-label)').not.toBeNull();
+    expect(chip!.getAttribute('aria-label')).toBe('Здесь управляют фичей: запускают шаги и принимают результат');
   });
 
   it('R6-1: аватар 18 — персона из chatPersonas (инициалы); без персоны — нейтральный круг', async () => {

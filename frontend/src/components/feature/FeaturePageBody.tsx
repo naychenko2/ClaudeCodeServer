@@ -3,6 +3,9 @@ import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Button } from '../ui/Button';
+import { Tooltip } from '../ui/Tooltip';
+import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
+import { useCanHover } from '../../lib/pointer';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
 import {
   featureChats, stepRows, stepStatusLabel, taskCounters, eventRows, showAllNeeded,
@@ -90,13 +93,23 @@ function RowAvatar({ personaId }: { personaId: string | null }) {
 function RoleTag({ kind, stepRef, lane, isKey }: {
   kind: string; stepRef?: string | null; lane?: string | null; isKey?: boolean;
 }) {
+  // Ф3.2: подсказка «что значит ключевой» (единый KEY_SESSION_TOOLTIP). По наведению —
+  // ui/Tooltip; на тач Tooltip не поднимается (свой комментарий) → нативный title
+  // (long-press) + aria-label для скринридера/клавиатуры. Метка — span (не интерактив),
+  // поэтому вложенность в <button> строки чата клик по строке не ломает.
+  const canHover = useCanHover();
   if (isKey) {
-    return (
-      <span style={{
-        fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700,
-        background: C.accentLight, color: C.accent, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
-      }}>ключевой</span>
+    const chip = (
+      <span
+        title={!canHover ? KEY_SESSION_TOOLTIP : undefined}
+        aria-label={KEY_SESSION_TOOLTIP}
+        style={{
+          fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700,
+          background: C.accentLight, color: C.accent, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
+        }}
+      >ключевой</span>
     );
+    return <Tooltip content={KEY_SESSION_TOOLTIP}>{chip}</Tooltip>;
   }
   const parts = [chatRoleLabel(kind)];
   if (stepRef) parts.push(stepRef);

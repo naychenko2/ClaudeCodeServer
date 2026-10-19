@@ -2,7 +2,7 @@ import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type C
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
-import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
+import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
@@ -34,7 +34,7 @@ import { useSlot } from '../lib/subsystems/registry';
 import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
-import { featureDisplayState } from '../lib/chatGroups';
+import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 
@@ -1039,18 +1039,28 @@ function ChatCardView({
             // m4: вид — как в плашке/шторке (макет .role): mono, R 6, 0/5;
             // «ключевой» — accent/accentLight 700, «ещё N» — textSecondary/bgSelected 400.
             const isKey = featureRole.startsWith('ключевой');
-            return (
-              <span data-testid="chat-feature-role" style={{
-                display: 'inline-flex', flexShrink: 0, alignItems: 'center',
-                fontFamily: FONT.mono, fontSize: FS.xs,
-                fontWeight: isKey ? 700 : 400,
-                color: isKey ? C.accent : C.textSecondary,
-                background: isKey ? C.accentLight : C.bgSelected,
-                borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
-              }}>
+            // Ф3.2: подсказка «что значит ключевой» — единый текст KEY_SESSION_TOOLTIP.
+            // По наведению — стилизованная плашка ui/Tooltip (canHover); на тач Tooltip
+            // не поднимается (свой комментарий) — тач-доступность даёт нативный title
+            // (long-press), а скринридеру/клавиатуре — aria-label.
+            const chip = (
+              <span
+                data-testid="chat-feature-role"
+                title={isKey && !canHover ? KEY_SESSION_TOOLTIP : undefined}
+                aria-label={isKey ? KEY_SESSION_TOOLTIP : undefined}
+                style={{
+                  display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+                  fontFamily: FONT.mono, fontSize: FS.xs,
+                  fontWeight: isKey ? 700 : 400,
+                  color: isKey ? C.accent : C.textSecondary,
+                  background: isKey ? C.accentLight : C.bgSelected,
+                  borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
+                }}
+              >
                 {featureRole}
               </span>
             );
+            return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP}>{chip}</Tooltip> : chip;
           })()}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (

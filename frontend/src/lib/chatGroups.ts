@@ -533,6 +533,11 @@ export function featureRoleFor(sessionId: string, keyId: string | null, index: F
   return otherN > 0 ? `ещё ${otherN}` : undefined;
 }
 
+// Подсказка у метки «ключевой» (волна 2, Ф3.2): что значит «ключевой чат» —
+// единый источник текста для метки в группе (ChatCard) и в блоке «Чаты фичи»
+// (FeaturePageBody): не два литерала, а одна константа.
+export const KEY_SESSION_TOOLTIP = 'Здесь управляют фичей: запускают шаги и принимают результат';
+
 // === Плашка группы фичи, волна 2 (макет features-overview-2.html, .ha) ===
 // Чистые функции отображения: бэк считает bucket/attention/chips/keySessionId
 // (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»), фронт только

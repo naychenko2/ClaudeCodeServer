@@ -28,6 +28,10 @@ namespace ClaudeHomeServer.Tests.Composition;
 // С фиксом (Lazy<IToolCallLeakSink> в LlmSessionAdapterFactory) построение
 // завершается. Без фикса (прямой IToolCallLeakSink) — DI-цикл: тест висит
 // (или падает бесконечной рекурсией), а не проходит.
+//
+// Коллекция Inotify: полный хост открывает inotify-экземпляры (reload конфигурации), а
+// InotifyLeakRegressionTests меряет их число в процессе — параллельный хост раздувал пик.
+[Collection(TestCollections.Inotify)]
 public class LlmSubsystemDiCycleTests
 {
     [Fact]

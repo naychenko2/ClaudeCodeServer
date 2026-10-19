@@ -285,6 +285,8 @@ const plugin: PluginInfo = {
   enabled: true,
   source: 'upload:u1',
   secrets: [],
+  // панель объявлена: мост тестирует именно панель, и слот её выбирает по contributes.panels
+  contributes: { panels: [{ id: 'notes-panel', slot: 'sidebar', title: 'Notes Panel' }] },
 };
 
 describe('PluginFrame: мост v1 (мини-раннер)', () => {

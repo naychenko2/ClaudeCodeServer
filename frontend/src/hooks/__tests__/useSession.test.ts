@@ -45,6 +45,9 @@ vi.mock('react', () => ({
 
 const m = vi.hoisted(() => ({
   getHistory: vi.fn<(sid: string) => Promise<unknown[]>>(async () => []),
+  // Докачка по курсору (B5). По умолчанию сервер «старый»: отвечает плоским массивом из
+  // getHistory — прежние тесты идут как раньше; тесты курсора переопределяют ответ конвертом
+  getHistoryTail: vi.fn<(sid: string, q: { after: number; fp?: string }) => Promise<unknown>>(async () => []),
   joinSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   leaveSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   sendMessage: vi.fn<() => Promise<'started' | 'queued' | 'queued-preempted'>>(async () => 'started'),
@@ -67,9 +70,13 @@ const visibilityHandlers: Array<() => void> = [];
 
 vi.mock('../../lib/api', () => ({
   api: {
-    chats: { getHistory: (sid: string) => m.getHistory(sid) },
+    chats: {
+      getHistory: (sid: string) => m.getHistory(sid),
+      getHistoryTail: (sid: string, q: { after: number; fp?: string }) => m.getHistoryTail(sid, q),
+    },
     sessions: {
       getHistory: (_projectId: string, sid: string) => m.getHistory(sid),
+      getHistoryTail: (_projectId: string, sid: string, q: { after: number; fp?: string }) => m.getHistoryTail(sid, q),
       cancelPending: vi.fn(async () => { }),
       preemptForPending: (sid: string) => m.preemptForPending(sid),
     },
@@ -157,6 +164,8 @@ async function leaveMidTurn(sid: string) {
 beforeEach(() => {
   m.getHistory.mockReset();
   m.getHistory.mockResolvedValue([]);
+  m.getHistoryTail.mockReset();
+  m.getHistoryTail.mockImplementation((sid: string) => m.getHistory(sid));
   m.joinSession.mockReset();
   m.joinSession.mockResolvedValue(undefined);
   m.leaveSession.mockClear();
@@ -737,6 +746,105 @@ describe('useSession: дедуп запросов истории (перф-2 F4)
     await flush();
     expect(historyCallsFor()).toBe(1);
 
+    chat.unmount();
+  });
+});
+
+describe('useSession: докачка истории по курсору (перф-2 B5)', () => {
+  type Rec = { kind: string; [k: string]: unknown };
+  type Q = { after: number; fp?: string };
+
+  // Фейковый сервер: тот же алгоритм, что ChatHistoryTail.Compute на бэке. Якорь — последняя
+  // завершающая запись хода; отпечаток — слепок префикса до неё (здесь сам JSON префикса)
+  function serverTail(history: Rec[], q: Q) {
+    let anchor = -1;
+    history.forEach((r, i) => { if (r.kind === 'result' || r.kind === 'error' || r.kind === 'interrupted') anchor = i; });
+    const fpOf = (i: number) => (i < 0 ? null : JSON.stringify(history.slice(0, i + 1)));
+    const anchorFp = fpOf(anchor);
+    if (q.after < 0 || q.after >= history.length || fpOf(q.after) !== q.fp)
+      return { reset: true, messages: history, anchorIndex: anchor, anchorFp };
+    return { reset: false, messages: history.slice(q.after + 1), anchorIndex: anchor, anchorFp };
+  }
+
+  const toolRunning = (): Rec => ({ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, result: null });
+  const toolDone = (): Rec => ({ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, result: 'ok', startedAt: 1, finishedAt: 2 });
+
+  // Ходы чата: завершённый первый с инструментом, дальше второй — идущий и законченный
+  const turn1 = (): Rec[] => [
+    { kind: 'user_message', text: 'первый' }, toolDone(), { kind: 'text', text: 'ответ 1' },
+    { kind: 'result', subtype: 'success', durationMs: 10, numTurns: 1 },
+  ];
+  const turn2Running = (): Rec[] => [{ kind: 'user_message', text: 'второй' }, { ...toolRunning(), id: 't2' }, { kind: 'text', text: 'печат' }];
+  const turn2Done = (): Rec[] => [
+    { kind: 'user_message', text: 'второй' }, { ...toolDone(), id: 't2' }, { kind: 'text', text: 'печатаю ответ' },
+    { kind: 'result', subtype: 'success', durationMs: 20, numTurns: 2 },
+  ];
+
+  const queries = () => m.getHistoryTail.mock.calls.map(c => c[1]);
+
+  async function reopen(prev: { unmount: () => void } | null, sid: string) {
+    prev?.unmount();
+    const chat = openChat(sid);
+    await flush();
+    return chat;
+  }
+
+  it('склеенная из хвостов лента равна полной загрузке на каждом шаге (инструменты и стрим)', async () => {
+    const { normalizeHistory } = await import('../../lib/chatReducer');
+    const sid = nextSid();
+    let server: Rec[] = turn1();
+    m.getHistoryTail.mockImplementation(async (_s, q) => serverTail(server, q));
+
+    // 1. первая загрузка — after=-1, сервер отдаёт всё и якорь
+    let chat = await reopen(null, sid);
+    expect(queries().at(-1)).toEqual({ after: -1 });
+    expect(chat.render().items).toEqual(normalizeHistory(server));
+
+    // 2. пришёл идущий ход: инструмент без результата и недописанный текст (хвост после якоря)
+    server = [...turn1(), ...turn2Running()];
+    chat = await reopen(chat, sid);
+    expect(queries().at(-1)).toMatchObject({ after: 3 }); // курсор на result первого хода
+    expect(chat.render().items).toEqual(normalizeHistory(server));
+
+    // 3. ход завершился: tool_use переписан результатом, текст дописан — хвост после того же якоря
+    server = [...turn1(), ...turn2Done()];
+    chat = await reopen(chat, sid);
+    expect(queries().at(-1)).toMatchObject({ after: 3 });
+    expect(chat.render().items).toEqual(normalizeHistory(server));
+
+    // 4. без изменений — курсор на конце, хвост пуст, лента та же
+    const before = chat.render().items;
+    chat = await reopen(chat, sid);
+    expect(queries().at(-1)).toMatchObject({ after: 7 });
+    expect(chat.render().items).toBe(before);
+    chat.unmount();
+  });
+
+  it('несходящийся отпечаток → reset: лента заменяется полной историей сервера', async () => {
+    const { normalizeHistory } = await import('../../lib/chatReducer');
+    const sid = nextSid();
+    let server: Rec[] = [...turn1(), ...turn2Done()];
+    m.getHistoryTail.mockImplementation(async (_s, q) => serverTail(server, q));
+
+    let chat = await reopen(null, sid);
+    expect(chat.render().items).toEqual(normalizeHistory(server));
+
+    // История переписана ДО курсора (правка, откат) и стала длиннее: префикс не совпадёт
+    server = [{ kind: 'user_message', text: 'ПЕРЕПИСАНО' }, ...turn1().slice(1), ...turn2Done(), { kind: 'user_message', text: 'третий' }];
+    chat = await reopen(chat, sid);
+    expect(chat.render().items).toEqual(normalizeHistory(server));
+    chat.unmount();
+  });
+
+  it('старый сервер (плоский массив) → полная загрузка, курсор не заводится', async () => {
+    const sid = nextSid();
+    m.getHistory.mockResolvedValue([...DONE_TURN]);
+
+    let chat = await reopen(null, sid);
+    chat = await reopen(chat, sid);
+
+    expect(queries().every(q => q.after === -1)).toBe(true);
+    expect(chat.render().items).toHaveLength(3);
     chat.unmount();
   });
 });

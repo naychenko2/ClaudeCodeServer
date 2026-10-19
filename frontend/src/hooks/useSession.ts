@@ -4,6 +4,7 @@ import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendM
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
+import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
@@ -30,9 +31,26 @@ const _lastSeen = new Map<string, number>(); // LRU: sid → ts последне
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
 const MAX_CACHED_SESSIONS = 20;
 
-// История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats
-const loadHistory = (sid: string, projectId?: string) =>
-  projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
+// Курсоры докачки истории (перф-2 B5): sid → сырая история прошлой загрузки + якорь сервера.
+// Со вторым открытием чата просим у сервера только хвост после якоря, а не всю историю
+// целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail. Живёт ровно столько же, сколько
+// лента чата в сторе: выселили сессию (evictColdSessions) — курсор уходит вместе с ней.
+const _cursors = new Map<string, HistoryCursor>();
+
+// История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats.
+// Возвращает ПОЛНУЮ сырую историю (склеенную из прошлой загрузки и хвоста), поэтому
+// normalizeHistory и serverHistoryNewer работают с ней так же, как с загруженной целиком.
+async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> {
+  const prev = _cursors.get(sid);
+  const q = cursorQuery(prev);
+  const reply = await (projectId
+    ? api.sessions.getHistoryTail(projectId, sid, q)
+    : api.chats.getHistoryTail(sid, q));
+  const applied = applyHistoryReply(prev, q, reply);
+  if (applied.cursor) _cursors.set(sid, applied.cursor);
+  else _cursors.delete(sid);
+  return applied.raw;
+}
 
 // Общий in-flight promise истории на sid: параллельные запросы одного чата
 // (joinAndLoadHistory + reloadHistory при монтировании, hover-warm, reconnect)
@@ -146,6 +164,7 @@ function evictColdSessions() {
   for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
     _store.delete(sid);
     _lastSeen.delete(sid);
+    _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
     // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
     _warmed.delete(sid);
   }

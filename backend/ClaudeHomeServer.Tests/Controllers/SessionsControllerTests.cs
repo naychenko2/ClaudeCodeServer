@@ -293,6 +293,99 @@ public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // --- Докачка хвоста по курсору (Перф-2 B5): GET .../history?after=<n>&fp=<отпечаток> ---
+    // Посев двух завершённых ходов: якорь первого хода — result на индексе 2, финальный
+    // якорь — result второго хода (индекс 5). Клиент, имеющий первый ход, просит хвост.
+    private async Task<(string ProjectId, string SessionId, string FirstAnchorFp)> SeedTwoTurnsAsync(string projectId)
+    {
+        var csid = "tail-" + Guid.NewGuid().ToString("N")[..16];
+        using var scope = _factory.Services.CreateScope();
+        var historySvc = scope.ServiceProvider.GetRequiredService<ChatHistoryService>();
+        var messages = new List<StoredMessage>
+        {
+            new StoredUserMessage("первый"),
+            new StoredTextMessage("ответ 1"),
+            new StoredResultMessage("success", 10, 1),
+            new StoredUserMessage("второй"),
+            new StoredTextMessage("ответ 2"),
+            new StoredResultMessage("success", 20, 2),
+        };
+        await historySvc.SaveAsync(csid, messages);
+
+        var createResponse = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new
+        {
+            mode = "auto",
+            resumeSessionId = csid
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var body = JsonSerializer.Deserialize<JsonElement>(await createResponse.Content.ReadAsStringAsync());
+        var sessionId = body.GetProperty("id").GetString()!;
+        // Отпечаток якоря первого хода (result, индекс 2) — тот, что клиент пришлёт курсором
+        var firstAnchorFp = ChatHistoryTail.PrefixFingerprint(messages, 2)!;
+        return (projectId, sessionId, firstAnchorFp);
+    }
+
+    [Fact]
+    public async Task GetHistory_WithAfterCursor_ReturnsTailEnvelope()
+    {
+        var (projectId, sessionId, firstAnchorFp) = await SeedTwoTurnsAsync(await CreateProjectAsync());
+
+        var response = await _client.GetAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history?after=2&fp={firstAnchorFp}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.ValueKind.Should().Be(JsonValueKind.Object, "с after — конверт докачки");
+        body.GetProperty("reset").GetBoolean().Should().BeFalse();
+        // Хвост = второй ход целиком (3 записи), не вся история
+        body.GetProperty("messages").GetArrayLength().Should().Be(3);
+        body.GetProperty("anchorIndex").GetInt32().Should().Be(5);
+        body.GetProperty("anchorFp").GetString().Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task GetHistory_WithAfterCursor_MismatchedFp_ReturnsResetAndFull()
+    {
+        var (projectId, sessionId, _) = await SeedTwoTurnsAsync(await CreateProjectAsync());
+
+        // Отпечаток не совпадает (история «переписана») — reset и полная история
+        var response = await _client.GetAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history?after=2&fp=0000000000000000");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("reset").GetBoolean().Should().BeTrue();
+        body.GetProperty("messages").GetArrayLength().Should().Be(6);
+    }
+
+    [Fact]
+    public async Task GetHistory_WithAfterCursor_CursorBeyondHistory_ReturnsReset()
+    {
+        var (projectId, sessionId, _) = await SeedTwoTurnsAsync(await CreateProjectAsync());
+
+        // Курсор за пределами истории (6 записей) — reset
+        var response = await _client.GetAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history?after=99&fp=x");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("reset").GetBoolean().Should().BeTrue();
+        body.GetProperty("messages").GetArrayLength().Should().Be(6);
+    }
+
+    [Fact]
+    public async Task GetHistory_WithAfterCursor_OtherProject_Returns404()
+    {
+        // Per-owner изоляция как раньше: чужой проект — 404, даже с курсором
+        var (projectId, _, _) = await SeedTwoTurnsAsync(await CreateProjectAsync());
+        var otherProjectId = await CreateProjectAsync();
+
+        var response = await _client.GetAsync(
+            $"/api/projects/{otherProjectId}/sessions/nonexistent/history?after=2&fp=x");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        projectId.Should().NotBeNullOrEmpty();
+    }
+
     // --- POST /api/sessions/{sid}/pending/preempt (кнопка «Прервать и отправить») ---
 
     [Fact]

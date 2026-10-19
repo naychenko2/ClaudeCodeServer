@@ -427,6 +427,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private Turn.ITurnEventBus TurnEvents => _turnEvents ??= new Turn.TurnEventBus();
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
+    // Признак штатной остановки: KillAllProcesses поднимает его ПЕРВОЙ строкой (до гашения
+    // адаптеров). Умирающий процесс присылает ErrorMessage/ExitedMessage, и ApplyStatusAsync
+    // при поднятом признаке ранним выходом не трогает статус ни в памяти, ни на диске —
+    // sessions.json сохранит Working, и LoadSessions отберёт сессию в кандидаты на auto-resume
+    // (ADR-033, дефект: штатная остановка перетирала Working в Error).
+    private volatile bool _stopping;
     // Автосохранение сессий каждые 30с
     /// <summary>
     /// Период автосохранения (оно же — единственный фоновый триггер sweep-terminus, см. SaveSessions).
@@ -10291,6 +10297,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status,
         bool touchUpdatedAt = true)
     {
+        // Штатная остановка: статус не менять ни в памяти, ни на диске — sessions.json сохранит
+        // Working, и LoadSessions отберёт сессию в кандидаты на auto-resume (ADR-033).
+        if (_stopping) return;
         entry.Info.Status = status;
         if (touchUpdatedAt && !entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
@@ -10314,6 +10323,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
     public void KillAllProcesses()
     {
+        // Первая строка — ДО гашения адаптеров: умирающий процесс присылает ErrorMessage/
+        // ExitedMessage, и ApplyStatusAsync при поднятом признаке ранним выходом не перетирает
+        // Working в Error/Active (ADR-033). Новый SaveSessions() здесь НЕ добавляем: его убрали
+        // (5c6606282) как источник зависаний остановки (ожидание _saveLock).
+        _stopping = true;
         // Таймер не должен пытаться писать одновременно с убийством процессов:
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
         // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же

@@ -84,7 +84,10 @@ public class TurnAutoResumeService : BackgroundService
                 var session = _host.GetSession(id);
                 if (session is null) { _log.LogInformation("Авто-возобновление {SessionId}: сессия не найдена", id); continue; }
 
-                if (session.OwnerId is not { } owner || !_host.IsEnabledForOwner(owner))
+                // Владелец резолвится через шов (ResolveOwnerId): у проектной сессии OwnerId
+                // пустой — владелец берётся из проекта (ADR-033, дефект: проверка по OwnerId
+                // отсеивала все проектные чаты).
+                if (!_host.IsEnabledFor(session))
                 {
                     _log.LogInformation("Авто-возобновление {SessionId}: флаг turn-auto-resume выключен у владельца", id);
                     continue;

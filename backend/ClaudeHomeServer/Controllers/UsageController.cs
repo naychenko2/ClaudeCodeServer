@@ -30,7 +30,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             Usage: usage.Version,
             Pool: subscriptionPool?.Version ?? 0,
             Poll: oauthUsage.Version,
-            Plan: usage.PlanVersion);
+            Plan: usage.PlanVersion,
+            Providers: UsageResponseCache.ProviderFingerprint(providers.All));
 
         if (limits && cache.TryGet("limits", isAdmin, fingerprint, out var cached))
             return Ok(cached);

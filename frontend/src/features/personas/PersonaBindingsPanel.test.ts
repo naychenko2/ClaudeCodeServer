@@ -171,6 +171,7 @@ async function renderPanel() {
   // joinUserGroup (personas.ts:25) читает cc_user_id из sessionStorage, если его нет в localStorage
   if (!g.sessionStorage) g.sessionStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   const { container } = mount(createElement(PersonaBindingsPanel, {
+    // eslint-disable-next-line design/no-raw-color -- фикстура: accent-цвет передаётся как есть, не стиль
     persona: PERSONA, accent: '#D97757', isMobile: false,
   }));
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });

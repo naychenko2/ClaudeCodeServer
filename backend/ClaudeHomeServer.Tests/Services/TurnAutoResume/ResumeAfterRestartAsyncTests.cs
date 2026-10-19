@@ -63,7 +63,9 @@ public class ResumeAfterRestartAsyncTests : IDisposable
     private sealed class SpySessionManager : SessionManager
     {
         public bool TailIntact = true;
-        public bool UseRealSend;
+        // Инициализация = false: поле нигде не выставляется тестом (всегда record-режим),
+        // но присваивание в объявлении гасит CS0649 «поле никогда не присваивается».
+        public bool UseRealSend = false;
         public int SendCalls;
         // Журнал порядка шагов: фиксирует, была ли карточка server_restart уже в истории
         // на момент отправки resume-хода (контракт: Append карточки ДО OnUserMessage).

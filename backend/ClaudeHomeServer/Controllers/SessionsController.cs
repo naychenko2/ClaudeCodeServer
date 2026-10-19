@@ -15,9 +15,13 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
     DefaultAssistantProvisioner provisioner,
-    PersonaManager personas, SessionContextResolver contextResolver) : ControllerBase
+    PersonaManager personas, SessionContextResolver contextResolver,
+    PrefixFingerprintCache prefixFpCache) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Кэш отпечатков префиксов истории (Перф-3 B8) — см. ChatsController._prefixFpCache
+    private readonly PrefixFingerprintCache _prefixFpCache = prefixFpCache;
 
     // Проект принадлежит текущему пользователю; чужой/несуществующий — как отсутствующий (404)
     private bool OwnsProject(string projectId) =>
@@ -147,7 +151,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // Курсор докачки (after) — приоритетнее пагинации: клиент пришёл за хвостом, не за страницей
         if (after is not null)
         {
-            var tail = ChatHistoryTail.Compute(history, after, fp);
+            // Ключ кэша — csid (HistoryKeyOf): отпечатки префиксов не пересчитываются на каждый запрос
+            var tail = ChatHistoryTail.Compute(history, after, fp,
+                _prefixFpCache.GetOrCompute(session.ClaudeSessionId ?? sessionId, history));
             return Ok(new
             {
                 reset = tail.Reset,

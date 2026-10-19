@@ -759,6 +759,9 @@ builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Watchdog.Watchd
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
+// Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 2,5 МБ-истории не пересчитывается
+// на каждый запрос с курсором, а берётся по (csid, версия истории)
+builder.Services.AddSingleton<PrefixFingerprintCache>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();

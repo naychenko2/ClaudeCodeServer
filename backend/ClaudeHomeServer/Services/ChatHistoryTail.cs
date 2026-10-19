@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -46,6 +47,25 @@ public static class ChatHistoryTail
     public static string? PrefixFingerprint(IReadOnlyList<StoredMessage> history, int upTo) =>
         Hashes(history, upTo, -1).AtFp;
 
+    // Все отпечатки префиксов history[0..i] за ОДИН проход: i-й элемент — SHA-256(0..i).
+    // Кэш (PrefixFingerprintCache) держит этот массив по (csid, версия истории) и отдаёт его
+    // Compute: atFp/anchorFp становятся O(1)-выбором, а не пересчётом хэша на каждый запрос
+    // с курсором (для 2,5 МБ истории это десятки мс на запрос).
+    public static string[] AllPrefixFingerprints(IReadOnlyList<StoredMessage> history)
+    {
+        var n = history.Count;
+        var result = new string[n];
+        if (n == 0) return result;
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        for (var i = 0; i < n; i++)
+        {
+            hash.AppendData(JsonSerializer.SerializeToUtf8Bytes(history[i], FpOptions));
+            hash.AppendData("\n"u8);
+            result[i] = Hex(hash.GetCurrentHash());
+        }
+        return result;
+    }
+
     // Один проход по префиксу даёт оба отпечатка (под курсором и под якорем): история до
     // 2,5 МБ, второй проход удвоил бы цену запроса.
     private static (string? AtFp, string? AnchorFp) Hashes(IReadOnlyList<StoredMessage> history, int at, int anchor)
@@ -74,23 +94,32 @@ public static class ChatHistoryTail
 
     // after — индекс последней записи, которая у клиента уже есть; fp — отпечаток её
     // префикса (от сервера). history — полная история сервера в момент запроса.
-    public static Result Compute(IReadOnlyList<StoredMessage> history, int? after, string? fp)
+    // prefixFps — готовые отпечатки всех префиксов (из PrefixFingerprintCache): atFp/anchorFp
+    // берутся из них за O(1) вместо пересчёта хэша; null — чистый путь (тесты, без кэша).
+    public static Result Compute(IReadOnlyList<StoredMessage> history, int? after, string? fp, string[]? prefixFps = null)
     {
         var total = history.Count;
         var anchor = AnchorIndex(history);
 
+        // Отпечаток префикса до индекса i: из готового массива (O(1)) либо пересчёт (чистый путь)
+        string? FpAt(int i) =>
+            i < 0 ? null
+            : prefixFps is not null && i < prefixFps.Length ? prefixFps[i]
+            : Hashes(history, i, i).AtFp;
+
         // Курсора нет — прежний контракт: полная история, reset не ставим
         if (after is null)
-            return new Result(false, history, anchor, Hashes(history, -1, anchor).AnchorFp);
+            return new Result(false, history, anchor, FpAt(anchor));
 
         var at = after.Value;
 
         // Курсор вне истории — она стала короче (откат/обрезка) либо у клиента ленты ещё
         // нет (after=-1: «дай всё и якорь»): полная история с признаком reset
         if (at < 0 || at >= total)
-            return new Result(true, history, anchor, Hashes(history, -1, anchor).AnchorFp);
+            return new Result(true, history, anchor, FpAt(anchor));
 
-        var (atFp, anchorFp) = Hashes(history, at, anchor);
+        var atFp = FpAt(at);
+        var anchorFp = FpAt(anchor);
 
         // Отпечаток префикса не совпал — что-то до курсора переписано: индексы и содержимое
         // нельзя считать общими, доверяем только полной истории
@@ -102,5 +131,31 @@ public static class ChatHistoryTail
         for (var i = at + 1; i < total; i++)
             tail.Add(history[i]);
         return new Result(false, tail, anchor, anchorFp);
+    }
+}
+
+// Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 префикса 2,5 МБ-истории на каждый
+// запрос с курсором — десятки мс. Массив AllPrefixFingerprints считается ОДИН раз на версию
+// истории и переиспользуется: версия = LastWriteUtc файла history.json (тот же признак
+// актуальности, что в ProjectFileSessionsIndex) + длина списка (страховка от живого
+// аккумулятора, который дописал запись ещё без записи на диск). Ключ — csid, а csid уникален
+// per-чат и per-владелец, поэтому изоляция per-owner не нарушается.
+public class PrefixFingerprintCache(ChatHistoryService history)
+{
+    private sealed record Entry(DateTime? Version, int Count, string[] Fps);
+
+    // Ключ — ClaudeSessionId (история лежит по нему, не по Session.Id); совпадает с
+    // SessionManager.HistoryKeyOf. Сторож границ: ChatHistoryService — спинка, не вертикаль.
+    private readonly ConcurrentDictionary<string, Entry> _cache = new();
+
+    // Готовые отпечатки всех префиксов истории: из кэша при совпадении версии, иначе пересчёт.
+    public string[] GetOrCompute(string csid, IReadOnlyList<StoredMessage> messages)
+    {
+        var version = history.LastWriteUtc(csid);
+        if (_cache.TryGetValue(csid, out var entry) && entry.Version == version && entry.Count == messages.Count)
+            return entry.Fps;
+        var fps = ChatHistoryTail.AllPrefixFingerprints(messages);
+        _cache[csid] = new Entry(version, messages.Count, fps);
+        return fps;
     }
 }

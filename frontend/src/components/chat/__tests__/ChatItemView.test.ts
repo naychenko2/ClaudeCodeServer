@@ -239,6 +239,7 @@ describe('ChatItemView — work_loop_stopped: server_restart', () => {
     const html = renderItem({ kind: 'work_loop_stopped', reason: 'server_restart', text });
     expect(html).toContain(text);
     expect(html, 'инфо-токены').toContain('var(--c-info-bg)');
+    expect(html, 'рамка и текст — инфо-цвет').toContain('var(--c-info)');
     expect(html, 'кнопок нет').not.toContain('<button');
   });
 

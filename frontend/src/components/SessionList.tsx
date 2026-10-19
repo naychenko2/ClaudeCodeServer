@@ -832,6 +832,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     if (!pid) return null;
     return personas.find(p => p.id === pid)?.name ?? null;
   };
+  // Резолвер id персоны → Persona: для стопки аватаров «кто сейчас» в заголовке группы.
+  // Не найден — undefined (аватар не рисуется; PersonaAvatar требует полный объект Persona).
+  const personaById = (id: string) => personas.find(p => p.id === id);
   // Режим «Фичи»: заголовок группы (FeatureGroupHeader) + чаты. Группа свёрнута по
   // умолчанию: наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»;
   // раскрыта — все чаты (ключевой первым, с меткой «ключевой»). «Без фичи» — хвост
@@ -868,13 +871,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         <div key={fid} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
           <FeatureGroupHeader
             feature={g.feature}
-            count={g.feature.chatCount}
             expanded={expanded}
             onToggle={toggle}
+            // Тело открывает страницу фичи; до Ф2.3 — заглушка (no-op).
+            onOpen={() => {}}
             isMobile={isMobile}
             compact
             personaName={personaNameOf(g.feature)}
             now={nowMs}
+            personaById={personaById}
           />
           {expanded && (
             <div style={{ marginLeft: 13, paddingLeft: 9, borderLeft: `1px solid ${C.divider}` }}>
@@ -908,15 +913,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       <div key={g.feature.featureId} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
         <FeatureGroupHeader
           feature={g.feature}
-          // Счётчик — chatCount строки индекса (бэк считает чаты фичи, архивные
-          // включены), а не число корней/строк группы (минор m3: «1» при 8 чатах)
-          count={g.feature.chatCount}
           expanded={expanded}
           onToggle={toggle}
+          // Тело открывает страницу фичи; до Ф2.3 — заглушка (no-op).
+          onOpen={() => {}}
           isMobile={isMobile}
           // «Кто · сколько» в статусе: персона-исполнитель (attention.personaId) + «сейчас»
           personaName={personaNameOf(g.feature)}
           now={nowMs}
+          personaById={personaById}
         />
         <div style={{ marginLeft: 13, paddingLeft: 9, borderLeft: `1px solid ${C.divider}` }}>
           {nestTreeRows(rows).map(node => (

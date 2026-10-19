@@ -514,3 +514,30 @@ export function featureRoleFor(sessionId: string, keyId: string | null, index: F
   if (sessionId === keyId) return otherN > 0 ? `ключевой · ещё ${otherN}` : 'ключевой';
   return otherN > 0 ? `ещё ${otherN}` : undefined;
 }
+
+// === Плашка группы фичи, волна 2 (макет features-overview-2.html, .ha) ===
+// Чистые функции отображения: бэк считает bucket/attention/chips/keySessionId
+// (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»), фронт только
+// раскладывает их в быстрое действие и стопку аватаров — не вычисляет сам.
+
+// Быстрое действие плашки (макет .qa, «Общее: два действия у плашки»): «Ответить» /
+// «К мержу» / «Ключевой чат». Чистая функция по attention.kind, chips, keySessionId:
+//   closed (chip)          → null (действие живёт на странице фичи, не в списке);
+//   attention.kind 'merge' → 'К мержу';
+//   attention.kind 'wait'  → 'Ответить';
+//   иначе (идёт/стоит)      → 'Ключевой чат' (только если ключевой чат найден), иначе null.
+export function featureQuickAction(f: FeatureIndexFeature): string | null {
+  if (f.chips.includes('closed')) return null;
+  if (f.attention?.kind === 'merge') return 'К мержу';
+  if (f.attention?.kind === 'wait') return 'Ответить';
+  return f.keySessionId ? 'Ключевой чат' : null;
+}
+
+// Стопка аватаров «кто сейчас» (макет .l2): по nowPersonaIds (волна 2, массив идущих
+// персон, по убыванию старта); если массив пуст/отсутствует (старый ответ бэка) —
+// фолбэк на now0 (одна InProgress-задача волны 1). Чистая функция.
+export function featureAvatarPersonaIds(f: FeatureIndexFeature): string[] {
+  if (f.nowPersonaIds && f.nowPersonaIds.length > 0) return f.nowPersonaIds;
+  if (f.now0?.personaId) return [f.now0.personaId];
+  return [];
+}

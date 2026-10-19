@@ -170,6 +170,35 @@ id чата, которого нет в снимке (чужой, удалённ
 Вид `key` есть в типах и в шкале силы, но в Б3 в `chats` не отдаётся: ключевой чат берётся из
 `keySessionId` строки. `SourceSessionId` дочерних задач членством не считается.
 
+## Контракт `GET /api/tasks/features/{featureId}`
+
+Страница фичи (волна 2, [features-overview-2-proposal.md](../mockups/features-overview-2-proposal.md) п. 2):
+одна фича по id эпика. Эндпоинт — [TasksController.GetFeature](../../backend/ClaudeHomeServer/Controllers/TasksController.cs).
+`[Authorize]`, владелец из claim (не из маршрута); от фич-флагов не зависит. Подсистема `Tasks`
+выключена → `503 { error }` (ADR-014, как у `GetFeatures`/`GetFeaturesIndex`).
+
+**Ответ — обёртка** `{ run, events, eventsTotal }`:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `run` | `FeatureRun` | агрегат фичи: `FeatureProjector.Project(featureId, ownerId)` (контракт — выше, «`GET /api/tasks/features?sessionId=`»); новой арифметики нет |
+| `events` | `FeatureEvent[]` | лента: `FeatureProjector.BuildEvents(run, снимок сессий)`, порядок `At desc` (при равенстве — `taskId`) |
+| `eventsTotal` | number | число событий **до** обрезки `eventsLimit` |
+
+`?eventsLimit=`: не задан → `100`; `all` или `0` → все; `N` (целое > 0) → `N`; прочее → `100`.
+
+**Коды:** нет эпика / чужой / удалён → один `404` (не отличаем: это же состояние «Фичу удалили» на
+фронте); подсистема выключена → `503`.
+
+Поле `FeatureEvent` — `{ at, kind, taskId, role, stepRef?, personaId?, sessionId?, round?, reason? }`
+(контракт — [FeatureEvents.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureEvents.cs)).
+`sessionId` наружу только если чат в снимке владельца, иначе `null` (fail-closed, как `KeySession`).
+
+**Ограничения ленты** (чистая проекция, журнала нет): видна **последняя пара старт/стоп** задачи
+(`TaskItem` держит одно `ClaudeStartedAt`/`ExecutorStoppedAt`); **нет снятого «ждёт вас»** (`waiting`
+есть, пока `AwaitingHumanSince` стоит); **нет переносов** (смена исполнителя отдельного события не даёт)
+и **нет автора кнопки** (кто запустил/снял — не атрибутируется).
+
 ## Правила
 
 - **Мерж `done`** — только по задаче `role=merge` со статусом `Done`. Финал зелёный, а merge-задачи

@@ -72,6 +72,51 @@
 - **`turn-plan-feature-mode`** — плашка фичи в чатах фичи: это та же поверхность чата, что режим «Исполнение фичи», поэтому отдельного флага у неё нет.
 - Флагами закрыт только UI: эндпоинт `features/index` от флагов не зависит, при выключенных флагах список сессий работает как раньше.
 
+## Волна 2: ручка одной фичи и лента событий
+
+Волна 1 (индекс «чат → фичи», §1–§5) даёт список фич; волна 2 добавляет ручку **одной** фичи по id —
+для страницы фичи (макет [features-overview-2-proposal.md](../mockups/features-overview-2-proposal.md) п. 2).
+Ручку разрешил Андрей; контракт — Александр (разрез §1).
+
+### Ручка `GET /api/tasks/features/{featureId}`
+
+Эндпоинт — [TasksController.GetFeature](../../backend/ClaudeHomeServer/Controllers/TasksController.cs).
+`[Authorize]`, владелец из claim (не из маршрута); от фич-флагов не зависит. Подсистема `Tasks`
+выключена (`features == null`) → честный `503` (ADR-014, как у `GetFeatures`/`GetFeaturesIndex`).
+
+**Ответ — обёртка** `{ run, events, eventsTotal }` (контракт — [turn-plan-feature-mode.md](../features/turn-plan-feature-mode.md),
+«Контракт `GET /api/tasks/features/{featureId}`»):
+
+- `run` — агрегат: существующий `FeatureProjector.Project(featureId, ownerId)`, новой арифметики нет.
+  Обёртка, а не поле в `FeatureRun`: тот же агрегат отдаёт `GET features?sessionId` (плашка чата),
+  а лента его раздула бы.
+- `events` — лента: `FeatureProjector.BuildEvents(run, снимок сессий)`, порядок как отдаёт функция
+  (`At desc`, при равенстве — `taskId`). `?eventsLimit=`: не задан → `100`; `all`/`0` → все;
+  `N` (целое > 0) → `N`; прочее → `100`.
+- `eventsTotal` — число событий **до** обрезки.
+
+**Коды:** нет эпика / чужой / удалён → один `404` (не отличаем: это же состояние «Фичу удалили» на
+фронте); подсистема выключена → `503`.
+
+### Шов: `InternalsVisibleTo` на Main
+
+`BuildEvents` — `internal static` (как `BuildIndexCore`). Контроллер (Main) зовёт его напрямую, поэтому
+в [ClaudeHomeServer.Tasks.csproj](../../backend/ClaudeHomeServer.Tasks/ClaudeHomeServer.Tasks.csproj) добавлен
+третий `InternalsVisibleTo("ClaudeHomeServer")` (к существующим `ClaudeHomeServer.Tests`/`ClaudeHomeServer.Tasks.Tests`).
+Направление `Main → Tasks` не меняется (Main уже ссылается на `FeatureProjector`), `SubsystemBoundaryTests`
+не задеты.
+
+### Ограничения ленты (честные, без журнала)
+
+Лента — чистая проекция `FeatureRun`/`TaskItem`, хранилища событий нет. Поэтому:
+
+- **Видна последняя пара старт/стоп** задачи: `TaskItem` держит одно `ClaudeStartedAt`/`ExecutorStoppedAt`,
+  перезапуск перезаписывает их — журнал не заводим.
+- **Нет снятого «ждёт вас»**: `waiting`-событие есть, пока `AwaitingHumanSince` стоит; сняли (→ `null`) —
+  события «снято» нет.
+- **Нет переносов**: смена исполнителя/персоны отдельного события не даёт.
+- **Нет автора кнопки**: кто запустил/снял — не атрибутируется (только `personaId` задачи, если есть).
+
 ## Что вынесено за волну
 
 Выкатку не блокирует ничего: флаги выключены, каждый пункт честно деградирует.

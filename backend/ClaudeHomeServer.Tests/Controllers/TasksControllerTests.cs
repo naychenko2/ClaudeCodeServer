@@ -348,6 +348,129 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             .Which.StatusCode.Should().Be(503);
     }
 
+    // ─── REST GET /api/tasks/features/{featureId}: обёртка { run, events, eventsTotal } ─────
+
+    // Находит событие (kind, taskId) в массиве events; бросает — такого нет (в тестах событие есть).
+    private static JsonElement FindEvent(JsonElement events, string kind, string taskId)
+    {
+        foreach (var e in events.EnumerateArray())
+            if (e.GetProperty("kind").GetString() == kind && e.GetProperty("taskId").GetString() == taskId)
+                return e;
+        throw new InvalidOperationException($"Событие {kind}/{taskId} не найдено");
+    }
+
+    // 200: своя фича → обёртка. run — агрегат (Project), events — массив, eventsTotal — до обрезки.
+    [Fact]
+    public async Task GetFeature_СвояФича_200_Обёртка()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+
+        var response = await _client.GetAsync($"/api/tasks/features/{epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("run").GetProperty("featureId").GetString().Should().Be(epicId);
+        body.GetProperty("run").GetProperty("epic").GetProperty("id").GetString().Should().Be(epicId);
+        body.GetProperty("events").ValueKind.Should().Be(JsonValueKind.Array);
+        // 2 события (эпик + шаг, оба created) — меньше лимита 100 → обрезки нет.
+        body.GetProperty("eventsTotal").GetInt32().Should().Be(2);
+        body.GetProperty("events").GetArrayLength().Should().Be(2);
+    }
+
+    // 404 чужой: эпик второго юзера для первого — «нет» (не отличим от несуществующей).
+    [Fact]
+    public async Task GetFeature_ЧужаяФича_404()
+    {
+        var created = await _stranger.PostAsJsonAsync("/api/tasks", new { title = "чужой эпик", role = "feature" });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+
+        var response = await _client.GetAsync($"/api/tasks/features/{epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 404 удалённой: эпик владельца удалён → «нет» (тот же 404, что у чужой).
+    [Fact]
+    public async Task GetFeature_УдалённаяФича_404()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await _client.DeleteAsync($"/api/tasks/{epicId}");
+
+        var response = await _client.GetAsync($"/api/tasks/features/{epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.
+    [Fact]
+    public void GetFeature_ПодсистемаВыключена_503()
+    {
+        var controller = new TasksController(
+            tasks: null!, broadcaster: null!, ai: null!, projects: null!,
+            personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
+            noteSync: null, features: null);
+
+        var result = controller.GetFeature("any", null);
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>()
+            .Which.StatusCode.Should().Be(503);
+    }
+
+    // eventsLimit: =2 → лента 2, eventsTotal=6 (до обрезки); all/0 → все 6.
+    [Fact]
+    public async Task GetFeature_EventsLimit_ОбрезаетЛенту_EventsTotalДоОбрезки()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        // 5 шагов → 6 событий (эпик + 5 шагов, все created).
+        for (var i = 0; i < 5; i++)
+            await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = $"Ш{i}" });
+
+        var limited = await (await _client.GetAsync($"/api/tasks/features/{epicId}?eventsLimit=2"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        limited.GetProperty("events").GetArrayLength().Should().Be(2);
+        limited.GetProperty("eventsTotal").GetInt32().Should().Be(6);
+
+        var all = await (await _client.GetAsync($"/api/tasks/features/{epicId}?eventsLimit=all"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        all.GetProperty("events").GetArrayLength().Should().Be(6);
+        all.GetProperty("eventsTotal").GetInt32().Should().Be(6);
+
+        var zero = await (await _client.GetAsync($"/api/tasks/features/{epicId}?eventsLimit=0"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        zero.GetProperty("events").GetArrayLength().Should().Be(6);
+    }
+
+    // sessionId события: чат в снимке владельца → id наружу; чат удалён → null (fail-closed).
+    [Fact]
+    public async Task GetFeature_SessionId_УдалённыйЧат_Null()
+    {
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedSessionId = sessionId,
+        });
+        var stepId = step.GetProperty("id").GetString();
+
+        // Чат жив (в снимке) → sessionId события наружу.
+        var live = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var liveEvent = FindEvent(live.GetProperty("events"), "created", stepId);
+        liveEvent.GetProperty("sessionId").GetString().Should().Be(sessionId);
+
+        // Чат удалён (не в снимке) → sessionId = null.
+        await Sessions.DeleteAsync(sessionId);
+        var after = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var afterEvent = FindEvent(after.GetProperty("events"), "created", stepId);
+        afterEvent.GetProperty("sessionId").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
     [Fact]
     public async Task Delete_УдаляетЗадачу()
     {

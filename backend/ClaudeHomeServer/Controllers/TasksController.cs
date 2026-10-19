@@ -478,6 +478,42 @@ public class TasksController(
         return Ok(features.BuildIndex(UserId, snapshot, projectId));
     }
 
+    // Одна фича по id эпика (волна 2 «Обзор фич», GET /api/tasks/features/{featureId}):
+    // обёртка { run, events, eventsTotal } — агрегат (Project, без новой арифметики) + лента
+    // событий (BuildEvents, порядок как отдаёт функция) + общее число событий до обрезки.
+    // [Authorize], владелец из claim (не из маршрута); нет эпика/чужой/удалён → один 404
+    // (не отличаем: это же состояние «Фичу удалили» на фронте). Подсистема Tasks выключена
+    // (features == null) → честный 503 (ADR-014, как у GetFeatures/GetFeaturesIndex). Ручка
+    // от фич-флагов не зависит. ?eventsLimit=: не задан → 100; "all"/"0" → все; N (целое > 0)
+    // → N; прочее → 100.
+    [HttpGet("features/{featureId}")]
+    public IActionResult GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Project: null — эпика нет (нет/чужой/удалён — один 404, см. выше).
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound();
+        // Снимок сессий владельца — как для индекса: sessionId события наружу только если в нём
+        // (fail-closed: удалённый/чужой чат → null).
+        var snapshot = sessions.GetAllOwnedBy(UserId)
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
+            .ToList();
+        var all = FeatureProjector.BuildEvents(run, snapshot);
+        var eventsTotal = all.Count;
+        var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
+        return Ok(new { run, events, eventsTotal });
+    }
+
+    // ?eventsLimit= : не задан → 100; "all"/"0" → все (int.MaxValue); N (целое > 0) → N; прочее → 100.
+    private static int ResolveEventsLimit(string? eventsLimit)
+    {
+        if (eventsLimit is null) return 100;
+        if (eventsLimit == "all" || eventsLimit == "0") return int.MaxValue;
+        if (int.TryParse(eventsLimit, out var n) && n > 0) return n;
+        return 100;
+    }
+
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]
     // Анти-рекурсия: раньше жила в составе инструментов (env TASKS_EXECUTE), из-за чего

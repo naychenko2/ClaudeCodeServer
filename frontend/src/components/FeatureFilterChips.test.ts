@@ -60,11 +60,14 @@ describe('FeatureFilterChips: рендер', () => {
     expect(html).toContain('>0</span>');
   });
 
-  it('выбранный чип — акцентный фон, остальные — прозрачные', () => {
+  it('m1: выбранный — accentLight + accentMuted; невыбранный — bgCard + borderLight', () => {
     const html = renderChips([feat('a', ['open'])], 'stopped');
-    // Выбранный (stopped) — background:var(--c-accent); остальные — transparent
-    expect(html).toContain('background:var(--c-accent)');
-    expect(html).toContain('background:transparent');
+    // m1: выбранный (stopped) — заливка accentLight, рамка accentMuted (макет .fch, не C.accent)
+    expect(html).toContain('background:var(--c-accent-light)');
+    expect(html).toContain('border:1px solid var(--c-accent-muted)');
+    // невыбранные — bgCard + borderLight
+    expect(html).toContain('background:var(--c-bg-card)');
+    expect(html).toContain('border:1px solid var(--c-border-light)');
   });
 
   it('n2: высота по макету .fch — мобила 36px (тач-цель), десктоп 26px', () => {

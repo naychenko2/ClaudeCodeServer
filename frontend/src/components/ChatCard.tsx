@@ -154,7 +154,8 @@ export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
       <FeatureGlyph kind={st.kind} size={11} />
       <span style={{
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-        fontSize: FS.xxs, color: C.textMuted,
+        // m11: 11 (FS.xs) по макету .ft, не 10 (FS.xxs)
+        fontSize: FS.xs, color: C.textMuted,
       }}>
         {feature.title}
       </span>
@@ -1033,16 +1034,23 @@ function ChatCardView({
           {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}
           {/* Роль чата в фиче (режим «Фичи»): «ключевой»/«ещё N» — в подстроке
               карточки, а не отдельной строкой над ней (макет, минор m6) */}
-          {featureRole && (
-            <span data-testid="chat-feature-role" style={{
-              display: 'inline-flex', flexShrink: 0, alignItems: 'center',
-              fontSize: FS.xs, fontWeight: 600, color: C.accent,
-              background: C.accentLight, borderRadius: R.max, padding: '1px 6px',
-              fontFamily: FONT.sans, whiteSpace: 'nowrap',
-            }}>
-              {featureRole}
-            </span>
-          )}
+          {featureRole && (() => {
+            // m4: вид — как в плашке/шторке (макет .role): mono, R 6, 0/5;
+            // «ключевой» — accent/accentLight 700, «ещё N» — textSecondary/bgSelected 400.
+            const isKey = featureRole.startsWith('ключевой');
+            return (
+              <span data-testid="chat-feature-role" style={{
+                display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+                fontFamily: FONT.mono, fontSize: FS.xs,
+                fontWeight: isKey ? 700 : 400,
+                color: isKey ? C.accent : C.textSecondary,
+                background: isKey ? C.accentLight : C.bgSelected,
+                borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
+              }}>
+                {featureRole}
+              </span>
+            );
+          })()}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (
             <span data-testid="chat-continued-mark" style={{ display: 'inline-flex', flexShrink: 0, color: C.textMuted }}

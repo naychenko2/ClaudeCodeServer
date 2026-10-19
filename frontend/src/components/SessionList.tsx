@@ -995,6 +995,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         inline
         icon={<Sparkles size={20} strokeWidth={2} />}
         title="Фич пока нет"
+        // m10: по макету .empty.sm — заголовок 14 (не 16) и КРУГЛАЯ иконка (R.full)
+        titleSize={FS.md}
+        iconRadius={R.full}
         subtitle="Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу."
       />
     );
@@ -1063,9 +1066,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           style={{
             display: 'flex', alignItems: 'center', gap: 6, width: '100%',
             border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
-            padding: `${SP.xs}px ${SP.xs}px`, fontFamily: FONT.sans,
-            // Тач-цель на мобиле: не ниже 40 (TB.iconHitMobile), иначе 22 px (минор m2)
-            minHeight: isMobile ? TB.iconHitMobile : undefined,
+            // n2: отступы 10/6/5 + minHeight 30 по макету .sec (высота ~31, не 23)
+            padding: '10px 6px 5px', fontFamily: FONT.sans,
+            // Тач-цель на мобиле: не ниже 40 (TB.iconHitMobile); десктоп — 30 (макет .sec)
+            minHeight: isMobile ? TB.iconHitMobile : 30,
           }}
         >
           <span style={{

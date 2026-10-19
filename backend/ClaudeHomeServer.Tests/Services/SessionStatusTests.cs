@@ -348,6 +348,21 @@ public class SessionStatusTests : IDisposable
     }
 
     [Fact]
+    public void TakeRestartResumeCandidates_Waiting_NotCandidate_EvenWithShutdownInterruptedAt()
+    {
+        // Симметрично Starting: KillAllProcesses Waiting не помечает (ход ещё не шёл);
+        // даже если снимок есть — Waiting кандидатом не становится.
+        var waiting = MakeSession(SessionStatus.Waiting);
+        waiting.ShutdownInterruptedAt = DateTime.UtcNow;
+        WriteSessions([waiting]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "Waiting не помечается KillAllProcesses; снимок не делает его кандидатом");
+    }
+
+    [Fact]
     public void TakeRestartResumeCandidates_OldOrphaned_NotCandidate()
     {
         // Старый Orphaned без снимка — «только последний рестарт»: кандидатом не является.

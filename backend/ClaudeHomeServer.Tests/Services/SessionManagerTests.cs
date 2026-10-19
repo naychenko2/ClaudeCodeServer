@@ -593,6 +593,105 @@ public class SessionManagerTests : IDisposable
         _sut.MarkRead("does-not-exist", TestUserId).Should().BeFalse();
     }
 
+    // Перф-3 B10 п.6: PUT /api/chats/{id}/read ~0,9с в среднем (15 вызовов, замер прода
+    // download5). Причина: MarkRead звал SaveSessions() синхронно — сериализация ВСЕГО
+    // sessions.json (600 сессий) + fsync (flushToDisk) + sweep-terminus в каждом запросе.
+    // Фикс: отметка пишет in-memory и ставит one-shot таймер (дебаунс) — запись одним пакетом,
+    // вне запроса. Бенчмарк: «до» = синхронный SaveSessions на 600 сессиях (что делал старый
+    // MarkRead), «после» = MarkRead с дебаунсом (in-memory, без полной записи).
+    [Fact]
+    public void MarkRead_Бенчмарк_ЗаписьНеСинхроннаВЗапросе()
+    {
+        var sut = BuildDebounceManager();
+        try
+        {
+            // 600 project-less сессий одного владельца — как в проде (download5).
+            for (var i = 0; i < 600; i++)
+                sut.AddSessionForTest(new Session { ProjectId = null, OwnerId = TestUserId });
+
+            // «До»: синхронный SaveSessions — то, что старый MarkRead делал в каждом запросе.
+            var before = TimeMs(() => sut.SaveSessions());
+
+            // «После»: MarkRead с дебаунсом — in-memory + one-shot таймер, без полной записи.
+            var target = sut.GetAllOwnedBy(TestUserId).First();
+            var after = TimeMs(() => sut.MarkRead(target.Id, TestUserId));
+
+            Console.WriteLine(
+                $"[MarkRead-бенчмарк] до (синхронный SaveSessions, 600 сессий): {before:F1} мс; " +
+                $"после (MarkRead с дебаунсом): {after:F3} мс");
+            after.Should().BeLessThan(before,
+                "отметка прочитанности не должна писать весь sessions.json синхронно в запросе");
+        }
+        finally
+        {
+            // Снять one-shot таймер дебаунса, чтобы он не гонял SaveSessions после теста
+            // (иначе запись ушла бы в уже удалённый temp-каталог).
+            sut.Dispose();
+        }
+    }
+
+    private static double TimeMs(Action action)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        action();
+        sw.Stop();
+        return sw.Elapsed.TotalMilliseconds;
+    }
+
+    // Менеджер с включённым автосейвом (Session:AutoSaveSeconds=1) — дебаунс MarkRead активен.
+    // Копия BuildSecondManager с тем же конфигом, кроме автосейва (1с) и задержки дебаунса (0,2с).
+    private SessionManager BuildDebounceManager()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                ["Session:AutoSaveSeconds"] = "1",
+                ["Session:MarkReadDebounceSeconds"] = "0.2",
+                ["DefaultProjectsPath"] = Path.Combine(_tempDir, "homes"),
+                ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile"),
+            })
+            .Build();
+        var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var appSettings = new AppSettingsService(config);
+        var projectManager = new ProjectManager(config, userStore, appSettings);
+        var historyService = new ChatHistoryService(config);
+
+        var clients = new Mock<IHubClients>();
+        var clientProxy = new Mock<IClientProxy>();
+        clientProxy
+            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
+
+        var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
+        var subPool = new ClaudeSubscriptionPool(config);
+        var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
+            config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
+        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+        var usage = new UsageService(config);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
+        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var flags = new FeatureFlagService(userStore);
+        var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        var personas = new PersonaManager(config);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
+        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+
+        return new SessionManager(projectManager, historyService, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox, broadcaster: new TestSessionBroadcaster());
+    }
+
     [Fact]
     public void LastReadAt_Сериализация_UtcСуффиксZ_И_RoundTrip()
     {

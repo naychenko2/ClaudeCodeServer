@@ -10,6 +10,11 @@ import type { HistoryCursorQuery, HistoryReply } from './historyTail';
 const historyCursorParams = (q: HistoryCursorQuery) =>
   `after=${q.after}${q.fp ? `&fp=${encodeURIComponent(q.fp)}` : ''}`;
 
+// Версия схемы миниатюр аватаров (?size=): bump-ит URL, чтобы браузеры, закэшировавшие
+// оригинал (1,5 МБ) с immutable, сделали один свежий запрос и получили миниатюру.
+// Сервер параметр может игнорировать; при смене схемы миниатюр поднять число.
+const AVATAR_THUMB_SCHEME_VERSION = 2;
+
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
 export interface ModelTiers {
@@ -1703,7 +1708,11 @@ export const api = {
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
-      if (size > 0) params.set('size', String(size));
+      if (size > 0) {
+        params.set('size', String(size));
+        // Версия схемы миниатюр: сменила URL у всех, кто закэшировал оригинал (см. константу).
+        params.set('t', String(AVATAR_THUMB_SCHEME_VERSION));
+      }
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.

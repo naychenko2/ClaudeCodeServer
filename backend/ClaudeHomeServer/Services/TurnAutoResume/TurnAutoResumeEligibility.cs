@@ -34,7 +34,7 @@ public static class TurnAutoResumeEligibility
     /// </summary>
     /// <param name="session">Сессия-кандидат.</param>
     /// <param name="project">Проект сессии (null — чат вне проекта, считается серверным).</param>
-    /// <param name="deviceOnline">Онлайн ли устройство локального проекта (актуально только при project.DeviceId != null).</param>
+    /// <param name="deviceOnline">Онлайн ли устройство локального проекта (для серверного проекта не учитывается).</param>
     /// <param name="lastTurnWasDeployOrRollback">Последний tool_use без result — deploy_start или deploy_rollback (петля выкатки).</param>
     public static EligibilityResult Check(Session session, Project? project, bool deviceOnline, bool lastTurnWasDeployOrRollback)
     {
@@ -51,7 +51,7 @@ public static class TurnAutoResumeEligibility
             return EligibilityResult.Exclude(ReasonGroupChat);
 
         // 4. Локальный проект с офлайн-устройством.
-        if (project is { DeviceId: not null } && !deviceOnline)
+        if (project is not null && ProjectCapabilities.IsDeviceBound(project) && !deviceOnline)
             return EligibilityResult.Exclude(ReasonDeviceOffline);
 
         // 5. Петля выкатки: последний tool_use — deploy_start/deploy_rollback без result.

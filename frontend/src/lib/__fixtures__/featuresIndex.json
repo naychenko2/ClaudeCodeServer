@@ -1,0 +1,134 @@
+{
+  "features": [
+    {
+      "featureId": "feat-attention",
+      "title": "Фича, которая встала и ждёт человека",
+      "projectId": "p1",
+      "bucket": "attention",
+      "attention": {
+        "kind": "stopped",
+        "since": "2026-10-18T12:00:00Z",
+        "reason": "Исполнитель встал: ждёт решения",
+        "personaId": "0b461266-6bdb-47f2-9ca3-47068de62b74",
+        "sessionId": "chat-exec-1"
+      },
+      "rail": [
+        { "key": "cut", "state": "done", "tone": null },
+        { "key": "plan", "state": "done", "tone": null },
+        { "key": "prod", "state": "active", "tone": "stopped" },
+        { "key": "review", "state": "pending", "tone": null },
+        { "key": "qa", "state": "pending", "tone": null },
+        { "key": "final", "state": "pending", "tone": null },
+        { "key": "merge", "state": "pending", "tone": null }
+      ],
+      "chips": ["open", "stopped"],
+      "stepsAccepted": 1,
+      "stepsTotal": 3,
+      "loops": 1,
+      "now0": { "personaId": "0b461266-6bdb-47f2-9ca3-47068de62b74", "stage": "prod", "stepRef": "Ш1" },
+      "lastActivityAt": "2026-10-18T12:00:00Z",
+      "summary": null,
+      "keySessionId": "chat-cur",
+      "keyArchived": false,
+      "keyProjectId": "p1",
+      "chatCount": 2
+    },
+    {
+      "featureId": "feat-running",
+      "title": "Фича в работе",
+      "projectId": "p1",
+      "bucket": "running",
+      "attention": null,
+      "rail": [
+        { "key": "cut", "state": "done", "tone": null },
+        { "key": "plan", "state": "done", "tone": null },
+        { "key": "prod", "state": "active", "tone": "run" },
+        { "key": "review", "state": "pending", "tone": null },
+        { "key": "qa", "state": "pending", "tone": null },
+        { "key": "final", "state": "pending", "tone": null },
+        { "key": "merge", "state": "pending", "tone": null }
+      ],
+      "chips": ["open"],
+      "stepsAccepted": 2,
+      "stepsTotal": 4,
+      "loops": 0,
+      "now0": { "personaId": "0b461266-6bdb-47f2-9ca3-47068de62b74", "stage": "prod", "stepRef": "Ш2" },
+      "lastActivityAt": "2026-10-18T14:30:00Z",
+      "summary": null,
+      "keySessionId": "chat-key-arch",
+      "keyArchived": true,
+      "keyProjectId": "p1",
+      "chatCount": 2
+    },
+    {
+      "featureId": "feat-idle",
+      "title": "Фича, которую ещё не запускали",
+      "projectId": "p1",
+      "bucket": "idle",
+      "attention": null,
+      "rail": [
+        { "key": "cut", "state": "done", "tone": null },
+        { "key": "plan", "state": "done", "tone": null },
+        { "key": "prod", "state": "pending", "tone": null },
+        { "key": "review", "state": "absent", "tone": null },
+        { "key": "qa", "state": "absent", "tone": null },
+        { "key": "final", "state": "absent", "tone": null },
+        { "key": "merge", "state": "absent", "tone": null }
+      ],
+      "chips": ["open"],
+      "stepsAccepted": 0,
+      "stepsTotal": 2,
+      "loops": 0,
+      "now0": null,
+      "lastActivityAt": "2026-10-17T09:00:00Z",
+      "summary": null,
+      "keySessionId": "chat-key-other",
+      "keyArchived": false,
+      "keyProjectId": "p2",
+      "chatCount": 1
+    },
+    {
+      "featureId": "feat-closed",
+      "title": "Смерженная фича",
+      "projectId": "p1",
+      "bucket": "closed",
+      "attention": null,
+      "rail": [
+        { "key": "cut", "state": "done", "tone": null },
+        { "key": "plan", "state": "done", "tone": null },
+        { "key": "prod", "state": "done", "tone": null },
+        { "key": "review", "state": "done", "tone": null },
+        { "key": "qa", "state": "done", "tone": null },
+        { "key": "final", "state": "done", "tone": null },
+        { "key": "merge", "state": "done", "tone": null }
+      ],
+      "chips": ["closed"],
+      "stepsAccepted": 3,
+      "stepsTotal": 3,
+      "loops": 2,
+      "now0": null,
+      "lastActivityAt": "2026-10-18T10:00:00Z",
+      "summary": { "mergedAt": "2026-10-18T10:00:00Z", "durationMinutes": 480 },
+      "keySessionId": "chat-cur",
+      "keyArchived": false,
+      "keyProjectId": "p1",
+      "chatCount": 1
+    }
+  ],
+  "chats": {
+    "chat-cur": [
+      { "featureId": "feat-closed", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null },
+      { "featureId": "feat-attention", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null },
+      { "featureId": "feat-running", "kind": "orchestrator", "taskRole": null, "stepRef": null, "lane": null }
+    ],
+    "chat-key-arch": [
+      { "featureId": "feat-running", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null }
+    ],
+    "chat-key-other": [
+      { "featureId": "feat-idle", "kind": "curator", "taskRole": null, "stepRef": null, "lane": null }
+    ],
+    "chat-exec-1": [
+      { "featureId": "feat-attention", "kind": "executor", "taskRole": "step", "stepRef": "Ш1", "lane": "бэк" }
+    ]
+  }
+}

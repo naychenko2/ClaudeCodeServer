@@ -340,10 +340,14 @@ public sealed class FeatureProjector(TaskManager tasks)
         FeatureSummary? summary = null;
         if (closed)
         {
-            // МergedAt: CompletedAt merge-задачи; если мержа нет — CompletedAt эпика.
+            // МergedAt: CompletedAt merge-задачи; только когда merge-задача ЗАКРЫТА (Done).
+            // Закрытая эпиком БЕЗ merge-задачи (эпик Done, мержа нет) → mergedAt = null:
+            // фронт читает «закрыта» (bucket=closed && mergedAt=null), а не «смержена».
+            // (Раньше сюда падал CompletedAt эпика — дефект n4: закрытая без мержа
+            // показывалась «смержена <дата закрытия эпика>».)
             var mergedAt = merge is not null && merge.Status == TaskItemStatus.Done
                 ? merge.CompletedAt
-                : epic.CompletedAt;
+                : null;
             // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
             var firstStart = featureTasks
                 .Min(t => t.ClaudeStartedAt ?? t.CreatedAt);
@@ -739,28 +743,31 @@ public sealed class FeatureProjector(TaskManager tasks)
     // internal — для золотых тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
     internal static IReadOnlyList<FeatureRun> OrderRuns(List<FeatureRun> runs)
     {
+        // 4 группы — по Bucket (единая точка правды, план С0 §2: bucket и OrderRuns не
+        // расходятся): attention → running → idle → closed, у каждой — свой ключ сортировки.
+
         // 1. Не закрытые с Attention: по since ascending (ждущая дольше всех — первая).
         var withAttention = runs
-            .Where(r => !r.Closed && r.Attention is not null)
+            .Where(r => Bucket(r) == "attention")
             .OrderBy(r => r.Attention!.Since ?? DateTime.MaxValue)
             .ToList();
 
         // 2. Не закрытые идущие (Now не пуст, Attention null): по max ClaudeStartedAt descending.
         //    Now[0] — задача с самым поздним ClaudeStartedAt (Now отсортирован по убыванию).
         var running = runs
-            .Where(r => !r.Closed && r.Attention is null && r.Now.Count > 0)
+            .Where(r => Bucket(r) == "running")
             .OrderByDescending(r => r.Now[0].StartedAt ?? DateTime.MinValue)
             .ToList();
 
         // 3. Не закрытые прочие (без Attention, не идут): по LastActivityAt descending.
         var other = runs
-            .Where(r => !r.Closed && r.Attention is null && r.Now.Count == 0)
+            .Where(r => Bucket(r) == "idle")
             .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
         // 4. Закрытые: в конец, по LastActivityAt descending.
         var closed = runs
-            .Where(r => r.Closed)
+            .Where(r => Bucket(r) == "closed")
             .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
@@ -773,10 +780,355 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Эпик + все его дочерние (FeatureId == epic.Id) из уже отобранных задач владельца.
-    private static List<TaskItem> FeatureTasks(TaskItem epic, List<TaskItem> owner)
+    private static List<TaskItem> FeatureTasks(TaskItem epic, IReadOnlyList<TaskItem> owner)
     {
         var all = new List<TaskItem> { epic };
         all.AddRange(owner.Where(t => t.FeatureId == epic.Id));
         return all;
+    }
+
+    // То же, но из lookup, сгруппированного по FeatureId (BuildIndexCore): эпик кладётся
+    // первым (сторож Build), дочерние — по ключу lookup; полного скана owner на эпик нет.
+    private static List<TaskItem> FeatureTasks(TaskItem epic, ILookup<string, TaskItem> byFeature)
+    {
+        var all = new List<TaskItem> { epic };
+        all.AddRange(byFeature[epic.Id]);
+        return all;
+    }
+
+    // ─── Б1: индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index) ────────────────
+
+    // Обёртка для REST (Б3): owner = задачи владельца (per-owner, fail-closed), сессии — узкий
+    // снимок от контроллера (SessionManager). Ядро — чистая функция <see cref="BuildIndexCore"/>.
+    public FeatureIndex BuildIndex(
+        string ownerId,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        string? projectId = null,
+        DateTime? now = null)
+        => BuildIndexCore(tasks.GetByOwner(ownerId).ToList(), sessions, projectId, now);
+
+    // Чистое ядро индекса (на нём золотые тесты, как на <see cref="Build"/>): задачи владельца
+    // (owner) + узкий снимок сессий (sessions) → карта членства (Chats) и строки-заготовки фич
+    // (Features). Хранилище сессий внутри проектора НЕ трогает (шов решён в С0).
+    //
+    // Членство чата в фиче F — сильнейший вид на пару «чат × фича» (key > curator > orchestrator
+    // > executor; key добавит Б2):
+    //   executor     — Session.TaskId → задача с FeatureId == F (или сама эпик F: Role=feature);
+    //   curator      — epic.SourceSessionId == чат;
+    //   orchestrator — epic.ExecutorLaunchedBySessionId == чат ИЛИ ExecutorLaunchedBySessionId
+    //                  дочерней задачи фичи == чат.
+    // SourceSessionId дочерних задач — НЕ членство (слабая связь: чат, создавший задачу, в фичу
+    // не «входит» — показывает только плашку).
+    //
+    // Задачи группируются по FeatureId ОДИН раз (ToLookup) — уходит O(E×T) старого FeatureTasks.
+    internal static FeatureIndex BuildIndexCore(
+        IReadOnlyList<TaskItem> owner,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        string? projectId = null,
+        DateTime? now = null)
+    {
+        ArgumentNullException.ThrowIfNull(sessions);
+        _ = now ?? DateTime.UtcNow; // «сейчас» — для длительностей (Б2); Б1 пока не трогает
+
+        // Задача по id — для executor-членства (Session.TaskId → задача).
+        var byId = owner.ToDictionary(t => t.Id);
+        // Эпики (role=feature) — источники curator/orchestrator-членства.
+        var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
+        // Задачи, сгруппированные по FeatureId, ОДИН раз (ToLookup): O(E×T) старого
+        // FeatureTasks (полный скан owner на каждый эпик) уходит.
+        var byFeature = owner.Where(t => t.FeatureId is not null).ToLookup(t => t.FeatureId);
+
+        // curator: кто создал эпик (SourceSessionId) → фичи.
+        var curatorBySession = new Dictionary<string, HashSet<string>>();
+        foreach (var epic in epics)
+            if (epic.SourceSessionId is not null)
+                AddToSet(curatorBySession, epic.SourceSessionId, epic.Id);
+
+        // orchestrator: кто запускал исполнителя эпика (ExecutorLaunchedBySessionId эпика)
+        // ИЛИ дочерней задачи фичи (ExecutorLaunchedBySessionId задачи) → фичи.
+        var orchestratorBySession = new Dictionary<string, HashSet<string>>();
+        foreach (var epic in epics)
+            if (epic.ExecutorLaunchedBySessionId is not null)
+                AddToSet(orchestratorBySession, epic.ExecutorLaunchedBySessionId, epic.Id);
+        foreach (var t in owner)
+            if (t.FeatureId is not null && t.ExecutorLaunchedBySessionId is not null)
+                AddToSet(orchestratorBySession, t.ExecutorLaunchedBySessionId, t.FeatureId);
+
+        // Область: сессии проекта (или все, если projectId не задан).
+        var inScope = projectId is null
+            ? sessions
+            : sessions.Where(s => s.ProjectId == projectId);
+
+        // sessionId → featureId → (сила, вид, role, stepRef, lane); на пару «чат × фича» —
+        // сильнейший вид (Add держит минимум по Strength).
+        var map = new Dictionary<string,
+            Dictionary<string, (int Strength, string Kind, string? Role, string? StepRef, string? Lane)>>();
+
+        foreach (var s in inScope)
+        {
+            // executor: Session.TaskId → задача с FeatureId == F (или сама эпик F).
+            if (s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
+            {
+                var featureId = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
+                if (featureId is not null)
+                    Add(map, s.Id, featureId, KindStrength("executor"), "executor",
+                        task.Role, task.StepRef, task.Lane);
+            }
+
+            // curator: epic.SourceSessionId == чат.
+            if (curatorBySession.TryGetValue(s.Id, out var curators))
+                foreach (var f in curators)
+                    Add(map, s.Id, f, KindStrength("curator"), "curator", null, null, null);
+
+            // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
+            if (orchestratorBySession.TryGetValue(s.Id, out var orchestrators))
+                foreach (var f in orchestrators)
+                    Add(map, s.Id, f, KindStrength("orchestrator"), "orchestrator", null, null, null);
+        }
+
+        // Строки-заготовки фич (Features). Область фич: эпик в проекте ИЛИ хотя бы один чат
+        // фичи в области (map). Эпик, которого нет в owner (удалён), строку не даёт — фича
+        // исчезает целиком (висячий FeatureId дочерних не поднимает её).
+        var featureIdsInScope = new HashSet<string>();
+        foreach (var epic in epics)
+            if (projectId is null || epic.ProjectId == projectId)
+                featureIdsInScope.Add(epic.Id);
+        foreach (var feats in map.Values)
+            foreach (var f in feats.Keys)
+                featureIdsInScope.Add(f);
+
+        // Строки фич (контракт «Контракт индекса фич — утверждён»): bucket/rail/chips/attention/
+        // summary/now0/ключевой чат/chatCount из FeatureRun; порядок — OrderRuns (фронт не
+        // пересортировывает). Б1 держал заготовку (id/название/проект) по FeatureId.
+        var survivingEpics = featureIdsInScope
+            .Select(id => epics.FirstOrDefault(e => e.Id == id))
+            .Where(e => e is not null)
+            .Cast<TaskItem>()
+            .ToList();
+        var runs = survivingEpics
+            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now))
+            .ToList();
+        var rows = OrderRuns(runs)
+            .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
+                ChatCount(map, run.FeatureId)))
+            .ToList();
+        var featureOrder = new Dictionary<string, int>();
+        for (var i = 0; i < rows.Count; i++)
+            featureOrder[rows[i].FeatureId] = i;
+
+        // Chats: sessionId → записи, упорядоченные по силе связи (key > curator > orchestrator
+        // > executor); при равенстве — по порядку фичи в Features. Членство в фичу, чей эпик
+        // исчез (удалён), не показываем — фича «исчезает целиком», чат за ней не тянется.
+        var surviving = new HashSet<string>(rows.Select(r => r.FeatureId));
+        var chats = new Dictionary<string, List<FeatureIndexChatEntry>>();
+        foreach (var (sessionId, feats) in map)
+        {
+            var entries = feats
+                .Where(kv => surviving.Contains(kv.Key))
+                .OrderBy(kv => kv.Value.Strength)
+                .ThenBy(kv => featureOrder.TryGetValue(kv.Key, out var i) ? i : int.MaxValue)
+                .Select(kv => new FeatureIndexChatEntry(
+                    kv.Key, kv.Value.Kind, kv.Value.Role, kv.Value.StepRef, kv.Value.Lane))
+                .ToList();
+            if (entries.Count > 0)
+                chats[sessionId] = entries;
+        }
+
+        return new FeatureIndex { Chats = chats, Features = rows };
+    }
+
+    // Сила связи вида: key(0) > curator(1) > orchestrator(2) > executor(3).
+    // key добавит Б2 (цепочка ключевого чата); пока в членстве не участвует.
+    private static int KindStrength(string kind) => kind switch
+    {
+        "key" => 0,
+        "curator" => 1,
+        "orchestrator" => 2,
+        _ => 3, // executor
+    };
+
+    // Добавляет (или усиливает) членство чата в фичу: на пару «чат × фича» держим сильнейший
+    // вид (минимум по Strength) и его данные (role/stepRef/lane — только у executor).
+    private static void Add(
+        Dictionary<string, Dictionary<string, (int, string, string?, string?, string?)>> map,
+        string sessionId, string featureId, int strength, string kind,
+        string? role, string? stepRef, string? lane)
+    {
+        if (!map.TryGetValue(sessionId, out var feats))
+            map[sessionId] = feats = new();
+        if (!feats.TryGetValue(featureId, out var cur) || strength < cur.Item1)
+            feats[featureId] = (strength, kind, role, stepRef, lane);
+    }
+
+    private static void AddToSet(Dictionary<string, HashSet<string>> map, string key, string value)
+    {
+        if (!map.TryGetValue(key, out var set))
+            map[key] = set = new();
+        set.Add(value);
+    }
+
+    // ─── Б2: строка фичи (контракт «Контракт индекса фич — утверждён») ─────────────────────
+    // Значения bucket/rail/chips/attention/now0/summary/lastActivityAt/loops/steps* берутся
+    // из FeatureRun (тон выводится из Attention, MAJOR-1) — проектор не пересчитывает.
+    // internal — для золотых тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
+
+    // Строка фичи: FeatureRun + задачи фичи (эпик + дочерние, для ключевого чата) + сессии
+    // (ключевой чат: archived/project) + chatCount.
+    // Чистая функция — на ней золотые тесты (FeatureIndexRowTests).
+    internal static FeatureIndexRow BuildRow(
+        FeatureRun run,
+        IReadOnlyList<TaskItem> featureTasks,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        int chatCount)
+    {
+        // Ключевой чат: первое живое звено цепочки (удалённый/чужой чат → следующее звено).
+        var key = KeySession(run.Epic, featureTasks, sessions);
+        var keySession = key is null ? null : sessions.FirstOrDefault(s => s.Id == key);
+        return new FeatureIndexRow(
+            run.FeatureId,
+            run.Epic.Title,
+            run.Epic.ProjectId,
+            Bucket(run),
+            AttentionOf(run, sessions),
+            RailOf(run),
+            ChipsOf(run),
+            run.StepsAccepted,
+            run.StepsTotal,
+            run.Verdicts.Loops,
+            Now0Of(run),
+            run.LastActivityAt,
+            SummaryOf(run),
+            key,
+            keySession?.Archived ?? false,
+            keySession?.ProjectId,
+            chatCount);
+    }
+
+    // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
+    // epic.SourceSessionId → epic.ExecutorLaunchedBySessionId → самый частый
+    // ExecutorLaunchedBySessionId у дочерних. Удалённый/чужой чат (не в снимке владельца
+    // sessions) пропускается — берётся следующее звено; живых звеньев нет → null.
+    internal static string? KeySession(TaskItem epic, IReadOnlyList<TaskItem> featureTasks,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        var live = new HashSet<string>(sessions.Select(s => s.Id));
+        return KeyChain(epic, featureTasks).FirstOrDefault(live.Contains);
+    }
+
+    // Цепочка ключевого чата в порядке звеньев (без дублей): epic.SourceSessionId →
+    // epic.ExecutorLaunchedBySessionId → самый частый ExecutorLaunchedBySessionId у дочерних
+    // (эпик исключён; при равенстве частот — лексикографически меньший id, детерминизм).
+    internal static List<string> KeyChain(TaskItem epic, IReadOnlyList<TaskItem> featureTasks)
+    {
+        var chain = new List<string>();
+        if (epic.SourceSessionId is not null) chain.Add(epic.SourceSessionId);
+        if (epic.ExecutorLaunchedBySessionId is not null) chain.Add(epic.ExecutorLaunchedBySessionId);
+        var mostFrequent = featureTasks
+            .Where(t => !ReferenceEquals(t, epic) && t.ExecutorLaunchedBySessionId is not null)
+            .GroupBy(t => t.ExecutorLaunchedBySessionId!)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key)
+            .Select(g => g.Key)
+            .FirstOrDefault();
+        if (mostFrequent is not null) chain.Add(mostFrequent);
+        return chain.Distinct().ToList();
+    }
+
+    // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
+    // OrderRuns выведены из неё, не расходятся): closed → attention → running → idle.
+    internal static string Bucket(FeatureRun run)
+    {
+        if (run.Closed) return "closed";
+        if (run.Attention is not null) return "attention";
+        if (run.Now.Count > 0) return "running";
+        return "idle";
+    }
+
+    // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
+    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting.
+    // (Чип «waiting» ≠ attention.kind «wait»: словарь чипов и словарь kind различаются.)
+    internal static List<string> ChipsOf(FeatureRun run)
+    {
+        var chips = new List<string>();
+        if (run.Closed)
+        {
+            chips.Add("closed");
+        }
+        else
+        {
+            chips.Add("open");
+            if (run.Attention is not null)
+            {
+                string chip = run.Attention.Kind switch
+                {
+                    "stopped" => "stopped",
+                    // wait: «мерж» → merge, явный wait → waiting.
+                    _ => run.Attention.Reason == "мерж" ? "merge" : "waiting",
+                };
+                chips.Add(chip);
+            }
+        }
+        return chips;
+    }
+
+    // Тревога строки: из FeatureRun.Attention; kind «wait»+«мерж» → merge; reason у merge — null;
+    // sessionId — LinkedSessionId, прошедший по снимку живых сессий владельца (иначе null,
+    // как в KeySession: мёртвый/чужой чат наружу не уходит).
+    internal static FeatureIndexAttention? AttentionOf(FeatureRun run, IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        var a = run.Attention;
+        if (a is null) return null;
+        bool isMerge = a.Kind == "wait" && a.Reason == "мерж";
+        var live = new HashSet<string>(sessions.Select(s => s.Id));
+        string? sessionId = a.LinkedSessionId is not null && live.Contains(a.LinkedSessionId)
+            ? a.LinkedSessionId : null;
+        return new FeatureIndexAttention(
+            isMerge ? "merge" : a.Kind,
+            a.Since,
+            isMerge ? null : a.Reason,
+            a.PersonaId,
+            sessionId);
+    }
+
+    // Рельса: ровно 7 стадий FeatureRun.Stages → сегменты {key, state, tone}.
+    // Нормализация закрытой фичи (контракт С0): у closed active нет — все стадии, кроме absent,
+    // приводятся к done, tone=null (merge в том числе: «честный мерж» epic Done без merge-задачи
+    // иначе даёт merge=active, tone=run). absent остаётся absent.
+    internal static List<FeatureIndexRailSegment> RailOf(FeatureRun run) =>
+        run.Stages
+            .Select(s =>
+            {
+                if (!run.Closed)
+                    return new FeatureIndexRailSegment(s.Key, s.State, s.Tone);
+                var state = s.State == "absent" ? "absent" : "done";
+                return new FeatureIndexRailSegment(s.Key, state, null);
+            })
+            .ToList();
+
+    // «Сейчас» (now0): первая InProgress-задача (Now[0], по убыванию ClaudeStartedAt); null — не идёт.
+    internal static FeatureIndexNow? Now0Of(FeatureRun run)
+    {
+        if (run.Now.Count == 0) return null;
+        var n = run.Now[0];
+        return new FeatureIndexNow(n.PersonaId, n.Stage, n.StepRef);
+    }
+
+    // Итог: из FeatureRun.Summary (mergedAt + durationMinutes); null — фича не закрыта.
+    internal static FeatureIndexSummary? SummaryOf(FeatureRun run)
+    {
+        var s = run.Summary;
+        if (s is null) return null;
+        return new FeatureIndexSummary(s.MergedAt, s.DurationMinutes);
+    }
+
+    // Чатов фичи в этом ответе: число сессий в map, чья карта фич содержит featureId.
+    private static int ChatCount(
+        Dictionary<string, Dictionary<string, (int, string, string?, string?, string?)>> map,
+        string featureId)
+    {
+        int count = 0;
+        foreach (var feats in map.Values)
+            if (feats.ContainsKey(featureId)) count++;
+        return count;
     }
 }

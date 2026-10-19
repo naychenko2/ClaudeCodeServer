@@ -1,7 +1,7 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
-import { C, R, SHADOW, FONT } from '../lib/design';
+import { C, R, SHADOW, FONT, FS } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
@@ -32,6 +32,11 @@ import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { useSlot } from '../lib/subsystems/registry';
 import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
+import { featureDisplayState } from '../lib/chatGroups';
+import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
+import type { FeatureIndexFeature } from '../types/featureIndex';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -131,6 +136,41 @@ function TeamImplementMarker({ session }: { session: Session }) {
   );
 }
 
+// Метка фичи в строке чата (макет features-overview.html, «Дни»: глиф + название,
+// обрезка с title). Показывается для чата, принадлежащего фиче, под флагом
+// features-overview — вместо имени персоны. Глиф — по состоянию фичи
+// (featureDisplayState: wait/stopped/run/loop/closed/done).
+export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
+  const st = featureDisplayState(feature);
+  return (
+    <span
+      title={feature.title}
+      data-testid="chat-feature-label"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        minWidth: 0, maxWidth: '100%', flexShrink: 1,
+      }}
+    >
+      <FeatureGlyph kind={st.kind} size={11} />
+      <span style={{
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+        // m11: 11 (FS.xs) по макету .ft, не 10 (FS.xxs)
+        fontSize: FS.xs, color: C.textMuted,
+      }}>
+        {feature.title}
+      </span>
+    </span>
+  );
+}
+
+// Фича чата для метки: null — метки нет (чат без фичи или флаг выключен).
+// Чистая функция: читает индекс фич (featureOf) и флаг; тестируется без рендера.
+export function featureLabelFor(sessionId: string | null, flagOn: boolean): FeatureIndexFeature | null {
+  if (!flagOn) return null;
+  const entries = featureOf(sessionId);
+  return entries[0]?.feature ?? null;
+}
+
 interface Props {
   session: Session;
   isActive: boolean;
@@ -193,6 +233,14 @@ interface Props {
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
   // абсолютно и на месте остаются.
   leadingInset?: number;
+  // Роль чата в фиче (режим «Фичи», макет: метка в подстроке карточки, а не отдельной
+  // строкой над ней): «ключевой» (ключевой чат фичи) и/или «ещё N» (чат принадлежит
+  // ещё N фичам). Не задано — метки нет.
+  featureRole?: string;
+  // Карточка внутри группы фичи (режим «Фичи»): метку фичи (FeatureLabel) не рисуем —
+  // её уже несёт заголовок группы (n1: дубль имени внутри группы). Не задано — метка
+  // по featureLabelFor (плоский список, «Дни», «Теги», «Темы»)
+  inFeatureGroup?: boolean;
   // === Свайп-действия (мобильная раскладка) ===
   // Эта карточка раскрыта свайпом (список держит ОДНУ раскрытую — открытие другой
   // закрывает предыдущую). Не задан/undefined — свайп-механика выключена
@@ -259,7 +307,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
+  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -286,6 +334,13 @@ function ChatCardView({
   const mechanic = getLastMechanic(s.id);
   // Значки подсистем в строке названия (чат картинки — миниатюра и «картинка»)
   const badges = useSlot<ChatCardBadgeCtx, ChatCardBadgeApi>('chat-card-badge');
+  // Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+  // useFeaturesIndex — реактивная подписка на индекс (один запрос на проект:
+  // первичная загрузка при 0→1 потребителях); featureLabelFor — чистое решение
+  // «показывать ли метку» (null — нет)
+  const featuresOn = useFeature(FLAGS.featuresOverview);
+  useFeaturesIndex(s.projectId ?? null, featuresOn);
+  const feature = featureLabelFor(s.id, featuresOn);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
 
@@ -974,6 +1029,29 @@ function ChatCardView({
           {badges.map((b, i) => b.render && <span key={b.name ?? i} style={{ display: 'contents' }}>{b.render({ session: s, isMobile })}</span>)}
           <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
+          {/* Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+              Глиф + название (обрезка с title); в «Днях» — вместо имени персоны.
+              Внутри группы фичи (inFeatureGroup) — не рисуем: имя уже в заголовке (n1) */}
+          {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}
+          {/* Роль чата в фиче (режим «Фичи»): «ключевой»/«ещё N» — в подстроке
+              карточки, а не отдельной строкой над ней (макет, минор m6) */}
+          {featureRole && (() => {
+            // m4: вид — как в плашке/шторке (макет .role): mono, R 6, 0/5;
+            // «ключевой» — accent/accentLight 700, «ещё N» — textSecondary/bgSelected 400.
+            const isKey = featureRole.startsWith('ключевой');
+            return (
+              <span data-testid="chat-feature-role" style={{
+                display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+                fontFamily: FONT.mono, fontSize: FS.xs,
+                fontWeight: isKey ? 700 : 400,
+                color: isKey ? C.accent : C.textSecondary,
+                background: isKey ? C.accentLight : C.bgSelected,
+                borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
+              }}>
+                {featureRole}
+              </span>
+            );
+          })()}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (
             <span data-testid="chat-continued-mark" style={{ display: 'inline-flex', flexShrink: 0, color: C.textMuted }}

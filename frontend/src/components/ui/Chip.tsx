@@ -12,7 +12,7 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 // dense — узкие поля по бокам (6 вместо 10): тесный ряд, где каждый пиксель отдан подписи.
 export function Chip({
   children, onClick, selected, dashed, title, maxW, touch, leading, onRemove,
-  variant = 'soft', large, dense, removeLabel, keyboard,
+  variant = 'soft', large, dense, removeLabel, keyboard, minHeight,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -29,6 +29,9 @@ export function Chip({
   dense?: boolean;
   // Кликабельный soft-чип доступен с клавиатуры: role=button, Tab, Enter/Space, кольцо фокуса
   keyboard?: boolean;
+  // Минимальная высота (тач-цель на мобиле): не меняет шрифт/подпись, только
+  // гарантирует досягаемость пальцем. Не задано — высота по padding+контенту.
+  minHeight?: number;
 }) {
   const body = maxW !== undefined
     ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{children}</span>
@@ -56,6 +59,7 @@ export function Chip({
           fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
           display: 'inline-flex', alignItems: 'center', gap: SP.xs,
           transition: 'background 0.12s, border-color 0.12s',
+          ...(minHeight !== undefined ? { minHeight, boxSizing: 'border-box' as const } : null),
           ...(maxW !== undefined ? { maxWidth: maxW, overflow: 'hidden' } : null),
         }}
       >

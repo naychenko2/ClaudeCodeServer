@@ -24,3 +24,15 @@ export function dateTimeLabel(iso?: string | null): string | null {
   const mi = String(d.getMinutes()).padStart(2, '0');
   return `${dd}.${mm} ${hh}:${mi}`;
 }
+
+// ISO → «dd.mm» (локальная календарная дата, без времени); невалидная/пустая → null.
+// Для подписи «Последняя смержена ДД.ММ»: как и остальные метки режима фичи —
+// в МЕСТНОМ поясе (getMonth/getDate, а не getUTC*).
+export function dateOnly(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${dd}.${mm}`;
+}

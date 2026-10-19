@@ -1624,6 +1624,10 @@ accent-цветом. Иконки авторов — эмодзи-роли (`AUT
 Подробности, контракт `GET /api/tasks/features?sessionId=`, правила и вынесенное за волну —
 [docs/features/turn-plan-feature-mode.md](../features/turn-plan-feature-mode.md).
 
+«Обзор фич» (флаг `features-overview`) добавляет фасет «Фичи» в списке сессий: членство «чат →
+фича» вычисляется индексом `GET /api/tasks/features/index`, хранимого поля нет —
+[ADR-031](../adr/ADR-031-feature-as-dimension.md), контракт — в том же документе.
+
 ## Задачи v3
 
 Напоминания, регулярные, Claude-исполнитель; исполнение гейтится флагом `personas` для персон:

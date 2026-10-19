@@ -1,6 +1,7 @@
 import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { readStoredToken, request } from './offline';
 import type { FeatureRun } from '../types/featureRun';
+import type { FeaturesIndex } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 
@@ -1404,6 +1405,11 @@ export const api = {
     // sessionId — id сессии-чата; без него — все фичи владельца.
     getFeatures: (sessionId?: string) =>
       request<FeatureRun[]>(`/tasks/features${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
+    // Индекс фич (фасет «Фичи» и плашка в чате): строки фич + связи «чат × фича».
+    // projectId — область ответа; без него — все проекты владельца и чаты вне проектов.
+    // 503 при выключенной подсистеме Tasks (как getFeatures).
+    featuresIndex: (projectId?: string) =>
+      request<FeaturesIndex>(`/tasks/features/index${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

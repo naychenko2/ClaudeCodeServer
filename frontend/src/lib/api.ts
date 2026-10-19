@@ -48,6 +48,12 @@ export interface LocalModelStats {
   // speculativeSpeedup — «ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δitl_count
   // за окно ~60 с, во сколько раз DFlash ускоряет генерацию; null — нет данных/рестарт или шагов не было
   speed?: { genPerStream?: number; prefillPerStream?: number; speculativeSpeedup?: number | null };
+  // cleanStepMs — база шага (мс): длительность прохода модели без помех, ОДНА на весь
+  // стенд и НЕ зависящая от окна графика. Нужна полосе «Куда уходит время агентов»:
+  // «генерирует» = ΣitlCount × база, «ждёт соседа» = ΣitlSeconds − «генерирует».
+  // Раньше база считалась на фронте по окну — величина прыгала при сдвиге окна.
+  // null/отсутствует — базы нет: «ждёт соседа» не выделяется (доля «—», не ноль).
+  cleanStepMs?: number | null;
   // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
   // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
   // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;

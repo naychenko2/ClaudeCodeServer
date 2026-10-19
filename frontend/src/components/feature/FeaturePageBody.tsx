@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import {
-  featureChats, stepRows, taskCounters, eventRows, showAllNeeded,
+  featureChats, stepRows, stepStatusLabel, taskCounters, eventRows, showAllNeeded,
   type FeatureChatEntry, type StepRow, type TaskCounters, type EventRow,
 } from './featurePageBody';
 import type { FeatureIndexFeature, FeaturesIndex, FeatureEvent } from '../../types/featureIndex';
@@ -20,6 +20,16 @@ import type { FeatureRun } from '../../types/featureRun';
 // .cnts — счётчики (row, gap 6);
 // .be — бейдж «нужно от бэка» (bgSelected, textMuted, R.max, 11/700).
 // Все значения — из шкал FS/SP/R, где есть; константы — где в шкале нет.
+
+// Единый focus-visible ring (клавиатура) для строк чатов и ссылок «открыть чат» —
+// тот же паттерн, что у крошки (FeaturePageHeader): один инжект <style> на модуль.
+const FOCUS_CLASS = 'cc-feature-page-body-focus';
+if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page-body-focus-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-feature-page-body-focus-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
 
 // Заголовок блока (.blk .cap): FS.sm, 700, uppercase, letterSpacing .06em, C.textMuted.
 function BlockCap({ children, right }: { children: ReactNode; right?: ReactNode }) {
@@ -67,24 +77,37 @@ function RoleTag({ kind, stepRef }: { kind: string; stepRef?: string | null }) {
 
 // Строка чата (.rw): grid 24px 1fr auto, gap 8, minHeight 32/40, R.md, border 1px transparent.
 // Ключевой чат — border accent (подсветка).
-function ChatRow({ entry, isMobile }: { entry: FeatureChatEntry; isMobile: boolean }) {
-  usePersonasVersion();
+// Строка — настоящая <button> (M3): клик ведёт в чат (механизм onBack, Ф2.3).
+// Ловушки <button> (§0): рамка/фон/шрифт/выравнивание явно, focus — SHADOW.focus,
+// touch-цель ≥ 40 на 360 (minHeight 40).
+// Название (M4): из списка сессий проекта (chatNames, без новых запросов); нет — «Чат».
+// GUID наружу не попадает.
+function ChatRow({ entry, onOpenChat, isMobile }: {
+  entry: FeatureChatEntry;
+  onOpenChat: (chatId: string) => void;
+  isMobile: boolean;
+}) {
   const minH = isMobile ? 40 : 32;
   return (
-    <div
+    <button
+      type="button"
       data-testid={`feature-chat-${entry.sessionId}`}
+      className={FOCUS_CLASS}
+      onClick={() => onOpenChat(entry.sessionId)}
       style={{
         display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: SP.sm, alignItems: 'center',
-        minHeight: minH, padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md,
+        width: '100%', minHeight: minH, padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md,
         border: entry.isKey ? `1px solid ${C.accent}` : '1px solid transparent',
         background: entry.isKey ? C.accentSoft : 'transparent',
+        fontFamily: FONT.sans, fontSize: FS.sm, color: 'inherit', textAlign: 'left',
+        cursor: 'pointer', boxSizing: 'border-box',
       }}
     >
       <span style={{ display: 'flex', justifyContent: 'center' }}>
         <span style={{ width: 20, height: 20, borderRadius: '50%', background: C.bgSelected, display: 'inline-block' }} />
       </span>
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: FS.sm, color: C.textPrimary }}>
-        {entry.sessionId}
+        {entry.name ?? 'Чат'}
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
         {entry.isArchived && (
@@ -92,7 +115,7 @@ function ChatRow({ entry, isMobile }: { entry: FeatureChatEntry; isMobile: boole
         )}
         <RoleTag kind={entry.link.kind} stepRef={entry.link.stepRef} />
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -100,17 +123,20 @@ function ChatRow({ entry, isMobile }: { entry: FeatureChatEntry; isMobile: boole
 // Слева: mono stepRef + название; справа: линия + тег исхода + круги.
 function StepRowView({ row, isMobile }: { row: StepRow; isMobile: boolean }) {
   const minH = isMobile ? 40 : 32;
-  // Тег исхода: ok → «принят» (successBg), run → «идёт» (bgSelected), loop → «доработка» (warningBg),
-  // stop → «стоит» (dangerBg), pend → «впереди» (bgSelected, textMuted).
+  // Тег исхода (M2): текст — готовая подпись бэка chain.status (одна точка правды,
+  // те же слова, что «Конвейер»/PipelineFlow); бэк не отдал status (старый ответ) —
+  // собственные слова бэка по outcome (stepStatusLabel), не трактовка фронта.
+  // Тон: ok → successBg, run → bgSelected, loop → warningBg, stop → dangerBg, pend → bgSelected.
   const tag = ((): { text: string; bg: string; fg: string } => {
+    const text = stepStatusLabel(row.outcome, row.status);
     switch (row.outcome) {
-      case 'accepted': return { text: 'принят', bg: C.successBg, fg: C.successText };
-      case 'running': return { text: 'идёт', bg: C.bgSelected, fg: C.textHeading };
+      case 'accepted': return { text, bg: C.successBg, fg: C.successText };
+      case 'running': return { text, bg: C.bgSelected, fg: C.textHeading };
       case 'returned':
-      case 'accepted_with_remarks': return { text: 'доработка', bg: C.warningBg, fg: C.warningText };
-      case 'withdrawn': return { text: 'снят', bg: C.bgSelected, fg: C.textMuted };
-      case 'pending': return { text: 'впереди', bg: C.bgSelected, fg: C.textMuted };
-      default: return { text: row.outcome, bg: C.bgSelected, fg: C.textSecondary };
+      case 'accepted_with_remarks': return { text, bg: C.warningBg, fg: C.warningText };
+      case 'withdrawn': return { text, bg: C.bgSelected, fg: C.textMuted };
+      case 'pending': return { text, bg: C.bgSelected, fg: C.textMuted };
+      default: return { text, bg: C.bgSelected, fg: C.textSecondary };
     }
   })();
   return (
@@ -157,12 +183,54 @@ function TaskCountersView({ c }: { c: TaskCounters }) {
   );
 }
 
+// Словарь видов событий (бэк: FeatureEvent.Kind, 12 значений) → слова по-русски.
+// Неизвестный вид (бэк расширил контракт) — как есть, не роняем строку.
+const KIND_LABEL: Record<string, string> = {
+  created: 'создана',
+  started: 'запущена',
+  stopped: 'остановлена',
+  waiting: 'ждёт',
+  accepted: 'принята',
+  accepted_with_remarks: 'принята с правками',
+  returned: 'возвращена',
+  withdrawn: 'снята',
+  completed: 'закрыта',
+  dropped: 'сброшена',
+  merged: 'смержена',
+  closed: 'закрыта',
+};
+
+// Роль задачи (TaskItem.Role) → слово; null — без роли.
+const ROLE_LABEL: Record<string, string> = {
+  feature: 'эпик',
+  cut: 'разрез',
+  plan: 'план',
+  step: 'шаг',
+  rework: 'доработка',
+  review: 'ревью',
+  qa: 'проверка',
+  final: 'финал',
+  merge: 'мерж',
+  consult: 'консультация',
+};
+
 // Строка события (.ev): grid 48px 20px 1fr, gap 8, fontSize FS.sm.
-// Время (mono, muted) + аватар + текст. Ссылка на чат — если sessionId ≠ null.
-function EventRowView({ row }: { row: EventRow }) {
+// Время (mono, muted) + аватар + текст: «{имя} · {вид}» + суффикс «{роль} {шаг}».
+// «Открыть чат» — настоящая <button> (M3): ловушки §0 (рамка/фон/шрифт, focus SHADOW.focus,
+// touch-цель ≥ 40 на 360); клик ведёт в чат (onOpenChat, механизм onBack, Ф2.3).
+// Ссылка — только если sessionId ≠ null (fail-closed).
+function EventRowView({ row, onOpenChat, isMobile }: {
+  row: EventRow;
+  onOpenChat: (chatId: string) => void;
+  isMobile: boolean;
+}) {
   usePersonasVersion();
   const persona = row.personaId ? getPersonaById(row.personaId) : undefined;
   const time = hhmm(row.at) ?? dateOnly(row.at) ?? '';
+  const kindLabel = KIND_LABEL[row.kind] ?? row.kind;
+  // Суффикс: роль + код шага (у step/rework), если есть.
+  const roleLabel = row.role ? (ROLE_LABEL[row.role] ?? row.role) : null;
+  const suffix = roleLabel != null ? `${roleLabel}${row.stepRef ? ` ${row.stepRef}` : ''}` : (row.stepRef ? row.stepRef : null);
   // Ссылка на чат: только если sessionId ≠ null (fail-closed).
   const hasChatLink = row.sessionId != null;
   return (
@@ -181,18 +249,26 @@ function EventRowView({ row }: { row: EventRow }) {
       </span>
       <span style={{ minWidth: 0 }}>
         <span style={{ color: C.textPrimary, overflowWrap: 'anywhere' }}>
-          {persona?.name ?? '—'} · {row.kind}
+          {persona?.name ?? '—'} · {kindLabel}{suffix ? ` · ${suffix}` : ''}
         </span>
         {row.reason && (
           <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{row.reason}</span>
         )}
         {hasChatLink && (
-          <span
+          <button
+            type="button"
             data-testid={`feature-event-chat-link-${row.sessionId}`}
-            style={{ display: 'inline-block', fontSize: FS.xs, color: C.accent, cursor: 'pointer', marginTop: 2 }}
+            className={FOCUS_CLASS}
+            onClick={() => onOpenChat(row.sessionId!)}
+            style={{
+              display: 'inline-flex', alignItems: 'center',
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent,
+              padding: isMobile ? '12px 0' : '4px 0', marginTop: 2,
+            }}
           >
             открыть чат
-          </span>
+          </button>
         )}
       </span>
     </div>
@@ -205,16 +281,20 @@ function EventRowView({ row }: { row: EventRow }) {
 //   правая: Чаты фичи (из индекса, ключевой первым) + Задачи (счётчики) + События (лента + «Показать все»).
 //
 // Данные: run (FeatureRun) — из useFeaturePage; index (FeaturesIndex) — из useFeaturesIndex;
-// feature (FeatureIndexFeature) — из индекса. «Без новых запросов»: чаты — только из индекса.
+// feature (FeatureIndexFeature) — из индекса. «Без новых запросов»: чаты — только из индекса,
+// названия — из chatNames (список сессий проекта, уже загружен SessionList'ом).
+// onOpenChat — открыть чат (механизм onBack, Ф2.3): строки чатов и «открыть чат» в ленте.
 // «Показать все» — перезапрос api.tasks.getFeature(fid, 'all') (без лимита).
-export function FeaturePageBody({ run, index, feature, isMobile = false }: {
+export function FeaturePageBody({ run, index, feature, chatNames, onOpenChat, isMobile = false }: {
   run: FeatureRun;
   index: FeaturesIndex;
   feature: FeatureIndexFeature | null;
+  chatNames?: Record<string, string>;
+  onOpenChat: (chatId: string) => void;
   isMobile?: boolean;
 }) {
   const steps = stepRows(run);
-  const chats = featureChats(index, feature);
+  const chats = featureChats(index, feature, chatNames);
   const counters = taskCounters(run);
 
   const cols: React.CSSProperties = {
@@ -257,24 +337,15 @@ export function FeaturePageBody({ run, index, feature, isMobile = false }: {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {chats.map(c => <ChatRow key={c.sessionId} entry={c} isMobile={isMobile} />)}
+              {chats.map(c => <ChatRow key={c.sessionId} entry={c} onOpenChat={onOpenChat} isMobile={isMobile} />)}
             </div>
           )}
         </Block>
 
+        {/* Кнопка «Все N задач в «Задачах»» убрана: переход в «Задачи» будет в Ф4.1 —
+            до него это мёртвое действие (тот же аргумент, что у меню ⋯ шапки). */}
         <Block cap="Задачи">
           <TaskCountersView c={counters} />
-          <button
-            data-testid="feature-page-all-tasks"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent',
-              cursor: 'pointer', fontSize: FS.sm, fontWeight: 600, color: C.accent,
-              fontFamily: 'inherit', padding: 0, minHeight: isMobile ? 40 : 24,
-            }}
-          >
-            Все {counters.total} задач фичи в «Задачах»
-            <span aria-hidden="true">→</span>
-          </button>
         </Block>
       </div>
     </div>
@@ -283,10 +354,12 @@ export function FeaturePageBody({ run, index, feature, isMobile = false }: {
 
 // Лента событий (отдельный блок, т.к. зависит от page.page.events, а не от run).
 // События + «Показать все» (если events.length < eventsTotal).
-export function FeaturePageEvents({ events, eventsTotal, onShowAll, isMobile = false }: {
+// onOpenChat — «открыть чат» ведёт в чат (механизм onBack, Ф2.3).
+export function FeaturePageEvents({ events, eventsTotal, onShowAll, onOpenChat, isMobile = false }: {
   events: FeatureEvent[];
   eventsTotal: number;
   onShowAll?: (() => void) | null;
+  onOpenChat: (chatId: string) => void;
   isMobile?: boolean;
 }) {
   const rows = eventRows(events);
@@ -302,7 +375,14 @@ export function FeaturePageEvents({ events, eventsTotal, onShowAll, isMobile = f
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {rows.map((r, i) => <EventRowView key={i} row={r} />)}
+          {rows.map((r, i) => (
+            <EventRowView
+              key={`${r.at}|${r.kind}|${r.sessionId ?? ''}|${i}`}
+              row={r}
+              onOpenChat={onOpenChat}
+              isMobile={isMobile}
+            />
+          ))}
           {showAll && onShowAll && (
             <button
               data-testid="feature-page-show-all"

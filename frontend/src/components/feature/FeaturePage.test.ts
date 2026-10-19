@@ -100,15 +100,27 @@ function pageData(over: Partial<FeaturePageData> = {}): FeaturePageData {
   };
 }
 
-function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void }) {
+function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void; chatNames?: Record<string, string> }) {
   installFakeDom();
   const { container } = mount(createElement(FeaturePage, {
     featureId: props.featureId ?? 'f1',
     projectId: props.projectId ?? 'p1',
     isMobile: props.isMobile ?? false,
     onBack: props.onBack ?? (() => {}),
+    chatNames: props.chatNames,
   }));
   return container;
+}
+
+// Первый <button> в поддереве узла (главное действие — Button ВНУТРИ div[data-testid]).
+type AnyNode = { nodeType: number; nodeName: string; childNodes: AnyNode[] };
+function firstButton(n: AnyNode): AnyNode | null {
+  if (n.nodeType === 1 && n.nodeName === 'BUTTON') return n;
+  for (const c of n.childNodes) {
+    const hit = firstButton(c);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 // Дождаться разрешения fetch (fake timers + microtasks) → финальное состояние страницы.
@@ -185,17 +197,18 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(textNodes(main!).join('')).toContain('Ключевой чат');
   });
 
-  it('ok: ⋯ открывает меню «Скопировать ветку» + «Открыть эпик в «Задачах»» (без «Закрыть без мержа»)', async () => {
+  it('ok: ⋯ открывает меню «Скопировать ветку» (без «Закрыть без мержа» и «Открыть эпик в «Задачах»»)', async () => {
     const c = render({});
     await settle();
     const kebab = findNodeByAttr(c, 'aria-label', 'Ещё действия')!;
     act(() => { (reactProps(kebab)!.onClick as (e: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }) } }); });
-    // Меню — портал в document.body: пункты на месте, «Закрыть без мержа» нет.
+    // Меню — портал в document.body: «Скопировать ветку» на месте; «Закрыть без мержа»
+    // и «Открыть эпик в «Задачах»» убраны (мёртвое действие — переход будет в Ф4.1).
     const body = (globalThis as { document: { body: unknown } }).document.body as { childNodes: unknown[] };
     const all = textNodes(body as never).join('');
     expect(all).toContain('Скопировать ветку');
-    expect(all).toContain('Открыть эпик в «Задачах»');
     expect(all).not.toContain('Закрыть без мержа');
+    expect(all).not.toContain('Открыть эпик в «Задачах»');
   });
 
   it('ok: тревога «ждёт вас» (infoBg) + кнопка «Ответить»', async () => {
@@ -436,5 +449,153 @@ describe('FeaturePage: пять состояний + шапка + тревога
     await settle();
     const all = textNodes(c).join('');
     expect(all).toContain('Шагов пока нет');
+  });
+
+  // === M1: главное действие и тревога — в ВЕРНЫЙ чат (не в ключевой) ===
+  it('M1: без тревоги, есть ключевой чат → «Ключевой чат» → onBack {kind:key, chat-key}', async () => {
+    const onBack = vi.fn();
+    const c = render({ onBack });
+    await settle();
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    expect(textNodes(main).join('')).toContain('Ключевой чат');
+    const btn = firstButton(main as never)!;
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'key', chatId: 'chat-key' });
+  });
+
+  it('M1: тревога про «chat-x» (не ключевой чат) → «Ответить» → onBack {kind:chat, chat-x}', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: 'chat-x' },
+    })];
+    const onBack = vi.fn();
+    const c = render({ onBack });
+    await settle();
+    // Главное действие — «Ответить» (не «Ключевой чат»).
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    expect(textNodes(main).join('')).toContain('Ответить');
+    const btn = firstButton(main as never)!;
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+    // Ведёт в чат ТРЕВОГИ, не в ключевой чат.
+    expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chat-x' });
+    expect(onBack).not.toHaveBeenCalledWith({ kind: 'key', chatId: 'chat-key' });
+  });
+
+  it('M1: «Ответить», но чата тревоги нет → кнопки нет (нет мёртвых действий)', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: null },
+    })];
+    const c = render({});
+    await settle();
+    // В шапке кнопки нет (dead action), в блоке тревоги — тоже.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action')).toBeNull();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    expect(textNodes(alarm).join('')).not.toContain('Ответить');
+  });
+
+  // === M2: подпись шага — готовая подпись бэка chain.status (одна точка правды) ===
+  it('M2: подпись шага — chain.status бэка как есть', async () => {
+    mockGetFeature.result = pageData({
+      run: {
+        ...pageData().run,
+        stepChains: [
+          { stepRef: 'Ш1', title: 'Шаг один', lane: 'back', taskIds: [], outcome: 'pending', status: 'ждёт ревью', durationMinutes: 0, loops: 0, rounds: [] },
+        ],
+      },
+    });
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1')!;
+    expect(textNodes(row).join('')).toContain('ждёт ревью');
+  });
+
+  it('M2: status отсутствует (старый ответ) → фолбэк словами бэка: pending=«ждёт ревью», returned=«закрыт без повторного ревью»', async () => {
+    mockGetFeature.result = pageData({
+      run: {
+        ...pageData().run,
+        // status нет в ответах (старый бэк) → null после нормализации stepRows.
+        stepChains: [
+          { stepRef: 'Ш2', title: 'Шаг два', lane: 'front', taskIds: [], outcome: 'pending', durationMinutes: 0, loops: 0, rounds: [] },
+          { stepRef: 'Ш3', title: 'Шаг три', lane: 'back', taskIds: [], outcome: 'returned', durationMinutes: 0, loops: 1, rounds: [] },
+        ] as unknown as import('../../types/featureRun').FeatureStepChain[],
+      },
+    });
+    const c = render({});
+    await settle();
+    const row2 = findNodeByAttr(c, 'data-testid', 'feature-step-Ш2')!;
+    expect(textNodes(row2).join('')).toContain('ждёт ревью');
+    const row3 = findNodeByAttr(c, 'data-testid', 'feature-step-Ш3')!;
+    expect(textNodes(row3).join('')).toContain('закрыт без повторного ревью');
+  });
+
+  // === M3: строка чата и «открыть чат» — настоящие <button> (ловушки §0) ===
+  it('M3: строка чата — <button>; клик → onBack {kind:chat, chatId}', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const onBack = vi.fn();
+    const c = render({ onBack });
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    // Настоящая кнопка, а не div.
+    expect((row as unknown as { nodeName: string }).nodeName).toBe('BUTTON');
+    act(() => { (reactProps(row)!.onClick as () => void)(); });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chat-key' });
+  });
+
+  it('M3: «открыть чат» в ленте — <button>; клик → onBack {kind:chat, chatId}', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
+      ],
+      eventsTotal: 1,
+    });
+    const onBack = vi.fn();
+    const c = render({ onBack });
+    await settle();
+    const link = findNodeByAttr(c, 'data-testid', 'feature-event-chat-link-chat-x')!;
+    expect((link as unknown as { nodeName: string }).nodeName).toBe('BUTTON');
+    act(() => { (reactProps(link)!.onClick as () => void)(); });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chat-x' });
+  });
+
+  // === M4: название чата вместо GUID (без новых запросов) ===
+  it('M4: есть chatNames → название; GUID наружу не попадает', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const c = render({ chatNames: { 'chat-key': 'Чат Дениса' } });
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    expect(textNodes(row).join('')).toContain('Чат Дениса');
+    // GUID ('chat-key') — только в data-testid (атрибут), в ТЕКСТ не попадает.
+    expect(textNodes(c).join('')).not.toContain('chat-key');
+  });
+
+  it('M4: названия нет (чат вне проекта / список не пришёл) → «Чат»', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    expect(textNodes(row).join('')).toContain('Чат');
+    expect(textNodes(c).join('')).not.toContain('chat-key');
+  });
+
+  // === Blocker: минимальный run (бэк не отдал steps/reviews/qa) — страница не падает ===
+  it('blocker: минимальный run (без steps/reviews/qa) — страница рендерится, «Задачи» на месте', async () => {
+    mockGetFeature.result = {
+      run: { featureId: 'f1', epic: { id: 'f1', title: 'Моя фича' } },
+      events: [], eventsTotal: 0,
+    } as unknown as FeaturePageData;
+    const c = render({});
+    await settle();
+    // Страница и шапка на месте (taskCounters не упал TypeError'ом на spread).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page')).not.toBeNull();
+    expect(textNodes(c).join('')).toContain('Моя фича');
+    // Блок «Задачи» с счётчиками (1 задача — эпик, впереди).
+    expect(textNodes(c).join('')).toContain('впереди 1');
   });
 });

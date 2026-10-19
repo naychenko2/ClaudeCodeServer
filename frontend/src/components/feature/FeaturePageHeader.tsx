@@ -91,9 +91,9 @@ export interface FeaturePageHeaderProps {
   // Крошка «← …».
   backLabel: string;
   onBack: () => void;
-  // Пункты меню ⋯.
+  // Пункт меню ⋯: «Скопировать ветку». («Открыть эпик в «Задачах»» убран: только
+  // тост-обещание; переход в «Задачи» будет в Ф4.1.)
   onCopyBranch: () => void;
-  onOpenEpic: () => void;
   // Клик по главному действию.
   onMainAction: () => void;
   isMobile: boolean;
@@ -109,7 +109,7 @@ export interface FeaturePageHeaderProps {
 // Ловушки <button> (раздел 0 таблицы токенов) заданы явно: рамка/фон/шрифт/поля/выравнивание.
 export function FeaturePageHeader({
   title, glyph, statusTag, branch, ageLabel, taskCount, mainAction,
-  backLabel, onBack, onCopyBranch, onOpenEpic, onMainAction, isMobile, loading,
+  backLabel, onBack, onCopyBranch, onMainAction, isMobile, loading,
 }: FeaturePageHeaderProps) {
   // Крошка: наведение bgSelected/textPrimary (m3, §0).
   const [hover, setHover] = useState(false);
@@ -224,8 +224,9 @@ export function FeaturePageHeader({
         </div>
       )}
 
-      {/* Меню ⋯: «Скопировать ветку» + «Открыть эпик в «Задачах»» (без «Закрыть без мержа»
-          и «Вернуть в работу» — за скобками волны, макет §5.2). */}
+      {/* Меню ⋯: «Скопировать ветку» (без «Закрыть без мержа» и «Вернуть в работу» —
+          за скобками волны, макет §5.2; «Открыть эпик в «Задачах»» убран — только
+          тост-обещание, переход будет в Ф4.1). */}
       {menuAnchor && (
         <Menu
           onClose={() => setMenuAnchor(null)}
@@ -237,11 +238,6 @@ export function FeaturePageHeader({
           <MenuItem
             label="Скопировать ветку"
             onClick={() => { setMenuAnchor(null); onCopyBranch(); }}
-            wrapper={isMobile ? { style: { minHeight: 44 } } : undefined}
-          />
-          <MenuItem
-            label="Открыть эпик в «Задачах»"
-            onClick={() => { setMenuAnchor(null); onOpenEpic(); }}
             wrapper={isMobile ? { style: { minHeight: 44 } } : undefined}
           />
         </Menu>

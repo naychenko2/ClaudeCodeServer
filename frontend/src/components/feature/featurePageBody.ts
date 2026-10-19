@@ -9,8 +9,11 @@ import type { FeatureRun } from '../../types/featureRun';
 // === Чаты фичи ===
 
 // Связь «чат × фича»: sessionId + роль/stepRef/lane.
+// name — название чата из уже загруженного списка сессий проекта (M4: без новых
+// запросов); null — названия нет (чат вне проекта / список ещё не загружен) → «Чат».
 export interface FeatureChatEntry {
   sessionId: string;
+  name: string | null;
   link: FeatureChatLink;
   // Ключевой чат фичи (feature.keySessionId === sessionId).
   isKey: boolean;
@@ -20,20 +23,27 @@ export interface FeatureChatEntry {
 
 // Чаты фичи из индекса: все sessionId, у которых есть связь с featureId.
 // Ключевой чат — первым (feature.keySessionId); остальные — в порядке индекса.
-// «Без новых запросов»: данные — только из FeaturesIndex.chats.
-export function featureChats(index: FeaturesIndex, feature: FeatureIndexFeature | null): FeatureChatEntry[] {
+// «Без новых запросов»: данные — только из FeaturesIndex.chats; названия — из
+// chatNames (список сессий проекта, уже загружен SessionList'ом).
+export function featureChats(
+  index: FeaturesIndex,
+  feature: FeatureIndexFeature | null,
+  chatNames?: Record<string, string>,
+): FeatureChatEntry[] {
   if (!feature) return [];
   const keyId = feature.keySessionId ?? null;
   const out: FeatureChatEntry[] = [];
   const seen = new Set<string>();
-  for (const [sessionId, links] of Object.entries(index.chats)) {
+  for (const [sessionId, links] of Object.entries(index.chats ?? {})) {
     if (seen.has(sessionId)) continue;
     for (const link of links) {
       if (link.featureId !== feature.featureId) continue;
       seen.add(sessionId);
       const isKey = sessionId === keyId;
+      const name = chatNames?.[sessionId];
       out.push({
         sessionId,
+        name: name ? name : null,
         link,
         isKey,
         isArchived: isKey && feature.keyArchived,
@@ -52,12 +62,16 @@ export function featureChats(index: FeaturesIndex, feature: FeatureIndexFeature 
 
 // === Шаги ===
 
-// Строка шага для списка: stepRef, название, линия, исход, число витков.
+// Строка шага для списка: stepRef, название, линия, исход, готовая подпись бэка,
+// число витков.
 export interface StepRow {
   stepRef: string;
   title: string;
   lane: string;
   outcome: string;
+  // Готовая подпись бэка (chain.status: «ждёт ревью», «закрыт без повторного ревью»,
+  // «принят», «идёт», «снят с выкладки»); null — бэк не отдал (старый ответ).
+  status: string | null;
   rounds: number;
 }
 
@@ -70,8 +84,27 @@ export function stepRows(run: FeatureRun): StepRow[] {
     title: c.title,
     lane: c.lane ?? '',
     outcome: c.outcome,
-    rounds: c.rounds.length,
+    status: c.status ?? null,
+    rounds: c.rounds?.length ?? 0,
   }));
+}
+
+// Подпись исхода шага (M2, одна точка правды): готовая подпись бэка chain.status
+// (те же слова, что «Конвейер»/PipelineFlow). Бэк не отдал status (старый ответ) —
+// собственные слова бэка по outcome (FeatureProjector.BuildStepChains), не трактовка
+// фронта: pending = «ждёт ревью» (шаг сделан, ревью ещё не было),
+// returned = «закрыт без повторного ревью».
+const OUTCOME_FALLBACK: Record<string, string> = {
+  accepted: 'принят',
+  running: 'идёт',
+  returned: 'закрыт без повторного ревью',
+  pending: 'ждёт ревью',
+  withdrawn: 'снят с выкладки',
+  accepted_with_remarks: 'доработка',
+};
+export function stepStatusLabel(outcome: string, status: string | null): string {
+  if (status) return status;
+  return OUTCOME_FALLBACK[outcome] ?? outcome;
 }
 
 // === Задачи ===
@@ -85,13 +118,14 @@ export interface TaskCounters {
 }
 
 // Счётчики из run: epic + steps + reviews + qa + final + merge + cut + plan.
-// Статус: done / inProgress / todo.
+// Статус: done / inProgress / todo. Контракт: UI обязан пережить отсутствие любого
+// поля ответа — списки, которых бэк не отдал, раскладываются как пустые.
 export function taskCounters(run: FeatureRun): TaskCounters {
   const all = [
     run.epic,
-    ...run.steps,
-    ...run.reviews,
-    ...run.qa,
+    ...(run.steps ?? []),
+    ...(run.reviews ?? []),
+    ...(run.qa ?? []),
     ...(run.final ? [run.final] : []),
     ...(run.merge ? [run.merge] : []),
     ...(run.cut ?? []),
@@ -108,11 +142,15 @@ export function taskCounters(run: FeatureRun): TaskCounters {
 
 // === Лента событий ===
 
-// Строка события для рендера: время, вид, исполнитель, чат (если есть).
+// Строка события для рендера: время, вид, исполнитель, роль/шаг, чат (если есть).
 export interface EventRow {
   at: string;
   kind: string;
   personaId: string | null;
+  // Роль задачи (feature · cut · plan · step · rework · review · qa · final · merge · consult).
+  role: string | null;
+  // Код шага («Ш1», «D1c»); у step/rework, иначе null.
+  stepRef: string | null;
   // Ссылка на чат: sessionId ≠ null → есть ссылка; null — нет.
   sessionId: string | null;
   reason: string | null;
@@ -120,11 +158,15 @@ export interface EventRow {
 
 // События из page.events: порядок — как в бэке (at desc).
 // Событие без sessionId — не даёт ссылки на чат (fail-closed).
+// Контракт: UI обязан пережить отсутствие любого поля ответа (events/eventsTotal
+// нормализует вызывающий; здесь — полевые ?? null).
 export function eventRows(events: FeatureEvent[]): EventRow[] {
-  return events.map(e => ({
+  return (events ?? []).map(e => ({
     at: e.at,
     kind: e.kind,
     personaId: e.personaId ?? null,
+    role: e.role ?? null,
+    stepRef: e.stepRef ?? null,
     sessionId: e.sessionId ?? null,
     reason: e.reason ?? null,
   }));

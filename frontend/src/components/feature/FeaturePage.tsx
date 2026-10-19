@@ -10,7 +10,7 @@ import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { showToast } from '../../lib/toast';
 import { featureDisplayState, featureQuickAction, featureStatusTag, formatDuration } from '../../lib/chatGroups';
-import { dateOnly } from '../chat/feature/featureTime';
+import { dateOnly, dateTimeLabel } from '../chat/feature/featureTime';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
@@ -38,6 +38,10 @@ export interface FeaturePageProps {
   isMobile?: boolean;
   // Исполнитель «← назад»: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
+  // Названия чатов (M4) — из уже загруженного SessionList'ом списка сессий проекта
+  // (без новых запросов). Нет названия (чат вне проекта / список ещё не пришёл) —
+  // нейтральная подпись «Чат»; GUID наружу не попадает.
+  chatNames?: Record<string, string>;
 }
 
 // «Сколько» фичи для шапки (макет §5.1): открытая — «идёт {возраст}» (от createdAt),
@@ -83,15 +87,16 @@ function LoadingSkeleton() {
 // задачи/тревога — из индекса фич (фолбэк — эпик страницы). Крошка читает указатель
 // возврата (featureBackNav). Тело — одно из пяти состояний: loading | ok | notFound |
 // disabled | error (макет §5.7).
-export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: FeaturePageProps) {
+export function FeaturePage({ featureId, projectId, isMobile = false, onBack, chatNames }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
 
-  // Название: из индекса, фолбэк — эпик страницы, затем нейтральное.
-  const title = feature?.title ?? (page.status === 'ok' ? page.page.run.epic.title : 'Фича');
+  // Название: из индекса, фолбэк — эпик страницы, затем нейтральное. Контракт:
+  // UI обязан пережить отсутствие любого поля ответа — эпик без title не роняет страницу.
+  const title = feature?.title ?? (page.status === 'ok' ? (page.page.run.epic?.title ?? 'Фича') : 'Фича');
 
   // Глиф + тег статуса: из индекса (display state); нет фичи в индексе — нейтральные.
   const display = feature ? featureDisplayState(feature) : null;
@@ -102,9 +107,6 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   const branch = feature?.branch ?? null;
   const taskCount = feature?.taskCount ?? null;
   const ageLabel = featureAgeLabel(feature);
-
-  // Главное действие (та же функция, что в Ф1.3: featureQuickAction).
-  const mainAction = feature ? featureQuickAction(feature) : null;
 
   // Крошка: куда ведёт и как подписана. Из чата — в исходный чат («К чату «…»»);
   // из списка/диплинк — в список: мобила «К списку», десктоп «Назад» (макет §6).
@@ -134,17 +136,30 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   }
   const goBack = () => { onBack(target); clearBackNav(); };
 
-  // ⋯: «Скопировать ветку» — clipboard + тост; «Открыть эпик в «Задачах»» — тост
-  // (переход в раздел «Задачи» — за скобками шага, макет §5.2).
+  // ⋯: «Скопировать ветку» — clipboard + тост. «Открыть эпик в «Задачах»» убран:
+  // он только показывал тост (обещание перехода, которого нет — переход будет в Ф4.1).
   const copyBranch = () => {
     if (!branch) return;
     void navigator.clipboard?.writeText(branch)
       .then(() => showToast('Ветка скопирована', branch, 'success'))
       .catch(() => showToast('Ветка', 'Не удалось скопировать ветку', 'info'));
   };
-  const openEpic = () => showToast('Задачи', 'Откроется эпик в «Задачах»', 'info');
-  // Главное действие: «Ответить»/«К мержу» — в ключевой чат; «Ключевой чат» — туда же.
-  const onMainAction = () => { if (feature?.keySessionId) onBack({ kind: 'key', chatId: feature.keySessionId }); };
+  // Главное действие (featureQuickAction): «Ответить»/«К мержу» — тревога про чат
+  // исполнителя (attention.sessionId); «Ключевой чат» — ключевой чат. Нет подходящего
+  // чата — кнопку не рисуем (никаких мёртвых действий, M1).
+  const quickAction = feature ? featureQuickAction(feature) : null;
+  const mainAction = quickAction && quickAction !== 'Ключевой чат' && !feature?.attention?.sessionId
+    ? null
+    : quickAction;
+  const onMainAction = () => {
+    if (!feature) return;
+    if (mainAction === 'Ключевой чат') {
+      if (feature.keySessionId) onBack({ kind: 'key', chatId: feature.keySessionId });
+      return;
+    }
+    // «Ответить»/«К мержу» — чат тревоги (M1: не ключевой чат).
+    if (feature.attention?.sessionId) onBack({ kind: 'chat', chatId: feature.attention.sessionId });
+  };
 
   // Тело: одно из пяти состояний (макет §5.7).
   let body: ReactNode;
@@ -192,19 +207,29 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     );
   } else {
     // ok: блок тревоги/итог + конвейер/шаги/чаты/задачи/лента (макет §5, Ф2.5).
+    // Лента нормализуется здесь (контракт: UI обязан пережить отсутствие любого поля
+    // ответа): бэк не отдал events/eventsTotal — пустой список и 0.
+    const events = page.page.events ?? [];
+    const eventsTotal = page.page.eventsTotal ?? 0;
+    // Открыть чат со страницы (M1/M3): та же механика Ф2.3, что у крошки — onBack
+    // в чат (исполняет WorkspacePage: чат открывается, возврат — на страницу фичи).
+    const openChat = (chatId: string) => onBack({ kind: 'chat', chatId });
     body = (
       <>
-        <AlarmBlock feature={feature} onMainAction={onMainAction} />
+        <AlarmBlock feature={feature} onOpenChat={openChat} />
         <FeaturePageBody
           run={page.page.run}
           index={index}
           feature={feature}
+          chatNames={chatNames}
+          onOpenChat={openChat}
           isMobile={isMobile}
         />
         <FeaturePageEvents
-          events={page.page.events}
-          eventsTotal={page.page.eventsTotal}
+          events={events}
+          eventsTotal={eventsTotal}
           onShowAll={() => refetchFeaturePageAll(featureId)}
+          onOpenChat={openChat}
           isMobile={isMobile}
         />
       </>
@@ -227,7 +252,6 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
         backLabel={label}
         onBack={goBack}
         onCopyBranch={copyBranch}
-        onOpenEpic={openEpic}
         onMainAction={onMainAction}
         isMobile={isMobile}
         loading={page.status === 'loading'}
@@ -243,9 +267,10 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
 // Блок тревоги/итог (макет §5.3): «ждёт вас»/«к мержу» (infoBg), «стоит» (dangerBg),
 // «смержена» (successBg), «без мержа» (bgSelected). Глиф 14, выделение 700, кнопка-действие.
 // Нет фичи в индексе или нет тревоги/итога — блок не рисуется (тело заполнит Ф2.5).
-function AlarmBlock({ feature, onMainAction }: {
+// Кнопка ведёт в чат тревоги (attention.sessionId, M1) — не в ключевой чат.
+function AlarmBlock({ feature, onOpenChat }: {
   feature: FeatureIndexFeature | null;
-  onMainAction: () => void;
+  onOpenChat: (chatId: string) => void;
 }) {
   if (!feature) return null;
   const att = feature.attention;
@@ -273,7 +298,9 @@ function AlarmBlock({ feature, onMainAction }: {
   const bg = isStop ? C.dangerBg : C.infoBg;
   const glyphKind: GlyphKind = isStop ? 'stopped' : 'wait';
   // «{с}» — с какого момента (attention.since), «{причина}» — attention.reason.
-  const since = att.since ? ` ${att.since}` : '';
+  // Дата-время — тем же хелпером, что и остальные метки режима фичи (featureTime:
+  // локальный пояс, «dd.mm ЧЧ:ММ»), не сырой ISO.
+  const since = att.since ? ` ${dateTimeLabel(att.since) ?? ''}`.trim() : '';
   const reason = att.reason ? `: ${att.reason}` : '';
   const head = isStop ? `Исполнитель молчит${since}` : `Ждёт вашего решения${since}`;
 
@@ -282,9 +309,10 @@ function AlarmBlock({ feature, onMainAction }: {
       <span style={{ display: 'flex', flexShrink: 0, paddingTop: 2 }}><FeatureGlyph kind={glyphKind} size={14} /></span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div><b style={{ color: C.textHeading, fontWeight: 700 }}>{head}</b>{reason}</div>
+        {/* Кнопка — только когда есть чат тревоги (attention.sessionId): без него она мёртвая (M1). */}
         {att.sessionId && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-            <Button size="xs" variant={isStop ? 'ghost' : 'primary'} style={isStop ? { background: C.bgWhite } : undefined} onClick={onMainAction}>
+            <Button size="xs" variant={isStop ? 'ghost' : 'primary'} style={isStop ? { background: C.bgWhite } : undefined} onClick={() => onOpenChat(att.sessionId!)}>
               {isStop ? 'Открыть его чат' : 'Ответить'}
             </Button>
           </div>

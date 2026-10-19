@@ -10,7 +10,7 @@ import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 // Общий паттерн мобильной и десктопной раскладки: одна реализация, не копипаста.
 // `children` — контент центра (в мобильной ветке — тернарник чат/задача/персона,
 // в десктопе — весь набор центральных режимов DesktopWorkspace).
-export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, children }: {
+export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, chatNames, children }: {
   // Страница открыта (featureId ≠ null).
   open: boolean;
   // Id эпика открытой страницы; null — страница закрыта.
@@ -20,6 +20,9 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
   isMobile: boolean;
   // Исполнитель «← назад»: закрывает страницу и ведёт в target.
   onBack: (t: FeaturePageBackTarget) => void;
+  // Названия чатов (M4) — из списка сессий проекта, уже загруженного SessionList'ом
+  // (без новых запросов); нет — страница показывает «Чат».
+  chatNames?: Record<string, string>;
   // Контент центра.
   children: ReactNode;
 }) {
@@ -31,7 +34,7 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
       </div>
       {/* Страница фичи: сосед центра, показана при open. */}
       {open && featureId && (
-        <FeaturePage featureId={featureId} projectId={projectId} isMobile={isMobile} onBack={onBack} />
+        <FeaturePage featureId={featureId} projectId={projectId} isMobile={isMobile} onBack={onBack} chatNames={chatNames} />
       )}
     </>
   );

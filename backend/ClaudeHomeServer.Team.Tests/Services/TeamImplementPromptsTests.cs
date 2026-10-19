@@ -300,4 +300,52 @@ public class TeamImplementPromptsTests
         text.Should().Contain("escalate:check");
         text.Should().Contain("escalate:deviation");
     }
+
+    // Шаг 5.3 фичи «Модульные тесты: отвязать от монолита и разнести по вертикалям»:
+    // шаблон задачи исполнителя обязан нести блок «Тестирование» (только затронутые
+    // тест-проекты, полный slnx — перед мержем, агентские сборки — `-v q -clp:ErrorsOnly`)
+    // и блок «Сверка числа тестов» (trx-сводка вместо stdout `--list-tests`). Без этих
+    // блоков исполнитель запустит полный прогон slnx на каждой итерации и потеряет тест
+    // за дублем — грабли, на которых уже сидели в пачке A.
+    private static string SubtaskDescriptionText() => TeamImplementPrompts.SubtaskDescription(
+        new TeamImplementPlan { Summary = "план" },
+        new TeamImplementSubtask { Title = "шаг", Goal = "шаг", Wave = 1, DoneCriteria = "готово" },
+        worktreePath: null, worktreeBranch: null);
+
+    [Fact]
+    public void SubtaskDescription_СодержитБлокТестирование_СЗатронутымиПроектами()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().Contain("## Тестирование",
+            "блок «Тестирование» — часть шаблона задачи исполнителя (шаг 5.3)");
+        text.Should().Contain("затронутые тест-проекты",
+            "правило: на итерации — только затронутые, полный slnx — перед мержем");
+        text.Should().Contain("scripts/");
+        text.Should().Contain("перед мержем",
+            "явное упоминание, что полный прогон — только перед мержем");
+    }
+
+    [Fact]
+    public void SubtaskDescription_УчитАгентскиеСборкиМинимизироватьШум()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().Contain("-v q");
+        text.Should().Contain("-clp:ErrorsOnly",
+            "агентские сборки должны подавлять лишний шум — иначе контекст забивается");
+    }
+
+    [Fact]
+    public void SubtaskDescription_СодержитБлокСверкиЧерезTrx()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().Contain("## Сверка числа тестов",
+            "блок «Сверка числа тестов» — часть шаблона задачи исполнителя (шаг 5.3)");
+        text.Should().Contain("trx",
+            "сверять число тестов через trx-сводку, не через stdout `--list-tests`");
+        text.Should().Contain("15203",
+            "baseline-число FQN должно быть в блоке как явный эталон");
+    }
 }

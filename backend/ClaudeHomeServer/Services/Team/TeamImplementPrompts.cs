@@ -576,6 +576,26 @@ public static class TeamImplementPrompts
             ? "Работа сделана и проверена фактическим прогоном (сборка/тесты), результат приложен к задаче."
             : subtask.DoneCriteria.Trim());
 
+        // Шаг 5.3 фичи «Модульные тесты»: отвязать от монолита и разнести по вертикалям.
+        // На итерации — только затронутые тест-проекты (скрипт из 5.1), полный slnx —
+        // перед мержем, агентские сборки — с `-v q -clp:ErrorsOnly`. Имя скрипта — placeholder
+        // до сдачи шага 5.1 Марком; после — обновить в этом методе и в
+        // docs/processes/executor-task-template.md синхронно.
+        sb.AppendLine();
+        sb.AppendLine("## Тестирование");
+        sb.AppendLine("На итерации запускай **только** затронутые тест-проекты. " +
+                      "Определить их: `bash scripts/<скрипт из 5.1>` (по `git diff` + графу " +
+                      "`ProjectReference`). Полный прогон `dotnet test backend/ClaudeHomeServer.slnx` " +
+                      "— только перед мержем в master. Агентские сборки: " +
+                      "`dotnet build -v q -clp:ErrorsOnly` (минимум шума, максимум сигнала).");
+        sb.AppendLine();
+        sb.AppendLine("## Сверка числа тестов");
+        sb.AppendLine("Сверять число тестов через **trx-сводку** прогона " +
+                      "(`--logger \"trx;LogFileName=…\"`), не через stdout `--list-tests` " +
+                      "(stdout теряет строки при параллельном выводе testhost). " +
+                      "Эталон baseline-файла: 15203 FQN " +
+                      "(см. docs/research/tests-by-module-baseline-2026-10.md).");
+
         sb.AppendLine();
         sb.AppendLine("## Контекст");
         if (!string.IsNullOrWhiteSpace(plan.Summary)) sb.AppendLine($"План команды: {plan.Summary.Trim()}");

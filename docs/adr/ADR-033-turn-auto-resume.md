@@ -78,7 +78,7 @@ crash-loop и узкого набора исключений.
 расхождения, третья (`bootId`/`server-state.json`) нам не нужна.
 
 **Формула кандидата** в реализации — простая и проверяется в
-`SessionManager.LoadSessions` (`SessionManager.cs:1416–1423`):
+`SessionManager.LoadSessions` (`SessionManager.cs:1437–1438`):
 
 ```
 кандидат := (исходный Status == Working в sessions.json на момент LoadSessions)
@@ -92,7 +92,18 @@ crash-loop и узкого набора исключений.
 статус по `ErrorMessage`/`ExitedMessage` ни в памяти, ни на диске — иначе умирающий
 процесс перетёр бы `Working` в `Error` и кандидатов не осталось. При остановке не
 пишутся только обрывы, а `result` пишется: ход честно завершился, и продолжать его
-после рестарта нельзя. **Владелец резолвится
+после рестарта нельзя.
+
+**Старт пишет `Orphaned` на диск.** Симметрично остановке: `LoadSessions`
+переводит живой статус (`Working`/`Starting`/`Waiting`) в `Orphaned` и одним
+`SaveSessions` на старте дописывает это в `sessions.json`
+(`SessionManager.cs:1445`). Именно это держит правило «только ходы последнего
+рестарта» между рестартами: сессия, уже переведённая в `Orphaned` и сохранённая
+на диске, на следующем старте кандидатом не станет (исходный статус —
+`Orphaned`, не `Working`). Заодно тем же `SaveSessions` на диск уходит
+`Active → Finished`.
+
+**Владелец резолвится
 через `ResolveOwnerId`**: у проектной сессии `OwnerId` пустой, владелец берётся
 из проекта; проверка флага `turn-auto-resume` идёт по резолвленному владельцу,
 а не по пустому `OwnerId` (шов `ITurnAutoResumeHost.IsEnabledFor(Session)`).
@@ -109,7 +120,7 @@ crash-loop и узкого набора исключений.
   `LoadSessions` переводит живой статус (`Working` / `Starting` /
   `Waiting`) в `Orphaned`, и в снимок кандидатов попадают только сессии с
   исходным `Working`. Это не правило в `Eligibility`, а маппинг в
-  `LoadSessions` (см. `SessionManager.cs:1407–1423`). Если CLI перед смертью
+  `LoadSessions` (см. `SessionManager.cs:1424–1430`). Если CLI перед смертью
   прислал карточку вопроса, статус уйдёт в `Waiting`; на старте это `Orphaned`,
   не кандидат — не регрессия.
 - **`RestartResumeAttempts` уже `≥ 1`** — `Eligibility.Reason =
@@ -155,7 +166,7 @@ crash-loop и узкого набора исключений.
 контекст.
 
 **Изменение в реализации:** `SessionManager` хранит фоновый `Task` записи
-маркеров в свойстве `AbortMarkersWritten` (`SessionManager.cs:1442–1451`).
+маркеров в свойстве `AbortMarkersWritten` (`SessionManager.cs:1449–1458`).
 Сервис ждёт его до первой отправки (`TurnAutoResumeService.cs:44`). Для
 ходов с уже завершённой записью маркера это no-op (`Task.CompletedTask`);
 для свежеоборванных — точка синхронизации. Порядок в сервисе:

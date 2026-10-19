@@ -9878,8 +9878,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             // Штатная остановка (ADR-033): обрывы (error/exited умирающего процесса) статус не
             // меняют — sessions.json сохранит Working, и LoadSessions отберёт сессию в кандидаты
-            // на auto-resume. result хода пишется как обычно: ход честно завершился, и
-            // «продолжать» его после рестарта нельзя.
+            // на auto-resume. Working живёт на диске только до следующего старта — там LoadSessions
+            // сразу переводит его в Orphaned. result хода пишется как обычно: ход честно
+            // завершился, и «продолжать» его после рестарта нельзя.
             if (_stopping && msg is ErrorMessage or ExitedMessage)
                 newStatus = null;
 

@@ -129,10 +129,14 @@ const FEATURE_ROLE = 'feature' as const;
 //   • задача с featureId — дочерняя → эпик (по id) → его проект.
 // Иначе (обычная задача) → null.
 function affectedProjectKey(msg: ServerMessage): string | null {
-  if (msg.type !== 'task_changed' || msg.action === 'deleted') return null;
+  if (msg.type !== 'task_changed') return null;
   const t = msg.task;
   if (t.role === FEATURE_ROLE) return t.projectId ?? '';
-  if (t.featureId) return getTaskById(t.featureId)?.projectId ?? null;
+  if (t.featureId) {
+    // Фолбэк на t.projectId: если эпика нет в сторе задач, проект берём
+    // из самой дочерней задачи (m1); '' — область вне проектов.
+    return getTaskById(t.featureId)?.projectId ?? t.projectId ?? '';
+  }
   return null;
 }
 
@@ -197,15 +201,25 @@ export function useFeaturesIndex(projectId: string | null, enabled: boolean): Fe
       // по проекту; последний ушедший включённый чистит срез в onUnmount).
       return;
     }
-    _activeCount.set(projectKey, (_activeCount.get(projectKey) ?? 0) + 1);
-    let cancelled = false;
-    setLoading(projectKey, true);
-    void api.tasks.featuresIndex(projectKey || undefined)
-      .then(index => { if (!cancelled) setIndex(projectKey, index); })
-      .catch(() => { if (!cancelled) setIndex(projectKey, EMPTY); })
-      .finally(() => { if (!cancelled) setLoading(projectKey, false); });
+    const prev = _activeCount.get(projectKey) ?? 0;
+    _activeCount.set(projectKey, prev + 1);
+    // Первичная загрузка — только когда первый включённый потребитель приходит
+    // (0→1): один запрос на проект, а не на каждую карточку. Ответ применяется,
+    // пока проект активен (есть хотя бы один включённый потребитель).
+    if (prev === 0) {
+      setLoading(projectKey, true);
+      void api.tasks.featuresIndex(projectKey || undefined)
+        .then(index => {
+          if ((_activeCount.get(projectKey) ?? 0) > 0) setIndex(projectKey, index);
+        })
+        .catch(() => {
+          if ((_activeCount.get(projectKey) ?? 0) > 0) setIndex(projectKey, EMPTY);
+        })
+        .finally(() => {
+          if ((_activeCount.get(projectKey) ?? 0) > 0) setLoading(projectKey, false);
+        });
+    }
     return () => {
-      cancelled = true;
       onUnmount(projectKey);
     };
   }, [projectKey, enabled]);

@@ -230,6 +230,31 @@ describe('live-режим: перезапрос затронутого прое�
     expect(featuresIndexSpy).toHaveBeenCalledWith('p1');
   });
 
+  it('m1: дочерняя задача, эпик не в сторе → фолбэк на t.projectId', () => {
+    // Эпик НЕ в сторе задач (getTaskById вернёт null); дочерняя — в p2.
+    upsertTaskLocal(task({ id: 'step-4', featureId: 'epic-missing', projectId: 'p2' }));
+    __test.setActive('p2');
+
+    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'step-4', featureId: 'epic-missing', projectId: 'p2' }) });
+
+    expect(__test.pending().has('p2')).toBe(true);
+    vi.advanceTimersByTime(1500);
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    expect(featuresIndexSpy).toHaveBeenCalledWith('p2');
+  });
+
+  it('m1: дочерняя задача, эпик не в сторе, projectId тоже null → срез \'\'', () => {
+    upsertTaskLocal(task({ id: 'step-5', featureId: 'epic-missing2' }));
+    __test.setActive('');
+
+    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'step-5', featureId: 'epic-missing2' }) });
+
+    expect(__test.pending().has('')).toBe(true);
+    vi.advanceTimersByTime(1500);
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    expect(featuresIndexSpy).toHaveBeenCalledWith(undefined);
+  });
+
   it('обычная задача (без featureId/role) — нет перезапроса', () => {
     __test.setActive('p1');
     __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'plain' }) });
@@ -250,13 +275,16 @@ describe('live-режим: перезапрос затронутого прое�
     expect(featuresIndexSpy).not.toHaveBeenCalled();
   });
 
-  it('deleted — игнорируется (как в featureRuns: агрегат пересчитается на следующем событии)', () => {
+  it('m2: deleted — перезапрос (удалённый эпик/шаг должен обновить индекс)', () => {
     upsertTaskLocal(task({ id: 'epic-5', role: 'feature', projectId: 'p1' }));
     __test.setActive('p1');
 
     __test.handleTaskChanged({ type: 'task_changed', action: 'deleted', task: task({ id: 'epic-5', role: 'feature', projectId: 'p1' }) });
 
-    expect(__test.pending().has('p1')).toBe(false);
+    expect(__test.pending().has('p1')).toBe(true);
+    vi.advanceTimersByTime(1500);
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    expect(featuresIndexSpy).toHaveBeenCalledWith('p1');
   });
 
   it('неактивный проект (никто его не смотрит) — нет перезапроса', () => {
@@ -349,5 +377,53 @@ describe('несколько потребителей: выключенный н
     expect(__test.active().has('p1')).toBe(false);
     a.root.unmount();
     b.root.unmount();
+  });
+
+  it('MAJOR-1: N потребителей → 1 запрос на проект', async () => {
+    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const c = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    await flush();
+    // Три потребителя одного проекта — ровно один GET.
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    expect(featuresIndexSpy).toHaveBeenCalledWith('p1');
+    // Срез дошёл до всех.
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    a.root.unmount();
+    b.root.unmount();
+    c.root.unmount();
+    await flush();
+  });
+
+  it('MAJOR-1: после ответа новый потребитель не стучится заново, пока индекс свежий', async () => {
+    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    await flush();
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    // Новый потребитель того же проекта: fetch уже отработал, срез свежий.
+    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    await flush();
+    // Второй запрос не ушёл.
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    a.root.unmount();
+    b.root.unmount();
+    await flush();
+  });
+
+  it('MAJOR-1: все ушли, новый потребитель — новый запрос', async () => {
+    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    await flush();
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+    // Последний ушёл — срез очищен.
+    a.root.unmount();
+    await flush();
+    expect(__test.snapshotFor('p1').features).toHaveLength(0);
+    // Новый потребитель — первичная загрузка заново.
+    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    await flush();
+    expect(featuresIndexSpy).toHaveBeenCalledTimes(2);
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    b.root.unmount();
+    await flush();
   });
 });

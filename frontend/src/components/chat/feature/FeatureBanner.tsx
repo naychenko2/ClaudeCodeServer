@@ -283,7 +283,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featuresOverview = useFeature(FLAGS.featuresOverview);
   const enabled = featureMode && featuresOverview;
-  // Индекс фич проекта (реактивная подписка; fetch идемпотентен, дедуплицируется).
+  // Индекс фич проекта (реактивная подписка; один запрос на проект:
+  // первичная загрузка при 0→1 потребителях).
   // Захватываем сам индекс — шторка (мобила) читает из него чаты фичи.
   const index = useFeaturesIndex(projectId, enabled);
   // «← назад»: исходный чат (в памяти вкладки); null, пока перехода из плашки не было.

@@ -42,7 +42,7 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
   useLayoutEffect(() => {
     const h = ref.current?.offsetHeight ?? 0;
     setTop(Math.max(12, Math.min(anchor.rect.top, window.innerHeight - h - 12)));
-  }, [anchor, task?.subtasks.length, task?.description]);
+  }, [anchor, task?.subtasks.length, task?.description, task?.descriptionPreview]);
 
   // Скролл вне тултипа уводит якорь — закрываем. Только пользовательский скролл:
   // программный прижим ленты чата при активности Claude тултип не закрывает.
@@ -140,14 +140,15 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
       </div>
 
       {/* Описание */}
-      {task.description && (
+      {/* В облегчённой задаче списка полного описания нет — в подсказке достаточно превью */}
+      {(task.listItem ? task.descriptionPreview : task.description) && (
         <div style={{
           maxHeight: 150, overflowY: 'auto', marginBottom: 11,
           padding: '9px 11px', background: C.bgCard,
           border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
           fontSize: 12.5,
         }}>
-          <MarkdownViewer content={task.description} />
+          <MarkdownViewer content={(task.listItem ? task.descriptionPreview : task.description) ?? ''} />
         </div>
       )}
 

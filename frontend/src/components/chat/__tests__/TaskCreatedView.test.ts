@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatItem, Task } from '../../../types';
-import { TaskCreatedView } from '../TaskCreatedView';
+import { TaskCreatedView, TaskRunExecutorView } from '../TaskCreatedView';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { __test } from '../../../lib/featureRuns';
 import { ChatSessionContext } from '../contexts';
@@ -40,12 +40,20 @@ vi.mock('../../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/personas')>();
   return { ...orig, ensurePersonasLoaded: () => Promise.resolve() };
 });
+// lib/api — spy tasks.get: TaskRunExecutorView добирает полную задачу по id; управляем
+// разрешением/отказом, чтобы покрыть «карточка по доборенной задаче» и «фолбэк при ошибке».
+const { tasksGetMock } = vi.hoisted(() => ({ tasksGetMock: vi.fn() }));
+vi.mock('../../../lib/api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/api')>();
+  return { ...orig, api: { ...orig.api, tasks: { ...orig.api.tasks, get: tasksGetMock } } };
+});
 
 beforeEach(() => {
   __test.reset();
   mobileFlag.value = false;
   setAllFlags({ [FLAG]: true });
   openTaskSpy.mockClear();
+  tasksGetMock.mockReset();
 });
 afterEach(() => {
   __test.reset();
@@ -288,5 +296,106 @@ describe('F9: чип — hover и фокус', () => {
     act(() => (spanProps!.onBlur as () => void)());
     expect(chip!.style.boxShadow, 'blur — без кольца').toBe('none');
     root.unmount();
+  });
+});
+
+// === TaskRunExecutorView: карточка «Задача создана» на месте запуска исполнителя ===
+//
+// Результат tasks_run_executor неполный ({id, title, status, executorSessionId, note}) —
+// полную задачу добираем по id (api.tasks.get). Пока грузится / ошибка / нет id — обычная
+// строка инструмента (ToolUseView), не падение. Все кейсы — fake-DOM (async useState+useEffect).
+
+describe('TaskRunExecutorView: карточка на месте запуска исполнителя', () => {
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+
+  // Deferred-promise: детерминированное разрешение/отказ добора задачи
+  function deferred<T>() {
+    let resolve: (v: T) => void = () => {};
+    let reject: (e: unknown) => void = () => {};
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+
+  // Вызов tasks_run_executor: input.taskId (надёжный источник id) + неполный result
+  function runItem(over: Partial<ToolItem> = {}): ToolItem {
+    return {
+      kind: 'tool_use',
+      id: 't-run',
+      name: 'mcp__tasks__tasks_run_executor',
+      input: { taskId: 'task-1' },
+      result: JSON.stringify({ id: 'task-1', title: 'Шаг D1', status: 'inProgress', executorSessionId: 'sess-x', note: 'запущено' }),
+      ...over,
+    } as ToolItem;
+  }
+
+  function mountRun(i: ToolItem) {
+    const node = createElement(
+      ChatSessionContext.Provider,
+      { value: 'sess-1' },
+      createElement(TaskRunExecutorView, { item: i, online: true }),
+    );
+    return mount(node);
+  }
+
+  it('задача доборена по id → карточка «Задача создана» (название + чип шага фичи)', async () => {
+    const { promise, resolve } = deferred<Task>();
+    tasksGetMock.mockReturnValue(promise);
+    const { root, container } = mountRun(runItem());
+    // Пока грузится — строка инструмента, карточки нет
+    expect(textNodes(container).join(' '), 'пока грузится — без карточки').not.toContain('Задача создана');
+    // Разрешаем добор полной задачи
+    await act(async () => { resolve(task()); });
+    const text = textNodes(container).join(' ');
+    expect(text, 'карточка «Задача создана»').toContain('Задача создана');
+    expect(text, 'название задачи').toContain('Шаг D1');
+    expect(text, 'чип «Шаг D1 фичи»').toContain('Шаг D1 фичи');
+    expect(tasksGetMock, 'dobor полной задачи по id').toHaveBeenCalledWith('task-1');
+    root.unmount();
+  });
+
+  it('ошибка/404 при доборе → строка инструмента (карточки нет, не падение)', async () => {
+    const { promise, reject } = deferred<Task>();
+    tasksGetMock.mockReturnValue(promise);
+    const { root, container } = mountRun(runItem());
+    await act(async () => { reject(new Error('404')); });
+    expect(textNodes(container).join(' '), 'после ошибки — без карточки').not.toContain('Задача создана');
+    root.unmount();
+  });
+
+  it('старая запись без taskId/result → не падает, добор не зовут, карточки нет', () => {
+    const { root, container } = mountRun(runItem({ input: {}, result: undefined }));
+    expect(tasksGetMock, 'без id — добор не зовут').not.toHaveBeenCalled();
+    expect(textNodes(container).join(' '), 'без карточки').not.toContain('Задача создана');
+    root.unmount();
+  });
+
+  it('подпись шапки — «tasks · run_executor» (не «tasks · create» от ветки tasks_create)', async () => {
+    const { promise, resolve } = deferred<Task>();
+    tasksGetMock.mockReturnValue(promise);
+    const { root, container } = mountRun(runItem());
+    await act(async () => { resolve(task()); });
+    // «tasks · {toolName}» рендерит две текстовые ноды; join(' ') даёт двойной пробел —
+    // схлопываем whitespace, чтобы проверка не зависала от артефакта склейки.
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text, 'подпись запуска').toContain('tasks · run_executor');
+    expect(text, 'не старая подпись').not.toContain('tasks · create');
+    root.unmount();
+  });
+});
+
+// === TaskCreatedView: подпись шапки по имени инструмента (дефолт tasks_create) ===
+
+describe('TaskCreatedView: подпись шапки по имени инструмента', () => {
+  it('дефолт (tasks_create) — «tasks · create»', () => {
+    expect(render(item(task()))).toContain('tasks · create');
+  });
+
+  it('toolName=run_executor — «tasks · run_executor»', () => {
+    const html = renderToStaticMarkup(
+      createElement(TaskCreatedView, { item: item(task()), online: true, toolName: 'run_executor' }),
+    );
+    expect(html).toContain('tasks · run_executor');
+    expect(html).not.toContain('tasks · create');
   });
 });

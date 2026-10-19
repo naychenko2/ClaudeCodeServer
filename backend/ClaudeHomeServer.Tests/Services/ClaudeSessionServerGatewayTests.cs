@@ -99,7 +99,8 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
     private sealed record TurnResult(Dictionary<string, string>? Env, ClaudeSession Session, TaskCompletionSource Exited);
 
     private async Task<TurnResult> RunTurnAsync(string model, string? gatewayApiUrl = GatewayApi,
-        bool gatewayEnabled = true, bool failStart = false, bool localStatsEnabled = false)
+        bool gatewayEnabled = true, bool failStart = false, bool localStatsEnabled = false,
+        string? ownerId = "owner-1")
     {
         _kit.Options.CurrentValue = new LlmGatewayOptions
         {
@@ -121,7 +122,7 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
             TasksMcp: null,
             Launcher: launcher,
             LlmGatewayApiUrl: gatewayApiUrl);
-        var session = new ClaudeSession(new Session { Model = model, OwnerId = "owner-1" }, context,
+        var session = new ClaudeSession(new Session { Model = model, OwnerId = ownerId }, context,
             providers: _kit.Providers,
             serverGateway: new ServerTurnGateway(_kit.Selector, _tokens, _kit.Options),
             localModelStats: new MutableOptionsMonitor<LocalModelStatsOptions>(
@@ -257,6 +258,29 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
             hasTurnTokenHeader.Should().BeFalse("токен хода выдают только шлюзу");
             _tokens.ActiveCount.Should().Be(0);
         }
+        await KillAndWaitAsync(turn);
+    }
+
+    // Подсказочные заголовки CLI нужны локальной модели и МИМО шлюза: прокси читает маркер сжатия
+    // из сырого x-claude-code-compaction. Боевой случай — чат без владельца (OwnerId пуст):
+    // UseServerGateway() его на шлюз не пускает, ход идёт напрямую в прокси.
+    // Мутация: убрать ветку else-if в ClaudeSession → первые три строки краснеют.
+    [Theory]
+    [InlineData("qwen3.8-27b", true, true, null, true)] // без владельца — напрямую, заголовки есть
+    [InlineData("qwen3.8-27b", true, false, "owner-1", true)] // шлюз выключен — напрямую, заголовки есть
+    [InlineData("qwen3.8-27b", false, true, "owner-1", true)] // статистика выключена — напрямую, заголовки есть
+    [InlineData("qwen3.8-27b", true, true, "owner-1", true)] // через шлюз — как и раньше
+    [InlineData("deepseek-v4-pro", true, true, "owner-1", false)] // не локаль — заголовков нет
+    public async Task ЛокальнаяМодель_ПодсказочныеЗаголовкиИНаПрямомПути(
+        string model, bool statsEnabled, bool gatewayEnabled, string? ownerId, bool expectHint)
+    {
+        var turn = await RunTurnAsync(model, GatewayApi, gatewayEnabled, localStatsEnabled: statsEnabled,
+            ownerId: ownerId);
+
+        if (expectHint)
+            turn.Env!.Should().Contain("CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1");
+        else
+            turn.Env!.ContainsKey("CLAUDE_CODE_GATEWAY_HINT_HEADERS").Should().BeFalse();
         await KillAndWaitAsync(turn);
     }
 

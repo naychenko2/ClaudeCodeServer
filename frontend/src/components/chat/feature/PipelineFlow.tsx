@@ -956,15 +956,19 @@ function formatDate(iso?: string | null): string {
 //
 // Компонент «глупый»: стадии/линии/возвраты/шаги считает БЭК (run.stages / run.lanes /
 // run.returnsBySource / run.stepChains), рендер только раскладывает. Нет stages → 7 pending.
-export function PipelineFlow({ run }: { run: FeatureRun }) {
+// initialExpandedStage — какой этап раскрыт НА СТАРТЕ (по умолчанию null = все свёрнуты,
+// раскрывает пользователь). Реальный рендер не передаёт (свёрнуто); тесты/SSR форсируют
+// 'prod', чтобы строки шагов были в разметке (SSR читает только начальное состояние).
+export function PipelineFlow({ run, initialExpandedStage = null }: { run: FeatureRun; initialExpandedStage?: StageKey | null }) {
   const reduced = usePrefersReducedMotion();
   const isMobile = useIsMobile();
   const now = useMinuteTick();
   const lanes = laneInfo(run);
   const badges = returnBadges(run);
-  // F8: управляемое раскрытие. «Производство» открыто по умолчанию; шаг — одиночно внутри этапа.
+  // F8: управляемое раскрытие. По умолчанию ВСЕ этапы свёрнуты (обзор фичи на верхнем
+  // уровне, детали раскрывает сам пользователь); шаг — одиночно внутри раскрытого этапа.
   // F9: сигнал фокуса чипа «Шаг N фичи» (стор Ф1, per chat) выставляет их по сигналу.
-  const [expandedStage, setExpandedStage] = useState<StageKey | null>('prod');
+  const [expandedStage, setExpandedStage] = useState<StageKey | null>(initialExpandedStage);
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   // minHeight строки: тач-цель по TB (32 десктоп / 40 мобила).
   const rowMinH = isMobile ? ROW_MIN_H_MOBILE : ROW_MIN_H_DESKTOP;

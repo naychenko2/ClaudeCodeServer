@@ -1,15 +1,24 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Controllers;
 
-// REST-панель «Локальные модели», вкладка «Текст»: снимок состояния локального
-// движка (vLLM) + история + видеокарты. Только для админов — настройка глобальная
-// (влияет на все пользователи), образец — LocalActionsAdminController.
+// REST-панель «Локальные модели»: вкладка «Текст» (снимок состояния локального движка vLLM +
+// история + видеокарты) и вкладка «Медиа» (ComfyUI).
+// Права (ADR-030, изменение правила приватности 2026-10-18): «Текст» — только admin (настройка
+// глобальная, влияет на всех, образец — LocalActionsAdminController); «Медиа» — любой
+// аутентифицированный, но не-админ видит только свои строки (scope "self", gpus null, счётчик
+// queueAhead «перед вами N»). Роль снята с класса и стоит на каждом действии: в ASP.NET Core
+// несколько [Authorize] складываются по И, поэтому [Authorize] на действии поверх class-level
+// Roles="admin" не ослабил бы доступ.
 //
 // Зависимости — только через интерфейсы вертикали Llm (ILocalModelStatsReader, IGpuSampler).
 // Подсистема Llm может быть отключена (Subsystems:llm:Enabled=false) — тогда
@@ -17,20 +26,29 @@ namespace ClaudeHomeServer.Controllers;
 // (200, а не 500). Внутренние типы Llm наружу не отдаём: DTO — отдельные записи ниже.
 [ApiController]
 [Route("api/local-model")]
-[Authorize(Roles = "admin")]
-public class LocalModelStatsController(IServiceProvider services) : ControllerBase
+public class LocalModelStatsController(IServiceProvider services, IOptions<LocalModelStatsMediaOptions> mediaOptions) : ControllerBase
 {
     // Llm-зависимости необязательны: подсистема может быть выключена (GetService → null).
     private readonly ILocalModelStatsReader? _reader = services.GetService<ILocalModelStatsReader>();
     private readonly IGpuSampler? _gpus = services.GetService<IGpuSampler>();
+    // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. Необязателен (подсистема Llm отключаема).
+    private readonly IHardwareReportService? _hardware = services.GetService<IHardwareReportService>();
     // Счётчик хода: живые чаты на движке (chats) и прогоны, которые он не видит (othersCount).
     private readonly ILocalModelTurnMeter? _meter = services.GetService<ILocalModelTurnMeter>();
+    // Рубильник «медиа для обычных пользователей» (ADR-030, 2026-10-18): единственная точка
+    // чтения секции LocalModelStats (связывание в Program.cs).
+    private readonly IOptions<LocalModelStatsMediaOptions> _mediaOptions = mediaOptions;
 
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    // Роль admin: «Текст» — только админ, «Медиа» — любой аутентифицированный.
+    private bool IsAdmin => User.IsInRole("admin");
 
     // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>
     // window: по умолчанию 15m; белый список 1m/5m/15m/1h, иное → 400.
     // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
+    // Вкладка «Текст» — только admin (настройка глобальная, влияет на всех).
+    [Authorize(Roles = "admin")]
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
         [FromQuery] string? window,
@@ -140,14 +158,40 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             History = history,
             Chats = chats,
             Unsupported = current.Unsupported,
+            // Строка-ссылка «Видеокарты»: ручка уже admin-only, отдельного опроса нет.
+            Hardware = _hardware?.Brief(),
         });
     }
 
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h
+    // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
+    // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403) плюс серверный
+    // флаг local-model-stats (без него 404, как в MediaHistory). Неизвестное window → 400.
+    // Подсистема Llm выключена → 200 пустой отчёт (не 500).
+    [Authorize(Roles = "admin")]
+    [HttpGet("hardware")]
+    public IActionResult Hardware([FromQuery] string? window, [FromServices] FeatureFlagService flags)
+    {
+        if (UserId is not { } id || !flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats))
+            return NotFound();
+        if (!TryParseWindow(window, out var windowSpan))
+            return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
+
+        if (_hardware is null)
+            return Ok(new HardwareReport(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "ok", null, "ok",
+                [], [], [], [], (long)HardwareReportService.StepFor(windowSpan).TotalMilliseconds));
+        return Ok(_hardware.Build(windowSpan));
+    }
+
     // GET /api/local-model/stats/media?since=<unix ms>
-    // Вкладка «Медиа»: статус ComfyUI + слоты + running/queue/lastHour. Только admin.
+    // Вкладка «Медиа»: статус ComfyUI + слоты + running/queue/lastHour.
+    // Админ (scope "all") — всё, как раньше; не-админ (scope "self") — только свои строки
+    // (OwnerId == sub, не Foreign), gpus null, счётчик queueAhead «перед вами N».
+    // Рубильник LocalModelStats:MediaForUsers=false → не-админ получает 404 (как будто функции нет).
     // IComfyStats — ОПЦИОНАЛЬНАЯ зависимость: подсистема images отключаема, а обязательный
     // параметр от неё вне её самой — дефект по ADR-014. Без неё → 200 {configured:false},
     // а не 500. since — unix-мс, фильтрует lastHour (только завершённые новее момента).
+    [Authorize]
     [HttpGet("stats/media")]
     public async Task<IActionResult> Media([FromQuery] long? since, CancellationToken ct)
     {
@@ -156,21 +200,80 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         // Подсистема images выключена (IComfyStats null) или снимок null → {configured:false}, 200.
         var snap = comfy is null ? null : await comfy.GetMediaAsync(ct);
         if (snap is null)
-            return Ok(new LocalModelMediaResponse { Configured = false });
+            return Ok(new LocalModelMediaResponse { Configured = false, Scope = IsAdmin ? "all" : "self" });
 
         var myId = UserId;
-        var running = snap.Running.Select(r => MapRunning(r, myId)).ToArray();
-        var queue = snap.Queue.Select((r, i) => MapQueue(r, myId, i + 1)).ToArray();
-        // since — только завершённые новее момента (аналог хвоста в «Текст»).
+        var isAdmin = IsAdmin;
+        // Рубильник: не-админ без MediaForUsers → 404, как будто функции нет (админ не меняется).
+        // fail-closed (ADR-030): не-админ без непустого sub → 404 тоже (та же общая проверка,
+        // что и в /history*, через MediaSelfScope).
+        if (!isAdmin && (!_mediaOptions.Value.MediaForUsers || !MediaSelfScope.HasOwner(User)))
+            return NotFound();
+
+        // fail-closed (ADR-030): не-админ с пустым/пробельным myId — своих строк нет: чужие
+        // (Foreign) несут OwnerId "", и совпали бы с пустым myId. Строже gate (IsNullOrEmpty):
+        // whitespace myId (" ") проходит gate, но здесь даёт пустые running/queue/lastHour.
+        // queueAhead остаётся null (своих задач в очереди нет), gpus null (не-админ).
+        if (!isAdmin && string.IsNullOrWhiteSpace(myId))
+        {
+            return Ok(new LocalModelMediaResponse
+            {
+                Configured = snap.Configured,
+                Scope = "self",
+                Comfy = new MediaComfyDto
+                {
+                    Status = snap.Status,
+                    DownSince = snap.DownSince?.ToUnixTimeMilliseconds(),
+                    Version = snap.Version,
+                },
+                Slots = new MediaSlotsDto { Used = snap.SlotsUsed, Limit = snap.SlotsLimit },
+                Gpus = null,
+                LoadedModels = snap.LoadedModels.Count > 0 ? [.. snap.LoadedModels] : null,
+                Running = [],
+                Queue = [],
+                LastHour = [],
+                Unsupported = [.. snap.Unsupported],
+            });
+        }
+
+        // queueAhead — по ПОЛНОЙ очереди ДО фильтра: сколько задач стоит перед первой своей
+        // поставленной в очередь задачей; нет своих в очереди → null.
+        int? queueAhead = null;
+        var myQueuePositions = snap.Queue
+            .Select((r, i) => (row: r, position: i + 1))
+            .Where(x => x.row.OwnerId == myId && x.row.Foreign is null)
+            .Select(x => x.position)
+            .ToList();
+        if (myQueuePositions.Count > 0)
+            queueAhead = myQueuePositions.Min() - 1;
+
+        // running: админ — все; не-админ — только свои, не Foreign.
+        var running = snap.Running
+            .Where(r => isAdmin || (r.OwnerId == myId && r.Foreign is null))
+            .Select(r => MapRunning(r, myId))
+            .ToArray();
+
+        // queue: позиция — в ПОЛНОЙ очереди (не в отфильтрованном списке); не-админ — только свои.
+        var queue = snap.Queue
+            .Select((r, i) => (row: r, position: i + 1))
+            .Where(x => isAdmin || (x.row.OwnerId == myId && x.row.Foreign is null))
+            .Select(x => MapQueue(x.row, myId, x.position))
+            .ToArray();
+
+        // since — только завершённые новее момента (аналог хвоста в «Текст»);
+        // не-админ — только свои (ComfyDoneRow без Foreign: чужие имеют OwnerId "").
         var lastHour = snap.LastHour
             .Where(d => since is null || d.FinishedAt.ToUnixTimeMilliseconds() >= since)
+            .Where(d => isAdmin || d.OwnerId == myId)
             .Select(d => MapDone(d, myId))
             .ToArray();
 
-        // gpus — карты узла ComfyUI (маршрут /ccs/stats, шаг 31): роль media, как есть с узла;
+        // gpus — карты узла ComfyUI (маршрут /ccs/stats, шаг 31): для не-админа скрыты (null);
         // подпись «RTX 3090 · медиа» делает фронт. Пустой список → null (узел не сообщает).
-        var gpus = snap.Gpus.Count > 0
-            ? snap.Gpus.Select(g => new MediaGpuDto
+        MediaGpuDto[]? gpus = null;
+        if (isAdmin && snap.Gpus.Count > 0)
+        {
+            gpus = snap.Gpus.Select(g => new MediaGpuDto
             {
                 Uuid = g.Uuid,
                 Index = g.Index,
@@ -182,12 +285,14 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
                 TempC = g.TempC,
                 PowerW = g.PowerW,
                 PowerLimitW = g.PowerLimitW,
-            }).ToArray()
-            : null;
+            }).ToArray();
+        }
 
         return Ok(new LocalModelMediaResponse
         {
             Configured = snap.Configured,
+            Scope = isAdmin ? "all" : "self",
+            QueueAhead = queueAhead,
             Comfy = new MediaComfyDto
             {
                 Status = snap.Status,
@@ -202,6 +307,8 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
             Queue = queue,
             LastHour = lastHour,
             Unsupported = [.. snap.Unsupported],
+            // Только админ (scope "all"): у не-админа поля нет.
+            Hardware = isAdmin ? _hardware?.Brief() : null,
         });
     }
 
@@ -348,6 +455,10 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
 
         // Метрики, которых движок не сообщил (отсутствуют в /metrics).
         public IReadOnlyList<string> Unsupported { get; init; } = [];
+
+        // Сводка «Железо» для строки-ссылки и точки на вкладке; только админ (у не-админа поля нет).
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public HardwareBrief? Hardware { get; init; }
     }
 
     // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени. GenPerStream/PrefillPerStream —
@@ -438,6 +549,13 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         // true — подсистема images/ComfyUI настроена; false — стенд выключен (status:disabled).
         public bool Configured { get; init; }
 
+        // Охват (ADR-030, 2026-10-18): "all" — админ (все строки), "self" — не-админ (только свои).
+        public string Scope { get; init; } = "all";
+
+        // «Перед вами N»: сколько задач в ПОЛНОЙ очереди стоит перед первой своей поставленной
+        // в очередь задачей (позиция — до фильтра); нет своих в очереди → null.
+        public int? QueueAhead { get; init; }
+
         public MediaComfyDto Comfy { get; init; } = new();
 
         public MediaSlotsDto Slots { get; init; } = new();
@@ -455,6 +573,10 @@ public class LocalModelStatsController(IServiceProvider services) : ControllerBa
         public MediaDoneDto[] LastHour { get; init; } = [];
 
         public IReadOnlyList<string> Unsupported { get; init; } = [];
+
+        // Сводка «Железо»: только админ (scope "all"); у не-админа поля нет в ответе.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public HardwareBrief? Hardware { get; init; }
     }
 
     // Блок ComfyUI: статус (working|busy|down|disabled), момент первого сбоя, версия.

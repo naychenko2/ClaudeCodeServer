@@ -71,4 +71,28 @@ public class PrefixFingerprintCacheTests
 
         fps2.Should().BeSameAs(fps1);
     }
+
+    // Дефект (Перф-3 B10, п.2): кэш жил вечно — записи удалённых чатов не вытеснялись.
+    // Теперь размер ограничен: при переполнении вытесняются давно не пересчитанные.
+    [Fact]
+    public void GetOrCompute_Переполнение_КэшОграничен()
+    {
+        var fake = new FakeHistory();
+        var cache = new PrefixFingerprintCache(fake, maxEntries: 4);
+
+        // 10 разных чатов — вдвое больше потолка 4
+        for (var i = 0; i < 10; i++)
+        {
+            var history = new List<StoredMessage>
+            {
+                new StoredUserMessage($"чат {i}"),
+                new StoredResultMessage("success", 10, i + 1),
+            };
+            fake.FakeVersion = new DateTime(2026, 10, 19, 10, i, 0, DateTimeKind.Utc);
+            cache.GetOrCompute($"csid-{i}", history);
+        }
+
+        // Кэш не растёт без ограничений: после переполнения вытеснен до <= лимита
+        cache.Count.Should().BeLessOrEqualTo(4);
+    }
 }

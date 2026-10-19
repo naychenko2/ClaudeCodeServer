@@ -253,3 +253,91 @@ slnx → `NotesController.cs` (та же вертикаль, что у Notes.Tes
   `Controllers/RemoteCommandsController.cs` + `Core/Models/RemoteCommandsOptions.cs`;
   Telemetry → `ClaudeHomeServer/Telemetry/` + `Core/Telemetry/`; Architecture, TestRuns,
   Watchdog, Deploy — собственные сборки (каталог проекта целиком).
+
+## Шаг 4.2: мутационная проверка вакуумности 5 guard-тестов
+
+> Цель: доказать, что **ни один** из 5 guard-тестов в `ClaudeHomeServer.Guards.Tests` не
+> вакуумный — каждый реально ловит нарушение собственного инварианта. Метод: для каждого
+> guard'а — **минимальная точечная** мутация, ломающая инвариант → guard обязан **покраснеть**
+> → откат мутации → guard обязан **позеленеть**. Мутации и откаты — локальные операции в
+> рабочей копии, в git **не** коммитятся: перед коммитом этого отчёта дерево чистое
+> (проверено `git status --short` + `git diff --stat` — оба пусты).
+>
+> Прогон — `mcp__tests__run_tests` target `backend/ClaudeHomeServer.Guards.Tests` (99 тестов).
+> Для guard'ов 1–2 — **полный** прогон (99), для 3–5 — **фильтрованный** (guard в изоляции):
+> так мутация проявляется именно в целевом guard'е, а не в артефактах изоляции.
+
+### Сводка
+
+| # | Guard | Инвариант | Мутация (локальная, откатана) | Красный прогон | Зелёный после отката |
+|---|---|---|---|---|---|
+| 1 | `SubsystemBoundaryTests` | вертикаль не ссылается на чужие вертикали | `Video → Notes` (ProjectReference + тип-метод) | 98/99, 1 упал | 99/99 |
+| 2 | `SubsystemBoundaryCoverageTests` | каждая IAppSubsystem/namespace покрыта в `Boundaries` | новый namespace + `IAppSubsystem` | 97/99, 2 упали | 99/99 |
+| 3 | `IlBoundaryRegressionTests` | IL-скан видит 6 известных швов | разрыв seam 5 (`Execution → TranscriptRoots`) | 3/4, 1 упал | 4/4 |
+| 4 | `McpToolsetStabilityTests` | состав tools/list не зависит от хода | литерал `turnText` в теле `BuildTurnMcpConfig` | 45/46, 1 упал | 46/46 |
+| 5 | `ProjectMapHygieneGuardTests` | в карте CLAUDE.md нет мёртвых ссылок | мёртвая ссылка на несуществующий ADR | 1/2, 1 упал | 2/2 |
+
+### 1. SubsystemBoundaryTests — «вертикаль → чужая вертикаль»
+
+- **Мутация:** `ClaudeHomeServer.Video.csproj` — `<ProjectReference>` на `ClaudeHomeServer.Notes.csproj`;
+  `VideoSubsystem.cs` — приватный метод `_MutationProbe(ClaudeHomeServer.Services.Notes.NotesSubsystem n)`
+  (тип-параметр виден IL-сканеру). `Notes` не в allow-list вертикали `Video`.
+- **Красный (98/99, 1 упал):**
+  `Vertical_НеСсылаетсяНаДругиеВертикали(Video)`:
+  «Video: `ClaudeHomeServer.Services.Video.VideoSubsystem` ссылается на
+  `ClaudeHomeServer.Services.Notes.NotesSubsystem` из чужой вертикали (нет в
+  AllowedNamespacePrefixes/AllowedExactNamespaces)».
+- **Откат → 99/99.**
+
+### 2. SubsystemBoundaryCoverageTests — «полнота таблицы Boundaries»
+
+- **Мутация:** новый файл `backend/ClaudeHomeServer/Services/MutationCoverageProbe.cs` —
+  namespace `ClaudeHomeServer.Services.ZzzMutationProbe` + `ZzzMutationProbeSubsystem : IAppSubsystem`
+  (подсистема, **не** заведённая в `Boundaries`).
+- **Красный (97/99, 2 упали)** — **оба** метода класса, оба на `ZzzMutationProbe`:
+  - `AllServicesNamespaces_AreCoveredByBoundaryOrExclusion`: «ClaudeHomeServer.Services.ZzzMutationProbe,
+    but found at least one item».
+  - `AllIAppSubsystemImplementations_HaveBoundaryEntry`: «ClaudeHomeServer.Services.ZzzMutationProbe,
+    but found at least one item».
+- **Откат (удаление файла) → 99/99.**
+
+### 3. IlBoundaryRegressionTests — «IL-скан видит 6 известных швов»
+
+- **Мутация:** `DockerProcessRunner.cs` (Execution) — закомментирован вызов
+  `TranscriptRoots.AddAllowedRoot(projectsDir);` — единственный шов `Execution → TranscriptRoots`
+  (seam 5 из 6) разорван.
+- **Красный (3/4, 1 упал):** `IlScan_ВидитВсеСемьИзвестныхШвов`:
+  «Не найдено: **Execution → TranscriptRoots: IL-скан НЕ видит**».
+- **Откат → 4/4.**
+- **Грабли (отличие от кандидата в постановке):** мутация «удалить строку форс-загрузки из
+  стат. конструктора» guard **не** красит — строки форс-загрузки в `IlBoundaryRegressionTests`
+  **избыточны**: xunit при обнаружении инстанциирует **все** классы сборки, и стат. конструктор
+  `SubsystemBoundaryTests` форс-загружает те же сборки (Execution/Reader/Memory/Llm/…). Поэтому
+  надёжнее ломать **самый шов** (реальную ссылку), а не механизм форс-загрузки.
+
+### 4. McpToolsetStabilityTests — «состав tools/list не зависит от хода»
+
+- **Мутация:** `ClaudeSession.cs` (Llm) — в тело `BuildTurnMcpConfig` добавлена строка
+  `var turnText = 0;` (литерал `turnText` в теле метода).
+- **Красный (45/46, 1 упал):** `СоставИнструментовХода_НеЗависитОтСостоянияХода`:
+  `NotContain("turnText")` — «Did not expect code … `var turnText = 0;` …».
+- **Откат → 46/46.**
+- **Ответ по «нулю форс-загрузки»:** guard **не** 0-форс-загрузочный. Его защита **source-based**:
+  `[Fact]` (не skippable) требует, чтобы файл `ClaudeSession.cs` **нашёл**ся (`path.Should().NotBeNull`)
+  **и** метод `BuildTurnMcpConfig` **существовал** (`signature.Success.Should().BeTrue`), и затем
+  проверяет чистоту тела от `turnText`/`_currentTurnAgentDepth`/`_currentTurnSuppressTasksExecute`.
+  Мутация **нашлась** (в отличие от контингента «мутация не нашлась» в постановке) — guard не вакуумный.
+
+### 5. ProjectMapHygieneGuardTests — «гигиена карты CLAUDE.md»
+
+- **Мутация:** `CLAUDE.md` (корень) — добавлена строка с мёртвой ссылкой
+  `[ADR-033-mutation-probe.md](docs/adr/ADR-033-mutation-probe.md)` (файла нет).
+- **Красный (1/2, 1 упал):** `КартыРепозитория_НеСодержатМёртвыхСсылокИИмпортов`:
+  «CLAUDE.md:498 — ссылка на «docs/adr/ADR-033-mutation-probe.md», файла нет».
+  Тест размера (`КартаРепозитория_НеПревышаетПотолокСтрок`) остался зелёным (497 < 530).
+- **Откат → 2/2.**
+
+### Вывод
+
+Все 5 guard'ов **не вакуумны**: каждый покраснел на точечной мутации, ломающей его инвариант,
+и позеленел после отката. Ни один guard не «проходит молча» при сломанной проверке.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, ChevronRight, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
-import type { FeatureIndexFeature } from '../types/featureIndex';
+import type { FeatureChip, FeatureIndexFeature } from '../types/featureIndex';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
@@ -962,7 +962,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // (Александр, 18.10)»), фронт только фильтрует по chips[] и считает счётчики.
   const renderFeaturesMode = () => {
     if (!featureGroups) return null;
-    const chip = filters.featureFilter;
+    // Мост: новые featureChips[]/showClosed → одиночный выбранный чип ряда.
+    // Ряд пока single-select (мультивыбор — следующий шаг): первый выбранный чип,
+    // иначе «closed» (если showClosed), иначе «open» (все открытые).
+    const chip: FeatureChip = filters.featureChips.length
+      ? filters.featureChips[0]
+      : (filters.showClosed ? 'closed' : 'open');
     const allFeatures = featuresIndex.features;
     const openFeatures = allFeatures.filter(f => f.bucket !== 'closed');
     const closedFeatures = allFeatures.filter(f => f.bucket === 'closed');
@@ -980,7 +985,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       <FeatureFilterChips
         features={allFeatures}
         selected={chip}
-        onSelect={c => patch({ featureFilter: c })}
+        onSelect={c => {
+          if (c === 'open') patch({ featureChips: [], showClosed: false });
+          else if (c === 'closed') patch({ featureChips: [], showClosed: true });
+          else patch({ featureChips: [c], showClosed: false });
+        }}
         isMobile={isMobile}
         closedCount={closedGroups.length}
       />
@@ -1047,7 +1056,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           : chip === 'merge' ? 'Сейчас ни одна фича не ждёт мержа.'
           : 'Сейчас ни одна фича не ждёт вас.'}
         action={
-          <Button variant="ghost" size="sm" onClick={() => patch({ featureFilter: 'open' })}>
+          <Button variant="ghost" size="sm" onClick={() => patch({ featureChips: [], showClosed: false })}>
             Показать открытые
           </Button>
         }

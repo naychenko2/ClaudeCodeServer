@@ -236,11 +236,11 @@ describe('featureChipCounts: счётчики по chips[]', () => {
       withChips('B', ['open', 'stopped']),
       withChips('C', ['closed']),
     ];
-    expect(featureChipCounts(feats)).toEqual({ open: 2, waiting: 1, stopped: 1, merge: 0, closed: 1 });
+    expect(featureChipCounts(feats)).toEqual({ open: 2, waiting: 1, stopped: 1, merge: 0, closed: 1, running: 0 });
   });
 
   it('пустой список — все нули', () => {
-    expect(featureChipCounts([])).toEqual({ open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0 });
+    expect(featureChipCounts([])).toEqual({ open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0 });
   });
 });
 

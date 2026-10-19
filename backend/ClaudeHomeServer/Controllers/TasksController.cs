@@ -492,8 +492,9 @@ public class TasksController(
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
         // Project: null — эпика нет (нет/чужой/удалён — один 404, см. выше).
+        // Тело совпадает с 404 POST merge: { error: "Фича не найдена" } (фронт читает error).
         var run = features.Project(featureId, UserId);
-        if (run is null) return NotFound();
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса: sessionId события наружу только если в нём
         // (fail-closed: удалённый/чужой чат → null).
         var snapshot = sessions.GetAllOwnedBy(UserId)
@@ -516,8 +517,9 @@ public class TasksController(
 
     // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{featureId}/merge):
     // создаёт задачу role=merge с персоной-исполнителем DevopsExecutor и запускает её.
-    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят,
-    // 0 или >1 исполнителей DevOps). Идемпотентна: открытая merge-задача → вернуть её,
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик, тело { error: "Фича не найдена" }),
+    // 409 (финал не принят, уже смержено/закрыто, worktree не на диске, 0 или >1 исполнителей DevOps).
+    // Идемпотентна и атомарна: открытая merge-задача → вернуть её (создание сериализовано по featureId),
     // если todo — запустить, вторую не заводить.
     [HttpPost("features/{featureId}/merge")]
     [DenyOnDelegatedTurn("Запуск мержа фичи", AllowInTeamImplement = true,
@@ -528,34 +530,33 @@ public class TasksController(
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
 
         var run = features.Project(featureId, UserId);
-        if (run is null) return NotFound();
+        // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
 
         // Финал не принят → мерж преждевременно.
         if (!run.Ready)
             return Conflict(new { error = "Финал не принят: мерж преждевременно" });
 
-        // Идемпотентность: открытая merge-задача уже есть → вернуть её.
-        if (run.Merge is { } existing && existing.Status != TaskItemStatus.Done)
-        {
-            if (existing.Status == TaskItemStatus.Todo)
-            {
-                try
-                {
-                    await executor.ExecuteAsync(existing, auto: false, null);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    return BadRequest(new { error = ex.Message });
-                }
-            }
-            return Ok(existing);
-        }
+        // Уже смержено (merge-задача закрыта) или фича закрыта (эпик Done) → повторный мерж не нужен.
+        if (run.Merge is { Status: TaskItemStatus.Done })
+            return Conflict(new { error = "Фича уже смержена" });
+        if (run.Closed)
+            return Conflict(new { error = "Фича закрыта" });
+
+        // Worktree эпика должен существовать на диске: иначе исполнитель тихо стартовал бы в корне проекта.
+        if (run.Epic.WorktreePath is { } wt && !Directory.Exists(wt))
+            return Conflict(new { error = $"Worktree фичи не найден: {wt}" });
 
         // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
+        // Те же externalScopes, что в Create: кросс-проектная ProjectTasks-привязка не даёт ложного 409.
         var devops = personas.GetByOwner(UserId)
             .Where(p => p.Specialty == PersonaSpecialty.DevopsExecutor)
-            .Where(p => TaskPersonaValidator.Error(personas, UserId, p.Id,
-                taskProjectId: run.Epic.ProjectId, spheres: spheres) is null)
+            .Where(p =>
+            {
+                var scopes = bindings.BuildExternalTaskScopes(UserId, p);
+                return TaskPersonaValidator.Error(personas, UserId, p.Id,
+                    taskProjectId: run.Epic.ProjectId, externalScopes: scopes, spheres: spheres) is null;
+            })
             .ToList();
 
         if (devops.Count == 0)
@@ -565,39 +566,90 @@ public class TasksController(
 
         var persona = devops[0];
 
-        // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
-        var req = new CreateTaskRequest(
-            Title: $"Мерж фичи: {run.Epic.Title}",
-            FeatureId: featureId,
-            Role: TaskRoles.Merge,
-            PersonaId: persona.Id,
-            Assignee: TaskItemAssignee.Claude,
-            WorktreePath: run.Epic.WorktreePath,
-            WorktreeBranch: run.Epic.WorktreeBranch);
-
-        TaskItem task;
+        // Создание идемпотентно и атомарно: два конкурентных POST сериализуем по featureId,
+        // иначе оба увидят «merge-задачи нет» и заведут две (два исполнителя на одном worktree).
+        var gate = MergeGates.GetOrAdd(featureId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
         try
         {
-            task = tasks.Create(run.Epic.ProjectId, UserId, req);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+            // Идемпотентность: открытая merge-задача уже есть (свежий снимок — после gate) → вернуть её.
+            if (features.Project(featureId, UserId)?.Merge is { } existing
+                && existing.Status != TaskItemStatus.Done)
+            {
+                if (existing.Status == TaskItemStatus.Todo)
+                {
+                    try
+                    {
+                        await executor.ExecuteAsync(existing, auto: false, null);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return BadRequest(new { error = ex.Message });
+                    }
+                }
+                return Ok(existing);
+            }
 
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+            // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
+            // Description — самодостаточный шаблон постановки (исход/цель, push, конфликт, критерий, уборка).
+            var req = new CreateTaskRequest(
+                Title: $"Мерж фичи: {run.Epic.Title}",
+                Description: BuildMergeDescription(run),
+                FeatureId: featureId,
+                Role: TaskRoles.Merge,
+                PersonaId: persona.Id,
+                Assignee: TaskItemAssignee.Claude,
+                WorktreePath: run.Epic.WorktreePath,
+                WorktreeBranch: run.Epic.WorktreeBranch);
 
-        try
-        {
-            await executor.ExecuteAsync(task, auto: false, null);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+            TaskItem task;
+            try
+            {
+                task = tasks.Create(run.Epic.ProjectId, UserId, req);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
 
-        return Ok(task);
+            await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+
+            // Возвращаем задачу ПОСЛЕ запуска: ClaudeStartedAt/статус подтверждают, что исполнитель стартовал.
+            TaskItem started;
+            try
+            {
+                started = await executor.ExecuteAsync(task, auto: false, null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            return Ok(started);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
+
+    // Шаблон постановки merge-задачи (M1): самодостаточный — исход/цель, push, конфликт, критерий, уборка.
+    // Названия ветки и пути worktree подставляются из эпика.
+    private static string BuildMergeDescription(FeatureRun run)
+    {
+        var branch = string.IsNullOrWhiteSpace(run.Epic.WorktreeBranch) ? "ветку фичи" : run.Epic.WorktreeBranch;
+        var worktree = string.IsNullOrWhiteSpace(run.Epic.WorktreePath) ? "worktree фичи" : run.Epic.WorktreePath;
+        return string.Join("\n",
+            $"Смержить ветку фичи «{branch}» в основную ветку проекта (master) в основном рабочем дереве проекта (корень проекта); исход — worktree фичи {worktree}.",
+            "Предусловие: финал фичи принят (проверено сервером).",
+            "Push НЕ делать — только локальный мерж.",
+            "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
+            "После успешного мержа проверить git log/сборку по кратким критериям проекта и закрыть эпик через tasks_complete только если мерж прошёл чисто.",
+            "Worktree и ветки не удалять — уборка по слову человека.");
+    }
+
+    // Семафоры создания merge-задач по featureId: статика, т.к. контроллер transient (по одному на запрос).
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> MergeGates = new();
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]

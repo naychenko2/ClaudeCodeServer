@@ -71,7 +71,7 @@ public class PluginDraftsControllerTests : IDisposable
             })
             .Build();
         var gate = new StubFlagGate { PluginsMvp = mvpOn, PluginsBuildYourself = buildYourselfOn };
-        var ctl = new PluginDraftsController(config, gate, _store, _drafts, _installer);
+        var ctl = new PluginDraftsController(config, gate, _store, _drafts, _installer, new PluginDraftDiff(_store));
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },

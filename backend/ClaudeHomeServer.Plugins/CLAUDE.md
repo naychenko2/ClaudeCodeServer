@@ -63,13 +63,13 @@ allow-list — и превышение лимитов → отказ с тем �
 5. **Нет `_drafts` → не падает.** Корня `data/plugins` нет при старте — `Start()` молчит;
    создание каталогов подхватывает сам примитив (авто-подписка на новые каталоги).
 
-## REST черновиков: список, предпросмотр, «Принять» (шаг 4.3a, ADR-031)
+## REST черновиков: список, предпросмотр, сравнение, «Принять» (шаги 4.3a/4.3b, ADR-031)
 
 `PluginDraftsController` (маршрут `/api/plugins/drafts`, `[Authorize]`): человек просматривает
-черновик агента и «Принимает» его. Гейты — как у `PluginsController` (подсистема выключена → 503,
-`plugins-mvp` off → 403) **плюс** `plugins-build-yourself` off → 403. На ВСЕХ ручках: сервисный
-JWT (`typ=svc`) → 403 (черновик собирает агент через MCP, принимает человек), чужой/
-несуществующий черновик → 404.
+черновик агента, сравнивает его с установленной версией и «Принимает». Гейты — как у
+`PluginsController` (подсистема выключена → 503, `plugins-mvp` off → 403) **плюс**
+`plugins-build-yourself` off → 403. На ВСЕХ ручках: сервисный JWT (`typ=svc`) → 403 (черновик
+собирает агент через MCP, принимает/сравнивает человек), чужой/несуществующий черновик → 404.
 
 - **`GET /api/plugins/drafts`** — список черновиков владельца. Массив сводок
   (`PluginDraftSummary`; ключи PascalCase — тип без `[JsonPropertyName]`):
@@ -89,6 +89,37 @@ JWT (`typ=svc`) → 403 (черновик собирает агент через
     "Secrets": [{ "Name": "LINEAR_TOKEN", "Required": true }],
     "Files": [{ "Path": "ccs-plugin.json", "IsDir": false, "Size": 217 }],
     "Validation": { "IsValid": true, "Problems": [] } }
+  ```
+
+- **`GET /api/plugins/drafts/{slug}/diff`** — сравнение черновика с ПОСЛЕДНЕЙ установленной
+  версией того же `id` (`PluginDraftDiff`, PascalCase): черновик vs `packages/{id}/{version}/`.
+  - нет установленной версии → `Status: "new"`, `InstalledVersion: null`, `Manifest: null`,
+    `Added` = список файлов черновика (всё «новое»);
+  - иначе → `Status: "updated"`, `InstalledVersion` = версия пакета:
+    - `Added`/`Removed`/`Modified` — файлы (путь относительный внутри пакета, `Size` в байтах);
+    - изменённый **текстовый** файл — `Lines` (построчный diff: `Kind` = `ctx`/`del`/`add`,
+      `OldLine`/`NewLine`); потолок **200 строк на файл** (превышение → `Truncated: true` у файла)
+      и **1000 суммарно** (превышение → `Truncated: true` в корне);
+    - **бинарный** (NUL-байт) или файл **> 256 КБ** — `Binary: true`, `Lines: null`
+      («изменён, N байт», без содержимого);
+    - `Manifest` — права (`PermissionsAdded`/`PermissionsRemoved`) и секреты
+      (`SecretsAdded`/`SecretsRemoved`/`SecretsRequiredChanged` — сменился признак «обязательный»).
+  В ответе нет хостовых путей, только относительные внутри пакета.
+  ```json
+  { "Status": "updated", "Slug": "pkg", "Id": "local-a/pkg",
+    "Version": "2.0.0", "InstalledVersion": "1.0.0", "Truncated": false,
+    "Added": [{ "Path": "D.txt", "Size": 5, "Binary": false, "Truncated": false, "Lines": null }],
+    "Removed": [{ "Path": "B.txt", "Size": 2, "Binary": false, "Truncated": false, "Lines": null }],
+    "Modified": [{ "Path": "A.txt", "Size": 8, "Binary": false, "Truncated": false,
+      "Lines": [
+        { "OldLine": 1, "NewLine": 1, "Kind": "ctx", "Text": "a1" },
+        { "OldLine": 2, "NewLine": 2, "Kind": "ctx", "Text": "a2" },
+        { "OldLine": 0, "NewLine": 3, "Kind": "add", "Text": "a3" } ] }],
+    "Manifest": {
+      "PermissionsAdded": ["net:api.linear.app"], "PermissionsRemoved": ["tasks:read"],
+      "SecretsAdded": [{ "Name": "NEW_TOKEN", "Required": true }],
+      "SecretsRemoved": [{ "Name": "OLD_TOKEN", "Required": true }],
+      "SecretsRequiredChanged": [{ "Name": "LINEAR_TOKEN", "Required": false }] } }
   ```
 
 - **`POST /api/plugins/drafts/{slug}/accept`** — принять: установка по метке `draft:<slug>`

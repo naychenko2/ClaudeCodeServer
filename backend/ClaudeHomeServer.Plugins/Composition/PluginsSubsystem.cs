@@ -43,6 +43,9 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // валидация, сводка. Stateless поверх PluginStore + PluginPackageValidator; его используют
         // и MCP-тулсет plugins (4.1), и наблюдение/«Принять» (4.2/4.3).
         services.AddSingleton<PluginDraftService>();
+        // Сравнение черновика с установленной версией (шаг 4.3b): stateless поверх PluginStore;
+        // его использует REST-ручка GET /api/plugins/drafts/{slug}/diff.
+        services.AddSingleton<PluginDraftDiff>();
         // MCP-тулсет plugins (шаг 4.1): POST /mcp/plugins/{sessionId}, реестр Main находит его
         // среди IMcpToolset. Состав (5 инструментов) не зависит от флага/хода/сессии.
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.PluginsToolset>();

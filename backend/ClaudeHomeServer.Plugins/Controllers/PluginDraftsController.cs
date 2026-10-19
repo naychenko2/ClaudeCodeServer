@@ -29,7 +29,8 @@ public class PluginDraftsController(
     IFeatureFlagGate flags,
     PluginStore? store,
     PluginDraftService? drafts,
-    PluginInstaller? installer) : ControllerBase
+    PluginInstaller? installer,
+    PluginDraftDiff? diff) : ControllerBase
 {
     // Claim'ы — литералы: вертикаль не тянет JwtBearer-пакет, а MapInboundClaims=false
     // (Program.cs) оставляет raw-имена. Смысл 1:1 с JwtService (sub = id владельца,
@@ -81,6 +82,30 @@ public class PluginDraftsController(
         try
         {
             return Ok(drafts!.Preview(UserId, slug));
+        }
+        catch (Exception e) when (e is FileNotFoundException or ArgumentException)
+        {
+            return NotFound(new { error = e.Message });
+        }
+    }
+
+    // --- GET /api/plugins/drafts/{slug}/diff — сравнение с установленной версией (шаг 4.3b) ---
+    // Черновик vs ПОСЛЕДНЯЯ установленная версия того же id: файлы (added/removed/modified),
+    // построчный diff текстовых (потолки 200/1000 → truncated), бинарные/крупные «N байт»,
+    // манифест (права/секреты). Нет установленной версии → «новый плагин» со списком файлов.
+    // Гейты те же: сервисный JWT → 403, чужой/несуществующий → 404 (Diff бросает
+    // FileNotFoundException/ArgumentException, как Preview).
+
+    [HttpGet("{slug}/diff")]
+    public IActionResult Diff(string slug)
+    {
+        var gate = Gate(); if (gate is not null) return gate;
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: черновики ведёт только пользовательский токен" });
+
+        try
+        {
+            return Ok(diff!.Diff(UserId, slug));
         }
         catch (Exception e) when (e is FileNotFoundException or ArgumentException)
         {

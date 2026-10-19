@@ -32,15 +32,6 @@
       светиться в выводе сборки — глушится только превращение их в ошибку.
     -->
     <WarningsNotAsErrors>NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
-    <!--
-      NU1903 (аудит NuGet: CVE в зависимостях) дополнительно глушим через NoWarn.
-      Причина: restore-таск NuGet (SDK 10.0.112) принимает WarningsNotAsErrors,
-      но не применяет его к audit-предупреждениям — под -warnaserror NU1903 всё
-      равно становится ошибкой (проверено: глобальный -p:WarningsNotAsErrors=NU1903
-      не помогает). NoWarn глушит и warning, и error. Точечные исключения по
-      конкретным advisory — ниже (NuGetAuditSuppress), они не дублируют NoWarn.
-    -->
-    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

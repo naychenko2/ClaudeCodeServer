@@ -1408,11 +1408,19 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
         if (list is null) return;
         List<string> abortedMidTurn = [];
+        // Залипший Working (замечание Веры, ADR-033): живой статус (Working/Starting/Waiting)
+        // переводим в Orphaned только в памяти; на диск это попадёт лишь при следующем
+        // SaveSessions. Если активности по чату нет, файл держит Working, и при следующем
+        // старте с включённым флагом этот давно оборванный ход снова станет кандидатом — ломает
+        // правило «только ходы последнего рестарта». Помечаем, чтобы сохранить один раз.
+        var anyLiveOrphaned = false;
         foreach (var session in list)
         {
             // Процесс умер при рестарте — "живые" статусы переводим в orphaned
             var originalStatus = session.Status;
             var wasLive = originalStatus is SessionStatus.Working or SessionStatus.Waiting;
+            if (originalStatus is SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting)
+                anyLiveOrphaned = true;
             session.Status = originalStatus switch
             {
                 SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
@@ -1431,8 +1439,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
-        // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
-        if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
+        // Идемпотентно: на уже перенесённых сессиях это no-op. Один SaveSessions покрывает
+        // обе миграции: перенос темы + сохранение Orphaned (залипший Working, см. выше).
+        var migratedTopics = Llm.ChatTopicMigration.Apply(list);
+        if (migratedTopics || anyLiveOrphaned) SaveSessions();
         // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
         // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
         // запуском resume, чтобы маркер не обогнал снимок.
@@ -10341,9 +10351,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public void KillAllProcesses()
     {
         // Первая строка — ДО гашения адаптеров: умирающий процесс присылает ErrorMessage/
-        // ExitedMessage, и ApplyStatusAsync при поднятом признаке ранним выходом не перетирает
-        // Working в Error/Active (ADR-033). Новый SaveSessions() здесь НЕ добавляем: его убрали
-        // (5c6606282) как источник зависаний остановки (ожидание _saveLock).
+        // ExitedMessage, и OnMessageAsync при поднятом признаке гасит их (newStatus = null),
+        // не перетирая Working в Error/Active (ADR-033). Новый SaveSessions() здесь НЕ
+        // добавляем: его убрали (5c6606282) как источник зависаний остановки (ожидание _saveLock).
         _stopping = true;
         // Таймер не должен пытаться писать одновременно с убийством процессов:
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры

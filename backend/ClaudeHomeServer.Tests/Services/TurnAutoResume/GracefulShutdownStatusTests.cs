@@ -105,42 +105,49 @@ public class GracefulShutdownStatusTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         };
 
-    // --- Регресс причины 1: KillAllProcesses + ErrorMessage → Working сохраняется ---
-
+    // --- Регресс причины 1: KillAllProcesses + ErrorMessage не перетирает статус ---
+    // Залипший Working (замечание Веры): LoadSessions переводит Working → Orphaned и
+    // сохраняет на диск, поэтому после первого старта на диске уже Orphaned, а не Working.
+    // Штатная остановка (ErrorMessage умирающего процесса) при поднятом признаке не
+    // перетирает его в Error; второй старт видит Orphaned на диске и ход НЕ берёт в
+    // кандидаты («только ходы последнего рестарта»). Мутация: убрать сохранение Orphaned
+    // в LoadSessions → на диске Working → второй старт снова берёт кандидата → тест красный.
     [Fact]
-    public async Task ШтатнаяОстановка_ErrorMessage_СтатусWorking_СохраняетсяИКандидатВозвращается()
+    public async Task ШтатнаяОстановка_ErrorMessage_OrphanedСохраняется_ВторойСтартНеБерётКандидата()
     {
         var session = MakeWorkingSession(claudeSessionId: "csid-" + Guid.NewGuid().ToString("N"));
         WriteSessions([session]);
         var sut = CreateSessionManager();
 
-        // LoadSessions уже отобрал сессию в кандидаты (исходный Working) — снимок не пуст.
+        // LoadSessions отобрал сессию в кандидаты (исходный Working) и сохранил Orphaned на диск.
         sut.TakeRestartResumeCandidates().Should().Contain(session.Id,
             "исходный Working — ход оборван, кандидат на auto-resume");
 
         // Штатная остановка: KillAllProcesses поднимает признак остановки первой строкой.
         sut.KillAllProcesses();
 
-        // Умирающий процесс присылает ErrorMessage; обработчик зовёт ApplyStatusAsync,
-        // который при поднятом признаке ранним выходом не перетирает статус. LoadSessions
-        // уже перевёл Working → Orphaned в памяти; без фикса ErrorMessage сделал бы Error.
+        // Умирающий процесс присылает ErrorMessage; OnMessageAsync при поднятом признаке гасит
+        // его (newStatus = null), не перетирая статус. LoadSessions уже перевёл Working → Orphaned
+        // в памяти и на диске; без гашения ErrorMessage сделал бы Error.
         var acc = new TurnAccumulator(new List<StoredMessage>());
         await sut.OnMessageAsync(session.Id, acc, new ErrorMessage("процесс завершился"));
 
         sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Orphaned,
-            "признак остановки: ErrorMessage не перетирает статус в Error (в памяти остался Orphaned из LoadSessions)");
+            "признак остановки: ErrorMessage не перетирает статус в Error (в памяти Orphaned из LoadSessions)");
 
-        // И на диске: sessions.json всё ещё Working (ApplyStatusAsync не вызвал SaveSessions).
+        // На диске Orphaned (строкой, как пишет SaveSessions): LoadSessions его сохранил,
+        // ErrorMessage в окне остановки не перетёр.
         var raw = File.ReadAllText(_sessionsJsonPath);
-        raw.Should().Contain("\"Status\":1",
-            "Working (int 1) сохранён в sessions.json — не перетёрт в Error (int 5)");
+        raw.Should().Contain("\"Status\":\"Orphaned\"",
+            "Orphaned сохранён в sessions.json — не перетёрт в Error")
+            .And.NotContain("\"Status\":\"Error\"");
 
-        // Новый экземпляр поверх того же файла: LoadSessions снова видит Working → кандидат.
+        // Второй старт поверх того же файла: на диске Orphaned (не Working) → ход НЕ кандидат.
         var sut2 = CreateSessionManager();
         sut2.GetById(session.Id)!.Status.Should().Be(SessionStatus.Orphaned,
-            "LoadSessions переводит Working → Orphaned (как и любой живой статус при рестарте)");
-        sut2.TakeRestartResumeCandidates().Should().Contain(session.Id,
-            "sessions.json сохранил Working — новый старт снова отбирает сессию в кандидаты");
+            "LoadSessions видит Orphaned на диске (уже не живой статус)");
+        sut2.TakeRestartResumeCandidates().Should().NotContain(session.Id,
+            "на диске Orphaned, не Working — «только ходы последнего рестарта», давно оборванный ход не возобновляется");
     }
 
     // --- Контроль: БЕЗ признака остановки ErrorMessage всё же переводит в Error ---
@@ -162,9 +169,10 @@ public class GracefulShutdownStatusTests : IDisposable
     }
 
     // --- ExitedMessage в окне остановки: Working в памяти не сбрасывается в Active ---
-    // LoadSessions переводит Working → Orphaned, а для Orphaned exited и так ничего не меняет
-    // (ветка `_ => null`), поэтому сначала возвращаем в памяти честный Working живого хода.
-    // Мутация: убрать гашение error/exited по _stopping в OnMessageAsync → Active → тест красный.
+    // LoadSessions переводит Working → Orphaned (и сохраняет Orphaned на диск), а для
+    // Orphaned exited и так ничего не меняет (ветка `_ => null`), поэтому сначала возвращаем
+    // в памяти честный Working живого хода. Мутация: убрать гашение error/exited по _stopping
+    // в OnMessageAsync → Active → тест красный.
     [Fact]
     public async Task ШтатнаяОстановка_ExitedMessage_СтатусWorking_СохраняетсяИКандидатВозвращается()
     {
@@ -178,10 +186,11 @@ public class GracefulShutdownStatusTests : IDisposable
 
         sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
             "признак остановки: exited умирающего процесса не сбрасывает Working в Active");
-        File.ReadAllText(_sessionsJsonPath).Should().Contain("\"Status\":1",
-            "на диске остался Working — sessions.json не перезаписан");
-        CreateSessionManager().TakeRestartResumeCandidates().Should().Contain(session.Id,
-            "после рестарта сессия снова в кандидатах на auto-resume");
+        // На диске Orphaned (LoadSessions его сохранил); exited в окне остановки не перезаписал.
+        File.ReadAllText(_sessionsJsonPath).Should().Contain("\"Status\":\"Orphaned\"",
+            "на диске Orphaned из LoadSessions — exited в окне остановки его не перезаписал");
+        CreateSessionManager().TakeRestartResumeCandidates().Should().NotContain(session.Id,
+            "на диске Orphaned, не Working — «только ходы последнего рестарта»");
     }
 
     // --- ResultMessage в окне остановки: ход завершился честно, пишется Active ---
@@ -207,5 +216,32 @@ public class GracefulShutdownStatusTests : IDisposable
             .And.NotContain("\"Status\":1").And.NotContain("\"Status\":\"Working\"");
         CreateSessionManager().TakeRestartResumeCandidates().Should().NotContain(session.Id,
             "ход завершён — повторно продолжать его после рестарта нельзя");
+    }
+
+    // --- Залипший Working (замечание Веры): первый старт сохраняет Orphaned, второй ход не берёт ---
+    // sessions.json с Working → первый SessionManager (LoadSessions переводит Working → Orphaned
+    // и сохраняет на диск; флаг роли не играет, ход не отправляется) → второй SessionManager поверх
+    // того же файла видит Orphaned (не живой статус) → TakeRestartResumeCandidates() пуст.
+    // Мутация: убрать сохранение Orphaned в LoadSessions → на диске Working → второй старт берёт
+    // кандидата → тест красный.
+    [Fact]
+    public void ЗалипшийWorking_ПервыйСтартСохраняетOrphaned_ВторойСтартНеБерётКандидата()
+    {
+        var session = MakeWorkingSession(claudeSessionId: "csid-" + Guid.NewGuid().ToString("N"));
+        WriteSessions([session]);
+
+        // Первый старт: LoadSessions отбирает кандидата (исходный Working) и сохраняет Orphaned на диск.
+        var first = CreateSessionManager();
+        first.TakeRestartResumeCandidates().Should().Contain(session.Id,
+            "первый старт: исходный Working — ход оборван, кандидат");
+
+        // Второй старт поверх того же файла: на диске Orphaned (не Working) → ход не кандидат.
+        var second = CreateSessionManager();
+        second.TakeRestartResumeCandidates().Should().BeEmpty(
+            "на диске Orphaned, не Working — «только ходы последнего рестарта», давно оборванный ход не возобновляется");
+        second.GetById(session.Id)!.Status.Should().Be(SessionStatus.Orphaned,
+            "LoadSessions видит Orphaned на диске (уже не живой статус)");
+        File.ReadAllText(_sessionsJsonPath).Should().Contain("\"Status\":\"Orphaned\"",
+            "на диске Orphaned — Working не залип");
     }
 }

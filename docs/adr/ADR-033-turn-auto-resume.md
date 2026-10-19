@@ -97,13 +97,21 @@ crash-loop и узкого набора исключений.
 из проекта; проверка флага `turn-auto-resume` идёт по резолвленному владельцу,
 а не по пустому `OwnerId` (шов `ITurnAutoResumeHost.IsEnabledFor(Session)`).
 
+**Компромисс по штабу в окне остановки:** при штатной остановке план хода штаба
+(«Командная реализация») не кладётся — сервер уходит, не дождавшись его. Это
+безопасно: сессии со штабом и так исключены из авто-продолжения
+(`team_implement`), а новых маркеров при остановке не появляется — стадия штаба
+просто двигается следующим ходом.
+
 Конкретные правила, как они работают в коде:
 
 - **Структурно отсекаются `Waiting`, `Starting`, `Orphaned`**: цикл
   `LoadSessions` переводит живой статус (`Working` / `Starting` /
   `Waiting`) в `Orphaned`, и в снимок кандидатов попадают только сессии с
   исходным `Working`. Это не правило в `Eligibility`, а маппинг в
-  `LoadSessions` (см. `SessionManager.cs:1407–1423`).
+  `LoadSessions` (см. `SessionManager.cs:1407–1423`). Если CLI перед смертью
+  прислал карточку вопроса, статус уйдёт в `Waiting`; на старте это `Orphaned`,
+  не кандидат — не регрессия.
 - **`RestartResumeAttempts` уже `≥ 1`** — `Eligibility.Reason =
   already_attempted`. Crash-loop guard, см. §«Сторож crash-loop».
 - **`TeamImplement != null`** — `Eligibility.Reason = team_implement`.

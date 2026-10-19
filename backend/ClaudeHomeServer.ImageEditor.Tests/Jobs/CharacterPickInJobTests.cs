@@ -130,7 +130,7 @@ public class CharacterPickInJobTests : IDisposable
         Character = r.Character is null ? null : new
         {
             r.Character.Slug, r.Character.Name,
-            Faces = r.Character.FacePhotos.Select(Convert.ToHexString),
+            Faces = r.Character.FacePhotos!.Select(Convert.ToHexString),
         },
     });
 
@@ -148,7 +148,7 @@ public class CharacterPickInJobTests : IDisposable
         // Побайтно: роли, подписи и байты всех референсов, эталон лица и промпт — как без подбора
         Snapshot(request).Should().Be(baseline);
         Order(request).Should().Equal(Hex(1), Hex(2), Hex(3));
-        request.Character!.FacePhotos.Select(Convert.ToHexString).Should().Equal(Hex(1), Hex(2), Hex(3));
+        request.Character!.FacePhotos!.Select(Convert.ToHexString).Should().Equal(Hex(1), Hex(2), Hex(3));
         lock (_picks) _picks.Should().BeEmpty();
     }
 
@@ -160,7 +160,7 @@ public class CharacterPickInJobTests : IDisposable
         // Главное первым, подобранное профильное — вторым, остальное следом
         Order(request).Should().Equal(Hex(1), Hex(3), Hex(2));
         // Эталон сходства от подбора не зависит
-        request.Character!.FacePhotos.Select(Convert.ToHexString).Should().Equal(Hex(1), Hex(2), Hex(3));
+        request.Character!.FacePhotos!.Select(Convert.ToHexString).Should().Equal(Hex(1), Hex(2), Hex(3));
         lock (_picks)
         {
             var pick = _picks.Should().ContainSingle().Subject;

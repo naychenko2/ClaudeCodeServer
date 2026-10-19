@@ -922,6 +922,103 @@ public class LocalModelStatsPollerTests
         h.Poller.Current.SpeculativeSpeedup.Should().BeNull("рестарт счётчика (отрицательная дельта) → null");
     }
 
+    // (38) Стабильная база шага декода (ADR-029, v2.5): поллер публикует Current.CleanStepMs,
+    // и база НЕ зависит от окна запроса — «долгие» шаги в хвосте кольца её не двигают
+    // (если бы база считалась по последнему окну, она была бы ≈250 мс).
+    // Мутация: считать базу по хвосту кольца (окно 1 мин) — тест краснеет.
+    [Fact]
+    public async Task CleanStep_PublishedBase_IgnoresRecentSlowSteps()
+    {
+        var h = new Harness();
+        double sum = 0;
+        long count = 0;
+
+        // 12 точек с шагом 50 мс (1 с itl на 20 шагов декодирования).
+        for (var i = 0; i < 12; i++)
+        {
+            sum += 1.0;
+            count += 20;
+            h.Source.Snapshots.Enqueue(new EngineSnapshot
+            {
+                GenerationTokens = 1000 + i,
+                InterTokenLatencySum = sum,
+                InterTokenLatencyCount = count,
+                Running = 1,
+            });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        h.Poller.Current.CleanStepMs.Should().BeApproximately(50.0, 0.01, "10-й перцентиль шагов кольца");
+
+        // Хвост кольца: 12 «долгих» шагов (5 с на 20 шагов = 250 мс) — целая минута.
+        for (var i = 0; i < 12; i++)
+        {
+            sum += 5.0;
+            count += 20;
+            h.Source.Snapshots.Enqueue(new EngineSnapshot
+            {
+                GenerationTokens = 2000 + i,
+                InterTokenLatencySum = sum,
+                InterTokenLatencyCount = count,
+                Running = 1,
+            });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        h.Poller.Current.CleanStepMs.Should().BeApproximately(50.0, 0.01, "хвост кольца не двигает базу");
+    }
+
+    // (39) База следует за движком, когда старые точки вышли из кольца (окно 10 с = 2 точки):
+    // опубликованная база обновляется, если новое значение отличается больше чем на 10 %.
+    [Fact]
+    public async Task CleanStep_UpdatesWhenRingTurnsOver()
+    {
+        var h = new Harness();
+        h.Options.CurrentValue = new LocalModelStatsOptions
+        {
+            Enabled = true,
+            HistoryWindow = TimeSpan.FromSeconds(10), // 10 с / 5 с = 2 точки
+        };
+
+        double sum = 0;
+        long count = 0;
+        for (var i = 0; i < 12; i++)
+        {
+            sum += 1.0;
+            count += 20;
+            h.Source.Snapshots.Enqueue(new EngineSnapshot
+            {
+                GenerationTokens = 1000 + i,
+                InterTokenLatencySum = sum,
+                InterTokenLatencyCount = count,
+                Running = 1,
+            });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+        h.Poller.Current.CleanStepMs.Should().BeApproximately(50.0, 0.01);
+
+        // Движок стал в 10 раз медленнее: старые точки выходят из кольца → база новая.
+        for (var i = 0; i < 6; i++)
+        {
+            sum += 10.0;
+            count += 20;
+            h.Source.Snapshots.Enqueue(new EngineSnapshot
+            {
+                GenerationTokens = 3000 + i,
+                InterTokenLatencySum = sum,
+                InterTokenLatencyCount = count,
+                Running = 1,
+            });
+            await h.Poller.PollOnceAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        h.Poller.Current.CleanStepMs.Should().BeApproximately(500.0, 0.01, "старые точки вышли из кольца — база новая");
+    }
+
     // Фейковый источник, который бросает (мусор в /metrics, на котором парсер не выдержал).
     private sealed class ThrowingSource : IEngineMetricsSource
     {

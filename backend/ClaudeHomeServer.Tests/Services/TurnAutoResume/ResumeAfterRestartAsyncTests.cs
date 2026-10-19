@@ -18,11 +18,12 @@ namespace ClaudeHomeServer.Tests.Services.TurnAutoResume;
 
 /// <summary>
 /// B3: публичный <see cref="SessionManager.ResumeAfterRestartAsync"/> — возобновление хода,
-/// оборванного рестартом сервера. Четыре регресс-теста:
+/// оборванного рестартом сервера. Пять регресс-тестов:
 ///   1. карточка server_restart лежит в истории ДО user_message;
 ///   2. битый хвост — отказ без отправки (счётчик не инкрементнут);
 ///   3. result хода сбрасывает RestartResumeAttempts;
-///   4. UpdatedAt не двигается.
+///   4. UpdatedAt не двигается;
+///   5. порядок шагов: Append карточки ДО OnUserMessage (карточка уже в истории на момент отправки).
 /// </summary>
 public class ResumeAfterRestartAsyncTests : IDisposable
 {
@@ -64,6 +65,9 @@ public class ResumeAfterRestartAsyncTests : IDisposable
         public bool TailIntact = true;
         public bool UseRealSend;
         public int SendCalls;
+        // Журнал порядка шагов: фиксирует, была ли карточка server_restart уже в истории
+        // на момент отправки resume-хода (контракт: Append карточки ДО OnUserMessage).
+        public readonly List<string> OpLog = [];
 
         public SpySessionManager(
             ProjectManager projects, ChatHistoryService history, IConfiguration config,
@@ -87,9 +91,15 @@ public class ResumeAfterRestartAsyncTests : IDisposable
             SendCalls++;
             if (UseRealSend)
                 return base.SendRestartResumeTurnAsync(sessionId, text);
+            var acc = SessionManagerTestAccess.AccumulatorOf(this, sessionId);
+            // Контракт порядка: карточка пишется в историю ДО отправки resume-хода.
+            // На момент отправки она уже должна быть в аккумуляторе (Append раньше OnUserMessage).
+            var cardAlready = acc.GetAll()
+                .Any(m => m is StoredWorkLoopStoppedMessage w && w.Reason == "server_restart");
+            OpLog.Add(cardAlready ? "card_before_send" : "send_before_card");
             // Record-режим: кладём user_message в аккумулятор — тот же побочный эффект,
             // что у реального хода (OnUserMessage в SendDirectAsync), без запуска процесса.
-            SessionManagerTestAccess.AccumulatorOf(this, sessionId).OnUserMessage(text, []);
+            acc.OnUserMessage(text, []);
             return Task.FromResult(SendUserOutcome.Started);
         }
     }
@@ -215,5 +225,26 @@ public class ResumeAfterRestartAsyncTests : IDisposable
 
         sut.GetById(session.Id)!.UpdatedAt.Should().Be(before,
             "служебные шаги (карточка + счётчик) UpdatedAt не двигают");
+    }
+
+    // --- 5. Контракт порядка: Append карточки ДО OnUserMessage ---
+    // Тест 1 проверяет финальный порядок в истории, но карточка лежит в _history, а
+    // user_message — в _currentTurn, и GetAll() всегда кладёт _history перед _currentTurn:
+    // финальная лента не меняет порядок даже при перестановке шагов в реализации. Этот
+    // тест ловит именно перестановку: на момент отправки resume-хода карточка уже в истории.
+
+    [Fact]
+    public async Task ResumeAfterRestart_КарточкаДоUserMessage_ПорядокШагов()
+    {
+        var session = MakeSession(SessionStatus.Orphaned);
+        WriteSessions([session]);
+        var sut = CreateSpySessionManager();
+
+        var result = await sut.ResumeAfterRestartAsync(session.Id);
+
+        result.Sent.Should().BeTrue("кандидат Orphaned с целым хвостом — возобновлён");
+        sut.OpLog.Should().Equal(["card_before_send"],
+            "карточка server_restart пишется в историю ДО отправки resume-хода " +
+            "(Append раньше OnUserMessage; перестановка шагов даёт send_before_card)");
     }
 }

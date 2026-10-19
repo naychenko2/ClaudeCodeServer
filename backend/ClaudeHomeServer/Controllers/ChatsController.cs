@@ -588,11 +588,24 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // История чата вне проекта. Без after — полный плоский массив (прежний контракт).
+    // С after (+ fp) — докачка хвоста (Перф-2 B5): объект { reset, messages, anchorIndex,
+    // anchorFp }, как у проектной сессии (SessionsController.GetHistory) — одна логика в
+    // ChatHistoryTail, изоляция per-owner та же (OwnedChat).
     [HttpGet("{id}/history")]
-    public async Task<IActionResult> GetHistory(string id)
+    public async Task<IActionResult> GetHistory(string id, [FromQuery] int? after = null, [FromQuery] string? fp = null)
     {
         if (OwnedChat(id) is null) return NotFound();
-        return Ok(await sessions.GetHistoryAsync(id));
+        var history = await sessions.GetHistoryAsync(id);
+        if (after is null) return Ok(history);
+        var tail = ChatHistoryTail.Compute(history, after, fp);
+        return Ok(new
+        {
+            reset = tail.Reset,
+            messages = tail.Messages,
+            anchorIndex = tail.AnchorIndex,
+            anchorFp = tail.AnchorFp,
+        });
     }
 
     // Обновить название чата по текущей переписке (AI-хаб): в отличие от авто-имени по первому

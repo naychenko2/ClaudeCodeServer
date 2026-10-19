@@ -4,6 +4,7 @@ import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendM
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
+import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
@@ -30,9 +31,47 @@ const _lastSeen = new Map<string, number>(); // LRU: sid → ts последне
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
 const MAX_CACHED_SESSIONS = 20;
 
-// История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats
-const loadHistory = (sid: string, projectId?: string) =>
-  projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
+// Курсоры докачки истории (перф-2 B5): sid → сырая история прошлой загрузки + якорь сервера.
+// Со вторым открытием чата просим у сервера только хвост после якоря, а не всю историю
+// целиком (до 2,5 МБ). Склейка и сброс — lib/historyTail. Живёт ровно столько же, сколько
+// лента чата в сторе: выселили сессию (evictColdSessions) — курсор уходит вместе с ней.
+const _cursors = new Map<string, HistoryCursor>();
+
+// История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats.
+// Возвращает ПОЛНУЮ сырую историю (склеенную из прошлой загрузки и хвоста), поэтому
+// normalizeHistory и serverHistoryNewer работают с ней так же, как с загруженной целиком.
+async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> {
+  const prev = _cursors.get(sid);
+  const q = cursorQuery(prev);
+  const reply = await (projectId
+    ? api.sessions.getHistoryTail(projectId, sid, q)
+    : api.chats.getHistoryTail(sid, q));
+  const applied = applyHistoryReply(prev, q, reply);
+  if (applied.cursor) _cursors.set(sid, applied.cursor);
+  else _cursors.delete(sid);
+  return applied.raw;
+}
+
+// Общий in-flight promise истории на sid: параллельные запросы одного чата
+// (joinAndLoadHistory + reloadHistory при монтировании, hover-warm, reconnect)
+// сливаются в один fetch. HAR: 28 вызова history за 1,5 мин навигации — дубли.
+const _historyInFlight = new Map<string, Promise<unknown[]>>();
+// fresh=true — нужен снимок НЕ СТАРШЕ момента вызова (конец хода, вход в группу): запрос,
+// уже летящий, мог стартовать раньше и снимок не покрыть, поэтому ждём его и берём
+// следующий. Параллельные fresh-вызовы схлопываются во ВТОРОЙ общий запрос.
+function loadHistoryOnce(sid: string, projectId?: string, fresh = false): Promise<unknown[]> {
+  const existing = _historyInFlight.get(sid);
+  if (existing) {
+    if (!fresh) return existing;
+    const next = () => loadHistoryOnce(sid, projectId);
+    return existing.then(next, next);
+  }
+  const p = loadHistory(sid, projectId).finally(() => {
+    if (_historyInFlight.get(sid) === p) _historyInFlight.delete(sid);
+  });
+  _historyInFlight.set(sid, p);
+  return p;
+}
 
 // Нормализация истории с опциями текущей сессии (derive разделителей в групповом чате)
 const normalizeFor = (sid: string, raw: unknown[]) =>
@@ -55,9 +94,9 @@ function historyTurnFinished(items: ChatItem[]): boolean {
 // (сервер — источник истины, сверка — serverHistoryNewer). Заодно лечит залипший
 // isWaiting: у завершённого хвоста ход точно кончился, даже если событие result
 // прошло мимо клиента, пока он был вне SignalR-группы.
-async function reloadHistory(sid: string, projectId?: string) {
+async function reloadHistory(sid: string, projectId?: string, fresh = false) {
   try {
-    const raw = await loadHistory(sid, projectId);
+    const raw = await loadHistoryOnce(sid, projectId, fresh);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       if (serverHistoryNewer(items, prev.items))
@@ -125,6 +164,7 @@ function evictColdSessions() {
   for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
     _store.delete(sid);
     _lastSeen.delete(sid);
+    _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
     // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
     _warmed.delete(sid);
   }
@@ -345,7 +385,11 @@ function ensureHandler() {
     if (msg.type === 'status_changed') {
       // Флаг сверяем ДО применения редьюсера — prev держит клиентское состояние
       noteReconcileResult(sid, prev.isWaiting, msg.status);
-      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId);
+      // Ход только что кончился (prev.isWaiting=true) — нужен fresh-снимок: запрос,
+      // летящий с момента открытия, стартовал ДО конца хода и его снимок устарел.
+      // Replay active у простаивающего чата (prev.isWaiting=false) схлопывается с
+      // загрузкой открытия — нового fetch не плодим.
+      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId, prev.isWaiting);
     }
   });
 
@@ -388,7 +432,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
   const joinedBeforeHistory = joinDone;
 
   try {
-    const raw = await loadHistory(sid, projectId);
+    const raw = await loadHistoryOnce(sid, projectId);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       // Сервер — источник истины: используем его данные, если история новее
@@ -411,7 +455,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // Снимок ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют».
       // Нужен только когда в группу мы вошли уже ПОСЛЕ снятия истории (join не уложился
       // в JOIN_WAIT_MS): иначе история и так снята из-под живой подписки.
-      if (!joinedBeforeHistory) return reloadHistory(sid, projectId);
+      if (!joinedBeforeHistory) return reloadHistory(sid, projectId, true);
     })
     .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
@@ -436,7 +480,7 @@ export function warmSession(sid: string, projectId?: string, isGroup?: boolean) 
   // не старее серверной и не заменила.
   if (isGroup !== undefined && getState(sid).isGroup !== isGroup)
     setState(sid, prev => ({ ...prev, isGroup }));
-  loadHistory(sid, projectId)
+  loadHistoryOnce(sid, projectId)
     .then(raw => {
       const items = normalizeFor(sid, raw);
       setState(sid, prev => {

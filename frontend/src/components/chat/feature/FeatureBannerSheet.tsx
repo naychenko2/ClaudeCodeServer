@@ -4,6 +4,7 @@ import { C, FONT, FS } from '../../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 import { Button, Modal } from '../../ui';
 import { api } from '../../../lib/api';
+import { listProjectSessions } from '../../../lib/sessionsList';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { FeatureRunView } from './FeatureRunView';
 import type { FeatureBannerModel } from './FeatureBanner';
@@ -118,7 +119,7 @@ export function FeatureBannerSheet({ feature, model, projectId, index, run, onGo
   const [sessions, setSessions] = useState<Session[] | null>(null);
   useEffect(() => {
     let cancelled = false;
-    const p = projectId ? api.sessions.list(projectId) : api.chats.list();
+    const p = projectId ? listProjectSessions(projectId, { maxAgeMs: 10_000 }) : api.chats.list();
     void p
       .then(list => { if (!cancelled) setSessions(list); })
       .catch(() => { if (!cancelled) setSessions([]); });

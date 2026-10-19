@@ -164,6 +164,61 @@ describe('M2: live-режим — перезапрос по task_changed', () =>
   });
 });
 
+describe('Перф-2 B2: троттлинг и дедуп запросов агрегата', () => {
+  let getFeaturesSpy: ReturnType<typeof vi.spyOn>;
+  const msg = () => ({
+    type: 'task_changed' as const, action: 'updated' as const,
+    task: task({ id: 'epic-t', role: 'feature', sourceSessionId: 'T' }),
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __test.reset();
+    setAllFlags({ [FLAG]: true });
+    getFeaturesSpy = vi.spyOn(api.tasks, 'getFeatures').mockResolvedValue([]);
+    upsertTaskLocal(task({ id: 'epic-t', role: 'feature', sourceSessionId: 'T' }));
+    __test.setActive('T');
+  });
+  afterEach(() => {
+    getFeaturesSpy.mockRestore();
+    __test.reset();
+    vi.useRealTimers();
+  });
+
+  it('второй всплеск событий вскоре после запроса откладывается до конца окна, не уходит сразу', async () => {
+    __test.handleTaskChanged(msg());
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+
+    // новый всплеск через 1 с после запроса: запрос не чаще окна в 4 с
+    await vi.advanceTimersByTimeAsync(500);
+    __test.handleTaskChanged(msg());
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('серия событий в окне даёт один запрос', async () => {
+    for (let i = 0; i < 20; i++) {
+      __test.handleTaskChanged(msg());
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    await vi.advanceTimersByTimeAsync(10000);
+    // 4 с окна → за ~14 с не больше 4 запросов, а не 20
+    expect(getFeaturesSpy.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(getFeaturesSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('параллельные запросы одной сессии делят один fetch', async () => {
+    const a = __test.fetchRuns('T');
+    const b = __test.fetchRuns('T');
+    expect(a).toBe(b);
+    await a;
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── F1: режим, выбор фичи, фокус шага — в памяти вкладки, per-session ─────────
 
 describe('F1: режим «План/Фича» на чат (в памяти вкладки)', () => {

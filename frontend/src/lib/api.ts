@@ -4,6 +4,11 @@ import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
+import type { HistoryCursorQuery, HistoryReply } from './historyTail';
+
+// Query-строка курсора докачки истории: after обязателен, fp — только для настоящего курсора
+const historyCursorParams = (q: HistoryCursorQuery) =>
+  `after=${q.after}${q.fp ? `&fp=${encodeURIComponent(q.fp)}` : ''}`;
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -1910,6 +1915,13 @@ export const api = {
       }); return api.sessions.getContext(projectId, sessionId); },
     getHistory: (projectId: string, sessionId: string) =>
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+    // Докачка хвоста истории по курсору сервера (см. lib/historyTail). after=-1 — первая
+    // загрузка (полная история + якорь), её можно кэшировать офлайн; настоящий курсор — live:
+    // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты)
+    getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery) =>
+      request<HistoryReply>(
+        `/projects/${projectId}/sessions/${sessionId}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0 }),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
@@ -2145,6 +2157,9 @@ export const api = {
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
       .then(r => { forgetChatContextSession(id); return r; }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
+    // То же, что api.sessions.getHistoryTail, для чата вне проекта
+    getHistoryTail: (id: string, q: HistoryCursorQuery) =>
+      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`, { live: q.after >= 0 }),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1
     uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {

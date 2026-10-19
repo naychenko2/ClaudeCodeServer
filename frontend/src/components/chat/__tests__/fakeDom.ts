@@ -29,7 +29,12 @@ class FNode {
   attributes: Record<string, string> = {};
   listeners: Record<string, Set<unknown>> = {};
 
-  constructor(doc: FDoc) { this.ownerDocument = doc; }
+  constructor(doc: FDoc) {
+    this.ownerDocument = doc;
+    // React setValueForStyle зовёт style.setProperty для CSS-кастом-пропсов (--x);
+    // в фейке — no-op, чтобы такие стили не роняли монтирование
+    (this.style as Record<string, unknown>).setProperty = () => {};
+  }
 
   appendChild(child: FNode): FNode { this._link(child, this.childNodes.length); return child; }
   insertBefore(child: FNode, ref: FNode | null): FNode {
@@ -142,6 +147,9 @@ export function installFakeDom() {
     dispatchEvent: () => true,
     matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
     HTMLIFrameElement: class {},
+    // WaitingIndicator и др. таймеры зовут window.setTimeout/clearTimeout — глобалы node
+    setTimeout,
+    clearTimeout,
   };
   (globalThis as { window?: unknown }).window = fwindow;
   (globalThis as { document?: unknown }).document = fdoc;

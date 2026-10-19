@@ -78,7 +78,21 @@ describe('FeatureGroupHeader: тона', () => {
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="run"')).toBe(true);
     expect(html.includes('Производство · идёт')).toBe(true);
-    expect(html.includes('border-left:3px')).toBe(false);
+    // M1: без тревоги левая сторона — 1px (longhand), НЕ 3px и НЕ обнулённая (UA-outset).
+    // Мутация: вернуть `borderLeft: undefined` поверх шорткода → border-left-width пропадает.
+    expect(html.includes('border-left-width:1px')).toBe(true);
+    expect(html.includes('border-left-color:var(--c-border-light)')).toBe(true);
+  });
+
+  it('M2: заголовок группы — шрифт Hanken (не Arial): inline font-family на кнопке', () => {
+    const html = renderHeader(feat());
+    // M2: нативная <button> не наследует font-family — задаём FONT.sans явно.
+    // SSR экранирует кавычки (font-family:&#x27;Hanken Grotesk…), поэтому ищем по имени шрифта
+    // в открывающем теге кнопки (у внутренних span собственного font-family нет).
+    const i = html.indexOf('<button');
+    const tag = html.slice(i, html.indexOf('>', i) + 1);
+    expect(tag).toContain('font-family:');
+    expect(tag).toContain('Hanken Grotesk');
   });
 
   it('доработка (loop): глиф loop, статус «{этап} · доработка», кромки нет', () => {
@@ -98,7 +112,9 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.status).toBe('ждёт вас');
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="wait"')).toBe(true);
-    expect(html.includes('border-left:3px solid var(--c-info)')).toBe(true);
+    // M1: кромка тревоги — longhand: левая 3px + цвет info
+    expect(html.includes('border-left-width:3px')).toBe(true);
+    expect(html.includes('border-left-color:var(--c-info)')).toBe(true);
   });
 
   it('ждёт вас · мерж (merge): кромка info, статус «ждёт вас · мерж»', () => {
@@ -107,7 +123,9 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
     expect(st.status).toBe('ждёт вас · мерж');
-    expect(renderHeader(f).includes('border-left:3px solid var(--c-info)')).toBe(true);
+    // M1: кромка тревоги — longhand: левая 3px + цвет info
+    expect(renderHeader(f).includes('border-left-width:3px')).toBe(true);
+    expect(renderHeader(f).includes('border-left-color:var(--c-info)')).toBe(true);
   });
 
   it('упала (stopped): глиф stopped, кромка danger, статус «стоит»', () => {
@@ -118,7 +136,9 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.status).toBe('стоит');
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="stopped"')).toBe(true);
-    expect(html.includes('border-left:3px solid var(--c-danger)')).toBe(true);
+    // M1: кромка тревоги — longhand: левая 3px + цвет danger
+    expect(html.includes('border-left-width:3px')).toBe(true);
+    expect(html.includes('border-left-color:var(--c-danger)')).toBe(true);
   });
 
   it('закрыта (closed, без мержа): глиф closed, статус «закрыта», кромки нет', () => {

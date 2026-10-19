@@ -108,12 +108,12 @@ const nextSid = () => `sess_${++_sid}`;
 
 // Открытие чата: монтируем «компонент» с хуком. render() — чтение текущего
 // состояния без перезапуска эффекта, unmount() — уход в другой чат.
-function openChat(sid: string, projectId?: string) {
+function openChat(sid: string, projectId?: string, updatedAt?: string) {
   const host = { slots: [] as Array<{ deps?: unknown[]; cleanup?: (() => void) | void }>, i: 0 };
   const render = () => {
     host.i = 0;
     rt.state.current = host;
-    try { return useSession(sid, projectId); }
+    try { return useSession(sid, projectId, undefined, updatedAt); }
     finally { rt.state.current = null; }
   };
   return { first: render(), render, unmount: () => { for (const s of host.slots) s?.cleanup?.(); } };
@@ -594,5 +594,78 @@ describe('useSession: идемпотентность повторного сна
     const st = again.render();
     expect(m.getHistory).toHaveBeenCalledTimes(2); // перезагрузки не размножаются
     expect(st.items).toBe(itemsAfterJoin);          // состояние не пересоздано
+  });
+});
+
+describe('useSession: повторная загрузка истории (перф-2 F4)', () => {
+  const historyCallsFor = () => m.getHistory.mock.calls.length;
+
+  it('два наблюдателя одного чата при монтировании → один запрос истории', async () => {
+    const sid = nextSid();
+    const gate = deferred<unknown[]>();
+    m.getHistory.mockReturnValue(gate.promise);
+
+    const a = openChat(sid, undefined, 'u1');
+    await flush(); // join успел, история ещё летит
+    const b = openChat(sid, undefined, 'u1'); // второй зритель (ArtifactsPanel) идёт в reloadHistory
+    await flush();
+
+    expect(historyCallsFor()).toBe(1);
+    gate.resolve([...DONE_TURN]);
+    await flush();
+    expect(historyCallsFor()).toBe(1);
+    expect(a.render().items).toHaveLength(3);
+
+    a.unmount(); b.unmount();
+  });
+
+  it('повторное открытие неизменившегося чата → 0 запросов, изменившегося (новый updatedAt) → 1', async () => {
+    const sid = nextSid();
+    m.getHistory.mockResolvedValue([...DONE_TURN]);
+
+    const first = openChat(sid, undefined, 'u1');
+    await flush();
+    expect(historyCallsFor()).toBe(1);
+    first.unmount();
+
+    const again = openChat(sid, undefined, 'u1');
+    await flush();
+    expect(historyCallsFor()).toBe(1); // лента из стора, запроса нет
+    expect(again.render().items).toHaveLength(3);
+    expect(again.render().isHistoryLoading).toBe(false);
+    again.unmount();
+
+    const changed = openChat(sid, undefined, 'u2');
+    await flush();
+    expect(historyCallsFor()).toBe(2); // чат менялся — ровно один запрос
+    changed.unmount();
+  });
+
+  it('живое событие после загрузки помечает историю устаревшей → один запрос при возврате', async () => {
+    const sid = nextSid();
+    m.getHistory.mockResolvedValue([...DONE_TURN]);
+    const first = openChat(sid, undefined, 'u1');
+    await flush();
+    first.unmount();
+
+    m.messageHandlers.forEach(h => h({ type: 'text_delta', sessionId: sid, text: 'хвост' }));
+
+    const again = openChat(sid, undefined, 'u1');
+    await flush();
+    expect(historyCallsFor()).toBe(2);
+    again.unmount();
+  });
+
+  it('без updatedAt история всегда считается устаревшей (поведение как раньше)', async () => {
+    const sid = nextSid();
+    m.getHistory.mockResolvedValue([...DONE_TURN]);
+    const first = openChat(sid);
+    await flush();
+    first.unmount();
+
+    const again = openChat(sid);
+    await flush();
+    expect(historyCallsFor()).toBe(2);
+    again.unmount();
   });
 });

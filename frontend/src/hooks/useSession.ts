@@ -34,6 +34,37 @@ const MAX_CACHED_SESSIONS = 20;
 const loadHistory = (sid: string, projectId?: string) =>
   projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
 
+// Общий in-flight promise истории на sid: параллельные запросы одного чата
+// (joinAndLoadHistory + reloadHistory при монтировании, hover-warm, reconnect)
+// сливаются в один fetch. HAR: 28 вызова history за 1,5 мин навигации — дубли.
+const _historyInFlight = new Map<string, Promise<unknown[]>>();
+// fresh=true — нужен снимок НЕ СТАРШЕ момента вызова (конец хода, вход в группу): запрос,
+// уже летящий, мог стартовать раньше и снимок не покрыть, поэтому ждём его и берём
+// следующий. Параллельные fresh-вызовы схлопываются во ВТОРОЙ общий запрос.
+function loadHistoryOnce(sid: string, projectId?: string, fresh = false): Promise<unknown[]> {
+  const existing = _historyInFlight.get(sid);
+  if (existing) {
+    if (!fresh) return existing;
+    const next = () => loadHistoryOnce(sid, projectId);
+    return existing.then(next, next);
+  }
+  // События, пришедшие с этого момента, снова пометят историю устаревшей
+  _dirty.delete(sid);
+  const p = loadHistory(sid, projectId).finally(() => {
+    if (_historyInFlight.get(sid) === p) _historyInFlight.delete(sid);
+  });
+  _historyInFlight.set(sid, p);
+  return p;
+}
+
+// sid, у которых с начала последней загрузки истории пришли живые события: сервер мог
+// дописать то, чего нет в сторе. Пока флага нет, ход не идёт и updatedAt чата совпадает
+// с отметкой загрузки — историю повторно не качаем.
+const _dirty = new Set<string>();
+// sid → updatedAt чата на момент последней успешной загрузки истории. Чат, изменённый
+// без нашего ведома (другое устройство, пока мы вне SignalR-группы), отличится от отметки.
+const _stamp = new Map<string, string>();
+
 // Нормализация истории с опциями текущей сессии (derive разделителей в групповом чате)
 const normalizeFor = (sid: string, raw: unknown[]) =>
   normalizeHistory(raw, { deriveSpeakers: getState(sid).isGroup });
@@ -51,13 +82,25 @@ function historyTurnFinished(items: ChatItem[]): boolean {
   return false;
 }
 
+// История в сторе актуальна: загрузили, ход не идёт, событий с момента загрузки не было,
+// updatedAt чата не ушёл от отметки загрузки. Повторное открытие такого чата обходится
+// без запроса — лента уже в сторе. updatedAt неизвестен — считаем историю устаревшей.
+function historyIsCurrent(sid: string, updatedAt?: string): boolean {
+  if (updatedAt === undefined) return false;
+  const st = _store.get(sid);
+  if (!st || st.isHistoryLoading || st.isWaiting) return false;
+  if (_dirty.has(sid) || _historyInFlight.has(sid)) return false;
+  return _stamp.get(sid) === updatedAt;
+}
+
 // Перезагрузка истории с сервера с применением, если она новее живой ленты
 // (сервер — источник истины, сверка — serverHistoryNewer). Заодно лечит залипший
 // isWaiting: у завершённого хвоста ход точно кончился, даже если событие result
 // прошло мимо клиента, пока он был вне SignalR-группы.
-async function reloadHistory(sid: string, projectId?: string) {
+async function reloadHistory(sid: string, projectId?: string, updatedAt?: string, fresh = false) {
   try {
-    const raw = await loadHistory(sid, projectId);
+    const raw = await loadHistoryOnce(sid, projectId, fresh);
+    if (updatedAt !== undefined) _stamp.set(sid, updatedAt);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       if (serverHistoryNewer(items, prev.items))
@@ -125,6 +168,8 @@ function evictColdSessions() {
   for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
     _store.delete(sid);
     _lastSeen.delete(sid);
+    _stamp.delete(sid);
+    _dirty.delete(sid);
     // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
     _warmed.delete(sid);
   }
@@ -332,6 +377,7 @@ function ensureHandler() {
     const next = applyServerMessage(prev, msg);
     if (next !== prev) {
       touch(sid, next);
+      _dirty.add(sid); // лента изменилась живым событием — сохранённая отметка истории устарела
       _listeners.get(sid)?.forEach(fn => fn());
     }
 
@@ -345,7 +391,13 @@ function ensureHandler() {
     if (msg.type === 'status_changed') {
       // Флаг сверяем ДО применения редьюсера — prev держит клиентское состояние
       noteReconcileResult(sid, prev.isWaiting, msg.status);
-      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId);
+      // Повторный replay «active» у уже загруженного простаивающего чата (каждое открытие
+      // чата зовёт reconcile) ничего не меняет — историю тут качать незачем. Качаем, когда
+      // ход только что закончился (prev.isWaiting — снимок нужен свежий), что-то менялось
+      // событиями либо история ещё грузится (запрос схлопнется с летящим).
+      if (msg.status === 'active' && isWatched(sid)
+        && (prev.isWaiting || prev.isHistoryLoading || _dirty.has(sid)))
+        reloadHistory(sid, getState(sid).projectId, undefined, prev.isWaiting);
     }
   });
 
@@ -361,15 +413,23 @@ function ensureHandler() {
 
 
 // Присоединяемся к сессии один раз и остаёмся — даже при переключении между сессиями
-function ensureJoined(sid: string, projectId?: string) {
+function ensureJoined(sid: string, projectId?: string, updatedAt?: string) {
   if (getState(sid).isJoined || _joining.has(sid)) return;
-  const p = joinAndLoadHistory(sid, projectId)
+  const p = joinAndLoadHistory(sid, projectId, updatedAt)
     .finally(() => _joining.delete(sid));
   _joining.set(sid, p);
 }
 
-async function joinAndLoadHistory(sid: string, projectId?: string) {
+async function joinAndLoadHistory(sid: string, projectId?: string, updatedAt?: string) {
+  // Историю в сторе уже сняли, чат с тех пор не менялся (ни событий, ни нового updatedAt) —
+  // лента показывается без запроса, а в группу входим только ради живых событий.
+  // Дыры «снимок → вход в группу» нет: отметка updatedAt совпадает, значит дописать нечего.
+  const skipHistory = historyIsCurrent(sid, updatedAt);
   setState(sid, prev => ({ ...prev, projectId }));
+  if (skipHistory) {
+    joinTracked(sid).then(() => refreshTeamImplement(sid)).catch(() => { /* офлайн — перезайдём при reconnect */ });
+    return;
+  }
 
   // Вход в группу СНАЧАЛА, но с коротким потолком ожидания: снятая после входа история
   // уже покрывает всё до него, поэтому повторный снимок (у активных чатов это мегабайты
@@ -388,7 +448,8 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
   const joinedBeforeHistory = joinDone;
 
   try {
-    const raw = await loadHistory(sid, projectId);
+    const raw = await loadHistoryOnce(sid, projectId);
+    if (updatedAt !== undefined) _stamp.set(sid, updatedAt);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       // Сервер — источник истины: используем его данные, если история новее
@@ -411,7 +472,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // Снимок ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют».
       // Нужен только когда в группу мы вошли уже ПОСЛЕ снятия истории (join не уложился
       // в JOIN_WAIT_MS): иначе история и так снята из-под живой подписки.
-      if (!joinedBeforeHistory) return reloadHistory(sid, projectId);
+      if (!joinedBeforeHistory) return reloadHistory(sid, projectId, undefined, true);
     })
     .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
@@ -425,7 +486,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
 const _warmed = new Set<string>();
 const _warming = new Set<string>();
 
-export function warmSession(sid: string, projectId?: string, isGroup?: boolean) {
+export function warmSession(sid: string, projectId?: string, isGroup?: boolean, updatedAt?: string) {
   if (_warming.has(sid) || _warmed.has(sid)) return;
   // Стор уже знает эту сессию (открывали, идёт ход, история пришла) — греть нечего
   const st = _store.get(sid);
@@ -436,8 +497,9 @@ export function warmSession(sid: string, projectId?: string, isGroup?: boolean) 
   // не старее серверной и не заменила.
   if (isGroup !== undefined && getState(sid).isGroup !== isGroup)
     setState(sid, prev => ({ ...prev, isGroup }));
-  loadHistory(sid, projectId)
+  loadHistoryOnce(sid, projectId)
     .then(raw => {
+      if (updatedAt !== undefined) _stamp.set(sid, updatedAt);
       const items = normalizeFor(sid, raw);
       setState(sid, prev => {
         if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
@@ -463,7 +525,7 @@ export function useHoverWarm(enabled = true) {
     window.clearTimeout(timer.current);
     if (!chat || !enabled) return;
     timer.current = window.setTimeout(
-      () => warmSession(chat.id, chat.projectId, (chat.participants?.length ?? 0) > 1),
+      () => warmSession(chat.id, chat.projectId, (chat.participants?.length ?? 0) > 1, chat.updatedAt),
       HOVER_WARM_MS,
     );
   }, [enabled]);
@@ -471,9 +533,15 @@ export function useHoverWarm(enabled = true) {
 
 // --- React-хук ---
 
-export function useSession(sessionId: string | null, projectId?: string, isGroup?: boolean) {
+// updatedAt — серверная отметка последнего изменения чата (Session.updatedAt из списка).
+// По ней решаем, нужна ли повторная загрузка истории; не передан — история всегда
+// считается устаревшей (как раньше). В deps эффекта НЕ входит: смена отметки по ходу
+// стрима не должна перезапускать вход в чат — читаем свежее значение через ref.
+export function useSession(sessionId: string | null, projectId?: string, isGroup?: boolean, updatedAt?: string) {
   ensureHandler();
   const [, setTick] = useState(0);
+  const updatedAtRef = useRef(updatedAt);
+  updatedAtRef.current = updatedAt;
 
   useEffect(() => {
     if (!sessionId) return;
@@ -489,7 +557,8 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     if (isGroup !== undefined && getState(sessionId).isGroup !== isGroup)
       setState(sessionId, prev => ({ ...prev, isGroup }));
 
-    ensureJoined(sessionId, projectId);
+    const openedAt = updatedAtRef.current;
+    ensureJoined(sessionId, projectId, openedAt);
 
     // При переключении на уже-присоединённую сессию подтягиваем историю с сервера.
     // Нужно чтобы после завершённых ходов (пока был открыт другой чат) данные были актуальны,
@@ -501,7 +570,8 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // потерялась незаметно (переподключение хаба, рестарт сервера), и приносит
       // авторитетный статус реплеем — открытие чата всегда лечит рассинхрон.
       reconcile(sessionId);
-      reloadHistory(sessionId, projectId);
+      // Лента уже в сторе и чат не менялся — повторный запрос истории не нужен
+      if (!historyIsCurrent(sessionId, openedAt)) reloadHistory(sessionId, projectId, openedAt);
       // Live-состояние режима могло устареть, пока чат был закрыт (события шли мимо
       // либо их реплея нет вовсе) — заход в чат подтягивает авторитетный снимок
       void refreshTeamImplement(sessionId);

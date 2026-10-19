@@ -132,6 +132,7 @@ public class PluginsToolsetTests : IDisposable
     public async Task ФлагВыключен_ОтказСПричиной()
     {
         var flags = new Mock<IFeatureFlagGate>();
+        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.PluginsMvp)).Returns(true);
         flags.Setup(f => f.IsEnabled(Owner, PluginsToolset.BuildYourselfFlag)).Returns(false);
         var toolset = Toolset(flags: flags.Object);
 

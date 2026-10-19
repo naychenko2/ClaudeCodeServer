@@ -71,14 +71,19 @@ allow-list — и превышение лимитов → отказ с тем �
 `plugins-build-yourself` off → 403. На ВСЕХ ручках: сервисный JWT (`typ=svc`) → 403 (черновик
 собирает агент через MCP, принимает/сравнивает человек), чужой/несуществующий черновик → 404.
 
-- **`GET /api/plugins/drafts`** — список черновиков владельца. Массив сводок
-  (`PluginDraftSummary`; ключи PascalCase — тип без `[JsonPropertyName]`):
+- **`GET /api/plugins/drafts`** — список черновиков владельца: активные (`_drafts`) **и**
+  отклонённые (`_rejected`, шаг 4.3c). Массив сводок (`PluginDraftSummary`; ключи PascalCase —
+  тип без `[JsonPropertyName]`):
   ```json
   [{ "Slug": "pkg", "Id": "local-a/pkg", "Version": "1.0.0",
-     "UpdatedAt": "2026-10-19T05:24:56Z", "Problems": 0, "InstalledSameVersion": false }]
+     "UpdatedAt": "2026-10-19T05:24:56Z", "Problems": 0, "InstalledSameVersion": false,
+     "Rejected": false, "ExpiresAt": null }]
   ```
   `Problems` — число проблем последней проверки (валидатор пакета, тот же, что при установке);
   `InstalledSameVersion` — есть ли запись `installed.json` с тем же `Id`+`Version`.
+  `Rejected` — `true` у отклонённых черновиков (`_rejected/{slug}`); `ExpiresAt` — дата, когда
+  отклонённый исчезнет (`rejectedAt + 30 дней`, UTC); у активных `Rejected: false`, `ExpiresAt: null`.
+  Просроченные отклонённые (> 30 дней) удаляются лениво при этом обращении, без фонового сервиса.
 
 - **`GET /api/plugins/drafts/{slug}/preview`** — предпросмотр; ответ = `PluginDraftService.Preview`
   (тот же, что у `draft_preview` для агента; `PluginDraftPreview`, PascalCase):
@@ -137,6 +142,23 @@ allow-list — и превышение лимитов → отказ с тем �
   `consentRequired: true` + `newPermissions` — только если обновление добавило новые запрошенные
   права (человек должен их одобрить через `grant`); заданные секреты прошлой версии сохраняются;
   черновик после успеха НЕ удаляется (агент может править дальше).
+
+- **`POST /api/plugins/drafts/{slug}/reject`** — отклонить черновик (шаг 4.3c): переносит
+  каталог `_drafts/{slug}` в служебный `_rejected/{slug}` (вне `_drafts` и вне наблюдения
+  наблюдателя) атомарным `Directory.Move` и записывает время отклонения
+  (`_rejected/{slug}/_rejected.json`). Гейты те же: сервисный JWT → 403, чужой/несуществующий → 404.
+  Ответ (анонимный объект, ключи camelCase):
+  ```json
+  { "slug": "pkg", "rejectedAt": "2026-10-19T05:24:56Z",
+    "expiresAt": "2026-11-18T05:24:56Z" }
+  ```
+  `expiresAt = rejectedAt + 30 дней` (после неё черновик удаляется лениво при `GET /drafts`).
+
+- **`POST /api/plugins/drafts/{slug}/restore`** — вернуть отклонённый черновик (шаг 4.3c):
+  переносит `_rejected/{slug}` обратно в `_drafts/{slug}`; событие наблюдателя
+  `plugin_draft_changed` приходит как обычно (черновик снова в `_drafts`). Если `_drafts/{slug}`
+  уже занят новым черновиком → 409. Гейты те же: сервисный JWT → 403, не отклонён/чужой → 404.
+  Ответ: `{ "slug": "pkg", "restored": true }`.
 
 ## Инварианты
 

@@ -1,8 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Plugins.Mcp;
 
@@ -28,24 +30,38 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
     public const string BuildYourselfFlag = "plugins-build-yourself";
     public const string SubsystemKey = "plugins";
 
+    // Якорь черновика в ленте чата (ADR-019 §2, шаг 4.5a): запись module_record с
+    // module = "plugins" (ключ подсистемы) и recordType = "plugin_draft"; data — только
+    // { slug }, содержимое карточки фронт грузит по REST.
+    public const string ModuleKey = SubsystemKey;
+    public const string RecordDraft = "plugin_draft";
+
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
     private readonly PluginDraftService _drafts;
     private readonly IFeatureFlagGate? _flags;
     private readonly IConfiguration? _config;
+    // Лента чата (Core-шов, адаптер ChatFeed в Main): якорь черновика пишет сюда.
+    // Необязательный параметр: без шва (тесты, выключенный адаптер) записи нет, ошибки нет.
+    private readonly IChatFeed? _feed;
+    private readonly ILogger<PluginsToolset>? _log;
 
     public PluginsToolset(
         IMcpSessionAccessor sessions,
         IProjectManager projects,
         PluginDraftService drafts,
         IFeatureFlagGate? flags = null,
-        IConfiguration? config = null)
+        IConfiguration? config = null,
+        IChatFeed? feed = null,
+        ILogger<PluginsToolset>? log = null)
     {
         _sessions = sessions;
         _projects = projects;
         _drafts = drafts;
         _flags = flags;
         _config = config;
+        _feed = feed;
+        _log = log;
     }
 
     public string Name => ServerName;
@@ -83,13 +99,50 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
 
         return tool switch
         {
-            ToolCreate => Op(_drafts.Create(context.OwnerId, slug)),
+            ToolCreate => await Create(context.OwnerId, slug, context.RouteTail, ct),
             ToolWriteFile => WriteFile(arguments, context.OwnerId, slug),
             ToolValidate => Validate(context.OwnerId, slug),
             ToolPreview => Preview(context.OwnerId, slug),
             ToolDeleteFile => Op(_drafts.DeleteFile(context.OwnerId, slug, Str(arguments, "path") ?? "")),
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
+    }
+
+    // ── draft_create ──────────────────────────────────────────────────────────────
+    // Создать черновик из шаблона и дописать якорь в ленту чата-вызывателя: карточка
+    // черновика (шаг 4.5a). Запись идемпотентна: не больше одной на (сессию, slug) —
+    // повторный create (после reject/restore) дубль не дописывает, дальнейшие изменения
+    // карточка получает по событию plugin_draft_changed. Без сессии-вызывателя — записи
+    // нет и ошибки нет. Сбой ленты не роняет создание: черновик уже на диске.
+    private async Task<McpToolCallResult> Create(string ownerId, string slug, string? sessionId, CancellationToken ct)
+    {
+        var result = _drafts.Create(ownerId, slug);
+        if (result.Ok)
+            await AppendDraftRecordAsync(sessionId, slug, ct);
+        return Op(result);
+    }
+
+    private async Task AppendDraftRecordAsync(string? sessionId, string slug, CancellationToken ct)
+    {
+        if (_feed is null || sessionId is null) return;
+        try
+        {
+            if (await _feed.HasRecordAsync(sessionId, ModuleKey, RecordDraft,
+                data => data.TryGetProperty("slug", out var s) && s.GetString() == slug, ct))
+                return;
+            await _feed.AppendRecordAsync(sessionId, new StoredModuleRecord
+            {
+                Module = ModuleKey,
+                RecordType = RecordDraft,
+                Data = JsonSerializer.SerializeToElement(new { slug }),
+                Fallback = $"Плагин: {slug}",
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Плагины: запись черновика {Slug} не легла в ленту чата {SessionId}", slug, sessionId);
+        }
     }
 
     // ── draft_write_file ───────────────────────────────────────────────────────

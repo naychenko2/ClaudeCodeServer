@@ -1383,32 +1383,63 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // --- Персистентность сессий ---
 
+    // Кандидаты на auto-resume, захваченные LoadSessions: исходный Working (ход оборван,
+    // result не пришёл). TakeRestartResumeCandidates возвращает и очищает список (второй
+    // вызов — пусто). ShutdownInterruptedAt — служебный снимок, гасится при захвате.
+    private readonly List<string> _restartResumeCandidates = [];
+
+    // Task записи маркеров обрыва ходов (LoadSessions). Не fire-and-forget: B2 дождётся его
+    // перед запуском resume, чтобы маркер не обогнал снимок. Task.CompletedTask — маркеров не было.
+    public Task AbortMarkersWritten { get; private set; } = Task.CompletedTask;
+
     private void LoadSessions()
     {
         var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
         if (list is null) return;
         List<string> abortedMidTurn = [];
+        bool snapshotExtinguished = false;
         foreach (var session in list)
         {
             // Процесс умер при рестарте — "живые" статусы переводим в orphaned
-            var wasLive = session.Status is SessionStatus.Working or SessionStatus.Waiting;
-            session.Status = session.Status switch
+            var originalStatus = session.Status;
+            var wasLive = originalStatus is SessionStatus.Working or SessionStatus.Waiting;
+            session.Status = originalStatus switch
             {
                 SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
                     => SessionStatus.Orphaned,
                 SessionStatus.Active => SessionStatus.Finished,
-                _ => session.Status,
+                _ => originalStatus,
             };
             if (wasLive && session.ClaudeSessionId is not null)
                 abortedMidTurn.Add(session.ClaudeSessionId);
+            // Кандидат на auto-resume — исходный Working: ход шёл, result не пришёл.
+            // Waiting/Starting/Orphaned не кандидаты: Waiting — ход ещё не шёл, Starting —
+            // CLI ещё не стартовал, Orphaned — уже был оборван раньше («только последний
+            // рестарт»). ShutdownInterruptedAt — служебный снимок, НЕ самостоятельный признак:
+            // KillAllProcesses ставит его только Working, поэтому отдельного условия по нему
+            // нет (иначе Starting со снимком ложно стал бы кандидатом).
+            if (originalStatus == SessionStatus.Working)
+                _restartResumeCandidates.Add(session.Id);
+            // Снимок ShutdownInterruptedAt гасим сразу после захвата: повторный рестарт
+            // не должен захватить его повторно («только последний рестарт»). Персистится
+            // SaveSessions ниже.
+            if (session.ShutdownInterruptedAt is not null)
+            {
+                session.ShutdownInterruptedAt = null;
+                snapshotExtinguished = true;
+            }
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
         // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
-        if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
-        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт
+        var topicMigrated = Llm.ChatTopicMigration.Apply(list);
+        // Одна запись на диск: миграция темы и/или гашение снимка ShutdownInterruptedAt.
+        if (topicMigrated || snapshotExtinguished) SaveSessions();
+        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
+        // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
+        // запуском resume, чтобы маркер не обогнал снимок.
         if (abortedMidTurn.Count > 0)
-            _ = Task.Run(async () =>
+            AbortMarkersWritten = Task.Run(async () =>
             {
                 foreach (var csid in abortedMidTurn)
                     try { await _history.AppendTurnAbortedAsync(csid); }
@@ -1417,6 +1448,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                         Console.Error.WriteLine($"[SessionManager] Маркер обрыва хода ({csid}) не записан: {ex.Message}");
                     }
             });
+    }
+
+    // Выдача кандидатов на auto-resume: возвращает захваченный LoadSessions список и
+    // очищает его в памяти, чтобы второй вызов не получил кандидатов повторно.
+    public IReadOnlyList<string> TakeRestartResumeCandidates()
+    {
+        lock (_restartResumeCandidates)
+        {
+            var result = _restartResumeCandidates.ToList();
+            _restartResumeCandidates.Clear();
+            return result;
+        }
     }
 
     // Счётчик вызовов SaveSessions — для тестов «пачка пишет файл один раз» (ApplySubjects)
@@ -9322,7 +9365,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // runId — прогон адаптера, чей read-loop прислал сообщение (0 у внутренних вызовов без
     // прогона): по нему отличаем exited ЭТОГО прогона от позднего exited доживающего
-    private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
+    // internal (InternalsVisibleTo): тесты гоняют сообщения (в т.ч. ResultMessage) через
+    // обработчик, чтобы проверить побочные эффекты (сброс RestartResumeAttempts, статус).
+    internal async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
     {
         _sessions.TryGetValue(sessionId, out var entry);
         // Волна 6: живая трансляция хода штаба фильтрует маркеры протокола (см. кейс ниже) —
@@ -9707,9 +9752,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.PendingInteraction = msg;
             }
             else if (msg is ResultMessage rm)
+            {
                 // Active (не Finished): клиент по active перезагружает историю хода;
                 // финальный Finished выставится по ExitedMessage ниже
                 newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;
+                // Result хода: сбрасываем счётчик auto-resume (B2). Поле служебное — UpdatedAt
+                // не двигаем сами (сдвинет ApplyStatusAsync ниже, как при любой смене статуса).
+                // Персистится тем же SaveSessions внутри ApplyStatusAsync.
+                entry.Info.RestartResumeAttempts = 0;
+            }
             else if (msg is ErrorMessage)
                 newStatus = SessionStatus.Error;
             else if (msg is ExitedMessage)
@@ -10193,6 +10244,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // в умирающий адаптер, и SendMessageAsync не нашёл бы Process.
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
+
+        // Снимок ShutdownInterruptedAt: помечаем ТОЛЬКО Working (ход шёл, result не пришёл)
+        // ДО dispose адаптеров. Starting/Waiting не помечаем: Starting — CLI ещё не стартовал,
+        // Waiting — ход не шёл (правило p.4 разреза). Снимок персистим синхронно ДО kill,
+        // чтобы рестарт захватил кандидатов (LoadSessions). Таймеры уже диспозены — SaveSessions
+        // не упрётся в _saveLock, как в старом сценарии зависших процессов.
+        foreach (var entry in _sessions.Values)
+            if (entry.Info.Status == SessionStatus.Working)
+                entry.Info.ShutdownInterruptedAt = DateTime.UtcNow;
+        SaveSessions();
 
         var tasks = _sessions.Values
             .Select(e => e.Process)

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -299,5 +301,114 @@ public class SessionStatusTests : IDisposable
 
         projects.GetById("proj-desktop").Should().NotBeNull("запись с полем удалённого тумблера не должна теряться")
             .And.Subject.As<Project>().Name.Should().Be("Старый проект");
+    }
+
+    // --- B1: кандидаты на auto-resume (LoadSessions + TakeRestartResumeCandidates) ---
+
+    [Fact]
+    public void TakeRestartResumeCandidates_Working_ReturnsThenClears()
+    {
+        var working = MakeSession(SessionStatus.Working);
+        WriteSessions([working]);
+
+        var sut = CreateSessionManager();
+
+        var first = sut.TakeRestartResumeCandidates();
+        first.Should().Contain(working.Id, "исходный Working — ход оборван, кандидат на auto-resume");
+
+        var second = sut.TakeRestartResumeCandidates();
+        second.Should().BeEmpty("второй вызов не должен вернуть кандидатов повторно");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_Waiting_NotCandidate()
+    {
+        var waiting = MakeSession(SessionStatus.Waiting);
+        WriteSessions([waiting]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "Waiting — ход ещё не шёл, кандидатом не является");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_Starting_NotCandidate_EvenWithShutdownInterruptedAt()
+    {
+        // KillAllProcesses Starting не помечает; даже если снимок есть — Starting
+        // кандидатом не становится (иначе снимок стал бы самостоятельным признаком).
+        var starting = MakeSession(SessionStatus.Starting);
+        starting.ShutdownInterruptedAt = DateTime.UtcNow;
+        WriteSessions([starting]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "Starting не помечается KillAllProcesses; снимок не делает его кандидатом");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_OldOrphaned_NotCandidate()
+    {
+        // Старый Orphaned без снимка — «только последний рестарт»: кандидатом не является.
+        var orphaned = MakeSession(SessionStatus.Orphaned);
+        WriteSessions([orphaned]);
+
+        var sut = CreateSessionManager();
+
+        sut.TakeRestartResumeCandidates().Should().BeEmpty(
+            "старый Orphaned без снимка ShutdownInterruptedAt — не «последний рестарт»");
+    }
+
+    [Fact]
+    public void TakeRestartResumeCandidates_WorkingWithSnapshot_ExtinguishesSnapshot()
+    {
+        var working = MakeSession(SessionStatus.Working);
+        working.ShutdownInterruptedAt = DateTime.UtcNow;
+        working.RestartResumeAttempts = 3; // произвольное: выдача кандидата его не трогает
+        WriteSessions([working]);
+
+        var sut = CreateSessionManager();
+
+        var candidates = sut.TakeRestartResumeCandidates();
+        candidates.Should().Contain(working.Id, "Working со снимком — кандидат");
+
+        var loaded = sut.GetById(working.Id)!;
+        loaded.RestartResumeAttempts.Should().Be(3, "выдача кандидата счётчик не трогает");
+        loaded.ShutdownInterruptedAt.Should().BeNull("снимок гасится сразу после захвата, в памяти");
+
+        // SaveSessions переписал файл опциями проекта (enum'и строками) — читаем теми же.
+        var diskOpts = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
+        var onDisk = JsonSerializer.Deserialize<List<Session>>(File.ReadAllText(_sessionsJsonPath), diskOpts)!;
+        onDisk.Single(s => s.Id == working.Id).ShutdownInterruptedAt.Should().BeNull(
+            "снимок гасится и сохраняется на диск");
+    }
+
+    [Fact]
+    public async Task OnResult_ResetsRestartResumeAttempts()
+    {
+        var working = MakeSession(SessionStatus.Working);
+        working.RestartResumeAttempts = 5;
+        WriteSessions([working]);
+
+        var sut = CreateSessionManager();
+        var loaded = sut.GetById(working.Id)!;
+
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        await sut.OnMessageAsync(working.Id, acc, new ResultMessage("success", 100, 1, null, null));
+
+        loaded.RestartResumeAttempts.Should().Be(0, "result хода сбрасывает счётчик auto-resume");
+    }
+
+    [Fact]
+    public void ResetRestartResumeAttempts_DoesNotMoveUpdatedAt()
+    {
+        // Сброс счётчика — служебная операция: сама по себе UpdatedAt не двигает
+        // (сдвинет отдельная смена статуса, а не сброс).
+        var s = MakeSession(SessionStatus.Active);
+        var before = s.UpdatedAt;
+        s.RestartResumeAttempts = 5;
+        s.RestartResumeAttempts = 0; // то, что делает обработчик result
+        s.UpdatedAt.Should().Be(before, "сброс счётчика UpdatedAt не двигает");
     }
 }

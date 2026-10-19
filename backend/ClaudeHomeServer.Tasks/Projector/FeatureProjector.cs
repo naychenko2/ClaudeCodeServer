@@ -1001,7 +1001,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             key,
             keySession?.Archived ?? false,
             keySession?.ProjectId,
-            chatCount);
+            chatCount,
+            run.Epic.WorktreeBranch,
+            run.Epic.CreatedAt,
+            featureTasks.Count,
+            NowPersonaIdsOf(run));
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1045,7 +1049,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
-    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting.
+    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting;
+    // bucket = running (идёт, без тревоги) → чип «running».
     // (Чип «waiting» ≠ attention.kind «wait»: словарь чипов и словарь kind различаются.)
     internal static List<string> ChipsOf(FeatureRun run)
     {
@@ -1067,8 +1072,25 @@ public sealed class FeatureProjector(TaskManager tasks)
                 };
                 chips.Add(chip);
             }
+            else if (run.Now.Count > 0)
+            {
+                // bucket = running (идёт, без тревоги) → чип «running».
+                chips.Add("running");
+            }
         }
         return chips;
+    }
+
+    // «Сейчас»: уникальные PersonaId идущих задач (Now, по убыванию ClaudeStartedAt) в порядке
+    // их старта; null-персоны пропускаются. Пустой список — фича не идёт.
+    internal static List<string> NowPersonaIdsOf(FeatureRun run)
+    {
+        var seen = new HashSet<string>();
+        var ids = new List<string>();
+        foreach (var n in run.Now)
+            if (n.PersonaId is not null && seen.Add(n.PersonaId))
+                ids.Add(n.PersonaId);
+        return ids;
     }
 
     // Тревога строки: из FeatureRun.Attention; kind «wait»+«мерж» → merge; reason у merge — null;

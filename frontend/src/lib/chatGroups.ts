@@ -470,6 +470,7 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
 // Подписи чипов: порядок = порядок ALL_FEATURE_FILTER_CHIPS (единый источник).
 const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
   open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
+  running: 'Идут',
 };
 
 // Определения чипов для рендера ряда: значение + подпись, в порядке ALL_FEATURE_FILTER_CHIPS.
@@ -479,7 +480,7 @@ export const FEATURE_FILTER_CHIPS: { value: FeatureChip; label: string }[] =
 // Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
 // Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
 export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
-  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0 };
+  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0 };
   for (const f of features) for (const c of f.chips) counts[c]++;
   return counts;
 }

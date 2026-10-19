@@ -30,8 +30,9 @@ export interface FeatureRailSegment {
 }
 
 // Чипы-фильтры (контракт §1, «chips принят»): фронт фильтрует по chips, а не по attention.
-// open = bucket ≠ closed; waiting/stopped/merge = attention.kind; closed = bucket = closed.
-export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed';
+// open = bucket ≠ closed; waiting/stopped/merge = attention.kind; closed = bucket = closed;
+// running = bucket = running (идёт, без тревоги).
+export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed' | 'running';
 
 // Тревога фичи (контракт: `attention.kind` расширен значением `merge` —
 // маппинг сырой строки «мерж» делается на бэке, на фронт уходит только kind).
@@ -96,6 +97,16 @@ export interface FeatureIndexFeature {
   keyProjectId: string | null;
   // Чатов фичи в этом ответе (архивные включены).
   chatCount: number;
+  // Аддитивные (волна 2, без хранения): старые ответы их не несут — UI обязан пережить
+  // отсутствие (все четыре опциональны).
+  // Ветка worktree эпика; null — эпик без worktree.
+  branch?: string | null;
+  // Момент создания эпика (ISO-строка).
+  createdAt?: string | null;
+  // Число задач фичи: эпик + дочерние.
+  taskCount?: number;
+  // «Сейчас»: уникальные PersonaId идущих задач, по убыванию старта; [] — фича не идёт.
+  nowPersonaIds?: string[];
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:

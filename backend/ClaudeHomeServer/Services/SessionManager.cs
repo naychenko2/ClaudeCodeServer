@@ -349,6 +349,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
         SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
         ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
+        ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 

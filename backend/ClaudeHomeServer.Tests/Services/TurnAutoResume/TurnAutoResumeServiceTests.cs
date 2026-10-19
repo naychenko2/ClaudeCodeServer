@@ -34,6 +34,12 @@ public class TurnAutoResumeServiceTests
         public List<string> Ids = [];
         public Func<string, bool> FlagOn = _ => true;
         public Func<string, Task<TurnResumeSendResult>>? OnResume;
+        // Id'ы, для которых ResumeAsync возвращает Sent=false (ветка отказа: битый
+        // транскрипт / Waiting-статус отбиты Eligibility'ем) — раньше не была покрыта.
+        public HashSet<string> NotSent = [];
+        // Id'ы, реально отправленные (Sent=true) — для проверки, что потолок считает
+        // реальные отправки, а не попытки.
+        public readonly List<string> SentIds = [];
 
         public Task AbortMarkersWritten => MarkersTcs.Task;
         public IReadOnlyList<string> TakeCandidates() { TakeCalls++; return Ids; }
@@ -45,7 +51,10 @@ public class TurnAutoResumeServiceTests
         public Task<TurnResumeSendResult> ResumeAsync(string sessionId)
         {
             lock (Log) Log.Add("send:" + sessionId);
-            return OnResume?.Invoke(sessionId) ?? Task.FromResult(new TurnResumeSendResult(true));
+            if (OnResume is { } f) return f(sessionId);
+            var sent = !NotSent.Contains(sessionId);
+            if (sent) lock (SentIds) SentIds.Add(sessionId);
+            return Task.FromResult(new TurnResumeSendResult(sent, sent ? null : "refused"));
         }
     }
 
@@ -110,13 +119,23 @@ public class TurnAutoResumeServiceTests
     [Fact]
     public async Task ПотолокMaxPerBoot_ОтправляетсяТолькоДесять_ИзДвенадцати()
     {
-        var (svc, _, life, events) = Make(ids: 12, max: 10);
+        var (svc, host, life, events) = Make(ids: 12, max: 10);
+        // 2 из 12 отбиты Eligibility'ем (битый транскрипт / Waiting-статус): Sent=false.
+        // Потолок обязан считать только реальные отправки, а не попытки.
+        host.NotSent = new() { "s1", "s2" };
         await RunToEndAsync(svc, life);
 
         var sends = events.Where(e => e.StartsWith("send:")).ToList();
-        sends.Should().HaveCount(10);
-        sends.Should().NotContain(["send:s11", "send:s12"], "11-й и 12-й сверх потолка");
-        // Пауза Gap между отправками: 9 штук между десятью
+        // Все 12 кандидатов дошли до ResumeAsync (12 попыток), чтобы набрать 10 реальных:
+        // потолок считает реальные отправки, а не попытки. Считай попытки — остановился бы
+        // на 10-й попытке (s1–s10) и реальных было бы 8 (s3–s10).
+        sends.Should().HaveCount(12, "потолок по реальным отправкам, не по попыткам");
+        sends.Should().Contain(["send:s1", "send:s2"], "отбитые кандидаты тоже попытаны");
+        // Реальные отправки — ровно 10 (s3–s12); s1/s2 — Sent=false, в потолок не входят.
+        host.SentIds.Should().HaveCount(10, "потолок MaxPerBoot=10 по реальным отправкам");
+        host.SentIds.Should().Equal(Enumerable.Range(3, 10).Select(i => "s" + i),
+            "реальные отправки — s3–s12, отбитые s1/s2 не в счёт");
+        // Пауза Gap между реальными отправками: 9 штук между десятью
         events.Count(e => e == "delay:5").Should().Be(9);
     }
 

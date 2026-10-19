@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -59,7 +60,8 @@ public class PluginDraftFeedTests : IDisposable
     private void AddChat(string id, string owner, string? projectId) =>
         _sessions[id] = new Session { Id = id, OwnerId = owner, ProjectId = projectId };
 
-    private PluginsToolset Toolset(IFeatureFlagGate? flags = null, IConfiguration? config = null)
+    private PluginsToolset Toolset(IFeatureFlagGate? flags = null, IConfiguration? config = null,
+        PluginDraftService? drafts = null)
     {
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
@@ -70,7 +72,7 @@ public class PluginDraftFeedTests : IDisposable
             .Returns((string id) => id == ProjectId
                 ? new Project { Id = id, OwnerId = Owner, DeviceId = null }
                 : null);
-        return new PluginsToolset(accessor.Object, projects.Object, _drafts, flags, config, _feed);
+        return new PluginsToolset(accessor.Object, projects.Object, drafts ?? _drafts, flags, config, _feed);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string? tail = ChatId) =>
@@ -142,6 +144,32 @@ public class PluginDraftFeedTests : IDisposable
         _feed.Records.Select(r => r.Record.Data!.Value.GetRawText()).Should()
             .ContainEquivalentOf("""{"slug":"plugin-a"}""")
             .And.ContainEquivalentOf("""{"slug":"plugin-b"}""");
+    }
+
+    // ── Гонка check-then-act (M3): два параллельных draft_create одной пары ───────
+    // Без замка на (сессию, slug) оба проходят HasRecordAsync (записи ещё нет) и оба
+    // дописывают → дубль. Барьер в AppendRecordAsync (TaskCompletionSource) синхронизирует
+    // их в точке записи: оба упираются в await, тест отпускает их вместе — без замка оба
+    // дописали (2 записи, тест красный), с замком — ровно одна (A пишет, B видит запись).
+    // Фейк PluginDraftService (всегда Ok) — чтобы оба draft_create дошли до записи в ленту,
+    // минуя already-exists реального Create (иначе второй create не дописал бы в ленту).
+    // Мутация: убрать RecordLocks из AppendDraftRecordAsync → оба дописывают → 2 записи.
+    [Fact]
+    public async Task ДваПараллельныхCreate_ОднойПары_РовноОднаЗапись()
+    {
+        var toolset = Toolset(drafts: new AlwaysOkDrafts(_store));
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _feed.WriteGate = gate.Task;
+
+        var t1 = Call(toolset, PluginsToolset.ToolCreate, new JsonObject { ["slug"] = "my-plugin" });
+        var t2 = Call(toolset, PluginsToolset.ToolCreate, new JsonObject { ["slug"] = "my-plugin" });
+        // Оба дошли до точки записи (await gate) — отпускаем: без замка оба допишут,
+        // с замком A уже держит запись, B после освобождения замка её увидит и пропустит.
+        gate.SetResult();
+        await Task.WhenAll(t1, t2);
+
+        _feed.Records.Should().HaveCount(1,
+            "замок на (сессию, slug) сериализует check-then-act: без него оба дописали бы");
     }
 
     // ── Нет сессии-вызывателя: записи нет и ошибки нет ───────────────────────────
@@ -218,10 +246,23 @@ public class PluginDraftFeedTests : IDisposable
     {
         public List<(string SessionId, StoredModuleRecord Record)> Records { get; } = [];
 
-        public Task<bool> AppendRecordAsync(string sessionId, StoredModuleRecord record, CancellationToken ct = default)
+        // Барьер «оба дошли до точки записи» (M3, гонка check-then-act): два параллельных
+        // draft_create одной пары оба проходят HasRecordAsync (записи ещё нет) и оба
+        // упираются в AppendRecordAsync; барьер синхронизирует их в точке записи, чтобы
+        // без замка оба гарантированно дописали. С замком первый держатель уже в
+        // AppendRecordAsync, а второй ещё ждёт замок (в AppendRecordAsync не попадёт) —
+        // поэтому первый НЕ ждёт второго (иначе мёртвая петля): он просто пишет, второй
+        // после освобождения замка увидит запись и пропустит.
+        public Task WriteGate;
+
+        public async Task<bool> AppendRecordAsync(string sessionId, StoredModuleRecord record, CancellationToken ct = default)
         {
+            if (WriteGate is { } gate)
+            {
+                await gate;
+            }
             lock (Records) Records.Add((sessionId, record));
-            return Task.FromResult(true);
+            return true;
         }
 
         public Task<bool> HasRecordAsync(string sessionId, string module, string recordType,
@@ -234,5 +275,15 @@ public class PluginDraftFeedTests : IDisposable
                     && (match is null || (r.Record.Data is { } d && match(d)))));
             }
         }
+    }
+
+    // Фейк черновиков для гонки идемпотентности записи: Create всегда Ok (в реальном
+    // сервисе повторный create того же slug → already-exists, и второй draft_create не
+    // дописал бы в ленту). Здесь оба параллельных create «успевают» — и оба доходят
+    // до записи в ленту, где и проявляется гонка check-then-act.
+    private sealed class AlwaysOkDrafts(PluginStore store) : PluginDraftService(store, new PluginPackageValidator())
+    {
+        public override PluginDraftOpResult Create(string ownerId, string slug) =>
+            PluginDraftOpResult.OkResult($"Черновик {slug} создан из шаблона");
     }
 }

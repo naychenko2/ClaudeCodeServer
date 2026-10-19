@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
@@ -127,21 +128,86 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset
         if (_feed is null || sessionId is null) return;
         try
         {
-            if (await _feed.HasRecordAsync(sessionId, ModuleKey, RecordDraft,
-                data => data.TryGetProperty("slug", out var s) && s.GetString() == slug, ct))
-                return;
-            await _feed.AppendRecordAsync(sessionId, new StoredModuleRecord
+            // Замок на пару (сессия, slug): проверка HasRecordAsync и запись AppendRecordAsync
+            // атомарны относительно других draft_create той же пары (M3, гонка check-then-act).
+            // Ключ — (sessionId, slug) с NUL-разделителем; замок общий на процесс (см. RecordLocks).
+            using (await RecordLocks.AcquireAsync(sessionId + "\u0000" + slug, ct))
             {
-                Module = ModuleKey,
-                RecordType = RecordDraft,
-                Data = JsonSerializer.SerializeToElement(new { slug }),
-                Fallback = $"Плагин: {slug}",
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            }, ct);
+                if (await _feed.HasRecordAsync(sessionId, ModuleKey, RecordDraft,
+                    data => data.TryGetProperty("slug", out var s) && s.GetString() == slug, ct))
+                    return;
+                await _feed.AppendRecordAsync(sessionId, new StoredModuleRecord
+                {
+                    Module = ModuleKey,
+                    RecordType = RecordDraft,
+                    Data = JsonSerializer.SerializeToElement(new { slug }),
+                    Fallback = $"Плагин: {slug}",
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }, ct);
+            }
         }
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "Плагины: запись черновика {Slug} не легла в ленту чата {SessionId}", slug, sessionId);
+        }
+    }
+
+    // ── Замок идемпотентности записи в ленту (M3, check-then-act) ─────────────────
+    // Два параллельных draft_create одной пары (сессия, slug) без замка оба проходят
+    // HasRecordAsync (записи ещё нет) и пишут по записи. Замок на пару делает проверку
+    // и запись атомарными. Общий на ПРОЦЕСС (static): тулсет может быть не синглтоном,
+    // и экземплярный замок был бы бесполезен. Семафор живёт, пока есть держатель или
+    // ожидающий (счётчик ссылок), и удаляется, когда последний отпустил — словарь не
+    // растёт вечно. Примитив по образцу KeyedLocks (ImageEditor), но локальный:
+    // KeyedLocks живёт в чужой вертикали, а граница вертикалей default-deny.
+    private sealed class RecordLocks
+    {
+        private sealed class Entry
+        {
+            public readonly SemaphoreSlim Gate = new(1, 1);
+            public int Refs;
+        }
+
+        private static readonly object Sync = new();
+        private static readonly Dictionary<string, Entry> Entries = new();
+
+        public static async Task<IDisposable> AcquireAsync(string key, CancellationToken ct = default)
+        {
+            Entry entry;
+            lock (Sync)
+            {
+                if (!Entries.TryGetValue(key, out entry!)) Entries[key] = entry = new Entry();
+                entry.Refs++;
+            }
+            try
+            {
+                await entry.Gate.WaitAsync(ct);
+            }
+            catch
+            {
+                Unref(key, entry);
+                throw;
+            }
+            return new Releaser(key, entry);
+        }
+
+        private static void Unref(string key, Entry entry)
+        {
+            lock (Sync)
+            {
+                if (--entry.Refs == 0) Entries.Remove(key);
+            }
+        }
+
+        private sealed class Releaser(string key, Entry entry) : IDisposable
+        {
+            private int _released;
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _released, 1) != 0) return;
+                entry.Gate.Release();
+                Unref(key, entry);
+            }
         }
     }
 

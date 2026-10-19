@@ -47,7 +47,9 @@ public class PluginDraftService
 
     // ── draft_create ───────────────────────────────────────────────────────────
     // Создать черновик из шаблона. Повторный create того же slug → already-exists (не перезапись).
-    public PluginDraftOpResult Create(string ownerId, string slug)
+    // virtual: тесты гонки идемпотентности записи в ленту подменяют (всегда Ok), чтобы
+    // оба параллельных draft_create дошли до записи в ленту, минуя already-exists.
+    public virtual PluginDraftOpResult Create(string ownerId, string slug)
     {
         if (DraftDir(ownerId, slug) is not { } dir)
             return PluginDraftOpResult.Fail("bad-slug", $"Недопустимый slug: {slug}");

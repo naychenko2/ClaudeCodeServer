@@ -85,15 +85,31 @@ function wireRealtime() {
   subscribeOnline(() => { if (isOnline()) void drainTaskOutbox({ reloadWhenEmpty: true }); });
 }
 
-// Сохранить уже загруженный ПОЛНЫЙ текст при перезагрузке списка: серверный элемент
+// === Реестр «открытых на правку» задач ===
+// Id задач, чья форма правки (TaskEditForm) сейчас смонтирована. Пока задача в этом
+// реестре, keepLoadedFull не подменяет её полную версию облегчённой — иначе панель
+// увидит listItem, догрузит и размонтирует форму, потеряв несохранённые правки.
+// TaskEditForm зовёт markEditing/unmarkEditing в эффекте монтирования/размонтирования.
+const _editing = new Set<string>();
+
+export function markEditing(id: string): void {
+  _editing.add(id);
+}
+
+export function unmarkEditing(id: string): void {
+  _editing.delete(id);
+}
+
+// Сохранить уже загрушенный ПОЛНЫЙ текст при перезагрузке списка: серверный элемент
 // облегчённый (listItem), и слепая подмена затирала бы описание/итог открытой карточки.
-// Полную версию оставляем, только если задача не менялась на сервере (тот же updatedAt);
-// изменилась — берём облегчённую, полную догрузит ensureFullTask при следующем открытии.
+// Полную версию оставляем, если задача не менялась на сервере (тот же updatedAt) ИЛИ
+// сейчас открыта на правку (в _editing) — иначе форма правки размонтируется. Иначе
+// берём облегчённую, полную догрузит ensureFullTask при следующем открытии.
 export function keepLoadedFull(list: Task[], current: Task[]): Task[] {
   const full = new Map(current.filter(t => !t.listItem).map(t => [t.id, t]));
   return list.map(t => {
     const cur = full.get(t.id);
-    return t.listItem && cur && cur.updatedAt === t.updatedAt ? cur : t;
+    return t.listItem && cur && (cur.updatedAt === t.updatedAt || _editing.has(t.id)) ? cur : t;
   });
 }
 

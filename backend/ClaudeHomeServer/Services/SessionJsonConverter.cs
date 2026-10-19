@@ -49,11 +49,27 @@ internal sealed class SessionJsonConverter(IServiceProvider services) : JsonConv
         var json = (JsonObject)JsonSerializer.SerializeToNode(value, OptionsWithoutSelf(options))!;
         json["parentSessionId"] = SessionTaskLinks.ParentSessionId(value, tasks);
         json["taskDone"] = SessionTaskLinks.IsTaskDone(value, tasks);
-        // Пометки «зафиксировано в git» — серверная кухня атрибуции правок, фронт их не
-        // читает, а в списке чатов они давали около трети веса ответа
-        json.Remove("committedFilePaths");
+        foreach (var field in ServerOnlyFields) json.Remove(field);
         json.WriteTo(writer);
     }
+
+    // Серверная кухня: в sessions.json живёт, на фронт не едет. Фронтовый тип Session этих
+    // полей не объявляет, и нигде в frontend/ они не читаются (проверено поиском по именам).
+    //  • committedFilePaths — пометки «зафиксировано в git»: в списке чатов около трети веса;
+    //  • lastCostState — накопленный cost-state CLI для дельты расхода хода;
+    //  • deviceWaitQueue — тексты сообщений, ждущих устройство локального проекта;
+    //  • context — состав контекста чата (фронт берёт его отдельным GET …/context);
+    //  • остальное — внутренние отметки: лок имени, миграции, онбординг, ручная группировка
+    //    (фронт строит дерево по вычисленному parentSessionId), ветка/архив/worktree.
+    // Добавляя поле в Session, которое нужно фронту, объявите его в types/index.ts и НЕ
+    // вносите сюда; сторож — SessionListWireTests.
+    internal static readonly string[] ServerOnlyFields =
+    [
+        "committedFilePaths", "lastCostState", "deviceWaitQueue", "context",
+        "nameLocked", "personaSwitched", "archiveBatchId",
+        "onboardingFinalized", "onboardingCreatedPersonaId", "branchedFromSessionId",
+        "worktreeOwned", "parentOverrideId", "parentDetached",
+    ];
 
     private JsonSerializerOptions OptionsWithoutSelf(JsonSerializerOptions options)
     {

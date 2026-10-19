@@ -66,6 +66,31 @@ describe('keepLoadedFull — подмена облегчённым не зати
   });
 });
 
+describe('keepLoadedFull — задача открыта на правку: полную версию не подменяем', () => {
+  it('открыта на правку + новый updatedAt → остаётся полная; после unmarkEditing подменяется как обычно', async () => {
+    // Стор: сначала лёгкая, затем догружаем полную (как в реальном сценарии)
+    mocks.listAll.mockResolvedValue([light()]);
+    mocks.get.mockResolvedValue(full());
+    await m.reloadTasks();
+    await m.ensureFullTask('t1');
+    expect(m.getTaskById('t1')?.listItem).toBeUndefined();
+
+    // Задача открыта на правку
+    m.markEditing('t1');
+    // Сервер отдаёт облегчённый элемент с НОВЫМ updatedAt
+    mocks.listAll.mockResolvedValue([light({ updatedAt: '2026-10-02T00:00:00Z' })]);
+    await m.reloadTasks();
+    // В сторе остаётся полная версия (не облегчённая)
+    expect(m.getTaskById('t1')?.listItem).toBeUndefined();
+    expect(m.getTaskById('t1')?.description).toBe('полное описание');
+
+    // После снятия отметки о правке следующая перезагрузка подменяет как обычно
+    m.unmarkEditing('t1');
+    await m.reloadTasks();
+    expect(m.getTaskById('t1')?.listItem).toBe(true);
+  });
+});
+
 describe('ensureFullTask — догрузка полной карточки', () => {
   it('облегчённая задача заменяется полной, listItem исчезает', async () => {
     mocks.listAll.mockResolvedValue([light()]);

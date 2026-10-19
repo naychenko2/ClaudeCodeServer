@@ -166,4 +166,59 @@ public class TranscriptProbeTests : IDisposable
         var path = WriteTranscript(lines.ToArray());
         TranscriptProbe.LastRecordUuid(path, tailBytes: 64 * 1024).Should().Be("tail-uuid");
     }
+
+    // --- LastToolUseIsDeployOrRollback: петля выкатки (ADR-033 «Исключения v1») ---
+    // Ход оборван посреди deploy_start/deploy_rollback: последний tool_use без tool_result.
+    // Имена инструментов — как их матчит реализация (deploy_start/deploy_rollback).
+
+    // tool_use deploy_start/deploy_rollback/… в content-массиве assistant-сообщения.
+    private static string DeployToolUseLine(string name, string id = "t1")
+        => $$$"""{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"{{{id}}}","name":"{{{name}}}","input":{}}]}}""";
+
+    // tool_result в user-сообщении — завершает вызов инструмента (выкатка дошла до конца).
+    private static string ToolResultLine(string toolUseId = "t1")
+        => $$$"""{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"{{{toolUseId}}}","content":"ok"}]}}""";
+
+    // Последний tool_use — deploy_start без tool_result: ход оборван посреди выкатки.
+    [Fact]
+    public void DeployStartБезResult_True()
+    {
+        var path = WriteTranscript(DeployToolUseLine("deploy_start"));
+        TranscriptProbe.LastToolUseIsDeployOrRollback(path).Should().BeTrue();
+    }
+
+    // Последний tool_use — deploy_rollback без tool_result: тоже оборванная выкатка.
+    [Fact]
+    public void DeployRollbackБезResult_True()
+    {
+        var path = WriteTranscript(DeployToolUseLine("deploy_rollback"));
+        TranscriptProbe.LastToolUseIsDeployOrRollback(path).Should().BeTrue();
+    }
+
+    // Последний tool_use — другой инструмент (Read): петли выкатки нет.
+    [Fact]
+    public void ДругойИнструмент_False()
+    {
+        var path = WriteTranscript(DeployToolUseLine("Read"));
+        TranscriptProbe.LastToolUseIsDeployOrRollback(path).Should().BeFalse();
+    }
+
+    // deploy_start с tool_result после него (и user-message): выкатка дошла до конца.
+    [Fact]
+    public void DeployStartСResult_False()
+    {
+        var path = WriteTranscript(
+            DeployToolUseLine("deploy_start"),
+            ToolResultLine("t1"),
+            UserLine("продолжай"));
+        TranscriptProbe.LastToolUseIsDeployOrRollback(path).Should().BeFalse();
+    }
+
+    // Пустой транскрипт: deploy-записей нет.
+    [Fact]
+    public void ПустойТранскрипт_False()
+    {
+        var path = WriteTranscript();
+        TranscriptProbe.LastToolUseIsDeployOrRollback(path).Should().BeFalse();
+    }
 }

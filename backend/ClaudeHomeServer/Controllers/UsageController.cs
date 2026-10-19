@@ -12,16 +12,36 @@ namespace ClaudeHomeServer.Controllers;
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
     LlmProviderRegistry providers, LocalActionRouter localRouter,
     SubscriptionOAuthUsageService oauthUsage,
-    LocalActionOverridesStore localActions, SpecialtySettingsStore specialty) : ControllerBase
+    LocalActionOverridesStore localActions, SpecialtySettingsStore specialty,
+    UsageResponseCache cache) : ControllerBase
 {
-    // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage)
+    // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage).
+    // scope=limits — ЛЁГКИЙ ответ для шапки чата: только последний снимок на (подписку, окно),
+    // без 8-дневной истории и без блока Ollama — в десятки раз меньше, и отдаётся из кэша, пока
+    // не изменились входы (версии снимков/пула/опроса + mtime тарифа). Тяжёлый (полная история)
+    // — только экранам «Расход»/«Квоты», которые её реально показывают (спарклайн тренда).
+    // Одна служба (UsageService) считает, проекции разные — второго источника правды нет.
     [HttpGet]
-    public IActionResult Get()
+    public IActionResult Get([FromQuery] string? scope = null)
     {
-        var all = usage.GetAll();
+        var limits = string.Equals(scope, "limits", StringComparison.OrdinalIgnoreCase);
+        var isAdmin = User.IsInRole("admin");
+        var fingerprint = new UsageResponseCache.Fingerprint(
+            Usage: usage.Version,
+            Pool: subscriptionPool?.Version ?? 0,
+            Poll: oauthUsage.Version,
+            Plan: usage.PlanVersion);
+
+        if (limits && cache.TryGet("limits", isAdmin, fingerprint, out var cached))
+            return Ok(cached);
+
         var plan = usage.GetPlan();
-        var bySub = usage.GetAllBySubscription();
-        var ollamaInfo = BuildOllamaInfo();
+        // Лёгкий — проекция «последний на окно»; полный — вся история (GetAll/GetAllBySubscription).
+        var bySub = limits ? usage.GetLatestPerWindow() : usage.GetAllBySubscription();
+        var all = limits
+            ? bySub.Values.SelectMany(s => s).ToList()
+            : usage.GetAll();
+        var ollamaInfo = limits ? null : BuildOllamaInfo();
 
         // Снимки окон лимитов сторонних CLI-провайдеров: их Anthropic-совместимые
         // эндпоинты тоже шлют rate_limit_event, и снимок пишется под ключ провайдера.
@@ -37,8 +57,12 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
         }
 
         // Статусы опроса api/oauth/usage per-аккаунт: по "unauthorized" вкладка честно
-        // показывает «нужен claude login», а не гадает по свежести снимков
-        var pollStatuses = oauthUsage.Statuses.Count > 0 ? oauthUsage.Statuses : null;
+        // показывает «нужен claude login», а не гадает по свежести снимков.
+        // Копия в НОВЫЙ словарь: кэшируемый ответ не должен держать ссылку на живую
+        // ConcurrentDictionary (иначе «изменялся бы» под нами и дёргал инвалидацию).
+        var pollStatuses = oauthUsage.Statuses.Count > 0
+            ? new Dictionary<string, string>(oauthUsage.Statuses)
+            : null;
 
         // Для подписок из пула — проставляем DisplayName + статус роутинга (в ротации / выведен)
         if (subscriptionPool?.HasExtra == true)
@@ -51,7 +75,6 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             // Пометки «модель недоступна на подписке» — админское состояние ротации: снимает их
             // только админ (ClearModelAvailability ниже), значит и видеть их должен он же.
             // Не-админу отдаём пустой список: карточка просто не рисует блок.
-            var isAdmin = User.IsInRole("admin");
             foreach (var sub in subscriptionPool.All)
             {
                 var key = sub.Key;
@@ -71,12 +94,16 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             }
             // Фактическая цель роутинга (куда ушёл бы новый чат) — детерминированный выбор,
             // чтобы бейдж не мигал между равными аккаунтами при обновлении экрана
-            return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps, ollamaInfo, pollStatuses,
+            var poolResponse = new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps, ollamaInfo, pollStatuses,
                 RoutingTarget: subscriptionPool.PickForDisplay(),
-                WeeklyThreshold: subscriptionPool.WeeklyThreshold));
+                WeeklyThreshold: subscriptionPool.WeeklyThreshold);
+            if (limits) cache.Set("limits", isAdmin, fingerprint, poolResponse);
+            return Ok(poolResponse);
         }
 
-        return Ok(new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo, pollStatuses));
+        var response = new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo, pollStatuses);
+        if (limits) cache.Set("limits", isAdmin, fingerprint, response);
+        return Ok(response);
     }
 
     // Снять пометку «модель недоступна на этой подписке» досрочно — кнопка «Проверить сейчас».

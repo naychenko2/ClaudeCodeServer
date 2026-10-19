@@ -202,4 +202,30 @@ public class ClaudeSessionEffortArgsTests : IDisposable
         idx.Should().BeGreaterOrEqualTo(0);
         arr[idx + 1].Should().Be("low", "high не поддерживается — ближайший снизу low");
     }
+
+    /// <summary>
+    /// Сквозной ход на MiniMax-M3.1-Flash: при пустом Session.Effort уходит --effort medium
+    /// из DefaultEffort каталога (без флага CLI шлёт high, на нём M3.1 тонет в рассуждениях),
+    /// а явный выбор человека перебивает дефолт модели.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "medium")]
+    [InlineData("high", "high")]
+    public async Task ХодНаM31_DefaultEffortМодели(string? effort, string expected)
+    {
+        var providers = new LlmProviderRegistry(Helpers.TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["LlmProviders:minimax:AnthropicBaseUrl"] = "https://api.minimax.io/anthropic",
+            ["LlmProviders:minimax:ApiKey"] = "mm-key",
+            ["LlmProviders:minimax:Models:0:Id"] = "MiniMax-M3.1-Flash[1m]",
+            ["LlmProviders:minimax:Models:0:DefaultEffort"] = "medium",
+        }));
+
+        var args = await RunTurnAsync("MiniMax-M3.1-Flash[1m]", effort, providers);
+
+        var arr = args!.ToArray();
+        var idx = Array.IndexOf(arr, "--effort");
+        idx.Should().BeGreaterOrEqualTo(0);
+        arr[idx + 1].Should().Be(expected);
+    }
 }

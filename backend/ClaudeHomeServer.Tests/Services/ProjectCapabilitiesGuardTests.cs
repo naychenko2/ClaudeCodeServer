@@ -20,7 +20,12 @@ public class ProjectCapabilitiesGuardTests
         + @"|\.DeviceId\s+is\s+(not\s+)?null"
         + @"|\.DeviceId\s+is\s*\{"
         + @"|IsNullOr(Empty|WhiteSpace)\(\s*[A-Za-z_][A-Za-z0-9_.]*\.DeviceId\s*\)"
-        + @"|\bIsLocal\b",
+        + @"|\bIsLocal\b"
+        // C# 8+ property pattern: is { DeviceId: not null } — DeviceId внутри скобок,
+        // а не перед is (направление «expr is { Prop: not null }»). Не берём общее
+        // is { ... not null }: в коде много таких (SessionManager, VideoEditor), не про
+        // локальность проекта.
+        + @"|\bis\s*\{[^{}]*\bDeviceId\b[^{}]*\bnot\s+null\b",
         RegexOptions.Compiled);
 
     private static readonly Regex FrontendPattern = new(
@@ -130,6 +135,10 @@ public class ProjectCapabilitiesGuardTests
     [InlineData("var local = p.DeviceId is { } d;")]
     [InlineData("if (!string.IsNullOrEmpty(project.DeviceId)) { }")]
     [InlineData("if (project.IsLocal) { }")]
+    // C# 8+ property pattern: оба направления — «expr.Prop is { not null }» (свойство
+    // перед is) и «expr is { Prop: not null }» (свойство внутри скобок).
+    [InlineData("if (project.DeviceId is { not null }) { return false; }")]
+    [InlineData("if (project is { DeviceId: not null }) { return false; }")]
     public void Шаблон_ЛовитИнлайновуюПроверку(string line) =>
         BackendPattern.IsMatch(line).Should().BeTrue();
 

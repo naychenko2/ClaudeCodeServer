@@ -38,7 +38,8 @@ import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolver, useTreeCollapse, withAncestors, type ChatTreeRowData } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
-import { startVisiblePoll } from '../lib/visiblePoll';
+import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
+import { listProjectSessions } from '../lib/sessionsList';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard, ROW_GAP } from './ChatCard';
@@ -90,6 +91,13 @@ interface Props {
 const GROUP_GAP = SP.xs + SP.xxs;
 // Дебаунс перечитывания реестра тем по неизвестному subjectId из опроса
 const SUBJECT_RELOAD_DEBOUNCE_MS = 1000;
+
+// Опрос списка — страховка на то, что не приходит событиями (чат создан на другом устройстве,
+// закрепление, теги, тема). Статусы, имена, удаления, архив и конец хода идут по SignalR.
+// Список меняется редко, а ответ с ETag при отсутствии изменений — 304 без тела.
+const SESSIONS_POLL_MS = 20_000;
+// Не чаще одного перечитывания на события «ход закончился»: серия из нескольких чатов — один запрос
+const TURN_END_REFETCH_GAP_MS = 3000;
 
 // Порция архива: столько карточек рисуется при входе в «Архивные» и добавляется кнопкой
 const ARCHIVE_PAGE = 40;
@@ -422,7 +430,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
     const init = async () => {
       // Офлайн без кэша — список недоступен, выходим без выбора
-      const list = await api.sessions.list(project.id).catch(() => null);
+      const list = await listProjectSessions(project.id).catch(() => null);
       if (!list || cancelled) return;
       freshArrived = true;
       setSessions(list);
@@ -449,13 +457,22 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // Пауза на скрытой вкладке + догон при возврате: час фоновых агентов не должен
     // жечь CPU/сеть опросом списка (см. lib/visiblePoll). Применяем через applyPoll:
     // дерево/свёрнутые ветки и pending-переносы origin учитываются, keepIfSame — внутри
-    const stop = startVisiblePoll(() => {
+    const refresh = () => {
       const pollNo = ++pollNoRef.current;
-      api.sessions.list(project.id)
+      listProjectSessions(project.id)
         .then(list => { if (!cancelled) applyPoll(pollNo, list); })
         .catch(() => {});
-    }, 5000);
-    return () => { cancelled = true; stop(); };
+    };
+    const stop = startVisiblePoll(refresh, SESSIONS_POLL_MS);
+    // Конец хода двигает updatedAt (на нём стоят непрочитанность и порядок списка), а
+    // status_changed его не несёт. Раньше это подбирал 5-секундный опрос; теперь опрос
+    // редкий, а переход в «простой» перечитывает список сам (пачка событий — один запрос)
+    const [onTurnEnd, disposeTurnEnd] = throttleRefetch(refresh, TURN_END_REFETCH_GAP_MS);
+    const offTurnEnd = onMessage(msg => {
+      if (msg.type !== 'status_changed') return;
+      if (msg.status === 'active' || msg.status === 'error' || msg.status === 'finished' || msg.status === 'orphaned') onTurnEnd();
+    });
+    return () => { cancelled = true; stop(); offTurnEnd(); disposeTurnEnd(); };
   }, [project.id, applyPoll]);
 
   // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.
@@ -467,7 +484,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const offReconnected = onReconnected(() => {
       if (!mounted) return;
       const pollNo = ++pollNoRef.current;
-      api.sessions.list(project.id).then(list => {
+      listProjectSessions(project.id).then(list => {
         if (mounted) applyPoll(pollNo, list);
       }).catch(() => {});
     });

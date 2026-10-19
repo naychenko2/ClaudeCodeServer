@@ -417,6 +417,125 @@ public class CloudCheapClientTests
         }
     }
 
+    // Второй источник того же провайдера minimax под MiniMax-M3.1-Flash: та думает всегда,
+    // на thinking:{type:"disabled"} отвечает 400, глубину задаёт reasoning_effort
+    private static Dictionary<string, string?> WithMinimaxM31(Dictionary<string, string?> cfg)
+    {
+        cfg["CheapHttpSources:minimax-m31:Provider"] = "minimax";
+        cfg["CheapHttpSources:minimax-m31:ReasoningEffort"] = "low";
+        cfg["CheapHttpSources:minimax-m31:Models:0:Id"] = "MiniMax-M3.1-Flash";
+        cfg["CheapHttpSources:minimax-m31:Models:0:DisplayName"] = "MiniMax M3.1 Flash";
+        cfg["CheapHttpSources:minimax-m31:Models:0:ContextWindow"] = "1048576";
+        return cfg;
+    }
+
+    [Fact]
+    public void TwoMinimaxSources_ResolveEachModelToOwnSource_SameEndpoint()
+    {
+        var logger = new CaptureLogger();
+        var client = Build(WithMinimaxM31(WithMinimax(WithOpenRouter(new()))), logger);
+
+        var m3 = client.ResolveSource("direct:MiniMax-M3");
+        var m31 = client.ResolveSource("direct:MiniMax-M3.1-Flash");
+
+        Assert.Equal("minimax", m3?.Key);
+        Assert.Equal("minimax-m31", m31?.Key);
+        Assert.Equal("minimax", m31?.ProviderKey);
+        Assert.Equal(m3?.ApiBaseUrl, m31?.ApiBaseUrl);
+        Assert.Equal("test-key", m31?.ApiKey);
+        Assert.Empty(logger.Warnings);
+    }
+
+    [Fact]
+    public async Task GenerateDetailedAsync_ReasoningEffort_SentWithoutThinking()
+    {
+        var config = TestConfig.Build(WithMinimaxM31(WithMinimax(new())));
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync("direct:MiniMax-M3.1-Flash", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Equal("https://api.minimax.io/v1/chat/completions", stub.Handler.LastRequestUri?.ToString());
+        Assert.Contains("\"reasoning_effort\":\"low\"", stub.Handler.LastRequestBody);
+        Assert.DoesNotContain("thinking", stub.Handler.LastRequestBody);
+    }
+
+    // Источникам без ReasoningEffort тело не меняется — в том числе старому minimax,
+    // который живёт рядом с новым источником того же провайдера
+    [Theory]
+    [InlineData("MiniMax-M3")]
+    [InlineData("deepseek-v4-flash")]
+    [InlineData("glm-5.2")]
+    [InlineData("kimi-k3")]
+    [InlineData("nvidia/nemotron:free")]
+    public async Task GenerateDetailedAsync_SourcesWithoutEffort_NoReasoningEffortField(string modelId)
+    {
+        var cfg = WithMinimaxM31(WithMinimax(WithKimi(WithGlm(WithDeepSeek(WithOpenRouter(new()))))));
+        var config = TestConfig.Build(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync($"direct:{modelId}", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.DoesNotContain("reasoning_effort", stub.Handler.LastRequestBody);
+    }
+
+    // Ответ M3.1 на OpenAI-маршруте: мысли в reasoning_content, content чистый — доехать
+    // обязан content целиком, рассуждение потребителю не нужно
+    [Fact]
+    public async Task GenerateDetailedAsync_ReasoningContent_ReturnsContentOnly()
+    {
+        const string json = """
+            {
+              "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "reasoning_content": "думаю про [скобки]", "content": "[\"тег\"]"}
+              }],
+              "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            }
+            """;
+        var config = TestConfig.Build(WithMinimaxM31(WithMinimax(new())));
+        var providers = new LlmProviderRegistry(config);
+        var client = new CloudCheapClient(new StubHttpFactory(json), config, providers,
+            NullLogger<CloudCheapClient>.Instance);
+
+        var result = await client.GenerateDetailedAsync("direct:MiniMax-M3.1-Flash", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Equal("[\"тег\"]", result.Text);
+    }
+
+    // Сторож на РЕАЛЬНЫЙ appsettings.json: источник M3.1 обязан нести ReasoningEffort и НЕ
+    // нести DisableThinking (иначе каждый вызов — 400), а ReasoningEffort ни у кого больше
+    // не стоит — старым моделям поле не нужно
+    [Fact]
+    public void Конфиг_ReasoningEffort_ТолькоУИсточникаM31()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        for (; dir is not null && path is null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json");
+            if (File.Exists(candidate)) path = candidate;
+        }
+        Assert.NotNull(path);
+
+        var config = new ConfigurationBuilder().AddJsonFile(path!).Build();
+        var m31 = config.GetSection("CheapHttpSources:minimax-m31");
+        Assert.Equal("minimax", m31["Provider"]);
+        Assert.Equal("low", m31["ReasoningEffort"]);
+        Assert.False(bool.TryParse(m31["DisableThinking"], out var dt) && dt);
+        Assert.Contains("MiniMax-M3.1-Flash",
+            m31.GetSection("Models").GetChildren().Select(c => c["Id"]));
+
+        var withEffort = config.GetSection("CheapHttpSources").GetChildren()
+            .Where(c => !string.IsNullOrWhiteSpace(c["ReasoningEffort"]))
+            .Select(c => c.Key);
+        Assert.Equal(["minimax-m31"], withEffort);
+    }
+
     [Fact]
     public void LegacyFallback_WhenCheapHttpSourcesEmpty()
     {

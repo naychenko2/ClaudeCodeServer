@@ -231,6 +231,11 @@ public class LlmModelConfig
     public double PriceInMissPer1M { get; set; }
     public double PriceInHitPer1M { get; set; }
     public double PriceOutPer1M { get; set; }
+    // Effort модели, когда человек уровень не выбрал (low…max). Без него CLI шлёт свой
+    // дефолт high, а MiniMax-M3.1-Flash на high уходит в многоминутные рассуждения
+    // (A/B 19.10.2026). Явный выбор человека не перебивает — поэтому поле каталога,
+    // а не env CLAUDE_CODE_EFFORT_LEVEL: тот перекрывает и --effort. Читает EffortFor.
+    public string? DefaultEffort { get; set; }
 }
 
 // Секция статистики локального движка (фича «Статистика локальных моделей»).

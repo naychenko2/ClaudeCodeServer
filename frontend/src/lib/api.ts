@@ -4,6 +4,11 @@ import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
+import type { HistoryCursorQuery, HistoryReply } from './historyTail';
+
+// Query-строка курсора докачки истории: after обязателен, fp — только для настоящего курсора
+const historyCursorParams = (q: HistoryCursorQuery) =>
+  `after=${q.after}${q.fp ? `&fp=${encodeURIComponent(q.fp)}` : ''}`;
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -43,6 +48,12 @@ export interface LocalModelStats {
   // speculativeSpeedup — «ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δitl_count
   // за окно ~60 с, во сколько раз DFlash ускоряет генерацию; null — нет данных/рестарт или шагов не было
   speed?: { genPerStream?: number; prefillPerStream?: number; speculativeSpeedup?: number | null };
+  // cleanStepMs — база шага (мс): длительность прохода модели без помех, ОДНА на весь
+  // стенд и НЕ зависящая от окна графика. Нужна полосе «Куда уходит время агентов»:
+  // «генерирует» = ΣitlCount × база, «ждёт соседа» = ΣitlSeconds − «генерирует».
+  // Раньше база считалась на фронте по окну — величина прыгала при сдвиге окна.
+  // null/отсутствует — базы нет: «ждёт соседа» не выделяется (доля «—», не ноль).
+  cleanStepMs?: number | null;
   // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
   // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
   // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;
@@ -641,6 +652,9 @@ export const api = {
 
   usage: {
     get: () => request<UsageResponse>('/usage'),
+    // Лёгкий ответ для шапки чата (перф-3 B6): только последний снимок на окно, без истории —
+    // в десятки раз меньше; тип тот же UsageResponse (проекция той же службы, не второй источник)
+    getLimits: () => request<UsageResponse>('/usage?scope=limits'),
     // Снять пометку «модель недоступна на этой подписке» досрочно (кнопка «Проверить
     // сейчас», только админ). Модель — ровно в том виде, в каком пришла в выдаче: в именах
     // встречаются точки и суффикс окна «[1m]», поэтому она в теле, а не в пути. В ответе —
@@ -1686,12 +1700,16 @@ export const api = {
     // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
     // Возвращает null, если у персоны нет картинки. cache-busting по imageFile —
     // иначе после перегенерации браузер покажет старый кадр из кэша.
-    avatarUrl: (persona: Persona): string | null => {
+    // size — размер показа (device px, 0 — оригинал): сервер отдаёт миниатюру ближайшей
+    // ступени (64/128/256), сгенерированную один раз; v в URL — имя файла, поэтому
+    // смена аватара сбрасывает кэш.
+    avatarUrl: (persona: Persona, size = 0): string | null => {
       if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
       const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
+      if (size > 0) params.set('size', String(size));
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.
@@ -1910,6 +1928,13 @@ export const api = {
       }); return api.sessions.getContext(projectId, sessionId); },
     getHistory: (projectId: string, sessionId: string) =>
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+    // Докачка хвоста истории по курсору сервера (см. lib/historyTail). after=-1 — первая
+    // загрузка (полная история + якорь), её можно кэшировать офлайн; настоящий курсор — live:
+    // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты)
+    getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery) =>
+      request<HistoryReply>(
+        `/projects/${projectId}/sessions/${sessionId}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0 }),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
@@ -2145,6 +2170,9 @@ export const api = {
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
       .then(r => { forgetChatContextSession(id); return r; }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
+    // То же, что api.sessions.getHistoryTail, для чата вне проекта
+    getHistoryTail: (id: string, q: HistoryCursorQuery) =>
+      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`, { live: q.after >= 0 }),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1
     uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {

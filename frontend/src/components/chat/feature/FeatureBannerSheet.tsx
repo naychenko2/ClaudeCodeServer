@@ -211,6 +211,8 @@ export function FeatureBannerSheet({ feature, model, projectId, index, run, onGo
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   borderRadius: 8, padding: '8px 10px',
+                  // m9: тач-цель строки ≥ 40 на 360 (макет .cc: minH 44)
+                  minHeight: 44,
                   background: isKey ? C.bgSelected : 'transparent',
                   minWidth: 0,
                 }}

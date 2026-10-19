@@ -1,5 +1,4 @@
-import { C, FONT, FS, SP } from '../lib/design';
-import { Chip } from './ui/Chip';
+import { C, FONT, FS, R, SP } from '../lib/design';
 import { FEATURE_FILTER_CHIPS, featureChipCounts } from '../lib/chatGroups';
 import type { FeatureChip, FeatureIndexFeature } from '../types/featureIndex';
 
@@ -47,28 +46,40 @@ export function FeatureFilterChips({
       {FEATURE_FILTER_CHIPS.map(({ value, label }) => {
         const isSel = selected === value;
         return (
-          <Chip
+          <button
             key={value}
-            variant="toggle"
-            selected={isSel}
-            // Макет .fch: 26px на десктопе, 36px (тач-цель) на мобиле
-            minHeight={isMobile ? 36 : 26}
+            type="button"
             onClick={() => onSelect(value)}
+            aria-pressed={isSel}
+            style={{
+              // m1: фильтр-чип по макету .fch: выбранный — accentLight + рамка accentMuted
+              // + текст textHeading 600; невыбранный — bgCard + borderLight + textSecondary 400;
+              // радиус R.max (999, полная пилюля). Не variant="toggle" Chip'а: тот заливает
+              // C.accent и спорит с кнопкой «+ Чат» в шапке.
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '0 9px',
+              borderRadius: R.max,
+              border: `1px solid ${isSel ? C.accentMuted : C.borderLight}`,
+              background: isSel ? C.accentLight : C.bgCard,
+              color: isSel ? C.textHeading : C.textSecondary,
+              fontSize: FS.sm, fontWeight: isSel ? 600 : 400, fontFamily: FONT.sans,
+              cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+              // Макет .fch: 26px на десктопе, 36px (тач-цель) на мобиле
+              minHeight: isMobile ? 36 : 26, boxSizing: 'border-box',
+            }}
           >
             {/* Подпись без переноса: на 360 чип «Ждут вас»/«К мержу» не должен
                 распадаться на две строки (высота 36, одна строка с прокруткой) */}
             <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
-            {/* Число: на заливке выбранного чипа (C.accent) — onAccent (читается);
-                не выбран — приглушённый textMuted (макет .fch .cnt). «Закрытые» —
+            {/* Число: mono 11, приглушённый textMuted (макет .fch .cnt). «Закрытые» —
                 из нарисованных групп (n3), если задано, иначе все закрытые фичи */}
             <span style={{
               fontFamily: FONT.mono, fontSize: FS.xs,
-              color: isSel ? C.onAccent : C.textMuted,
-              opacity: isSel ? 0.9 : 0.75,
+              color: C.textMuted, opacity: 0.75,
             }}>
               {value === 'closed' ? (closedCount ?? counts.closed) : counts[value]}
             </span>
-          </Chip>
+          </button>
         );
       })}
     </div>

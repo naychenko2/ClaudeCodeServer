@@ -1694,12 +1694,16 @@ export const api = {
     // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
     // Возвращает null, если у персоны нет картинки. cache-busting по imageFile —
     // иначе после перегенерации браузер покажет старый кадр из кэша.
-    avatarUrl: (persona: Persona): string | null => {
+    // size — размер показа (device px, 0 — оригинал): сервер отдаёт миниатюру ближайшей
+    // ступени (64/128/256), сгенерированную один раз; v в URL — имя файла, поэтому
+    // смена аватара сбрасывает кэш.
+    avatarUrl: (persona: Persona, size = 0): string | null => {
       if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
       const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
+      if (size > 0) params.set('size', String(size));
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.

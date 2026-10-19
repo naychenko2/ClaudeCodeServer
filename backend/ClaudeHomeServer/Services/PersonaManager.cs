@@ -889,6 +889,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: null);
         DeleteAsset(id, persona.Avatar.OriginalFile, keep: null);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
         persona.Avatar.ImageFile = imageFile;
@@ -900,13 +901,13 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     }
 
     // Загруженный аватар: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
-    // Прежние avatar-*/original-* файлы удаляются.
+    // Прежние avatar-*/original-* файлы (включая миниатюры) удаляются.
     public Persona SetAvatarUploaded(string id, string userId, string imageFile, string originalFile,
         AvatarCropState? crop)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
-        DeleteAsset(id, persona.Avatar.ImageFile, keep: imageFile);
+        DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: imageFile);
         DeleteAsset(id, persona.Avatar.OriginalFile, keep: originalFile);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
         persona.Avatar.ImageFile = imageFile;
@@ -917,12 +918,13 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         return persona;
     }
 
-    // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры.
+    // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры;
+    // прежняя картинка с её миниатюрами удаляется.
     public Persona SetAvatarRecropped(string id, string userId, string imageFile, AvatarCropState? crop)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
-        DeleteAsset(id, persona.Avatar.ImageFile, keep: imageFile);
+        DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: imageFile);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
         persona.Avatar.ImageFile = imageFile;
         persona.Avatar.Crop = crop;
@@ -936,6 +938,20 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     {
         if (string.IsNullOrEmpty(file) || file == keep) return;
         try { File.Delete(Path.Combine(AssetsDir, personaId, file)); } catch { /* не критично */ }
+    }
+
+    // Удалить файл аватара и ВСЕ его миниатюры (64/128/256): зовётся при замене аватара
+    // (upload/recrop/select) — старое имя больше не ссылается, и его миниатюры осирали бы.
+    public void DeleteAvatarAssets(string personaId, string? imageFile, string? keep = null)
+    {
+        if (string.IsNullOrEmpty(imageFile) || imageFile == keep) return;
+        DeleteAsset(personaId, imageFile, keep: null);
+        foreach (var step in ImageAssetHelper.AvatarThumbSteps)
+        {
+            var thumb = ImageAssetHelper.AvatarThumbName(imageFile, step);
+            if (thumb is null) continue;
+            try { File.Delete(Path.Combine(AssetsDir, personaId, thumb)); } catch { /* не критично */ }
+        }
     }
 
     public bool Delete(string id, string userId)

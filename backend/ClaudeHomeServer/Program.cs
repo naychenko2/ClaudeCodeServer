@@ -461,6 +461,9 @@ builder.Services.AddSingleton<ProjectEventLogService>();
 // Notes видит только Append.
 builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
+// Миниатюры аватара (64/128/256): ленивая генерация через IImageRaster (подсистема Images,
+// ADR-018 §9) + сохранение рядом с оригиналом. Stateless — singleton.
+builder.Services.AddSingleton<PersonaAvatarThumbService>();
 // Форвардер, а не вторая регистрация: иначе второй стор персон и резолвер handle не видит
 // персон, созданных после старта (см. DuplicateSingletonRegistrationTests).
 builder.Services.AddSingleton<IPersonaHandleResolver>(sp => sp.GetRequiredService<PersonaManager>());

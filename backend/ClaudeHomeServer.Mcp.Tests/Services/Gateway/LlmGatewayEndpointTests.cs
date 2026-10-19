@@ -169,6 +169,39 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         up.Headers.GetValues("x-api-key").Should().Equal("mmx-key");
     }
 
+    // Запрос-суммаризация: CLI помечает его x-claude-code-compaction (ADR-029), шлюз вырезает
+    // hint-заголовок и ставит собственный маркер x-ccs-compaction — по нему прокси локальной
+    // модели шлёт сжатие в облако, не глядя на тело.
+    [Fact]
+    public async Task ЗапросСжатия_ШлюзСтавитСобственныйМаркер_СрезаетHint()
+    {
+        var t = Start("deepseek-v4-pro");
+        var req = Req(HttpMethod.Post, t, "v1/messages", """{"model":"deepseek-v4-pro","max_tokens":1}""");
+        req.Headers.TryAddWithoutValidation(GatewayHintHeaders.CompactionHeader, "auto");
+
+        var resp = await _client.SendAsync(req);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (up, _) = _upstream.Calls.Single();
+        // Валидный x-claude-code-compaction → собственный маркер x-ccs-compaction с тем же значением.
+        up.Headers.GetValues(LlmGatewayEndpoints.CompactionMarkerHeader).Should().Equal("auto");
+        up.Headers.Contains(GatewayHintHeaders.CompactionHeader).Should().BeFalse("hint-заголовок вырезается");
+    }
+
+    [Fact]
+    public async Task ЗапросСжатия_МусорноеЗначение_МаркераНет()
+    {
+        var t = Start("deepseek-v4-pro");
+        var req = Req(HttpMethod.Post, t, "v1/messages", """{"model":"deepseek-v4-pro","max_tokens":1}""");
+        req.Headers.TryAddWithoutValidation(GatewayHintHeaders.CompactionHeader, "banana");
+
+        var resp = await _client.SendAsync(req);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (up, _) = _upstream.Calls.Single();
+        up.Headers.Contains(LlmGatewayEndpoints.CompactionMarkerHeader).Should().BeFalse("мусорное значение → маркера нет");
+    }
+
     [Fact]
     public async Task СерверныйХод_ПодпискаИлиОтозванныйИлиВыдуманный_401()
     {

@@ -591,7 +591,15 @@ export interface Task {
   projectId?: string;
   ownerId?: string;
   title: string;
-  description: string;      // markdown
+  description: string;      // markdown; у облегчённого элемента списка (listItem) всегда ''
+  // Облегчённый элемент СПИСКА (GET /api/tasks, /projects/{id}/tasks): description='' и
+  // resultMarkdown отсутствуют, вместо них — признаки и превью. Полный текст — через
+  // ensureFullTask(id) (GET /api/tasks/{id}); у полной задачи (ответ create/update/get,
+  // realtime task_changed) поля listItem нет.
+  listItem?: boolean;
+  hasDescription?: boolean;
+  hasResult?: boolean;
+  descriptionPreview?: string;   // начало описания (≤200 символов + «…» при усечении)
   status: TaskStatus;
   columnId?: string;         // колонка доски проекта; отсутствует = дефолтная колонка категории
   priority: TaskPriority;
@@ -603,6 +611,16 @@ export interface Task {
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
+  // Режим «Исполнение фичи»: связь задачи с фичей (эпик) и кодом шага.
+  // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
+  featureId?: string | null;   // id задачи-эпика
+  stepRef?: string | null;    // код шага из плана («Ш1», «D1c»)
+  lane?: string | null;       // линия шага («бэк», «фронт»); подпись берётся как есть
+  // Роль задачи в фиче (бэк TaskItem.Role): feature · cut · plan · step · rework · review · qa · final · merge · consult.
+  role?: string | null;
+  // Чат, породивший задачу (бэк TaskItem.SourceSessionId). Для фичи — связь эпика с чатом:
+  // GET /api/tasks/features?sessionId= выбирает эпики по этому полю (и ExecutorLaunchedBySessionId).
+  sourceSessionId?: string | null;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
   // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
@@ -43,6 +44,13 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // передаётся (HooksOffArgs), те же ключи выключает LlmProviderRegistry.EnsureClaudeAiSyncOff
 // в settings.json профиля CLI.
 //
+// Пятая обязанность файла — хук PreToolUse на Bash, режущий убийство процессов по имени
+// (pkill/killall, xargs kill, kill $(...)). Боевой сервер и дев-стенд из worktree — один и
+// тот же `dotnet ClaudeHomeServer.dll`, а у CLI-агентов в командной строке лежит весь
+// системный промпт, поэтому любой шаблон задевает прод или чужие ходы (инциденты 28.09,
+// 12.10, 16.10, 17.10: последний оборвал все ходы). Запрет в тексте задач не держится —
+// держит только отказ на уровне инструмента. Скрипт пишется рядом с файлом настроек.
+//
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
 // внутри контейнера недоступен — там --settings не добавляем (и гейт браузера
 // в песочнице не работает; браузера в образе всё равно нет).
@@ -54,6 +62,41 @@ public static class ClaudeRuntimeSettings
     // 10 лет: практическое «не чистить» без рискованной магии нуля (его семантика
     // не документирована и не проверялась)
     private const int TranscriptRetentionDays = 3650;
+
+    private const string BlockKillScriptName = "block-process-kill.py";
+
+    // Читает tool_input.command из stdin; код 2 + stderr — отказ, текст уходит модели.
+    // Совпадение ищется только там, где слово стоит в позиции команды (начало, после
+    // ; & | ( или перевода строки, sudo, xargs): grep/echo/commit-сообщение с этим словом
+    // внутри аргументов и в теле heredoc проходят. kill <PID> разрешён намеренно.
+    private const string BlockKillScript = """
+        import json, re, sys
+
+        try:
+            cmd = (json.load(sys.stdin).get("tool_input") or {}).get("command") or ""
+        except Exception:
+            sys.exit(0)
+
+        # Тексты, а не команды: тело heredoc и аргумент -m/--message (сообщение коммита)
+        cmd = re.sub(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\b", "<<", cmd, flags=re.S)
+        cmd = re.sub(r"(?:-m|--message|--body)\s*(?:\"(?:\\.|[^\"\\])*\"|'[^']*')", "-m X", cmd)
+
+        pos = r"(?:^|[;&|(\n])\s*(?:sudo\s+)?"
+        patterns = [
+            pos + r"(?:pkill|killall)\b",
+            r"\bxargs\s+(?:-\S+\s+)*(?:sudo\s+)?kill\b",
+            pos + r"kill\b[^;&|\n]*(?:\$\(|`)",
+        ]
+        if any(re.search(p, cmd) for p in patterns):
+            sys.stderr.write(
+                "Заблокировано: убийство процессов по имени или шаблону (pkill, killall, "
+                "xargs kill, kill $(...)) запрещено. Боевой сервер /opt/ccs/app/ClaudeHomeServer.dll "
+                "и дев-стенд — один бинарь, шаблон заденет прод и оборвёт все ходы. "
+                "Гаси только свой процесс по PID: запомни $! при запуске или найди через "
+                "`ss -ltnp` по порту стенда, затем `kill <PID>`; стенд лучше поднимать и "
+                "гасить инструментами start_stand/stop_stand.\n")
+            sys.exit(2)
+        """;
 
     // На Windows хуки плагинов порождают мелькающие окна консоли — гасим.
     // На остальных платформах хуки нужны как канал влияния на локальную модель.
@@ -91,8 +134,17 @@ public static class ClaudeRuntimeSettings
             // что ключ кэша, иначе два ключа делили бы один файл и перезаписывали друг друга.
             var path = Path.Combine(dir,
                 $"hooks-{(disableHooks ? "off" : "on")}{(browserEnabled ? "" : "-no-browser")}.settings.json");
+            // На хосте с погашенными хуками (Windows) ни хук, ни python3 не нужны
+            var hooksJson = "";
+            if (!disableHooks)
+            {
+                var scriptPath = Path.Combine(dir, BlockKillScriptName);
+                File.WriteAllText(scriptPath, BlockKillScript);
+                var command = JsonSerializer.Serialize($"python3 -I \"{scriptPath}\"");
+                hooksJson = $",\"hooks\":{{\"PreToolUse\":[{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{command}}}]}}]}}";
+            }
             File.WriteAllText(path,
-                $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false}}");
+                $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false{hooksJson}}}");
             _cachedPaths[cacheKey] = path;
             return path;
         }

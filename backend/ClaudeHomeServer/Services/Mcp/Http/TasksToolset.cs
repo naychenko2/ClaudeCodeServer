@@ -485,7 +485,8 @@ public sealed class TasksToolset(
                     "Запуск задачи на исполнение",
                     alsoWhenExecutorSuppressed: false,
                     allowInTeamImplement: true,
-                    failOpenWhenUnknown: false);
+                    failOpenWhenUnknown: false,
+                    allowedDepth: McpEndpoints.RunExecutorAllowedDepth);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
 
                 var taskId = StringArg(arguments, "taskId");
@@ -838,16 +839,14 @@ public sealed class TasksToolset(
 
     // Ответ tasks_complete: сериализованная карточка + мягкое предупреждение (отдельное поле
     // warning, НЕ notes), если ревью/проверку/финал фичи закрыли без вердикта — карточка его
-    // не покажет, а блокировать закрытие ради UI нельзя (разрез §5). Сериализация — теми же
+    // не покажет, а блокировать закрытие ради UI нельзя (разрез §5). Строка и условие — общие
+    // с REST (FeatureVerdict.Warning, Core): одна точка правды. Сериализация — теми же
     // JsonOpts, что Json<T>: кириллица без \u-экранирования, enum'ы camelCase.
     private static McpToolCallResult CompleteResponse(TaskItem task)
     {
         var json = JsonNode.Parse(JsonSerializer.Serialize(task, JsonOpts))!.AsObject();
-        if (task.FeatureId is not null
-            && task.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final
-            && string.IsNullOrEmpty(task.Verification?.Verdict))
-            json["warning"] = "У ревью/проверки/финала фичи нет вердикта — карточка его не покажет. "
-                + "Задайте verification.verdict (accepted · accepted_with_remarks · returned · withdrawn).";
+        if (FeatureVerdict.Warning(task) is { } warning)
+            json["warning"] = warning;
         return new(json.ToJsonString(JsonOpts));
     }
 

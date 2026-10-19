@@ -61,6 +61,16 @@ body {
   50% { opacity: 1; transform: scale(1); }
 }
 
+/* Пульс «идёт» в режиме «Исполнение фичи»: кольцо активного шага/стадии */
+@keyframes feature-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
+.feature-pulse { animation: feature-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .feature-pulse { animation: none; opacity: 0.5; }
+}
+
 @keyframes thinkingDot {
   0%, 80%, 100% { opacity: 0.2; transform: scale(0.75); }
   40% { opacity: 0.7; transform: scale(1); }
@@ -1029,6 +1039,17 @@ body {
 .cc-chat-switch[aria-current="true"], .cc-chat-switch:active, .cc-pressable:active { background: var(--c-bg-selected); }
 @media (hover: hover) { .cc-chat-switch:hover, .cc-pressable:hover { background: var(--c-bg-selected); } }
 .cc-chat-switch:focus-visible, .cc-pressable:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+/* Строка конвейера фичи (PipelineFlow): hover/tap — подложка C.bgSelected,
+   фокус — общее кольцо (SHADOW.focus). Радиус задаёт инлайн (R.md). */
+.cc-stage-row { background: transparent; }
+.cc-stage-row:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-stage-row:hover { background: var(--c-bg-selected); } }
+.cc-stage-row:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+/* Строка шага (PipelineFlow, «Производство»): hover/tap/фокус — как у строки стадии. */
+.cc-step-row { background: transparent; }
+.cc-step-row:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-step-row:hover { background: var(--c-bg-selected); } }
+.cc-step-row:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 @media (prefers-reduced-motion: reduce) {
   .cc-role-card, .cc-tools-row-btn { transition: none; }
 }

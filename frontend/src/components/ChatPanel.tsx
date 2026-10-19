@@ -59,6 +59,7 @@ import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, getNav, type NavSnapshot } from '../lib/nav';
 import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
 import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
+import { FeatureBanner } from './chat/feature/FeatureBanner';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -67,6 +68,8 @@ import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
+import { useFeatureRuns, setHasPlanCard } from '../lib/featureRuns';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -1756,6 +1759,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const taskTodos = useMemo(
     () => (todoBatches.length ? todoBatches[todoBatches.length - 1].todos : []),
     [todoBatches]);
+  // Индекс ТЕКУЩЕЙ карточки плана (последняя пачка): живое тело (переключатель + выбор
+  // фичи + FeatureRunView/TodoList) рисуется только на ней, прошлые — снимок TodoList.
+  // Для TodoWrite это последний вызов TodoWrite, для Task* — пачка с максимальным lastIndex.
+  const lastPlanIndex = useMemo(
+    () => todoBatches.reduce((max, b) => Math.max(max, b.lastIndex), -1),
+    [todoBatches]);
+  // Режим «Исполнение фичи»: гейт фич-флага (dark-launch) — выключен, фича не
+  // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
+  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
+  const featureRuns = useFeatureRuns(session.id, featureMode);
+
+  // F9: чип «Шаг N фичи» (TaskCreatedView) должен знать, есть ли в ленте живая карточка
+  // плана (стор Ф1, per chat): есть — сигнал фокуса потребляется в ней, нет — чип открывает
+  // меню пилюли. Живая карточка — только на последней пачке (lastPlanIndex ≥ 0) и только
+  // когда у чата есть фичи (иначе там снимок TodoList, а не FeatureModeBody).
+  useEffect(() => {
+    if (session.id) setHasPlanCard(session.id, lastPlanIndex >= 0 && featureRuns.length > 0);
+  }, [session.id, lastPlanIndex, featureRuns]);
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
@@ -2078,8 +2099,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       online={online}
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
-      planPill={!showWaiting && i === lastResultIndex && taskTodos.length > 0
-        ? <TurnPlanPill todos={taskTodos} />
+      planPill={!showWaiting && i === lastResultIndex && (taskTodos.length > 0 || featureRuns.length > 0)
+        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
         : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
       onToggleThinking={toggleThinking}
@@ -2101,6 +2122,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onContinue={continueGate && i === lastAssistantIdx ? openContinue : undefined}
       availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
+      isCurrentPlan={i === lastPlanIndex}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
@@ -2142,7 +2164,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, batchByIndex, lastPlanIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,
@@ -2788,6 +2810,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         </div>
       )}
 
+      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фича, её статус и
+          куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
+          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null). */}
+      <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} />
+
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса
           прокрутки рисуется по краю широкого центра и на большом экране висит
@@ -2927,7 +2954,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 индикатора не оставалось места даже под аватар и время. Половина — потолок,
                 а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
             <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
-              <TurnPlanPill todos={taskTodos} />
+              <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
             </div>
           </div>
         )}

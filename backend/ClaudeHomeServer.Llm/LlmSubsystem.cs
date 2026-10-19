@@ -434,5 +434,24 @@ public sealed class LlmSubsystem : IAppSubsystem
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>().CurrentValue.GpuCacheTtl,
             sp.GetRequiredService<ILogger<GpuSampler>>()));
+
+        // === Вкладка «Железо» (Б1): фоновый сэмплер датчиков + кольцо 1 ч + отчёт с уровнями ===
+        // Источники ТОЛЬКО читаются (nvidia-smi — уже существующий вызов GpuSampler, файл помощника
+        // ccs-gddr6, /sys/class/hwmon, /proc/meminfo). Singleton + hosted от того же экземпляра
+        // (без второго AddSingleton<HardwareSampler>: гейт DuplicateSingletonRegistrationTests).
+        services.AddSingleton(sp => new Gddr6HelperReader(sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(_ => new HwmonReader());
+        services.AddSingleton(_ => new MeminfoReader());
+        services.AddSingleton<HardwareSampler>(sp => new HardwareSampler(
+            sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>(),
+            sp.GetRequiredService<IGpuSampler>(),
+            sp.GetRequiredService<Gddr6HelperReader>(),
+            sp.GetRequiredService<HwmonReader>(),
+            sp.GetRequiredService<MeminfoReader>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<HardwareSampler>>()));
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<HardwareSampler>());
+        services.AddSingleton<IHardwareSampler>(sp => sp.GetRequiredService<HardwareSampler>());
+        services.AddSingleton<IHardwareReportService, HardwareReportService>();
     }
 }

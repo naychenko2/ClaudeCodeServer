@@ -126,8 +126,8 @@ public sealed class DeviceWaitTestHost : IDisposable
         var adapter = new Mock<ILlmSessionAdapter>();
         adapter.SetupGet(a => a.Info).Returns(chat);
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
-                It.IsAny<int>(), It.IsAny<bool>()))
-            .Callback<string, IReadOnlyList<string>, int, bool>((text, _, _, _) => delivered.TrySetResult(text))
+                It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()))
+            .Callback<string, IReadOnlyList<string>, int, bool, string>((text, _, _, _, _) => delivered.TrySetResult(text))
             .Returns(Task.CompletedTask);
         entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
         chat.Status = SessionStatus.Active;

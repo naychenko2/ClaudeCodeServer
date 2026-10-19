@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import base64, gzip, hashlib, http.client, json, os, re, sys, threading, time
+import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time
 from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -273,6 +273,10 @@ COMPACT_SIGNATURE = os.environ.get(
 # Запрос сжатия при живом стенде молча уходил бы на локаль — те самые 330–430 с стоп-мира.
 # Две величины отвечают на разные вопросы и совпадали случайно.
 COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS", "150000"))
+# Фиксированный словарь значений маркера сжатия: шлюз ставит x-ccs-compaction, сырой CLI
+# (ход мимо шлюза) — x-claude-code-compaction. Значения те же, что у CLI (auto|manual|reactive);
+# вне словаря — мусор, по нему маршрут не едет.
+COMPACT_HEADER_VALUES = {"auto", "manual", "reactive"}
 # Сжатие с сохранением дословного (план «сжатие с сохранением дословного», шаг 5): к сводке в
 # ответе сжатия дописывается <ccs-preserved> — постановка, реплики человека, файлы, проверки,
 # план и якоря, собранные compactor.py по ОРИГИНАЛЬНОМУ телу. Дописывается в тот же текстовый
@@ -343,12 +347,40 @@ LOOP_RETRY_SAMPLING = _parse_kv(os.environ.get("LOOP_RETRY_SAMPLING",
 # JUNK_RATIO и выше — upstream закрывается, ответ обрывается пометкой. Повтора нет: тот же префикс
 # попадёт в тот же кэш и выдаст тот же мусор.
 #
+# 2026-10-17: второй признак — вырождение в цепочку одинаковых «слов» без букв и цифр. Ход
+# 17:53 (контекст 88K, 98,5 % из кэша): «зависит-зависит от (monoлит, ) … Про-ов- Проверя-»,
+# затем больше сотни строк из одного «-» до конца хода. Доля мусорных слов такое не видит
+# (в «-» нет письменностей), детектор петли тоже — «слова» без букв он выкидывает намеренно,
+# ради таблиц. Списки, таблицы и разделители чередуют такие «слова» с текстом, подряд их
+# десятками не бывает.
+#
 # Дефолт off по той же причине, что у предохранителя петли: включает mode.conf.
 # Откат: JUNK_GUARD=off и рестарт.
 JUNK_GUARD = os.environ.get("JUNK_GUARD", "off")
 JUNK_WINDOW = int(os.environ.get("JUNK_WINDOW", "80"))          # слов в скользящем окне
 JUNK_RATIO = float(os.environ.get("JUNK_RATIO", "0.35"))        # доля мусорных слов — обрыв
 JUNK_MIN_WORDS = int(os.environ.get("JUNK_MIN_WORDS", "60"))    # раньше не срабатывать
+JUNK_RUN = int(os.environ.get("JUNK_RUN", "40"))                # одинаковых «слов» без букв подряд
+
+# Тело запроса, на котором сработал предохранитель петли или мусора (2026-10-17). Причину
+# срывов (порча состояния после prefix cache, DFlash2 или сама модель) по транскриптам не
+# различить — нужен тот самый запрос, чтобы переиграть его через кэш и мимо (cache_salt).
+# В отличие от PRUNE_DUMP_DIR пишутся только сработки — единицы в день, а не каждый запрос.
+# В файлах чужие чаты: каталог 0700, файлы 0600, хранятся GUARD_DUMP_KEEP последних.
+# Пусто — выключено. Откат: убрать строку из mode.conf и рестарт.
+GUARD_DUMP_DIR = os.environ.get("GUARD_DUMP_DIR", "")
+GUARD_DUMP_KEEP = int(os.environ.get("GUARD_DUMP_KEEP", "30"))
+
+# Карантин сессии после мусора (2026-10-17). Переигровка сработки 22:11 показала: мусор даёт
+# испорченное состояние в prefix cache, а не модель. Тот же запрос мимо кэша (cache_salt) — 7 из 7
+# чисто, через кэш после порчи — 6 из 6 мусор с первых слов. Поэтому «Повтори ход» бесполезен:
+# повтор попадёт в те же блоки. На срыве прокси сам переспрашивает с новой солью (полный префилл,
+# ~70 с на 95K), а сессия и дальше ходит со своей солью: один пересчёт — и кэш снова работает,
+# только в чистом пространстве, куда испорченные блоки не попадают. Остальных сессий это не
+# касается. Карантин живёт в памяти процесса: рестарт прокси его снимает.
+# Дефолт off: включает mode.conf. Откат: CACHE_QUARANTINE=off и рестарт.
+CACHE_QUARANTINE = os.environ.get("CACHE_QUARANTINE", "off")
+_карантин = {}  # заголовок сессии -> cache_salt
 
 # --- Прунинг картинок -----------------------------------------------------------------------
 #
@@ -375,11 +407,14 @@ IMAGE_TOKENS_CAP = 2048
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "images_pruned": 0, "images_kept": 0, "image_tokens_saved": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
-         "compact_preserved": 0, "compact_preserve_failed": 0,
+         "compact_routed_header": 0, "compact_cloud_retry": 0,
+         "compact_preserved": 0, "compact_preserve_failed": 0, "usage_normalized": 0,
          "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
          "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
          "loops_truncated": 0, "loop_guard_errors": 0,
-         "junk_aborts": 0, "junk_words_max_ratio": 0.0}
+         "junk_aborts": 0, "junk_words_max_ratio": 0.0, "guard_dumps": 0,
+         "quarantine_retries": 0, "quarantine_failed": 0, "quarantine_salted": 0,
+         "quarantine_loop_reused": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -898,6 +933,20 @@ def _tail_text(msgs, role=None):
     return ""
 
 
+def compact_header_kind(headers):
+    """Вид сжатия по заголовку-маркеру: x-ccs-compaction (шлюз) или x-claude-code-compaction
+    (ход, идущий мимо шлюза). None — заголовка нет или значение вне словаря (мусор).
+
+    Заголовок — ГЛАВНЫЙ признак: при нём тело любого размера уходит в облако, без проверки
+    сигнатуры и порога. Сигнатура + порог остаются запасным путём, когда заголовка нет.
+    """
+    raw = headers.get("x-ccs-compaction") or headers.get("x-claude-code-compaction")
+    if raw is None:
+        return None
+    v = raw.strip().lower()
+    return v if v in COMPACT_HEADER_VALUES else None
+
+
 def compact_verdict(doc, min_context_tokens=None):
     """Разбор запроса на три исхода: `("route"|"signature_small"|"no", оценка контекста)`.
 
@@ -1334,22 +1383,53 @@ def merge_usage(копилка, chunk):
     return копилка
 
 
+def _полная_форма(usage):
+    """Признак полной формы usage: `input_tokens` уже включает кэш (роутер vLLM, финальный
+    `message_delta`). Та же развилка, что в `usage_totals` и `diff_miss.цифры`: `input_tokens`
+    не меньше `cache_read_input_tokens`. Одна проверка — и в карточке, и в нормализации."""
+    return (usage.get("input_tokens") or 0) >= (usage.get("cache_read_input_tokens") or 0)
+
+
 def usage_totals(usage):
     """`(cache_read_input_tokens, весь промпт)` из накопленного usage — для карточки.
 
     `(None, None)` — если цифр нет вовсе (чужой формат ответа, оборванный поток).
 
-    У `input_tokens` роутера vLLM ДВЕ семантики, и различать их обязательно (та же развилка,
-    что в `diff_miss.цифры`): в `message_start` это только то, что прошло МИМО кэша, а в
-    финальном `message_delta` — ВЕСЬ промпт, кэш включительно. Сложишь слагаемые вслепую —
-    промпт удвоится, и доля из кэша в карточке соврёт вдвое. Признак полной формы простой:
-    `input_tokens` не меньше `cache_read_input_tokens`.
+    Копилка (`merge_usage`) берёт по максимуму, поэтому `input_tokens` в ней — это `input` из
+    `message_start` роутера vLLM, то есть ВЕСЬ промпт (дельта даёт только часть мимо кэша, она
+    меньше и не перекрывает). Тогда `input_tokens` не меньше `cache_read_input_tokens` — полная
+    форма, промпт = `input`. Если старта в копилке не было (чужой формат), слагаемые складываются.
     """
     вход = usage.get("input_tokens") or 0
     чтение = usage.get("cache_read_input_tokens")
-    промпт = вход if вход >= (чтение or 0) else (
+    промпт = вход if _полная_форма(usage) else (
         вход + (чтение or 0) + (usage.get("cache_creation_input_tokens") or 0))
     return (чтение if isinstance(чтение, int) else None), (промпт or None)
+
+
+def normalize_usage(usage, промпт_старта=None):
+    """Правит `message_delta.usage`, если `input_tokens` в нём — ВЕСЬ промпт, кэш включительно.
+
+    Снято живьём 2026-10-18 (README, «Нормализация usage»): роутер vLLM шлёт `message_start` с
+    `input_tokens` = ВЕСЬ промпт (оценка до поиска в кэше), а финальный `message_delta` — уже в
+    семантике Anthropic: `input` = только мимо кэша, `cache_read` и `cache_creation` отдельно, и
+    `input + cache_read + cache_creation` = промпт. «Полная форма» в дельте (`input` = весь промпт
+    при ненулевом кэше) не наблюдалась, но защита оставлена: опознаётся ТОЧНО — `input` дельты
+    равен `input` старта (в правильной форме он строго меньше при ненулевом кэше). Прежний
+    признак `input ≥ cache_read` был ошибочным: он принимал за полную форму любой промах кэша
+    (`input 773 ≥ read 0`) и обнулял `input`, а CLI берёт `input` дельты только когда он больше
+    нуля, иначе остаётся старт (весь промпт) — и промпт удваивался.
+
+    Возвращает (новый usage, изменилось ли). Вход не мутирует.
+    """
+    if not isinstance(usage, dict) or not промпт_старта:
+        return usage, False
+    вход = usage.get("input_tokens") or 0
+    чтение = usage.get("cache_read_input_tokens") or 0
+    создание = usage.get("cache_creation_input_tokens") or 0
+    if вход != промпт_старта or чтение + создание <= 0:
+        return usage, False
+    return dict(usage, input_tokens=max(0, вход - чтение - создание)), True
 
 
 def post_event(payload, connector=None):
@@ -1555,19 +1635,24 @@ class ДетекторМусора:
     """Скользящее окно слов из дельт thinking/text; мусор — доля мусорных слов `ratio` и выше.
 
     Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
-    ```-заборов не считается (длинные токены там легальны), «слова» без букв и цифр — тоже.
+    ```-заборов не считается (длинные токены там легальны). «Слова» без букв и цифр в долю не
+    идут, зато `run` одинаковых токенов подряд — второй признак мусора: вырождение в «- - - -»
+    или в одно слово «like like like…» (числа не в счёт).
     """
 
-    def __init__(self, window=None, ratio=None, min_words=None):
+    def __init__(self, window=None, ratio=None, min_words=None, run=None):
         self.window = window or JUNK_WINDOW
         self.ratio = JUNK_RATIO if ratio is None else ratio
         self.min_words = JUNK_MIN_WORDS if min_words is None else min_words
+        self.run = run or JUNK_RUN
         self.окно = deque(maxlen=self.window)  # True — мусорное слово
         self.мусорных = 0
         self.всего = 0
         self.хвост = ""
         self.в_коде = False
         self.доля = 0.0  # доля мусора в окне на последней проверке
+        self.пустое, self.подряд = None, 0  # последний токен и длина цепочки из него
+        self.причина = ""  # чем сработал — для журнала и дампа
         self.сработал = False
 
     def новый_блок(self):
@@ -1592,7 +1677,22 @@ class ДетекторМусора:
             if w.count("```") % 2:
                 self.в_коде = not self.в_коде
             return False
-        if self.в_коде or ("\ufffd" not in w and not any(ch.isalnum() for ch in w)):
+        if self.в_коде:
+            return False
+        без_букв = "\ufffd" not in w and not any(ch.isalnum() for ch in w)
+        # Одинаковый токен подряд: «слово» без букв и цифр как есть, слово с буквами — без
+        # регистра и краевой пунктуации («like like like…», 18.10). Числа («0 0 0») — не в счёт.
+        ключ = w if без_букв else w.strip(_JUNK_TRIM).lower()
+        if без_букв or any(ch.isalpha() for ch in ключ):
+            self.подряд = self.подряд + 1 if ключ == self.пустое else 1
+            self.пустое = ключ
+            if self.подряд >= self.run:
+                self.причина = f"цепочка {self.подряд}× {ключ!r}"
+                self.сработал = True
+                return True
+        else:
+            self.пустое, self.подряд = None, 0
+        if без_букв:
             return False
         мусор = мусорное_слово(w)
         if len(self.окно) == self.окно.maxlen:
@@ -1605,6 +1705,7 @@ class ДетекторМусора:
         self.доля = self.мусорных / len(self.окно)
         if self.доля < self.ratio:
             return False
+        self.причина = f"доля {self.доля:.2f} в окне {self.window}"
         self.сработал = True
         return True
 
@@ -1664,6 +1765,11 @@ class РелеПотока:
                     self.буфер = b""
                     return True
                 событие = b""
+        except (BrokenPipeError, ConnectionResetError):
+            # клиент ушёл (прерывание хода) — не считать ошибкой предохранителя:
+            # исключение пролетит мимо инкремента loop_guard_errors и будет поймано
+            # общим обработчиком выше, который просто фиксирует обрыв
+            raise
         except Exception as e:
             with lock:
                 stats["loop_guard_errors"] += 1
@@ -1804,6 +1910,10 @@ class ВставкаБлока:
                 событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
                 self._событие(событие)
                 событие = b""
+        except (BrokenPipeError, ConnectionResetError):
+            # клиент ушёл — не считать ошибкой вставки: исключение пролетит мимо
+            # _preserve_failed и будет поймано общим обработчиком выше
+            raise
         except Exception as e:
             _preserve_failed("вставка в поток", e)
             self.сквозной = True
@@ -1897,8 +2007,109 @@ class ВставкаВJson:
         self.отдать(готовое)
 
 
+class НормализаторUsage:
+    """Приводит `usage` ответа ЛОКАЛЬНОЙ модели к тому, что CLI соберёт верно (см. `normalize_usage`).
+
+    Живьём снято 2026-10-18: `message_start` vLLM несёт `input_tokens` = ВЕСЬ промпт, а
+    `message_delta` — `input` мимо кэша + `cache_read` + `cache_creation` (сумма = промпт). CLI
+    берёт `input_tokens` дельты, только если он больше нуля; при промахе кэша после сжатия
+    (`input` 773, creation 128128) или полном попадании (`input` 0) остаётся `input` старта —
+    весь промпт, и итог выходит вдвое больше реального. Лечим там, где корень: `input_tokens`
+    в `message_start` обнуляем — настоящую цифру CLI получит из дельты (она всегда следует за
+    стартом), а нулевая дельта больше не оставляет в итоге весь промпт.
+
+    SSE: правит `message_start` (обнуляет `input_tokens`, запоминает его как промпт) и страхует
+    `message_delta` от «полной формы». Не-SSE (один объект `usage` в правильной форме, снято
+    живьём) — тело проходит как есть. Облачный ответ (MiniMax: `input_tokens` 0 в старте,
+    остальное в дельте) сюда не попадает.
+
+    Fail-open, как и всё в прокси: любой сбой разбора — сквозной режим, ход важнее цифры.
+    """
+
+    БУФЕР_МАКС = РелеПотока.БУФЕР_МАКС
+
+    def __init__(self, отдать, sse):
+        self.отдать = отдать
+        self.sse = sse
+        self.буфер = b""
+        self.сквозной = not sse
+        self.промпт = None  # input_tokens из message_start, до обнуления
+
+    def усвоить(self, chunk):
+        if self.сквозной:
+            self.отдать(chunk)
+            return
+        self._sse(chunk)
+
+    def _sse(self, chunk):
+        self.буфер += chunk
+        while True:
+            i = self.буфер.find(b"\n\n")
+            if i < 0:
+                if len(self.буфер) > self.БУФЕР_МАКС:
+                    self._сквозной()
+                    return
+                return
+            событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+            self._событие(событие)
+            if self.сквозной:
+                return
+
+    def _событие(self, сырое):
+        """Правит `usage` в `message_start`/`message_delta`; событие ВСЕГДА уходит клиенту."""
+        for строка in сырое.split(b"\n"):
+            if not строка.startswith(b"data:"):
+                continue
+            try:
+                данные = json.loads(строка[5:].strip())
+            except ValueError:
+                break
+            if not isinstance(данные, dict):
+                break
+            тип = данные.get("type")
+            if тип == "message_start":
+                usage = (данные.get("message") or {}).get("usage")
+                вход = usage.get("input_tokens") if isinstance(usage, dict) else None
+                if isinstance(вход, int) and вход > 0:
+                    self.промпт = вход
+                    данные["message"]["usage"] = dict(usage, input_tokens=0)
+                    with lock:
+                        stats["usage_normalized"] += 1
+                    self.отдать(_sse("message_start", данные))
+                    return
+            elif тип == "message_delta":
+                usage = данные.get("usage")
+                if isinstance(usage, dict):
+                    новый, изменилось = normalize_usage(usage, self.промпт)
+                    if изменилось:
+                        данные["usage"] = новый
+                        with lock:
+                            stats["usage_normalized"] += 1
+                        self.отдать(_sse("message_delta", данные))
+                        return
+            break
+        self.отдать(сырое)
+
+    def дослать(self):
+        """Конец ответа: недочитанный хвост SSE (событие без пустой строки) уходит как есть."""
+        if self.сквозной:
+            return
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+
+    def _сквозной(self):
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+        self.сквозной = True
+
+
 def retry_body(body):
-    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать."""
+    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать.
+
+    Соль prefix cache сюда не добавляет: её кладёт вызывающий через salted_body (карантин),
+    чтобы повтор шёл в чистом пространстве, а сессия и дальше ходила со своей солью."""
     try:
         doc = json.loads(body)
         if not isinstance(doc, dict):
@@ -1911,6 +2122,18 @@ def retry_body(body):
             if ключ == "presence_penalty":
                 стало = min(стало, 2.0)
             doc[ключ] = стало
+        return json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        return None
+
+
+def salted_body(body, соль):
+    """Тело с cache_salt: vLLM не берёт для него чужие блоки prefix cache. None — не разобрать."""
+    try:
+        doc = json.loads(body)
+        if not isinstance(doc, dict):
+            return None
+        doc["cache_salt"] = соль
         return json.dumps(doc, ensure_ascii=False).encode("utf-8")
     except Exception:
         return None
@@ -2022,6 +2245,35 @@ def dump_request(тело, session, мета):
     return ЗаписьДампа(каталог, seq, session, тело, мета)
 
 
+def dump_guard(тело, session, мета):
+    """Кладёт в GUARD_DUMP_DIR тело запроса, на котором сработал предохранитель, и мету.
+
+    Тот же формат, что у `ЗаписьДампа` (gzip-тело + meta.json, 0600): переигрывать сработку и
+    разбирать дамп промахов можно одними инструментами. Хранятся GUARD_DUMP_KEEP свежих пар.
+    Fail-open: осечка записи — строка в журнал, ход идёт дальше.
+    """
+    if not GUARD_DUMP_DIR or not тело:
+        return
+    global _dump_seq
+    try:
+        os.makedirs(GUARD_DUMP_DIR, mode=0o700, exist_ok=True)
+        with _dump_lock:
+            _dump_seq += 1
+            seq = _dump_seq
+        запись = ЗаписьДампа(GUARD_DUMP_DIR, seq, session, тело, мета)
+        запись.записать()
+        with lock:
+            stats["guard_dumps"] += 1
+        тела = sorted((e for e in os.scandir(GUARD_DUMP_DIR) if e.name.endswith(".req.json.gz")),
+                      key=lambda e: e.stat().st_mtime)
+        for e in тела[:-GUARD_DUMP_KEEP] if GUARD_DUMP_KEEP > 0 else []:
+            for путь in (e.path, e.path[:-len(".req.json.gz")] + ".meta.json"):
+                with contextlib.suppress(OSError):
+                    os.remove(путь)
+    except Exception as e:
+        print(f"дамп сработки не записан ({e!r})", file=sys.stderr, flush=True)
+
+
 def _debug_dump(doc, msgs, body_len):
     """Разбор запроса в журнал: зачем прунинг решил так, а не иначе.
 
@@ -2095,7 +2347,7 @@ class Handler(BaseHTTPRequestHandler):
                                   loop_guard=(f"{LOOP_GUARD}: {LOOP_NGRAM}-грамма x{LOOP_REPEATS} "
                                               f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"),
                                   junk_guard=(f"{JUNK_GUARD}: доля {JUNK_RATIO} в {JUNK_WINDOW} "
-                                              f"словах, не раньше {JUNK_MIN_WORDS}"),
+                                              f"словах, не раньше {JUNK_MIN_WORDS}, цепочка {JUNK_RUN}"),
                                   image_prune=(f"{IMAGE_PRUNE}: свежих {IMAGE_KEEP}, "
                                                f"потолок {IMAGE_MAX}"))).encode()
         self.send_response(200)
@@ -2131,10 +2383,12 @@ class Handler(BaseHTTPRequestHandler):
         # ПО СЕССИЯМ (сравнивается соседняя пара запросов одного чата), и без него дамп
         # прогона превращается в кашу из ходов исполнителя и фоновых действий продукта.
         сессия = (self.headers.get(EVENT_SESSION_HEADER)
-                  if (BACKEND_EVENTS_URL or DUMP_DIR) else None)
+                  if (BACKEND_EVENTS_URL or DUMP_DIR or GUARD_DUMP_DIR
+                      or CACHE_QUARANTINE == "on") else None)
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
         дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
+        compact_by_header = False  # True — в облако шлём по заголовку-маркеру, а не по сигнатуре+порогу
         прунинг = {"blocks": 0, "freedChars": 0}
         if body and self.command == "POST":
             try:
@@ -2142,27 +2396,46 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(doc, dict):
                     # Распознаём и снимаем копию ДО правок: в облако едет сырая история.
                     if COMPACT_UPSTREAM or COMPACT_PRESERVE == "on":
-                        вердикт, оценка = compact_verdict(doc)
-                        if вердикт == "route" and COMPACT_PRESERVE == "on":
-                            # По оригинальному телу и до compact_body: дополнение инструкции
-                            # должно уехать и в облако, и в фолбэк на локаль.
-                            сохранённое = preserve_for_compact(doc)
-                            if сохранённое is not None:
-                                stripped = True
-                        if вердикт == "route" and COMPACT_UPSTREAM:
-                            compact = compact_body(doc)
-                            compact_before = оценка
-                        elif вердикт == "signature_small" and COMPACT_UPSTREAM:
-                            # Настройка стенда разъехалась: CLI сжимается раньше, чем история
-                            # набирает порог. Молча отпускать такой запрос на локаль нельзя —
-                            # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
-                            with lock:
-                                stats["compact_signature_small"] += 1
-                            print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
-                                  f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
-                                  f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
-                                  f"опусти COMPACT_MIN_CONTEXT_TOKENS",
-                                  file=sys.stderr, flush=True)
+                        маркер = compact_header_kind(self.headers)
+                        if маркер is not None:
+                            # Заголовок-маркер — ГЛАВНЫЙ признак: шлюз (x-ccs-compaction) или сырой
+                            # CLI (x-claude-code-compaction, ход мимо шлюза) помечают запрос-суммаризацию,
+                            # и тело ЛЮБОГО размера уходит в облако, без проверки сигнатуры и порога.
+                            if COMPACT_PRESERVE == "on":
+                                # По оригинальному телу и до compact_body: дополнение инструкции
+                                # должно уехать и в облако, и в фолбэк на локаль.
+                                сохранённое = preserve_for_compact(doc)
+                                if сохранённое is not None:
+                                    stripped = True
+                            if COMPACT_UPSTREAM:
+                                compact = compact_body(doc)
+                                compact_before = 0
+                                compact_by_header = True
+                        else:
+                            # Заголовка нет — запасной путь: сигнатура + порог.
+                            вердикт, оценка = compact_verdict(doc)
+                            if вердикт == "route" and COMPACT_PRESERVE == "on":
+                                # По оригинальному телу и до compact_body: дополнение инструкции
+                                # должно уехать и в облако, и в фолбэк на локаль.
+                                сохранённое = preserve_for_compact(doc)
+                                if сохранённое is not None:
+                                    stripped = True
+                            if вердикт == "route" and COMPACT_UPSTREAM:
+                                compact = compact_body(doc)
+                                compact_before = оценка
+                            elif вердикт == "signature_small" and COMPACT_UPSTREAM:
+                                # Настройка стенда разъехалась: CLI сжимается раньше, чем история
+                                # набирает порог. Молча отпускать такой запрос на локаль нельзя —
+                                # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
+                                with lock:
+                                    stats["compact_signature_small"] += 1
+                                print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
+                                      f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
+                                      f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
+                                      f"опусти COMPACT_MIN_CONTEXT_TOKENS; до нормализации usage "
+                                      f"(usage_normalized) раннее сжатие могло дать и удвоение "
+                                      f"input_tokens в message_delta",
+                                      file=sys.stderr, flush=True)
                     if apply_sampling(doc):
                         stripped = True
                     изменено, решение = apply_thinking_mode(doc)
@@ -2241,7 +2514,13 @@ class Handler(BaseHTTPRequestHandler):
                                 "thinkingBlocks": виды.get("thinking", 0) if сдвиг else 0,
                                 "imageBlocks": картинки["pruned"] if картинки else 0,
                                 "imageTokens": картинки["tokens"] if картинки else 0}
-                    if stripped:
+                    соль = (_карантин.get(сессия) if CACHE_QUARANTINE == "on" and сессия
+                            and compact is None else None)
+                    if соль and doc.get("cache_salt") != соль:
+                        doc["cache_salt"] = соль
+                        with lock:
+                            stats["quarantine_salted"] += 1
+                    if stripped or соль:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
             except Exception as e:
                 # fail-open: не наш формат ИЛИ неожиданная структура внутри — отдаём тело как
@@ -2267,8 +2546,22 @@ class Handler(BaseHTTPRequestHandler):
         начало = time.monotonic()
         if compact is not None:
             попытка = open_compact(compact, self.path)
+            if попытка is None:
+                # Первая попытка облака упала, а ответ клиенту ещё не начат (send_response ниже) —
+                # повторяем один раз: обрыв в начале потока — самый вероятный из отказов, и он
+                # ещё лечится повтором. Второй отказ — фолбэк на локаль, как раньше.
+                попытка = open_compact(compact, self.path)
+                if попытка is not None:
+                    with lock:
+                        stats["compact_cloud_retry"] += 1
             with lock:
-                stats["compact_routed" if попытка else "compact_fallback"] += 1
+                if попытка:
+                    # Маршрут в облако: по заголовку-маркеру (compact_routed_header) или по
+                    # запасному пути сигнатура+порог (compact_routed) — исходы взаимно исключают
+                    # друг друга: запрос едет в облако ровно по одному признаку.
+                    stats["compact_routed_header" if compact_by_header else "compact_routed"] += 1
+                else:
+                    stats["compact_fallback"] += 1
             if попытка:
                 conn, resp, первый = попытка
                 дамп = dump_request(compact, сессия, dict(
@@ -2349,6 +2642,13 @@ class Handler(BaseHTTPRequestHandler):
                 _preserve_failed("ответ", RuntimeError(f"непонятный Content-Type {вид!r}"))
             if вставка is not None:
                 выход = вставка.усвоить
+        # Нормализация usage — только локальный ответ: облачный (MiniMax) уже в семантике
+        # Anthropic, и его не трогаем. Ставится до реле: реле и его повтор идут через него.
+        нормализатор = None
+        if первый is None:
+            sse = "text/event-stream" in (resp.getheader("Content-Type") or "")
+            нормализатор = НормализаторUsage(выход, sse)
+            выход = нормализатор.усвоить
         # Предохранитель — только на потоке локальной модели: облако (автосжатие) не петляет,
         # а ответы-ошибки и не-SSE идут как раньше, байт в байт.
         реле = None
@@ -2357,6 +2657,7 @@ class Handler(BaseHTTPRequestHandler):
             реле = РелеПотока(выход, петли=LOOP_GUARD == "on",
                               детектор_мусора=ДетекторМусора() if JUNK_GUARD == "on" else None)
         итог_петли = {"петли": 0, "повторён": False, "conn": None}
+        сработка = None  # мета для дампа сработки предохранителя
         try:
             if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
                 prefill = time.monotonic() - начало
@@ -2376,14 +2677,25 @@ class Handler(BaseHTTPRequestHandler):
                     выход(chunk)
                 elif реле.усвоить(chunk):
                     break
+            if реле is not None and (реле.мусор or реле.петля):
+                # Мета — на момент сработки, а запись — в finally: диск не должен задерживать
+                # обрыв генерации, каждая лишняя доля секунды — токены впустую.
+                сработка = dict(
+                    path=self.path, guard="мусор" if реле.мусор else "петля",
+                    reason=(реле.детектор_мусора.причина if реле.мусор
+                            else " ".join(реле.детектор.петля or ())),
+                    block=реле.петля_в, usage=dict(usage_карточки),
+                    ttfbSeconds=None if prefill is None else round(prefill, 3))
             if реле is not None and реле.мусор:
-                self._после_мусора(реле, conn)
+                self._после_срыва("junk", реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None and реле.петля:
-                self._после_петли(реле, conn, body, headers, итог_петли)
+                self._после_петли(реле, conn, body, headers, сессия, итог_петли)
             elif реле is not None:
                 реле.дослать()
             if вставка is not None:
                 вставка.дослать()
+            if нормализатор is not None:
+                нормализатор.дослать()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -2391,6 +2703,8 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if итог_петли["conn"] is not None:
                 итог_петли["conn"].close()
+            if сработка is not None:
+                dump_guard(body, сессия, сработка)
             # Карточка «петля перехвачена»: blocks — сколько петель поймали (2 — и повтор
             # петлял, ответ усечён), resultBlocks — был ли повтор, thinkingBlocks — петля в
             # размышлениях. Поля общие с карточкой обрезки: ручка бэкенда одна.
@@ -2415,23 +2729,73 @@ class Handler(BaseHTTPRequestHandler):
                 событие = None
             conn.close()
 
-    def _после_петли(self, реле, conn, body, headers, итог):
-        """Петля поймана: гасим генерацию, закрываем блок и один раз повторяем запрос.
+    def _после_срыва(self, kind, реле, conn, body, headers, сессия, итог):
+        """Общий хвост после срыва (петля/мусор): гасим генерацию, закрываем блок и один раз
+        повторяем запрос — мимо испорченного prefix cache.
 
         Закрытие соединения — и есть остановка: vLLM снимает запрос по обрыву клиента, расход
-        GPU прекращается сразу. Поток повтора приклеивается к тому же ответу клиенту. Петля и
+        GPU прекращается сразу. Поток повтора приклеивается к тому же ответу клиенту. Срыв и
         в повторе (или повтор не удался) — пометка отдельным текстовым блоком и штатный хвост.
+
+        Повтор идёт с солью карантина (q-<сессия>-<ns>): vLLM не берёт для неё чужие блоки
+        prefix cache, а сессия и дальше ходит со своей солью (parse_body подставляет её в
+        каждый запрос). Петля дополнительно сдвигает сэмплинг (локальная стохастика); мусор —
+        нет (S0, факт 3). Повторный запрос, закрытие блока, пометка и штатный хвост — общие;
+        счётчики, логи и текст пометки различаются по виду срыва.
         """
+        петля = kind == "loop"
         conn.close()
-        итог["петли"] = 1
-        with lock:
-            stats["loops_detected"] += 1
-        print(f"петля в потоке ({реле.петля_в}, {реле.детектор.всего} слов): "
-              f"{' '.join(реле.детектор.петля or ())!r}", file=sys.stderr, flush=True)
+        if петля:
+            итог["петли"] = 1
+            with lock:
+                stats["loops_detected"] += 1
+            print(f"петля в потоке ({реле.петля_в}, {реле.детектор.всего} слов): "
+                  f"{' '.join(реле.детектор.петля or ())!r}", file=sys.stderr, flush=True)
+        else:
+            д = реле.детектор_мусора
+            with lock:
+                stats["junk_aborts"] += 1
+                stats["junk_words_max_ratio"] = round(д.доля, 3)
+            print(f"мусор в потоке ({д.всего} слов, {д.причина}) — ответ оборван",
+                  file=sys.stderr, flush=True)
         реле.закрыть_блок()
-        тело = retry_body(body) if LOOP_RETRY == "on" and body else None
+        # Повтор: петля — сдвиг сэмплинга (всегда, если LOOP_RETRY), мусор — только при
+        # карантине. Соль карантина (q-<сессия>-<ns>) — обоим: повтор уходит в чистое
+        # пространство, а сессия и дальше ходит со своей солью. Петля в уже засоленной
+        # сессии соль не меняет (берёт существующую); мусор — новую на каждый срыв.
+        повтор_вкл = (LOOP_RETRY if петля else CACHE_QUARANTINE) == "on"
+        тело = (retry_body(body) if петля else body) if повтор_вкл and body else None
+        if CACHE_QUARANTINE == "on" and body and тело is not None:
+            повтор_соль = None  # соль, которой сессия уже ходит (петля в засоленной сессии)
+            if петля and сессия:
+                # Петля: сессия уже ходит с солью — повтор берёт её, новую не выдаёт:
+                # ещё один полный префилл (~70 с на 95K) и брошенный KV прежней соли —
+                # то, чего избегали, убирая uuid4-соль.
+                with lock:
+                    соль = _карантин.get(сессия)
+                    if соль is None:
+                        соль = f"q-{сессия[:40]}-{time.time_ns()}"
+                        _карантин[сессия] = соль
+                    else:
+                        повтор_соль = соль
+                        stats["quarantine_loop_reused"] += 1
+            else:
+                # Мусор (или петля без заголовка сессии): новая соль на каждый срыв —
+                # испорченный кэш мог появиться и в уже засоленном пространстве.
+                соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
+                if сессия:
+                    with lock:
+                        _карантин[сессия] = соль
+            тело = salted_body(тело, соль)
+            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша "
+                  f"{'с прежней солью' if повтор_соль else 'с солью'}",
+                  file=sys.stderr, flush=True)
         причина = "повтор выключен" if тело is None else None
         if тело is not None:
+            if not петля:
+                # Мусор: перед повтором — пометка, что ответ пересчитывается заново.
+                реле.пометка("\n\n[прокси: модель выдала мусор из испорченного кэша — ответ "
+                             "пересчитывается заново]\n\n")
             заголовки = dict(headers, **{"Content-Length": str(len(тело))})
             c2 = итог["conn"] = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
             try:
@@ -2439,57 +2803,68 @@ class Handler(BaseHTTPRequestHandler):
                 r2 = c2.getresponse()
             except OSError as e:
                 r2, причина = None, f"upstream недоступен: {e!r}"
+                if not петля:
+                    # Мусор: текст master — оператор видит, почему повтор не ушёл.
+                    print(f"карантин: повтор не ушёл ({e!r})", file=sys.stderr, flush=True)
             if r2 is not None and r2.status != 200:
                 причина = f"повтор ответил HTTP {r2.status}"
+                if not петля:
+                    print(f"карантин: повтор ответил HTTP {r2.status}", file=sys.stderr, flush=True)
             elif r2 is not None:
-                итог["повторён"] = True
-                with lock:
-                    stats["loops_retried"] += 1
-                реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
+                if петля:
+                    итог["повторён"] = True
+                    with lock:
+                        stats["loops_retried"] += 1
+                    реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
+                else:
+                    реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True,
+                                       петли=LOOP_GUARD == "on", детектор_мусора=ДетекторМусора())
                 while True:
                     chunk = r2.read1(65536)
                     if not chunk or реле2.усвоить(chunk):
                         break
-                if not реле2.петля:
+                if not (реле2.мусор or реле2.петля):
                     реле2.дослать()
                     if not реле2.завершён and not реле2.сквозной:
                         # Повтор оборвался без message_stop — клиенту всё равно целое сообщение.
                         реле2.закрыть_блок()
                         реле2.хвост()
+                    if not петля:
+                        with lock:
+                            stats["quarantine_retries"] += 1
                     return
                 c2.close()
-                итог["петли"] = 2
-                with lock:
-                    stats["loops_detected"] += 1
-                print(f"петля и в повторе ({реле2.детектор.всего} слов) — ответ усечён",
-                      file=sys.stderr, flush=True)
+                if петля:
+                    итог["петли"] = 2
+                    with lock:
+                        stats["loops_detected"] += 1
+                    print(f"петля и в повторе ({реле2.детектор.всего} слов) — ответ усечён",
+                          file=sys.stderr, flush=True)
+                else:
+                    print("карантин: мусор или петля и в повторе — ответ оборван",
+                          file=sys.stderr, flush=True)
                 реле2.закрыть_блок()
                 реле = реле2
-        if причина:
-            print(f"петля: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
-        with lock:
-            stats["loops_truncated"] += 1
-        реле.пометка("\n\n[прокси: ответ усечён — модель зациклилась"
-                     + (", повтор запроса тоже" if итог["повторён"] else "") + "]")
+            if not петля:
+                # Повтор мусора не ушёл (не 200, обрыв, или мусор/петля и в повторе) — счётчик.
+                with lock:
+                    stats["quarantine_failed"] += 1
+        if петля:
+            if причина:
+                print(f"петля: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
+            with lock:
+                stats["loops_truncated"] += 1
+            реле.пометка("\n\n[прокси: ответ усечён — модель зациклилась"
+                         + (", повтор запроса тоже" if итог["повторён"] else "") + "]")
+        else:
+            if причина:
+                print(f"мусор: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
+            реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]")
         реле.хвост()
 
-    @staticmethod
-    def _после_мусора(реле, conn):
-        """Мусор пойман: гасим генерацию и обрываем ответ пометкой — без повтора.
-
-        Повтор того же тела попадёт в тот же prefix cache и выдаст тот же мусор (vLLM #60174).
-        """
-        conn.close()
-        д = реле.детектор_мусора
-        with lock:
-            stats["junk_aborts"] += 1
-            stats["junk_words_max_ratio"] = round(д.доля, 3)
-        print(f"мусор в потоке ({д.всего} слов, доля {д.доля:.2f} в окне {д.window}) — ответ оборван",
-              file=sys.stderr, flush=True)
-        реле.закрыть_блок()
-        реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор (vLLM #60174, DFlash2 + "
-                     "prefix cache). Повтори ход.]")
-        реле.хвост()
+    def _после_петли(self, реле, conn, body, headers, сессия, итог):
+        """Петля поймана: общий хвост срыва — повтор, сдвиг сэмплинга, соль карантина (S2a)."""
+        self._после_срыва("loop", реле, conn, body, headers, сессия, итог)
 
     def handle_one_request(self):
         try:
@@ -2527,10 +2902,11 @@ if __name__ == "__main__":
              else ", карточка сдвига границы выкл")
           + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "
              f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл")
-          + (f", предохранитель мусора вкл (доля {JUNK_RATIO} в {JUNK_WINDOW} словах)"
+          + (f", предохранитель мусора вкл (доля {JUNK_RATIO} в {JUNK_WINDOW} словах, цепочка {JUNK_RUN})"
              if JUNK_GUARD == "on" else ", предохранитель мусора выкл")
           + (f", прунинг картинок вкл (свежих {IMAGE_KEEP}, потолок {IMAGE_MAX})"
-             if IMAGE_PRUNE == "on" else ", прунинг картинок выкл"),
+             if IMAGE_PRUNE == "on" else ", прунинг картинок выкл")
+          + (f", дамп сработок -> {GUARD_DUMP_DIR} (свежих {GUARD_DUMP_KEEP})" if GUARD_DUMP_DIR else ""),
           flush=True)
     prepare_dump_dir()  # сообщит в журнал, включён дамп или каталог не годится
     srv.serve_forever()

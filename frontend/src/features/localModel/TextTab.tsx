@@ -16,7 +16,7 @@ import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelStats } from './api';
 import { formatSince, formatTps, formatUpdatedAt, gpuCountLabel, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
-import { GpuCard } from './GpuCard';
+import { HwLinkRow } from './HwLinkRow';
 import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
 
 // === Оболочка секции ===
@@ -40,13 +40,21 @@ function Card({ title, right, children }: { title: string; right?: React.ReactNo
   );
 }
 
-// «Движок {имя} это не сообщает» — вместо блока, чьё поле движок не отдал
-// (не рисовать нули: ноль — это значение, а не отсутствие данных)
+// Текст «не сообщает»: с именем движка — «Движок {имя} это не сообщает»,
+// без имени — «Движок этого не сообщает» (иначе было бы «Движок движок»).
+// Чистая функция — тестируется отдельно (TextTab.test.ts).
+export function notReportedText(engine: string | null | undefined): string {
+  const name = engine?.trim();
+  return name ? `Движок ${name} это не сообщает` : 'Движок этого не сообщает';
+}
+
+// «Движок {имя} это не сообщает» / «Движок этого не сообщает» — вместо блока,
+// чьё поле движок не отдал (не рисовать нули: ноль — это значение, а не
+// отсутствие данных).
 function NotReported({ data }: { data: LocalModelStats }) {
-  const engine = data.engine?.trim() || 'движок';
   return (
     <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
-      Движок {engine} это не сообщает
+      {notReportedText(data.engine)}
     </p>
   );
 }
@@ -169,50 +177,32 @@ function NowCard({ data }: { data: LocalModelStats }) {
 }
 
 // === «Скорость»: генерация и чтение промпта, ток/с на поток, «сейчас» (окно ~60 с) ===
-// Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат) +
-// «ускорение угадыванием ×N». Среднее и пик за окно графика — ТОЛЬКО у графика
-// (дубль под KPI убран: пик там был из чужой величины — genThroughput суммарно, а
-// среднее — на поток).
+// Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат).
+// Среднее и пик за окно графика — ТОЛЬКО у графика (дубль под KPI убран).
 function SpeedCard({ data }: { data: LocalModelStats }) {
   if (data.speed == null) {
     return <Card title="Скорость"><NotReported data={data} /></Card>;
   }
-  const speedup = data.speed.speculativeSpeedup;
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
         <Kpi
           value={formatTps(data.speed.genPerStream)}
-          label="генерация на одного агента, ток/с, за последнюю минуту"
+          label="генерация на запрос, ток/с, за последнюю минуту"
         />
         <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, ток/с, за последнюю минуту" />
-      </div>
-      <div style={{ marginTop: SP.sm }}>
-        <Kpi
-          value={speedup != null ? `×${speedup.toFixed(1)}` : '—'}
-          label="ускорение угадыванием"
-          note="во сколько раз черновая модель ускоряет генерацию. Упало — текст трудный для угадывания (числа, код)"
-        />
       </div>
     </Card>
   );
 }
 
-// === «Видеокарты»: карточка на каждую карту текстового стенда ===
-// gpus === null — блока нет вовсе (макет: карта медиа на другом узле сюда не
-// попадает); пустой массив — тоже нет.
-function GpusCard({ data }: { data: LocalModelStats }) {
-  if (data.gpus == null || data.gpus.length === 0) return null;
-  return (
-    <Card title="Видеокарты">
-      {/* auto-fit, а не auto-fill: одна карта тянется на всю ширину, несколько делят её поровну */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: SP.sm }}>
-        {data.gpus.map(g => (
-          <GpuCard key={g.index} gpu={g} total={data.gpus!.length} kind="text" />
-        ))}
-      </div>
-    </Card>
-  );
+// === «Видеокарты»: строка-ссылка на вкладку «Железо» (только админ) ===
+// GpuCard ушёл на «Железо» (GpuDetailCard); здесь — компактная строка-ссылка:
+// точка худшего уровня, «память 68° · 81°», плашки, «Железо →». Касание открывает
+// «Железо». hardware — только у админа (не-админу поля нет → строки нет, ADR-030).
+function GpusCard({ data, onOpenHardware }: { data: LocalModelStats; onOpenHardware: () => void }) {
+  if (!data.hardware || data.hardware.gpus.length === 0) return null;
+  return <HwLinkRow brief={data.hardware} onOpen={onOpenHardware} />;
 }
 
 // === «Нагрузка и кэш»: выработка (ток/с) + график «Кэш, %» + полоса «Вытеснения»
@@ -376,12 +366,13 @@ function TextTabSkeleton() {
 }
 
 // === Вкладка ===
-export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window, onWindowChange }: {
+export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpenHardware, window, onWindowChange }: {
   data: LocalModelStats | null;
   loading: boolean;
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
+  onOpenHardware: () => void;
   window: Window;
   onWindowChange: (w: Window) => void;
 }) {
@@ -405,8 +396,8 @@ export function TextTab({ data, loading, isMobile, onOpenChat, onRefetch, window
         <NowCard data={data} />
         <SpeedCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
-        {/* «Видеокарты» — детали железа (nvidia-smi), а не живая нагрузка */}
-        <GpusCard data={data} />
+        {/* «Видеокарты» — строка-ссылка на вкладку «Железо» (только админ) */}
+        <GpusCard data={data} onOpenHardware={onOpenHardware} />
         <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />
       </div>
     </>

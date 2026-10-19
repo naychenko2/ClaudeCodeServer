@@ -22,6 +22,12 @@
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
   </ItemGroup>
 
+  <!-- Золотые фикстуры FeatureProjector (12 фич из 4 чатов, задача 1f4e6a620): копируются
+       в output, тесты читают их по пути Fixtures/feature-runs/ из AppContext.BaseDirectory. -->
+  <ItemGroup>
+    <None Include="Fixtures/feature-runs/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />

@@ -1,5 +1,7 @@
 import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { readStoredToken, request } from './offline';
+import type { FeatureRun } from '../types/featureRun';
+import type { FeaturesIndex } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 
@@ -91,6 +93,8 @@ export interface LocalModelStats {
   // только projectId (и только для своих чатов) — имя проекта резолвит фронт из
   // стора проектов; для чужого чата подстроки нет вовсе.
   chats?: { own: boolean; sessionId?: string; projectId?: string; title?: string; phase: string; genTps?: number }[];
+  // Сводка «Железо» (только админ): для строки-ссылки «Видеокарты» и точки на вкладке.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   unsupported?: string[];
 }
 
@@ -104,6 +108,11 @@ export interface LocalModelStats {
 // gpus=null — данные карты медиа ещё не приходят с узла ComfyUI (шаг 31).
 export interface LocalModelMedia {
   configured: boolean;
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
+  // Сколько задач стоит перед текущим пользователем в очереди; null — сервер не сообщает
+  queueAhead?: number | null;
   comfy: {
     // working | busy | down | disabled
     status: 'working' | 'busy' | 'down' | 'disabled';
@@ -115,6 +124,8 @@ export interface LocalModelMedia {
   slots: { used: number; limit: number };
   // Видеокарта медиа; null до шага 31 (данные карты — с узла ComfyUI, не с хоста)
   gpus?: MediaGpu[] | null;
+  // Сводка «Железо» (только админ): строка-ссылка «Видеокарты» по картам с ролью media.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   // «Загружено сейчас»: имена моделей в памяти узла (basename, ≤ 96 символов);
   // null/отсутствует — узел не сообщает (маршрут /ccs/stats не установлен)
   loadedModels?: string[] | null;
@@ -236,6 +247,9 @@ export interface MediaHistoryRecord {
 // ленты), счётчики для меню фильтров (с учётом остальных активных фильтров).
 export interface MediaHistoryPage {
   records: MediaHistoryRecord[];
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
   nextCursor: string | null;
   counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
 }
@@ -677,6 +691,11 @@ export const api = {
       if (since != null) qs.set('since', String(since));
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);
     },
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;
+    // 403 не-админу, 404 без флага). window — окно графика «Температуры» (дефолт 15m).
+    // Тип ответа — в feature-слое (hardwareTypes.ts); type-only импорт, без цикла рантайма.
+    hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m') =>
+      request<import('../features/localModel/hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}`),
     // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
     lastTurn: (sessionId: string) =>
       request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`),
@@ -1376,9 +1395,21 @@ export const api = {
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
+    // в облегчённом списке); элементы ответа — облегчённые, нужны id совпавших
+    search: (q: string) => request<Task[]>(`/tasks?q=${encodeURIComponent(q)}`),
     // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
     listByPersona: (personaId: string) =>
       request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),
+    // Агрегаты фич чата (режим «Исполнение фичи»): готовые `FeatureRun` из бэка.
+    // sessionId — id сессии-чата; без него — все фичи владельца.
+    getFeatures: (sessionId?: string) =>
+      request<FeatureRun[]>(`/tasks/features${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
+    // Индекс фич (фасет «Фичи» и плашка в чате): строки фич + связи «чат × фича».
+    // projectId — область ответа; без него — все проекты владельца и чаты вне проектов.
+    // 503 при выключенной подсистеме Tasks (как getFeatures).
+    featuresIndex: (projectId?: string) =>
+      request<FeaturesIndex>(`/tasks/features/index${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

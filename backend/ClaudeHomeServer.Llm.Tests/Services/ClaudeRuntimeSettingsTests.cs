@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -92,5 +93,69 @@ public class ClaudeRuntimeSettingsTests
             json.GetProperty("syncClaudeAiSkills").GetBoolean().Should().BeFalse();
             json.GetProperty("syncClaudeAiPlugins").GetBoolean().Should().BeFalse();
         }
+    }
+
+    // Хук режет убийство процессов по имени: прод и дев-стенд — один бинарь, а в командной
+    // строке CLI-агентов лежит весь системный промпт (инциденты 28.09, 12.10, 16.10, 17.10)
+    private static (int Exit, string Err) RunKillHook(string command)
+    {
+        var json = Settings(browserEnabled: true).Json;
+        var hookCommand = json.GetProperty("hooks").GetProperty("PreToolUse")[0]
+            .GetProperty("hooks")[0].GetProperty("command").GetString()!;
+        var parts = hookCommand.Split(' ', 3);
+        var psi = new ProcessStartInfo(parts[0])
+        {
+            RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true,
+        };
+        psi.ArgumentList.Add(parts[1]);
+        psi.ArgumentList.Add(parts[2].Trim('"'));
+        using var proc = Process.Start(psi)!;
+        proc.StandardInput.Write(JsonSerializer.Serialize(new { tool_input = new { command } }));
+        proc.StandardInput.Close();
+        var err = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        return (proc.ExitCode, err);
+    }
+
+    [Fact]
+    public void ХукБлокируетУбийствоПроцессовПоИмени_НаЛинуксе()
+    {
+        if (OperatingSystem.IsWindows()) return; // на Windows хуки погашены целиком
+
+        var json = Settings(browserEnabled: true).Json;
+        json.GetProperty("hooks").GetProperty("PreToolUse")[0].GetProperty("matcher").GetString().Should().Be("Bash");
+
+        foreach (var cmd in new[]
+        {
+            "pkill -f ClaudeHomeServer",
+            "echo ok; pkill -f \"ClaudeHomeServer.dll\" 2>/dev/null",
+            "sudo killall dotnet",
+            "ps aux | grep ClaudeHomeServer | awk '{print $2}' | xargs kill -9",
+            "kill -9 $(pgrep -f ClaudeHomeServer)",
+            "kill `pgrep dotnet`",
+        })
+        {
+            var (exit, err) = RunKillHook(cmd);
+            exit.Should().Be(2, $"команда должна блокироваться: {cmd}");
+            err.Should().Contain("PID");
+        }
+    }
+
+    [Fact]
+    public void ХукПропускаетОбычныеКоманды_НаЛинуксе()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        foreach (var cmd in new[]
+        {
+            "kill 12345",
+            "kill -TERM $STAND_PID",
+            "grep -rn pkill docs/",
+            "git commit -m \"fix: запретить pkill по имени\"",
+            "ss -ltnp | grep :5000",
+            "git commit -F - <<'EOF'\nfix: запретить\nkill $(pgrep x) и pkill\nEOF",
+            "git commit -m \"первая строка\nkill $(pgrep x)\"",
+        })
+            RunKillHook(cmd).Exit.Should().Be(0, $"команда должна проходить: {cmd}");
     }
 }

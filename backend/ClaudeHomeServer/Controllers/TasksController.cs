@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
@@ -10,6 +11,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -37,7 +39,8 @@ public class ProjectTasksController(
     public IActionResult GetAll(string projectId)
     {
         if (OwnProject(projectId) is null) return NotFound();
-        return Ok(tasks.GetByProject(projectId));
+        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}
+        return Ok(tasks.GetByProject(projectId).Select(TaskListItem.From).ToList());
     }
 
     [HttpPost]
@@ -102,7 +105,11 @@ public class TasksController(
     // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
     // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
     // для задач не из заметки).
-    INoteTaskSync? noteSync = null) : ControllerBase
+    INoteTaskSync? noteSync = null,
+    // Агрегат фичи (режим «Исполнение фичи»): null, когда подсистема Tasks выключена
+    // гейтом Subsystems:tasks:Enabled — тогда GET /features отвечает честным 503, а не 500
+    // (правило отключаемости, ADR-014; образец — AgentDownloadsController).
+    FeatureProjector? features = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -293,7 +300,10 @@ public class TasksController(
                 t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 t.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 t.Labels.Any(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
-        return Ok(result.ToList());
+        // Фильтры (в т.ч. q по полному описанию) отработали на полных задачах; наружу уходит
+        // облегчённый элемент: без Description/ResultMarkdown (на проде это ~80% веса ответа).
+        // Полная карточка — GET /api/tasks/{taskId}.
+        return Ok(result.Select(TaskListItem.From).ToList());
     }
 
     [HttpGet("{taskId}")]
@@ -404,7 +414,68 @@ public class TasksController(
         if (wasDone != (updated.Status == TaskItemStatus.Done))
             await (noteSync?.SyncTaskToNoteAsync(UserId, updated) ?? Task.CompletedTask);
 
-        return Ok(updated);
+        // Мироринг MCP (TasksToolset.CompleteResponse): если ревью/проверку/финал фичи
+        // закрыли без вердикта, ответ несёт мягкое предупреждение (отдельное поле warning,
+        // не notes) — карточка фичи вердикт не покажет, а блокировать закрытие ради UI нельзя.
+        return WithWarning(updated);
+    }
+
+    // Карточка + мягкое warning (FeatureVerdict.Warning), если условие сработало. Единый путь
+    // сериализации: TaskItem → JsonObject теми же опциями, что MVC (camelCase + string-enum
+    // camelCase, relaxed-энкодер против двойного \u-экранирования) — один source of truth,
+    // warning (если есть) дописывается на верхнем уровне. Та же форма, что у MCP tasks_complete.
+    private ObjectResult WithWarning(TaskItem task)
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(task, FeatureJsonOptions))!.AsObject();
+        if (FeatureVerdict.Warning(task) is { } warning)
+            json["warning"] = warning;
+        return Ok(json);
+    }
+
+    // Опции сериализации TaskItem, совпадающие с MVC (AddJsonOptions: camelCase +
+    // JsonStringEnumConverter(CamelCase)). Relaxed-энкодер: кириллица не уходит в \uXXXX
+    // при пред-сериализации, иначе MVC переэкранировал бы её вторично.
+    private static readonly JsonSerializerOptions FeatureJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    // Агрегат фичи (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md):
+    // GET /api/tasks/features?sessionId=… — фичи чата (эпик + конвейер) с агрегатом каждой.
+    // Без sessionId — все фичи владельца. Выборка и подсчёт — только через FeatureProjector
+    // (без второго источника правды); [Authorize] + OwnerId из claim. Подсистема Tasks
+    // выключена (features == null) → честный 503, а не 500 (ADR-014).
+    [HttpGet("features")]
+    public IActionResult GetFeatures([FromQuery] string? sessionId = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Связь фичи с чатом: эпик через SourceSessionId/ExecutorLaunchedBySessionId (разрез §2:
+        // «фича переезжает за оркестратором»). sessionId — id сессии (GUID-строка).
+        var runs = sessionId is null
+            ? features.ProjectAll(UserId)
+            : features.ProjectForSession(sessionId, UserId);
+        return Ok(runs);
+    }
+
+    // Индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index?projectId=…): [Authorize],
+    // владелец из claim, только свои данные (GetByOwner). Сессии владельца — узкий снимок
+    // (FeatureIndexSession) из SessionManager: чужие/неизвестные id чатов в снимок не попадают
+    // (fail-closed). projectId — только сессии/фичи этого проекта (эпик в проекте ИЛИ собственный
+    // чат в проекте); без projectId — все проекты владельца. Подсистема Tasks выключена
+    // (features == null) → честный 503, а не 500 (ADR-014, как у GetFeatures).
+    [HttpGet("features/index")]
+    public IActionResult GetFeaturesIndex([FromQuery] string? projectId = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Сессии владельца → узкий снимок (id, taskId, projectId, archived). GetAllOwnedBy
+        // отдаёт только живые сессии владельца: чужие/удалённые id чатов в снимок не попадают.
+        var snapshot = sessions.GetAllOwnedBy(UserId)
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
+            .ToList();
+        return Ok(features.BuildIndex(UserId, snapshot, projectId));
     }
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
@@ -415,7 +486,8 @@ public class TasksController(
     // автономный цикл волн иначе невозможен, а лавину держит бюджет итерации (Э4).
     // Ход-реакция на доклад исполнителя запускать может: запрет снят решением владельца
     // (мешал и пользы не давал), цикл «доклад → запуск → доклад» останавливает «Стоп».
-    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AllowInTeamImplement = true)]
+    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AllowInTeamImplement = true,
+        AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);

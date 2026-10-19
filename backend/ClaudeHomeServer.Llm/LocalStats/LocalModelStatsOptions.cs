@@ -24,6 +24,10 @@ public sealed class LocalModelStatsOptions
     // TTL кэша снимка KV-кэша: при повторном запросе в пределах TTL не ходим в сеть.
     public TimeSpan GpuCacheTtl { get; set; } = TimeSpan.FromSeconds(2);
 
+    // Файл помощника ccs-gddr6 (температура памяти GDDR6X и hotspot видеокарт, root-служба).
+    // Путь по умолчанию — как в deploy/systemd/ccs-gddr6.service (RuntimeDirectory=ccs-gddr6).
+    public string Gddr6HelperFile { get; set; } = "/run/ccs-gddr6/temps.json";
+
     // Окно, за которое считаем дельту счётчика preemptions в снимке Current.
     public TimeSpan PreemptionsWindow { get; set; } = TimeSpan.FromMinutes(15);
 }

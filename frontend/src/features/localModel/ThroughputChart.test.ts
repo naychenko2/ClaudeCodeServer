@@ -118,12 +118,21 @@ describe('maxThroughputOf', () => {
   });
 });
 
-describe('niceAxisMax: «круглая» шкала (1, 2, 5 × 10ⁿ, не меньше 10)', () => {
+describe('niceAxisMax: «круглая» шкала (до 100 — 1, 2, 5; от 100 мельче; не меньше 10)', () => {
   it('0 → 10 (не 0: ось не схлопывается)', () => {
     expect(niceAxisMax(0)).toBe(10);
   });
   it('37 → 50 (ряд 1,2,5: 5×10=50 ≥ 37)', () => {
     expect(niceAxisMax(37)).toBe(50);
+  });
+  it('210 → 250, а не 500 (пик чуть выше 200 не раздувает ось вдвое)', () => {
+    expect(niceAxisMax(210)).toBe(250);
+  });
+  it('260 → 300', () => {
+    expect(niceAxisMax(260)).toBe(300);
+  });
+  it('101 → 150', () => {
+    expect(niceAxisMax(101)).toBe(150);
   });
   it('412 → 500', () => {
     expect(niceAxisMax(412)).toBe(500);
@@ -134,8 +143,9 @@ describe('niceAxisMax: «круглая» шкала (1, 2, 5 × 10ⁿ, не м�
   it('ровно 1000 → 1000', () => {
     expect(niceAxisMax(1000)).toBe(1000);
   });
-  it('1500 → 2000', () => {
-    expect(niceAxisMax(1500)).toBe(2000);
+  it('1500 → 1500, 1600 → 2000', () => {
+    expect(niceAxisMax(1500)).toBe(1500);
+    expect(niceAxisMax(1600)).toBe(2000);
   });
   it('1 → 10 (не меньше 10)', () => {
     expect(niceAxisMax(1)).toBe(10);
@@ -253,13 +263,14 @@ describe('buildIntervals: доля попаданий из СУММ приращ
     expect(intervals[0].kvUsage).toBe(0.8);
   });
 
-  it('выработка — среднее ненулевых; вытеснения — сумма', () => {
+  it('выработка = Σ genTokens / длина интервала; вытеснения — сумма', () => {
     const samples = [
-      sample({ t: 5_000, throughput: 100, running: 1, preemptions: 2 }),
-      sample({ t: 10_000, throughput: 200, running: 1, preemptions: 3 }),
+      sample({ t: 5_000, genTokens: 300, itlSeconds: 1, preemptions: 2 }),
+      sample({ t: 10_000, genTokens: 300, itlSeconds: 1, preemptions: 3 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].throughput).toBe(150);
+    // Σ genTokens = 600; интервал 30 с → 600/30 = 20
+    expect(intervals[0].throughput).toBeCloseTo(20, 6);
     expect(intervals[0].preemptions).toBe(5);
   });
 
@@ -276,9 +287,10 @@ describe('buildIntervals: доля попаданий из СУММ приращ
   });
 
   it('пустой интервал (точек нет) — null; интервалы не смешиваются', () => {
-    const samples = [sample({ t: 5_000, throughput: 100, running: 1, prefixHits: 10, prefixQueries: 20 })];
+    const samples = [sample({ t: 5_000, genTokens: 300, itlSeconds: 1, prefixHits: 10, prefixQueries: 20 })];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].throughput).toBe(100);
+    // interval 0 = 30 с; Σ genTokens = 300 → 300/30 = 10
+    expect(intervals[0].throughput).toBeCloseTo(10, 6);
     expect(intervals[0].prefix).toBeCloseTo(0.5, 6);
     // второй интервал пуст
     expect(intervals[1].throughput).toBeNull();
@@ -360,17 +372,18 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «На одного агента, ток/с» обновляется на hover', () => {
-  it('базовый: окно + среднее + кэш', () => {
+describe('tpChartAriaLabel: SVG «На запрос, ток/с» обновляется на hover', () => {
+  it('базовый: окно + кэш (среднее под графиком не дублируем)', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('На одного агента, ток/с за 15 минут');
-    expect(label).toContain('на агента в среднем 412 ток/с');
+    expect(label).toContain('На запрос, ток/с за 15 минут');
+    expect(label).toContain('кэш 87 %');
     expect(label).not.toContain('интервал');
+    expect(label).not.toContain('в среднем');
   });
-  it('hover: интервал со скоростью на одного агента', () => {
+  it('hover: интервал со скоростью на запрос', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('на одного агента 250 ток/с');
+    expect(label).toContain('на запрос 250 ток/с');
   });
   it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
     const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
@@ -569,7 +582,7 @@ describe('buildIntervals: кэш — несение при «не спрашив
   });
 });
 
-// === Вторая линия «на агента, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
+// === Вторая линия «на запрос, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
 // Мутации: «суммы → среднее долей» красит тест на расчёт; «null → 0» — на разрыв;
 // «max одной серии → max обеих» — на ось.
 
@@ -581,7 +594,7 @@ function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput
     preemptions: null, hasData: { prefix: false, ram: false }, timeShares };
 }
 
-describe('buildIntervals: скорость на агента из СУММ приращений', () => {
+describe('buildIntervals: скорость на запрос из СУММ приращений', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
 
   it('ΣgenTokens/ΣitlSeconds по точкам интервала (не среднее долей точек)', () => {
@@ -658,7 +671,7 @@ describe('maxSeriesOf: верх общей оси по максимуму ОБЕ
   });
 });
 
-describe('avgPerStreamOf: средняя на агента за окно', () => {
+describe('avgPerStreamOf: средняя на запрос за окно', () => {
   it('ΣgenTokens/ΣitlSeconds по всем точкам окна', () => {
     const samples = [
       sample({ t: 1, genTokens: 100, itlSeconds: 10 }),
@@ -688,8 +701,22 @@ describe('buildIntervals: скорость генерации и «выдано 
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
     // скорость генерации = 200/2 = 100 — паузы в знаменатель не входят
     expect(intervals[0].perStream).toBeCloseTo(100, 6);
-    // выдано стендом = среднее (40+0+0)/3 — паузы размывают (так и задумано)
-    expect(intervals[0].throughput).toBeCloseTo(40 / 3, 6);
+    // выдано стендом = Σ genTokens / 15 с = 200/15 ≈ 13.3 — паузы размывают (так и задумано)
+    expect(intervals[0].throughput).toBeCloseTo(200 / 15, 6);
+  });
+
+  it('один агент в простое: throughput интервала ≤ perStream (часть времени в декодировании не тратилась)', () => {
+    const samples = [
+      sample({ t: 0, genTokens: 100, itlSeconds: 2 }),    // 100 токенов за 2 с декодирования
+      sample({ t: 5000, genTokens: 0, itlSeconds: 0 }),    // простой
+      sample({ t: 10000, genTokens: 0, itlSeconds: 0 }),  // простой
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    // perStream = 100/2 = 50 (скорость в декодировании); throughput = 100/15 ≈ 6.7 (за весь интервал)
+    expect(intervals[0].perStream).toBeCloseTo(50, 6);
+    expect(intervals[0].throughput).toBeCloseTo(100 / 15, 6);
+    // «всего по стенду» за 15 с не превышает скорость в декодировании: агент простаивал
+    expect(intervals[0].throughput as number).toBeLessThanOrEqual(intervals[0].perStream as number);
   });
 
   it('два агента параллельно: выдано стендом выше скорости генерации на поток', () => {
@@ -711,16 +738,17 @@ describe('buildIntervals: скорость генерации и «выдано 
   });
 });
 
-describe('avgIssuedOf: «выдано стендом» за окно — среднее с простоем', () => {
-  it('нули простоя входят в среднее; null пропускается', () => {
+describe('avgIssuedOf: «выдано стендом» за окно — Σ genTokens / длина окна', () => {
+  it('Σ genTokens / (tMax − tMin); простой (genTokens=0) размывает, null не входит в сумму', () => {
     const samples = [
-      sample({ t: 1, throughput: 100 }),
-      sample({ t: 2, throughput: 0 }),
-      sample({ t: 3, throughput: null }),
+      sample({ t: 0, genTokens: 300 }),
+      sample({ t: 10_000, genTokens: 0 }),     // простой
+      sample({ t: 20_000, genTokens: null }),   // разрыв — не в сумму, но в длину окна
     ];
-    expect(avgIssuedOf(samples)).toBeCloseTo(50, 6);
+    // span = 20_000 − 0 = 20 с; Σ genTokens = 300 → 300/20 = 15
+    expect(avgIssuedOf(samples)).toBeCloseTo(15, 6);
   });
-  it('нет данных → null', () => {
+  it('нет точек с genTokens → null', () => {
     expect(avgIssuedOf([sample({ t: 1 })])).toBeNull();
   });
 });

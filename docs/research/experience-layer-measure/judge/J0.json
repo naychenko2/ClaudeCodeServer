@@ -1,0 +1,74 @@
+[
+  {
+    "target": "T046",
+    "total_tool_calls": 32,
+    "useful": [
+      {
+        "id": "E072",
+        "episode": "Исполнитель отдельно проверял, включён ли noUnusedLocals: `cat tsconfig.app.json | grep -A 2 \"noUnusedLocals\\|noUnusedParameters\"` (1 вызов), чтобы понять, ловит ли tsc мёртвые импорты.",
+        "why_not_in_brief": "Постановка говорит условно: «Если tsconfig включает noUnusedLocals: true» — факт и файл не названы.",
+        "est_saved_calls": 1
+      }
+    ],
+    "harmful": [],
+    "relevant_no_gain": ["E016", "E036", "E039", "E044", "E054", "E063", "E064"],
+    "note": "Ревью прошло без заметных спотыканий. Знание о мёртвом Rounds.tsx (E073) взято из самой цели и в пуле его нет. Мелкие потери из-за cwd (git diff/grep из frontend/) пул не покрывает."
+  },
+  {
+    "target": "T047",
+    "total_tool_calls": 132,
+    "useful": [],
+    "harmful": [
+      {
+        "id": "E014",
+        "why": "Утверждает, что mcp__dev__build и run_tests в worktree смотрят в master и новых файлов не видят. В цели оба инструмента нормально собирали и гоняли тесты в /home/an/Sources/ClaudeCodeServer-plugins. Запись увела бы на ручной Bash."
+      },
+      {
+        "id": "E020",
+        "why": "Пишет, что «mcp__dev__build привязан к основному дереву». В цели mcp__dev__build собирал worktree, ошибки указывали на пути worktree. Противоречит факту."
+      }
+    ],
+    "relevant_no_gain": ["E000", "E024", "E030", "E031", "E032", "E039", "E048", "E059", "E062", "E067", "E068", "E070", "E071"],
+    "note": "Основные потери: неверный путь BackupPaths/BackupRoundTripTests и DI PluginsRouteTests. Их покрывают E075/E076, но они извлечены из самой цели и в пул не входят. Сбой Edit с JSON к записям пула не относится."
+  },
+  {
+    "target": "T048",
+    "total_tool_calls": 6,
+    "useful": [],
+    "harmful": [],
+    "relevant_no_gain": [],
+    "note": "6 вызовов, сверка с proxy.py сразу. Экономить нечего: знание о прокси (E077) извлечено из этой цели, в пуле его нет."
+  },
+  {
+    "target": "T049",
+    "total_tool_calls": 29,
+    "useful": [],
+    "harmful": [],
+    "relevant_no_gain": ["E077"],
+    "note": "Главная потеря — пустой ответ из-за разбора только text_delta (~3 вызова) и поиск GUARD_DUMP_DIR. Это покрывают E078/E084, но они из этой и более поздней задачи и в пул не входят."
+  },
+  {
+    "target": "T054",
+    "total_tool_calls": 35,
+    "useful": [
+      {
+        "id": "E074",
+        "episode": "П.3 (риск EnvironmentName=Testing): ~14 вызовов find/grep/cat по appsettings. Из них 3 (cat Testing.json | grep kestrel, cat Production.json из bin и из ClaudeHomeServer) ушли на то, чтобы выяснить, что причина — Kestrel:Endpoints:Https в appsettings.Production.json.",
+        "why_not_in_brief": "В постановке есть фикс и гадание про прод-конфиг, но нет механизма: slim builder + Production.json с Https без UseKestrelHttpsConfiguration.",
+        "est_saved_calls": 3
+      }
+    ],
+    "harmful": [
+      {
+        "id": "E014",
+        "why": "Велит не использовать mcp__tests__run_tests/dev__build в worktree. В цели оба работали в ClaudeCodeServer-tests-by-module (9/9 e2e с фиксом из ветки, slnx 78/78). Запись противоречит и факту, и постановке."
+      },
+      {
+        "id": "E020",
+        "why": "«mcp__dev__build привязан к основному дереву» — в цели он собрал slnx worktree (78/78). Устарело."
+      }
+    ],
+    "relevant_no_gain": ["E001", "E006", "E012", "E017", "E018", "E034", "E041", "E051", "E055", "E069"],
+    "note": "Лишние шаги в основном на проверку прод-риска. Список тестов исполнитель посчитал одним grep -c по slnx и получил ожидаемое 15216, без спотыканий. Потеря ~1 вызова из-за cwd в backend/ не засчитана: подсказка в E017 побочная."
+  }
+]

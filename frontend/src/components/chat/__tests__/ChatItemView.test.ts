@@ -232,3 +232,19 @@ describe('ChatItemView — ветка tool_use: tasks_create / tasks_run_executo
     expect(html, 'строка инструмента рисуется').toContain('tasks_run_executor');
   });
 });
+describe('ChatItemView — work_loop_stopped: server_restart', () => {
+  const text = 'Сервер был перезапущен — продолжаю ход с того же места';
+
+  it('server_restart — инфо-пилюля с текстом сервера, без кнопок', () => {
+    const html = renderItem({ kind: 'work_loop_stopped', reason: 'server_restart', text });
+    expect(html).toContain(text);
+    expect(html, 'инфо-токены').toContain('var(--c-info-bg)');
+    expect(html, 'кнопок нет').not.toContain('<button');
+  });
+
+  it('team_restart остаётся нейтральной пилюлей', () => {
+    const html = renderItem({ kind: 'work_loop_stopped', reason: 'team_restart', text: 'Перезапуск штаба' });
+    expect(html).toContain('Перезапуск штаба');
+    expect(html).not.toContain('var(--c-info-bg)');
+  });
+});

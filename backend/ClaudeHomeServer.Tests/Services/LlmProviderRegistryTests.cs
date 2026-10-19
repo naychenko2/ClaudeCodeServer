@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -418,6 +419,45 @@ public class LlmProviderRegistryTests
         env.Should().ContainKey("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
             .WhoseValue.Should().Be("140000");
         LlmProviderRegistry.ProviderEnvKeys.Should().Contain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+    }
+
+    // Сторож на РЕАЛЬНЫЙ appsettings.json: рекомендации MiniMax для Claude Code (19.10.2026)
+    // обязаны доезжать до CLI — все слоты на M3.1, сжатие на 512K при ёмкости 1M, таймаут и
+    // тишина сети. Без него любую из ручек можно молча потерять правкой конфига
+    [Fact]
+    public void Конфиг_Minimax_РекомендацииВендораДоезжаютДоCLI()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        for (; dir is not null && path is null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json");
+            if (File.Exists(candidate)) path = candidate;
+        }
+        path.Should().NotBeNull();
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(path!)
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["LlmProviders:minimax:ApiKey"] = "mm-key",
+                ["ClaudeUserProfileDir"] = TestConfig.EmptyClaudeProfileDir(),
+            })
+            .Build();
+
+        const string m31 = "MiniMax-M3.1-Flash[1m]";
+        var env = new LlmProviderRegistry(config).BuildCliEnv(m31)!;
+
+        env["ANTHROPIC_MODEL"].Should().Be(m31);
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"].Should().Be(m31);
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"].Should().Be(m31);
+        env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be(m31);
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"].Should().Be("524288");
+        env["API_TIMEOUT_MS"].Should().Be("3000000");
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"].Should().Be("1");
+        config["LlmProviders:minimax:TierStrong"].Should().Be(m31);
+        config["LlmProviders:minimax:TierMedium"].Should().Be(m31);
+        config["LlmProviders:minimax:TierWeak"].Should().Be(m31);
     }
 
     [Fact]

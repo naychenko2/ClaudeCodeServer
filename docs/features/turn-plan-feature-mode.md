@@ -101,6 +101,75 @@
   | `accepted` | `withdrawn`; `running`, если задача стадии идёт; `null` — стадия без задач или без
   вердикта.
 
+## Контракт `GET /api/tasks/features/index?projectId=`
+
+Индекс «чат → фичи» для фасета «Фичи» в списке сессий (флаг `features-overview`); решение и
+отвергнутые варианты — [ADR-031](../adr/ADR-031-feature-as-dimension.md). Эндпоинт —
+[TasksController.GetFeaturesIndex](../../backend/ClaudeHomeServer/Controllers/TasksController.cs),
+DTO — [FeatureIndex.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureIndex.cs), расчёт —
+`FeatureProjector.BuildIndexCore` в [FeatureProjector.cs](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs),
+зеркало на фронте — [featureIndex.ts](../../frontend/src/types/featureIndex.ts).
+
+`[Authorize]`, владелец из claim, задачи — только `GetByOwner`. Подсистема `Tasks` выключена →
+`503 { error }`, как у `GetFeatures`. От фич-флагов эндпоинт не зависит. Контроллер передаёт
+проектору узкий снимок всех сессий владельца `FeatureIndexSession(Id, TaskId, ProjectId, Archived)`;
+id чата, которого нет в снимке (чужой, удалённый), наружу не уходит.
+
+**Область.** Без `projectId` — все проекты владельца и чаты вне проектов. С `projectId`:
+`features[]` — эпик в проекте **или** хотя бы один чат фичи в проекте; `chats` — только сессии
+этого проекта; `chatCount` считается в той же области. Фича, чей эпик удалён, не попадает в ответ
+целиком, и её членство в `chats` тоже.
+
+Ответ: `{ features: FeatureIndexRow[], chats: { [sessionId]: FeatureIndexChatEntry[] } }`.
+
+Поля строки фичи (`features[]`, порядок — `OrderRuns`, фронт не пересортировывает):
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `featureId` | string | id эпика |
+| `title` | string | название эпика |
+| `projectId` | string \| null | проект **эпика**; `null` — вне проектов |
+| `bucket` | `attention \| running \| idle \| closed` | группа; та же функция `Bucket`, что задаёт порядок |
+| `attention` | объект \| null | тревога; `null` — нет |
+| `rail` | сегмент[7] | `cut, plan, prod, review, qa, final, merge` по порядку |
+| `chips` | string[] | `open`, `waiting`, `stopped`, `merge`, `closed` |
+| `stepsAccepted`, `stepsTotal` | number | шаги: принятые (`Done`) / все |
+| `loops` | number | возвраты (`Verdicts.Loops`) |
+| `now0` | объект \| null | первая `InProgress`-задача; `null` — фича не идёт |
+| `lastActivityAt` | ISO \| null | максимум `CompletedAt`/`ClaudeStartedAt` |
+| `summary` | `{ mergedAt: ISO \| null, durationMinutes }` \| null | только у закрытой |
+| `keySessionId` | string \| null | ключевой чат; `null` — живых звеньев нет |
+| `keyArchived` | boolean | ключевой чат в архиве (остаётся ключевым) |
+| `keyProjectId` | string \| null | проект ключевого чата; `null` — вне проектов |
+| `chatCount` | number | чатов фичи в этом ответе, архивные включены |
+
+- `attention` — `{ kind: stopped | wait | merge, since: ISO | null, reason: string | null,
+  personaId: string | null, sessionId: string | null }`. `merge` — это `wait` с причиной «мерж»
+  из `FeatureRun.Attention`, маппинг на бэке (`AttentionOf`); у `merge` `reason = null`.
+  `sessionId` — `LinkedSessionId` задачи. `since` бывает `null`.
+- `rail[]` — `{ key, state: done | active | pending | absent, tone: run | loop | wait | stopped | null }`,
+  `FeatureStage` один в один. **У закрытой фичи** (`bucket = closed`) рельса нормализуется
+  (`RailOf`): всё, кроме `absent`, становится `done`, `tone = null` — иначе эпик, закрытый без
+  merge-задачи, давал бы `merge = active, tone = run`.
+- `chips` (`ChipsOf`): закрытая → `["closed"]`; иначе `"open"` плюс чип тревоги:
+  `stopped` → `stopped`, `wait` «мерж» → `merge`, явный `wait` → `waiting`.
+- `now0` — `{ personaId: string | null, stage: string, stepRef: string | null }`.
+- Ключевой чат (`KeyChain`/`KeySession`): первое живое звено цепочки `epic.SourceSessionId` →
+  `epic.ExecutorLaunchedBySessionId` → самый частый `ExecutorLaunchedBySessionId` дочерних задач
+  (при равенстве — меньший id) → `null`. Удалённый или чужой чат пропускается.
+
+Записи `chats[sessionId][]` — `{ featureId, kind, taskRole, stepRef, lane }`, на пару
+«чат × фича» одна запись с сильнейшим видом, порядок — по силе, при равенстве — по порядку фичи в
+`features[]`:
+
+- `curator` — чат завёл эпик (`epic.SourceSessionId`);
+- `orchestrator` — `ExecutorLaunchedBySessionId` эпика или дочерней задачи фичи;
+- `executor` — `Session.TaskId` → задача фичи или сам эпик; только у него заполнены `taskRole`,
+  `stepRef`, `lane` (поля задачи), у остальных — `null`.
+
+Вид `key` есть в типах и в шкале силы, но в Б3 в `chats` не отдаётся: ключевой чат берётся из
+`keySessionId` строки. `SourceSessionId` дочерних задач членством не считается.
+
 ## Правила
 
 - **Мерж `done`** — только по задаче `role=merge` со статусом `Done`. Финал зелёный, а merge-задачи

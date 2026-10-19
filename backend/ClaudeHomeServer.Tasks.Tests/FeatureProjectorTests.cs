@@ -766,6 +766,82 @@ public class FeatureProjectorTests
         runClosed.Summary.DurationMinutes.Should().Be(120, "2 часа от старта до закрытия");
     }
 
+    // ─── n4: mergedAt только у завершённой merge-задачи ──────────────────────────────────────
+
+    // Эпик закрыт (Done) БЕЗ merge-задачи → mergedAt = null (фронт: «закрыта», не «смержена»).
+    // Дефект n4: раньше сюда падал CompletedAt эпика → закрытая без мержа показывалась
+    // «смержена <дата закрытия эпика>».
+    [Fact]
+    public void Build_ЗакрытаБезМержа_MergedAtNull()
+    {
+        const string epicId = "epic-closed-no-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.Closed.Should().BeTrue("эпик Done — фича закрыта");
+        run.Summary.Should().NotBeNull("у закрытой фичи Summary есть");
+        run.Summary!.MergedAt.Should().BeNull(
+            "закрыта эпиком БЕЗ merge-задачи → mergedAt = null (не «смержена <дата эпика>»)");
+    }
+
+    // Эпик закрыт (Done) С завершённой merge-задачей → mergedAt = CompletedAt merge-задачи (как прежде).
+    [Fact]
+    public void Build_ЗакрытаСМержем_MergedAtКакПрежде()
+    {
+        const string epicId = "epic-closed-with-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 15, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, merge]);
+
+        run.Closed.Should().BeTrue();
+        run.Summary!.MergedAt.Should().Be(new DateTime(2026, 10, 18, 15, 0, 0),
+            "merge-задача Done → mergedAt = CompletedAt merge-задачи (не CompletedAt эпика)");
+    }
+
+    // Мутация к условию: вернуть старое поведение (mergedAt = epic.CompletedAt, когда мержа нет).
+    // Сломал: `: null` → `: epic.CompletedAt` → тест «ЗакрытаБезМержа_MergedAtNull» краснеет
+    // (mergedAt = CompletedAt эпика ≠ null). Без мутации зелёный.
+    [Fact]
+    public void Build_Мутация_ЗакрытаБезМержа_MergedAtNull()
+    {
+        const string epicId = "epic-mut-no-merge";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        // Мутация: если mergedAt = epic.CompletedAt (старое) → 12:00 ≠ null → краснеет.
+        run.Summary!.MergedAt.Should().BeNull(
+            "закрыта эпиком без мержа → mergedAt = null (мутация: epic.CompletedAt красит)");
+    }
+
     // ─── Б3: порядок фич (правило v2) ────────────────────────────────────────────────────────
 
     // Порядок на трёх фичах (ждёт · идёт · спокойная) + закрытая — последней.
@@ -811,6 +887,64 @@ public class FeatureProjectorTests
         ordered.Select(r => r.FeatureId).Should().Equal(
             new[] { "epic-a", "epic-b", "epic-c", "epic-d" },
             "1) ждёт (A) → 2) идёт (B) → 3) спокойная (C) → 4) закрытая (D)");
+    }
+
+    // Монотонность (план С0 §2): features[] в индексе идёт строго по группам
+    // attention → running → idle → closed. OrderRuns группирует по Bucket (единая точка
+    // правды), порядок групп фиксирован. Вход перемешан (не в порядке групп) — вывод обязан
+    // быть строго по группам. Мутация: OrderRuns расходитcя с Bucket (группа выбирается
+    // собственным условием, а не Bucket) → порядок групп в выводе ломается → тест краснеет.
+    [Fact]
+    public void OrderRuns_Монотонность_СтрогоПоГруппамBucket()
+    {
+        var t = new DateTime(2026, 10, 17);
+
+        // attention: InProgress-задача с AwaitingHumanSince (Attention «wait», не closed).
+        var epicA = new TaskItem { Id = "epic-a", Role = TaskRoles.Feature };
+        var waitA = new TaskItem
+        {
+            Id = "a1", FeatureId = "epic-a", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            AwaitingHumanSince = t.AddHours(8),
+        };
+        var runA = FeatureProjector.Build(epicA, [epicA, waitA]);
+
+        // running: InProgress, без Attention.
+        var epicR = new TaskItem { Id = "epic-r", Role = TaskRoles.Feature };
+        var runR = new TaskItem
+        {
+            Id = "r1", FeatureId = "epic-r", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = t.AddHours(9),
+        };
+        var runRunning = FeatureProjector.Build(epicR, [epicR, runR]);
+
+        // idle: только Todo, без Attention, не идёт.
+        var epicI = new TaskItem { Id = "epic-i", Role = TaskRoles.Feature };
+        var idleI = new TaskItem
+        {
+            Id = "i1", FeatureId = "epic-i", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Todo,
+        };
+        var runI = FeatureProjector.Build(epicI, [epicI, idleI]);
+
+        // closed: эпик Done.
+        var epicC = new TaskItem { Id = "epic-c", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var runC = FeatureProjector.Build(epicC, [epicC]);
+
+        // Sanity: четыре фичи — в четырёх разных bucket (иначе тест тривиален).
+        FeatureProjector.Bucket(runA).Should().Be("attention");
+        FeatureProjector.Bucket(runRunning).Should().Be("running");
+        FeatureProjector.Bucket(runI).Should().Be("idle");
+        FeatureProjector.Bucket(runC).Should().Be("closed");
+
+        // Вход перемешан (не в порядке групп) — вывод строго по группам.
+        var shuffled = new List<FeatureRun> { runI, runC, runRunning, runA };
+        var ordered = FeatureProjector.OrderRuns(shuffled);
+
+        ordered.Select(r => r.FeatureId).Should().Equal(
+            new[] { "epic-a", "epic-r", "epic-i", "epic-c" },
+            "features[] идёт строго по группам attention → running → idle → closed");
     }
 
     // Мутация (а): Now берёт одну задачу вместо списка.

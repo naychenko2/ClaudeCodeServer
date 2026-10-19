@@ -49,6 +49,10 @@ public static class FeatureFlagKeys
     // Режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»): карточка фичи в
     // чате + режим исполнения. Dark launch, выключено по умолчанию.
     public const string TurnPlanFeatureMode = "turn-plan-feature-mode";
+
+    // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
+    // Dark launch, выключено по умолчанию. Запись в каталоге — шаг Б3.
+    public const string FeaturesOverview = "features-overview";
 }
 
 /// <summary>
@@ -118,6 +122,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.TurnPlanFeatureMode,
             Title: "Режим «Исполнение фичи» в «Плане хода»",
             Description: "Включает карточку фичи в чате и режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»).",
+            Default: false,
+            Stage: "dev"),
+
+        // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
+        // Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.FeaturesOverview,
+            Title: "Обзор фич",
+            Description: "Фасет «Фичи» в списке сессий и плашка фичи в чате: какие фичи ведутся, их стадии и ключевые чаты.",
             Default: false,
             Stage: "dev"),
     ];

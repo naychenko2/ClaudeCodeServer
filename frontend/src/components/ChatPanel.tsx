@@ -59,6 +59,7 @@ import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, getNav, type NavSnapshot } from '../lib/nav';
 import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
 import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
+import { FeatureBanner } from './chat/feature/FeatureBanner';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -2808,6 +2809,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           </Button>
         </div>
       )}
+
+      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фича, её статус и
+          куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
+          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null). */}
+      <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса

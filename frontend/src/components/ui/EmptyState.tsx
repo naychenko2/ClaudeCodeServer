@@ -14,14 +14,19 @@ interface EmptyStateProps {
   // другим содержимым (напр. обучающие подсказки под пустой базой знаний), а не
   // один занимает всю панель. По умолчанию тянется на height:100% и центрируется.
   inline?: boolean
+  // m10: override'ы для «Фич пока нет» (макет .empty.sm): заголовок 14 (не FS.lg=16)
+  // и КРУГЛАЯ иконка (R.full, не R 16). Не задано — дефолтный вид compact/обычного.
+  titleSize?: number
+  iconRadius?: number | string
 }
 
-export function EmptyState({ icon, title, subtitle, action, compact, inline }: EmptyStateProps) {
+export function EmptyState({ icon, title, subtitle, action, compact, inline, titleSize, iconRadius }: EmptyStateProps) {
   return (
     <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
       textAlign:'center', padding: compact ? 24 : 40, gap:8, height: inline ? undefined : '100%' }}>
       <div style={{
-        width: compact ? 44 : 56, height: compact ? 44 : 56, borderRadius:16,
+        width: compact ? 44 : 56, height: compact ? 44 : 56,
+        borderRadius: iconRadius ?? 16,
         background: compact ? C.bgSelected : C.bgPanel, color: compact ? C.textMuted : C.accent,
         display:'flex', alignItems:'center', justifyContent:'center', marginBottom:8,
       }}>
@@ -30,7 +35,7 @@ export function EmptyState({ icon, title, subtitle, action, compact, inline }: E
       <div style={{
         fontFamily:FONT.serif, letterSpacing:'-0.01em',
         fontWeight: compact ? 700 : 500,
-        fontSize: compact ? FS.lg : 21,
+        fontSize: titleSize ?? (compact ? FS.lg : 21),
         color: compact ? C.textHeading : C.textPrimary,
       }}>{title}</div>
       {subtitle && <div style={{ fontSize: compact ? FS.sm : 13.5, color:C.textSecondary, lineHeight:1.5, maxWidth:240 }}>{subtitle}</div>}

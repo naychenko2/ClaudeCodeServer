@@ -459,6 +459,25 @@ public class TasksController(
         return Ok(runs);
     }
 
+    // Индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index?projectId=…): [Authorize],
+    // владелец из claim, только свои данные (GetByOwner). Сессии владельца — узкий снимок
+    // (FeatureIndexSession) из SessionManager: чужие/неизвестные id чатов в снимок не попадают
+    // (fail-closed). projectId — только сессии/фичи этого проекта (эпик в проекте ИЛИ собственный
+    // чат в проекте); без projectId — все проекты владельца. Подсистема Tasks выключена
+    // (features == null) → честный 503, а не 500 (ADR-014, как у GetFeatures).
+    [HttpGet("features/index")]
+    public IActionResult GetFeaturesIndex([FromQuery] string? projectId = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Сессии владельца → узкий снимок (id, taskId, projectId, archived). GetAllOwnedBy
+        // отдаёт только живые сессии владельца: чужие/удалённые id чатов в снимок не попадают.
+        var snapshot = sessions.GetAllOwnedBy(UserId)
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
+            .ToList();
+        return Ok(features.BuildIndex(UserId, snapshot, projectId));
+    }
+
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]
     // Анти-рекурсия: раньше жила в составе инструментов (env TASKS_EXECUTE), из-за чего

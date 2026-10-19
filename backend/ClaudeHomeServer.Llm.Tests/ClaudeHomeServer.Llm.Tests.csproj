@@ -53,4 +53,11 @@
     <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Сериализация коллекций: InotifyLeakRegressionTests меряет inotify-бюджет процесса,
+         а TurnFileWatcher*Tests/FileWatcherService открывают наблюдатели — параллельный прогон
+         выедал лимит. Глобально отключаем параллелизацию ТОЛЬКО для Llm.Tests (как в монолите). -->
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

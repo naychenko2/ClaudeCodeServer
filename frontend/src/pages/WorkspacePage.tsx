@@ -466,6 +466,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
 
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  // «Открыть в «Плагинах»» (карточка черновика в ленте/настройках): существующий способ —
+  // раскрыть диалог настроек проекта, где секция плагинов (тот же приём, что onOpenPlugins у PluginFrame).
+  useEffect(() => {
+    const open = () => setEditProjectOpen(true);
+    window.addEventListener('cc-open-plugins', open);
+    return () => window.removeEventListener('cc-open-plugins', open);
+  }, []);
   // Сохранение секции настроек (тумблер рук, MCP, устройство) — и диалогу, и проекту, который
   // видят чаты: иначе они держат прежний объект до перезагрузки страницы
   const handleProjectUpdated = useCallback((updated: Project) => {

@@ -72,6 +72,9 @@ const SUMMARY: PluginDraftSummary = {
   expiresAt: null,
 };
 
+// Установлен той же версией: карточка сворачивается в строку со ссылкой «Открыть в «Плагинах»»
+const SUMMARY_INSTALLED: PluginDraftSummary = { ...SUMMARY, installedSameVersion: true };
+
 // === Хелперы (типы нод fakeDom не экспортируются — через сигнатуру textNodes) ===
 type FNode = Parameters<typeof textNodes>[0];
 
@@ -161,5 +164,51 @@ describe('DraftsSection: «Принять…» (диалог согласия)',
     expect(textOf(body)).toContain('Сбой сети');
     expect(findButton(body, 'Установить'), 'диалог закрылся после ошибки').not.toBeNull();
     expect(vi.mocked(api.plugins.draftsList).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // consentRequired: false — диалог согласия НЕ открывается (права уже выданы/не нужны).
+  // Мутация «игнорировать consentRequired» (всегда открывать) краснит этот тест.
+  it('accept с consentRequired: false → диалог согласия не открывается', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftAccept).mockResolvedValue({
+      id: 'local-1/my-plugin',
+      version: '1.0.0',
+      sha256: 'abc12345',
+      source: 'upload:my-plugin',
+      enabled: true,
+      requested: ['notes:read'],
+      granted: ['notes:read'],
+      consentRequired: false,
+      newPermissions: [],
+      secrets: [],
+    });
+
+    const { container } = await renderSection();
+    // document.body живёт между тестами (uninstallFakeDom только в afterAll) —
+    // чистим leftover-диалог предыдущего теста, иначе «Установить» найдётся не от нашего accept
+    const body = (globalThis as { document: { body: FNode } }).document.body;
+    for (const c of [...body.childNodes]) body.removeChild(c);
+
+    const accept = findButton(container, 'Принять…');
+    expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { accept!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    // диалог не открыт: кнопки «Установить» согласия нет в body
+    expect(findButton(body, 'Установить'), 'диалог согласия открылся без consentRequired').toBeNull();
+  });
+});
+
+describe('DraftsSection: «Установлен» → ссылка «Открыть в «Плагинах»»', () => {
+  it('установлен той же версией → свёрнутая строка со ссылкой на экран плагинов', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_INSTALLED]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+
+    const { container, text } = await renderSection();
+    // бейдж «Установлен · 1.0.0» и ссылка «Открыть в «Плагинах»» на месте
+    expect(text()).toContain('Установлен');
+    expect(findButton(container, 'Открыть в «Плагинах»'), 'ссылка «Открыть в «Плагинах»» не найдена').not.toBeNull();
   });
 });

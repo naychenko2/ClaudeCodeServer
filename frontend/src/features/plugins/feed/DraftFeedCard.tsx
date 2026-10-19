@@ -121,6 +121,9 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
         onRestore={() => void handleRestore()}
         onEdit={handleEdit}
         onLoadDiff={() => { /* diff — по требованию в шторке; в ленте не грузим заранее */ }}
+        // «Открыть в «Плагинах»» (установлен): существующий способ — открыть настройки проекта
+        // (секция плагинов там); WorkspacePage слушает cc-open-plugins и раскрывает диалог.
+        onOpenInPlugins={() => window.dispatchEvent(new CustomEvent('cc-open-plugins', { detail: { projectId } }))}
       />
       {consent && (
         <ConsentDialog

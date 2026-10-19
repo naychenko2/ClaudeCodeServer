@@ -49,12 +49,13 @@ function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentDat
 }
 
 // Одна карточка черновика: данные из useDraftCard, действия — колбэки секции.
-function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit }: {
+function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit, onOpenInPlugins }: {
   summary: PluginDraftSummary;
   onAccept: (slug: string) => void;
   onReject: (slug: string) => void;
   onRestore: (slug: string) => void;
   onEdit: (reply: string) => void;
+  onOpenInPlugins?: () => void;
 }) {
   const { preview, diff, loading, error, justUpdated, loadDiff } = useDraftCard(summary);
   return (
@@ -70,6 +71,7 @@ function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit }: {
       onRestore={() => onRestore(summary.slug)}
       onEdit={onEdit}
       onLoadDiff={loadDiff}
+      onOpenInPlugins={onOpenInPlugins}
     />
   );
 }
@@ -181,6 +183,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
             onReject={handleReject}
             onRestore={handleRestore}
             onEdit={r => onEdit?.(r)}
+            onOpenInPlugins={() => window.dispatchEvent(new CustomEvent('cc-open-plugins', { detail: { project } }))}
           />
         ))
       )}

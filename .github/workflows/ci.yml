@@ -33,24 +33,24 @@ jobs:
       # Список кодов, выведенных из-под гейта (NuGet-предупреждения, зависящие от
       # сети и внешних advisory), — в свойстве WarningsNotAsErrors там же, в props.
       #
-      # -p:NoWarn=NU1903;CA1822;CA1805;CS1591;CA2255 — точечное исключение из-под гейта:
+      # NoWarn: "NU1903" — точечное исключение из-под гейта:
       #
       # NU1903 (NuGet audit, high-severity): restore-таск NuGet (SDK 10.0.112) НЕ
       # применяет WarningsNotAsErrors к audit-предупреждениям, так что под -warnaserror
       # NU1903 становится ошибкой; единственный способ не превращать его в ошибку —
-      # NoWarn. Держим флагом на ЭТОЙ команде, а не в общем props: (1) в локальной
-      # dev-сборке (без -warnaserror) NU1903 остаётся видимым warning — уязвимости
-      # светятся; (2) решение явно в workflow, а не спрятано в общем файле; (3)
-      # глушим только high-severity — NU1901/NU1902/NU1904 в CI по-прежнему видны.
+      # NoWarn. Держим env-переменной на ЭТОЙ команде, а не в общем props: (1) в
+      # локальной dev-сборке (без -warnaserror) NU1903 остаётся видимым warning —
+      # уязвимости светятся; (2) решение явно в workflow, а не спрятано в общем файле;
+      # (3) глушим только high-severity — NU1901/NU1902/NU1904 в CI по-прежнему видны.
       #
-      # CA1822/CA1805/CS1591 (HandsBridge) и CA2255 (TestKit): -p:NoWarn= задаёт
-      # NoWarn как ГЛОБАЛЬНОЕ свойство MSBuild, которое перебивает per-project
-      # <NoWarn>$(NoWarn);…</NoWarn> в .csproj. Без этих кодов в флаге per-project
-      # подавления слетают, и под -warnaserror сборка падает. В dev-сборке (без
-      # -warnaserror) все предупреждения — включая NuGet audit — остаются видимыми.
+      # Env, а не -p:NoWarn=: -p: задаёт ГЛОБАЛЬНОЕ свойство MSBuild, которое перебивает
+      # per-project <NoWarn>$(NoWarn);…</NoWarn> в .csproj (и не умеет list-value:
+      # ; = разделитель свойств). Env-переменная — обычное свойство, поэтому per-project
+      # подавления (CA1822/CA1805/CS1591/CA2255) дописываются сами и дублировать их
+      # в CI-флаге не нужно.
       - name: Build
         env:
-          NoWarn: "NU1903;CA1822;CA1805;CS1591;CA2255"
+          NoWarn: "NU1903"
         run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
       # Сторож кросс-сборки агента устройства (agent-distribution AD-1): выкатка собирает
       # win-x64 на Linux, и мост ConPTY обязан ехать в тот же каталог. Условие в csproj

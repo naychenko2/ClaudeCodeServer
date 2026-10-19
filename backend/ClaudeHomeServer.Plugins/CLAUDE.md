@@ -63,6 +63,50 @@ allow-list — и превышение лимитов → отказ с тем �
 5. **Нет `_drafts` → не падает.** Корня `data/plugins` нет при старте — `Start()` молчит;
    создание каталогов подхватывает сам примитив (авто-подписка на новые каталоги).
 
+## REST черновиков: список, предпросмотр, «Принять» (шаг 4.3a, ADR-031)
+
+`PluginDraftsController` (маршрут `/api/plugins/drafts`, `[Authorize]`): человек просматривает
+черновик агента и «Принимает» его. Гейты — как у `PluginsController` (подсистема выключена → 503,
+`plugins-mvp` off → 403) **плюс** `plugins-build-yourself` off → 403. На ВСЕХ ручках: сервисный
+JWT (`typ=svc`) → 403 (черновик собирает агент через MCP, принимает человек), чужой/
+несуществующий черновик → 404.
+
+- **`GET /api/plugins/drafts`** — список черновиков владельца. Массив сводок
+  (`PluginDraftSummary`; ключи PascalCase — тип без `[JsonPropertyName]`):
+  ```json
+  [{ "Slug": "pkg", "Id": "local-a/pkg", "Version": "1.0.0",
+     "UpdatedAt": "2026-10-19T05:24:56Z", "Problems": 0, "InstalledSameVersion": false }]
+  ```
+  `Problems` — число проблем последней проверки (валидатор пакета, тот же, что при установке);
+  `InstalledSameVersion` — есть ли запись `installed.json` с тем же `Id`+`Version`.
+
+- **`GET /api/plugins/drafts/{slug}/preview`** — предпросмотр; ответ = `PluginDraftService.Preview`
+  (тот же, что у `draft_preview` для агента; `PluginDraftPreview`, PascalCase):
+  ```json
+  { "Slug": "pkg", "Name": "pkg", "Version": "1.0.0",
+    "Panels": [], "Commands": [], "Skills": ["skills/a"],
+    "RequestedPermissions": ["notes:read"],
+    "Secrets": [{ "Name": "LINEAR_TOKEN", "Required": true }],
+    "Files": [{ "Path": "ccs-plugin.json", "IsDir": false, "Size": 217 }],
+    "Validation": { "IsValid": true, "Problems": [] } }
+  ```
+
+- **`POST /api/plugins/drafts/{slug}/accept`** — принять: установка по метке `draft:<slug>`
+  (`PluginInstaller` — единственный арбитр: валидация, no-op по совпавшему sha, 409 при смене
+  пакета). Права НЕ выдаёт: первая установка → `granted: []`; обновление →
+  `granted = старые ∩ новые запрошенные`. Статусы: 400 (проблемы валидатора, `problems` — список),
+  409 (та же `id`+`version`, другой sha — «поднимите версию»), 200 (установлено / no-op). Ответ
+  (анонимный объект, ключи camelCase):
+  ```json
+  { "id": "local-a/pkg", "version": "2.0.0", "sha256": "…", "source": "draft:pkg",
+    "enabled": true, "requested": ["notes:read", "net:api.linear.app"],
+    "granted": ["notes:read"], "consentRequired": true, "newPermissions": ["net:api.linear.app"],
+    "secrets": [{ "name": "LINEAR_TOKEN", "set": true, "updatedAt": "2026-10-19T05:24:56Z" }] }
+  ```
+  `consentRequired: true` + `newPermissions` — только если обновление добавило новые запрошенные
+  права (человек должен их одобрить через `grant`); заданные секреты прошлой версии сохраняются;
+  черновик после успеха НЕ удаляется (агент может править дальше).
+
 ## Инварианты
 
 1. **Per-owner изоляция.** Пакеты, установки, черновики, права и секреты ключуются

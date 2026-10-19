@@ -571,6 +571,19 @@ public class Session
     // (ReleaseWorktreeGraph) — дерево делят другие чаты. Аддитивное поле с дефолтом: старые записи
     // sessions.json читаются штатно, BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths).
     public bool WorktreeOwned { get; set; }
+    // Момент, когда ход был прерван graceful shutdown сервера (KillAllProcesses):
+    // статус был Working, адаптер диспозен, но result не пришёл. null — ход не
+    // прерван рестартом (или сессия не была Working на момент shutdown).
+    // Персистится в sessions.json: после рестарта LoadSessions использует это поле
+    // как признак «кандидат на auto-resume» (помимо исходного Working).
+    // Аддитивное nullable-поле: старые записи читаются штатно, BackupSchema.Version
+    // не двигается.
+    public DateTime? ShutdownInterruptedAt { get; set; }
+    // Счётчик попыток auto-resume после прерывания: растёт при каждом запуске
+    // resume-цикла, сбрасывается на успешный result хода. Сторож crash-loop:
+    // при превышении порога (в B2) ход не перезапускается. Аддитивное int-поле
+    // с дефолтом 0: старые записи читаются штатно.
+    public int RestartResumeAttempts { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Теги сессии (из реестра проекта) — per-owner изоляция

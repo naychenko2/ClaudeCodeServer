@@ -122,4 +122,15 @@ public class PluginStore
             return result;
         }
     }
+
+    // Критическая секция на lock-е стора: сериализует операции, которые гоняются за одним и тем
+    // же файлом/каталогом (например, move пакета при параллельной установке того же id).
+    // <paramref name="action"/> выполняется под тем же <c>_lock</c>, что Load/Save/Update.
+    public void RunExclusive(Action action)
+    {
+        lock (_lock)
+        {
+            action();
+        }
+    }
 }

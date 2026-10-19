@@ -175,6 +175,51 @@ public class PluginDraftService
             new PluginDraftValidation(validation.IsValid, validation.Problems.Select(p => new PluginDraftProblem(p.Code, p.Message)).ToList()));
     }
 
+    // ── draft_list (REST, шаг 4.3a) ───────────────────────────────────────────
+    // Список черновиков владельца: slug, id, версия, время изменения, число проблем последней
+    // проверки, признак «установлена такая же версия». Валидатор — тот же (считаем проблемы),
+    // id/version — из манифеста, время — max mtime файлов черновика, «такая же версия» —
+    // сверка id+version с записями installed.json.
+    public List<PluginDraftSummary> List(string ownerId)
+    {
+        var root = SafePath.Join(_store.OwnerRoot(ownerId), PluginStore.DraftsDirName);
+        if (!Directory.Exists(root)) return [];
+        var installed = _store.LoadInstalled(ownerId);
+        var result = new List<PluginDraftSummary>();
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            var slug = Path.GetFileName(dir);
+            var (manifest, _) = PluginInstaller.ReadManifest(dir);
+            var id = manifest?.Id ?? "";
+            var version = manifest?.Version ?? TemplateVersion;
+            var validation = _validator.Validate(dir);
+            result.Add(new PluginDraftSummary(
+                slug,
+                id,
+                version,
+                MaxFileMtimeUtc(dir),
+                validation.Problems.Count,
+                installed.Any(r => r.Id == id && r.Version == version)));
+        }
+        return result;
+    }
+
+    // Время изменения черновика = max LastWriteTimeUtc всех файлов (рекурсивно); нет файлов → MinValue.
+    private static DateTime MaxFileMtimeUtc(string dir)
+    {
+        var max = DateTime.MinValue;
+        foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+        {
+            try
+            {
+                var t = new FileInfo(file).LastWriteTimeUtc;
+                if (t > max) max = t;
+            }
+            catch (IOException) { }
+        }
+        return max;
+    }
+
     // Дерево файлов черновика (рекурсивно): каталоги с «/» и размером 0, файлы с размером.
     // <paramref name="root"/> — корень черновика (для относительных путей), <paramref name="current"/> — текущий.
     private static void AddTree(string root, string current, List<PluginDraftFile> files)
@@ -329,6 +374,16 @@ public sealed class PluginDraftPreview
         Files = files; Validation = validation;
     }
 }
+
+// Сводка черновика для списка (REST, шаг 4.3a): slug, id, версия, время изменения,
+// число проблем последней проверки, признак «установлена такая же версия».
+public sealed record PluginDraftSummary(
+    string Slug,
+    string Id,
+    string Version,
+    DateTime UpdatedAt,
+    int Problems,
+    bool InstalledSameVersion);
 
 public sealed record PluginDraftPanel(string Id, string Slot, string Title);
 public sealed record PluginDraftSecret(string Name, bool Required);

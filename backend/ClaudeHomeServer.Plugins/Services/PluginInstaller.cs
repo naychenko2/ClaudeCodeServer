@@ -121,9 +121,14 @@ public class PluginInstaller
 
             // Атомарная замена: удалить старый, переместить копию. Родитель target
             // (packages/{id}) создаём явно: staging лежит в packages/, а не в packages/{id}/.
-            if (Directory.Exists(targetDir)) Directory.Delete(targetDir, recursive: true);
-            Directory.CreateDirectory(Path.GetDirectoryName(targetDir)!);
-            Directory.Move(stagingDir, targetDir);
+            // RunExclusive: delete+move под lock-ем стора — два параллельных accept одного id
+            // не гоняются за targetDir (иначе Directory.Move → IOException «Directory not empty»).
+            _store.RunExclusive(() =>
+            {
+                if (Directory.Exists(targetDir)) Directory.Delete(targetDir, recursive: true);
+                Directory.CreateDirectory(Path.GetDirectoryName(targetDir)!);
+                Directory.Move(stagingDir, targetDir);
+            });
         }
         finally
         {

@@ -81,6 +81,54 @@ public class PluginPackageValidator
     /// </summary>
     public PluginPackageValidationResult Validate(string packageRoot)
     {
+        // Файловые проверки (allow/deny, symlink, лимиты, нативный манифест, name==slug, content).
+        var (problems, files, limitHit) = ValidateFiles(packageRoot);
+
+        // M9: хеш — только валидного пакета (нет проблем), до лимита (limitHit → null).
+        // Невалидный пакет хеш не несёт: sha256 = null.
+        var sha256 = limitHit || problems.Count > 0 ? null : ComputeSha256(files);
+        return new PluginPackageValidationResult(
+            problems.Count == 0, problems, sha256, files.Count);
+    }
+
+    /// <summary>
+    /// Полная валидация пакета: файловые проверки (<see cref="Validate"/>) + структурная
+    /// валидация манифеста (<see cref="ClaudeHomeServer.Models.PluginManifest.Validate"/>:
+    /// <c>no-contribution</c>, <c>unknown-permission</c>, required secrets). Единый арбитр:
+    /// установка (<see cref="PluginInstaller"/>) и черновик (<see cref="PluginDraftService"/>)
+    /// зовут этот метод, чтобы коды проблем совпадали 1:1 (инвариант «Валидатор пакета —
+    /// единственный арбитр»). Манифест читаем ТОЛЬКО если файловая валидация прошла (нет
+    /// файловых проблем): иначе symlink-манифест (no-symlink) не дойдёт до чтения — тот же
+    /// порядок «read после validate», что в <see cref="PluginInstaller"/>.
+    /// </summary>
+    public PluginPackageValidationResult ValidateFull(string packageRoot)
+    {
+        var (problems, files, limitHit) = ValidateFiles(packageRoot);
+
+        // Манифестная валидация — та же, что в установщике: ccs-plugin.json → модель →
+        // PluginManifest.Validate (no-contribution / unknown-permission / required secrets).
+        if (problems.Count == 0)
+        {
+            var (manifest, _) = PluginInstaller.ReadManifest(packageRoot);
+            if (manifest is not null)
+                foreach (var p in manifest.Validate().Problems)
+                    problems.Add(new PluginPackageProblem(p.Code, p.Message));
+        }
+
+        var sha256 = limitHit || problems.Count > 0 ? null : ComputeSha256(files);
+        return new PluginPackageValidationResult(
+            problems.Count == 0, problems, sha256, files.Count);
+    }
+
+    // Файловые проверки пакета (C4+M9+minor8): <paramref name="current"/> — текущий каталог,
+    // <paramref name="root"/> — корень пакета (для относительных путей).
+    //   * symlink-каталог (ReparsePoint) → no-symlink, внутрь не заходить (C4);
+    //   * каталог: лимит числа каталогов (minor 8, прерывает обход);
+    //   * файл: лимиты (прерывают обход) + size + IsSymlink + EscapesRoot + deny + allow + size;
+    //   * обычные подкаталоги — рекурсия.
+    // Возвращает (проблемы, файлы, limitHit) — для Validate (только файлы) и ValidateFull (+ манифест).
+    private (List<PluginPackageProblem> Problems, List<PackageFile> Files, bool LimitHit) ValidateFiles(string packageRoot)
+    {
         var problems = new List<PluginPackageProblem>();
         var files = new List<PackageFile>();
         long totalSize = 0;
@@ -107,11 +155,7 @@ public class PluginPackageValidator
         // name != slug → привязка указывает в никуда.
         CheckNameEqualsSlug(raws, problems);
 
-        // M9: хеш — только валидного пакета (нет проблем), до лимита (limitHit → null).
-        // Невалидный пакет хеш не несёт: sha256 = null.
-        var sha256 = limitHit || problems.Count > 0 ? null : ComputeSha256(files);
-        return new PluginPackageValidationResult(
-            problems.Count == 0, problems, sha256, files.Count);
+        return (problems, files, limitHit);
     }
 
     // Своя рекурсия (C4+M9+minor8): <paramref name="current"/> — текущий каталог,

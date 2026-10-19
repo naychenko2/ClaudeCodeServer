@@ -71,8 +71,10 @@ public class PluginInstaller
             // 1) Валидация КОПИИ (staging) — ДО чтения манифеста: symlink-манифест
             // (ccs-plugin.json/.claude-plugin/plugin.json → чужой файл) отбивается no-symlink валидатором,
             // и JsonException с куском содержимого чужого файла не уходит в ответ 400
-            // (non-blocker: leak через symlink manifest). sha256 — того, что будет перемещено.
-            var validation = _validator.Validate(stagingDir);
+            // (non-blocker: leak через symlink manifest). ValidateFull — единый арбитр с
+            // черновиком: файловые проверки + манифест (no-contribution/unknown-permission),
+            // коды 1:1. sha256 — того, что будет перемещено.
+            var validation = _validator.ValidateFull(stagingDir);
             if (!validation.IsValid)
                 return InstallResult.FailValidation(validation.Problems);
             sha256 = validation.Sha256!;
@@ -96,14 +98,10 @@ public class PluginInstaller
             id = m.Id;
             version = m.Version;
 
-            // manifest.Validate(): неизвестное право / нет вклада → 400, и пакет ещё не
-            // перемещён (раньше валидировался только в grant; установка могла принять битый
-            // манифест, а проверка после Move дала бы «половинную» установку).
-            var manifestValidation = m.Validate();
-            if (!manifestValidation.IsValid)
-                return InstallResult.FailValidation(manifestValidation.Problems
-                    .Select(p => new PluginPackageProblem(p.Code, p.Message)).ToList());
-
+            // manifest.Validate() (no-contribution/unknown-permission) — в ValidateFull (шаг 1):
+            // единый арбитр с черновиком, пакет ещё не перемещён (раньше валидировался отдельно
+            // после чтения; установка могла принять битый манифест, а проверка после Move дала бы
+            // «половинную» установку).
             manifest = m;
 
             var targetDir = _store.PackageDir(ownerId, id, version);

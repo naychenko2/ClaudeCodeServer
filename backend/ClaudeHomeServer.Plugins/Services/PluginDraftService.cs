@@ -163,14 +163,15 @@ public class PluginDraftService
     }
 
     // ── draft_validate ─────────────────────────────────────────────────────────
-    // Валидатор пакета (тот же код, что при установке) по корню черновика.
+    // Валидатор пакета (тот же арбитр, что при установке: файлы + манифест) по корню
+    // черновика. ValidateFull — одна реализация с PluginInstaller: коды проблем 1:1.
     public PluginPackageValidationResult Validate(string ownerId, string slug)
     {
         if (DraftDir(ownerId, slug) is not { } dir)
             throw new ArgumentException($"Недопустимый slug: {slug}", nameof(slug));
         if (!Directory.Exists(dir))
             throw new FileNotFoundException($"Черновик {slug} не найден", nameof(slug));
-        return _validator.Validate(dir);
+        return _validator.ValidateFull(dir);
     }
 
     // ── draft_preview ──────────────────────────────────────────────────────────
@@ -186,7 +187,7 @@ public class PluginDraftService
 
         var manifest = ReadManifest(dir);
         var files = new List<PluginDraftFile>();
-        var validation = _validator.Validate(dir);
+        var validation = _validator.ValidateFull(dir);
         AddTree(dir, dir, files);
         files.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
 
@@ -225,7 +226,7 @@ public class PluginDraftService
                 var (manifest, _) = PluginInstaller.ReadManifest(dir);
                 var id = manifest?.Id ?? "";
                 var version = manifest?.Version ?? TemplateVersion;
-                var validation = _validator.Validate(dir);
+                var validation = _validator.ValidateFull(dir);
                 result.Add(new PluginDraftSummary(
                     slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),
@@ -253,7 +254,7 @@ public class PluginDraftService
                 var (manifest, _) = PluginInstaller.ReadManifest(dir);
                 var id = manifest?.Id ?? "";
                 var version = manifest?.Version ?? TemplateVersion;
-                var validation = _validator.Validate(dir);
+                var validation = _validator.ValidateFull(dir);
                 result.Add(new PluginDraftSummary(
                     slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),

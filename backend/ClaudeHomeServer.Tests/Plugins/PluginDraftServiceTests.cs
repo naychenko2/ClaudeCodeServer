@@ -387,14 +387,94 @@ public class PluginDraftServiceTests : IDisposable
         result.Code.Should().Be("not-found");
     }
 
-    // ── draft_validate: шаблон проходит без проблем ────────────────────────────
+    // ── draft_validate: единый арбитр с установкой (ValidateFull: файлы + манифест) ─────
+    // Мутация (критерий): убрать общий вызов ValidateFull (вернуть _validator.Validate) →
+    // манифестные коды (no-contribution/unknown-permission) исчезают из проверки черновика →
+    // тесты ниже краснеют.
 
+    // Шаблон из Create: contributes пуст → no-contribution (тот же код, что при установке).
+    // Раньше (до фикса) шаблон проходил валидацию «без проблем», а установка падала no-contribution.
     [Fact]
-    public void Validate_Шаблон_БезПроблем()
+    public void Validate_Шаблон_NoContribution()
     {
         _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
         var validation = _service.Validate(Owner, "my-plugin");
-        validation.IsValid.Should().BeTrue($"шаблон обязан проходить валидацию: {string.Join("; ", validation.Problems)}");
+        validation.IsValid.Should().BeFalse("шаблон без вклада → no-contribution");
+        validation.Problems.Should().Contain(p => p.Code == "no-contribution");
+    }
+
+    // Черновик с вкладом (skill) и неизвестным правом → unknown-permission (тот же код, что
+    // при установке). Манифест переписываем через WriteFile (разрешённые поля id/name/version/
+    // contributes/permissions → deny-manifest-field не срабатывает).
+    [Fact]
+    public void Validate_НеизвестноеПраво_UnknownPermission()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md",
+            System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
+            System.Text.Encoding.UTF8.GetBytes(
+                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["unknown:perm"]}}"""))
+            .Ok.Should().BeTrue();
+        var validation = _service.Validate(Owner, "my-plugin");
+        validation.IsValid.Should().BeFalse();
+        validation.Problems.Should().Contain(p => p.Code == "unknown-permission");
+    }
+
+    // Битый манифест: запрещённое топ-уровневое поле (hooks) → deny-manifest-field (тот же
+    // код, что при установке; ловится файловым валидатором через CheckContent).
+    [Fact]
+    public void Validate_БитыйМанифест_DenyManifestField()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md",
+            System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
+        // hooks — запрещённое поле манифеста (RCE/обход) → deny-manifest-field.
+        _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
+            System.Text.Encoding.UTF8.GetBytes(
+                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"hooks":{}}"""))
+            .Ok.Should().BeFalse("запись с запрещённым полем отбивается deny-manifest-field");
+        // Записали манифест напрямую (WriteFile его отклонил), чтобы валидатор сам его нашёл.
+        File.WriteAllText(Path.Combine(DraftDir(Owner, "my-plugin"), "ccs-plugin.json"),
+            """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"hooks":{}}""");
+        var validation = _service.Validate(Owner, "my-plugin");
+        validation.IsValid.Should().BeFalse();
+        validation.Problems.Should().Contain(p => p.Code == "deny-manifest-field");
+    }
+
+    // name != slug: ccs-манифест с name, отличным от slug (из id) → deny-name-not-equal-slug
+    // (тот же код, что при установке; файловая проверка CheckNameEqualsSlug).
+    [Fact]
+    public void Validate_NameNotEqualSlug_DenyNameNotEqualSlug()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md",
+            System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
+        // name = "Другое имя" ≠ slug "my-plugin" (из id local-x/my-plugin) → deny.
+        _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
+            System.Text.Encoding.UTF8.GetBytes(
+                """{"id":"local-x/my-plugin","name":"Другое имя","version":"0.1.0","contributes":{"skills":["skills/a"]}}"""))
+            .Ok.Should().BeTrue();
+        var validation = _service.Validate(Owner, "my-plugin");
+        validation.IsValid.Should().BeFalse();
+        validation.Problems.Should().Contain(p => p.Code == "deny-name-not-equal-slug");
+    }
+
+    // Хороший черновик: вклад (skill) + известное право + name = slug + нативный манифест →
+    // валиден (и при установке, и при проверке черновика — один арбитр).
+    [Fact]
+    public void Validate_ХорошийЧерновик_Прохходит()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md",
+            System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
+        _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
+            System.Text.Encoding.UTF8.GetBytes(
+                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["notes:read"]}}"""))
+            .Ok.Should().BeTrue();
+        var validation = _service.Validate(Owner, "my-plugin");
+        validation.IsValid.Should().BeTrue(
+            $"хороший черновик обязан проходить: {string.Join("; ", validation.Problems.Select(p => p.Code + ": " + p.Message))}");
     }
 
     [Fact]

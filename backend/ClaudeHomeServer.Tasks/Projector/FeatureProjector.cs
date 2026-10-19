@@ -373,22 +373,26 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
+        // Все расчёты выше идут по исходным задачам; в ВЫХОД (REST) уходят облегчённые копии:
+        // тексты (Description/ResultMarkdown), Verification.Notes, Repro, подзадачи и файлы
+        // пульту фичи не нужны (причина витка уже лежит в Rounds[].Reason), а на фиче из десятков
+        // задач именно они делали ответ в сотни КБ. Полную карточку пульт берёт по id.
         return new FeatureRun
         {
             FeatureId = epic.Id,
-            Epic = epic,
-            Steps = steps,
-            Reviews = reviews,
-            Qa = qa,
-            Final = final,
-            Merge = merge,
+            Epic = Slim(epic),
+            Steps = SlimAll(steps),
+            Reviews = SlimAll(reviews),
+            Qa = SlimAll(qa),
+            Final = final is null ? null : Slim(final),
+            Merge = merge is null ? null : Slim(merge),
             AwaitingHumanSince = epic.AwaitingHumanSince,
             AwaitingHumanReason = epic.AwaitingHumanReason,
             Verdicts = verdicts,
             Progress = progress,
             Ready = ready,
-            Cut = cut,
-            Plan = plan,
+            Cut = SlimAll(cut),
+            Plan = SlimAll(plan),
             Stages = stages,
             StepChains = stepChains,
             ReturnsBySource = returnsBySource,
@@ -402,6 +406,29 @@ public sealed class FeatureProjector(TaskManager tasks)
             Summary = summary,
         };
     }
+
+    // Облегчённая копия задачи для выхода агрегата: TaskListItem (без Description/ResultMarkdown,
+    // с маркером listItem — фронт догрузит полную карточку по id) + без Verification.Notes,
+    // Repro, подзадач, файлов и меток. Остальные поля — как есть (роль, статус, связи, времена).
+    private static TaskItem Slim(TaskItem t)
+    {
+        var item = TaskListItem.From(t);
+        item.Verification = t.Verification is null
+            ? null
+            : new TaskVerification
+            {
+                VerifiedAt = t.Verification.VerifiedAt,
+                PersonaId = t.Verification.PersonaId,
+                Verdict = t.Verification.Verdict,
+            };
+        item.Repro = null;
+        item.LinkedFiles = [];
+        item.Subtasks = [];
+        item.Labels = [];
+        return item;
+    }
+
+    private static List<TaskItem> SlimAll(List<TaskItem> tasks) => tasks.Select(Slim).ToList();
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 

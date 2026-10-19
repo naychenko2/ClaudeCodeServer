@@ -250,17 +250,39 @@ export function useFeatureRunsSnapshot(sessionId: string | null): FeatureRun[] {
   );
 }
 
-// M2: дебаунс ~500 мс на сессию.
+// M2: дебаунс ~500 мс на сессию + троттлинг: не чаще одного запроса на сессию за
+// MIN_FETCH_GAP_MS. Пока идут исполнители, task_changed летят непрерывно, и запрос по 400+ КБ
+// уходил десятки раз в минуту (HAR прода: 24 за 1,5 мин) — теперь серия событий схлопывается
+// в один запрос на окно, а последнее изменение всё равно попадает в хвостовой перезапрос.
 const REFETCH_DEBOUNCE_MS = 500;
+const MIN_FETCH_GAP_MS = 4000;
+
+// Дедуп: параллельные запросы одной сессии (ChatPanel и FeatureBanner монтируют
+// useFeatureRuns для одного чата) делят один fetch.
+const _inflight = new Map<string, Promise<FeatureRun[]>>();
+// Момент старта последнего запроса по сессии (для троттлинга).
+const _lastFetchAt = new Map<string, number>();
+
+function fetchRuns(sessionId: string): Promise<FeatureRun[]> {
+  const running = _inflight.get(sessionId);
+  if (running) return running;
+  _lastFetchAt.set(sessionId, Date.now());
+  const p = api.tasks.getFeatures(sessionId).finally(() => { _inflight.delete(sessionId); });
+  _inflight.set(sessionId, p);
+  return p;
+}
+
 function scheduleRefetch(sessionId: string) {
   if (_pending.has(sessionId)) return;
+  const sinceLast = Date.now() - (_lastFetchAt.get(sessionId) ?? -Infinity);
+  const delay = Math.max(REFETCH_DEBOUNCE_MS, MIN_FETCH_GAP_MS - sinceLast);
   _pending.set(sessionId, setTimeout(() => {
     _pending.delete(sessionId);
-    void api.tasks.getFeatures(sessionId)
+    void fetchRuns(sessionId)
       .then(list => setRuns(sessionId, list))
       // Сбой live-перезапроса не затирает свежий срез (в отличие от первичной загрузки).
       .catch(() => {});
-  }, REFETCH_DEBOUNCE_MS));
+  }, delay));
 }
 
 // M2: затронутая сессия по task_changed.
@@ -313,7 +335,7 @@ export function useFeatureRuns(sessionId: string | null, enabled: boolean): Feat
     }
     _active.add(sessionId);
     let cancelled = false;
-    void api.tasks.getFeatures(sessionId)
+    void fetchRuns(sessionId)
       .then(list => { if (!cancelled) setRuns(sessionId, list); })
       .catch(() => { if (!cancelled) setRuns(sessionId, EMPTY); });
     return () => {
@@ -338,6 +360,8 @@ export const __test = {
     _active.clear();
     _pending.forEach(t => clearTimeout(t));
     _pending.clear();
+    _inflight.clear();
+    _lastFetchAt.clear();
     _listeners.clear();
     _realtimeWired = false;
   },
@@ -345,6 +369,7 @@ export const __test = {
   clearRuns,
   snapshotFor,
   handleTaskChanged,
+  fetchRuns,
   affectedSessionId,
   setActive: (s: string) => _active.add(s),
   active: () => new Set(_active),

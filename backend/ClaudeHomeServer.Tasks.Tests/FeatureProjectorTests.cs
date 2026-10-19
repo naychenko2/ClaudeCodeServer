@@ -1385,4 +1385,65 @@ public class FeatureProjectorTests
         Stage(run, "cut").Passes.Should().Be(1,
             "consult входит в cut: passes = 1; мутация (только Cut) → 0");
     }
+    // ─── Перф-2 B2: облегчённый ответ GET /api/tasks/features ─────────────────────────────
+
+    // Фича из 24 задач с тяжёлыми текстами: в выходе агрегата тексты, Verification.Notes и прочий
+    // «жир» отсутствуют, ответ меньше исходных задач минимум в 10 раз, а расчёты (вердикты, виток
+    // с причиной) остаются теми же — причина витка живёт в Rounds[].Reason.
+    [Fact]
+    public void Build_ВыходЛёгкий_БезТекстовЗадач_РасчётыПрежние()
+    {
+        const string epicId = "epic-slim";
+        var longText = new string('я', 6000);
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, Title = "Эпик", Description = longText };
+        var tasks = new List<TaskItem> { epic };
+        for (var i = 1; i <= 10; i++)
+            tasks.Add(new TaskItem
+            {
+                Id = $"s{i}", FeatureId = epicId, Role = TaskRoles.Step, StepRef = $"B{i}", Title = $"Шаг {i}",
+                Status = TaskItemStatus.Done, Description = longText, ResultMarkdown = longText,
+                LinkedFiles = [longText], Subtasks = [new TaskSubtask { Title = longText }],
+            });
+        for (var i = 1; i <= 10; i++)
+            tasks.Add(new TaskItem
+            {
+                Id = $"r{i}", FeatureId = epicId, Role = TaskRoles.Review, Title = $"Ревью {i}",
+                Status = TaskItemStatus.Done, ReviewOf = [$"s{i}"], Description = longText,
+                ResultMarkdown = longText,
+                Verification = new TaskVerification { Verdict = TaskVerdicts.Returned, Notes = longText },
+            });
+        tasks.Add(new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Title = "Финал", Status = TaskItemStatus.Done,
+            Description = longText, ResultMarkdown = longText,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = longText },
+        });
+        tasks.Add(new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge, Title = "Мерж", Status = TaskItemStatus.Done,
+            Description = longText, ResultMarkdown = longText,
+        });
+
+        var run = FeatureProjector.Build(epic, tasks);
+
+        var jsonOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var before = System.Text.Json.JsonSerializer.Serialize(tasks, jsonOptions).Length;
+        var after = System.Text.Json.JsonSerializer.Serialize(run, jsonOptions).Length;
+
+        run.Epic.Description.Should().BeEmpty();
+        run.Steps.Should().OnlyContain(t => t.Description == "" && t.ResultMarkdown == null
+            && t.LinkedFiles.Count == 0 && t.Subtasks.Count == 0);
+        run.Reviews.Should().OnlyContain(t => t.Verification!.Notes == null
+            && t.Verification.Verdict == TaskVerdicts.Returned);
+        run.Final!.Verification!.Notes.Should().BeNull();
+        run.Final.Verification.Verdict.Should().Be(TaskVerdicts.Accepted);
+        run.Merge!.ResultMarkdown.Should().BeNull();
+        // Расчёты прежние, причина витка не потеряна.
+        run.Verdicts.Returned.Should().Be(10);
+        run.StepChains.Should().HaveCount(10);
+        run.StepChains[0].Rounds[0].Reason.Should().Be(longText);
+        // Замер: цифры до/после уходят в отчёт (вывод теста).
+        after.Should().BeLessThan(before / 3,
+            $"до {before} симв. (сырые задачи), после {after} симв. (агрегат; Reason витков остаётся)");
+    }
 }

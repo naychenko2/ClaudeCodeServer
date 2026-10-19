@@ -10,7 +10,7 @@ import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
-import { C, FONT, FS, GROUP_COLORS, MODAL_W, R, SP } from '../lib/design';
+import { C, FONT, FS, GROUP_COLORS, MODAL_W, R, SHADOW, SP } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton, Chip } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
@@ -43,7 +43,7 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupLinks, pluralChat, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
@@ -910,6 +910,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       else next.add(g.feature!.featureId);
       return next;
     });
+    // F3.3: ссылки на «чужие» группы — чаты, связанные с этой фичей в индексе,
+    // но нарисованные в группе другой фичи (мультифичевый чат). Только в раскрытой группе.
+    const otherLinks = expanded ? otherGroupLinks(g.feature.featureId, featuresIndex, g.sessions) : [];
     return (
       <div key={g.feature.featureId} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
         <FeatureGroupHeader
@@ -951,6 +954,34 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             >
               ещё {layout.hiddenCount}
             </button>
+          )}
+          {/* F3.3: строка-ссылка на «чужую» группу (мультифичевый чат). */}
+          {otherLinks.length > 0 && (
+            <div>
+              {otherLinks.map(link => (
+                <button
+                  key={link.featureId}
+                  type="button"
+                  data-testid={`other-group-link-${link.featureId}`}
+                  aria-label={`+${link.count} ${pluralChat(link.count)} в группе «${link.featureTitle}»`}
+                  onClick={() => {
+                    const target = sessions.find(s => s.id === link.firstChatId);
+                    if (target) onSelect(target);
+                  }}
+                  onFocus={e => { e.currentTarget.style.boxShadow = SHADOW.focus; }}
+                  onBlur={e => { e.currentTarget.style.boxShadow = 'none'; }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    border: 'none', cursor: 'pointer',
+                    background: 'transparent', color: C.textSecondary, fontFamily: FONT.sans,
+                    fontSize: FS.xs, padding: `${SP.xs}px ${SP.xs}px`, marginTop: 2,
+                    ...(isMobile ? { minHeight: 40 } : null),
+                  }}
+                >
+                  +{link.count} {pluralChat(link.count)} в группе «{link.featureTitle}»
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </div>

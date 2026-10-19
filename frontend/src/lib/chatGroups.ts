@@ -522,6 +522,62 @@ export function otherFeatureCount(chatId: string, index: FeaturesIndex): number 
   return links.length - 1;
 }
 
+// Склонение «чат/чата/чатов» (рус. pluralization, F3.3).
+export function pluralChat(n: number): string {
+  const m100 = n % 100, m10 = n % 10;
+  if (m100 >= 11 && m100 <= 14) return 'чатов';
+  if (m10 === 1) return 'чат';
+  if (m10 >= 2 && m10 <= 4) return 'чата';
+  return 'чатов';
+}
+
+// Ссылка на «чужую» группу (F3.3): чат, связанный с текущей фичей в индексе,
+// но нарисованный в группе другой фичи (мультифичевый чат — в группе первой фичи,
+// а счётчик другой группы его считает). Считается из chats уже загруженного индекса,
+// без запросов. Чистая функция — тестируется без DOM.
+export interface OtherGroupLink {
+  featureId: string;
+  featureTitle: string;
+  count: number;
+  firstChatId: string;
+}
+
+export function otherGroupLinks(
+  currentFeatureId: string,
+  index: FeaturesIndex,
+  currentGroupSessions: Session[],
+): OtherGroupLink[] {
+  const currentIds = new Set(currentGroupSessions.map(s => s.id));
+  const featureById = new Map(index.features.map(f => [f.featureId, f]));
+  // Все чаты, связанные с текущей фичей в индексе
+  const linkedToCurrent: string[] = [];
+  for (const [chatId, links] of Object.entries(index.chats)) {
+    if (links.some(l => l.featureId === currentFeatureId)) {
+      linkedToCurrent.push(chatId);
+    }
+  }
+  // Для каждого такого чата: если он НЕ в текущей группе — он нарисован в другой.
+  // Группируем по фиче, в которой он нарисован (первая в chats[id] = группа).
+  const byOther = new Map<string, { count: number; firstChatId: string }>();
+  for (const chatId of linkedToCurrent) {
+    if (currentIds.has(chatId)) continue;
+    const links = index.chats[chatId];
+    if (!links || links.length === 0) continue;
+    const drawnIn = links[0].featureId;
+    if (drawnIn === currentFeatureId) continue;
+    if (!featureById.has(drawnIn)) continue;
+    const entry = byOther.get(drawnIn) ?? { count: 0, firstChatId: chatId };
+    entry.count++;
+    byOther.set(drawnIn, entry);
+  }
+  const result: OtherGroupLink[] = [];
+  for (const [fid, { count, firstChatId }] of byOther) {
+    const f = featureById.get(fid)!;
+    result.push({ featureId: fid, featureTitle: f.title, count, firstChatId });
+  }
+  return result;
+}
+
 // Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»
 // (ключевой чат фичи) и/или «ещё N» (чат принадлежит ещё N фичам — C0, п.5: след
 // других фич). Считается по id САМОЙ строки, а не замыканием корня: ChatTreeBranch

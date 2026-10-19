@@ -708,8 +708,11 @@ export default function App() {
         if (p) {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           setProject(p)
-          // Пишем проект из диплинка в историю (сид его пропустил из-за расхождения)
-          navPush({ screen: 'project', project: p, view: 'sidebar', file: null, chatId: initialHash.chatId || undefined })
+          // Пишем проект из диплинка в историю (сид его пропустил из-за расхождения).
+          // featureId из хэша кладём в снимок (и view как в сиде): инициализатор openFeatureId
+          // WorkspacePage берёт getNav()?.feature, и без него адрес схлопывается в #/project/{pid}
+          // ещё до прихода /me — страница не открывается в свежем браузере / из другого проекта.
+          navPush({ screen: 'project', project: p, view: initialHash.chatId ? undefined : 'sidebar', file: null, chatId: initialHash.chatId || undefined, feature: initialHash.featureId ?? null })
         }
       })
       .catch(() => { /* офлайн/нет доступа — остаёмся на восстановленном состоянии */ })

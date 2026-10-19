@@ -591,8 +591,14 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const composerSkills = useMemo(
     () => [...(skillsData?.skills ?? []), ...(skillsData?.workflows ?? []), ...(skillsData?.plugins ?? [])],
     [skillsData]);
-  // мобайл: показываем либо sidebar, либо chat
-  const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
+  // мобайл: показываем либо sidebar, либо chat. Диплинк/перезагрузка на страницу фичи
+  // (#/project/{pid}/feature/{fid}): на мобиле страница живёт в виде chat (сосед центра),
+  // поэтому при feature-сегменте В АДРЕСЕ стартуем в chat — иначе адрес обещает страницу,
+  // а на экране список (M1-360). Читаем ТОЛЬКО адрес (не снимок): в тёплом браузере
+  // feature может жить в снимке, пока пользователь в списке (m7) — там mobileView=sidebar.
+  const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>(() => {
+    return parseHash(window.location.hash)?.featureId != null ? 'chat' : 'sidebar';
+  });
 
 const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
@@ -1560,6 +1566,10 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- WorkspacePage перемонтируется на смену проекта (key={project.id} в App), подписка на весь жизненный цикл инстанса
   }, []);
 
+  // Предыдущая запись истории ДО открытия страницы фичи (m5): крошка «К списку» делает
+  // history.back() (а не navReplace), если предыдущая запись — список ЭТОГО проекта, иначе
+  // первый системное «назад» был бы пустым шагом (navReplace давал [список, список]).
+  const featurePrevStateRef = useRef<NavSnapshot | null>(null);
   // Страница фичи (Ф2.3): «Фича →» в плашке чата (fromChat=true) и тело группы в
   // списке (fromChat=false) шлют cc-open-feature. Указатель возврата (крошка «← К чату
   // «…»») записывается ТОЛЬКО при входе из чата: при входе из списка крошка ведёт в
@@ -1574,6 +1584,8 @@ const windowWidth = useWindowWidth();
       else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);
       if (isMobileRef.current) setMobileView('chat');
+      // Снимок ДО navPush = предыдущая запись (список/чат, с которого открыли страницу)
+      featurePrevStateRef.current = getNav();
       navPush({ screen: 'project', project, view: 'chat', file: null, task: null, feature: d.featureId, chatId: d.fromChatId ?? undefined });
     };
     window.addEventListener('cc-open-feature', onOpenFeature);
@@ -1605,6 +1617,18 @@ const windowWidth = useWindowWidth();
       window.history.back();
       return;
     }
+    // m5 (ветка «список»): предыдущая запись — список ЭТОГО проекта (вход из списка) —
+    // history.back() снимает запись страницы: без дубля [список, список], и первое
+    // системное «назад» ведёт в осмысленное предыдущее место, а не в тот же список.
+    // popstate-обработчик восстановит снимок (feature: null, view: sidebar) синхронно.
+    if (target.kind === 'list') {
+      const prev = featurePrevStateRef.current;
+      if (prev && prev.screen === 'project' && prev.project?.id === project.id && !prev.feature) {
+        setOpenFeatureId(null);
+        window.history.back();
+        return;
+      }
+    }
     setOpenFeatureId(null);
     // Синхронизация URL с состоянием (крошка и история — в одно место, разрез §4): крошка
     // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
@@ -1630,7 +1654,12 @@ const windowWidth = useWindowWidth();
   // Пока флаги НЕ загружены (flagsLoaded=false) не схлопываем — адрес ждёт ответа /me.
   useEffect(() => {
     if (!flagsLoaded || featuresOn || !openFeatureId) return;
-    navReplace({ screen: 'project', project, view: isMobile ? mobileView : 'sidebar', file: null, task: null, chatId: activeSessionId ?? undefined, feature: null });
+    // m7: на мобиле вид sidebar = список — адрес не должен обещать /chat/{id} (экран — список).
+    // chatId кладём, только когда чат реально показан: на мобиле — mobileView==='chat',
+    // на десктопе чат в центре всегда, поэтому chatId согласован с экраном.
+    const view = isMobile ? mobileView : 'sidebar';
+    const chatShown = isMobile ? mobileView === 'chat' : true;
+    navReplace({ screen: 'project', project, view, file: null, task: null, chatId: chatShown ? (activeSessionId ?? undefined) : undefined, feature: null });
     setOpenFeatureId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
     // в «загружено и выключено»; project/mobileView/activeSessionId в замыкании — текущие

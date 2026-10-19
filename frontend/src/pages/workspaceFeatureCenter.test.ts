@@ -579,4 +579,111 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка есть при выключенном флаге (M1б)').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта при выключенном флаге (M1б)').toBeNull();
   });
+
+  // === M1-360: диплинк/перезагрузка на 360 — страница (вид chat) видна, а не список ===
+  it('M1-360: диплинк на 360 — контейнер центра (страница) виден display:flex, не display:none', async () => {
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница открыта (крошка + testid feature-page)
+    const page = findNodeByAttr(container, 'data-testid', 'feature-page');
+    expect(page, 'страница фичи не открыта (M1-360)').not.toBeNull();
+    // M1-360: на мобиле страница живёт в виде chat. При featureId в адресе mobileView='chat',
+    // поэтому контейнер центра (родитель feature-page) виден (display:flex), а не скрыт
+    // (display:none = вид sidebar = список). Мутация «mobileView всегда sidebar» красит:
+    // контейнер display:none, на экране список, хотя адрес /feature/{fid}.
+    const centerContainer = (page as any).parentNode;
+    expect(centerContainer?.style?.display, 'центр (страница) не виден на 360 (M1-360: на экране список)').toBe('flex');
+  });
+
+  // === m5: вход из списка → крошка «К списку» → history.back() (не navReplace) ===
+  it('m5: вход из списка — крошка «К списку» делает history.back() (индекс 0), не navReplace (дубль)', async () => {
+    const win = globalThis as any;
+    // Фейк-история со стеком и индексом: navPush=pushState, крошка=history.back()/navReplace.
+    // Сценарий: [список] (index 0) → открытие страницы (navPush → index 1) → крошка.
+    const listRecord = { screen: 'project', project, view: 'sidebar', file: null, task: null, feature: null };
+    const stack: any[] = [listRecord];
+    let index = 0;
+    win.window.history = {
+      get state() { return stack[index]; },
+      set state(v: any) { stack[index] = v; },
+      pushState: (s: any, _t: string, h: string) => { stack.splice(index + 1); stack.push(s); index++; win.window.location.hash = h; },
+      replaceState: (s: any, _t: string, h: string) => { stack[index] = s; win.window.location.hash = h; },
+      back: () => { if (index > 0) index--; win.window.location.hash = toHashOf(stack[index]); },
+      go: () => {}, forward: () => {},
+      get length() { return stack.length; },
+    };
+    win.window.location.hash = '#/project/p1';
+
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Вход из СПИСКА (fromChat: false): navPush страницы поверх списка (index 1)
+    act(() => {
+      win.window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: false } }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(index, 'страница не открыта (navPush)').toBe(1);
+
+    // Крошка «К списку»: m5 — history.back() (index 0), НЕ navReplace (index остался бы 1)
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back, 'крошка не найдена (m5)').not.toBeNull();
+    act(() => { (reactProps(back!) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // КЛЮЧЕВОЕ (m5): index=0 (history.back() снял запись страницы). Мутация «navReplace»
+    // красит: index остался бы 1 (дубль [список, список]), первое «назад» — пустой шаг.
+    expect(index, 'крошка не сняла запись страницы (m5: navReplace дал дубль, index=1)').toBe(0);
+  });
+
+  // === m7: 360, флаг выключен, тёплый браузер (mobileView=sidebar) — адрес не обещает /chat/{id} ===
+  it('m7: 360, тёплый браузер, флаг выключен, вид sidebar — адрес = #/project/p1 (без /chat/{id})', async () => {
+    const win = globalThis as any;
+    // Фейк-история: navReplace пишет hash (toHash), чтобы проверить, что /chat/{id} не появился
+    win.window.history = {
+      state: null,
+      pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      back: () => {}, go: () => {}, forward: () => {}, length: 1,
+    };
+    // Тёплый браузер: пользователь в СПИСКЕ (mobileView='sidebar', без featureId в адресе),
+    // но openFeatureId задан из снимка (feature в history.state). Адрес — проект (без feature).
+    win.window.location.hash = '#/project/p1';
+    win.window.history.state = { screen: 'project', project, view: 'sidebar', feature: 'f1' };
+    // Флаги ещё НЕ загружены (до ответа /me)
+    flagsTest.reset();
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Флаги «пришли» выключенными → эффект «один раз» приводит адрес к проекту
+    act(() => { setAllFlags({ 'features-overview': false }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // m7: mobileView='sidebar' (список) — адрес НЕ должен обещать /chat/{id} (экран — список).
+    // Мутация «всегда chatId» красит: адрес /chat/chatA, а на экране список.
+    expect(win.window.location.hash, 'адрес обещает /chat/{id}, а на экране список (m7)').toBe('#/project/p1');
+    void container;
+  });
 });
+
+// Вспомогательный: toHash для фейк-истории (m5) — упрощённый, только project/feature/chat
+function toHashOf(s: any): string {
+  if (!s || s.screen !== 'project' || !s.project) return '#/projects';
+  let h = `#/project/${s.project.id}`;
+  if (s.feature) h += `/feature/${encodeURIComponent(s.feature)}`;
+  else if (s.chatId) h += `/chat/${encodeURIComponent(s.chatId)}`;
+  return h;
+}

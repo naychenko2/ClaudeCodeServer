@@ -1,9 +1,8 @@
 import { ChevronRight } from 'lucide-react';
-import { C, R, SP, FS, FONT } from '../lib/design';
+import { C, R, FS, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import { FeatureRail } from './chat/feature/FeatureRail';
-import { CountBadge } from './ui';
 import { featureDisplayState, formatDuration } from '../lib/chatGroups';
 import { dateOnly } from './chat/feature/featureTime';
 import type { FeatureIndexFeature } from '../types/featureIndex';
@@ -54,13 +53,26 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
         columnGap: 7, rowGap: 3,
         alignItems: 'center',
         width: '100%', boxSizing: 'border-box',
-        // Компактная (закрытая): без рамки и заливки (макет .closed .fgh)
-        border: compact ? '1px solid transparent' : `1px solid ${C.borderLight}`,
-        // Кромка тревоги: 3px слева (вместо 1px) у «ждёт вас»/«упала»
-        borderLeft: alarmEdge ? `3px solid ${alarmEdge}` : undefined,
+        // M1: рамка — явными longhand'ами, НЕ шорткод + `borderLeft: undefined`:
+        // React на undefined обнуляет longhand border-left, и <button> получает
+        // дефолтную рамку UA (2px outset, чёрная) — «третье состояние» без тревоги.
+        // Компактная (закрытая): рамка прозрачная (макет .closed .fgh).
+        borderStyle: 'solid',
+        borderTopWidth: 1, borderRightWidth: 1, borderBottomWidth: 1,
+        borderLeftWidth: alarmEdge ? 3 : 1,
+        borderTopColor: compact ? 'transparent' : C.borderLight,
+        borderRightColor: compact ? 'transparent' : C.borderLight,
+        borderBottomColor: compact ? 'transparent' : C.borderLight,
+        // Кромка тревоги: 3px слева (вместо 1px) у «ждёт вас»/«упала»; иначе — как остальные
+        borderLeftColor: alarmEdge ?? (compact ? 'transparent' : C.borderLight),
+        // M2: нативная <button> не наследует font-family — задаём Hanken явно
+        // (название фичи — главный текст группы; иначе Arial).
+        fontFamily: FONT.sans,
         background: compact ? 'transparent' : C.bgCard,
         borderRadius: R.lg,
-        padding: compact ? `${SP.xs}px ${SP.sm}px` : `${SP.sm}px ${SP.sm}px`,
+        // m5/m6: отступы по макету .fgh: 8/10 (обычная), 5/10 (закрытая);
+        // 10 и 5 — не в SP-шкале, поэтому литерал (макет эталон)
+        padding: compact ? '5px 10px' : '8px 10px',
         cursor: 'pointer', textAlign: 'left',
         minHeight: isMobile ? (compact ? 40 : 44) : undefined,
       }}
@@ -89,9 +101,12 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
       >
         {feature.title}
       </span>
-      {/* Счётчик чатов группы */}
-      <span style={{ gridColumn: 4, gridRow: 1, display: 'flex', flexShrink: 0 }}>
-        <CountBadge inline tone="muted" value={count} />
+      {/* m3: счётчик чатов группы — mono 11 textMuted без подложки (макет .fgh .cnt) */}
+      <span style={{
+        gridColumn: 4, gridRow: 1, flexShrink: 0,
+        fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+      }}>
+        {count}
       </span>
       {/* Строка 2: мини-рельса + статус (span columns 3-5). Компактная — без рельсы */}
       <span style={{
@@ -102,8 +117,14 @@ export function FeatureGroupHeader({ feature, count, expanded, onToggle, isMobil
         <span
           data-testid="feature-group-status"
           style={{
-            fontSize: FS.xs, color: compact ? C.textMuted : C.textSecondary, whiteSpace: 'nowrap',
-            overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
+            fontSize: FS.xs,
+            // m3: тон статуса красится по состоянию (макет .fgh .st): ждёт → info 600,
+            // стоит → dangerText 600; иначе обычный (run/loop и закрытая — textSecondary)
+            color: st.alarm === 'wait' ? C.info
+              : st.alarm === 'stop' ? C.dangerText
+              : C.textSecondary,
+            fontWeight: st.alarm == null ? 400 : 600,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
             fontFamily: FONT.sans,
           }}
         >

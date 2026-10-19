@@ -198,7 +198,11 @@ function GoButton({ testId, onClick, children, ariaExpanded, tone = 'go', style 
         display: 'inline-flex', alignItems: 'center', gap: 4,
         border: 'none', background: 'transparent',
         color: isGo ? C.accent : C.textSecondary,
-        fontWeight: 600, fontSize: FS.sm,
+        // M2: нативная <button> не наследует font-family — задаём Hanken явно
+        // (кнопки .go/.back и «· ещё N» — иначе Arial).
+        fontFamily: FONT.sans,
+        // m8: «← назад» (back) — вес 400 (макет .back), «.go» — 600
+        fontWeight: isGo ? 600 : 400, fontSize: FS.sm,
         padding: isGo ? '4px 8px' : '4px 6px',
         borderRadius: R.md, cursor: 'pointer', whiteSpace: 'nowrap',
         flexShrink: 0,
@@ -349,7 +353,8 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // (обрезка) + рельса + счётчик + [· ещё N]; справа тач-цель 40×40 («→» / «▾»). Тап по
   // телу плашки открывает шторку (FeatureBannerSheet). Статус/роль-текст скрыты (у
   // «← назад» — только иконка); горизонтального скролла нет (nowrap + ellipsis).
-  // m6: тело БЕЗ рамки (не «коробка в коробке»). n4: высота плашки 48 (не 52):
+  // m7: рамка — по тону (toneStyle): run/key → 1px borderLight (плашка не сливается
+  // с полем), wait/stop/closed → transparent. n4: высота плашки 48 (не 52):
   // кнопка-тач-цель 40 + отступы 4/4 (border-box, пересчёт макета .app.m .fs).
   if (isMobile) {
     return (
@@ -360,7 +365,6 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
         data-banner-tone={model.tone}
         style={{
           ...toneStyle(model.tone),
-          border: 'none',
           display: 'flex',
           flexDirection: 'column',
           borderRadius: R.lg,

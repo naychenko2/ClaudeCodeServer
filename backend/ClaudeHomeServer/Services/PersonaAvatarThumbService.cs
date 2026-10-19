@@ -31,7 +31,15 @@ public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<Perso
         var original = await File.ReadAllBytesAsync(originalPath);
         // Заголовок без декодирования: формат/размер известны до пикселей
         var probe = raster.Probe(original);
-        if (probe is null) return null;
+        if (probe is null)
+        {
+            // Формат растр не распознал (напр. SVG-аватар, который Skia не декодирует):
+            // вызывающий отдаёт оригинал. Логируем — иначе в проде не видно, почему
+            // миниатюра не сгенерировалась (дефект: оригинал залипал в кэше браузера)
+            log.LogInformation("Миниатюра {Step} аватара персоны {Persona} не сгенерирована: формат не распознан",
+                step, persona.Id);
+            return null;
+        }
         // Без апскейла: оригинал меньше ступени — браузер растянет его сам, сервер
         // не плодит большую копию меньшей картинки
         if (Math.Max(probe.DisplayWidth, probe.DisplayHeight) <= step) return null;

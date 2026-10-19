@@ -297,15 +297,30 @@ public class PersonasController(
         var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
         if (!System.IO.File.Exists(full)) return NotFound();
 
-        // Имя файла в URL (v) меняется при каждой смене аватара — кэш браузера может
-        // быть долгим и immutable (тот же приём, что у картинки-иконки проекта, ADR-009 §8)
-        Response.Headers.CacheControl = "private, max-age=604800, immutable";
-
         var step = ImageAssetHelper.AvatarThumbStep(size);
-        if (step is null) return ImageAssetHelper.PhysicalFileByExt(full);
+        if (step is null)
+        {
+            // Оригинал (большой вид): имя файла в URL (v) меняется при каждой смене аватара —
+            // кэш браузера может быть долгим и immutable (тот же приём, что у картинки-иконки
+            // проекта, ADR-009 §8)
+            Response.Headers.CacheControl = "private, max-age=604800, immutable";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
 
         var thumb = await _avatarThumbs.GetOrGenerateAsync(persona, full, step.Value);
-        return ImageAssetHelper.PhysicalFileByExt(thumb ?? full);
+        if (thumb is null)
+        {
+            // Фолбэк на оригинал: миниатюра не получилась (гонка/сбой генерации) — отдаём
+            // оригинал, но БЕЗ долгого кэша (no-cache), чтобы следующий запрос получил
+            // миниатюру, а не держал оригинал на этом URL неделю (дефект: 1,5 МБ PNG с
+            // immutable на size=64)
+            Response.Headers.CacheControl = "no-cache";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
+
+        // Миниатюра: имя стабильно до смены аватара — кэш долгий и immutable
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return ImageAssetHelper.PhysicalFileByExt(thumb);
     }
 
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.

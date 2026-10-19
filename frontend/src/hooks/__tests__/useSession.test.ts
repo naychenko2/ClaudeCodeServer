@@ -683,4 +683,60 @@ describe('useSession: дедуп запросов истории (перф-2 F4)
 
     chat.unmount();
   });
+
+  it('конец хода (isWaiting=true) во время летящего снимка → fresh-снимок после него', async () => {
+    const sid = nextSid();
+    // Снимок при открытии подвешен: запрос истории летит, ход ещё не кончился
+    const gate = deferred<unknown[]>();
+    m.getHistory.mockReturnValue(gate.promise);
+
+    const chat = openChat(sid);
+    await flush();
+    expect(historyCallsFor()).toBe(1); // снимок при открытии — в полёте
+
+    // Ход ещё идёт: isWaiting=true, когда придёт его конец (replay active)
+    await chat.first.send('в ход');
+    expect(chat.render().isWaiting).toBe(true);
+
+    // Конец хода: prev.isWaiting=true → fresh. Ждём летящий снимок, потом берём новый
+    emitStatus(sid, 'active');
+    await flush();
+    expect(historyCallsFor()).toBe(1); // fresh ещё не стрелял — ждёт летящий
+
+    gate.resolve([...DONE_TURN]);
+    await flush();
+    expect(historyCallsFor()).toBe(2); // летящий + ровно один fresh-снимок после него
+    await flush();
+    expect(historyCallsFor()).toBe(2); // бесконечной цепочки нет
+
+    chat.unmount();
+  });
+
+  it('replay active у простаивающего чата (isWaiting=false) схлопывается с летящей загрузкой', async () => {
+    const sid = nextSid();
+    // Снимок при открытии подвешен: запрос истории летит, чат простаивает (isWaiting=false)
+    const gate = deferred<unknown[]>();
+    m.getHistory.mockReturnValue(gate.promise);
+
+    const chat = openChat(sid);
+    await flush();
+    expect(historyCallsFor()).toBe(1); // снимок при открытии — в полёте
+
+    // Чат простаивает: сообщения не отправляли, isWaiting=false
+    expect(chat.render().isWaiting).toBe(false);
+
+    // Replay active (открытие простаивающего чата): prev.isWaiting=false → не fresh,
+    // схлопывается с уже летящей загрузкой открытия
+    emitStatus(sid, 'active');
+    await flush();
+    expect(historyCallsFor()).toBe(1); // дополнительного fetch нет
+
+    gate.resolve([...DONE_TURN]);
+    await flush();
+    expect(historyCallsFor()).toBe(1); // всё ещё один — схлопнулось
+    await flush();
+    expect(historyCallsFor()).toBe(1);
+
+    chat.unmount();
+  });
 });

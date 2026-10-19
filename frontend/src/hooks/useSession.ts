@@ -366,7 +366,11 @@ function ensureHandler() {
     if (msg.type === 'status_changed') {
       // Флаг сверяем ДО применения редьюсера — prev держит клиентское состояние
       noteReconcileResult(sid, prev.isWaiting, msg.status);
-      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId);
+      // Ход только что кончился (prev.isWaiting=true) — нужен fresh-снимок: запрос,
+      // летящий с момента открытия, стартовал ДО конца хода и его снимок устарел.
+      // Replay active у простаивающего чата (prev.isWaiting=false) схлопывается с
+      // загрузкой открытия — нового fetch не плодим.
+      if (msg.status === 'active' && isWatched(sid)) reloadHistory(sid, getState(sid).projectId, prev.isWaiting);
     }
   });
 

@@ -263,3 +263,74 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     expect(allText(c), 'blur → плашка исчезла').not.toContain(KEY);
   });
 });
+
+// === M4: карточка — role="button" + клавиатурная активация (Enter/Space) ===
+describe('M4: карточка — role="button" + клавиатурная активация', () => {
+  const session = (id: string): Session => ({
+    id, mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual',
+  } as Session);
+
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T10:00:00Z').getTime());
+    featuresIndexTest.reset();
+    setAllFlags({ 'features-overview': false });
+    const w = (globalThis as { window: Record<string, unknown> }).window;
+    w.setTimeout = globalThis.setTimeout;
+    w.clearTimeout = globalThis.clearTimeout;
+    w.addEventListener = () => {};
+    w.removeEventListener = () => {};
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const renderCard = (onSelect: () => void) => {
+    const { container } = mount(createElement(ChatCard, {
+      session: session('chat-1'), isActive: false, isMobile: false, online: true,
+      onSelect, onHover: () => {}, onDelete: () => {},
+    }));
+    return container;
+  };
+
+  it('корень карточки — role="button"', () => {
+    const c = renderCard(() => {});
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const p = reactProps(card)!;
+    expect(p['role'], 'нет role="button" на корне карточки (M4)').toBe('button');
+  });
+
+  it('Enter на карточке открывает чат (onSelect вызывается)', () => {
+    const onSelect = vi.fn();
+    const c = renderCard(onSelect);
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const p = reactProps(card)!;
+    // Симулируем keydown Enter: target === currentTarget (нажатие на саму карточку)
+    const e = { key: 'Enter', target: card, currentTarget: card, preventDefault: () => {} } as unknown as Parameters<typeof p.onKeyDown>[0];
+    act(() => { (p.onKeyDown as (e: unknown) => void)(e); });
+    expect(onSelect, 'Enter на карточке не вызвал onSelect (M4)').toHaveBeenCalledTimes(1);
+  });
+
+  it('Space на карточке открывает чат (onSelect вызывается)', () => {
+    const onSelect = vi.fn();
+    const c = renderCard(onSelect);
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const p = reactProps(card)!;
+    const e = { key: ' ', target: card, currentTarget: card, preventDefault: () => {} } as unknown as Parameters<typeof p.onKeyDown>[0];
+    act(() => { (p.onKeyDown as (e: unknown) => void)(e); });
+    expect(onSelect, 'Space на карточке не вызвал onSelect (M4)').toHaveBeenCalledTimes(1);
+  });
+
+  it('Enter на вложенной кнопке НЕ открывает чат (target ≠ currentTarget)', () => {
+    const onSelect = vi.fn();
+    const c = renderCard(onSelect);
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const p = reactProps(card)!;
+    // target — вложенный элемент (не сама карточка) → handlePressableKey не срабатывает
+    const nested = { key: 'Enter', target: {}, currentTarget: card, preventDefault: () => {} } as unknown as Parameters<typeof p.onKeyDown>[0];
+    act(() => { (p.onKeyDown as (e: unknown) => void)(nested); });
+    expect(onSelect, 'Enter на вложенной кнопке вызвал onSelect (M4: target ≠ currentTarget)').not.toHaveBeenCalled();
+  });
+});

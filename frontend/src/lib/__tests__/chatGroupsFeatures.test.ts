@@ -12,7 +12,7 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, featureGroupTreeRows, otherFeatureCount, featureRoleFor, otherGroupLinks, pluralChat } from '../chatGroups';
+import { groupByFeatures, featureChipCounts, featureGroupTreeRows, otherFeatureCount, featureRoleFor, otherGroupLinks } from '../chatGroups';
 import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
@@ -414,23 +414,6 @@ describe('M3: featureRoleFor (роль по id строки, не корня)', 
   });
 });
 
-// === F3.3: pluralChat (склонение «чат/чата/чатов») ===
-describe('F3.3: pluralChat (склонение)', () => {
-  it('1 → «чат», 2-4 → «чата», 5-10/11-14/21+ → «чатов»', () => {
-    expect(pluralChat(1)).toBe('чат');
-    expect(pluralChat(2)).toBe('чата');
-    expect(pluralChat(3)).toBe('чата');
-    expect(pluralChat(4)).toBe('чата');
-    expect(pluralChat(5)).toBe('чатов');
-    expect(pluralChat(10)).toBe('чатов');
-    expect(pluralChat(11)).toBe('чатов');
-    expect(pluralChat(14)).toBe('чатов');
-    expect(pluralChat(15)).toBe('чатов');
-    expect(pluralChat(21)).toBe('чат');
-    expect(pluralChat(22)).toBe('чата');
-    expect(pluralChat(25)).toBe('чатов');
-  });
-});
 
 // === F3.3: otherGroupLinks (ссылки на «чужие» группы) ===
 // Сценарий: мультифичевый чат нарисован в группе первой фичи (A), но связан и с B.

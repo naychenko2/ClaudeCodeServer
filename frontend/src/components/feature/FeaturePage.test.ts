@@ -851,16 +851,20 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect((row as unknown as { style: Record<string, string> }).style.background).toBe('var(--c-accent-light)');
   });
 
-  it('Ф3.2: метка «ключевой» — подсказка «что значит ключевой» (M1: aria-describedby на кнопке-строке + Tooltip)', async () => {
+  it('Ф3.2: метка «ключевой» — aria-describedby ведёт на скрытый span (минор 46: id всегда в DOM)', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
     const c = render({});
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
-    // M1-минор: aria-label с неинтерактивного span метки убран (скринридер его игнорирует);
-    // описание подсказки — на кнопке-строке через aria-describedby (id плашки Tooltip).
-    expect(row.getAttribute('aria-describedby'), 'кнопка-строка ссылается на плашку').toBe('key-tip-chat-key');
+    // Минор 46: aria-describedby → скрытый span с постоянным id (не на Tooltip,
+    // который в DOM только когда открыт; на тач Tooltip не поднимается).
+    expect(row.getAttribute('aria-describedby'), 'кнопка-строка ссылается на скрытое описание').toBe('key-desc-chat-key');
+    // Скрытый span с описанием существует в DOM (aria-label — текст для скринридера).
+    const desc = findNodeByAttr(row, 'id', 'key-desc-chat-key');
+    expect(desc, 'скрытый span с описанием подсказки (минор 46)').not.toBeNull();
+    expect((desc! as unknown as { attributes: Record<string, string> }).attributes['aria-label']).toBe(KEY_SESSION_TOOLTIP);
     const chip = findNodeByAttr(row, 'data-testid', 'feature-role-key');
     expect(chip, 'метка «ключевой» (data-testid) есть').not.toBeNull();
   });

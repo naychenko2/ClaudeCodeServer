@@ -2,7 +2,7 @@ import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type C
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
-import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip } from './ui';
+import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip, handlePressableKey } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
@@ -786,6 +786,9 @@ function ChatCardView({
   const backdropPersona = group.length > 1 ? group[0] : persona;
   const padV = isMobile ? 14 : 11;
   const minHeight = Math.max(padV * 2 + TWO_LINES, ACTION_BOX + 8);
+  // M4 (минор 47): скрытое описание подсказки «ключевой» — aria-describedby корня
+  // ведёт на постоянный id (не на Tooltip, который в DOM только когда открыт).
+  const isKeyRole = featureRole !== undefined && featureRole.startsWith('ключевой');
 
   return (
     <div
@@ -803,7 +806,12 @@ function ChatCardView({
       onMouseLeave={() => onHover(false)}
       // M1: карточка — фокус-стоп (tabIndex 0), чтобы подсказка «ключевой» поднималась
       // по клавиатуре; onFocus/onBlur — единственный источник фокус-состояния метки.
+      // M4: role="button" + onKeyDown (handlePressableKey) — Enter/Space открывают чат;
+      // e.target === e.currentTarget защищает от перехвата Enter на вложенных кнопках.
+      role="button"
       tabIndex={0}
+      onKeyDown={e => handlePressableKey(e, () => onSelect())}
+      aria-describedby={isKeyRole ? `key-desc-${s.id}` : undefined}
       onFocus={() => setCardFocused(true)}
       onBlur={() => setCardFocused(false)}
       // Правый клик — меню действий прямо у курсора (desktop): тот же состав, что у
@@ -831,6 +839,11 @@ function ChatCardView({
         cursor: 'pointer',
       }}
     >
+      {/* M4 (минор 47): скрытое описание подсказки «ключевой» — aria-describedby
+          корня ведёт сюда (постоянный id), а не на плашку Tooltip (её id живёт
+          только пока плашка открыта). На тач-устройствах Tooltip не поднимается,
+          но скринридер всё равно прочитает описание. */}
+      {isKeyRole && <span id={'key-desc-' + s.id} aria-label={KEY_SESSION_TOOLTIP} style={{ display: 'none' }} />}
       {/* Кнопки свайпа (мобила): под карточкой у правого края, видны, когда карточка
           уехала. Высота — вся карточка, ширина — вылет раскрытия.
           Слой висит постоянно, а прячет его непрозрачный фон карточки — поэтому фон

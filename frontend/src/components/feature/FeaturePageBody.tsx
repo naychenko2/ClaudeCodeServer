@@ -143,20 +143,25 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
   // является: вложенный интерактив в <button> недопустим), поэтому её onFocus/onBlur —
   // единственный источник фокус-состояния для метки.
   const [focused, setFocused] = useState(false);
-  // M1 (минор): описание подсказки «ключевой» — на кнопке-строке через aria-describedby
-  // (id плашки Tooltip), а не aria-label на неинтерактивном span метки.
+  // M1 (минор 46): описание подсказки «ключевой» — на кнопке-строке через aria-describedby,
+  // ведущее на СКРЫТЫЙ span с постоянным id (не на плашку Tooltip, которая в DOM только
+  // когда открыта; на тач Tooltip не поднимается → описание было бы недоступно никогда).
+  const descId = entry.isKey ? `key-desc-${entry.sessionId}` : undefined;
   const tipId = entry.isKey ? `key-tip-${entry.sessionId}` : undefined;
   return (
     <button
       type="button"
       data-testid={`feature-chat-${entry.sessionId}`}
       className={FOCUS_CLASS}
-      aria-describedby={tipId}
+      aria-describedby={descId}
       onClick={() => onOpenChat(entry.sessionId)}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={rowBase(isMobile, entry.isKey ? { background: C.accentLight } : undefined)}
     >
+      {entry.isKey && (
+        <span id={descId} aria-label={KEY_SESSION_TOOLTIP} style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }} />
+      )}
       <span style={{ display: 'flex', flexShrink: 0 }}>
         <RowAvatar personaId={entry.personaId} />
       </span>

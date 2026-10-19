@@ -522,14 +522,6 @@ export function otherFeatureCount(chatId: string, index: FeaturesIndex): number 
   return links.length - 1;
 }
 
-// Склонение «чат/чата/чатов» (рус. pluralization, F3.3).
-export function pluralChat(n: number): string {
-  const m100 = n % 100, m10 = n % 10;
-  if (m100 >= 11 && m100 <= 14) return 'чатов';
-  if (m10 === 1) return 'чат';
-  if (m10 >= 2 && m10 <= 4) return 'чата';
-  return 'чатов';
-}
 
 // Ссылка на «чужую» группу (F3.3): чат, связанный с текущей фичей в индексе,
 // но нарисованный в группе другой фичи (мультифичевый чат — в группе первой фичи,

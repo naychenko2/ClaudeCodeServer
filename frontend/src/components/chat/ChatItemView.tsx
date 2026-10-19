@@ -1985,9 +1985,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'work_loop_stopped': {
       // Остановка цикла «до готово» — вид зависит от причины (SessionManager.
       // AddWorkLoopStoppedNoticeAsync шлёт reason ∈ manual|error|blocked|limit|
-      // waiting_timeout|stuck_reset|team_restart), текст готов с сервера, не пересобираем.
+      // waiting_timeout|stuck_reset|team_restart|server_restart), текст готов с сервера, не пересобираем.
       // manual (и технические stuck_reset/team_restart) — нейтральное ожидаемое действие,
       // та же пилюля, что «Ход остановлен пользователем» (case 'interrupted')
+      if (item.reason === 'server_restart') {
+        // Сервер перезапустился, ход продолжен с того же места — штатная ситуация,
+        // информационная пилюля без кнопок
+        return (
+          <div style={{
+            alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
+            background: C.infoBg, border: `1px solid ${C.info}`, borderRadius: 8, padding: '6px 12px',
+            fontSize: 12, color: C.info, textAlign: 'center',
+          }}>
+            <RotateCcw size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+            <span>{item.text}</span>
+          </div>
+        );
+      }
+
       if (item.reason === 'limit') {
         // Мягкое предупреждение — не критично, но стоит проверить результат.
         // Та же янтарная пилюля, что rate_limit/truncated

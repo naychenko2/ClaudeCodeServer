@@ -1134,6 +1134,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.IShellCom
 builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>();
 builder.Services.AddSingleton<IHostedService>(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>());
+// Авто-возобновление ходов после рестарта (флаг turn-auto-resume): параметры из секции TurnAutoResume.
+builder.Services.Configure<ClaudeHomeServer.Models.TurnAutoResumeOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.TurnAutoResumeOptions.Section));
+// Фоновый оркестратор: шов-хост (адаптер над SessionManager) + hosted-сервис (в Testing не стартует)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITurnAutoResumeHost, ClaudeHomeServer.Services.SessionManagerTurnResumeHost>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.TurnAutoResume.TurnAutoResumeService>(builder.Configuration);
 // Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
 // мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
 // KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`

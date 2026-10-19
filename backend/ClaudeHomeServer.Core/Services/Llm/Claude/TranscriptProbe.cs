@@ -117,6 +117,71 @@ public static class TranscriptProbe
         }
     }
 
+    // Петля выкатки (флаг turn-auto-resume, ADR-033 «Исключения v1»): ход оборван
+    // посреди deploy_start/deploy_rollback — последний tool_use без следующего tool_result.
+    // Возобновлённый агент снова выкатит, и так по кругу. null/ошибка ФС — false (fail-open:
+    // не возобновлять из-за непрочитанного хвоста хуже, чем пропустить проверку). Читается
+    // только хвост файла, как в соседних методах.
+    public static bool LastToolUseIsDeployOrRollback(string? transcriptPath)
+    {
+        if (transcriptPath is null) return false;
+        try
+        {
+            using var fs = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var tail = new byte[Math.Min(256 * 1024, fs.Length)];
+            fs.Seek(-tail.Length, SeekOrigin.End);
+            fs.ReadExactly(tail);
+
+            var lines = System.Text.Encoding.UTF8.GetString(tail).Split('\n');
+            for (var i = lines.Length - 1; i >= 0; i--)
+            {
+                if (!LineHasDeployToolUse(lines[i])) continue;
+                // Нашли последнюю deploy-запись: если после неё (строки с индексом > i)
+                // нет tool_result — ход оборван посреди выкатки.
+                return !HasToolResultAfter(lines, i);
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[TranscriptProbe] LastToolUseIsDeployOrRollback ({transcriptPath}): {ex.Message}");
+            return false;
+        }
+    }
+
+    // Строка содержит tool_use deploy_start/deploy_rollback (в content-массиве сообщения).
+    private static bool LineHasDeployToolUse(string rawLine)
+    {
+        var line = rawLine.TrimEnd('\r');
+        if (line.Length == 0) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            if (!doc.RootElement.TryGetProperty("message", out var msg)) return false;
+            if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) return false;
+            foreach (var block in content.EnumerateArray())
+            {
+                if (block.TryGetProperty("type", out var t) && t.GetString() == "tool_use"
+                    && block.TryGetProperty("name", out var n)
+                    && n.GetString() is "deploy_start" or "deploy_rollback")
+                    return true;
+            }
+            return false;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    // Есть ли tool_result в строках с индексом > index (т.е. после записи по index).
+    private static bool HasToolResultAfter(string[] lines, int index)
+    {
+        for (var j = index + 1; j < lines.Length; j++)
+        {
+            var line = lines[j].TrimEnd('\r');
+            if (line.Contains("\"tool_result\"", StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
     // Текст последнего user-сообщения транскрипта (content-строка; массивы блоков — вложения —
     // не сравнить со стартовым текстом хода, возвращаем null). null и при любой ошибке ФС —
     // вызывающий трактует как «текста нет» и не skip'ает submit (безопасная сторона).

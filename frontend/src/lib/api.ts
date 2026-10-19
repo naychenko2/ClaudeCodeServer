@@ -578,6 +578,11 @@ export interface PluginInfo {
   enabled: boolean;
   source: string;
   secrets: PluginSecretView[];
+  // Вклады пакета (contributes из манифеста): нужны, чтобы слот панели выбирал
+  // плагин, у которого панель объявлена, а не просто первый включённый.
+  // Бэковая зависимость: PluginResponse (список) пока не отдаёт contributes —
+  // см. отчёт по задаче (шаг 3).
+  contributes?: { panels?: unknown[] };
 }
 // Тело POST /api/plugins/{id}/grant: выданные права (подмножество requested) + значения секретов
 export interface PluginGrantSecret {

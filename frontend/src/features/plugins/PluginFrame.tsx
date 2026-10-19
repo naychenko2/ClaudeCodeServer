@@ -60,6 +60,13 @@ function toConsentData(info: PluginInfo): PluginConsentData {
   };
 }
 
+// У плагина панель объявлена (contributes.panels непусто). Пока бэк не отдаёт
+// contributes в данных списка, это false — слот деградирует к «панелей нет»
+// (бэковая зависимость, см. отчёт по задаче, шаг 3).
+function hasDeclaredPanel(p: PluginInfo): boolean {
+  return (p.contributes?.panels?.length ?? 0) > 0;
+}
+
 // Мини-плитка 20×20 с инициалами (шапка острова, макет экран 3).
 function MiniTile({ name }: { name: string }) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -130,11 +137,19 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   const [consent, setConsent] = useState<PluginConsentData | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // Панель — у первого установленного и ВКЛЮЧЕННОГО плагина (выключенный
-  // не монтирует панели; бэк на его panel ответил бы 409)
-  const panelPlugin = useMemo(
-    () => plugins.find(p => p.enabled) ?? null,
+  // Панель — у плагина, у которого панель ОБЪЯВЛЕНА (contributes.panels), а не просто
+  // у первого включённого: включённый без панели показывал бы «панелей нет», хотя у
+  // другого включённого панель есть. Выключенный не монтирует панели (бэк — 409).
+  const panelPlugins = useMemo(
+    () => plugins.filter(p => p.enabled && hasDeclaredPanel(p)),
     [plugins],
+  );
+  // Выбранный плагин (переключатель, когда панелей несколько); null → первый
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const panelPlugin = useMemo(
+    () => panelPlugins.find(p => p.id === selectedPanelId) ?? panelPlugins[0] ?? null,
+    [panelPlugins, selectedPanelId],
   );
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -324,6 +339,26 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
 
   const headerActions = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      {/* Переключатель плагина: когда панелей несколько — выбор, чью показывать */}
+      {panelPlugins.length > 1 && (
+        <div style={{ position: 'relative' }}>
+          <IconButton size="xs" tone="muted" ariaLabel="Выбрать плагин" onClick={() => setSwitcherOpen(o => !o)}>
+            <Plug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          {switcherOpen && (
+            <Menu onClose={() => setSwitcherOpen(false)} align="right" top={-2}>
+              {panelPlugins.map(p => (
+                <MenuItem
+                  key={p.id}
+                  label={humanizeId(p.id)}
+                  hint={p.id === panelPlugin?.id ? 'показывается' : undefined}
+                  onClick={() => { setSelectedPanelId(p.id); setSwitcherOpen(false); }}
+                />
+              ))}
+            </Menu>
+          )}
+        </div>
+      )}
       {isBridgeError && (
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: C.danger, flexShrink: 0 }} />
       )}

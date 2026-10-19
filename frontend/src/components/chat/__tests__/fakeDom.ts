@@ -150,6 +150,10 @@ export function installFakeDom() {
     // WaitingIndicator и др. таймеры зовут window.setTimeout/clearTimeout — глобалы node
     setTimeout,
     clearTimeout,
+    // PluginFrame и др. слушают window 'message' (postMessage моста); в тесте события не
+    // генерируем — достаточно, чтобы вешать/снимать слушатели не падало
+    addEventListener: () => {},
+    removeEventListener: () => {},
   };
   (globalThis as { window?: unknown }).window = fwindow;
   (globalThis as { document?: unknown }).document = fdoc;

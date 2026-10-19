@@ -31,6 +31,8 @@ const _entries = new Map<string, DraftEntry>();
 // Список черновиков владельца загружен хотя бы раз: true — можно отличить 404 от «ещё грузим»
 let _listLoaded = false;
 let _listInflight = false;
+// «Список грязный»: refreshDraft во время идущей loadList → перечитать после завершения
+let _listDirty = false;
 const _listeners = new Set<() => void>();
 
 function emit() { _listeners.forEach(fn => fn()); }
@@ -40,7 +42,9 @@ export function subscribeDrafts(fn: () => void): () => void {
   return () => { _listeners.delete(fn); };
 }
 
-// Снимок для useSyncExternalStore: стабильная ссылка, меняется только при замене записи
+// Снимок записи (стабильная ссылка; меняется только при замене в мапе).
+// Хук useDraftEntry копирует его в useState + подписка (не useSyncExternalStore —
+// чтобы асинхронные обновления попадали в act() в тестах).
 export function getDraftSnapshot(slug: string): DraftEntry {
   return _entries.get(slug) ?? EMPTY;
 }
@@ -62,6 +66,8 @@ function loadList(): void {
       for (const slug of _entries.keys()) put(slug, { summary: bySlug.get(slug) ?? null, listResolved: true });
       _listLoaded = true;
       emit();
+      // refreshDraft во время идущей загрузки: перечитать, чтобы не потерять обновление
+      if (_listDirty) { _listDirty = false; _listLoaded = false; void loadList(); }
     })
     .catch(() => { _listLoaded = true; emit(); })
     .finally(() => { _listInflight = false; });
@@ -69,15 +75,17 @@ function loadList(): void {
 
 // Предпросмотр по slug: один запрос на slug (карточки одного slug делят результат).
 // force — перечитать (после события), игнорируя уже загруженный предпросмотр.
+// Счётчик поколения: устаревший ответ (от предыдущего force) не затирает свежий.
+const _gen = new Map<string, number>();
 function loadPreview(slug: string, force = false): void {
-  // Гвард: запись уже в мапе и загрузка/предпросмотр уже есть → не дублируем.
-  // EMPTY (fallback при отсутствии записи) НЕ считается: его loading:true — «ещё не начинали».
   const cur = _entries.get(slug);
   if (!force && cur !== undefined && (cur.preview || cur.loading)) return;
+  const gen = (_gen.get(slug) ?? 0) + 1;
+  _gen.set(slug, gen);
   put(slug, { loading: true, error: null });
   api.plugins.draftPreview(slug)
-    .then(p => put(slug, { preview: p, loading: false }))
-    .catch((e: unknown) => put(slug, { error: e instanceof Error ? e.message : 'Не удалось загрузить черновик', loading: false }));
+    .then(p => { if (_gen.get(slug) === gen) put(slug, { preview: p, loading: false }); })
+    .catch((e: unknown) => { if (_gen.get(slug) === gen) put(slug, { error: e instanceof Error ? e.message : 'Не удалось загрузить черновик', loading: false }); });
 }
 
 // Событие наблюдателя: черновик по slug поменялся → перечитать предпросмотр и список.
@@ -103,6 +111,7 @@ export function refreshDraft(slug: string): void {
   put(slug, { preview: null, loading: true, revision: cur.revision });
   void loadPreview(slug, true);
   _listLoaded = false;
+  if (_listInflight) _listDirty = true;
   void loadList();
 }
 
@@ -120,11 +129,13 @@ export function useDraftEntry(slug: string): DraftEntry {
   return entry;
 }
 
-// Сброс кэша (тесты): записи, флаг списка, вполёте, подписка
+// Сброс кэша (тесты): записи, флаг списка, вполёте, поколения, подписка
 export function __resetDraftsStore(): void {
   _entries.clear();
+  _gen.clear();
   _listLoaded = false;
   _listInflight = false;
+  _listDirty = false;
   _subscribed = false;
   emit();
 }

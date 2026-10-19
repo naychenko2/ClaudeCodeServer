@@ -139,6 +139,7 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
               grantError = e instanceof Error ? e : new Error('Не удалось выдать права');
             }
             refreshDraft(slug);
+            // throw — диалог остаётся открытым, чтобы показать ошибку; карточка уже перечитана
             if (grantError) throw grantError;
             setConsent(null);
           }}

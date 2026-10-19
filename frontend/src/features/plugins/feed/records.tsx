@@ -36,11 +36,23 @@ function FallbackLine({ text }: { text: string }) {
   );
 }
 
+// Slug из ленты — недоверенный ввод: формат PluginId (`publisher/slug`, бэк: PluginId.Pattern),
+// длина 1..64. Невалидный → нейтральная строка без запросов и кнопок (slug в текст не подставляем).
+const SLUG_RE = /^[a-z0-9-]+\/[a-z0-9-]+$/;
+export function isDraftSlug(s: unknown): s is string {
+  return typeof s === 'string' && s.length >= 1 && s.length <= 64 && SLUG_RE.test(s);
+}
+
 // Якорь записи черновика: slug из данных → карточка (общий кэш draftsStore, флаг
 // plugins-build-yourself проверяет сама карточка). slug нет — нейтральная строка fallback.
 export function DraftAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
-  const slug = rec?.data && typeof rec.data.slug === 'string' ? (rec.data.slug as string) : null;
-  if (!slug) return rec?.fallback ? <FallbackLine text={rec.fallback} /> : null;
+  const raw = rec?.data?.slug;
+  const slug = isDraftSlug(raw) ? raw : null;
+  if (!slug) {
+    if (rec?.fallback) return <FallbackLine text={rec.fallback} />;
+    if (raw != null) return <FallbackLine text="Черновик больше недоступен" />;
+    return null;
+  }
   return <DraftFeedCard slug={slug} fallback={rec?.fallback ?? null} projectId={ctx.projectId} />;
 }

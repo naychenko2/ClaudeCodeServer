@@ -205,6 +205,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
             }
             void loadList();
             onUpdated?.(project);
+            // throw — диалог остаётся открытым, чтобы показать ошибку; список уже перечитан
             if (grantError) throw grantError;
             setConsent(null);
           }}

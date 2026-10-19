@@ -3,6 +3,8 @@
 // шаги (stepChains), чаты (из индекса), задачи (счётчики), лента (events).
 // Все функции чистые: тестируются в node без DOM.
 
+import { laneOfChain } from '../chat/feature/PipelineFlow';
+import { hhmm, dateTimeLabel } from '../chat/feature/featureTime';
 import type { FeaturesIndex, FeatureIndexFeature, FeatureChatLink, FeatureEvent } from '../../types/featureIndex';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -11,6 +13,7 @@ import type { FeatureRun } from '../../types/featureRun';
 // Связь «чат × фича»: sessionId + роль/stepRef/lane.
 // name — название чата из уже загруженного списка сессий проекта (M4: без новых
 // запросов); null — названия нет (чат вне проекта / список ещё не загружен) → «Чат».
+// personaId — персона чата (из списка сессий); null — персоне не ведётся.
 export interface FeatureChatEntry {
   sessionId: string;
   name: string | null;
@@ -19,16 +22,31 @@ export interface FeatureChatEntry {
   isKey: boolean;
   // Ключевой чат в архиве (feature.keyArchived && isKey).
   isArchived: boolean;
+  personaId: string | null;
+}
+
+// Роль чата (FeatureChatLink.kind) → русское слово (M1: не сырые коды
+// curator/executor/orchestrator). Неизвестный kind (бэк расширил контракт) —
+// как есть, не роняем строку.
+export const CHAT_ROLE_LABEL: Record<string, string> = {
+  key: 'ключевой',
+  curator: 'куратор',
+  orchestrator: 'оркестратор',
+  executor: 'исполнитель',
+};
+export function chatRoleLabel(kind: string): string {
+  return CHAT_ROLE_LABEL[kind] ?? kind;
 }
 
 // Чаты фичи из индекса: все sessionId, у которых есть связь с featureId.
 // Ключевой чат — первым (feature.keySessionId); остальные — в порядке индекса.
-// «Без новых запросов»: данные — только из FeaturesIndex.chats; названия — из
-// chatNames (список сессий проекта, уже загружен SessionList'ом).
+// «Без новых запросов»: данные — только из FeaturesIndex.chats; названия и персоны —
+// из chatNames/chatPersonas (список сессий проекта, уже загружен SessionList'ом).
 export function featureChats(
   index: FeaturesIndex,
   feature: FeatureIndexFeature | null,
   chatNames?: Record<string, string>,
+  chatPersonas?: Record<string, string>,
 ): FeatureChatEntry[] {
   if (!feature) return [];
   const keyId = feature.keySessionId ?? null;
@@ -47,6 +65,7 @@ export function featureChats(
         link,
         isKey,
         isArchived: isKey && feature.keyArchived,
+        personaId: chatPersonas?.[sessionId] ?? null,
       });
       break; // один чат — одна запись (сильнейшая роль)
     }
@@ -62,12 +81,49 @@ export function featureChats(
 
 // === Шаги ===
 
-// Строка шага для списка: stepRef, название, линия, исход, готовая подпись бэка,
-// число витков.
+// Код шага не повторяется в названии (M4): бэковый title может начинаться с кода
+// («Ш1 · индекс поиска») — в этом случае код и разделитель срезается: код уже
+// выводится отдельно слева в строке. «Ш10» для кода «Ш1» не режется (посмотрка
+// на следующий символ: он должен быть разделителем или концом строки).
+export function stripStepCode(title: string, stepRef: string): string {
+  if (!stepRef || !title) return title;
+  const esc = stepRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = title.match(new RegExp(`^\\s*${esc}(?=\\s|[·:—-]|$)`));
+  if (!m) return title;
+  const rest = title.slice(m[0].length).replace(/^\s*[·:—-]\s*/, '');
+  return rest.trim() ? rest : title;
+}
+
+// Линия шага (back/front/прочее) → русское слово (M4: не английский код).
+// Прочие линии (тест, дизайн) — как в данных.
+export function laneLabel(lane: string): string {
+  const l = laneOfChain(lane);
+  if (l === 'back') return 'бэк';
+  if (l === 'front') return 'фронт';
+  return lane;
+}
+
+// Чат шага: чат из индекса, у которого связь executor к этой фиче с тем же
+// stepRef. Такого чата нет — шаг никуда не ведёт (строка — текст, не кнопка, M4).
+function stepChatSessionId(index: FeaturesIndex, feature: FeatureIndexFeature, stepRef: string): string | null {
+  for (const [sessionId, links] of Object.entries(index.chats ?? {})) {
+    for (const link of links) {
+      if (link.featureId === feature.featureId && link.kind === 'executor' && link.stepRef === stepRef) {
+        return sessionId;
+      }
+    }
+  }
+  return null;
+}
+
+// Строка шага для списка: stepRef, название (без повторённого кода), линия,
+// исполнитель, чат шага (null — не ведёт), исход, готовая подпись бэка, число витков.
 export interface StepRow {
   stepRef: string;
   title: string;
   lane: string;
+  personaId: string | null;
+  sessionId: string | null;
   outcome: string;
   // Готовая подпись бэка (chain.status: «ждёт ревью», «закрыт без повторного ревью»,
   // «принят», «идёт», «снят с выкладки»); null — бэк не отдал (старый ответ).
@@ -77,12 +133,14 @@ export interface StepRow {
 
 // Шаги из stepChains: порядок — как в бэке (не пересортировываем).
 // «Шагов нет» — если stepChains пусто.
-export function stepRows(run: FeatureRun): StepRow[] {
+export function stepRows(run: FeatureRun, index: FeaturesIndex, feature: FeatureIndexFeature | null): StepRow[] {
   const chains = run.stepChains ?? [];
   return chains.map(c => ({
     stepRef: c.stepRef,
-    title: c.title,
+    title: stripStepCode(c.title, c.stepRef),
     lane: c.lane ?? '',
+    personaId: c.personaId ?? null,
+    sessionId: feature ? stepChatSessionId(index, feature, c.stepRef) : null,
     outcome: c.outcome,
     status: c.status ?? null,
     rounds: c.rounds?.length ?? 0,
@@ -175,4 +233,16 @@ export function eventRows(events: FeatureEvent[]): EventRow[] {
 // «Показать все» — нужно, если лента обрезана (events.length < eventsTotal).
 export function showAllNeeded(events: FeatureEvent[], eventsTotal: number): boolean {
   return events.length < eventsTotal;
+}
+
+// Время в ленте (M3): сегодня — «ЧЧ:ММ», другой день — «dd.mm ЧЧ:ММ» (дата
+// вместе со временем: иначе события разных дней в ленте не различить).
+// now — «сейчас» в мс (стабильные тесты; не задано — Date.now()).
+export function eventTimeLabel(at: string, now?: number): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return '';
+  const n = new Date(now ?? Date.now());
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  if (sameDay) return hhmm(at) ?? '';
+  return dateTimeLabel(at) ?? hhmm(at) ?? '';
 }

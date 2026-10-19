@@ -10,13 +10,14 @@ import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { showToast } from '../../lib/toast';
 import { featureDisplayState, featureQuickAction, featureStatusTag, formatDuration } from '../../lib/chatGroups';
+import { plural } from '../../lib/plural';
 import { dateOnly, dateTimeLabel } from '../chat/feature/featureTime';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../ui/Button';
 import { FeaturePageHeader, type FeatureStatusTag } from './FeaturePageHeader';
-import { FeaturePageBody, FeaturePageEvents } from './FeaturePageBody';
+import { FeaturePageBody } from './FeaturePageBody';
 import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 
@@ -42,6 +43,9 @@ export interface FeaturePageProps {
   // (без новых запросов). Нет названия (чат вне проекта / список ещё не пришёл) —
   // нейтральная подпись «Чат»; GUID наружу не попадает.
   chatNames?: Record<string, string>;
+  // Персоны чатов (sessionId → personaId) — из того же списка сессий: аватары 18
+  // в строках чатов (макет §5). Нет персоны — нейтральный круг.
+  chatPersonas?: Record<string, string>;
 }
 
 // «Сколько» фичи для шапки (макет §5.1): открытая — «идёт {возраст}» (от createdAt),
@@ -87,7 +91,7 @@ function LoadingSkeleton() {
 // задачи/тревога — из индекса фич (фолбэк — эпик страницы). Крошка читает указатель
 // возврата (featureBackNav). Тело — одно из пяти состояний: loading | ok | notFound |
 // disabled | error (макет §5.7).
-export function FeaturePage({ featureId, projectId, isMobile = false, onBack, chatNames }: FeaturePageProps) {
+export function FeaturePage({ featureId, projectId, isMobile = false, onBack, chatNames, chatPersonas }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
   const featuresOn = useFeature(FLAGS.featuresOverview);
@@ -172,7 +176,8 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
         icon={AlertTriangle}
         title="Не удалось загрузить фичу."
         action={
-          <Button size="xs" variant="ghost" style={{ background: C.bgWhite }}
+          // m1: на 360 у всех ui/Button страницы minHeight 40 (тач-цель, §6).
+          <Button size="xs" variant="ghost" style={{ background: C.bgWhite, ...(isMobile ? { minHeight: 40 } : {}) }}
             onClick={() => refetchFeaturePage(featureId)}>
             <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             Повторить
@@ -222,10 +227,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
           index={index}
           feature={feature}
           chatNames={chatNames}
-          onOpenChat={openChat}
-          isMobile={isMobile}
-        />
-        <FeaturePageEvents
+          chatPersonas={chatPersonas}
           events={events}
           eventsTotal={eventsTotal}
           onShowAll={() => refetchFeaturePageAll(featureId)}
@@ -281,8 +283,9 @@ function AlarmBlock({ feature, onOpenChat }: {
   if (closed) {
     const bg = merged ? C.successBg : C.bgSelected;
     const hi = merged ? C.successText : C.textHeading;
+    // m5: «1 задача / 2–4 задачи / 5+ задач» (lib/plural), не «3 задач».
     const text = merged
-      ? `Смержена ${dateOnly(feature.summary?.mergedAt) ?? ''} · за ${formatDuration(feature.summary?.durationMinutes ?? 0)}${feature.taskCount != null ? ` · ${feature.taskCount} задач` : ''}`
+      ? `Смержена ${dateOnly(feature.summary?.mergedAt) ?? ''} · за ${formatDuration(feature.summary?.durationMinutes ?? 0)}${feature.taskCount != null ? ` · ${feature.taskCount} ${plural(feature.taskCount, 'задача', 'задачи', 'задач')}` : ''}`
       : `Закрыта без мержа${feature.summary?.mergedAt ? ` ${dateOnly(feature.summary.mergedAt)}` : ''}`;
     return (
       <div data-testid="feature-page-alarm" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px', padding: '10px 12px', borderRadius: R.lg, background: bg, fontSize: FS.base, color: C.textPrimary }}>

@@ -15,6 +15,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
+import { stripStepCode } from './featurePageBody';
 import { __test as pageTest } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -54,6 +55,14 @@ vi.mock('../../lib/api', () => ({
       },
     },
   },
+}));
+// Стор персон (lib/personas) — мок: hoisted-карта id→имя (аватары 18 в строках
+// чатов/шагов, таблица §5.5). Компоненту нужен только .name.
+const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+vi.mock('../../lib/personas', () => ({
+  getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
+  usePersonasVersion: () => 0,
+  personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
@@ -100,7 +109,7 @@ function pageData(over: Partial<FeaturePageData> = {}): FeaturePageData {
   };
 }
 
-function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void; chatNames?: Record<string, string> }) {
+function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void; chatNames?: Record<string, string>; chatPersonas?: Record<string, string> }) {
   installFakeDom();
   const { container } = mount(createElement(FeaturePage, {
     featureId: props.featureId ?? 'f1',
@@ -108,6 +117,7 @@ function render(props: { featureId?: string; projectId?: string | null; isMobile
     isMobile: props.isMobile ?? false,
     onBack: props.onBack ?? (() => {}),
     chatNames: props.chatNames,
+    chatPersonas: props.chatPersonas,
   }));
   return container;
 }
@@ -137,6 +147,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     pageTest.reset();
     indexTest.reset();
     backNavTest.reset();
+    personaMap.clear();
     setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
@@ -401,11 +412,13 @@ describe('FeaturePage: пять состояний + шапка + тревога
     });
     const c = render({});
     await settle();
-    // Кнопка «Показать все» есть (лента обрезана).
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-show-all');
+    // Кнопка «Показать все» есть (лента обрезана): ui/Button xs ghost внутри span-обёртки.
+    const wrap = findNodeByAttr(c, 'data-testid', 'feature-page-show-all');
+    expect(wrap).not.toBeNull();
+    const btn = firstButton(wrap as never);
     expect(btn).not.toBeNull();
     // Клик.
-    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
     await settle();
     // Запрос с eventsLimit='all' (последний вызов).
     const lastCall = mockGetFeature.calls[mockGetFeature.calls.length - 1];
@@ -598,4 +611,291 @@ describe('FeaturePage: пять состояний + шапка + тревога
     // Блок «Задачи» с счётчиками (1 задача — эпик, впереди).
     expect(textNodes(c).join('')).toContain('впереди 1');
   });
+
+  // === R6-1: чаты — роль русским словом, аватар персоны, «ключевой» ===
+
+  it('R6-1: роль чата — русское слово (curator→«куратор», executor→«исполнитель»), не сырой kind', async () => {
+    mockIndex.chats = {
+      'chat-c': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+      'chat-x': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'back' }],
+    };
+    const c = render({});
+    await settle();
+    const cRow = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-c')!;
+    const cText = textNodes(cRow).join('');
+    expect(cText).toContain('куратор');
+    expect(cText).not.toContain('curator');
+    const xRow = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-x')!;
+    const xText = textNodes(xRow).join('');
+    expect(xText).toContain('исполнитель');
+    expect(xText).not.toContain('executor');
+  });
+
+  it('R6-1: ключевой чат — метка «ключевой» (accentLight), без кода роли', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    const t = textNodes(row).join('');
+    expect(t).toContain('ключевой');
+    expect(t).not.toContain('curator');
+    // Фон строки — accentLight (не рамка/фон-карточки).
+    expect((row as unknown as { style: Record<string, string> }).style.background).toBe('var(--c-accent-light)');
+  });
+
+  it('R6-1: аватар 18 — персона из chatPersonas (инициалы); без персоны — нейтральный круг', async () => {
+    personaMap.set('p1', 'Денис');
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const c = render({ chatPersonas: { 'chat-key': 'p1' } });
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    // Аватар персоны: инициал (mock personaInitials → первая буква).
+    expect(textNodes(row).join('')).toContain('Д');
+  });
+
+  it('R6-1: персоны нет — инициалов в строке чата нет (нейтральный круг)', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
+    expect(textNodes(row).join('')).not.toContain('Д');
+  });
+
+  // === R6-2: лента — исполнитель, дата+время, сетка 44·16 ===
+
+  it('R6-2: лента — исполнитель по personaId (имя), без персоны — без прочерка', async () => {
+    personaMap.set('p1', 'Денис');
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: 'p1', sessionId: null, round: null, reason: null },
+        { at: '2026-10-19T11:00:00Z', kind: 'completed', taskId: 't2', personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 2,
+    });
+    const c = render({});
+    await settle();
+    const withPersona = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-19T10:00:00Z-started')!;
+    const t1 = textNodes(withPersona).join('');
+    expect(t1).toContain('Денис');
+    expect(t1).not.toContain('—');
+    // Без персоны — только фраза, прочерка нет.
+    const noPersona = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-19T11:00:00Z-completed')!;
+    const t2 = textNodes(noPersona).join('');
+    expect(t2).toContain('закрыта');
+    expect(t2).not.toContain('—');
+  });
+
+  it('R6-2: время — сегодня «ЧЧ:ММ», другой день «dd.mm ЧЧ:ММ» (дата вместе со временем)', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
+        { at: '2026-10-18T10:00:00Z', kind: 'completed', taskId: 't2', personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 2,
+    });
+    const c = render({});
+    await settle();
+    // Сегодня (NOW = 19.10): только время (в местном поясе — TZ-стабильно по форме).
+    const today = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-19T10:00:00Z-started')!;
+    const t1 = textNodes(today).find(t => /^\d{2}:\d{2}$/.test(t));
+    expect(t1).toBeDefined();
+    // Другой день: дата + время.
+    const other = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-18T10:00:00Z-completed')!;
+    const t2 = textNodes(other).find(t => /^\d{2}\.\d{2} \d{2}:\d{2}$/.test(t));
+    expect(t2).toBeDefined();
+    expect(t2).toContain('18.10');
+  });
+
+  it('R6-2: строка события — сетка 44px 16px minmax(0,1fr), column-gap 8', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 1,
+    });
+    const c = render({});
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-19T10:00:00Z-started')!;
+    const st = (row as unknown as { style: Record<string, string> }).style;
+    expect(st.gridTemplateColumns).toBe('44px 16px minmax(0,1fr)');
+    expect(st.columnGap).toBe('8px');
+  });
+
+  // === R6-3: шаги — код не повторяется, число отдельно, «Показать все» Button, строка-кнопка ===
+
+  it('R6-3: код шага в названии не повторяется (stripStepCode, чистая функция)', () => {
+    expect(stripStepCode('Ш1 · индекс поиска', 'Ш1')).toBe('индекс поиска');
+    expect(stripStepCode('Ш10 · индекс', 'Ш1')).toBe('Ш10 · индекс'); // «Ш10» для кода «Ш1» не режется
+    expect(stripStepCode('Ш10 · индекс', 'Ш10')).toBe('индекс');
+    expect(stripStepCode('Индекс без кода', 'Ш1')).toBe('Индекс без кода');
+  });
+
+  it('R6-3: строка шага — код один раз; с чатом — <button>, без — <div>', async () => {
+    mockGetFeature.result = pageData({
+      run: {
+        ...pageData().run,
+        stepChains: [
+          { stepRef: 'Ш1', title: 'Ш1 · индекс поиска', lane: 'back', taskIds: [], outcome: 'pending', status: 'ждёт ревью', durationMinutes: 0, loops: 0, rounds: [] },
+          { stepRef: 'Ш2', title: 'Шаг два', lane: 'front', taskIds: [], outcome: 'pending', status: 'ждёт ревью', durationMinutes: 0, loops: 0, rounds: [] },
+        ],
+      },
+    });
+    // Чат исполнителя только для Ш1.
+    mockIndex.chats = {
+      'chat-x': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш1', lane: 'back' }],
+    };
+    const c = render({});
+    await settle();
+    const row1 = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1')!;
+    const t1 = textNodes(row1).join('');
+    // Код «Ш1» — один раз (отдельный span), название без повторённого кода.
+    expect(t1.match(/Ш1/g)?.length).toBe(1);
+    expect(t1).toContain('индекс поиска');
+    // Ведёт в чат → настоящая кнопка.
+    expect(row1.nodeName).toBe('BUTTON');
+    // Ш2 — чата нет → текст (div).
+    const row2 = findNodeByAttr(c, 'data-testid', 'feature-step-Ш2')!;
+    expect(row2.nodeName).toBe('DIV');
+  });
+
+  it('R6-3: число шагов отделено от подписи (отдельный span, не «ШАГИ2»)', async () => {
+    mockGetFeature.result = pageData({
+      run: {
+        ...pageData().run,
+        stepChains: [
+          { stepRef: 'Ш1', title: 'Шаг один', lane: 'back', taskIds: [], outcome: 'pending', status: 'ждёт ревью', durationMinutes: 0, loops: 0, rounds: [] },
+          { stepRef: 'Ш2', title: 'Шаг два', lane: 'front', taskIds: [], outcome: 'pending', status: 'ждёт ревью', durationMinutes: 0, loops: 0, rounds: [] },
+        ],
+      },
+    });
+    const c = render({});
+    await settle();
+    // Подпись блока: caption «Шаги» и число «2» — разные текстовые ноды (right —
+    // отдельный span с marginLeft auto; подписываю его testid'ом, caption — его родитель).
+    const right = findNodeByAttr(c, 'data-testid', 'feature-steps-cap');
+    expect(right).not.toBeNull();
+    const capDiv = (right as unknown as { parentNode: FNodeLike }).parentNode as FNodeLike;
+    const nodes = textNodes(capDiv as never);
+    expect(nodes).toContain('Шаги');
+    expect(nodes).toContain('2');
+    // Ни одна нода не склеивает подпись и число.
+    for (const t of nodes) expect(t).not.toMatch(/Шаги\s*2|2\s*Шаги/);
+  });
+
+  // === R6-4: каркас §5.4 — колонки, открытые блоки, порядок на 360 ===
+
+  it('R6-4: десктоп — grid minmax(0,1fr) 300px, gap 18, align start; блоки открытые (marginBottom 18, без фона)', async () => {
+    const c = render({});
+    await settle();
+    const body = findNodeByAttr(c, 'data-testid', 'feature-page-body')!;
+    const st = (body as unknown as { style: Record<string, string> }).style;
+    expect(st.gridTemplateColumns).toBe('minmax(0,1fr) 300px');
+    expect(st.gap).toBe('18px');
+    expect(st.alignItems).toBe('start');
+    // Левая колонка → первый блок (конвейер): открытый — отступ 18, фона/рамки/полей нет.
+    const leftCol = (body as unknown as { childNodes: FNodeLike[] }).childNodes[0] as FNodeLike;
+    const firstBlock = leftCol.childNodes[0] as FNodeLike;
+    const bst = (firstBlock as unknown as { style: Record<string, string> }).style;
+    expect(bst.marginBottom).toBe('18px');
+    expect(bst.background).toBeUndefined();
+    expect(bst.border).toBeUndefined();
+  });
+
+  it('R6-4: 360 — одна колонка, порядок «чаты → шаги» (R-11)', async () => {
+    mockIndex.chats = {
+      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+    };
+    mockGetFeature.result = pageData({
+      run: {
+        ...pageData().run,
+        stepChains: [
+          { stepRef: 'Ш1', title: 'Шаг один', lane: 'back', taskIds: [], outcome: 'pending', status: 'ждёт ревью', durationMinutes: 0, loops: 0, rounds: [] },
+        ],
+      },
+    });
+    const c = render({ isMobile: true });
+    await settle();
+    const body = findNodeByAttr(c, 'data-testid', 'feature-page-body')!;
+    const bst = (body as unknown as { style: Record<string, string> }).style;
+    expect(bst.display).toBe('flex');
+    expect(bst.flexDirection).toBe('column');
+    // Порядок блоков: чаты раньше шагов.
+    const order: string[] = [];
+    const walk = (n: { childNodes: unknown[]; attributes?: Record<string, string> }) => {
+      const at = (n as { attributes?: Record<string, string> }).attributes;
+      if (at && at['data-testid']) {
+        if (at['data-testid'].startsWith('feature-chat-')) order.push('chat');
+        if (at['data-testid'].startsWith('feature-step-')) order.push('step');
+      }
+      for (const ch of (n.childNodes as { childNodes: unknown[]; attributes?: Record<string, string> }[])) walk(ch as never);
+    };
+    walk(body as never);
+    expect(order.indexOf('chat')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('step')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('chat')).toBeLessThan(order.indexOf('step'));
+  });
+
+  // === R6-5: склонение, тач-цель «Повторить», счётчики-теги ===
+
+  it('R6-5: шапка — «1 задача», «2 задачи», «5 задач» (lib/plural, не «3 задач»)', async () => {
+    for (const [count, expected] of [[1, '1 задача'], [2, '2 задачи'], [5, '5 задач']] as const) {
+      mockIndex.features = [feat({ taskCount: count })];
+      const c = render({});
+      await settle();
+      const tc = findNodeByAttr(c, 'data-testid', 'feature-page-taskcount')!;
+      expect(textNodes(tc).join('')).toContain(expected);
+    }
+  });
+
+  it('R6-5: «Повторить» на 360 — minHeight 40 (тач-цель)', async () => {
+    mockGetFeature.error = { name: 'HttpError', status: 500 } as Error & { status?: number };
+    const c = render({ isMobile: true });
+    await settle();
+    const btn = findButtonWithText(c, 'Повторить');
+    expect(btn).not.toBeNull();
+    expect((btn as unknown as { style: Record<string, string> }).style.minHeight).toBe('40px');
+  });
+
+  it('R6-5: счётчики задач — теги §5.1 (11/600, R 6, padding 1 7), ряд gap 6, marginBottom 6', async () => {
+    const c = render({});
+    await settle();
+    const body = findNodeByAttr(c, 'data-testid', 'feature-page-body')!;
+    // Правая колонка (десктоп): чаты, задачи, события → блок «Задачи» — третий.
+    const rightCol = (body as unknown as { childNodes: FNodeLike[] }).childNodes[1] as FNodeLike;
+    const tasksBlock = rightCol.childNodes[1] as FNodeLike;
+    const rows = (tasksBlock as unknown as { childNodes: FNodeLike[] }).childNodes;
+    // Block: [BlockCap, TaskCountersView].
+    const counters = rows[1] as FNodeLike;
+    const cst = (counters as unknown as { style: Record<string, string> }).style;
+    expect(cst.gap).toBe('6px');
+    expect(cst.marginBottom).toBe('6px');
+    // Тег: 600, padding 1 7, R 6.
+    const tag = (counters as unknown as { childNodes: FNodeLike[] }).childNodes[0] as FNodeLike;
+    const tst = (tag as unknown as { style: Record<string, string> }).style;
+    expect(tst.fontWeight).toBe('600');
+    expect(tst.padding).toBe('1px 7px');
+    expect(tst.borderRadius).toBe('6px');
+  });
 });
+
+// Тип узла fakeDom для обходов в тестах (childNodes/attributes).
+type FNodeLike = { nodeType: number; nodeName: string; childNodes: FNodeLike[]; attributes?: Record<string, string> };
+
+// <button> с текстом (обход дерева; null — не найден).
+function findButtonWithText(n: FNodeLike, text: string): FNodeLike | null {
+  if (n.nodeType === 1 && n.nodeName === 'BUTTON') {
+    const t = textNodes(n as never).join('');
+    if (t.includes(text)) return n;
+  }
+  for (const c of n.childNodes) {
+    const hit = findButtonWithText(c, text);
+    if (hit) return hit;
+  }
+  return null;
+}

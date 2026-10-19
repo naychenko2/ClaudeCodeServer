@@ -368,6 +368,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     for (const s of sessions) if (s.name) m[s.id] = s.name;
     return m;
   }, [sessions]);
+  // Персоны чатов (макет §5, аватары 18 в строках чатов): тот же список сессий —
+  // sessionId → personaId; чат без персоны (не ведётся от её лица) — в карте нет.
+  const chatPersonas = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const s of sessions) if (s.personaId) m[s.id] = s.personaId;
+    return m;
+  }, [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
@@ -2072,7 +2079,7 @@ const windowWidth = useWindowWidth();
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} chatNames={chatNames}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} chatNames={chatNames} chatPersonas={chatPersonas}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2178,6 +2185,7 @@ const windowWidth = useWindowWidth();
           openFeatureId={featurePageOpen ? openFeatureId : null}
           onFeatureBack={handleFeatureBack}
           chatNames={chatNames}
+          chatPersonas={chatPersonas}
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}

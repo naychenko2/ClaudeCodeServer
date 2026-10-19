@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ArrowLeft, GitBranch, MoreHorizontal } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW } from '../../lib/design';
+import { plural } from '../../lib/plural';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
@@ -205,7 +206,8 @@ export function FeaturePageHeader({
             <span data-testid="feature-page-age" style={{ fontSize: FS.sm, color: C.textSecondary }}>{ageLabel}</span>
           )}
           {taskCount != null && (
-            <span data-testid="feature-page-taskcount" style={{ fontSize: FS.sm, color: C.textSecondary }}>{taskCount} задач</span>
+            // m5: «1 задача / 2–4 задачи / 5+ задач» (lib/plural), не «3 задач».
+            <span data-testid="feature-page-taskcount" style={{ fontSize: FS.sm, color: C.textSecondary }}>{taskCount} {plural(taskCount, 'задача', 'задачи', 'задач')}</span>
           )}
         </div>
       )}

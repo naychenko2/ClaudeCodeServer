@@ -174,7 +174,8 @@ public class ComfyGpuSnapshotBuilderTests
     public void БитыйСнимок_BuildНеБросает()
     {
         var h = Build();
-        SetSnapshot(h.Monitor, new ComfyQueueMonitorSnapshot(false, null, null, null, null, null, null));
+        // null! — намеренный «битый снимок»: Running/Pending/Foreign non-null, тест проверяет, что Build не роняет
+        SetSnapshot(h.Monitor, new ComfyQueueMonitorSnapshot(false, null, null, null!, null!, null!, null));
 
         var gpu = h.Builder.Build("unknown-ticket", 1);
 

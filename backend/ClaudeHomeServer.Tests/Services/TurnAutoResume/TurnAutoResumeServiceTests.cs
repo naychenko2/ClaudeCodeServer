@@ -124,9 +124,9 @@ public class TurnAutoResumeServiceTests
     }
 
     // Регресс (ADR-033, причина 2): у проектной сессии OwnerId пустой — владелец берётся
-    // из проекта. Раньше сервис проверял session.OwnerId напрямую и отсеивал все проектные
-    // чаты с причиной «флаг выключен у владельца». Мутация: вернуть проверку по
-    // session.OwnerId (null) → IsEnabledFor не вызывается → ResumeAsync не уходит → тест красный.
+    // из проекта. Здесь проверяется только оркестратор (FakeHost владельца не резолвит); сам
+    // резолв владельца в боевом адаптере покрыт SessionManagerTurnResumeHostTests (мутация
+    // «session.OwnerId вместо ResolveOwnerId(session)» краснит их, а не этот тест).
     [Fact]
     public async Task ПроектныйЧат_СПустымOwnerId_ФлагВладельцаПроектаВключён_Возобновляется()
     {

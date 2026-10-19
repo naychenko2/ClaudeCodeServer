@@ -18,9 +18,10 @@ namespace ClaudeHomeServer.Tests.Services.TurnAutoResume;
 /// <summary>
 /// Регресс (ADR-033, причина 1): штатная остановка (KillAllProcesses) не должна перетирать
 /// Working в Error/Active. Умирающий процесс присылает ErrorMessage/ExitedMessage, и
-/// ApplyStatusAsync при поднятом признаке остановки ранним выходом не трогает статус ни в
-/// памяти, ни на диске — sessions.json сохранит Working, и LoadSessions отберёт сессию в
-/// кандидаты на auto-resume. Мутация: убрать ранний выход в ApplyStatusAsync → тест красный.
+/// OnMessageAsync при поднятом признаке остановки не переводит по ним статус ни в памяти,
+/// ни на диске — sessions.json сохранит Working, и LoadSessions отберёт сессию в
+/// кандидаты на auto-resume. ResultMessage пишется как обычно (ход честно завершился).
+/// Мутация: убрать гашение error/exited по _stopping в OnMessageAsync → тесты красные.
 /// </summary>
 public class GracefulShutdownStatusTests : IDisposable
 {
@@ -143,8 +144,8 @@ public class GracefulShutdownStatusTests : IDisposable
     }
 
     // --- Контроль: БЕЗ признака остановки ErrorMessage всё же переводит в Error ---
-    // Тест показывает, что именно ранний выход (а не что-то другое) держит Working: если
-    // ApplyStatusAsync не ранит выход, статус станет Error. Мутация = убрать if(_stopping).
+    // Тест показывает, что именно гашение по _stopping (а не что-то другое) держит Working:
+    // без поднятого признака статус станет Error.
     [Fact]
     public async Task БезОстановки_ErrorMessage_ПереводитВError()
     {
@@ -158,5 +159,53 @@ public class GracefulShutdownStatusTests : IDisposable
 
         sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error,
             "без признака остановки ErrorMessage штатно переводит Working → Error");
+    }
+
+    // --- ExitedMessage в окне остановки: Working в памяти не сбрасывается в Active ---
+    // LoadSessions переводит Working → Orphaned, а для Orphaned exited и так ничего не меняет
+    // (ветка `_ => null`), поэтому сначала возвращаем в памяти честный Working живого хода.
+    // Мутация: убрать гашение error/exited по _stopping в OnMessageAsync → Active → тест красный.
+    [Fact]
+    public async Task ШтатнаяОстановка_ExitedMessage_СтатусWorking_СохраняетсяИКандидатВозвращается()
+    {
+        var session = MakeWorkingSession(claudeSessionId: "csid-" + Guid.NewGuid().ToString("N"));
+        WriteSessions([session]);
+        var sut = CreateSessionManager();
+        sut.GetById(session.Id)!.Status = SessionStatus.Working;
+
+        sut.KillAllProcesses();
+        await sut.OnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()), new ExitedMessage());
+
+        sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
+            "признак остановки: exited умирающего процесса не сбрасывает Working в Active");
+        File.ReadAllText(_sessionsJsonPath).Should().Contain("\"Status\":1",
+            "на диске остался Working — sessions.json не перезаписан");
+        CreateSessionManager().TakeRestartResumeCandidates().Should().Contain(session.Id,
+            "после рестарта сессия снова в кандидатах на auto-resume");
+    }
+
+    // --- ResultMessage в окне остановки: ход завершился честно, пишется Active ---
+    // Без точечного выхода (гасим только обрывы) result тоже терялся бы, на диске оставался бы
+    // Working, и уже завершённый ход после рестарта «продолжился» бы повторно.
+    // Мутация: гасить по _stopping и ResultMessage → Working на диске → тест красный.
+    [Fact]
+    public async Task ШтатнаяОстановка_ResultMessage_ПишетсяActive_ВКандидатыНеИдёт()
+    {
+        var session = MakeWorkingSession(claudeSessionId: "csid-" + Guid.NewGuid().ToString("N"));
+        WriteSessions([session]);
+        var sut = CreateSessionManager();
+        sut.GetById(session.Id)!.Status = SessionStatus.Working;
+
+        sut.KillAllProcesses();
+        await sut.OnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 1, 1, null, null));
+
+        sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active, "result хода пишется и при остановке");
+        var raw = File.ReadAllText(_sessionsJsonPath);
+        // SaveSessions пишет статус строкой (в отличие от исходного файла теста с числом)
+        raw.Should().Contain("\"Status\":\"Active\"", "на диске Active")
+            .And.NotContain("\"Status\":1").And.NotContain("\"Status\":\"Working\"");
+        CreateSessionManager().TakeRestartResumeCandidates().Should().NotContain(session.Id,
+            "ход завершён — повторно продолжать его после рестарта нельзя");
     }
 }

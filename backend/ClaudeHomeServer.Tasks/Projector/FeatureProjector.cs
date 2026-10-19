@@ -38,7 +38,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var qa = children.Where(t => t.Role == TaskRoles.Qa).ToList();
         var final = children.LastOrDefault(t => t.Role == TaskRoles.Final);
         var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge);
-        var cut = children.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var cut = children.Where(t => t.Role is TaskRoles.Cut or TaskRoles.Consult).ToList();
         var plan = children.Where(t => t.Role == TaskRoles.Plan).ToList();
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
@@ -169,16 +169,26 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // activeIndex: текущая стадия конвейера.
         // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
-        // 2) Если таких нет (все стадии с задачами пройдены) — merge (последняя),
-        //    если не пройдена: финал зелёный, merge-задачи ещё нет → мерж active.
-        // 3) -1 — все стадии пройдены.
+        // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
+        //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
+        //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
+        //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
+        //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
+        //    нет) — частный случай: последняя с задачами = final → active = merge.
+        //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
+        // 3) -1 — все стадии пройдены (merge done).
         int activeIndex = -1;
         for (int i = 0; i < isDone.Length; i++)
         {
             if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
         }
         if (activeIndex == -1 && !isDone[^1])
-            activeIndex = isDone.Length - 1;
+        {
+            int lastWithTasks = -1;
+            for (int i = 0; i < stageDefs.Length; i++)
+                if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
+            activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
+        }
 
         var stages = new List<FeatureStage>(stageDefs.Length);
         for (int i = 0; i < stageDefs.Length; i++)
@@ -432,11 +442,11 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Роль задачи → ключ стадии конвейера (для блока «Сейчас»).
-    // step/rework → prod; consult/прочее → prod. Эпик (feature) сюда не доходит:
-    // он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
+    // cut/consult → cut (Разрез); step/rework → prod; прочее → prod.
+    // Эпик (feature) сюда не доходит: он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
     private static string RoleToStage(string? role) => role switch
     {
-        TaskRoles.Cut => "cut",
+        TaskRoles.Cut or TaskRoles.Consult => "cut",
         TaskRoles.Plan => "plan",
         TaskRoles.Step or TaskRoles.Rework => "prod",
         TaskRoles.Review => "review",

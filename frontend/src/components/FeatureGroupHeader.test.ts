@@ -355,3 +355,28 @@ describe('featureGroupByOptions: пункт «Фичи»', () => {
     expect(featureGroupByOptions(false, false)).toEqual(['days', 'none']);
   });
 });
+
+// === m2: поля тела плашки по состоянию (таблица §2) ===
+// Обычная — 7 10 7 2 (55 px); закрытая (compact) — 5 10 5 2 (≈50,5), на 360 minHeight 52.
+// До фикса тело закрытой плашки шло с полями 7 10 7 2 и высотой 55, как открытая.
+describe('FeatureGroupHeader: m2 поля тела по состоянию', () => {
+  it('обычная плашка: поля 7 10 7 2 (55 px)', () => {
+    const html = renderHeader(feat());
+    expect(html).toContain('padding:7px 10px 7px 2px');
+  });
+
+  it('закрытая (compact): поля 5 10 5 2 (≈50,5, таблица §2)', () => {
+    const html = renderHeader(feat({ bucket: 'closed', summary: null }), { compact: true });
+    expect(html).toContain('padding:5px 10px 5px 2px');
+  });
+
+  it('закрытая на 360 (compact + isMobile): minHeight 52', () => {
+    const html = renderHeader(feat({ bucket: 'closed', summary: null }), { compact: true, isMobile: true });
+    expect(html).toContain('min-height:52px');
+  });
+
+  it('обычная на 360: minHeight 52 нет (только у закрытой)', () => {
+    const html = renderHeader(feat(), { isMobile: true });
+    expect(html).not.toContain('min-height:52px');
+  });
+});

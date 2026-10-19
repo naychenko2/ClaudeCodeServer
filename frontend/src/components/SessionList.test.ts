@@ -388,6 +388,14 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     return null;
   }
 
+  // Узел по data-testid (надёжно в fake-DOM: атрибуты всегда создаются, в отличие от
+  // текстовых узлов)
+  function findTestId(n: _FakeNode, id: string): _FakeNode | null {
+    if (n._attrs['data-testid'] === id) return n;
+    for (const c of n.childNodes) { const r = findTestId(c, id); if (r) return r; }
+    return null;
+  }
+
   it('два чипа дают OR: waiting+stopped → их фичи, merge не показана', async () => {
     const container = await renderFeatures({ featureChips: ['waiting', 'stopped'] });
     expect(hasFeatureTitle(container, 'FICH_W')).toBe(true);
@@ -436,4 +444,52 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     // Новых запросов индекса нет: сброс фильтров не меняет проект → fetch не плодится
     expect(indexCalls).toBe(1);
   });
+
+  // M1 (major): заголовок секции «Закрытые · N · на втором плане» (таблица §2, макет A).
+  // Был утерян вместе со сносом closedSectionOpen: закрытые шли сразу за открытыми, хотя
+  // подпись тумблера обещала «секцией внизу списка». Возвращаем строку БЕЗ шеврона
+  // (сворачивать больше нечего — видимость решает тумблер); N = нарисованные закрытые группы.
+  // Мутация: data-closed-count = 0 (вместо closedGroups.length) → число 0, тест красный.
+  it('M1: заголовок «Закрытые · N · на втором плане» — есть при showClosed+закрытых, число = нарисованные', async () => {
+    // showClosed выкл → заголовка нет (закрытые не нарисованы)
+    const off = await renderFeatures({});
+    expect(findTestId(off, 'closed-section-header')).toBeNull();
+    // showClosed вкл → заголовок; N = 1 (c1 — единственная закрытая в idx)
+    const on = await renderFeatures({ showClosed: true });
+    const header = findTestId(on, 'closed-section-header');
+    expect(header).not.toBeNull();
+    expect(header!._attrs['data-closed-count']).toBe('1');
+  });
+
+  // m1: «Сбросить» в строке снимаемых чипов — minHeight 40 на 360 (было 24).
+  // SSR (renderToStaticMarkup): стили в style-атрибуте — надёжно. removableChips рендерится
+  // при hasFeatureFilter (showClosed) независимо от индекса (в SSR effects не идут).
+  // Мутация: убрать minHeight:40 из style кнопки → на мобиле height/minHeight по xs (24), тест красный.
+  it('m1: «Сбросить» minHeight 40 на 360 (десктоп — 24)', () => {
+    setAllFlags({ 'features-overview': true });
+    featuresIndexTest.reset();
+    // showClosed=true → hasFeatureFilter → строка снимаемых чипов с «Сбросить»
+    store.clear();
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', showClosed: true }));
+    // Мобила: у кнопки «Сбросить» minHeight 40
+    const mobile = renderToStaticMarkup(createElement(SessionList, { project, activeSession: null, onSelect: () => {}, isMobile: true }));
+    const mTag = buttonTagWithText(mobile, 'Сбросить');
+    expect(mTag).not.toBeNull();
+    expect(mTag).toContain('min-height:40px');
+    // Десктоп: height/minHeight 24 (xs), minHeight 40 нет
+    const desktop = renderToStaticMarkup(createElement(SessionList, { project, activeSession: null, onSelect: () => {} }));
+    const dTag = buttonTagWithText(desktop, 'Сбросить');
+    expect(dTag).not.toBeNull();
+    expect(dTag).not.toContain('min-height:40px');
+  });
 });
+
+// Открывающий тег <button ...> с заданным текстом-содержимым (SSR: style в открывающем
+// теге, текст — содержимое). Возвращает строку тега или null.
+function buttonTagWithText(html: string, text: string): string | null {
+  const end = html.indexOf(`>${text}</button>`);
+  if (end < 0) return null;
+  const start = html.lastIndexOf('<button', end);
+  if (start < 0) return null;
+  return html.slice(start, end);
+}

@@ -226,6 +226,7 @@ function FilterContent({
                   return (
                     <span key={value} style={{ display: 'inline-flex', opacity: count === 0 ? 0.5 : 1 }}>
                       <Chip variant="toggle" selected={active} large={large} disabled={count === 0}
+                        minHeight={large ? 40 : undefined}
                         onClick={() => patch({ featureChips: toggle(filters.featureChips, value) })}
                       >
                         <FeatureDot tone={FEATURE_TONE[value]} active={active} />
@@ -361,6 +362,8 @@ function buildSummary(filters: ChatFilters, personaName: string | null): string 
   const parts: string[] = [];
   const q = filters.search.trim();
   if (q) parts.push(`«${q}»`);
+  // Выбранные чипы фич (n1): подсказка воронки называет их, а не только дефолт статусов
+  if (filters.featureChips.length) parts.push(filters.featureChips.map(c => FEATURE_CHIP_LABEL[c]).join(', '));
   const liveSel = (['active', 'waiting', 'error'] as ChatStatusChip[]).filter(s => filters.statuses.includes(s));
   if (liveSel.length < 3 && liveSel.length > 0) parts.push(liveSel.map(s => STATUS_SUMMARY[s]).join(', '));
   if (!filters.statuses.includes('done')) parts.push('без завершённых');
@@ -512,7 +515,14 @@ export function FilterBar({
     </span>
   );
 
-  // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки)
+  // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки).
+  // На 360 в режиме фич — «Показать N фич» (md, 42 px, таблица §4) вместо «Готово»;
+  // N = открытые фичи индекса (bucket != closed). Подвал общий с «Чатами», поэтому
+  // переключение только по groupBy + isMobile.
+  const isFeaturesMode = filters.groupBy === 'features';
+  const openFeatureCount = isFeaturesMode && features ? features.filter(f => f.bucket !== 'closed').length : 0;
+  const footerIsMobileFeatures = isMobile && isFeaturesMode;
+  const footerActionLabel = footerIsMobileFeatures ? `Показать ${openFeatureCount} фич` : 'Готово';
   const footerRow = (
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: SP.sm,
@@ -520,15 +530,19 @@ export function FilterBar({
       <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {hiddenCount > 0 ? `Скрыто ${hiddenCount}` : 'Все чаты показаны'}
         {hasFilters && (
-          <button onClick={resetAll} style={{ ...linkBtnStyle, marginLeft: 6 }}>Сбросить всё</button>
+          <button onClick={resetAll} style={{ ...linkBtnStyle, marginLeft: 6, ...(isMobile ? { minHeight: 40 } : null) }}>Сбросить всё</button>
         )}
       </span>
       <button onClick={() => setOpen(false)} style={{
-        padding: '5px 14px', borderRadius: R.md, border: 'none',
+        padding: footerIsMobileFeatures ? '11px 16px' : '5px 14px',
+        borderRadius: footerIsMobileFeatures ? R.xl : R.md,
+        border: 'none',
         background: C.accent, color: C.onAccent,
-        fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer', flexShrink: 0,
+        fontSize: footerIsMobileFeatures ? FS.md : FS.sm, fontWeight: 600, fontFamily: FONT.sans,
+        cursor: 'pointer', flexShrink: 0,
+        ...(footerIsMobileFeatures ? { minHeight: 42 } : null),
       }}>
-        Готово
+        {footerActionLabel}
       </button>
     </div>
   );

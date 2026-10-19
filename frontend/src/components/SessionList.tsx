@@ -1011,7 +1011,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             и закрытые
           </Chip>
         )}
-        <Button variant="ghost" size="xs" style={{ color: C.accent, border: 'none' }}
+        <Button variant="ghost" size="xs"
+          style={{ color: C.accent, border: 'none', ...(isMobile ? { height: 40, minHeight: 40 } : null) }}
           onClick={() => patch({ featureChips: [], showClosed: false })}>
           Сбросить
         </Button>
@@ -1085,7 +1086,37 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         {calm}
         {openGroups.map(g => renderFeatureGroup(g))}
         {noMatch}
-        {filters.showClosed && closedGroups.map(g => renderFeatureGroup(g))}
+        {filters.showClosed && closedGroups.length > 0 && (
+          <>
+            {/* Заголовок секции «Закрытые · N · на втором плане» (таблица §2, макет А):
+                строка БЕЗ шеврона — сворачивать больше нечего, видимость решает тумблер.
+                N = нарисованные закрытые группы (единый источник, как в волне 1);
+                подсказка справа 11/400, без капса. На 360 — minHeight 40. */}
+            <div
+              data-testid="closed-section-header"
+              data-closed-count={closedGroups.length}
+              style={{
+                display: 'flex', alignItems: 'baseline', gap: 6,
+                padding: '12px 6px 5px',
+                ...(isMobile ? { minHeight: 40 } : null),
+              }}
+            >
+              <span style={{
+                fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase',
+                letterSpacing: '0.06em', color: C.textMuted, fontFamily: FONT.sans,
+              }}>
+                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{closedGroups.length}</span>
+              </span>
+              <span style={{
+                marginLeft: 'auto', fontSize: FS.xs, fontWeight: 400,
+                textTransform: 'none', color: C.textMuted, fontFamily: FONT.sans,
+              }}>
+                на втором плане
+              </span>
+            </div>
+            {closedGroups.map(g => renderFeatureGroup(g))}
+          </>
+        )}
         {noFeatureGroup && renderFeatureGroup(noFeatureGroup)}
       </>
     );

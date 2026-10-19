@@ -130,6 +130,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
     overflow: 'hidden',
     boxShadow: hovered && !compact ? SHADOW.card : undefined,
   };
+  // Поля тела: обычная 7 10 7 2 (55 px), закрытая (compact) 5 10 5 2 (≈50,5, таблица §2);
+  // на 360 закрытая — minHeight 52 (→ 54).
+  const bodyPadding = compact ? '5px 10px 5px 2px' : '7px 10px 7px 2px';
 
   return (
     <div
@@ -185,7 +188,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           background: 'transparent',
           color: 'inherit',
           fontFamily: FONT.sans,
-          padding: '7px 10px 7px 2px',
+          padding: bodyPadding,
           margin: 0,
           cursor: 'pointer',
           textAlign: 'left',
@@ -194,6 +197,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           display: 'flex',
           flexDirection: 'column',
           gap: 3,
+          ...(compact && isMobile ? { minHeight: 52 } : null),
         }}
       >
         {/* Строка 1: глиф, название, давность. lineHeight 19 (Р-1). */}

@@ -159,19 +159,25 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
 
 - **`POST /api/plugins/drafts/{slug}/accept`** — принять: установка по метке `draft:<slug>`
   (`PluginInstaller` — единственный арбитр: валидация, no-op по совпавшему sha, 409 при смене
-  пакета). Права НЕ выдаёт: первая установка → `granted: []`; обновление →
-  `granted = старые ∩ новые запрошенные`. Статусы: 400 (проблемы валидатора, `problems` — список),
-  409 (та же `id`+`version`, другой sha — «поднимите версию»), 200 (установлено / no-op). Ответ
-  (анонимный объект, ключи camelCase):
+  пакета). Права НЕ выдаёт сам: `granted = []` (первая установка) или `granted = старые ∩ новые`
+  (обновление). Статусы: 400 (проблемы валидатора, `problems` — список),
+  409 (та же `id`+`version`, другой sha — «поднимите версию»), 200 (установлено / no-op).
+  **`consentRequired` + `newPermissions`** (дефект 86dec98d, ADR-031 §4):
+  - **первая установка** (`oldById == null`): `newPermissions = Requested` (ВСЕ запрошенные —
+    «новые» для человека), `consentRequired = Requested непусто`. Фронт открывает диалог согласия;
+    человек выдаёт права через `grant`.
+  - **обновление** (`oldById != null`): `newPermissions = Requested \ старые Requested`,
+    `consentRequired = newPermissions непусто`.
+  - **no-op** (совпал sha): `newPermissions = []`, `consentRequired = false`.
+  Ответ (анонимный объект, ключи camelCase):
   ```json
   { "id": "local-a/pkg", "version": "2.0.0", "sha256": "…", "source": "draft:pkg",
     "enabled": true, "requested": ["notes:read", "net:api.linear.app"],
     "granted": ["notes:read"], "consentRequired": true, "newPermissions": ["net:api.linear.app"],
     "secrets": [{ "name": "LINEAR_TOKEN", "set": true, "updatedAt": "2026-10-19T05:24:56Z" }] }
   ```
-  `consentRequired: true` + `newPermissions` — только если обновление добавило новые запрошенные
-  права (человек должен их одобрить через `grant`); заданные секреты прошлой версии сохраняются;
-  черновик после успеха НЕ удаляется (агент может править дальше).
+  Заданные секреты прошлой версии сохраняются; черновик после успеха НЕ удаляется (агент может
+  править дальше).
 
 - **`POST /api/plugins/drafts/{slug}/reject`** — отклонить черновик (шаг 4.3c): переносит
   каталог `_drafts/{slug}` в служебный `_rejected/{slug}` (вне `_drafts` и вне наблюдения

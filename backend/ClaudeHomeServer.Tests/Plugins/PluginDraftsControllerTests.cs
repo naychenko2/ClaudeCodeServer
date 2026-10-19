@@ -409,24 +409,69 @@ public class PluginDraftsControllerTests : IDisposable
         JsonSerializer.Serialize(bad.Value).Should().Contain("problems", "список проблем в ответе");
     }
 
-    // --- Accept: первая установка → granted = [] ---
+    // --- Accept: первая установка → granted = [], consentRequired = true, newPermissions = все Requested ---
+    // Дефект 86dec98d: раньше consentRequired=false → фронт не открывал диалог согласия,
+    // плагин оставался без выданных прав. Теперь: все запрошенные права «новые» для человека.
 
     [Fact]
-    public void Accept_ПерваяУстановка_GrantedПусто()
+    public void Accept_ПерваяУстановкаСПравами_ConsentRequired_NewPermissionsВсе_GrantedПусто()
     {
         CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"]);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.Accept("pkg");
         var json = JsonSerializer.Serialize(ok.Value);
-        json.Should().Contain("\"granted\":[", "granted в ответе");
-        json.Should().Contain("\"consentRequired\":false", "первая установка — согласия не требуется");
+        json.Should().Contain("\"granted\":[", "granted = [] (accept ничего не выдаёт сам)");
+        json.Should().Contain("\"consentRequired\":true", "первая установка с правами → требуется согласие");
+        json.Should().Contain("notes:read", "notes:read в newPermissions");
+        json.Should().Contain("net:api.linear.app", "net:api.linear.app в newPermissions");
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
         record.Granted.Should().BeEmpty("granted при первой установке пуст");
         record.Requested.Should().Equal("notes:read", "net:api.linear.app");
         record.Enabled.Should().BeTrue();
         record.Source.Should().Be("draft:pkg");
+    }
+
+    // --- Accept: первая установка БЕЗ прав → consentRequired = false ---
+
+    [Fact]
+    public void Accept_ПерваяУстановкаБезПрав_ConsentRequiredFalse()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", []);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"consentRequired\":false", "без запрошенных прав → согласия не требуется");
+        json.Should().Contain("\"newPermissions\":[", "newPermissions пуст");
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Granted.Should().BeEmpty();
+        record.Requested.Should().BeEmpty();
+    }
+
+    // --- Accept: обновление БЕЗ новых прав → consentRequired = false ---
+
+    [Fact]
+    public void Accept_ОбновлениеБезНовыхПрав_ConsentRequiredFalse()
+    {
+        // v1: requested = [notes:read]; accept → granted = [notes:read].
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+        GrantDirectly(OwnerA, "local-a/pkg", ["notes:read"]);
+
+        // v2: та же id, версия 2.0.0, тот же requested = [notes:read] (нет новых прав).
+        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"consentRequired\":false", "обновление без новых прав → согласия не требуется");
+        json.Should().Contain("\"newPermissions\":[", "newPermissions пуст");
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Version.Should().Be("2.0.0");
+        record.Granted.Should().Equal(new[] { "notes:read" }, "granted = старые ∩ новые");
     }
 
     // --- Accept: обновление с новым правом → consentRequired, granted не расширяется ---

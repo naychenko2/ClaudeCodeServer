@@ -222,13 +222,18 @@ public class PluginDraftsController(
             record = result.Record!;
         }
 
-        // consentRequired + newPermissions — только если обновление добавило новые запрошенные права.
+        // consentRequired + newPermissions:
+        //   - первая установка (oldById == null): ВСЕ запрошенные права «новые» для человека
+        //     (ADR-031 §4, макет: «Принять…» → диалог согласия → выдача). newPermissions = Requested,
+        //     consentRequired = Requested непусто. granted = [] (accept ничего не выдаёт сам).
+        //   - обновление (oldById != null): newPermissions = Requested \ старые Requested;
+        //     consentRequired = newPermissions непусто. granted = старые ∩ новые (выше).
         bool consentRequired;
         List<string> newPermissions;
         if (oldById is null)
         {
-            consentRequired = false;
-            newPermissions = [];
+            consentRequired = record.Requested.Count > 0;
+            newPermissions = record.Requested.ToList();
         }
         else
         {

@@ -1,3 +1,4 @@
+using System.Text;
 using ClaudeHomeServer.Services.Plugins;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -191,6 +192,129 @@ public class PluginDraftServiceTests : IDisposable
         var result = _service.WriteFile(Owner, "my-plugin", "panel/one-more.bin", [1]);
         result.Ok.Should().BeFalse();
         result.Code.Should().Be("file-count-limit");
+    }
+
+    // ── draft_write_file: проверки содержимого (rework D1) ─────────────────────
+    // Тот же метод CheckContent, что у валидатора: запись отбивается с тем же кодом,
+    // файл на диск не пишется.
+
+    [Fact]
+    public void WriteFile_AllowedTools_ВSkill_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        const string content = """
+        ---
+        name: a
+        allowed-tools: [Bash]
+        ---
+        Текст навыка
+        """;
+        var result = _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md", Encoding.UTF8.GetBytes(content));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-allowed-tools");
+        File.Exists(Path.Combine(DraftDir(Owner, "my-plugin"), "skills", "a", "SKILL.md"))
+            .Should().BeFalse("файл на диск не записан");
+    }
+
+    [Fact]
+    public void WriteFile_BacktickExec_ВSkill_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        const string content = """
+        ---
+        name: a
+        ---
+        Навык: !`bash -c "echo hi"`
+        """;
+        var result = _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md", Encoding.UTF8.GetBytes(content));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-backtick-exec");
+        File.Exists(Path.Combine(DraftDir(Owner, "my-plugin"), "skills", "a", "SKILL.md"))
+            .Should().BeFalse("файл на диск не записан");
+    }
+
+    [Fact]
+    public void WriteFile_FencedBacktick_ВCommand_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        const string content = """
+        ---
+        name: a
+        ---
+        ```!
+        bash -c 'echo hi'
+        ```
+        """;
+        var result = _service.WriteFile(Owner, "my-plugin", "commands/cmd.md", Encoding.UTF8.GetBytes(content));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-backtick-exec");
+        File.Exists(Path.Combine(DraftDir(Owner, "my-plugin"), "commands", "cmd.md"))
+            .Should().BeFalse("файл на диск не записан");
+    }
+
+    [Fact]
+    public void WriteFile_Аргументы_ВSkill_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        const string content = """
+        ---
+        name: a
+        ---
+        Навык: !$ARGUMENTS
+        """;
+        var result = _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md", Encoding.UTF8.GetBytes(content));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-backtick-exec");
+        File.Exists(Path.Combine(DraftDir(Owner, "my-plugin"), "skills", "a", "SKILL.md"))
+            .Should().BeFalse("файл на диск не записан");
+    }
+
+    [Fact]
+    public void WriteFile_ОбратныйСлеш_ВоФронтматтере_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        // allowed-\x74ools: Contains «allowed-tools» не срабатывает (t экранирован),
+        // срабатывает запрет обратного слеша во фронтматтере (M10.2).
+        const string content = """
+        ---
+        name: a
+        allowed-\x74ools: Bash
+        ---
+        Текст навыка
+        """;
+        var result = _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md", Encoding.UTF8.GetBytes(content));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-allowed-tools");
+        File.Exists(Path.Combine(DraftDir(Owner, "my-plugin"), "skills", "a", "SKILL.md"))
+            .Should().BeFalse("файл на диск не записан");
+    }
+
+    [Fact]
+    public void WriteFile_ЗапрещённоеПоле_ВМанифесте_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        // Записываем наш манифест с запрещённым полем hooks → deny-manifest-field.
+        var result = _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
+            Encoding.UTF8.GetBytes("""{"name":"P","version":"0.1.0","hooks":{}}"""));
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("deny-manifest-field");
+        // Файл на диске не обновлён: запрещённого поля в записанном (шаблонном) манифесте нет.
+        File.ReadAllText(Path.Combine(DraftDir(Owner, "my-plugin"), "ccs-plugin.json"))
+            .Should().NotContain("hooks", "манифест на диске не переписан");
+    }
+
+    [Fact]
+    public void WriteFile_201_Каталог_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        var dir = DraftDir(Owner, "my-plugin");
+        // 200 каталогов (лимит) + файл в 201-й → dir-count-limit, файла на диске нет.
+        for (var i = 0; i < PluginPackageValidator.MaxDirCount; i++)
+            Directory.CreateDirectory(Path.Combine(dir, "panel", $"d{i}"));
+        var result = _service.WriteFile(Owner, "my-plugin", "panel/d200/file.md", [1]);
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("dir-count-limit");
+        File.Exists(Path.Combine(dir, "panel", "d200", "file.md")).Should().BeFalse("файл на диск не записан");
     }
 
     // ── draft_delete_file ──────────────────────────────────────────────────────

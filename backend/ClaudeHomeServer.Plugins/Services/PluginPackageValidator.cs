@@ -93,9 +93,9 @@ public class PluginPackageValidator
         // перечисляет всё до конца.
         Walk(packageRoot, packageRoot, ref files, ref totalSize, ref dirCount, problems, ref limitHit);
 
-        // C3: поля манифеста (ccs-plugin.json/.claude-plugin/plugin.json) — deny-manifest-field.
-        var (raws, manifestProblems) = _manifestReader.Read(packageRoot);
-        problems.AddRange(manifestProblems);
+        // C3: сырые JSON манифестов — для сверки name == slug (CheckNameEqualsSlug). Поля
+        // (deny-manifest-field) теперь проверяет CheckContent в Walk (общий метод с записью черновика).
+        var (raws, _) = _manifestReader.Read(packageRoot);
 
         // R10-1: нативный манифест .claude-plugin/plugin.json обязателен (CLI берёт из него
         // имя пакета, спайк plugin-dir-name-spike-2026-10.md): нет файла → deny-native-manifest-missing,
@@ -193,10 +193,15 @@ public class PluginPackageValidator
             if (!IsAllowed(file.RelativePath))
                 problems.Add(new PluginPackageProblem("not-allowed", $"Файл не в allow-list пакета: {file.RelativePath}"));
 
-            // 5) M10: исполняемые .md (skills/**/SKILL.md, commands/*.md) — frontmatter
-            //    allowed-tools и !`cmd` в теле дают Bash без запроса (спайк 82fecb37).
-            if (IsExecutableMd(file.RelativePath))
-                CheckExecutableMd(file, problems);
+            // 5) M10 + манифест: проверки содержимого (allowed-tools/backtick-exec для
+            //    исполняемых .md, deny-manifest-field для манифестов) — общий метод CheckContent
+            //    (его же зовёт запись черновика; спайк 82fecb37).
+            if (IsExecutableMd(file.RelativePath) || IsManifest(file.RelativePath))
+            {
+                var content = ReadFileBytes(file.FullPath);
+                if (content is not null)
+                    problems.AddRange(CheckContent(file.RelativePath, content));
+            }
 
             // 6) Лимит размера отдельного файла.
             if (file.Size > MaxSingleFileSizeBytes)
@@ -294,12 +299,9 @@ public class PluginPackageValidator
     //         (ложное срабатывание, цена низкая).
     //   M10.3 backtick-исполнение: `!`cmd` / ```! и `!$` (маркер живого исполнения после
     //         подстановки аргумента $ARGUMENTS/$1, CLI сам считает его исполняемым).
-    private static void CheckExecutableMd(PackageFile file, List<PluginPackageProblem> problems)
+    // Работает с ТЕКСТОМ (не читает файл): общий для валидатора и записи черновика.
+    private static void CheckExecutableMdContent(string rel, string content, List<PluginPackageProblem> problems)
     {
-        string content;
-        try { content = File.ReadAllText(file.FullPath); }
-        catch (IOException) { return; } // битая symlink — уже no-symlink
-
         // allowed-tools: Contains по всему тексту (M10.1) ИЛИ обратный слеш во
         // фронтматтере (M10.2, экранированный ключ). Одно срабатывание — один problem;
         // формулировки раздельные: «allowed-tools» и «обратный слеш» — разные причины
@@ -310,17 +312,47 @@ public class PluginPackageValidator
         var hasEscapedKey = frontmatter is not null && frontmatter.Contains('\\');
         if (hasAllowedTools)
             problems.Add(new PluginPackageProblem("deny-allowed-tools",
-                $"Ключ allowed-tools (Bash без запроса): {file.RelativePath}"));
+                $"Ключ allowed-tools (Bash без запроса): {rel}"));
         else if (hasEscapedKey)
             problems.Add(new PluginPackageProblem("deny-allowed-tools",
-                $"Обратный слеш во фронтматтере (экранированный ключ, M10.2): {file.RelativePath}"));
+                $"Обратный слеш во фронтматтере (экранированный ключ, M10.2): {rel}"));
 
         // !`cmd` / ```! (backtick-исполнение) и !$ (маркер подстановки аргумента, M10.3).
         if (content.Contains("!`", StringComparison.Ordinal)
             || content.Contains("```!", StringComparison.Ordinal)
             || content.Contains("!$", StringComparison.Ordinal))
             problems.Add(new PluginPackageProblem("deny-backtick-exec",
-                $"Backtick-команда !`…` (исполняет shell): {file.RelativePath}"));
+                $"Backtick-команда !`…` (исполняет shell): {rel}"));
+    }
+
+    // Манифест пакета (ccs-plugin.json / .claude-plugin/plugin.json) — для deny-manifest-field.
+    private static bool IsManifest(string rel) =>
+        rel == "ccs-plugin.json" || rel == ".claude-plugin/plugin.json";
+
+    // Общий метод проверок содержимого ОДНОГО файла (rework D1): M10 (allowed-tools/backtick-exec)
+    // для исполняемых .md и deny-manifest-field для манифестов. Вызывается И валидатором (Walk),
+    // И записью черновика (PluginDraftService.WriteFile) — одна реализация, коды 1:1, регулярки
+    // и списки не копируются. <paramref name="relPath"/> — относительный путь (через «/»).
+    public IReadOnlyList<PluginPackageProblem> CheckContent(string relPath, byte[] bytes)
+    {
+        var problems = new List<PluginPackageProblem>();
+        var rel = relPath.Replace('\\', '/');
+        var content = Encoding.UTF8.GetString(bytes);
+
+        if (IsExecutableMd(rel))
+            CheckExecutableMdContent(rel, content, problems);
+
+        if (IsManifest(rel))
+            problems.AddRange(_manifestReader.ValidateFields(content));
+
+        return problems;
+    }
+
+    // Прочитать байты файла; null — IOException (битая symlink — уже no-symlink, не читаем).
+    private static byte[]? ReadFileBytes(string fullPath)
+    {
+        try { return File.ReadAllBytes(fullPath); }
+        catch (IOException) { return null; }
     }
 
     // M10.2: фронтматтер — между первым «---» (начало файла) и следующим «---»

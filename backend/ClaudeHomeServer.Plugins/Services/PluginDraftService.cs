@@ -99,12 +99,24 @@ public class PluginDraftService
         if (!IsAllowed(norm))
             return PluginDraftOpResult.Fail("not-allowed", $"Файл не в allow-list пакета: {norm}");
 
-        // 4) Лимит размера отдельного файла.
+        // 4) Проверки содержимого (rework D1): M10 (allowed-tools/backtick-exec) для исполняемых
+        //    .md и deny-manifest-field для манифестов — тот же метод CheckContent, что у валидатора.
+        //    Запись отбивается с тем же кодом и путём, файл на диск не пишется.
+        var contentProblems = _validator.CheckContent(norm, content);
+        if (contentProblems.Count > 0)
+        {
+            var p = contentProblems[0];
+            // M10-сообщения уже несут путь; у манифеста путь добавляем, чтобы отказ был «с кодом и путём».
+            var msg = p.Message.Contains(norm, StringComparison.Ordinal) ? p.Message : $"{p.Message} ({norm})";
+            return PluginDraftOpResult.Fail(p.Code, msg);
+        }
+
+        // 5) Лимит размера отдельного файла.
         if (content.Length > PluginPackageValidator.MaxSingleFileSizeBytes)
             return PluginDraftOpResult.Fail("file-size-limit",
                 $"Файл больше {PluginPackageValidator.MaxSingleFileSizeBytes / 1024 / 1024} МБ: {norm}");
 
-        // 5) Лимиты пакета: общий размер и число файлов (после записи).
+        // 6) Лимиты пакета: общий размер, число файлов и число каталогов (minor 2, после записи).
         var (fileCount, totalSize) = CountAndSize(dir);
         var existing = File.Exists(full);
         var existingSize = existing ? new FileInfo(full).Length : 0;
@@ -114,8 +126,12 @@ public class PluginDraftService
         if (!existing && fileCount >= PluginPackageValidator.MaxFileCount)
             return PluginDraftOpResult.Fail("file-count-limit",
                 $"Файлов в пакете {fileCount + 1}, лимит {PluginPackageValidator.MaxFileCount}");
+        var dirCount = CountDirs(dir, Path.GetDirectoryName(full));
+        if (dirCount > PluginPackageValidator.MaxDirCount)
+            return PluginDraftOpResult.Fail("dir-count-limit",
+                $"Каталогов в пакете {dirCount}, лимит {PluginPackageValidator.MaxDirCount}");
 
-        // 6) Запись (перезапись допустима).
+        // 7) Запись (перезапись допустима).
         var parent = Path.GetDirectoryName(full);
         if (parent is not null) Directory.CreateDirectory(parent);
         File.WriteAllBytes(full, content);
@@ -362,6 +378,18 @@ public class PluginDraftService
             try { total += new FileInfo(file).Length; } catch (IOException) { }
         }
         return (count, total);
+    }
+
+    // Число каталогов черновика (рекурсивно, без корня) + новый родительский каталог файла,
+    // если его ещё нет. Тот же смысл, что лимит каталогов валидатора (MaxDirCount, minor 2).
+    private static int CountDirs(string dir, string? newParent)
+    {
+        int count = 0;
+        foreach (var d in Directory.EnumerateDirectories(dir, "*", SearchOption.AllDirectories))
+            count++;
+        if (newParent is not null && newParent != dir && !Directory.Exists(newParent))
+            count++;
+        return count;
     }
 
     // ── Шаблоны ────────────────────────────────────────────────────────────────

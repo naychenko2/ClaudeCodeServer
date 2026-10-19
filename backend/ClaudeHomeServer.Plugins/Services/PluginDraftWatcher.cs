@@ -54,6 +54,13 @@ public sealed class PluginDraftWatcher : BackgroundService
     private Timer? _timer;
     private volatile bool _stopping;
 
+    // Циклы дебаунса (rework D1, тесты без Task.Delay): каждый OnFsEvent начинает новый цикл
+    // (_pendingCycle++), Flush (дебаунс сработал) фиксирует обработанный (_flushedCycle) и будит
+    // _cycleTcs. Тест ждёт _flushedCycle >= _pendingCycle (тишина) — без реального сна.
+    private long _pendingCycle;
+    private long _flushedCycle;
+    private TaskCompletionSource<bool>? _cycleTcs;
+
     // Окно дебаунса; тесты сужают его, чтобы склейка была детерминированной.
     internal int DebounceMs { get; set; } = DefaultDebounceMs;
 
@@ -96,9 +103,11 @@ public sealed class PluginDraftWatcher : BackgroundService
     internal void StartWatch()
     {
         // Start() идемпотентен (повторный вызов снимает прежнее) и молчит, если корня нет.
-        // Отказ на корне (лимит ОС, нет прав) — исключение: наблюдение без карточек, но не падает.
+        // Отказ на корне (лимит ОС, нет прав, неподдерживаемая платформа) — исключение:
+        // наблюдение без карточек, но не падает (rework D1: шире фильтр, исключение не в пул).
         try { _watcher.Start(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+            or PlatformNotSupportedException or NotSupportedException)
         { _log.LogWarning(ex, "Plugins: не удалось поднять наблюдение за черновиками"); }
     }
 
@@ -118,19 +127,30 @@ public sealed class PluginDraftWatcher : BackgroundService
 
     // Колбэк события (зовётся с ПОТОКА ЧТЕНИЯ примитива): работа короткая, замки, под которыми
     // гасится наблюдатель, не берём. Разбор пути: {owner}/_drafts/{slug}/... → owner + slug.
+    // Примитив (Emit) глотает исключения колбэка без следа: ловим и логируем сами (rework D1).
     private void OnFsEvent(string path, DirectoryWatchKind kind)
     {
-        if (!TryParseDraft(path, out var owner, out var slug)) return;
-
-        lock (_lock)
+        try
         {
-            if (_stopping) return;
-            _revision[(owner, slug)] = _revision.TryGetValue((owner, slug), out var rev) ? rev + 1 : 1;
-            _pending.Add((owner, slug));
-            if (_timer is null)
-                _timer = new Timer(_ => Flush(), null, DebounceMs, Timeout.Infinite);
-            else
-                _timer.Change(DebounceMs, Timeout.Infinite);
+            if (!TryParseDraft(path, out var owner, out var slug)) return;
+
+            lock (_lock)
+            {
+                if (_stopping) return;
+                _revision[(owner, slug)] = _revision.TryGetValue((owner, slug), out var rev) ? rev + 1 : 1;
+                _pending.Add((owner, slug));
+                // Новый цикл дебаунса: сбрасываем TCS тишины (rework D1, тесты без Task.Delay).
+                _pendingCycle++;
+                _cycleTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (_timer is null)
+                    _timer = new Timer(_ => Flush(), null, DebounceMs, Timeout.Infinite);
+                else
+                    _timer.Change(DebounceMs, Timeout.Infinite);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Plugins: сбой обработки события черновика {Path}", path);
         }
     }
 
@@ -157,6 +177,9 @@ public sealed class PluginDraftWatcher : BackgroundService
                 .Select(k => (k.Owner, k.Slug, _revision[k]))
                 .ToList();
             _pending.Clear();
+            // Дебаунс сработал: цикл завершён, будим ожидателя тишины (rework D1).
+            _flushedCycle = _pendingCycle;
+            _cycleTcs?.TrySetResult(true);
         }
 
         foreach (var (owner, slug, revision) in batch)
@@ -166,6 +189,26 @@ public sealed class PluginDraftWatcher : BackgroundService
             if (_flags is not null && !_flags.IsEnabled(owner, FeatureFlagKeys.PluginsBuildYourself))
                 continue;
             _ = _broadcaster.ToOwner(owner, new PluginDraftChangedMessage(slug, revision));
+        }
+    }
+
+    // internal для тестов: ждать тишины — все начатые циклы дебаунса обработаны (Flush) и новых
+    // событий нет. БЕЗ реального сна (rework D1): основной сигнал — TCS, который будит сам Flush
+    // (дебаунс fired); если за это время начался новый цикл (TCS заменён) — короткая уступка и
+    // переприхватываем текущий. Timeout — страховка от зависания (идиом как в WaitEventAsync).
+    internal async Task WaitQuietAsync(int timeoutMs)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 <= deadline)
+        {
+            TaskCompletionSource<bool>? tcs;
+            lock (_lock)
+            {
+                if (_flushedCycle >= _pendingCycle) return;   // тишина: всё обработано
+                tcs = _cycleTcs;
+            }
+            if (tcs is null) return;                            // циклов не было вовсе
+            await Task.WhenAny(tcs.Task, Task.Delay(20));      // ждём, пока Flush не побудит
         }
     }
 

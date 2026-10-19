@@ -102,9 +102,9 @@ public class PluginDraftWatcherTests : IDisposable
             for (var i = 0; i < 10; i++)
                 WriteDraftFile(Owner, Slug, $"f{i}.md");
 
-            // Ждём первое событие (TCS), затем короткую «тишину», чтобы дошли все склеенные.
+            // Ждём первое событие (TCS), затем тишину: все циклы дебаунса обработаны (без сна).
             (await _broadcaster.WaitEventAsync(Owner, 5000)).Should().BeTrue();
-            await Task.Delay(400);   // quiescence: окно дебаунса (100 мс) давно истекло
+            await watcher.WaitQuietAsync(2000);
             _broadcaster.CountFor(Owner).Should().BeLessOrEqualTo(2,
                 "запись десяти файлов подряд даёт не больше двух событий, а не десять");
         }
@@ -123,7 +123,7 @@ public class PluginDraftWatcherTests : IDisposable
         {
             File.WriteAllText(Path.Combine(DraftDir(Owner, Slug), "a.md"), "changed");
             (await _broadcaster.WaitEventAsync(Owner, 5000)).Should().BeTrue("свой владелец получил");
-            await Task.Delay(400);   // quiescence
+            await watcher.WaitQuietAsync(2000);   // тишина: все циклы дебаунса обработаны (без сна)
             _broadcaster.CountFor(Stranger).Should().Be(0,
                 "чужой владелец событие не получает никогда");
         }
@@ -176,7 +176,7 @@ public class PluginDraftWatcherTests : IDisposable
         try
         {
             File.WriteAllText(Path.Combine(DraftDir(Owner, Slug), "a.md"), "changed");
-            await Task.Delay(400);   // quiescence: дебаунс истёк, события быть не должно
+            await watcher.WaitQuietAsync(2000);   // тишина: дебаунс сработал, события быть не должно
             _broadcaster.CountFor(Owner).Should().Be(0,
                 "флаг plugins-build-yourself выключен — событие не уходит");
         }
@@ -202,7 +202,7 @@ public class PluginDraftWatcherTests : IDisposable
         {
             // Правка файла в _rejected: наблюдатель не подписан (каталог исключён) → тишина.
             File.WriteAllText(file, "changed");
-            await Task.Delay(400);   // quiescence: дебаунс истёк, события быть не должно
+            await watcher.WaitQuietAsync(2000);   // тишина: дебаунс сработал, события быть не должно
             _broadcaster.CountFor(Owner).Should().Be(0,
                 "наблюдатель не шумит на _rejected (каталог исключён)");
         }

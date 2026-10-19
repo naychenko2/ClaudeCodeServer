@@ -333,33 +333,16 @@ public class SessionStatusTests : IDisposable
     }
 
     [Fact]
-    public void TakeRestartResumeCandidates_Starting_NotCandidate_EvenWithShutdownInterruptedAt()
+    public void TakeRestartResumeCandidates_Starting_NotCandidate()
     {
-        // KillAllProcesses Starting не помечает; даже если снимок есть — Starting
-        // кандидатом не становится (иначе снимок стал бы самостоятельным признаком).
+        // Starting — CLI ещё не стартовал, ход не шёл: кандидатом не является.
         var starting = MakeSession(SessionStatus.Starting);
-        starting.ShutdownInterruptedAt = DateTime.UtcNow;
         WriteSessions([starting]);
 
         var sut = CreateSessionManager();
 
         sut.TakeRestartResumeCandidates().Should().BeEmpty(
-            "Starting не помечается KillAllProcesses; снимок не делает его кандидатом");
-    }
-
-    [Fact]
-    public void TakeRestartResumeCandidates_Waiting_NotCandidate_EvenWithShutdownInterruptedAt()
-    {
-        // Симметрично Starting: KillAllProcesses Waiting не помечает (ход ещё не шёл);
-        // даже если снимок есть — Waiting кандидатом не становится.
-        var waiting = MakeSession(SessionStatus.Waiting);
-        waiting.ShutdownInterruptedAt = DateTime.UtcNow;
-        WriteSessions([waiting]);
-
-        var sut = CreateSessionManager();
-
-        sut.TakeRestartResumeCandidates().Should().BeEmpty(
-            "Waiting не помечается KillAllProcesses; снимок не делает его кандидатом");
+            "Starting — ход ещё не шёл, кандидатом не является");
     }
 
     [Fact]
@@ -372,31 +355,7 @@ public class SessionStatusTests : IDisposable
         var sut = CreateSessionManager();
 
         sut.TakeRestartResumeCandidates().Should().BeEmpty(
-            "старый Orphaned без снимка ShutdownInterruptedAt — не «последний рестарт»");
-    }
-
-    [Fact]
-    public void TakeRestartResumeCandidates_WorkingWithSnapshot_ExtinguishesSnapshot()
-    {
-        var working = MakeSession(SessionStatus.Working);
-        working.ShutdownInterruptedAt = DateTime.UtcNow;
-        working.RestartResumeAttempts = 3; // произвольное: выдача кандидата его не трогает
-        WriteSessions([working]);
-
-        var sut = CreateSessionManager();
-
-        var candidates = sut.TakeRestartResumeCandidates();
-        candidates.Should().Contain(working.Id, "Working со снимком — кандидат");
-
-        var loaded = sut.GetById(working.Id)!;
-        loaded.RestartResumeAttempts.Should().Be(3, "выдача кандидата счётчик не трогает");
-        loaded.ShutdownInterruptedAt.Should().BeNull("снимок гасится сразу после захвата, в памяти");
-
-        // SaveSessions переписал файл опциями проекта (enum'и строками) — читаем теми же.
-        var diskOpts = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
-        var onDisk = JsonSerializer.Deserialize<List<Session>>(File.ReadAllText(_sessionsJsonPath), diskOpts)!;
-        onDisk.Single(s => s.Id == working.Id).ShutdownInterruptedAt.Should().BeNull(
-            "снимок гасится и сохраняется на диск");
+            "старый Orphaned — «только последний рестарт», кандидатом не является");
     }
 
     [Fact]

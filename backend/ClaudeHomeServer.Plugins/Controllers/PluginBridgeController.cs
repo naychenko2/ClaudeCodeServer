@@ -228,8 +228,17 @@ public class PluginBridgeController(
     // srcdoc: HTML + CSP (meta) + шим plugin-kit (мост + CSS-токены).
     // CSP в meta (не в HTTP-заголовке): srcdoc не имеет собственного HTTP-контекста.
     // internal: переиспользуется PluginDraftsController.Panel (предпросмотр панели черновика, 4.3d).
+    //
+    // Дефект 3caf4f13: если панель — полный HTML-документ со своим <head>, прежний код
+    // вставлял его целиком в <body> хоста; браузер игнорировал <head> внутри <body>
+    // (в т.ч. meta CSP панели). Фикс: извлечь содержимое <head> и <body> панели и
+    // вставить их в соответствующие секции хоста; meta CSP хоста остаётся ПЕРВОЙ.
     internal static string BuildSrcdoc(string html)
     {
+        // Если панель — полный документ с <head>, разделим head/body.
+        // Иначе (фрагмент) — весь HTML в body.
+        var (panelHead, panelBody) = SplitPanelDocument(html);
+
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>\n");
         sb.Append("<html>\n<head>\n");
@@ -246,10 +255,36 @@ public class PluginBridgeController(
         sb.Append("      resize(h) { parent.postMessage({ source: 'ccs-plugin', v: 1, type: 'resize', height: h }, '*'); }\n");
         sb.Append("    };\n");
         sb.Append("  </script>\n");
+
+        // Содержимое <head> панели (meta CSP панели, <title>, <link> и т.д.) —
+        // после хостовых meta/style/script, но ВНУТРИ <head> хоста.
+        if (panelHead.Length > 0)
+            sb.Append("  " + panelHead + "\n");
+
         sb.Append("</head>\n<body>\n");
-        sb.Append(html);
+        sb.Append(panelBody);
         sb.Append("\n</body>\n</html>");
         return sb.ToString();
+    }
+
+    // Разбор HTML панели: если есть <head> — вернуть (headContent, bodyContent);
+    // иначе (фрагмент) — ("", html). Regex: Singleline (точка = любой символ, включая \n).
+    private static (string Head, string Body) SplitPanelDocument(string html)
+    {
+        var headMatch = System.Text.RegularExpressions.Regex.Match(
+            html, "<head[^>]*>(.*?)</head>",
+            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!headMatch.Success)
+            return ("", html.Trim());
+
+        var head = headMatch.Groups[1].Value.Trim();
+
+        var bodyMatch = System.Text.RegularExpressions.Regex.Match(
+            html, "<body[^>]*>(.*?)</body>",
+            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var body = bodyMatch.Success ? bodyMatch.Groups[1].Value.Trim() : "";
+
+        return (head, body);
     }
 
     // MIME-тип по расширению файла.

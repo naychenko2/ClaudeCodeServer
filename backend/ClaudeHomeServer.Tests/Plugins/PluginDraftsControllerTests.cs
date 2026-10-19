@@ -290,6 +290,49 @@ public class PluginDraftsControllerTests : IDisposable
         content.Content.Should().Contain("<h1>Panel</h1>", "HTML панели в теле");
     }
 
+    // --- Panel: полный HTML-документ со своим <head> (дефект 3caf4f13) ---
+    //
+    // До фикса: BuildSrcdoc просто вставлял весь HTML панели в <body> хоста.
+    // Если панель — полный документ со своим <head> (и meta CSP), тот <head>
+    // оказывался ВНУТРИ <body> — браузер его игнорировал и писал красную
+    // ошибку в консоль. Фикс: извлечь head/body панели и вставить их содержимое
+    // в head/body хоста; meta CSP хоста остаётся ПЕРВОЙ в <head>.
+
+    [Fact]
+    public void Panel_ПолныйДокумент_CspMetaВнутриHead()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        // Панель — ПОЛНЫЙ HTML-документ со своим <head> и meta CSP.
+        const string panel =
+            "<!DOCTYPE html>\n<html>\n<head>\n" +
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'\">\n" +
+            "<title>Panel Title</title>\n" +
+            "</head>\n<body>\n<h1>Panel</h1>\n</body>\n</html>";
+        AddPanelToDraft(OwnerA, "pkg", panel);
+        var ctl = NewController(OwnerA);
+
+        var content = (ContentResult)ctl.Panel("pkg");
+        var srcdoc = content.Content;
+
+        // Вырезаем <head>...</head> итогового документа (от <head> до </head>).
+        var headStart = srcdoc.IndexOf("<head>");
+        var headEnd = srcdoc.IndexOf("</head>");
+        var head = srcdoc.Substring(headStart, headEnd - headStart);
+
+        // 1) Meta CSP хоста — ПЕРВАЯ в <head> (политика не ослаблена, та же строка).
+        head.Should().StartWith("<head>\n  <meta http-equiv=\"Content-Security-Policy\"",
+            "meta CSP хоста обязана быть первой в <head>");
+
+        // 2) Содержимое <head> панели (title, meta CSP панели) теперь ВНУТРИ <head> хоста
+        //    (до фикса — в <body>, браузер игнорировал). Проверяем по уникальному маркеру:
+        //    <title>Panel Title</title> — есть только в <head> панели.
+        head.Should().Contain("<title>Panel Title</title>",
+            "содержимое <head> панели обязано оказаться внутри <head> итогового документа");
+
+        // 3) Тело панели на месте.
+        srcdoc.Should().Contain("<h1>Panel</h1>", "HTML панели в теле");
+    }
+
     // --- Panel: 403 (сервисный JWT) ---
 
     [Fact]

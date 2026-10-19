@@ -28,8 +28,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     {
         if (!OwnsProject(projectId)) return NotFound();
         // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
-        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно
-        return Ok(sessions.GetByProject(projectId));
+        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно.
+        // Условный GET: фронт опрашивает список каждые несколько секунд, а меняется он редко;
+        // тег считается по готовому телу, так что updatedAt в ответе всегда точный
+        return new ETagJsonResult(sessions.GetByProject(projectId).ToList());
     }
 
     [HttpPost]

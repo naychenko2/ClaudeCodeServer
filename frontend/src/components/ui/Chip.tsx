@@ -12,7 +12,7 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 // dense — узкие поля по бокам (6 вместо 10): тесный ряд, где каждый пиксель отдан подписи.
 export function Chip({
   children, onClick, selected, dashed, title, maxW, touch, leading, onRemove,
-  variant = 'soft', large, dense, removeLabel, keyboard, minHeight,
+  variant = 'soft', large, dense, removeLabel, keyboard, minHeight, disabled,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -32,6 +32,10 @@ export function Chip({
   // Минимальная высота (тач-цель на мобиле): не меняет шрифт/подпись, только
   // гарантирует досягаемость пальцем. Не задано — высота по padding+контенту.
   minHeight?: number;
+  // Доступное «отключено» (aria-disabled) для toggle-кнопки: чип с нулём фич —
+  // не только прозрачностью, но и состоянием, которое слышит скринридер. Клик не
+  // блокируем (aria-disabled, а не disabled): фильтр можно выбрать, просто фич нет.
+  disabled?: boolean;
 }) {
   const body = maxW !== undefined
     ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{children}</span>
@@ -49,6 +53,7 @@ export function Chip({
       <button
         onClick={onClick}
         title={title}
+        aria-disabled={disabled ? 'true' : undefined}
         style={{
           padding: large ? '7px 13px' : '4px 10px',
           borderRadius: R.pill,

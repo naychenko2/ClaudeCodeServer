@@ -225,7 +225,7 @@ function FilterContent({
                   const count = featureCounts[value];
                   return (
                     <span key={value} style={{ display: 'inline-flex', opacity: count === 0 ? 0.5 : 1 }}>
-                      <Chip variant="toggle" selected={active} large={large}
+                      <Chip variant="toggle" selected={active} large={large} disabled={count === 0}
                         onClick={() => patch({ featureChips: toggle(filters.featureChips, value) })}
                       >
                         <FeatureDot tone={FEATURE_TONE[value]} active={active} />

@@ -12,7 +12,7 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, filterFeaturesByChip, featureGroupTreeRows, otherFeatureCount, featureRoleFor } from '../chatGroups';
+import { groupByFeatures, featureChipCounts, featureGroupTreeRows, otherFeatureCount, featureRoleFor } from '../chatGroups';
 import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
@@ -244,21 +244,6 @@ describe('featureChipCounts: счётчики по chips[]', () => {
   });
 });
 
-describe('filterFeaturesByChip: фильтр по чипу', () => {
-  it('возвращает фичи, чьи chips[] содержат чип', () => {
-    const feats = [
-      withChips('A', ['open', 'waiting']),
-      withChips('B', ['open', 'stopped']),
-      withChips('C', ['closed']),
-    ];
-    expect(filterFeaturesByChip(feats, 'open').map(f => f.featureId)).toEqual(['A', 'B']);
-    expect(filterFeaturesByChip(feats, 'waiting').map(f => f.featureId)).toEqual(['A']);
-    expect(filterFeaturesByChip(feats, 'stopped').map(f => f.featureId)).toEqual(['B']);
-    expect(filterFeaturesByChip(feats, 'merge')).toEqual([]);
-    expect(filterFeaturesByChip(feats, 'closed').map(f => f.featureId)).toEqual(['C']);
-  });
-});
-
 // === C1: правило дерева на уровне рендера списка (не только чистая groupByFeatures) ===
 // Сценарий из контракта С0: оркестратор — куратор двух фич (A и B), исполнители обеих
 // висят под ним. groupByFeatures режет межфичевые рёбра: исполнители A остаются деревом
@@ -320,8 +305,7 @@ describe('featureGroupTreeRows: правило дерева (C1, уровень 
     const chats = [chat('orch'), chat('execB', { parentSessionId: 'orch' })];
     const groups = groupByFeatures(chats, idx);
     // Чип «Стоят» — только фича B; её группа рисуется (исполнитель B — корень)
-    const stopped = filterFeaturesByChip(feats, 'stopped');
-    expect(stopped.map(f => f.featureId)).toEqual(['B']);
+    expect(feats.filter(f => f.chips.includes('stopped')).map(f => f.featureId)).toEqual(['B']);
     const gB = groups.find(g => g.feature?.featureId === 'B')!;
     expect(gB).toBeDefined();
     const rowsB = featureGroupTreeRows(gB.sessions, null, null, noTreeOpts);

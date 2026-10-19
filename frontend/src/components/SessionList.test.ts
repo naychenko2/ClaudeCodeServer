@@ -267,7 +267,7 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
     keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 1,
   });
   const sess = (id: string): Session => ({
-    id, mode: 'auto', status: 'finished', messageCount: 0,
+    id, projectId: 'p1', mode: 'auto', status: 'finished', messageCount: 0,
     createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
     origin: 'manual',
   } as Session);
@@ -288,26 +288,27 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
     const root = createRoot(container);
     await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: () => {} })); });
 
-    // Заголовок группы закрытой фичи (data-testid), а не кнопка секции «Закрытые»:
-    // у обоих aria-expanded, но раскрываем именно группу
-    const findHeader = (): _FakeNode | null => {
+    // Раскрытие группы — кнопка-шеврон (data-testid="feature-group-chevron"): после Ф1.3
+    // data-testid="feature-group-header" — обёртка div (без aria-expanded/onClick), а
+    // aria-expanded и клик живут на шевроне. Ищем шеврон, а не обёртку.
+    const findChevron = (): _FakeNode | null => {
       const walk = (n: _FakeNode): _FakeNode | null => {
-        if (n._attrs['data-testid'] === 'feature-group-header') return n;
+        if (n._attrs['data-testid'] === 'feature-group-chevron') return n;
         for (const c of n.childNodes) { const r = walk(c); if (r) return r; }
         return null;
       };
       return walk(container);
     };
-    // По умолчанию свёрнута (aria-expanded="false" на самом заголовке группы)
-    let header = findHeader();
-    expect(header).not.toBeNull();
-    expect(header!._attrs['aria-expanded']).toBe('false');
-    // Клик по заголовку: до фикса onToggle был no-op (aria-expanded не менялся)
-    await act(async () => { container.fireClick(header!); });
+    // По умолчанию свёрнута (aria-expanded="false" на шевроне)
+    let chevron = findChevron();
+    expect(chevron).not.toBeNull();
+    expect(chevron!._attrs['aria-expanded']).toBe('false');
+    // Клик по шеврону: до фикса onToggle был no-op (aria-expanded не менялся)
+    await act(async () => { container.fireClick(chevron!); });
     // После клика — раскрыта: React может пересоздать узел, ищем заново
-    header = findHeader();
-    expect(header).not.toBeNull();
-    expect(header!._attrs['aria-expanded']).toBe('true');
+    chevron = findChevron();
+    expect(chevron).not.toBeNull();
+    expect(chevron!._attrs['aria-expanded']).toBe('true');
     root.unmount();
   });
 });
@@ -326,8 +327,10 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
     keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 1,
   });
+  // projectId: 'p1' — как в реальном списке проекта: карточка читает индекс того же
+  // проекта, что и SessionList (useFeaturesIndex), а не области '' (вне проектов)
   const s = (id: string): Session => ({
-    id, mode: 'auto', status: 'finished', messageCount: 0,
+    id, projectId: 'p1', mode: 'auto', status: 'finished', messageCount: 0,
     createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
     origin: 'manual',
   } as Session);
@@ -377,6 +380,14 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     return false;
   }
 
+  // Родительский элемент текстового узла (кнопка, несущая эту подпись): для клика
+  // по «Сбросить» — текст живёт в text-узле, клик — на его <button>-родителе
+  function parentOfText(n: _FakeNode, text: string): _FakeNode | null {
+    if (n.nodeType === 3 && n.textContent === text) return n.parentElement;
+    for (const c of n.childNodes) { const r = parentOfText(c, text); if (r) return r; }
+    return null;
+  }
+
   it('два чипа дают OR: waiting+stopped → их фичи, merge не показана', async () => {
     const container = await renderFeatures({ featureChips: ['waiting', 'stopped'] });
     expect(hasFeatureTitle(container, 'FICH_W')).toBe(true);
@@ -401,7 +412,28 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
   });
 
   it('один запрос индекса на проект (FilterBar не плодит fetch)', async () => {
+    // Все потребители (SessionList + карточки) читают индекс того же проекта 'p1'
+    // (projectId в фикстуре), поэтому первичная загрузка — ровно один fetch (0→1).
+    // Если бы карточка читала область '' (вне проектов) — был бы второй fetch.
     await renderFeatures({ featureChips: ['waiting'] });
+    expect(indexCalls).toBe(1);
+  });
+
+  // M2: «Сбросить» в строке снимаемых чипов снимает ВСЕ фильтры фич (чипы + «и закрытые»)
+  // одним кликом и не плодит запросов индекса. Мутация: в обработчике сброса `featureChips: []`
+  // → `['waiting']` (чип «Ждут вас» остаётся) — строка чипов не исчезает, «Сбросить» на месте → тест красный.
+  it('M2: «Сбросить» снимает все фильтры фич (чипы + «и закрытые») и не плодит запросов', async () => {
+    const container = await renderFeatures({ featureChips: ['waiting', 'stopped'], showClosed: true });
+    // До сброса: строка снимаемых чипов на месте, кнопка «Сбросить» в ней
+    const resetBtn = parentOfText(container, 'Сбросить');
+    expect(resetBtn).not.toBeNull();
+    // Клик по «Сбросить»: patch({ featureChips: [], showClosed: false })
+    await act(async () => { container.fireClick(resetBtn!); });
+    // После сброса: фильтров нет → строка снимаемых чипов (и «Сбросить») исчезает
+    expect(parentOfText(container, 'Сбросить')).toBeNull();
+    // И «Показаны:» (подпись строки) тоже снято
+    expect(parentOfText(container, 'Показаны:')).toBeNull();
+    // Новых запросов индекса нет: сброс фильтров не меняет проект → fetch не плодится
     expect(indexCalls).toBe(1);
   });
 });

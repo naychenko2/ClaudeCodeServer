@@ -241,6 +241,12 @@ describe('featureQuickAction: «Ответить» / «К мержу» / «Кл�
     expect(html).toContain('Ответить');
   });
 
+  it('M1: быстрое действие несёт aria-label «Ответить: <название фичи>» (контекст для скринридера)', () => {
+    const html = renderHeader(feat({ bucket: 'attention', attention: attention('wait'), title: 'Моя фича' }));
+    // aria-label на самой кнопке (ui/Button): «Ответить: Моя фича» — не только «Ответить»
+    expect(html).toContain('aria-label="Ответить: Моя фича"');
+  });
+
   it('рендер: на 360 (isMobile) быстрое действие не рендерится', () => {
     const html = renderHeader(feat({ bucket: 'attention', attention: attention('wait') }), { isMobile: true });
     expect(html).not.toContain('data-testid="feature-group-quick"');

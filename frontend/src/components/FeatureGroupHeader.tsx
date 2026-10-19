@@ -294,6 +294,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           <Button
             size="xs"
             variant="ghost"
+            // Доступное имя: действие + фича («Ответить: <название>») — видимая подпись
+            // «Ответить» сама по себе не говорит, какой фичи (M1, Р2).
+            ariaLabel={`${quick}: ${feature.title}`}
             onClick={e => { e.stopPropagation(); onOpen(); }}
             style={{ background: C.bgWhite }}
           >

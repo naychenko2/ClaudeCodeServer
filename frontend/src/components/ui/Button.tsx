@@ -55,6 +55,10 @@ interface ButtonProps {
   onClick?: (e: MouseEvent) => void;
   type?: 'button' | 'submit';
   title?: string;
+  // Доступное имя для скринридера (aria-label): переопределяет текстовое содержимое.
+  // Для кнопки, у которой видимая подпись не несёт полного контекста (напр. «Ответить»
+  // без указания, какой фичи). Не задан — aria-label не выставляется.
+  ariaLabel?: string;
   style?: CSSProperties;
   // Задан — вместо <button> рендерится честная <a> в новой вкладке: работает средний клик
   // и «открыть в новой вкладке». Ссылки на внешние ресурсы — только через этот путь.
@@ -64,7 +68,7 @@ interface ButtonProps {
 
 export function Button({
   variant = 'primary', size = 'md', fullWidth, loading = false,
-  disabled, glow, pill, leftIcon, onClick, type = 'button', title, style, href, children,
+  disabled, glow, pill, leftIcon, onClick, type = 'button', title, ariaLabel, style, href, children,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
   const baseStyle: CSSProperties = {
@@ -89,6 +93,7 @@ export function Button({
         target="_blank"
         rel="noopener noreferrer"
         title={title}
+        aria-label={ariaLabel}
         onClick={onClick}
         style={baseStyle}
       >
@@ -101,6 +106,7 @@ export function Button({
     <button
       type={type}
       title={title}
+      aria-label={ariaLabel}
       disabled={isDisabled}
       onClick={onClick}
       style={baseStyle}

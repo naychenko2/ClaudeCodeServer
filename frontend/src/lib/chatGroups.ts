@@ -487,12 +487,6 @@ export function featureChipCounts(features: FeatureIndexFeature[]): Record<Featu
   return counts;
 }
 
-// Фильтр фич по выбранному чипу: фича видна, если её chips[] содержит чип.
-// 'open' — все открытые (не закрытые), 'closed' — все закрытые, остальные — по тревоге.
-export function filterFeaturesByChip(features: FeatureIndexFeature[], chip: FeatureChip): FeatureIndexFeature[] {
-  return features.filter(f => f.chips.includes(chip));
-}
-
 // Число ДРУГИХ фич, к которым принадлежит чат (кроме первой, в группе которой он
 // нарисован). Мультифичевый чат (оркестратор/куратор нескольких фич) — «ещё N» на
 // строке в группе первой фичи: след, где живут его ключевые чаты остальных фич

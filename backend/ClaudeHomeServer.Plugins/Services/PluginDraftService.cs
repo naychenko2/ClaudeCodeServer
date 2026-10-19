@@ -21,11 +21,20 @@ public class PluginDraftService
 
     private readonly PluginStore _store;
     private readonly PluginPackageValidator _validator;
+    // Часы (TimeProvider): время отклонения черновика и расчёт 30-дневного хранения.
+    // По умолчанию TimeProvider.System; тесты подставляют свои (без Task.Delay).
+    private readonly TimeProvider _time;
 
-    public PluginDraftService(PluginStore store, PluginPackageValidator validator)
+    // Хранение отклонённых черновиков: 30 дней, затем ленивое удаление при перечислении.
+    public const int RejectedRetentionDays = 30;
+    // Метаданные отклонённого черновика (время отклонения) — файл в каталоге _rejected/{slug}.
+    private const string RejectedMetaFile = "_rejected.json";
+
+    public PluginDraftService(PluginStore store, PluginPackageValidator validator, TimeProvider? time = null)
     {
         _store = store;
         _validator = validator;
+        _time = time ?? TimeProvider.System;
     }
 
     // slug — грамматика PluginId: [a-z0-9-]+ (часть id после '/').
@@ -175,34 +184,124 @@ public class PluginDraftService
             new PluginDraftValidation(validation.IsValid, validation.Problems.Select(p => new PluginDraftProblem(p.Code, p.Message)).ToList()));
     }
 
-    // ── draft_list (REST, шаг 4.3a) ───────────────────────────────────────────
-    // Список черновиков владельца: slug, id, версия, время изменения, число проблем последней
-    // проверки, признак «установлена такая же версия». Валидатор — тот же (считаем проблемы),
-    // id/version — из манифеста, время — max mtime файлов черновика, «такая же версия» —
-    // сверка id+version с записями installed.json.
+    // ── draft_list (REST, шаги 4.3a/4.3c) ─────────────────────────────────────
+    // Список черновиков владельца: активные (_drafts) + отклонённые (_rejected, признак
+    // rejected: true + дата, когда исчезнут). Поля: slug, id, версия, время изменения, число
+    // проблем последней проверки, признак «установлена такая же версия». Валидатор — тот же
+    // (считаем проблемы), id/version — из манифеста, время — max mtime файлов черновика,
+    // «такая же версия» — сверка id+version с записями installed.json. Просроченные отклонённые
+    // (> 30 дней) удаляются лениво здесь, без фонового сервиса.
     public List<PluginDraftSummary> List(string ownerId)
     {
-        var root = SafePath.Join(_store.OwnerRoot(ownerId), PluginStore.DraftsDirName);
-        if (!Directory.Exists(root)) return [];
         var installed = _store.LoadInstalled(ownerId);
         var result = new List<PluginDraftSummary>();
-        foreach (var dir in Directory.EnumerateDirectories(root))
+
+        // Активные черновики: _drafts/{slug} (rejected: false, без даты исчезновения).
+        var draftsRoot = SafePath.Join(_store.OwnerRoot(ownerId), PluginStore.DraftsDirName);
+        if (Directory.Exists(draftsRoot))
         {
-            var slug = Path.GetFileName(dir);
-            var (manifest, _) = PluginInstaller.ReadManifest(dir);
-            var id = manifest?.Id ?? "";
-            var version = manifest?.Version ?? TemplateVersion;
-            var validation = _validator.Validate(dir);
-            result.Add(new PluginDraftSummary(
-                slug,
-                id,
-                version,
-                MaxFileMtimeUtc(dir),
-                validation.Problems.Count,
-                installed.Any(r => r.Id == id && r.Version == version)));
+            foreach (var dir in Directory.EnumerateDirectories(draftsRoot))
+            {
+                var slug = Path.GetFileName(dir);
+                var (manifest, _) = PluginInstaller.ReadManifest(dir);
+                var id = manifest?.Id ?? "";
+                var version = manifest?.Version ?? TemplateVersion;
+                var validation = _validator.Validate(dir);
+                result.Add(new PluginDraftSummary(
+                    slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
+                    installed.Any(r => r.Id == id && r.Version == version),
+                    Rejected: false, ExpiresAt: null));
+            }
         }
+
+        // Отклонённые черновики: _rejected/{slug}; просроченные (> 30 дней) — ленивое удаление.
+        var rejectedRoot = SafePath.Join(_store.OwnerRoot(ownerId), PluginStore.RejectedDirName);
+        if (Directory.Exists(rejectedRoot))
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            foreach (var dir in Directory.EnumerateDirectories(rejectedRoot))
+            {
+                var slug = Path.GetFileName(dir);
+                var meta = LoadRejectedMeta(dir);
+                var rejectedAt = meta?.RejectedAt ?? MaxFileMtimeUtc(dir);
+                var expiresAt = rejectedAt.AddDays(RejectedRetentionDays);
+                if (expiresAt <= now)
+                {
+                    // Просрочен: ленивое удаление (каталог + метаданные), из списка не идёт.
+                    try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+                    continue;
+                }
+                var (manifest, _) = PluginInstaller.ReadManifest(dir);
+                var id = manifest?.Id ?? "";
+                var version = manifest?.Version ?? TemplateVersion;
+                var validation = _validator.Validate(dir);
+                result.Add(new PluginDraftSummary(
+                    slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
+                    installed.Any(r => r.Id == id && r.Version == version),
+                    Rejected: true, ExpiresAt: expiresAt));
+            }
+        }
+
         return result;
     }
+
+    // ── reject (REST, шаг 4.3c) ─────────────────────────────────────────────────
+    // Перенести черновик из _drafts/{slug} в служебный _rejected/{slug} (вне наблюдения)
+    // и записать время отклонения. Перенос атомарный (Directory.Move), время — из часов.
+    public PluginDraftOpResult Reject(string ownerId, string slug)
+    {
+        if (DraftDir(ownerId, slug) is not { } dir)
+            return PluginDraftOpResult.Fail("bad-slug", $"Недопустимый slug: {slug}");
+        if (!Directory.Exists(dir))
+            return PluginDraftOpResult.Fail("not-found", $"Черновик {slug} не найден");
+
+        var rejectedDir = _store.RejectedDir(ownerId, slug);
+        if (Directory.Exists(rejectedDir))
+            return PluginDraftOpResult.Fail("already-rejected", $"Отклонённый черновик {slug} уже существует");
+
+        _store.RunExclusive(() =>
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(rejectedDir)!);
+            Directory.Move(dir, rejectedDir);
+            SaveRejectedMeta(rejectedDir, _time.GetUtcNow().UtcDateTime);
+        });
+        return PluginDraftOpResult.OkResult($"Черновик {slug} отклонён");
+    }
+
+    // ── restore (REST, шаг 4.3c) ────────────────────────────────────────────────
+    // Вернуть отклонённый черновик из _rejected/{slug} обратно в _drafts/{slug}.
+    // Если _drafts/{slug} уже занят (новый черновик) → conflict (409).
+    public PluginDraftOpResult Restore(string ownerId, string slug)
+    {
+        if (DraftDir(ownerId, slug) is not { } draftDir)
+            return PluginDraftOpResult.Fail("bad-slug", $"Недопустимый slug: {slug}");
+
+        var rejectedDir = _store.RejectedDir(ownerId, slug);
+        if (!Directory.Exists(rejectedDir))
+            return PluginDraftOpResult.Fail("not-found", $"Отклонённый черновик {slug} не найден");
+        if (Directory.Exists(draftDir))
+            return PluginDraftOpResult.Fail("conflict", $"Черновик {slug} уже существует");
+
+        _store.RunExclusive(() =>
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(draftDir)!);
+            Directory.Move(rejectedDir, draftDir);
+        });
+        return PluginDraftOpResult.OkResult($"Черновик {slug} возвращён");
+    }
+
+    // Метаданные отклонённого черновика (время отклонения); null — не отклонён или slug невалиден.
+    // Публичный: контроллер использует его в ответах reject/restore.
+    public PluginRejectedMeta? RejectedMeta(string ownerId, string slug) =>
+        DraftDir(ownerId, slug) is { } _ ? LoadRejectedMeta(_store.RejectedDir(ownerId, slug)) : null;
+
+    // Метаданные отклонённого черновика: записать время отклонения (UTC) в _rejected.json.
+    private static void SaveRejectedMeta(string rejectedDir, DateTime rejectedAt) =>
+        JsonFileStore.Save(Path.Combine(rejectedDir, RejectedMetaFile), new PluginRejectedMeta(rejectedAt));
+
+    // Прочитать метаданные; null — файла нет или JSON бит (forward-compat).
+    private static PluginRejectedMeta? LoadRejectedMeta(string rejectedDir) =>
+        JsonFileStore.Load<PluginRejectedMeta>(Path.Combine(rejectedDir, RejectedMetaFile));
 
     // Время изменения черновика = max LastWriteTimeUtc всех файлов (рекурсивно); нет файлов → MinValue.
     private static DateTime MaxFileMtimeUtc(string dir)
@@ -375,15 +474,22 @@ public sealed class PluginDraftPreview
     }
 }
 
-// Сводка черновика для списка (REST, шаг 4.3a): slug, id, версия, время изменения,
-// число проблем последней проверки, признак «установлена такая же версия».
+// Сводка черновика для списка (REST, шаги 4.3a/4.3c): slug, id, версия, время изменения,
+// число проблем последней проверки, признак «установлена такая же версия», признак «отклонён»
+// (rejected) и дата, когда отклонённый черновик исчезнет (ExpiresAt; null у активных).
 public sealed record PluginDraftSummary(
     string Slug,
     string Id,
     string Version,
     DateTime UpdatedAt,
     int Problems,
-    bool InstalledSameVersion);
+    bool InstalledSameVersion,
+    bool Rejected,
+    DateTime? ExpiresAt);
+
+// Метаданные отклонённого черновика (шаг 4.3c): время отклонения (UTC). Хранится в
+// _rejected/{slug}/_rejected.json; из него считается 30-дневное хранение (ExpiresAt).
+public sealed record PluginRejectedMeta(DateTime RejectedAt);
 
 public sealed record PluginDraftPanel(string Id, string Slot, string Title);
 public sealed record PluginDraftSecret(string Name, bool Required);

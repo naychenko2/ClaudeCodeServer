@@ -229,4 +229,52 @@ public class PluginDraftsController(
                 .ToList(),
         });
     }
+
+    // --- POST /api/plugins/drafts/{slug}/reject — отклонить черновик (шаг 4.3c) ---
+    // Переносит каталог черновика в служебный _rejected/{slug} (вне _drafts и вне наблюдения)
+    // и записывает время отклонения. Гейты те же: сервисный JWT → 403, чужой/несуществующий → 404.
+    // Ответ: slug, время отклонения (rejectedAt) и дата, когда исчезнет (expiresAt = +30 дней).
+
+    [HttpPost("{slug}/reject")]
+    public IActionResult Reject(string slug)
+    {
+        var gate = Gate(); if (gate is not null) return gate;
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: черновики ведёт только пользовательский токен" });
+
+        // Чужой/несуществующий черновик → 404 ДО переноса (иначе Reject вернёт 400, а не 404).
+        if (!drafts!.Exists(UserId, slug))
+            return NotFound(new { error = $"Черновик {slug} не найден" });
+
+        var op = drafts.Reject(UserId, slug);
+        if (!op.Ok)
+            return op.Code == "already-rejected"
+                ? Conflict(new { error = op.Message })
+                : BadRequest(new { error = op.Message });
+
+        var meta = drafts.RejectedMeta(UserId, slug);
+        DateTime? rejectedAt = meta?.RejectedAt;
+        DateTime? expiresAt = meta is null ? null : meta.RejectedAt.AddDays(PluginDraftService.RejectedRetentionDays);
+        return Ok(new { slug, rejectedAt, expiresAt });
+    }
+
+    // --- POST /api/plugins/drafts/{slug}/restore — вернуть отклонённый черновик (шаг 4.3c) ---
+    // Возвращает _rejected/{slug} обратно в _drafts/{slug}; если slug уже занят новым черновиком → 409.
+    // Событие наблюдателя plugin_draft_changed приходит как обычно (черновик снова в _drafts).
+    // Гейты те же: сервисный JWT → 403, чужой/не отклонён → 404.
+
+    [HttpPost("{slug}/restore")]
+    public IActionResult Restore(string slug)
+    {
+        var gate = Gate(); if (gate is not null) return gate;
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: черновики ведёт только пользовательский токен" });
+
+        var op = drafts!.Restore(UserId, slug);
+        if (!op.Ok)
+            return op.Code == "conflict" ? Conflict(new { error = op.Message })
+                 : op.Code == "not-found" ? NotFound(new { error = op.Message })
+                 : BadRequest(new { error = op.Message });
+        return Ok(new { slug, restored = true });
+    }
 }

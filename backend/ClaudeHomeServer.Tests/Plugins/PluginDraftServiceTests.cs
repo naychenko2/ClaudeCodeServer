@@ -268,6 +268,103 @@ public class PluginDraftServiceTests : IDisposable
         _service.Exists(Owner, "my-plugin").Should().BeTrue("черновик владельца A на месте");
     }
 
+    // ── reject / restore / 30-дневное хранение (шаг 4.3c) ──────────────────────
+
+    // Часы с ручным ходом (TimeProvider): тест 30-дневного хранения без Task.Delay.
+    private sealed class FakeClock : TimeProvider
+    {
+        private DateTimeOffset _now;
+        public FakeClock(DateTimeOffset now) => _now = now;
+        public void Advance(TimeSpan by) => _now += by;
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    [Fact]
+    public void Reject_Переносит_ВRejected_ИЗаписываетВремя()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        var op = _service.Reject(Owner, "my-plugin");
+        op.Ok.Should().BeTrue();
+        Directory.Exists(DraftDir(Owner, "my-plugin")).Should().BeFalse("черновик убран из _drafts");
+        Directory.Exists(_store.RejectedDir(Owner, "my-plugin")).Should().BeTrue("черновик перенесён в _rejected");
+        _service.RejectedMeta(Owner, "my-plugin").Should().NotBeNull("время отклонения записано");
+    }
+
+    [Fact]
+    public void Reject_ЧужойВладелец_НеНайден()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        var op = _service.Reject(Stranger, "my-plugin");
+        op.Ok.Should().BeFalse();
+        op.Code.Should().Be("not-found");
+    }
+
+    [Fact]
+    public void Restore_Возвращает_ВDrafts()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.Reject(Owner, "my-plugin").Ok.Should().BeTrue();
+        var op = _service.Restore(Owner, "my-plugin");
+        op.Ok.Should().BeTrue();
+        Directory.Exists(DraftDir(Owner, "my-plugin")).Should().BeTrue("черновик возвращён в _drafts");
+        Directory.Exists(_store.RejectedDir(Owner, "my-plugin")).Should().BeFalse("_rejected пуст");
+    }
+
+    [Fact]
+    public void Restore_КонфликтSlug_Ошибка()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        _service.Reject(Owner, "my-plugin").Ok.Should().BeTrue();
+        // Новый черновик того же slug занял _drafts/my-plugin.
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        var op = _service.Restore(Owner, "my-plugin");
+        op.Ok.Should().BeFalse();
+        op.Code.Should().Be("conflict");
+    }
+
+    [Fact]
+    public void Restore_НеОтклонён_НеНайден()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue(); // активный, не отклонён
+        var op = _service.Restore(Owner, "my-plugin");
+        op.Ok.Should().BeFalse();
+        op.Code.Should().Be("not-found");
+    }
+
+    [Fact]
+    public void List_Отклонённые_ПризнакRejected_ИExpiresAt()
+    {
+        var clock = new FakeClock(new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero));
+        var svc = new PluginDraftService(_store, new PluginPackageValidator(), clock);
+        svc.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        svc.Reject(Owner, "my-plugin").Ok.Should().BeTrue();
+
+        var item = svc.List(Owner).Single(s => s.Slug == "my-plugin");
+        item.Rejected.Should().BeTrue("отклонённый черновик помечен rejected: true");
+        item.ExpiresAt.Should().NotBeNull("дата исчезновения задана");
+        item.ExpiresAt!.Value.Should().Be(
+            new DateTime(2026, 10, 19, 0, 0, 0, DateTimeKind.Utc).AddDays(PluginDraftService.RejectedRetentionDays),
+            "expiresAt = время отклонения + 30 дней");
+    }
+
+    [Fact]
+    public void List_ПросроченныеОтклонённые_УдаляютсяЛениво()
+    {
+        var clock = new FakeClock(new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero));
+        var svc = new PluginDraftService(_store, new PluginPackageValidator(), clock);
+        svc.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        svc.Reject(Owner, "my-plugin").Ok.Should().BeTrue();
+
+        // 29 дней — ещё не просрочено: черновик в списке.
+        clock.Advance(TimeSpan.FromDays(29));
+        svc.List(Owner).Should().Contain(s => s.Slug == "my-plugin" && s.Rejected);
+
+        // 31 день — просрочено: ленивое удаление при перечислении.
+        clock.Advance(TimeSpan.FromDays(2));
+        svc.List(Owner).Should().NotContain(s => s.Slug == "my-plugin");
+        Directory.Exists(_store.RejectedDir(Owner, "my-plugin")).Should().BeFalse("просроченный отклонённый удалён");
+    }
+
     // ── Хелпер: symlink (кроссплатформенно) ─────────────────────────────────────
 
     private static void CreateSymlink(string target, string link)

@@ -22,6 +22,8 @@ public class PluginStore
     public const string RootDirName = "plugins";
     public const string PackagesDirName = "packages";
     public const string DraftsDirName = "_drafts";
+    // Отклонённые черновики (шаг 4.3c): вне _drafts и вне наблюдения наблюдателя черновиков.
+    public const string RejectedDirName = "_rejected";
     public const string UploadsDirName = "_uploads";
     public const string InstalledFileName = "installed.json";
 
@@ -58,6 +60,11 @@ public class PluginStore
     // Каталог черновика: data/plugins/{owner}/_drafts/{slug}.
     public string DraftDir(string ownerId, string slug) =>
         SafePath.Join(OwnerRoot(ownerId), $"{DraftsDirName}/{slug}");
+
+    // Каталог отклонённого черновика: data/plugins/{owner}/_rejected/{slug} (шаг 4.3c).
+    // Вне _drafts (агентский тулсет его не видит) и вне наблюдения наблюдателя черновиков.
+    public string RejectedDir(string ownerId, string slug) =>
+        SafePath.Join(OwnerRoot(ownerId), $"{RejectedDirName}/{slug}");
 
     // Каталог загруженного пакета: data/plugins/{owner}/_uploads/{uploadId}.
     public string UploadDir(string ownerId, string uploadId) =>

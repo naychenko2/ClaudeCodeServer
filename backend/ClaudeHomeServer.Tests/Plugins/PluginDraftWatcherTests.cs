@@ -183,6 +183,32 @@ public class PluginDraftWatcherTests : IDisposable
         finally { watcher.StopWatch(); }
     }
 
+    // ── 7. Наблюдатель не шумит на _rejected (шаг 4.3c) ───────────────────────
+
+    [Fact]
+    public async Task ОтклонённыеЧерновики_НаблюдательНеШумит()
+    {
+        // Корень владельца + отклонённый черновик (_rejected/{slug}) с файлом — ДО старта:
+        // создание не даёт события, проверяем правку файла в _rejected.
+        Directory.CreateDirectory(_store.OwnerRoot(Owner));
+        var rejectedDir = _store.RejectedDir(Owner, Slug);
+        Directory.CreateDirectory(rejectedDir);
+        var file = Path.Combine(rejectedDir, "a.md");
+        File.WriteAllText(file, "seed");
+
+        var watcher = NewWatcher();
+        watcher.StartWatch();
+        try
+        {
+            // Правка файла в _rejected: наблюдатель не подписан (каталог исключён) → тишина.
+            File.WriteAllText(file, "changed");
+            await Task.Delay(400);   // quiescence: дебаунс истёк, события быть не должно
+            _broadcaster.CountFor(Owner).Should().Be(0,
+                "наблюдатель не шумит на _rejected (каталог исключён)");
+        }
+        finally { watcher.StopWatch(); }
+    }
+
     // ── Фейки ──────────────────────────────────────────────────────────────────
 
     // Фейк IFeatureFlagGate: один общий переключатель (тестам хватает «включён/выключен»).

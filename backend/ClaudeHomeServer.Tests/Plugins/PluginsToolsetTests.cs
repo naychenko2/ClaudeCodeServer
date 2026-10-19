@@ -201,4 +201,20 @@ public class PluginsToolsetTests : IDisposable
         second.IsError.Should().BeTrue();
         second.Text.Should().Contain("already-exists");
     }
+
+    // ── Отклонённые черновики: агентский тулсет их не видит (шаг 4.3c) ─────────
+
+    [Fact]
+    public async Task ОтклонённыйЧерновик_АгентНеВидит()
+    {
+        var toolset = Toolset();
+        (await Call(toolset, PluginsToolset.ToolCreate, new JsonObject { ["slug"] = "my-plugin" })).IsError.Should().BeFalse();
+
+        // Отклонить черновик (перенос в _rejected) — агентский тулсет его больше не найдёт.
+        _drafts.Reject(Owner, "my-plugin").Ok.Should().BeTrue();
+
+        var result = await Call(toolset, PluginsToolset.ToolValidate, new JsonObject { ["slug"] = "my-plugin" });
+        result.IsError.Should().BeTrue("отклонённый черновик невидим агенту (не в _drafts)");
+        result.Text.Should().Contain("не найден");
+    }
 }

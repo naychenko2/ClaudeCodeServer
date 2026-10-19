@@ -441,6 +441,100 @@ public class PluginDraftsControllerTests : IDisposable
         records.Single(r => r.Id == "local-a/pkg").Sha256.Should().NotBeEmpty("запись целая (sha на месте)");
     }
 
+    // --- Reject: перенос в _rejected, убирает из активных (шаг 4.3c) ---
+
+    [Fact]
+    public void Reject_Переносит_ИУбираетИзАктивных()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Reject("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"rejectedAt\":", "время отклонения в ответе");
+        json.Should().Contain("\"expiresAt\":", "дата исчезновения в ответе");
+
+        Directory.Exists(_store.DraftDir(OwnerA, "pkg")).Should().BeFalse("черновик убран из _drafts");
+        Directory.Exists(_store.RejectedDir(OwnerA, "pkg")).Should().BeTrue("черновик перенесён в _rejected");
+
+        // List: активный исчез, отклонённый помечен rejected: true + дата исчезновения.
+        var listJson = JsonSerializer.Serialize(((OkObjectResult)ctl.List()).Value);
+        listJson.Should().Contain("\"Rejected\":true", "отклонённый помечен rejected: true");
+        listJson.Should().Contain("\"ExpiresAt\":", "дата исчезновения в списке");
+    }
+
+    [Fact]
+    public void Reject_СервисныйJwt_Отдаёт403()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+        var obj = (ObjectResult)ctl.Reject("pkg");
+        obj.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public void Reject_ЧужойВладелец_Отдаёт404()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerB);
+        ctl.Reject("pkg").Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public void Reject_ТочкаТочкаВSlug_Отбита()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        // «../pkg» — не по грамматике slug → Exists=false → 404 (не 500 от SafePath.Join).
+        ctl.Reject("../pkg").Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    // --- Restore: возврат в _drafts, конфликт slug → 409 (шаг 4.3c) ---
+
+    [Fact]
+    public void Restore_Возвращает_ВDrafts()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Reject("pkg").Should().BeOfType<OkObjectResult>();
+
+        var ok = (OkObjectResult)ctl.Restore("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"restored\":true", "черновик возвращён");
+        Directory.Exists(_store.DraftDir(OwnerA, "pkg")).Should().BeTrue("черновик снова в _drafts");
+        Directory.Exists(_store.RejectedDir(OwnerA, "pkg")).Should().BeFalse("_rejected пуст");
+    }
+
+    [Fact]
+    public void Restore_КонфликтSlug_Отдаёт409()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Reject("pkg").Should().BeOfType<OkObjectResult>();
+        // Новый черновик того же slug занял _drafts/pkg.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+
+        var conflict = (ConflictObjectResult)ctl.Restore("pkg");
+        conflict.StatusCode.Should().Be(409);
+    }
+
+    [Fact]
+    public void Restore_СервисныйJwt_Отдаёт403()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA, serviceToken: true);
+        var obj = (ObjectResult)ctl.Restore("pkg");
+        obj.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public void Restore_ЧужойВладелец_Отдаёт404()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerB);
+        ctl.Restore("pkg").Should().BeOfType<NotFoundObjectResult>();
+    }
+
     // --- Тестовая заглушка флага ---
 
     // IFeatureFlagGate: интересующие флаги — plugins-mvp и plugins-build-yourself.

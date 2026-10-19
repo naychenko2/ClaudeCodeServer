@@ -36,8 +36,9 @@ public sealed class PluginDraftWatcher : BackgroundService
     internal const int RootRetryMs = 5000;
 
     // Служебные каталоги data/plugins, которые НЕ подписываются (по имени, на любой глубине):
-    // packages (неизменяемые пакеты) и _uploads (загруженные пакеты). _drafts — подписывается.
-    private static readonly string[] ExcludeDirs = ["packages", "_uploads"];
+    // packages (неизменяемые пакеты), _uploads (загруженные пакеты) и _rejected (отклонённые
+    // черновики, шаг 4.3c — живут вне _drafts, наблюдателю не интересны). _drafts — подписывается.
+    private static readonly string[] ExcludeDirs = ["packages", "_uploads", "_rejected"];
 
     private readonly PluginStore _store;
     private readonly ISessionBroadcaster _broadcaster;

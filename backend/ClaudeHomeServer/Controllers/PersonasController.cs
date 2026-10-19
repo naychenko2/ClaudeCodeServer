@@ -272,7 +272,7 @@ public class PersonasController(
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
         var safe = Path.GetFileName(file);   // защита от path-traversal
-        var full = Path.Combine(_personas.AssetsDir, id, "candidates", safe);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, "candidates", safe));
         if (!System.IO.File.Exists(full)) return NotFound();
         return ImageAssetHelper.PhysicalFileByExt(full);
     }
@@ -294,7 +294,7 @@ public class PersonasController(
             || string.IsNullOrEmpty(persona.Avatar.ImageFile))
             return NotFound();
 
-        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, persona.Avatar.ImageFile));
         if (!System.IO.File.Exists(full)) return NotFound();
 
         var step = ImageAssetHelper.AvatarThumbStep(size);
@@ -332,7 +332,7 @@ public class PersonasController(
         if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return NotFound();
 
-        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, persona.Avatar.OriginalFile));
         if (!System.IO.File.Exists(full)) return NotFound();
 
         Response.Headers.CacheControl = "private, max-age=604800, immutable";

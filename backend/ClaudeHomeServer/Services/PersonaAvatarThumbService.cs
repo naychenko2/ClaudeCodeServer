@@ -25,7 +25,7 @@ public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<Perso
         var name = ImageAssetHelper.AvatarThumbName(persona.Avatar.ImageFile, step);
         if (name is null) return null;
         var dir = Path.GetDirectoryName(originalPath)!;
-        var path = Path.Combine(dir, name);
+        var path = SafePath.Join(dir, name);
         if (File.Exists(path)) return path;
 
         var original = await File.ReadAllBytesAsync(originalPath);
@@ -57,7 +57,7 @@ public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<Perso
 
         // Временный файл + переименование: параллельный второй запрос не увидит
         // наполовину записанную миниатюру; победил последний Move, обе копии валидны
-        var tmp = Path.Combine(dir, $".{name}.tmp-{Guid.NewGuid():N}");
+        var tmp = SafePath.Join(dir, $".{name}.tmp-{Guid.NewGuid():N}");
         await File.WriteAllBytesAsync(tmp, result.Image!.Bytes);
         try
         {

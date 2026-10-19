@@ -173,10 +173,20 @@ vi.mock('../lib/git', async (importOriginal) => {
   };
 });
 
-// ── SessionList (сайдбар): заглушка — display:none, но в DOM ──
+// ── SessionList (сайдбар): заглушка — display:none, но в DOM. N1: «загружает» список
+//     (mockSessionList) и прокидывает его владельцу onSessionsListChanged (useEffect, как
+//     в реальном SessionList:393) — иначе на десктопе chatNames/chatPersonas пусты. ──
+const mockSessionList = vi.hoisted(() => [] as Session[]);
 vi.mock('../components/SessionList', async () => {
-  const { createElement } = await import('react');
-  return { SessionList: () => createElement('div', { 'data-testid': 'sessionlist-stub' }) };
+  const { createElement, useEffect } = await import('react');
+  return {
+    SessionList: ({ onSessionsListChanged }: { onSessionsListChanged?: (s: Session[]) => void }) => {
+      useEffect(() => {
+        if (onSessionsListChanged && mockSessionList.length) onSessionsListChanged(mockSessionList);
+      }, [onSessionsListChanged, mockSessionList.length]);
+      return createElement('div', { 'data-testid': 'sessionlist-stub' });
+    },
+  };
 });
 
 // ── useFeaturePage: состояние страницы (run.epic.title) — no-op api отдаёт null ──
@@ -309,6 +319,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     (globalThis as any).MutationObserver = class { observe() {} disconnect() {} takeRecords() { return []; } };
     (globalThis as any).IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} };
     store.clear(); sstore.clear();
+    mockSessionList.length = 0;
     backNavTest.reset();
     indexTest.reset();
     setAllFlags({ 'features-overview': true });
@@ -502,6 +513,47 @@ describe('WorkspacePage: центр — страница фичи соседом
     act(() => { (reactProps(back!) as any).onClick(); });
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не скрыта после возврата (C1)').toBeNull();
     expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
+  });
+
+  // === N1: десктоп 1280 — названия/персоны чатов фичи приходят через SessionList-колбэк ===
+  // Шов: DesktopWorkspace монтирует SessionList БЕЗ onSessionsListChanged → sessions в
+  // WorkspacePage пусты → chatNames/chatPersonas пусты → у всех чатов фичи «Чат» + круг.
+  // Тест ловит именно эту цепочку (SessionList → колбэк → WorkspacePage → FeatureCenter →
+  // страница), а не проп напрямую. Мутация «убрать проп из DesktopWorkspace» красит.
+  it('N1: десктоп 1280 — название чата фичи из SessionList-колбэка (не «Чат»)', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // SessionList «загрузил» список с именованным чатом (session.name = 'Чат Дениса').
+    mockSessionList.length = 0;
+    mockSessionList.push(session);
+    // Чат фичи = тот же session (id chatA = ключевой чат feat()); связь в индексе.
+    const idx = {
+      features: [feat()],
+      chats: { [session.id]: [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }] },
+    } as FeaturesIndex;
+    indexTest.setIndex('p1', idx);
+    mockData.index = idx;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи (из чата).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (N1): строка чата фичи показывает НАЗВАНИЕ (не «Чат»):
+    // SessionList → onSessionsListChanged → WorkspacePage.sessions → chatNames → FeaturePage.
+    const row = findNodeByAttr(container, 'data-testid', `feature-chat-${session.id}`);
+    expect(row, 'строка чата фичи не найдена (N1)').not.toBeNull();
+    expect(
+      textNodes(row!).join(''),
+      'название чата не пришло через SessionList-колбэк (N1: «Чат» вместо имени)',
+    ).toContain(session.name);
   });
 
   // === M3 + m4: вход из списка (fromChat: false) — крошка «К списку», не в активный чат ===

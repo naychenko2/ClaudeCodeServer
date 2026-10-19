@@ -2194,6 +2194,9 @@ const windowWidth = useWindowWidth();
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
           onSessionUpdated={handleSessionUpdated}
+          // N1: тот же колбэк, что у мобильной раскладки (SessionList:2030) — иначе на
+          // десктопе sessions/chatNames/chatPersonas пусты и у чатов фичи «Чат» + круг.
+          onSessionsListChanged={handleSessionsListChanged}
           onCreateSession={handleCreateSession}
           onClearSession={handleClearSession}
           creatingSession={creatingSession}

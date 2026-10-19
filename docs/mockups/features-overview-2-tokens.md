@@ -225,6 +225,7 @@
 |---|---|---|---|
 | событие | сетка `44 · 16 · 1fr`, `gap 8`, поля `5 0`, 12 `textSecondary` | `gridTemplateColumns: '44px 16px minmax(0,1fr)'`, `columnGap: SP.sm`, `padding: '5px 0'`, `FS.sm`, `C.textSecondary` | 27 |
 | время | mono 10,5 `textMuted`, отступ сверху 1 | `FONT.mono`, `FS.xxs` (Р-4), `C.textMuted`, `paddingTop: 1` | 10 |
+| время: не сегодня | ДВЕ строки в колонке 44: дата `dd.mm` сверху, время `ЧЧ:ММ` снизу (N2: «dd.mm ЧЧ:ММ» одной строкой в 44 px не влезает — минуты уходили под аватар); сегодня — только `ЧЧ:ММ` | `eventTimeParts`: `display: flex`, `flexDirection: column`, `alignItems: flex-start`; сетка `44 · 16 · 1fr` не меняется | 10 |
 | аватар | 16 | `PersonaAvatar size={16}` | 16 |
 | кто | 600 `textHeading` | `fontWeight: 600`, `C.textHeading` | — |
 | ссылка на чат события | (в макете нет) | только при `sessionId`; `C.accent`, без подчёркивания, наведение `C.accentLight`; без `sessionId` — обычный текст | — |

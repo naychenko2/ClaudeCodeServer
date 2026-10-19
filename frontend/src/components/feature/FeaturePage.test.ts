@@ -257,6 +257,49 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(textNodes(alarm!).join('')).toContain('Открыть его чат');
   });
 
+  // === m1: пробел перед датой (не «решения18.10») + единый формат даты с лентой ===
+  it('m1: тревога — пробел перед датой (не «решения18.10»), формат даты как в ленте', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      // since — НЕ сегодня (18.10): дата выводится, и перед ней обязателен пробел.
+      attention: { kind: 'wait', since: '2026-10-18T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: 'chat-key' },
+    })];
+    const c = render({});
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    const text = textNodes(alarm).join('');
+    expect(text, 'нет пробела перед датой (m1: «решения18.10»)').toContain('решения 18.10');
+    expect(text, 'дата склеена с «решения» (m1)').not.toContain('решения18.10');
+  });
+
+  // === m2: кнопка тревоги на 360 — тач-цель ≥ 40 ===
+  it('m2: кнопка тревоги на 360 — minHeight 40 (тач-цель)', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: 'chat-key' },
+    })];
+    const c = render({ isMobile: true });
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    const btn = firstButton(alarm as never);
+    expect(btn, 'кнопка тревоги не найдена (m2)').not.toBeNull();
+    expect((btn as unknown as { style: Record<string, string> }).style.minHeight, 'на 360 нет minHeight 40 (m2: тач-цель < 40)').toBe('40px');
+  });
+
+  // === m3: тревога «к мержу» (kind=merge) — текст «К мержу», не «Ждёт вашего решения» ===
+  it('m3: тревога kind=merge — текст «К мержу» (не «Ждёт вашего решения»)', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
+    })];
+    const c = render({});
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    const text = textNodes(alarm).join('');
+    expect(text, 'нет «К мержу» (m3: тревога merge показывает «Ждёт вашего решения»)').toContain('К мержу');
+    expect(text, '«Ждёт вашего решения» вместо «К мержу» (m3)').not.toContain('Ждёт вашего решения');
+  });
+
   it('ok: закрытая смержена — итог «Смержена …» (successBg)', async () => {
     mockIndex.features = [feat({
       bucket: 'closed',
@@ -573,6 +616,25 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chat-x' });
   });
 
+  // === N3: «открыть чат» — отдельный блок под текстом; на 360 тач-цель ≥ 40 через minHeight ===
+  it('N3: «открыть чат» — display:block (отдельная строка), на 360 minHeight 40, не большие поля', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
+      ],
+      eventsTotal: 1,
+    });
+    const c = render({ isMobile: true });
+    await settle();
+    const link = findNodeByAttr(c, 'data-testid', 'feature-event-chat-link-chat-x')!;
+    const st = (link as unknown as { style: Record<string, string> }).style;
+    // N3: отдельный блок (display: block), не inline-flex, приклеенный к тексту события.
+    expect(st.display, '«открыть чат» не отдельный блок (N3: приклеен к тексту)').toBe('block');
+    // На 360 тач-цель ≥ 40 через minHeight (псевдо-область), а не большими полями (старое '12px 0').
+    expect(st.minHeight, 'на 360 нет minHeight 40 (N3: тач-цель < 40)').toBe('40px');
+    expect(st.padding, 'на 360 большие поля (N3: тач-цель через minHeight, не padding)').not.toBe('12px 0px');
+  });
+
   // === M4: название чата вместо GUID (без новых запросов) ===
   it('M4: есть chatNames → название; GUID наружу не попадает', async () => {
     mockIndex.chats = {
@@ -610,6 +672,21 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(textNodes(c).join('')).toContain('Моя фича');
     // Блок «Задачи» с счётчиками (1 задача — эпик, впереди).
     expect(textNodes(c).join('')).toContain('впереди 1');
+  });
+
+  // === Глеб major: run БЕЗ epic — taskCounters не падает (защита run.epic ? [..] : []) ===
+  it('epic: минимальный run БЕЗ epic — страница не падает (taskCounters защищён)', async () => {
+    mockGetFeature.result = {
+      run: { featureId: 'f1' },
+      events: [], eventsTotal: 0,
+    } as unknown as FeaturePageData;
+    const c = render({});
+    await settle();
+    // Страница на месте: taskCounters не упал TypeError'ом на run.epic (undefined.status).
+    // Мутация «убрать защиту run.epic ? [..] : []» красит: белый экран (feature-page null).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница упала (epic: run без epic)').not.toBeNull();
+    // Блок «Задачи» на месте (0 задач — счётчики пустые, но блок страницу не роняет).
+    expect(textNodes(c).join('')).toContain('Задачи');
   });
 
   // === R6-1: чаты — роль русским словом, аватар персоны, «ключевой» ===
@@ -691,7 +768,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(t2).not.toContain('—');
   });
 
-  it('R6-2: время — сегодня «ЧЧ:ММ», другой день «dd.mm ЧЧ:ММ» (дата вместе со временем)', async () => {
+  it('R6-2: время — сегодня «ЧЧ:ММ» (одна строка); другой день — ДВЕ строки: дата сверху, время снизу (N2)', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
@@ -701,15 +778,18 @@ describe('FeaturePage: пять состояний + шапка + тревога
     });
     const c = render({});
     await settle();
-    // Сегодня (NOW = 19.10): только время (в местном поясе — TZ-стабильно по форме).
+    // Сегодня (NOW = 19.10): только время, ОДНА строка; даты нет.
     const today = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-19T10:00:00Z-started')!;
     const t1 = textNodes(today).find(t => /^\d{2}:\d{2}$/.test(t));
     expect(t1).toBeDefined();
-    // Другой день: дата + время.
+    expect(textNodes(today).some(t => /^\d{2}\.\d{2}$/.test(t)), 'сегодняшний день: дата не должна выводиться (N2)').toBe(false);
+    // Другой день (N2): ДВЕ отдельные строки — дата «18.10» сверху, время «10:00» снизу.
     const other = findNodeByAttr(c, 'data-testid', 'feature-event-2026-10-18T10:00:00Z-completed')!;
-    const t2 = textNodes(other).find(t => /^\d{2}\.\d{2} \d{2}:\d{2}$/.test(t));
-    expect(t2).toBeDefined();
-    expect(t2).toContain('18.10');
+    const nodes = textNodes(other);
+    expect(nodes.some(t => /^\d{2}\.\d{2}$/.test(t)), 'нет отдельной строки даты (N2: дата сверху)').toBe(true);
+    expect(nodes.some(t => /^\d{2}:\d{2}$/.test(t)), 'нет отдельной строки времени (N2: время снизу)').toBe(true);
+    // НЕ одна склеенная строка «18.10 10:00» (она не влезала в колонку 44 — минуты под аватар).
+    expect(nodes.some(t => /^\d{2}\.\d{2} \d{2}:\d{2}$/.test(t)), 'дата+время склеены в одну строку (N2: должны быть в две строки)').toBe(false);
   });
 
   it('R6-2: строка события — сетка 44px 16px minmax(0,1fr), column-gap 8', async () => {

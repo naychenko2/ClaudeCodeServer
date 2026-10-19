@@ -57,6 +57,10 @@ interface Props {
   activeSession: Session | null;
   onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated: (s: Session) => void;
+  // Полный список сессий проекта → WorkspacePage (N1): тот же колбэк, что у мобильной
+  // раскладки. Без него на десктопе chatNames/chatPersonas пусты → у всех чатов фичи
+  // название «Чат» и нейтральный круг.
+  onSessionsListChanged?: (sessions: Session[]) => void;
   // Создание чата по клику (кнопка в пустом состоянии центра) + сброс при удалении последнего
   onCreateSession: () => void;
   onClearSession: () => void;
@@ -285,7 +289,7 @@ export function DesktopWorkspace(p: Props) {
   // Пустой список сам показывает empty-state с кнопкой «Новый чат» (см. SessionList).
   const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsListChanged={p.onSessionsListChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
   );
 

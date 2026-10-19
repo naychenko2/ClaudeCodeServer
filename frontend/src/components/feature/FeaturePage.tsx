@@ -11,7 +11,8 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { showToast } from '../../lib/toast';
 import { featureDisplayState, featureQuickAction, featureStatusTag, formatDuration } from '../../lib/chatGroups';
 import { plural } from '../../lib/plural';
-import { dateOnly, dateTimeLabel } from '../chat/feature/featureTime';
+import { dateOnly } from '../chat/feature/featureTime';
+import { eventTimeLabel } from './featurePageBody';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
@@ -221,7 +222,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
     const openChat = (chatId: string) => onBack({ kind: 'chat', chatId });
     body = (
       <>
-        <AlarmBlock feature={feature} onOpenChat={openChat} />
+        <AlarmBlock feature={feature} onOpenChat={openChat} isMobile={isMobile} />
         <FeaturePageBody
           run={page.page.run}
           index={index}
@@ -270,9 +271,10 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
 // «смержена» (successBg), «без мержа» (bgSelected). Глиф 14, выделение 700, кнопка-действие.
 // Нет фичи в индексе или нет тревоги/итога — блок не рисуется (тело заполнит Ф2.5).
 // Кнопка ведёт в чат тревоги (attention.sessionId, M1) — не в ключевой чат.
-function AlarmBlock({ feature, onOpenChat }: {
+function AlarmBlock({ feature, onOpenChat, isMobile = false }: {
   feature: FeatureIndexFeature | null;
   onOpenChat: (chatId: string) => void;
+  isMobile?: boolean;
 }) {
   if (!feature) return null;
   const att = feature.attention;
@@ -298,14 +300,17 @@ function AlarmBlock({ feature, onOpenChat }: {
   // Тревога: «ждёт вас»/«к мержу» (infoBg) или «стоит» (dangerBg).
   if (!att) return null;
   const isStop = att.kind === 'stopped';
+  const isMerge = att.kind === 'merge';
   const bg = isStop ? C.dangerBg : C.infoBg;
   const glyphKind: GlyphKind = isStop ? 'stopped' : 'wait';
   // «{с}» — с какого момента (attention.since), «{причина}» — attention.reason.
-  // Дата-время — тем же хелпером, что и остальные метки режима фичи (featureTime:
-  // локальный пояс, «dd.mm ЧЧ:ММ»), не сырой ISO.
-  const since = att.since ? ` ${dateTimeLabel(att.since) ?? ''}`.trim() : '';
+  // m1: ЕДИНЫЙ формат даты с лентой (eventTimeLabel: сегодня «ЧЧ:ММ», иначе «dd.mm ЧЧ:ММ»,
+  // локальный пояс, не сырой ISO); пробел перед датой — внутри since (trim не срезает его).
+  const since = att.since && eventTimeLabel(att.since) ? ` ${eventTimeLabel(att.since)}` : '';
   const reason = att.reason ? `: ${att.reason}` : '';
-  const head = isStop ? `Исполнитель молчит${since}` : `Ждёт вашего решения${since}`;
+  // m3: тревога «к мержу» — текст «К мержу» (не «Ждёт вашего решения»): главное действие
+  // и макет §5.3 различают «ждёт вас»/«к мержу».
+  const head = isStop ? `Исполнитель молчит${since}` : isMerge ? `К мержу${since}` : `Ждёт вашего решения${since}`;
 
   return (
     <div data-testid="feature-page-alarm" style={{ display: 'flex', gap: 9, alignItems: 'flex-start', margin: '0 0 16px', padding: '10px 12px', borderRadius: R.lg, background: bg, fontSize: FS.base, color: C.textPrimary }}>
@@ -315,7 +320,7 @@ function AlarmBlock({ feature, onOpenChat }: {
         {/* Кнопка — только когда есть чат тревоги (attention.sessionId): без него она мёртвая (M1). */}
         {att.sessionId && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-            <Button size="xs" variant={isStop ? 'ghost' : 'primary'} style={isStop ? { background: C.bgWhite } : undefined} onClick={() => onOpenChat(att.sessionId!)}>
+            <Button size="xs" variant={isStop ? 'ghost' : 'primary'} style={isStop ? { background: C.bgWhite, ...(isMobile ? { minHeight: 40 } : {}) } : (isMobile ? { minHeight: 40 } : undefined)} onClick={() => onOpenChat(att.sessionId!)}>
               {isStop ? 'Открыть его чат' : 'Ответить'}
             </Button>
           </div>

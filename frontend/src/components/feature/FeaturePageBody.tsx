@@ -6,7 +6,7 @@ import { Button } from '../ui/Button';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
 import {
   featureChats, stepRows, stepStatusLabel, taskCounters, eventRows, showAllNeeded,
-  chatRoleLabel, laneLabel, eventTimeLabel,
+  chatRoleLabel, laneLabel, eventTimeParts,
   type FeatureChatEntry, type StepRow, type TaskCounters, type EventRow,
 } from './featurePageBody';
 import type { FeatureIndexFeature, FeaturesIndex, FeatureEvent } from '../../types/featureIndex';
@@ -276,7 +276,7 @@ function EventRowView({ row, onOpenChat, isMobile, now }: {
 }) {
   usePersonasVersion();
   const persona = row.personaId ? getPersonaById(row.personaId) : undefined;
-  const time = eventTimeLabel(row.at, now);
+  const { date, time } = eventTimeParts(row.at, now);
   const kindLabel = KIND_LABEL[row.kind] ?? row.kind;
   // Суффикс: роль + код шага (у step/rework), если есть.
   const roleLabel = row.role ? (ROLE_LABEL[row.role] ?? row.role) : null;
@@ -291,7 +291,10 @@ function EventRowView({ row, onOpenChat, isMobile, now }: {
         alignItems: 'start', fontSize: FS.sm, color: C.textSecondary, padding: '5px 0',
       }}
     >
-      <span style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, paddingTop: 1, whiteSpace: 'nowrap' }}>{time}</span>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted, paddingTop: 1, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+        {date && <span>{date}</span>}
+        <span>{time}</span>
+      </span>
       <span style={{ display: 'flex', justifyContent: 'center' }}>
         {persona
           ? <PersonaAvatar persona={persona} size={16} />
@@ -310,16 +313,20 @@ function EventRowView({ row, onOpenChat, isMobile, now }: {
           <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{row.reason}</span>
         )}
         {hasChatLink && (
+          // N3: «открыть чат» — ОТДЕЛЬНЫЙ блок под текстом события (не приклеен к нему).
+          // На 360 тач-цель ≥ 40 через minHeight (псевдо-область), а не большими полями —
+          // inline-flex с padding 12px раздувал строку и уводил текст от времени/аватара.
           <button
             type="button"
             data-testid={`feature-event-chat-link-${row.sessionId}`}
             className={FOCUS_CLASS}
             onClick={() => onOpenChat(row.sessionId!)}
             style={{
-              display: 'inline-flex', alignItems: 'center',
+              display: 'block',
               border: 'none', background: 'transparent', cursor: 'pointer',
               fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent,
-              padding: isMobile ? '12px 0' : '4px 0', marginTop: 2,
+              padding: 0, textAlign: 'left', boxSizing: 'border-box',
+              marginTop: SP.xs, minHeight: isMobile ? 40 : undefined,
             }}
           >
             открыть чат
@@ -475,9 +482,11 @@ export function FeaturePageEvents({ events, eventsTotal, onShowAll, onOpenChat, 
         ? <div style={{ fontSize: FS.sm, color: C.textSecondary, padding: '14px 10px 6px' }}>Событий пока нет.</div>
         : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {rows.map((r, i) => (
+            {rows.map((r) => (
+              // п.24: ключ без индекса (at|kind|sessionId) — при живом обновлении индексы
+              // плавают и строки пересоздаются; at+kind+sessionId — стабильны.
               <EventRowView
-                key={`${r.at}|${r.kind}|${r.sessionId ?? ''}|${i}`}
+                key={`${r.at}|${r.kind}|${r.sessionId ?? ''}`}
                 row={r}
                 onOpenChat={onOpenChat}
                 isMobile={isMobile}

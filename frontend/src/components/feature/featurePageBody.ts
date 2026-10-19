@@ -4,7 +4,7 @@
 // Все функции чистые: тестируются в node без DOM.
 
 import { laneOfChain } from '../chat/feature/PipelineFlow';
-import { hhmm, dateTimeLabel } from '../chat/feature/featureTime';
+import { hhmm, dateTimeLabel, dateOnly } from '../chat/feature/featureTime';
 import type { FeaturesIndex, FeatureIndexFeature, FeatureChatLink, FeatureEvent } from '../../types/featureIndex';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -180,7 +180,9 @@ export interface TaskCounters {
 // поля ответа — списки, которых бэк не отдал, раскладываются как пустые.
 export function taskCounters(run: FeatureRun): TaskCounters {
   const all = [
-    run.epic,
+    // N-epic: одиночный epic — той же защитой, что и списки (контракт: UI обязан
+    // пережить отсутствие любого поля; без epic → [], а не undefined в массиве).
+    ...(run.epic ? [run.epic] : []),
     ...(run.steps ?? []),
     ...(run.reviews ?? []),
     ...(run.qa ?? []),
@@ -245,4 +247,18 @@ export function eventTimeLabel(at: string, now?: number): string {
   const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
   if (sameDay) return hhmm(at) ?? '';
   return dateTimeLabel(at) ?? hhmm(at) ?? '';
+}
+
+// Время события в ленте (N2): сегодня — «ЧЧ:ММ» (одна строка); другой день — ДВЕ строки
+// в колонке 44: дата «dd.mm» сверху, время «ЧЧ:ММ» снизу. Сетка 44·16 не меняется:
+// «dd.mm ЧЧ:ММ» одной строкой в 44 px не влезает (минуты уходили под аватар).
+// now — «сейчас» в мс (стабильные тесты; не задано — Date.now()).
+export function eventTimeParts(at: string, now?: number): { date: string | null; time: string } {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return { date: null, time: '' };
+  const n = new Date(now ?? Date.now());
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  const time = hhmm(at) ?? '';
+  if (sameDay) return { date: null, time };
+  return { date: dateOnly(at) ?? null, time };
 }

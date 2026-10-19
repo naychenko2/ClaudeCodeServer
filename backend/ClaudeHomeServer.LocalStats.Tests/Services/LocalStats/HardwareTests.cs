@@ -143,7 +143,7 @@ public class HardwareTests : IDisposable
         kv.TempC.Should().Be(82, "самый горячий датчик контроллера");
         kv.Temp2C.Should().Be(58);
         kv.CritC.Should().Be(84, "temp*_max 83,85 → 84 (WCTEMP)");
-        var sys = snap.Disks.Single(d => d.Role == "system");
+        var sys = snap.Disks!.Single(d => d.Role == "system");
         sys.Controller.Should().Be("nvme0");
         sys.CritC.Should().BeNull("предел не сообщён → пороги 70/80");
 
@@ -204,7 +204,7 @@ public class HardwareTests : IDisposable
         kv.UsedGb.Should().Be(370, "kv — ФС kvdisk (492−122), а не наибольшая на контроллере /mnt/big");
         kv.TotalGb.Should().Be(492, "total — той же ФС kvdisk, не из /sys/block");
 
-        var sys = snap.Disks.Single(d => d.Role == "system");
+        var sys = snap.Disks!.Single(d => d.Role == "system");
         sys.UsedGb.Should().Be(400, "system — наибольшая ФС контроллера (/)");
         sys.TotalGb.Should().Be(500);
     }

@@ -171,10 +171,10 @@ public class VllmMetricsSourceTests
     }
 
     [Fact]
-    public void NullEngineMetricsSource_ReturnsEmptySnapshotWithAllBlocksUnsupported()
+    public async Task NullEngineMetricsSource_ReturnsEmptySnapshotWithAllBlocksUnsupported()
     {
         var source = new NullEngineMetricsSource();
-        var snapshot = source.ReadAsync().Result;
+        var snapshot = await source.ReadAsync();
         snapshot.Should().NotBeNull();
 
         snapshot!.Running.Should().BeNull();

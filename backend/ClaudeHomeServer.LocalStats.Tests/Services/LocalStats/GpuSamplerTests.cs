@@ -47,7 +47,7 @@ public class GpuSamplerTests
         var text =
             Line(0, "GPU-uuid-1", "NVIDIA GeForce RTX 3090", util: "99", busId: "00000000:0B:00.0") + "\n" +
             Line(1, "GPU-uuid-2", "NVIDIA GeForce RTX 3090", util: "100", busId: "00000000:0C:00.0");
-        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2), () => Task.FromResult(text));
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2), () => Task.FromResult<string?>(text));
 
         var samples = await sampler.ReadAsync();
         samples.Should().HaveCount(2, "обе карты хоста, не только первая");
@@ -65,7 +65,7 @@ public class GpuSamplerTests
     {
         var time = new ManualTime();
         var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
-            () => Task.FromResult(Line(0, "GPU-1", "NVIDIA GeForce RTX 4090", util: "50", memUsed: "100", memTotal: "200", temp: "40", powerDraw: "1.0", powerLimit: "2.0")));
+            () => Task.FromResult<string?>(Line(0, "GPU-1", "NVIDIA GeForce RTX 4090", util: "50", memUsed: "100", memTotal: "200", temp: "40", powerDraw: "1.0", powerLimit: "2.0")));
 
         var samples = await sampler.ReadAsync();
         samples.Should().HaveCount(1);
@@ -78,7 +78,7 @@ public class GpuSamplerTests
     public async Task ReadAsync_EmptyOutput_ReturnsEmpty()
     {
         var time = new ManualTime();
-        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2), () => Task.FromResult(""));
+        var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2), () => Task.FromResult<string?>(""));
         (await sampler.ReadAsync()).Should().BeEmpty();
     }
 
@@ -88,7 +88,7 @@ public class GpuSamplerTests
     {
         var time = new ManualTime();
         var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
-            () => Task.FromResult("NVIDIA GeForce RTX 3090\nfoo,bar"));
+            () => Task.FromResult<string?>("NVIDIA GeForce RTX 3090\nfoo,bar"));
         (await sampler.ReadAsync()).Should().BeEmpty();
     }
 
@@ -110,7 +110,7 @@ public class GpuSamplerTests
         var time = new ManualTime();
         var runs = 0;
         var sampler = new GpuSampler(time, TimeSpan.FromSeconds(2),
-            () => { runs++; return Task.FromResult(Line(0, "GPU-1", "Card", util: "50", memUsed: "100", memTotal: "200", temp: "40", powerDraw: "1.0", powerLimit: "2.0")); });
+            () => { runs++; return Task.FromResult<string?>(Line(0, "GPU-1", "Card", util: "50", memUsed: "100", memTotal: "200", temp: "40", powerDraw: "1.0", powerLimit: "2.0")); });
 
         var first = await sampler.ReadAsync();
         first.Should().HaveCount(1);

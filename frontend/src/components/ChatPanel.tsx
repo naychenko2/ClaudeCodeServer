@@ -75,7 +75,7 @@ import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
 import { splitAgentResultTail } from '../lib/agentTail';
-import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
+import { ChatItemView, FileChangedRow, shouldHideAbortBanner } from './chat/ChatItemView';
 import { PendingMessageList } from './chat/PendingMessageView';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { buildMediaVisibility } from './chat/mediaDedup';
@@ -2103,6 +2103,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
         : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
+      hideAbortBanner={shouldHideAbortBanner(item, items[i + 1])}
       onToggleThinking={toggleThinking}
       onAllowPermission={allowPermission}
       onDenyPermission={denyPermission}

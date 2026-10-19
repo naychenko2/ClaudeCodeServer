@@ -9,7 +9,7 @@ import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import type { FeatureRun } from '../../../types/featureRun';
-import { ChatItemView } from '../ChatItemView';
+import { ChatItemView, shouldHideAbortBanner } from '../ChatItemView';
 import {
   ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext,
   SpeakingItemContext, AssistantNameContext,
@@ -247,5 +247,88 @@ describe('ChatItemView — work_loop_stopped: server_restart', () => {
     const html = renderItem({ kind: 'work_loop_stopped', reason: 'team_restart', text: 'Перезапуск штаба' });
     expect(html).toContain('Перезапуск штаба');
     expect(html).not.toContain('var(--c-info-bg)');
+  });
+});
+
+// === Обрыв хода + авто-продолжение (server_restart): красный баннер избыточен ===
+// Обрыв хода — это kind='error' (текст «Ход прервался… Отправьте ещё раз»); сразу за ним —
+// карточка work_loop_stopped reason='server_restart' (синяя пилюля). Решение — по соседству
+// записей, не по тексту: shouldHideAbortBanner. Мутация: убрать `if (hideAbortBanner) return
+// null` в case 'error' → тест «баннер скрыт» краснеет.
+type ErrorItem = Extract<ChatItem, { kind: 'error' }>;
+type WorkLoopStoppedItem = Extract<ChatItem, { kind: 'work_loop_stopped' }>;
+
+const ABORT_TEXT = 'Ход прервался: процесс агента остановлен сервером (перезапуск или восстановление чата). Отправьте сообщение ещё раз.';
+
+function errorItem(): ErrorItem {
+  return { kind: 'error', text: ABORT_TEXT, canRetry: true };
+}
+function serverRestartCard(): WorkLoopStoppedItem {
+  return { kind: 'work_loop_stopped', reason: 'server_restart', text: 'Сервер был перезапущен — продолжаю ход с того же места' };
+}
+
+// Рендер одиночной error-записи с пропом hideAbortBanner (та же обвязка контекстами, что renderItem).
+function renderErrorItem(hideAbortBanner: boolean): string {
+  const noop = () => {};
+  const tree: ReactElement = createElement(
+    ChatProjectContext.Provider, { value: null },
+    createElement(
+      ChatTreePathContext.Provider, { value: null },
+      createElement(
+        ChatSessionContext.Provider, { value: null },
+        createElement(
+          PersonaContext.Provider, { value: null },
+          createElement(
+            SpeakingItemContext.Provider, { value: null },
+            createElement(
+              AssistantNameContext.Provider, { value: 'Ассистент' },
+              createElement(ChatItemView, {
+                item: errorItem(),
+                index: 0,
+                online: true,
+                hideAbortBanner,
+                onToggleThinking: noop,
+                onAllowPermission: noop,
+                onDenyPermission: noop,
+                onAllowAlways: noop,
+                onAnswerQuestion: noop,
+                onRespondPlan: noop,
+                onSwitchMode: noop,
+                onRetry: noop,
+                onInterrupt: noop,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return renderToStaticMarkup(tree);
+}
+
+describe('ChatItemView — обрыв хода + авто-продолжение (server_restart)', () => {
+  it('shouldHideAbortBanner: обрыв + server_restart → скрыть', () => {
+    expect(shouldHideAbortBanner(errorItem(), serverRestartCard())).toBe(true);
+  });
+
+  it('shouldHideAbortBanner: обрыв без соседа (конец ленты) → показать', () => {
+    expect(shouldHideAbortBanner(errorItem(), undefined)).toBe(false);
+  });
+
+  it('shouldHideAbortBanner: обрыв + work_loop_stopped с другим reason → показать', () => {
+    expect(shouldHideAbortBanner(errorItem(), { kind: 'work_loop_stopped', reason: 'team_restart', text: 'Перезапуск штаба' })).toBe(false);
+  });
+
+  it('shouldHideAbortBanner: обрыв + сосед не work_loop_stopped → показать', () => {
+    expect(shouldHideAbortBanner(errorItem(), errorItem())).toBe(false);
+  });
+
+  // Мутация: убрать `if (hideAbortBanner) return null` в case 'error' → этот тест краснеет.
+  it('обрыв + hideAbortBanner=true → баннера нет (синей пилюли достаточно)', () => {
+    expect(renderErrorItem(true), 'красный баннер обрыва скрыт').not.toContain(ABORT_TEXT);
+  });
+
+  it('обрыв + hideAbortBanner=false → баннер на месте (подсказка «отправьте ещё раз» верна)', () => {
+    expect(renderErrorItem(false), 'красный баннер обрыва показан').toContain(ABORT_TEXT);
   });
 });

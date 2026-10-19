@@ -51,6 +51,9 @@ public sealed class MouseInputService
             cancellationToken,
             checkCurrentPosition: true);
 
+    // CA1068: порядок параметров (CancellationToken не последний) — дизайн форка sbroenne/mcp-windows;
+    // 9 call-sites передают его positionally, reorder = лишний churn. Подавляем точечно.
+#pragma warning disable CA1068
     private static Task<MouseControlResult> MoveCoreAsync(
         int x,
         int y,
@@ -58,6 +61,7 @@ public sealed class MouseInputService
         nint? expectedForegroundWindow,
         CancellationToken cancellationToken,
         bool checkCurrentPosition)
+#pragma warning restore CA1068
     {
         // Validate coordinates against virtual screen bounds
         var (isValid, screenBounds) = CoordinateNormalizer.ValidateCoordinates(x, y);

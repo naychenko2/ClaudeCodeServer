@@ -45,7 +45,8 @@ import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
 import { FeaturePage, type FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { openChatById } from '../lib/openChat';
-import { recordBackNav } from '../lib/featureBackNav';
+import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { getFlag, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
@@ -391,7 +392,14 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Страница фичи в центральной области (волна 2 «Обзор фич», Ф2.3): id эпика или null.
   // Сосед ChatPanel'а, а не новая ветка тернарника: центр прячется display:none, чтобы
   // стрим хода и черновик композера пережили переход (и возврат) на страницу.
-  const [openFeatureId, setOpenFeatureId] = useState<string | null>(null);
+  // Инициализация из nav-снимка/хэша (диплинк #/project/{pid}/feature/{fid} и
+  // перезагрузка вкладки): первый рендер — history.state ещё не сидирован (null), берём
+  // из хэша; после смены проекта — из снимка. Только при включённом флаге «Обзор фич»;
+  // при выключенном сегмент игнорируется (parseHash сам его не отдаёт, снимок гейтим).
+  const [openFeatureId, setOpenFeatureId] = useState<string | null>(() => {
+    if (!getFlag(FLAGS.featuresOverview)) return null;
+    return getNav()?.feature ?? parseHash(window.location.hash)?.featureId ?? null;
+  });
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -1559,13 +1567,36 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- подписка на весь жизненный цикл инстанса (перемонтируется на смену проекта); isMobile — через ref
   }, []);
 
+  // Смена проекта: WorkspacePage перемонтируется (key={project.id} в App), но указатель
+  // «← назад» (featureBackNav) — module-level и живёт до конца вкладки. Сбрасываем его,
+  // чтобы указатель из старого проекта (chat → фича/чат) не применился к новому, если
+  // id чата совпали (MINOR: «← назад» не должен перескакивать через границу проекта).
+  useEffect(() => {
+    clearBackNav();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по key={project.id} эффект
+    // исполняется ровно на перемонтировании (смену проекта); [project.id] дублирует это
+  }, []);
+
   // «← назад» со страницы фичи: закрываем страницу и ведём в target. Исходный чат
   // (kind 'chat') и есть активный (плашка была в нём) — центр просто показываем;
   // ключевой чат — переход, список — режим sidebar.
   const handleFeatureBack = (target: FeaturePageBackTarget) => {
     setOpenFeatureId(null);
+    // Синхронизация URL с состоянием (крошка и история — в одно место, разрез §4): крошка
+    // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
+    // «назад» (popstate) уводило не туда. navReplace на снимок БЕЗ feature: адрес схлопывается
+    // к чату/списку, и «назад» ведёт туда же, куда и крошка.
+    const chatId = target.kind === 'chat' || target.kind === 'key' ? target.chatId : undefined;
+    const restore = target.kind === 'chat' ? chatToRestore(chatId, activeSessionRef.current?.id) : null;
+    const view = target.kind === 'list' ? 'sidebar' : (restore ? 'chat' : mobileView);
+    navReplace({ screen: 'project', project, view, file: null, task: null, chatId, feature: null });
     if (target.kind === 'key') void openChatById(target.chatId);
     else if (target.kind === 'list') setMobileView('sidebar');
+    else if (target.kind === 'chat' && restore) {
+      // Исходный чат ≠ текущий (редкий): переключаем через штатный pending (как popstate).
+      sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restore, { file: null, task: null }));
+      window.dispatchEvent(new Event('cc-pending-project-chat'));
+    }
   };
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из

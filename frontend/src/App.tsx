@@ -610,7 +610,10 @@ export default function App() {
       && !!initialHash.projectId && initialHash.projectId !== project?.id
     if (hubTab === 'projects' && project && !hashOtherProject) {
       const chatFromHash = initialHash?.screen === 'project' && initialHash.chatId ? initialHash.chatId : undefined
-      navPush({ screen: 'project', project, view: chatFromHash ? undefined : 'sidebar', file: null, chatId: chatFromHash })
+      // Диплинк #/project/{id}/feature/{fid}: сохраняем страницу фичи в снимке, иначе сид
+      // схлопнул бы адрес, и WorkspacePage не открыл бы страницу при первом монтировании.
+      const featureFromHash = initialHash?.screen === 'project' && initialHash.featureId ? initialHash.featureId : null
+      navPush({ screen: 'project', project, view: chatFromHash ? undefined : 'sidebar', file: null, chatId: chatFromHash, feature: featureFromHash })
       const ws = loadWorkspaceState(project.id)
       if (ws?.openFile && !chatFromHash) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
     }

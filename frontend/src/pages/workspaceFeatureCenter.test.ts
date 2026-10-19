@@ -111,7 +111,13 @@ vi.mock('../lib/api', () => {
         listAll: () => Promise.resolve([]),
       });
       if (prop === 'chats') return ns({ get: () => Promise.resolve(mockData.chat) });
-      if (prop === 'sessions') return ns({ list: () => Promise.resolve([]) });
+      // list отдаёт активный чат: эффект «чат-призрак» (WorkspacePage) сбрасывает
+      // activeSession в null, если его id нет в списке — пустой список молча терял бы чат.
+      if (prop === 'sessions') return ns({ list: () => Promise.resolve(mockData.chat ? [mockData.chat] : []) });
+      if (prop === 'projects') return ns({ list: () => Promise.resolve([]) });
+      // personas.list → []: иначе deep(null) отдаёт null → setCtxPersonas(null) →
+      // проп personas Composer'а null (не []) → «personas is not iterable» при полном рендере.
+      if (prop === 'personas') return ns({ list: () => Promise.resolve([]) });
       return deep(null);
     },
   });
@@ -207,6 +213,20 @@ vi.mock('../hooks/useVoiceInput', async (importOriginal) => {
     useVoiceInput: () => ({ hasSpeech: false, isListening: false, recSeconds: 0, startMic: () => {}, stopMic: () => {} }),
   };
 });
+vi.mock('../hooks/useMicLevel', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../hooks/useMicLevel')>();
+  return {
+    ...orig,
+    useMicLevel: () => ({ reportMicDead: () => {}, reportCycleEnd: () => {}, reportEngineHeard: () => {}, reportCycleStart: () => {} }),
+  };
+});
+// online=true: в node-env navigator.onLine === undefined → _online falsy → Composer
+// рисует офлайн-заглушку без поля ввода. Для проверки черновика композеру нужен полный
+// рендер (textarea), поэтому связь фиксируем в online.
+vi.mock('../hooks/useOnline', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../hooks/useOnline')>();
+  return { ...orig, useOnline: () => true };
+});
 
 // ── Данные ──
 const project: Project = {
@@ -256,7 +276,12 @@ describe('WorkspacePage: центр — страница фичи соседом
   beforeEach(() => {
     vi.useFakeTimers();
     installFakeDom();
+    // Мобильная ширина (≤ MOBILE_MAX=600): одноколоночная раскладка, где страница фичи
+    // — СОСЕД центра (ChatPanel в DOM, display:none). На десктопе (DesktopWorkspace)
+    // страницы фичи в центре нет — она рендерится только в мобильной ветке.
     (globalThis as any).window.innerWidth = 360;
+    // PanelZone читает document.documentElement.style — в fake-DOM documentElement null
+    (globalThis as any).document.documentElement = { style: { setProperty: () => {}, removeProperty: () => {} } };
     (globalThis as any).window.innerHeight = 800;
     (globalThis as any).window.location = { hash: '', href: 'http://x/', origin: 'http://x', protocol: 'http:', host: 'x', pathname: '/', search: '' };
     (globalThis as any).window.history = { state: null, pushState: () => {}, replaceState: () => {}, back: () => {}, go: () => {}, forward: () => {}, length: 1 };
@@ -300,26 +325,28 @@ describe('WorkspacePage: центр — страница фичи соседом
     vi.restoreAllMocks();
   });
 
-  it('открытая страница: textarea композера в DOM, черновик переживает возврат, крошка закрывает страницу', async () => {
+  it('открытая страница: ChatPanel в DOM (data-testid), черновик композера переживает возврат, крошка закрывает страницу', async () => {
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
       onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
     } as any));
 
-    // Маркер «ChatPanel в DOM»: имя открытой сессии (SessionList — заглушка, имя
-    // рендерит только ChatPanel). Черновик композера — следствие того же: пока ChatPanel
-    // не размонтирован (display:none), состояние поля живёт.
-    const chatInDom = () => textNodes(container).join(' ').includes('Чат Дениса');
+    // Маркер «ChatPanel в DOM»: data-testid="chat-panel" — есть ТОЛЬКО в ChatPanel, а не
+    // в шапке WorkspacePage (там тоже рендерится имя сессии — старый маркер не ловил
+    // размонтирование). Условный рендер вместо display:none убирает testid — тест краснеет.
+    const chatPanelInDom = () => findNodeByAttr(container, 'data-testid', 'chat-panel') !== null;
 
     // 1. ChatPanel смонтирован (activeSession задан).
-    expect(chatInDom(), 'ChatPanel не смонтирован (имя сессии не в DOM)').toBe(true);
+    expect(chatPanelInDom(), 'ChatPanel не смонтирован (data-testid="chat-panel" не в DOM)').toBe(true);
 
-    // 2. Черновик: пишем в textarea композера, если он рендерится (fake-аудио может
-    //    прятать его за ветку handsFree; имя сессии — основной маркер).
-    let ta = composerTextarea(container);
+    // 2. Черновик: пишем в textarea композера. Композер ОБЯЗАТЕЛЕН (MAJOR-3):
+    //    online=true + personas=[] дают полный рендер карточки, textarea гарантированно
+    //    в DOM. КЛЮЧЕВОЙ маркер «ChatPanel в DOM» — data-testid="chat-panel".
+    const ta = composerTextarea(container);
+    expect(ta, 'textarea композера не в DOM (композер не отрендерился)').not.toBeNull();
     const draft = 'черновик хода';
-    if (ta) act(() => { (reactProps(ta) as any).onChange({ target: { value: draft, selectionStart: 0 } }); });
+    act(() => { (reactProps(ta!) as any).onChange({ target: { value: draft, selectionStart: 0 } }); });
 
     // 3. Открываем страницу фичи (указатель чат → фича + navPush).
     recordBackNav('chatA', { kind: 'feature', id: 'f1' });
@@ -335,19 +362,24 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(back, 'крошка страницы фичи не найдена').not.toBeNull();
     expect(textNodes(back!).join('')).toContain('К чату');
 
-    // 5. КЛЮЧЕВОЕ: ChatPanel НЕ размонтирован при открытой странице — имя сессии
-    //    (и textarea, если рендерится) всё ещё в DOM. display:none, а не unmount.
-    expect(chatInDom(), 'ChatPanel размонтирован (имя сессии пропало из DOM)').toBe(true);
-    if (ta) {
-      ta = composerTextarea(container);
-      expect(ta, 'textarea композера пропал из DOM (ChatPanel размонтирован)').not.toBeNull();
-    }
+    // 5. КЛЮЧЕВОЕ (MAJOR-3): ChatPanel НЕ размонтирован при открытой странице
+    //    (display:none, а не unmount) — testid в DOM. Мутация «display → условный
+    //    рендер» краснит этот тест (testid пропадает из DOM).
+    expect(chatPanelInDom(), 'ChatPanel размонтирован (data-testid="chat-panel" пропал из DOM)').toBe(true);
+    // 6. Композер (обязательно): textarea в DOM и черновик переживает открытие страницы.
+    const taAfterOpen = composerTextarea(container);
+    expect(taAfterOpen, 'textarea композера пропал из DOM (ChatPanel размонтирован)').not.toBeNull();
+    expect((reactProps(taAfterOpen!) as any).value, 'черновик композера потерян при открытой странице').toBe(draft);
 
-    // 6. Возврат: клик по крошке → страница фичи закрывается (центр возвращается).
+    // 7. Возврат: клик по крошке → страница фичи закрывается (центр возвращается).
     act(() => { (reactProps(back!) as any).onClick(); });
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка не скрыта после возврата').toBeNull();
-    // Черновик/состояние ChatPanel переживают переход: страница закрыта, центр снова чат.
-    expect(chatInDom() || !findNodeByAttr(container, 'data-testid', 'feature-page'), 'центр не вернулся к чату после возврата').toBe(true);
+    // ChatPanel/черновик переживают переход: страница закрыта, центр снова чат.
+    expect(chatPanelInDom(), 'центр не вернулся к чату (ChatPanel пропал) после возврата').toBe(true);
+    // Композер (обязательно): textarea в DOM и черновик пережил возврат.
+    const taAfterReturn = composerTextarea(container);
+    expect(taAfterReturn, 'textarea композера пропал после возврата').not.toBeNull();
+    expect((reactProps(taAfterReturn!) as any).value, 'черновик композера не пережил возврат').toBe(draft);
   });
 
   it('системное «назад» (popstate): setOpenFeatureId по снимку — в исходнике центра', () => {
@@ -358,5 +390,75 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(src, 'popstate не выставляет openFeatureId').toContain('setOpenFeatureId(s.feature ?? null)');
     // Обёртка центра прячет ChatPanel display:none (не размонтирует) при открытой странице.
     expect(src, 'центр не прячет ChatPanel display:none').toContain("display: openFeatureId ? 'none' : 'flex'");
+  });
+
+  it('диплинк #/project/p1/feature/f1: страница открывается при первом монтировании (чат в DOM, крошка)', async () => {
+    // Свежая загрузка/перезагрузка: history.state ещё не сидирован (null), адрес — диплинк.
+    // openFeatureId инициализируется из хэша (getNav() null → parseHash).
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница фичи открыта: крошка есть (указателя нет → «← К ключевому чату»).
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back, 'крошка страницы фичи не найдена (диплинк не открыл страницу)').not.toBeNull();
+    // ChatPanel НЕ размонтирован (display:none): testid в DOM.
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (диплинк)').not.toBeNull();
+  });
+
+  it('диплинк при выключенном флаге: сегмент feature игнорируется (страница не открывается)', async () => {
+    setAllFlags({ 'features-overview': false });
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница не открыта: ни крошки, ни testid feature-page (сегмент игнорируется).
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка есть при выключенном флаге').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница фичи открыта при выключенном флаге').toBeNull();
+  });
+
+  it('крошка: navReplace синхронизирует URL (feature исчезает из хэша), «назад» ведёт туда же', async () => {
+    // Фейк-история, которая реально записывает hash: navReplace/navPush пишут toHash,
+    // и window.location.hash отражает снимок (в beforeEach replaceState — no-op).
+    const win = globalThis as any;
+    win.window.history = {
+      state: null,
+      pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      back: () => {}, go: () => {}, forward: () => {}, length: 1,
+    };
+    win.window.location.hash = '';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу (указатель чат → фича): navPush пишет feature в hash.
+    recordBackNav('chatA', { kind: 'feature', id: 'f1' });
+    act(() => {
+      win.window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: 'f1', fromChatId: 'chatA' } }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(win.window.location.hash, 'после открытия feature не в hash').toContain('/feature/f1');
+
+    // Клик по крошке (kind 'chat', chatA = текущий чат): navReplace на снимок БЕЗ feature.
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back, 'крошка не найдена').not.toBeNull();
+    act(() => { (reactProps(back!) as any).onClick(); });
+    // Хэш больше не содержит feature (крошка и история — в одно место).
+    expect(win.window.location.hash, 'feature остался в hash после возврата').not.toContain('/feature/');
+    // Снимок истории (history.state) тоже без feature: «назад» ведёт туда же, что крошка.
+    expect(win.window.history.state?.feature ?? null, 'feature остался в снимке истории').toBeNull();
   });
 });

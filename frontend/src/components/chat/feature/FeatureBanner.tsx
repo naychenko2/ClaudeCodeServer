@@ -318,7 +318,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   // состояние (выбор/раскрытие/шторка — иначе новый чат наследовал бы их).
   useEffect(() => {
     const back = getBackNav();
-    if (back && back.to !== sessionId) clearBackNav();
+    // Сброс, если записанный переход ведёт в ДРУГОЙ чат (обычное открытие, не из плашки).
+    // `to` — объект { kind, id }: сравниваем id только когда это чат (не страница фичи).
+    if (back && back.to.kind === 'chat' && back.to.id !== sessionId) clearBackNav();
     setSelIdx(0); setFxOpen(false); setSheetOpen(false);
   }, [sessionId]);
 

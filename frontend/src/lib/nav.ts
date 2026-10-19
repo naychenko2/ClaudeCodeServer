@@ -1,4 +1,5 @@
 import type { Project } from '../types';
+import { getFlag, FLAGS } from './featureFlags';
 
 // Снимок навигационного положения. Хранится в history.state, чтобы кнопки
 // «назад/вперёд» браузера могли восстановить экран. Дополнительно снапшот
@@ -16,6 +17,7 @@ export interface NavSnapshot {
   revealInTree?: boolean;
   task?: string | null;          // открытая задача (id) или null
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
+  feature?: string | null;       // страница фичи (id) в центральной области (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
   persona?: string | null;       // открытая персона (id) или null (screen === 'personas')
   // Подвид раздела «Персоны»: 'automation' — открыть вкладку автоматизаций в студии
@@ -58,6 +60,9 @@ function toHash(s: NavSnapshot): string {
       if (s.task) h += `/task/${s.task}`;
       else if (s.file) h += `/file/${encodeURIComponent(s.file)}`;
       else if (s.board) h += '/board';
+      // Страница фичи — отдельная поверхность (не чат): сегмент в адресе только при
+      // включённом флаге «Обзор фич» (dark launch), иначе снимок деградирует к чату.
+      else if (s.feature && getFlag(FLAGS.featuresOverview)) h += `/feature/${encodeURIComponent(s.feature)}`;
       else if (s.chatId) h += `/chat/${encodeURIComponent(s.chatId)}`;
       else if (s.persona) h += `/persona/${encodeURIComponent(s.persona)}`;
       return h;
@@ -73,6 +78,7 @@ export interface HashTarget {
   taskId?: string;
   file?: string;
   board?: boolean;
+  featureId?: string;   // #/project/{id}/feature/{featureId} — страница фичи
   noteId?: string;
   personaId?: string;
   personaView?: 'automation'; // вкладка студии персоны (бэйдж автоматизации в чате)
@@ -166,6 +172,9 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       if (parts[2] === 'task' && parts[3]) target.taskId = parts[3];
       else if (parts[2] === 'file' && parts[3]) target.file = decodeURIComponent(parts.slice(3).join('/'));
       else if (parts[2] === 'board') target.board = true;
+      // Сегмент фичи разбирается только при включённом флаге «Обзор фич»: при выключенном
+      // флаге адрес #/project/{id}/feature/{fid} деградирует к простому проекту.
+      else if (parts[2] === 'feature' && parts[3] && getFlag(FLAGS.featuresOverview)) target.featureId = decodeURIComponent(parts[3]);
       else if (parts[2] === 'persona' && parts[3]) {
         target.personaId = parts[3];
         if (parts[4] === 'automation') target.personaView = 'automation';

@@ -1,14 +1,14 @@
 // Стор «← назад» (featureBackNav): откуда пришли в ключевой чат, в памяти вкладки.
 // Чистая логика (без DOM): запись/сброс/чтение по текущему чату.
 import { describe, expect, it, beforeEach } from 'vitest';
-import { recordBackNav, clearBackNav, getBackNav, backNavFrom, __test } from './featureBackNav';
+import { recordBackNav, clearBackNav, getBackNav, backNavFrom, normalizeBackTarget, __test } from './featureBackNav';
 
 beforeEach(() => __test.reset());
 
 describe('featureBackNav', () => {
   it('recordBackNav: записывает from→to; backNavFrom(to) = from, backNavFrom(другой) = null', () => {
     recordBackNav('chat-exec', 'chat-key');
-    expect(getBackNav()).toEqual({ from: 'chat-exec', to: 'chat-key' });
+    expect(getBackNav()).toEqual({ from: 'chat-exec', to: { kind: 'chat', id: 'chat-key' } });
     expect(backNavFrom('chat-key')).toBe('chat-exec');
     expect(backNavFrom('other')).toBeNull();
     expect(backNavFrom(null)).toBeNull();
@@ -39,7 +39,7 @@ describe('featureBackNav', () => {
   it('recordBackNav поверх прежнего — заменяет указатель (один «← назад»)', () => {
     recordBackNav('chat-a', 'chat-key');
     recordBackNav('chat-b', 'chat-key');
-    expect(getBackNav()).toEqual({ from: 'chat-b', to: 'chat-key' });
+    expect(getBackNav()).toEqual({ from: 'chat-b', to: { kind: 'chat', id: 'chat-key' } });
     expect(backNavFrom('chat-key')).toBe('chat-b');
   });
 
@@ -47,5 +47,35 @@ describe('featureBackNav', () => {
     recordBackNav('chat-exec', 'chat-key');
     // from = 'chat-exec', но мы в 'chat-exec' (это from, не to) → null.
     expect(backNavFrom('chat-exec')).toBeNull();
+  });
+});
+
+describe('featureBackNav: цель перехода (chat | feature) и нормализация старой строки', () => {
+  beforeEach(() => __test.reset());
+
+  it('normalizeBackTarget: старая строка (id чата) → { kind: chat, id }', () => {
+    expect(normalizeBackTarget('chat-key')).toEqual({ kind: 'chat', id: 'chat-key' });
+  });
+
+  it('normalizeBackTarget: объект { kind, id } — как есть (feature)', () => {
+    expect(normalizeBackTarget({ kind: 'feature', id: 'f1' })).toEqual({ kind: 'feature', id: 'f1' });
+  });
+
+  it('recordBackNav с целем-фичей: to = { kind: feature, id }; backNavFrom(чата) = null', () => {
+    recordBackNav('chat-exec', { kind: 'feature', id: 'f1' });
+    expect(getBackNav()).toEqual({ from: 'chat-exec', to: { kind: 'feature', id: 'f1' } });
+    // Страница фичи — не чат: «← назад» по chat-id не совпадает (backNavFrom ищет to-чат).
+    expect(backNavFrom('f1')).toBeNull();
+    expect(backNavFrom('chat-exec')).toBeNull();
+  });
+
+  it('«чат → тот же чат» (to.kind=chat, id=from) — не переход', () => {
+    recordBackNav('chat-a', 'chat-a');
+    expect(getBackNav()).toBeNull();
+  });
+
+  it('«чат → фича с тем же id» — переход (разные поверхности, guard не срабатывает)', () => {
+    recordBackNav('f1', { kind: 'feature', id: 'f1' });
+    expect(getBackNav()).toEqual({ from: 'f1', to: { kind: 'feature', id: 'f1' } });
   });
 });

@@ -41,6 +41,13 @@ const _cursors = new Map<string, HistoryCursor>();
 // Возвращает ПОЛНУЮ сырую историю (склеенную из прошлой загрузки и хвоста), поэтому
 // normalizeHistory и serverHistoryNewer работают с ней так же, как с загруженной целиком.
 async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> {
+  // Гонка двух загрузок подряд (hover-warm → открытие, конец хода): если для этого sid уже
+  // летит запрос, ждём его — курсор из его ответа свежее, и наш уйдёт хвостом, а не полным
+  // after=-1. Self-цикла нет: свой promise в _historyInFlight ставит loadHistoryOnce ПОСЛЕ
+  // этого await, поэтому здесь виден только ЧУЖОЙ (предыдущий) полёт.
+  const inFlight = _historyInFlight.get(sid);
+  if (inFlight) { try { await inFlight; } catch { /* чужой полёт упал — снимаем свой снимок заново */ } }
+
   const prev = _cursors.get(sid);
   const q = cursorQuery(prev);
   const reply = await (projectId
@@ -318,7 +325,9 @@ function ensureHandler() {
         const isOpen = (_listeners.get(sid)?.size ?? 0) > 0;
         if (wasWaiting.has(sid) || isOpen) {
           try {
-            const raw = await loadHistory(sid, s.projectId);
+            // loadHistoryOnce, а не loadHistory напрямую: реконнект не плодит параллельный
+            // fetch, если снимок уже летит (склейка по _historyInFlight)
+            const raw = await loadHistoryOnce(sid, s.projectId);
             const items = normalizeFor(sid, raw);
             if (items.length > 0) {
               setState(sid, prev => ({

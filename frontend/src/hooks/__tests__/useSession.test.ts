@@ -848,3 +848,65 @@ describe('useSession: докачка истории по курсору (пер�
     chat.unmount();
   });
 });
+
+describe('useSession: реконнект и повторная загрузка (перф-3 B8)', () => {
+  // Реконнект-хэндлер и итерации по _store видят ВСЕ сессии модуля (включая чужие из
+  // предыдущих тестов) — считаем запросы адресно, по sid, а не глобально
+  const callsFor = (sid: string) => m.getHistoryTail.mock.calls.filter(c => c[0] === sid).length;
+  const queriesFor = (sid: string) => m.getHistoryTail.mock.calls.filter(c => c[0] === sid).map(c => c[1]);
+
+  // П.3: реконнект раньше звал loadHistory напрямую — мимо склейки _historyInFlight.
+  // Теперь loadHistoryOnce: если снимок уже летит, параллельного fetch не плодится.
+  // Ассертция — по ДЕЛЬТЕ (реконнект не добавил запрос), а не по абсолютному счётчику:
+  // в полном прогоне post-join snapshot и фоновые сессии могут добавить свои запросы.
+  it('реконнект во время летящего снимка схлопывается с ним (не плодит параллельный fetch)', async () => {
+    const sid = nextSid();
+    m.getHistoryTail.mockResolvedValue([...DONE_TURN]);
+    const chat = openChat(sid);
+    await flush();
+    expect(callsFor(sid)).toBe(1); // снимок при открытии
+
+    // Новый снимок (replay active у смотримого чата) — подвешен: запрос в полёте
+    const gate = deferred<unknown[]>();
+    m.getHistoryTail.mockReturnValue(gate.promise);
+    emitStatus(sid, 'active');
+    await flush();
+    expect(callsFor(sid)).toBe(2); // второй снимок — в полёте
+
+    // Реконнект: loadHistoryOnce схлопывается с летящим — параллельного fetch нет
+    const before = callsFor(sid);
+    void m.reconnectHandlers[0]!();
+    await flush();
+    expect(callsFor(sid)).toBe(before); // реконнект не плодит новый fetch
+
+    gate.resolve([...DONE_TURN]);
+    await flush();
+    chat.unmount();
+  });
+
+  // П.4: повторная загрузка, ушедшая вслед за первой. Без фикса (loadHistory напрямую,
+  // не дожидаясь летящего) она шла полным after=-1, хотя курсор из первого ответа уже был.
+  // Теперь loadHistory ждёт летящий запрос и берёт курсор из его ответа — второй уходит хвостом.
+  it('повторная загрузка, ушедшая вслед за первой, идёт хвостом, а не полным after=-1', async () => {
+    const sid = nextSid();
+    const server = [...DONE_TURN];
+    // Сервер: after=-1 — полная выдача + якорь; иначе — хвост после курсора (как ChatHistoryTail)
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+      if (q.after < 0) return { reset: true, messages: server, anchorIndex: 2, anchorFp: 'fp2' };
+      return { reset: false, messages: server.slice(q.after + 1), anchorIndex: 2, anchorFp: 'fp2' };
+    });
+
+    const chat = openChat(sid);
+    await flush();
+    expect(queriesFor(sid).at(-1)).toMatchObject({ after: -1 }); // первая — полная, курсор заведён
+
+    // Повторная загрузка, ушедшая вслед за первой (реконнект): курсор из первого ответа уже есть
+    const before = callsFor(sid);
+    void m.reconnectHandlers[0]!();
+    await flush();
+    expect(callsFor(sid)).toBeGreaterThan(before); // реконнект добавил запрос
+    expect(queriesFor(sid).at(-1)).toMatchObject({ after: 2 }); // хвост, а не after=-1
+
+    chat.unmount();
+  });
+});

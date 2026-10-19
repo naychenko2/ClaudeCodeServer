@@ -68,6 +68,62 @@ public class ChatHistoryTailTests
         ChatHistoryTail.AnchorIndex(h).Should().Be(-1);
     }
 
+    // Якорь — любая завершающая запись хода, не только result: error и interrupted тоже
+    // завершают ход, и курсор должен вставать на них (Перф-3 B8)
+    [Fact]
+    public void AnchorIndex_ЗавершённыйХодОшибка_ИндексError()
+    {
+        List<StoredMessage> h =
+        [
+            new StoredUserMessage("в"),
+            new StoredTextMessage("печатаю"),
+            new StoredErrorMessage("сбой"),
+        ];
+        ChatHistoryTail.AnchorIndex(h).Should().Be(2);
+    }
+
+    [Fact]
+    public void AnchorIndex_ЗавершённыйХодПрерывание_ИндексInterrupted()
+    {
+        List<StoredMessage> h =
+        [
+            new StoredUserMessage("в"),
+            new StoredTextMessage("печатаю"),
+            new StoredInterruptedMessage(),
+        ];
+        ChatHistoryTail.AnchorIndex(h).Should().Be(2);
+    }
+
+    // Несколько завершающих записей — якорь на ПОСЛЕДНЕЙ (конец последнего хода), не на первой
+    [Fact]
+    public void AnchorIndex_НесколькоЗавершающих_Последняя()
+    {
+        List<StoredMessage> h =
+        [
+            new StoredUserMessage("1"), new StoredResultMessage("success", 10, 1),
+            new StoredUserMessage("2"), new StoredErrorMessage("сбой"),
+        ];
+        ChatHistoryTail.AnchorIndex(h).Should().Be(3);
+    }
+
+    // Путь с кэшем (prefixFps из AllPrefixFingerprints) даёт тот же результат, что чистый:
+    // O(1)-выбор из готового массива эквивалентен пересчёту хэша (Перф-3 B8)
+    [Fact]
+    public void Compute_СКэшемОтпечатков_РезультатТотЖе()
+    {
+        var history = TwoTurns();
+        var fp = ChatHistoryTail.PrefixFingerprint(history, 2);
+        var pure = ChatHistoryTail.Compute(history, after: 2, fp);
+        var cached = ChatHistoryTail.Compute(history, after: 2, fp, ChatHistoryTail.AllPrefixFingerprints(history));
+        cached.Reset.Should().Be(pure.Reset);
+        cached.AnchorIndex.Should().Be(pure.AnchorIndex);
+        cached.AnchorFp.Should().Be(pure.AnchorFp);
+        // Хвост — те же объекты истории (два разных списка, но элементы — ссылки на те же записи)
+        cached.Messages.Should().HaveSameCount(pure.Messages);
+        for (var i = 0; i < pure.Messages.Count; i++)
+            cached.Messages[i].Should().BeSameAs(pure.Messages[i]);
+    }
+
     [Fact]
     public void Compute_БезКурсора_ПолнаяИсторияБезReset()
     {

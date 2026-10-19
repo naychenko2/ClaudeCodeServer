@@ -561,9 +561,8 @@ public sealed class PersonasCrudService(
         var fileName = $"avatar-{Guid.NewGuid():N}{ext}";   // cache-busting
         System.IO.File.Copy(candPath, Path.Combine(dir, fileName), overwrite: true);
 
-        // Удаляем прежний аватар и всю папку кандидатов
-        if (!string.IsNullOrEmpty(persona.Avatar.ImageFile))
-            try { System.IO.File.Delete(Path.Combine(dir, persona.Avatar.ImageFile)); } catch { }
+        // Удаляем прежний аватар (с его миниатюрами) и всю папку кандидатов
+        personas.DeleteAvatarAssets(id, persona.Avatar.ImageFile);
         try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
 
         var updated = personas.SetAvatarImage(id, userId, fileName);

@@ -19,11 +19,15 @@ namespace ClaudeHomeServer.Controllers;
 public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
     ChatDigestService digest, ChatArchiveService autoArchive,
-    UserStore users,
+    UserStore users, PrefixFingerprintCache prefixFpCache,
     ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Кэш отпечатков префиксов истории (Перф-3 B8) — параметр первичного конструктора,
+    // в методах доступен только через поле
+    private readonly PrefixFingerprintCache _prefixFpCache = prefixFpCache;
 
     // Чат принадлежит текущему пользователю и не привязан к проекту
     private Session? OwnedChat(string id)
@@ -595,10 +599,12 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id, [FromQuery] int? after = null, [FromQuery] string? fp = null)
     {
-        if (OwnedChat(id) is null) return NotFound();
+        if (OwnedChat(id) is not { } session) return NotFound();
         var history = await sessions.GetHistoryAsync(id);
         if (after is null) return Ok(history);
-        var tail = ChatHistoryTail.Compute(history, after, fp);
+        // Ключ кэша — csid (HistoryKeyOf): отпечатки префиксов не пересчитываются на каждый запрос
+        var tail = ChatHistoryTail.Compute(history, after, fp,
+            _prefixFpCache.GetOrCompute(session.ClaudeSessionId ?? id, history));
         return Ok(new
         {
             reset = tail.Reset,

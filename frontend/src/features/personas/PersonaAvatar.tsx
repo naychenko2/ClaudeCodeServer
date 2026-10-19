@@ -3,7 +3,7 @@ import type { Persona } from '../../types';
 import { C, R, FONT } from '../../lib/design';
 import { agentDotColor } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
-import { personaInitials } from '../../lib/personas';
+import { avatarThumbStep, personaInitials } from '../../lib/personas';
 
 // Круглый аватар персоны. kind==='image' и есть картинка — рендерим <img>
 // (с фолбэком на инициалы при ошибке загрузки). Иначе — инициалы на цветном
@@ -55,7 +55,11 @@ function PersonaFace({ persona, size, fill }: {
   persona: Persona; size: number; fill: boolean;
 }) {
   const [hasError, setHasError] = useState(false);
-  const imageUrl = persona.avatar?.kind === 'image' ? api.personas.avatarUrl(persona) : null;
+  // Миниатюра ближайшей ступени (64/128/256) — аватар рисуется кружком 18–54 px,
+  // а оригинал весит сотни КБ; fill-контейнеры (плавающая кнопка) тоже в этой сетке
+  const imageUrl = persona.avatar?.kind === 'image'
+    ? api.personas.avatarUrl(persona, avatarThumbStep(size))
+    : null;
 
   const base: React.CSSProperties = {
     width: fill ? '100%' : size, height: fill ? '100%' : size,

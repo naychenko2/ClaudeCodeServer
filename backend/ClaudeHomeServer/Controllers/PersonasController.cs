@@ -45,6 +45,7 @@ public class PersonasController(
     PersonaAutomationService automation,
     PersonaDraftService drafts,
     PersonasCrudService crud,
+    PersonaAvatarThumbService avatarThumbs,
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
@@ -66,6 +67,7 @@ public class PersonasController(
     private readonly PersonaAutomationService _automation = automation;
     private readonly PersonaDraftService _drafts = drafts;
     private readonly PersonasCrudService _crud = crud;
+    private readonly PersonaAvatarThumbService _avatarThumbs = avatarThumbs;
     private readonly IConfiguration _config = config;
     private readonly ILogger<PersonasController> _log = log;
     private readonly IHubContext<SessionHub> _hub = hub;
@@ -281,8 +283,11 @@ public class PersonasController(
         _crud.SelectAvatarAsync(UserId, id, req);
 
     // Отдать картинку аватара. JWT принимается и в query access_token (браузерный <img>).
+    // size — размер показа (device px): сервер отдаёт миниатюру ближайшей ступени
+    // (64/128/256, генерируется один раз и лежит рядом с оригиналом); без параметра —
+    // оригинал (нужен для перекропа и большого вида).
     [HttpGet("{id}/avatar")]
-    public IActionResult Avatar(string id)
+    public async Task<IActionResult> Avatar(string id, [FromQuery] int? size = null)
     {
         var persona = _personas.Get(id, UserId);
         if (persona is null || persona.Avatar.Kind != PersonaAvatarKind.Image
@@ -290,10 +295,21 @@ public class PersonasController(
             return NotFound();
 
         var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
-        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
+        if (!System.IO.File.Exists(full)) return NotFound();
+
+        // Имя файла в URL (v) меняется при каждой смене аватара — кэш браузера может
+        // быть долгим и immutable (тот же приём, что у картинки-иконки проекта, ADR-009 §8)
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+
+        var step = ImageAssetHelper.AvatarThumbStep(size);
+        if (step is null) return ImageAssetHelper.PhysicalFileByExt(full);
+
+        var thumb = await _avatarThumbs.GetOrGenerateAsync(persona, full, step.Value);
+        return ImageAssetHelper.PhysicalFileByExt(thumb ?? full);
     }
 
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
+    // v в URL — имя файла оригинала: меняется при повторной загрузке, кэш — как у аватара.
     [HttpGet("{id}/avatar/original")]
     public IActionResult AvatarOriginal(string id)
     {
@@ -302,7 +318,10 @@ public class PersonasController(
             return NotFound();
 
         var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
-        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
+        if (!System.IO.File.Exists(full)) return NotFound();
+
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return ImageAssetHelper.PhysicalFileByExt(full);
     }
 
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа (JSON).

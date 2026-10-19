@@ -96,6 +96,14 @@ allow-list — и превышение лимитов → отказ с тем �
     "Validation": { "IsValid": true, "Problems": [] } }
   ```
 
+- **`GET /api/plugins/drafts/{slug}/panel`** — предпросмотр ПАНЕЛИ черновика (шаг 4.3d):
+  srcdoc-ready HTML — тот же код сборки, что у `PanelSrcdoc` установленной панели (`panel/index.html`
+  + шим моста + CSP в meta), но из `_drafts/{slug}/panel/index.html`. Гейты те же, что у остальных
+  ручек черновиков: сервисный JWT → 403, чужой/несуществующий → 404, нет панели → 404,
+  файл > 4 MiB → 413. Путь только через `SafePath.Join` (без выхода из каталога черновика);
+  symlink не следовать. Предпросмотр работает БЕЗ выданных прав: у черновика нет записи установки,
+  значит прав нет — `call` от такой панели даёт отказ, а не данные.
+
 - **`GET /api/plugins/drafts/{slug}/diff`** — сравнение черновика с ПОСЛЕДНЕЙ установленной
   версией того же `id` (`PluginDraftDiff`, PascalCase): черновик vs `packages/{id}/{version}/`.
   - нет установленной версии → `Status: "new"`, `InstalledVersion: null`, `Manifest: null`,

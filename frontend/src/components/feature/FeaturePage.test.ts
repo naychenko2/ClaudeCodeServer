@@ -24,7 +24,7 @@ import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
-import type { Session } from '../../types';
+import type { Session, Task } from '../../types';
 
 // Управляемый индекс фич (useFeaturesIndex → этот срез).
 const mockIndex = vi.hoisted(() => ({
@@ -41,6 +41,15 @@ const mockGetFeature = vi.hoisted(() => ({
   error: null as (Error & { status?: number }) | null,
   calls: [] as { fid: string; eventsLimit?: string }[],
 }));
+// Управляемый ответ api.tasks.mergeFeature: calls — журнал (двойной клик → 1 вызов),
+// pending (запрос в полёте → кнопка заблокирована), error (409/сбой, body.error — причина),
+// result (успех → задача мержа).
+const mockMergeFeature = vi.hoisted(() => ({
+  pending: false,
+  result: null as Task | null,
+  error: null as (Error & { status?: number; body?: unknown }) | null,
+  calls: [] as string[],
+}));
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -52,6 +61,12 @@ vi.mock('../../lib/api', () => ({
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});
         if (mockGetFeature.error) return Promise.reject(mockGetFeature.error);
         return Promise.resolve(mockGetFeature.result!);
+      },
+      mergeFeature: (fid: string) => {
+        mockMergeFeature.calls.push(fid);
+        if (mockMergeFeature.pending) return new Promise<Task>(() => {});
+        if (mockMergeFeature.error) return Promise.reject(mockMergeFeature.error);
+        return Promise.resolve(mockMergeFeature.result!);
       },
     },
   },
@@ -156,6 +171,10 @@ describe('FeaturePage: пять состояний + шапка + тревога
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
     mockGetFeature.calls = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   });
   afterEach(() => {
@@ -298,6 +317,113 @@ describe('FeaturePage: пять состояний + шапка + тревога
     const text = textNodes(alarm).join('');
     expect(text, 'нет «К мержу» (m3: тревога merge показывает «Ждёт вашего решения»)').toContain('К мержу');
     expect(text, '«Ждёт вашего решения» вместо «К мержу» (m3)').not.toContain('Ждёт вашего решения');
+  });
+
+  // === Ф2.6: главное действие «Мерж» (состояние «к мержу») ===
+
+  it('Ф2.6: тревога kind=merge → главное действие «Мерж» (не «К мержу»/«Ответить»)', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
+    })];
+    const c = render({});
+    await settle();
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    const text = textNodes(main).join('');
+    expect(text, 'нет кнопки «Мерж» (Ф2.6: главное действие merge)').toContain('Мерж');
+    expect(text, '«К мержу»/«Ответить» вместо «Мерж» (Ф2.6)').not.toContain('К мержу');
+    expect(text).not.toContain('Ответить');
+  });
+
+  it('Ф2.6: кнопка «Мерж» есть ТОЛЬКО в состоянии «к мержу» (идущая фича → «Ключевой чат»)', async () => {
+    // Идущая фича (нет тревоги, есть ключевой чат) → «Ключевой чат», НЕ «Мерж» (мёртвая кнопка).
+    const c = render({});
+    await settle();
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    const text = textNodes(main).join('');
+    expect(text, 'идущая фича: «Мерж» вместо «Ключевой чат» (Ф2.6: мёртвая кнопка)').toContain('Ключевой чат');
+    expect(text).not.toContain('Мерж');
+  });
+
+  it('Ф2.6: 409 → причина из ответа (body.error) под кнопкой', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
+    })];
+    mockMergeFeature.error = { status: 409, body: { error: 'Финал не принят: мерж преждевременно' } } as Error & { status?: number; body?: unknown };
+    const c = render({});
+    await settle();
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    const btn = firstButton(main as never)!;
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+    await settle();
+    const err = findNodeByAttr(c, 'data-testid', 'feature-page-merge-error');
+    expect(err, 'нет причины 409 (Ф2.6: 409 не показывает причину)').not.toBeNull();
+    expect(textNodes(err!).join('')).toContain('Финал не принят: мерж преждевременно');
+  });
+
+  it('Ф2.6: двойной клик → один запрос (кнопка заблокирована на время запроса)', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
+    })];
+    mockMergeFeature.pending = true; // запрос в полёте → кнопка заблокирована
+    const c = render({});
+    await settle();
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    const btn = firstButton(main as never)!;
+    // ДВА клика в ОДНОМ act() = один тик: setState(merging) ещё не сменился (батчинг),
+    // защита от второго запроса — синхронный mergingRef (state-флаг тут не спасает).
+    act(() => {
+      (reactProps(btn)!.onClick as () => void)();
+      (reactProps(btn)!.onClick as () => void)();
+    });
+    expect(mockMergeFeature.calls, 'двойной клик дал >1 запроса (Ф2.6: кнопка не заблокирована)').toHaveLength(1);
+  });
+
+  it('Ф2.6: успех → название задачи мержа + статус (без мёртвой ссылки)', async () => {
+    mockIndex.features = [feat({
+      bucket: 'attention',
+      attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
+    })];
+    mockMergeFeature.result = { id: 'merge-1', title: 'Мерж фичи: Моя фича', status: 'inProgress', description: '', priority: 'medium' } as Task;
+    const c = render({});
+    await settle();
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action')!;
+    const btn = firstButton(main as never)!;
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+    await settle();
+    const result = findNodeByAttr(c, 'data-testid', 'feature-page-merge-result');
+    expect(result, 'нет результата мержа (Ф2.6: успех не показывает задачу)').not.toBeNull();
+    const text = textNodes(result!).join('');
+    expect(text).toContain('Мерж фичи: Моя фича');
+    expect(text, 'нет статуса задачи мержа (Ф2.6)').toContain('в работе');
+  });
+
+  // === Ф2.6: ключи ленты уникальны при равном at (taskId в ключе) ===
+  it('Ф2.6: два события одного вида в одном чате с равным at → ключи уникальны (taskId в ключе)', async () => {
+    mockGetFeature.result = pageData({
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't2', personaId: null, sessionId: 'chat-x', round: null, reason: null },
+      ],
+      eventsTotal: 2,
+    });
+    installFakeDom();
+    const { root, container } = mount(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', isMobile: false, onBack: () => {} }));
+    await settle();
+    // Перерендер = reconciliation списка: дубль ключа (at|kind|sessionId без taskId) дал бы
+    // warning «two children with the same key». С taskId в ключе — уникальны, warning нет.
+    const errSpy = vi.spyOn(console, 'error');
+    act(() => { root.render(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', isMobile: false, onBack: () => {} })); });
+    await settle();
+    const dupKey = errSpy.mock.calls.some(args =>
+      args.some(a => typeof a === 'string' && a.includes('same key')));
+    errSpy.mockRestore();
+    // Обе строки на месте (data-testid повторяется) + нет warning о дубле ключа.
+    const all = textNodes(container).join('');
+    expect(all.split('открыть чат').length - 1, 'не две строки с равным at (Ф2.6: дубль ключа)').toBe(2);
+    expect(dupKey, 'дубль ключа ленты (Ф2.6: taskId не в ключе)').toBe(false);
   });
 
   it('ok: закрытая смержена — итог «Смержена …» (successBg)', async () => {
@@ -616,8 +742,9 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chat-x' });
   });
 
-  // === N3: «открыть чат» — отдельный блок под текстом; на 360 тач-цель ≥ 40 через minHeight ===
-  it('N3: «открыть чат» — display:block (отдельная строка), на 360 minHeight 40, не большие поля', async () => {
+  // === m5: «открыть чат» — блок display:flex + alignItems:flex-start, прижат к тексту;
+  // на 360 тач-цель ≥ 40 через minHeight (не большими полями). ===
+  it('m5: «открыть чат» — display:flex + alignItems:flex-start (прижат к тексту), на 360 minHeight 40', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
@@ -628,11 +755,12 @@ describe('FeaturePage: пять состояний + шапка + тревога
     await settle();
     const link = findNodeByAttr(c, 'data-testid', 'feature-event-chat-link-chat-x')!;
     const st = (link as unknown as { style: Record<string, string> }).style;
-    // N3: отдельный блок (display: block), не inline-flex, приклеенный к тексту события.
-    expect(st.display, '«открыть чат» не отдельный блок (N3: приклеен к тексту)').toBe('block');
+    // m5: flex-блок, прижатый к тексту события (не detached full-width display:block).
+    expect(st.display, '«открыть чат» не flex-блок (m5: прижат к тексту)').toBe('flex');
+    expect(st.alignItems, '«открыть чат» не alignItems:flex-start (m5)').toBe('flex-start');
     // На 360 тач-цель ≥ 40 через minHeight (псевдо-область), а не большими полями (старое '12px 0').
-    expect(st.minHeight, 'на 360 нет minHeight 40 (N3: тач-цель < 40)').toBe('40px');
-    expect(st.padding, 'на 360 большие поля (N3: тач-цель через minHeight, не padding)').not.toBe('12px 0px');
+    expect(st.minHeight, 'на 360 нет minHeight 40 (m5: тач-цель < 40)').toBe('40px');
+    expect(st.padding, 'на 360 большие поля (m5: тач-цель через minHeight, не padding)').not.toBe('12px 0px');
   });
 
   // === M4: название чата вместо GUID (без новых запросов) ===

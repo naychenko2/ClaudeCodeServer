@@ -97,9 +97,25 @@ export interface FeaturePageHeaderProps {
   onCopyBranch: () => void;
   // Клик по главному действию.
   onMainAction: () => void;
+  // Мерж (mainAction === 'Мерж'): запрос в полёте (кнопка заблокирована, спиннер).
+  merging?: boolean;
+  // Мерж: причина 409/сбоя из ответа (null — нет); показывается под кнопкой.
+  mergeError?: string | null;
+  // Мерж: задача мержа после успеха (название + статус текстом, без мёртвой ссылки).
+  mergedTask?: { title: string; status: string } | null;
   isMobile: boolean;
   // Загрузка: вместо названия — полоса-скелет (20×50%), крошка рабочая (макет §5.7).
   loading: boolean;
+}
+
+// Статус задачи мержа (TaskStatus) → короткая подпись по-русски (текст результата).
+function mergeTaskStatusLabel(status: string): string {
+  switch (status) {
+    case 'todo': return 'в очереди';
+    case 'inProgress': return 'в работе';
+    case 'done': return 'готово';
+    default: return status;
+  }
 }
 
 // Шапка страницы фичи (волна 2 «Обзор фич», шаг Ф2.4; макет §5.1–5.2).
@@ -110,7 +126,9 @@ export interface FeaturePageHeaderProps {
 // Ловушки <button> (раздел 0 таблицы токенов) заданы явно: рамка/фон/шрифт/поля/выравнивание.
 export function FeaturePageHeader({
   title, glyph, statusTag, branch, ageLabel, taskCount, mainAction,
-  backLabel, onBack, onCopyBranch, onMainAction, isMobile, loading,
+  backLabel, onBack, onCopyBranch, onMainAction,
+  merging = false, mergeError = null, mergedTask = null,
+  isMobile, loading,
 }: FeaturePageHeaderProps) {
   // Крошка: наведение bgSelected/textPrimary (m3, §0).
   const [hover, setHover] = useState(false);
@@ -212,17 +230,42 @@ export function FeaturePageHeader({
         </div>
       )}
 
-      {/* Ряд действий: главное действие (та же функция, что в Ф1.3). gap 8, wrap, marginTop 10. */}
+      {/* Ряд действий: главное действие (та же функция, что в Ф1.3). gap 8, wrap, marginTop 10.
+          «Мерж»: кнопка блокируется на время запроса (loading); 409 — причина из ответа;
+          успех — название задачи мержа + статус текстом (без мёртвой ссылки). */}
       {mainAction && (
         <div data-testid="feature-page-main-action" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 }}>
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={onMainAction}
-            style={isMobile ? { minHeight: 40 } : undefined}
-          >
-            {mainAction}
-          </Button>
+          {mainAction === 'Мерж' ? (
+            mergedTask ? (
+              <span data-testid="feature-page-merge-result" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                {mergedTask.title} · {mergeTaskStatusLabel(mergedTask.status)}
+              </span>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={merging}
+                  onClick={onMainAction}
+                  style={isMobile ? { minHeight: 40 } : undefined}
+                >
+                  Мерж
+                </Button>
+                {mergeError && (
+                  <span data-testid="feature-page-merge-error" style={{ fontSize: FS.sm, color: C.dangerText }}>{mergeError}</span>
+                )}
+              </>
+            )
+          ) : (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={onMainAction}
+              style={isMobile ? { minHeight: 40 } : undefined}
+            >
+              {mainAction}
+            </Button>
+          )}
         </div>
       )}
 

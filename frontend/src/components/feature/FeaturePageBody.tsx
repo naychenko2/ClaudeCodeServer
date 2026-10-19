@@ -313,16 +313,16 @@ function EventRowView({ row, onOpenChat, isMobile, now }: {
           <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{row.reason}</span>
         )}
         {hasChatLink && (
-          // N3: «открыть чат» — ОТДЕЛЬНЫЙ блок под текстом события (не приклеен к нему).
-          // На 360 тач-цель ≥ 40 через minHeight (псевдо-область), а не большими полями —
-          // inline-flex с padding 12px раздувал строку и уводил текст от времени/аватара.
+          // m5: «открыть чат» — блок display:flex + alignItems:flex-start, прижатый к
+          // тексту события (не detached full-width). На 360 тач-цель ≥ 40 через minHeight
+          // (псевдо-область), а не большими полями.
           <button
             type="button"
             data-testid={`feature-event-chat-link-${row.sessionId}`}
             className={FOCUS_CLASS}
             onClick={() => onOpenChat(row.sessionId!)}
             style={{
-              display: 'block',
+              display: 'flex', alignItems: 'flex-start',
               border: 'none', background: 'transparent', cursor: 'pointer',
               fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent,
               padding: 0, textAlign: 'left', boxSizing: 'border-box',
@@ -483,10 +483,12 @@ export function FeaturePageEvents({ events, eventsTotal, onShowAll, onOpenChat, 
         : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {rows.map((r) => (
-              // п.24: ключ без индекса (at|kind|sessionId) — при живом обновлении индексы
-              // плавают и строки пересоздаются; at+kind+sessionId — стабильны.
+              // п.24: ключ без индекса (at|kind|sessionId|taskId) — при живом обновлении
+              // индексы плавают и строки пересоздаются; at+kind+sessionId+taskId — стабильны.
+              // taskId — два события одного вида в одном чате с равным at иначе дают дубль
+              // ключа и потерянную строку (м.1).
               <EventRowView
-                key={`${r.at}|${r.kind}|${r.sessionId ?? ''}`}
+                key={`${r.at}|${r.kind}|${r.sessionId ?? ''}|${r.taskId}`}
                 row={r}
                 onOpenChat={onOpenChat}
                 isMobile={isMobile}

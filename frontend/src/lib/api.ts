@@ -1420,6 +1420,13 @@ export const api = {
         `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
         signal ? { signal } : undefined,
       ),
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
+    // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:
+    // 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят / 0 или >1
+    // исполнителей DevOps) — причина в err.body.error (и err.message). Идемпотентна:
+    // открытая merge-задача → вернуть её (повторный вызов — та же задача, вторую не заводим).
+    mergeFeature: (fid: string) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, { method: 'POST' }),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

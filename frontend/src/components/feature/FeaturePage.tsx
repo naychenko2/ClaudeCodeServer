@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS } from '../../lib/design';
@@ -21,6 +21,7 @@ import { FeaturePageHeader, type FeatureStatusTag } from './FeaturePageHeader';
 import { FeaturePageBody } from './FeaturePageBody';
 import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
+import type { Task } from '../../types';
 
 // Куда ведёт крошка «← …»:
 //   chat — в исходный чат (указатель back-nav «чат → фича»);
@@ -149,20 +150,58 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
       .then(() => showToast('Ветка скопирована', branch, 'success'))
       .catch(() => showToast('Ветка', 'Не удалось скопировать ветку', 'info'));
   };
-  // Главное действие (featureQuickAction): «Ответить»/«К мержу» — тревога про чат
-  // исполнителя (attention.sessionId); «Ключевой чат» — ключевой чат. Нет подходящего
-  // чата — кнопку не рисуем (никаких мёртвых действий, M1).
+  // Главное действие:
+  //   «к мержу» (attention.kind merge) → «Мерж» — POST /features/{id}/merge (создаёт и
+  //     запускает задачу мержа; 409 — причина, успех — задача мержа);
+  //   «Ключевой чат» (нет тревоги, есть ключевой чат) → ключевой чат;
+  //   «Ответить» (attention.kind wait, есть чат тревоги) → чат тревоги.
+  // Мёртвых кнопок нет: «Мерж» — всегда (состояние «к мержу»); «Ключевой чат»/«Ответить»
+  // — только когда есть чат (иначе мёртвое действие, M1).
+  const isMerge = feature?.attention?.kind === 'merge';
   const quickAction = feature ? featureQuickAction(feature) : null;
-  const mainAction = quickAction && quickAction !== 'Ключевой чат' && !feature?.attention?.sessionId
-    ? null
-    : quickAction;
+  let mainAction: string | null = null;
+  if (isMerge) mainAction = 'Мерж';
+  else if (quickAction === 'Ключевой чат') mainAction = 'Ключевой чат';
+  else if (quickAction === 'Ответить' && feature?.attention?.sessionId) mainAction = 'Ответить';
+
+  // Мерж: merging — запрос в полёте (блокирует кнопку); mergeError — причина 409/сбоя;
+  // mergedTask — задача мержа после успеха. mergingRef — синхронная защита от двойного
+  // клика (setState батчится: второй клик в том же тике не видит merging=true).
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergedTask, setMergedTask] = useState<Task | null>(null);
+  const mergingRef = useRef(false);
+  useEffect(() => {
+    setMerging(false);
+    setMergeError(null);
+    setMergedTask(null);
+    mergingRef.current = false;
+  }, [featureId]);
+  const doMerge = () => {
+    if (!feature || mergingRef.current) return;
+    mergingRef.current = true;
+    setMerging(true);
+    setMergeError(null);
+    void api.tasks.mergeFeature(feature.featureId)
+      .then(task => { setMergedTask(task); })
+      .catch((e: Error & { status?: number; body?: unknown }) => {
+        // 409: причина из ответа (body.error); иначе — сообщение ошибки.
+        const reason = (e.body as { error?: string } | undefined)?.error ?? e.message;
+        setMergeError(reason);
+      })
+      .finally(() => { mergingRef.current = false; setMerging(false); });
+  };
   const onMainAction = () => {
     if (!feature) return;
+    if (mainAction === 'Мерж') {
+      doMerge();
+      return;
+    }
     if (mainAction === 'Ключевой чат') {
       if (feature.keySessionId) onBack({ kind: 'key', chatId: feature.keySessionId });
       return;
     }
-    // «Ответить»/«К мержу» — чат тревоги (M1: не ключевой чат).
+    // «Ответить» — чат тревоги (M1: не ключевой чат).
     if (feature.attention?.sessionId) onBack({ kind: 'chat', chatId: feature.attention.sessionId });
   };
 
@@ -256,6 +295,9 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
         onBack={goBack}
         onCopyBranch={copyBranch}
         onMainAction={onMainAction}
+        merging={merging}
+        mergeError={mergeError}
+        mergedTask={mergedTask}
         isMobile={isMobile}
         loading={page.status === 'loading'}
       />

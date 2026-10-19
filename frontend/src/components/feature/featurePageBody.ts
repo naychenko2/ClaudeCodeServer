@@ -206,6 +206,9 @@ export function taskCounters(run: FeatureRun): TaskCounters {
 export interface EventRow {
   at: string;
   kind: string;
+  // Id задачи события: в ключ строки ленты (at|kind|sessionId|taskId) — два события
+  // одного вида в одном чате с равным at иначе дают дубль ключа и потерянную строку.
+  taskId: string;
   personaId: string | null;
   // Роль задачи (feature · cut · plan · step · rework · review · qa · final · merge · consult).
   role: string | null;
@@ -224,6 +227,7 @@ export function eventRows(events: FeatureEvent[]): EventRow[] {
   return (events ?? []).map(e => ({
     at: e.at,
     kind: e.kind,
+    taskId: e.taskId,
     personaId: e.personaId ?? null,
     role: e.role ?? null,
     stepRef: e.stepRef ?? null,

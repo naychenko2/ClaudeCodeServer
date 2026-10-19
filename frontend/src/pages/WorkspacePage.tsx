@@ -367,6 +367,17 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const handleSessionsListChanged = useCallback((list: Session[]) => setSessions(list), []);
   const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
+  // «Попросить агента исправить» из настроек проекта (PluginsProjectSection → EditDialog):
+  // готовая реплика кладётся в композер активного чата этого проекта.
+  useEffect(() => {
+    const onDraftReply = (e: Event) => {
+      const { project: p, reply } = (e as CustomEvent<{ project: Project; reply: string }>).detail ?? {};
+      if (p?.id !== project.id || !reply) return;
+      setPendingMessage(reply);
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
+  }, [project.id]);
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
   const [openFileDiffMode, setOpenFileDiffMode] = useState(false);

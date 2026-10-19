@@ -588,6 +588,131 @@ export interface PluginPermissionsView {
   requested: string[];
   granted: string[];
 }
+
+// === Черновики build-it-yourself (ADR-031, шаги 4.3a/4.3b/4.3c, вертикаль Plugins) ===
+// DTO зеркалит PluginDraftService/PluginDraftDiff. Ключи camelCase — глобальная
+// JSON-политика MVC (типы без [JsonPropertyName] сериализуются дефолтом Web).
+// Значения секретов наружу не едут: только имя + признак «обязательный».
+
+// Сводка черновика для списка (GET /api/plugins/drafts): активные + отклонённые
+export interface PluginDraftSummary {
+  slug: string;
+  id: string;
+  version: string;
+  updatedAt: string;
+  // Число проблем последней проверки (валидатор пакета)
+  problems: number;
+  // Есть ли запись installed.json с тем же Id+Version
+  installedSameVersion: boolean;
+  // true — отклонён (в _rejected/{slug}); у активных false
+  rejected: boolean;
+  // Когда отклонённый исчезнет (rejectedAt + 30 дней); у активных null
+  expiresAt: string | null;
+}
+// Панель в предпросмотре (PluginDraftPanel)
+export interface PluginDraftPanelView {
+  id: string;
+  slot: string;
+  title: string;
+}
+// Секрет в предпросмотре (PluginDraftSecret): имя + признак «обязательный»
+export interface PluginDraftSecretView {
+  name: string;
+  required: boolean;
+}
+// Файл в предпросмотре (PluginDraftFile): путь, каталог/файл, размер
+export interface PluginDraftFileView {
+  path: string;
+  isDir: boolean;
+  size: number;
+}
+// Проблема валидатора (PluginDraftProblem)
+export interface PluginDraftProblemView {
+  code: string;
+  message: string;
+}
+// Предпросмотр черновика (GET /api/plugins/drafts/{slug}/preview)
+export interface PluginDraftPreview {
+  slug: string;
+  name: string;
+  version: string;
+  panels: PluginDraftPanelView[];
+  commands: string[];
+  skills: string[];
+  requestedPermissions: string[];
+  secrets: PluginDraftSecretView[];
+  files: PluginDraftFileView[];
+  validation: { isValid: boolean; problems: PluginDraftProblemView[] };
+}
+// Строка diff (PluginDraftDiffLine): kind = ctx/del/add
+export interface PluginDraftDiffLine {
+  oldLine: number;
+  newLine: number;
+  kind: 'ctx' | 'del' | 'add';
+  text: string;
+}
+// Файл в diff (PluginDraftDiffFile): binary/truncated → содержимое подавлено
+export interface PluginDraftDiffFile {
+  path: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  lines: PluginDraftDiffLine[] | null;
+}
+// Секрет в diff (PluginDraftDiffSecret)
+export interface PluginDraftDiffSecret {
+  name: string;
+  required: boolean;
+}
+// Разница манифеста (PluginDraftDiffManifest): права и секреты
+export interface PluginDraftDiffManifest {
+  permissionsAdded: string[];
+  permissionsRemoved: string[];
+  secretsAdded: PluginDraftDiffSecret[];
+  secretsRemoved: PluginDraftDiffSecret[];
+  secretsRequiredChanged: PluginDraftDiffSecret[];
+}
+// Сравнение черновика с установленной версией (GET /api/plugins/drafts/{slug}/diff)
+export interface PluginDraftDiff {
+  status: 'new' | 'updated';
+  slug: string;
+  id: string;
+  version: string;
+  installedVersion: string | null;
+  // Суммарный потолок diff (1000 строк) превышен
+  truncated: boolean;
+  added: PluginDraftDiffFile[];
+  removed: PluginDraftDiffFile[];
+  modified: PluginDraftDiffFile[];
+  // null, если статус "new"
+  manifest: PluginDraftDiffManifest | null;
+}
+// Ответ «Принять» (POST /api/plugins/drafts/{slug}/accept)
+export interface PluginDraftAcceptResult {
+  id: string;
+  version: string;
+  sha256: string;
+  source: string;
+  enabled: boolean;
+  requested: string[];
+  granted: string[];
+  // true + newPermissions — только если обновление добавило новые запрошенные права
+  consentRequired: boolean;
+  newPermissions: string[];
+  secrets: PluginSecretView[];
+}
+// Ответ «Отклонить» (POST /api/plugins/drafts/{slug}/reject)
+export interface PluginDraftRejectResult {
+  slug: string;
+  rejectedAt: string;
+  expiresAt: string;
+}
+// Ответ «Вернуть» (POST /api/plugins/drafts/{slug}/restore)
+export interface PluginDraftRestoreResult {
+  slug: string;
+  restored: boolean;
+}
+
 // id → сегмент URL: publisher/slug → publisher~slug (M1: один сегмент маршрута)
 function pluginUrlId(id: string): string {
   return id.replace(/\//g, '~');
@@ -927,6 +1052,43 @@ export const api = {
         `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/panel/index.html`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
       );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
+        e.status = res.status;
+        throw e;
+      }
+      return res.text();
+    },
+
+    // === Черновики build-it-yourself (шаги 4.3a/4.3b/4.3c). Гейты бэка:
+    // подсистема выключена → 503, plugins-mvp/plugins-build-yourself off → 403,
+    // сервисный JWT → 403, чужой/несуществующий черновик → 404 ===
+    // Список черновиков владельца (активные + отклонённые)
+    draftsList: () => request<PluginDraftSummary[]>('/plugins/drafts'),
+    // Предпросмотр черновика: вклады, запрошенные права, секреты, файлы, результат проверки
+    draftPreview: (slug: string) =>
+      request<PluginDraftPreview>(`/plugins/drafts/${encodeURIComponent(slug)}/preview`),
+    // Сравнение черновика с последней установленной версией того же id (diff)
+    draftDiff: (slug: string) =>
+      request<PluginDraftDiff>(`/plugins/drafts/${encodeURIComponent(slug)}/diff`),
+    // Принять черновик: установка по метке draft:{slug}; права НЕ выдаёт
+    draftAccept: (slug: string) =>
+      request<PluginDraftAcceptResult>(`/plugins/drafts/${encodeURIComponent(slug)}/accept`, { method: 'POST' }),
+    // Отклонить черновик: перенос в _rejected/{slug}
+    draftReject: (slug: string) =>
+      request<PluginDraftRejectResult>(`/plugins/drafts/${encodeURIComponent(slug)}/reject`, { method: 'POST' }),
+    // Вернуть отклонённый черновик обратно в _drafts/{slug}
+    draftRestore: (slug: string) =>
+      request<PluginDraftRestoreResult>(`/plugins/drafts/${encodeURIComponent(slug)}/restore`, { method: 'POST' }),
+    // Панель черновика для предпросмотра (GET /api/plugins/drafts/{slug}/panel, шаг 4.3d):
+    // сырой HTML, как panelHtml. Схема 4.3d ещё дописывается в CLAUDE.md — зеркалим
+    // panelHtml-паттерн (текст ответа)
+    draftPanel: async (slug: string): Promise<string> => {
+      const token = readStoredToken();
+      const res = await fetch(`/api/plugins/drafts/${encodeURIComponent(slug)}/panel`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         const e = new Error(err.error ?? res.statusText) as Error & { status?: number };

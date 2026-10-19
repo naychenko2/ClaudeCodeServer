@@ -14,6 +14,7 @@ import { ProjectFeature, type Project } from '../../types';
 import { api, type PluginInfo } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
+import { DraftsSection } from './DraftsSection';
 
 // === Секция «Плагины» в настройках проекта (экран 1 макетов, ADR-031, флаг plugins-mvp) ===
 // Самодостаточная: сама грузит список (useInstalledPlugins), сама ведёт установку/удаление/
@@ -180,9 +181,11 @@ function PluginRow({ plugin, isMobile, onToggle, onOpenConsent, onDelete, onRefr
 }
 
 // === Секция «Плагины» ===
-export function PluginsProjectSection({ project, onUpdated }: {
+export function PluginsProjectSection({ project, onUpdated, onEdit }: {
   project: Project;
   onUpdated?: (updated: Project) => void;
+  // «Править»/«Попросить агента исправить» в карточке черновика: готовая реплика → чат
+  onEdit?: (reply: string) => void;
 }) {
   const isMobile = useIsMobile();
   const pluginsMvp = useFeature(FLAGS.pluginsMvp);
@@ -346,6 +349,9 @@ export function PluginsProjectSection({ project, onUpdated }: {
             ))}
           </div>
         )}
+
+        {/* Черновики от агента (флаг plugins-build-yourself): секция сама решает, показывать ли */}
+        <DraftsSection project={project} onUpdated={onUpdated} onEdit={onEdit} />
       </div>
 
       {/* Диалог «Поставить из папки» */}

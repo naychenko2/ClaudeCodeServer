@@ -59,6 +59,9 @@ interface Props {
   // Родитель реализует через api.plugins.setSecret; не передан — «Сохранить» лишь
   // подтверждает значение локально (оно уедет с grant).
   onSaveSecret?: (name: string, value: string) => Promise<string>;
+  // Права, появившиеся при обновлении (accept вернул consentRequired): выделяем как «новые»
+  // (макет 4, карточка черновика) — человек видит, что именно добавилось.
+  newPermissions?: string[];
 }
 
 // === Чистые хелперы (тестируются в ConsentDialog.test.ts) ===
@@ -138,7 +141,7 @@ function shortDate(iso: string | null | undefined): string | null {
 
 // === Диалог согласия: права с чекбоксами, секреты «задан/не задан»,
 // === подпись основной кнопки по числу выданных прав.
-export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret }: Props) {
+export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, newPermissions }: Props) {
   const isMobile = useIsMobile();
 
   // Умолчание галок (В1) / в «изменить» — по granted
@@ -333,6 +336,9 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret }: P
                         <Globe size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.warning, flexShrink: 0 }} />
                       )}
                       <span style={{ fontWeight: 600, color: C.textHeading, fontSize: FS.base }}>{label}</span>
+                      {newPermissions?.includes(key) && (
+                        <Badge tone="accent" size="xs" title="Право появилось при обновлении">new</Badge>
+                      )}
                     </div>
                     <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>{key}</div>
                     {net && (

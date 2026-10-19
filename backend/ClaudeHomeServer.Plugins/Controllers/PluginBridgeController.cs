@@ -199,7 +199,8 @@ public class PluginBridgeController(
 
     // srcdoc: HTML + CSP (meta) + шим plugin-kit (мост + CSS-токены).
     // CSP в meta (не в HTTP-заголовке): srcdoc не имеет собственного HTTP-контекста.
-    private static string BuildSrcdoc(string html)
+    // internal: переиспользуется PluginDraftsController.Panel (предпросмотр панели черновика, 4.3d).
+    internal static string BuildSrcdoc(string html)
     {
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>\n");

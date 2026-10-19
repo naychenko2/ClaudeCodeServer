@@ -39,6 +39,10 @@ public class PluginDraftsController(
     private const string TokenKindClaim = "typ";
     private const string ServiceTokenKind = "svc";
 
+    // Потолок размера файла панели (тот же, что в PluginBridgeController): больше 4 MiB → 413,
+    // чтобы предпросмотр черновика не выкачивал неограниченный файл в память сервера.
+    private const long MaxPanelBytes = 4 * 1024 * 1024; // 4 MiB
+
     private string UserId => User.FindFirstValue(SubClaim)!;
     private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
 
@@ -87,6 +91,41 @@ public class PluginDraftsController(
         {
             return NotFound(new { error = e.Message });
         }
+    }
+
+    // --- GET /api/plugins/drafts/{slug}/panel — предпросмотр панели черновика (шаг 4.3d) ---
+    // Тот же srcdoc-ready HTML (CSP + шим моста), что у PluginBridgeController.PanelSrcdoc,
+    // но из _drafts/{slug}/panel/index.html. Гейты те же, что у остальных ручек черновиков:
+    // сервисный JWT → 403, чужой/несуществующий → 404, нет панели → 404, файл > 4 MiB → 413.
+    // Путь только через SafePath.Join (без выхода из каталога черновика); symlink не следовать.
+
+    [HttpGet("{slug}/panel")]
+    public IActionResult Panel(string slug)
+    {
+        var gate = Gate(); if (gate is not null) return gate;
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: черновики ведёт только пользовательский токен" });
+
+        // Чужой/несуществующий черновик → 404 (DraftDir null — slug не по грамматике, каталога нет).
+        var draftDir = drafts!.DraftDir(UserId, slug);
+        if (draftDir is null || !System.IO.Directory.Exists(draftDir))
+            return NotFound(new { error = $"Черновик {slug} не найден" });
+
+        // Путь панели: _drafts/{slug}/panel/index.html, только через SafePath.Join.
+        string indexPath;
+        try { indexPath = SafePath.Join(Path.Combine(draftDir, "panel"), "index.html"); }
+        catch (Exception) { return NotFound(new { error = $"Черновик {slug} не найден" }); }
+
+        // Нет панели → 404; symlink → 404 (не следовать); файл > 4 MiB → 413.
+        if (!System.IO.File.Exists(indexPath)
+            || (System.IO.File.GetAttributes(indexPath) & System.IO.FileAttributes.ReparsePoint) != 0)
+            return NotFound(new { error = $"Черновик {slug} без панели" });
+        if (new System.IO.FileInfo(indexPath).Length > MaxPanelBytes)
+            return StatusCode(413, new { error = "Файл панели превышает лимит размера (4 MiB)" });
+
+        // Тот же код сборки HTML (CSP + шим моста), что у PanelSrcdoc — не копия.
+        var srcdoc = PluginBridgeController.BuildSrcdoc(System.IO.File.ReadAllText(indexPath));
+        return Content(srcdoc, "text/html; charset=utf-8");
     }
 
     // --- GET /api/plugins/drafts/{slug}/diff — сравнение с установленной версией (шаг 4.3b) ---

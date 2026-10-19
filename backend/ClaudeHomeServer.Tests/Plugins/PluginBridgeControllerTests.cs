@@ -248,6 +248,22 @@ public class PluginBridgeControllerTests : IDisposable
         res.Should().BeOfType<NotFoundResult>();
     }
 
+    // --- Call: 404 (id существует только как черновик, не установлен) ---
+    // Предпросмотр панели черновика работает БЕЗ выданных прав: у черновика нет записи
+    // установки, значит прав нет → call даёт отказ (404), а не данные.
+
+    [Fact]
+    public async Task Call_ТолькоЧерновик_Отдаёт404()
+    {
+        // Черновик создан (draft), но НЕ установлен — записи в installed.json нет.
+        CreatePanelPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
+        res.Should().BeOfType<NotFoundResult>();
+    }
+
     // --- Call: 409 (выключенный пакет) ---
 
     [Fact]

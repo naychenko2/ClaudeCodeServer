@@ -126,6 +126,14 @@ public class PluginDraftsControllerTests : IDisposable
         File.WriteAllText(Path.Combine(draftDir, "skills", "a", "SKILL.md"), "# Skill A changed\n");
     }
 
+    // Добавить панель в черновик: _drafts/{slug}/panel/index.html.
+    private void AddPanelToDraft(string ownerId, string slug, string html)
+    {
+        var root = _store.DraftDir(ownerId, slug);
+        Directory.CreateDirectory(Path.Combine(root, "panel"));
+        File.WriteAllText(Path.Combine(root, "panel", "index.html"), html);
+    }
+
     // Выдать права/секреты записи напрямую (как делает человек через grant): granted + set-секреты.
     private void GrantDirectly(string ownerId, string id, List<string> granted,
         List<(string Name, string Value)>? secrets = null)
@@ -265,6 +273,98 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"Version\":\"1.0.0\"", "версия");
         json.Should().Contain("notes:read", "запрошенные права");
         json.Should().Contain("\"IsValid\":true", "валидный черновик");
+    }
+
+    // --- Panel: 200 (panel/index.html → srcdoc-ready HTML с CSP + шимом моста) ---
+
+    [Fact]
+    public void Panel_ОтдаётSrcdocСCsp()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        AddPanelToDraft(OwnerA, "pkg", "<html><body><h1>Panel</h1></body></html>");
+        var ctl = NewController(OwnerA);
+
+        var content = (ContentResult)ctl.Panel("pkg");
+        content.Content.Should().Contain("Content-Security-Policy", "CSP в meta");
+        content.Content.Should().Contain("ccsPlugin", "шим моста");
+        content.Content.Should().Contain("<h1>Panel</h1>", "HTML панели в теле");
+    }
+
+    // --- Panel: 403 (сервисный JWT) ---
+
+    [Fact]
+    public void Panel_СервисныйJwt_Отдаёт403()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        AddPanelToDraft(OwnerA, "pkg", "<html></html>");
+        var ctl = NewController(OwnerA, serviceToken: true);
+        var obj = (ObjectResult)ctl.Panel("pkg");
+        obj.StatusCode.Should().Be(403);
+    }
+
+    // --- Panel: 404 (чужой владелец) ---
+
+    [Fact]
+    public void Panel_ЧужойВладелец_Отдаёт404()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        AddPanelToDraft(OwnerA, "pkg", "<html></html>");
+        var ctl = NewController(OwnerB);
+        ctl.Panel("pkg").Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    // --- Panel: 404 (нет панели) ---
+
+    [Fact]
+    public void Panel_БезПанели_Отдаёт404()
+    {
+        // Черновик есть, но panel/index.html нет.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Panel("pkg").Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    // --- Panel: 413 (файл > 4 MiB) ---
+    // Мутация (критерий): убрать проверку лимита размера → этот тест падает.
+
+    [Fact]
+    public void Panel_ФайлБольшой_Отдаёт413()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var root = _store.DraftDir(OwnerA, "pkg");
+        Directory.CreateDirectory(Path.Combine(root, "panel"));
+        File.WriteAllBytes(Path.Combine(root, "panel", "index.html"), new byte[4 * 1024 * 1024 + 1]);
+        var ctl = NewController(OwnerA);
+        var obj = (ObjectResult)ctl.Panel("pkg");
+        obj.StatusCode.Should().Be(413);
+    }
+
+    // --- Panel: «../» в slug отбит (slug не по грамматике → 404, не 500 от SafePath.Join) ---
+
+    [Fact]
+    public void Panel_ТочкаТочкаВSlug_Отбита()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        AddPanelToDraft(OwnerA, "pkg", "<html></html>");
+        var ctl = NewController(OwnerA);
+        ctl.Panel("../pkg").Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    // --- Panel: symlink не следовать (→ 404) ---
+
+    [Fact]
+    public void Panel_Symlink_Отбита()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var root = _store.DraftDir(OwnerA, "pkg");
+        Directory.CreateDirectory(Path.Combine(root, "panel"));
+        var outside = Path.Combine(_dir, "outside.html");
+        File.WriteAllText(outside, "<html>outside</html>");
+        var link = Path.Combine(root, "panel", "index.html");
+        try { File.CreateSymbolicLink(link, outside); }
+        catch (PlatformNotSupportedException) { File.Copy(outside, link); }
+        var ctl = NewController(OwnerA);
+        ctl.Panel("pkg").Should().BeOfType<NotFoundObjectResult>();
     }
 
     // --- Accept: 400 при проблемах валидатора ---

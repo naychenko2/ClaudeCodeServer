@@ -471,6 +471,184 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         afterEvent.GetProperty("sessionId").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────
+
+    // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.
+    [Fact]
+    public void MergeFeature_ПодсистемаВыключена_503()
+    {
+        var controller = new TasksController(
+            tasks: null!, broadcaster: null!, ai: null!, projects: null!,
+            personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
+            noteSync: null, features: null);
+
+        var result = controller.MergeFeature("any").GetAwaiter().GetResult();
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>()
+            .Which.StatusCode.Should().Be(503);
+    }
+
+    // 404: чужой эпик → «нет» (тот же 404, что у GET).
+    [Fact]
+    public async Task MergeFeature_ЧужаяФича_404()
+    {
+        var created = await _stranger.PostAsJsonAsync("/api/tasks", new { title = "чужой эпик", role = "feature" });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+
+        var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 409: финал не принят (нет финала или вердикт не accepted/accepted_with_remarks).
+    [Fact]
+    public async Task MergeFeature_ФиналНеПринят_409()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        // Финал без вердикта → Ready=false.
+        await CreateTaskAsync(new { title = "финал", featureId = epicId, role = "final" });
+
+        var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("Финал не принят");
+    }
+
+    // 409: нет исполнителя DevOps (персон с Specialty=DevopsExecutor нет).
+    [Fact]
+    public async Task MergeFeature_НетИсполнителяDevOps_409()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        // Финал принят → Ready=true.
+        var final = await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final",
+            status = "done",
+            verification = new { verdict = "accepted" },
+        });
+
+        var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("DevOps");
+    }
+
+    // 409: несколько исполнителей DevOps. Персоны создаются напрямую (уникальные имена)
+    // и удаляются после теста, чтобы не влиять на другие тесты класса (общий IClassFixture).
+    [Fact]
+    public async Task MergeFeature_НесколькоИсполнителейDevOps_409()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final",
+            status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        var personas = _factory.Services.GetRequiredService<PersonaManager>();
+        var p1 = personas.Create(OwnerId, "DevOps-multi-" + Guid.NewGuid().ToString("N")[..6],
+            null, null, null, null, null, PersonaScope.Global, null,
+            null, null, true, null, null, PersonaAccess.Full, null, PersonaSpecialty.DevopsExecutor);
+        var p2 = personas.Create(OwnerId, "DevOps-multi-" + Guid.NewGuid().ToString("N")[..6],
+            null, null, null, null, null, PersonaScope.Global, null,
+            null, null, true, null, null, PersonaAccess.Full, null, PersonaSpecialty.DevopsExecutor);
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("Несколько");
+        }
+        finally
+        {
+            personas.Delete(p1.Id, OwnerId);
+            personas.Delete(p2.Id, OwnerId);
+        }
+    }
+
+    // 200: создаёт задачу role=merge с персоной DevopsExecutor и запускает исполнителя.
+    // Персона создаётся напрямую через PersonaManager (не через REST), чтобы не зависеть
+    // от персон, созданных другими тестами класса (общий IClassFixture).
+    [Fact]
+    public async Task MergeFeature_СоздаётЗадачу_200()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final",
+            status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        // Персона напрямую: уникальное имя, чтобы не конфликтовать с персонами других тестов.
+        var personas = _factory.Services.GetRequiredService<PersonaManager>();
+        var persona = personas.Create(OwnerId, "DevOps-merge-test-" + Guid.NewGuid().ToString("N")[..6],
+            null, null, null, null, null, PersonaScope.Global, null,
+            null, null, true, null, null, PersonaAccess.Full, null,
+            PersonaSpecialty.DevopsExecutor);
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            if (response.StatusCode != HttpStatusCode.OK)
+            {
+                var dbg = await response.Content.ReadFromJsonAsync<JsonElement>();
+                throw new Exception($"Merge failed: {(int)response.StatusCode} {dbg.GetProperty("error").GetString()}");
+            }
+            var task = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+            task.GetProperty("role").GetString().Should().Be("merge");
+            task.GetProperty("featureId").GetString().Should().Be(epicId);
+            task.GetProperty("personaId").GetString().Should().Be(persona.Id);
+        }
+        finally
+        {
+            personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // Идемпотентность: двойной вызов → одна задача (второй вызов возвращает существующую).
+    [Fact]
+    public async Task MergeFeature_ДвойнойВызов_ОднаЗадача()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final",
+            status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        // Персона напрямую: уникальное имя, чтобы не конфликтовать с персонами других тестов.
+        var personas = _factory.Services.GetRequiredService<PersonaManager>();
+        var persona = personas.Create(OwnerId, "DevOps-merge-test-" + Guid.NewGuid().ToString("N")[..6],
+            null, null, null, null, null, PersonaScope.Global, null,
+            null, null, true, null, null, PersonaAccess.Full, null,
+            PersonaSpecialty.DevopsExecutor);
+
+        try
+        {
+            var first = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            first.StatusCode.Should().Be(HttpStatusCode.OK);
+            var firstTask = await first.Content.ReadFromJsonAsync<JsonElement>();
+            var firstId = firstTask.GetProperty("id").GetString();
+
+            // Второй вызов: merge-задача уже существует (todo → запустить, inProgress → вернуть).
+            var second = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            second.StatusCode.Should().Be(HttpStatusCode.OK);
+            var secondTask = await second.Content.ReadFromJsonAsync<JsonElement>();
+            secondTask.GetProperty("id").GetString().Should().Be(firstId);
+        }
+        finally
+        {
+            personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
     [Fact]
     public async Task Delete_УдаляетЗадачу()
     {

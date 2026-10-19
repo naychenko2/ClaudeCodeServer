@@ -106,6 +106,34 @@
 Направление `Main → Tasks` не меняется (Main уже ссылается на `FeatureProjector`), `SubsystemBoundaryTests`
 не задеты.
 
+### Ручка `POST /api/tasks/features/{featureId}/merge`
+
+Эндпоинт — [TasksController.MergeFeature](../../backend/ClaudeHomeServer/Controllers/TasksController.cs).
+`[Authorize]`, `[DenyOnDelegatedTurn]` (анти-рекурсия, как у `Execute`); от фич-флагов не зависит.
+Составная операция: создаёт задачу `role=merge` и запускает исполнителя штатным путём
+(`TaskExecutionService.ExecuteAsync`), прямого git в бэкенде нет.
+
+**Контракт:**
+
+| Код | Условие |
+|-----|---------|
+| `503` | подсистема `Tasks` выключена (`features == null`) |
+| `404` | эпик не найден / чужой / удалён (тот же, что у `GET`) |
+| `409` | финал не принят (`!run.Ready`): `final` не `Done` или вердикт не `accepted`/`accepted_with_remarks` |
+| `409` | `0` или `>1` персоны с `Specialty=DevopsExecutor`, допустимых в проекте эпика |
+| `200` | задача `role=merge` создана (или существующая открытая возвращена) и исполнитель запущен |
+
+**Идемпотентность:** если открытая (`Status != Done`) задача `role=merge` уже существует — вернуть её;
+если `Status == Todo` — запустить исполнителя, вторую задачу не заводить.
+
+**Исполнитель:** выбирается динамически через `PersonaSpecialty.DevopsExecutor`
+([PersonaContract.cs](../../backend/ClaudeHomeServer.Core/Models/PersonaContract.cs)):
+`personas.GetByOwner(ownerId)` → фильтр по `Specialty` → валидация `TaskPersonaValidator.Error`
+(зона `PersonaZone`). Имя персоны в код не зашито.
+
+**Поля задачи:** `FeatureId` = id эпика, `Role` = `merge`, `ProjectId`/`WorktreePath`/`WorktreeBranch`
+— из эпика, `PersonaId` — выбранный исполнитель, `Assignee` = `Claude`.
+
 ### Ограничения ленты (честные, без журнала)
 
 Лента — чистая проекция `FeatureRun`/`TaskItem`, хранилища событий нет. Поэтому:

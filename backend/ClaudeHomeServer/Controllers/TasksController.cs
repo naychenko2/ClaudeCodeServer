@@ -514,6 +514,91 @@ public class TasksController(
         return 100;
     }
 
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{featureId}/merge):
+    // создаёт задачу role=merge с персоной-исполнителем DevopsExecutor и запускает её.
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят,
+    // 0 или >1 исполнителей DevOps). Идемпотентна: открытая merge-задача → вернуть её,
+    // если todo — запустить, вторую не заводить.
+    [HttpPost("features/{featureId}/merge")]
+    [DenyOnDelegatedTurn("Запуск мержа фичи", AllowInTeamImplement = true,
+        AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
+    public async Task<IActionResult> MergeFeature(string featureId)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound();
+
+        // Финал не принят → мерж преждевременно.
+        if (!run.Ready)
+            return Conflict(new { error = "Финал не принят: мерж преждевременно" });
+
+        // Идемпотентность: открытая merge-задача уже есть → вернуть её.
+        if (run.Merge is { } existing && existing.Status != TaskItemStatus.Done)
+        {
+            if (existing.Status == TaskItemStatus.Todo)
+            {
+                try
+                {
+                    await executor.ExecuteAsync(existing, auto: false, null);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return BadRequest(new { error = ex.Message });
+                }
+            }
+            return Ok(existing);
+        }
+
+        // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
+        var devops = personas.GetByOwner(UserId)
+            .Where(p => p.Specialty == PersonaSpecialty.DevopsExecutor)
+            .Where(p => TaskPersonaValidator.Error(personas, UserId, p.Id,
+                taskProjectId: run.Epic.ProjectId, spheres: spheres) is null)
+            .ToList();
+
+        if (devops.Count == 0)
+            return Conflict(new { error = "Нет исполнителя DevOps: задайте персона с специальностью DevopsExecutor" });
+        if (devops.Count > 1)
+            return Conflict(new { error = "Несколько исполнителей DevOps: уточните, кто ведёт мерж" });
+
+        var persona = devops[0];
+
+        // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
+        var req = new CreateTaskRequest(
+            Title: $"Мерж фичи: {run.Epic.Title}",
+            FeatureId: featureId,
+            Role: TaskRoles.Merge,
+            PersonaId: persona.Id,
+            Assignee: TaskItemAssignee.Claude,
+            WorktreePath: run.Epic.WorktreePath,
+            WorktreeBranch: run.Epic.WorktreeBranch);
+
+        TaskItem task;
+        try
+        {
+            task = tasks.Create(run.Epic.ProjectId, UserId, req);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+
+        try
+        {
+            await executor.ExecuteAsync(task, auto: false, null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        return Ok(task);
+    }
+
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]
     // Анти-рекурсия: раньше жила в составе инструментов (env TASKS_EXECUTE), из-за чего

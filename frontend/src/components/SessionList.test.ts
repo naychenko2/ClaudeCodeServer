@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionList } from './SessionList';
 import { setAllFlags } from '../lib/featureFlags';
 import { __test as featuresIndexTest } from '../lib/featuresIndex';
+import { featureChipCounts } from '../lib/chatGroups';
 import type { Project } from '../types';
 
 // useSubjectRun — useSyncExternalStore БЕЗ getServerSnapshot: legacy-SSR-рендерер
@@ -108,29 +109,57 @@ describe('SessionList: M1′ «Фич пока нет» по содержимо�
   });
 });
 
-// n3: число «Закрытые» — из нарисованных групп (единый источник для чипа и секции),
-// не «все закрытые фичи индекса». В SSR sessions пусты → нарисованных групп 0,
-// даже если в индексе есть закрытые фичи: чип и секция совпадают (0), а не 0 vs N.
-describe('SessionList: n3 число «Закрытые» из нарисованных групп', () => {
+// n3 (волна 2): число «Закрытые» живёт в тумблере секции FilterBar «Показывать закрытые
+// фичи · N». По макету волны 2 N = ВСЕ закрытые фичи индекса (featureChipCounts), а не
+// «нарисованные группы» (это была волна 1, чип FeatureFilterChips — снесён в Ф1.2).
+// Поповер — в document.body (портal): открываем триггером. Текстовые узлы счётчика в
+// fake-DOM ненадёжны (как заголовок группы), поэтому число проверяем через featureChipCounts
+// (тот же расчёт, что в FilterBar), а наличие секции и тумблера — по разметке.
+describe('SessionList: n3 число «Закрытые» в тумблере FilterBar', () => {
   const closedFeat = (id: string) => ({
     featureId: id, title: `Закрыта ${id}`, projectId: 'p1', bucket: 'closed' as const,
     attention: null, rail: [], chips: ['closed' as const],
     stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
     keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 0,
   });
+  // Узел по title-атрибуту (триггер фильтра)
+  function findByTitle(n: _FakeNode, title: string): _FakeNode | null {
+    if (n._attrs['title'] === title) return n;
+    for (const c of n.childNodes) { const r = findByTitle(c, title); if (r) return r; }
+    return null;
+  }
+  // Весь текст поддерева (текстовые узлы)
+  function textOf(n: _FakeNode): string {
+    let out = n.nodeType === 3 ? n.textContent : '';
+    for (const c of n.childNodes) out += textOf(c);
+    return out;
+  }
 
-  it('2 закрытые фичи в индексе, sessions пусты → чип «Закрытые» = 0 (нарисованные группы)', () => {
+  it('2 закрытые фичи → секция «Закрытые» + тумблер в поповере; N = все закрытые (2)', async () => {
     setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
-    featuresIndexTest.setIndex('p1', { features: [closedFeat('c1'), closedFeat('c2')], chats: {} });
+    const idx = { features: [closedFeat('c1'), closedFeat('c2')], chats: {} };
+    featuresIndexTest.setIndex('p1', idx);
+    mockIndex = idx;
+    mockSessions = [];
     store.clear();
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
-    const html = renderToStaticMarkup(createElement(SessionList, { project, activeSession: null, onSelect: () => {} }));
-    // Первый «Закрытые» в разметке — чип (строка чипов идёт первой); его число = 0
-    const i = html.indexOf('>Закрытые</span>');
-    expect(i).toBeGreaterThan(-1);
-    const m = html.slice(i).match(/<span[^>]*>(\d+)<\/span>/);
-    expect(m?.[1]).toBe('0');
+
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: () => {} })); });
+
+    // Открыть поповер фильтров: триггер (title «Фильтры и поиск», фильтры по дефолту)
+    const trigger = findByTitle(container, 'Фильтры и поиск');
+    expect(trigger).not.toBeNull();
+    await act(async () => { container.fireClick(trigger!); });
+
+    // Поповер — в document.body (портal): тумблер «Показывать закрытые фичи» (label надёжен;
+    // текстовые узлы SectionTitle в fake-DOM не создаются — как заголовок группы).
+    const bodyText = textOf(_doc.body);
+    expect(bodyText).toContain('Показывать закрытые фичи');
+    // N = все закрытые фичи индекса = 2 (волна 2, не «нарисованные группы» волны 1)
+    expect(featureChipCounts(idx.features).closed).toBe(2);
   });
 });
 
@@ -152,6 +181,11 @@ class _FakeNode {
   _attrs: Record<string, string> = {};
   style: any = { setProperty: () => {} };
   textContent = '';
+  // Рамка для позиционирования поповера FilterBar (toggleOpen → getBoundingClientRect)
+  getBoundingClientRect() { return { top: 0, left: 0, right: 100, bottom: 30, width: 100, height: 30, x: 0, y: 0, toJSON() { return {}; } }; }
+  // Поповер FilterBar фокусирует поле поиска (useListAutoFocus) — focus/blur на узле
+  focus() {}
+  blur() {}
   setAttribute(k: string, v: string) { this._attrs[k] = String(v); }
   getAttribute(k: string) { return this._attrs[k] ?? null; }
   removeAttribute(k: string) { delete this._attrs[k]; }
@@ -197,6 +231,8 @@ const _doc: any = {
   addEventListener: () => {}, removeEventListener: () => {}, location: { href: '' }, navigator: { userAgent: 'test' },
   // useHoverWarm (useSession.ts:461) в cleanup зовёт window.clearTimeout — в node его нет
   setTimeout: () => 0, clearTimeout: () => {},
+  // useIsTouch (breakpoints.ts) — matchMedia при открытии поповера FilterBar (useListAutoFocus)
+  matchMedia: (q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {}, onchange: null, dispatchEvent: () => true }),
 };
 _doc.defaultView = (globalThis as any).window;
 
@@ -204,11 +240,14 @@ let mockSessions: Session[] = [];
 // useFeaturesIndex (effects) сам зовёт api.tasks.featuresIndex и setIndex-ит результат:
 // без мока он падает (нет сервера) → сброс в EMPTY, и группа фичи не рисуется
 let mockIndex: import('../types/featureIndex').FeaturesIndex = { features: [], chats: {} };
+// Счётчик запросов индекса: «один запрос на проект» — секция FilterBar фич не
+// должна плодить второй fetch (индекс приходит из SessionList, не из FilterBar)
+let indexCalls = 0;
 vi.mock('../lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/api')>();
   return { ...orig, api: { ...orig.api,
     sessions: { ...orig.api.sessions, list: async () => mockSessions },
-    tasks: { ...orig.api.tasks, featuresIndex: async () => mockIndex },
+    tasks: { ...orig.api.tasks, featuresIndex: async () => { indexCalls++; return mockIndex; } },
   } };
 });
 
@@ -270,5 +309,99 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
     expect(header).not.toBeNull();
     expect(header!._attrs['aria-expanded']).toBe('true');
     root.unmount();
+  });
+});
+
+// === Ф1.2: секция FilterBar «Фичи · что с ними» + строка снимаемых чипов ===
+// Мультивыбор чипов (OR), крестик снимает чип, «Показывать закрытые» добавляет
+// закрытые в конец, один запрос индекса на проект (FilterBar не плодит fetch).
+// Индекс и sessions приходят из SessionList (useFeaturesIndex) — FilterBar только
+// показывает; интерактив — createRoot + act (effects идут), текст собираем из fake-DOM.
+describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закрытые / один запрос)', () => {
+  type FC = import('../types/featureIndex').FeatureChip;
+  const feat = (id: string, chips: FC[], title: string) => ({
+    featureId: id, title, projectId: 'p1',
+    bucket: chips.includes('closed') ? 'closed' as const : 'running' as const,
+    attention: null, rail: [], chips,
+    stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
+    keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 1,
+  });
+  const s = (id: string): Session => ({
+    id, mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual',
+  } as Session);
+  // Индекс: 3 открытые фичи (waiting/stopped/merge) + 1 закрытая; каждая со своим чатом
+  const f1 = feat('f1', ['open', 'waiting'], 'FICH_W');
+  const f2 = feat('f2', ['open', 'stopped'], 'FICH_S');
+  const f3 = feat('f3', ['open', 'merge'], 'FICH_M');
+  const c1 = feat('c1', ['closed'], 'FICH_C');
+  const idx: import('../types/featureIndex').FeaturesIndex = {
+    features: [f1, f2, f3, c1],
+    chats: {
+      's1': [{ featureId: 'f1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+      's2': [{ featureId: 'f2', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+      's3': [{ featureId: 'f3', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+      's4': [{ featureId: 'c1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+    },
+  };
+
+  // Рендер режима «Фичи» с заданными фильтрами; возвращает контейнер fake-DOM
+  async function renderFeatures(filters: Record<string, unknown>): Promise<_FakeNode> {
+    setAllFlags({ 'features-overview': true });
+    featuresIndexTest.reset();
+    indexCalls = 0;
+    featuresIndexTest.setIndex('p1', idx);
+    mockIndex = idx; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
+    mockSessions = [s('s1'), s('s2'), s('s3'), s('s4')];
+    store.clear();
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', ...filters }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: () => {} })); });
+    return container;
+  }
+
+  // Узел по aria-label (крестик снимаемого чипа)
+  function findByAriaLabel(n: _FakeNode, label: string): _FakeNode | null {
+    if (n._attrs['aria-label'] === label) return n;
+    for (const c of n.childNodes) { const r = findByAriaLabel(c, label); if (r) return r; }
+    return null;
+  }
+
+  // Заголовок группы фичи: в fake-DOM текстовый узел {feature.title} не создаётся,
+  // но span несёт атрибут title={feature.title} — по нему и проверяем, что группа на экране
+  function hasFeatureTitle(n: _FakeNode, title: string): boolean {
+    if (n._attrs['title'] === title) return true;
+    for (const c of n.childNodes) if (hasFeatureTitle(c, title)) return true;
+    return false;
+  }
+
+  it('два чипа дают OR: waiting+stopped → их фичи, merge не показана', async () => {
+    const container = await renderFeatures({ featureChips: ['waiting', 'stopped'] });
+    expect(hasFeatureTitle(container, 'FICH_W')).toBe(true);
+    expect(hasFeatureTitle(container, 'FICH_S')).toBe(true);
+    expect(hasFeatureTitle(container, 'FICH_M')).toBe(false);
+  });
+
+  it('крестик снимает чип: убирает «Ждут вас» → фича waiting исчезает, stopped остаётся', async () => {
+    const container = await renderFeatures({ featureChips: ['waiting', 'stopped'] });
+    const cross = findByAriaLabel(container, 'Убрать фильтр «Ждут вас»');
+    expect(cross).not.toBeNull();
+    await act(async () => { container.fireClick(cross!); });
+    expect(hasFeatureTitle(container, 'FICH_W')).toBe(false);
+    expect(hasFeatureTitle(container, 'FICH_S')).toBe(true);
+  });
+
+  it('«Показывать закрытые» добавляет закрытые в конец (выкл — их нет)', async () => {
+    const off = await renderFeatures({});
+    expect(hasFeatureTitle(off, 'FICH_C')).toBe(false);
+    const on = await renderFeatures({ showClosed: true });
+    expect(hasFeatureTitle(on, 'FICH_C')).toBe(true);
+  });
+
+  it('один запрос индекса на проект (FilterBar не плодит fetch)', async () => {
+    await renderFeatures({ featureChips: ['waiting'] });
+    expect(indexCalls).toBe(1);
   });
 });

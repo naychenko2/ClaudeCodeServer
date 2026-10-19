@@ -4,17 +4,19 @@ import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal, IconButton, Chip, usePanelElement, usePanelHeaderHold } from './ui';
+import { Modal, IconButton, Chip, Toggle, usePanelElement, usePanelHeaderHold } from './ui';
 import { clampPopupLeft } from './ui/Menu';
 import { personaLabel } from '../lib/personas';
 import { useCanHover } from '../lib/pointer';
 import { useListAutoFocus } from '../lib/listAutoFocus';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
-  ALL_ORIGINS, ALL_STATUS_CHIPS,
+  ALL_ORIGINS, ALL_STATUS_CHIPS, ALL_FEATURE_CHIPS,
   chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
   type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
 } from '../lib/chatFilters';
+import { featureChipCounts, FEATURE_CHIP_LABEL } from '../lib/chatGroups';
+import type { FeatureChip, FeatureIndexFeature } from '../types/featureIndex';
 
 // === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
 // или мобильная шторка (ui/Modal). Секции: поиск → статус → тип → персона → показать
@@ -50,6 +52,16 @@ const ORIGIN_OPTIONS: { value: Session['origin']; label: string }[] = [
   { value: 'automation', label: 'Автоматизация' },
 ];
 
+// Чипы-фильтры фич в секции «Фичи · что с ними» (макет features-overview-2.html,
+// .cap «Фичи · что с ними» + .row .chip): мультивыбор waiting|stopped|merge|running
+// (OR). «Открытые» = пустой выбор (дефолт), «Закрытые» = отдельный тумблер ниже.
+// Тон точки: «ждут вас»/«к мержу» — info, «стоят» — danger, «идут» — textHeading;
+// на включённом чипе — onAccent. Подписи — из FEATURE_CHIP_LABEL (единый источник).
+type FeatureToneChip = Exclude<FeatureChip, 'open' | 'closed'>;
+const FEATURE_TONE: Record<FeatureToneChip, string> = {
+  waiting: C.info, stopped: C.danger, merge: C.info, running: C.textHeading,
+};
+
 const POPOVER_W = 320;
 
 interface FilterBarProps {
@@ -64,6 +76,10 @@ interface FilterBarProps {
   // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле,
   // xs в шапке панели: там весь ряд контролов высотой 24)
   triggerSize?: 'xs' | 'sm' | 'md' | 'lg';
+  // Индекс фич проекта (features[]): нужен секции «Фичи · что с ними» в режиме
+  // groupBy='features' для счётчиков по chips[]. Не задан — секция не рисуется
+  // (глобальный список фич не знает).
+  features?: FeatureIndexFeature[];
 }
 
 // Маркер-точка статуса: на активном чипе — onAccent, иначе — цвет статуса
@@ -78,6 +94,17 @@ function StatusDot({ chip, active }: { chip: ChatStatusChip; active: boolean }) 
 
 function Count({ n }: { n: number }) {
   return <span style={{ fontFamily: FONT.mono, fontSize: 10, opacity: 0.8 }}>{n}</span>;
+}
+
+// Точка тона фичи в чипе «Фичи · что с ними»: на включённом чипе — onAccent,
+// иначе — цвет тона (info/danger/textHeading).
+function FeatureDot({ tone, active }: { tone: string; active: boolean }) {
+  return (
+    <span style={{
+      width: 6, height: 6, borderRadius: R.full, flexShrink: 0,
+      background: active ? C.onAccent : tone,
+    }} />
+  );
 }
 
 function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
@@ -103,13 +130,14 @@ const sectionStyle: React.CSSProperties = { marginBottom: SP.md };
 
 // === Содержимое фильтра (общее для поповера и мобильной шторки) ===
 function FilterContent({
-  sessions, filters, patch, allPersonas, large,
+  sessions, filters, patch, allPersonas, large, features,
 }: {
   sessions: Session[];
   filters: ChatFilters;
   patch: (p: Partial<ChatFilters>) => void;
   allPersonas: Persona[];
   large?: boolean;
+  features?: FeatureIndexFeature[];
 }) {
   // Счётчики по чипам — из полного списка области
   const counts = useMemo(() => {
@@ -181,6 +209,55 @@ function FilterContent({
           </button>
         )}
       </div>
+
+      {/* Фичи · что с ними: мультивыбор состояния фич (OR) + тумблер закрытых.
+          Только в режиме groupBy='features' и когда передан индекс фич проекта;
+          счётчики — по chips[] бэка (featureChipCounts), членство фронт не считает. */}
+      {filters.groupBy === 'features' && features !== undefined && (() => {
+        const featureCounts = featureChipCounts(features);
+        return (
+          <>
+            <div style={sectionStyle}>
+              <SectionTitle>Фичи · что с ними</SectionTitle>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+                {(ALL_FEATURE_CHIPS as FeatureToneChip[]).map(value => {
+                  const active = filters.featureChips.includes(value);
+                  const count = featureCounts[value];
+                  return (
+                    <span key={value} style={{ display: 'inline-flex', opacity: count === 0 ? 0.5 : 1 }}>
+                      <Chip variant="toggle" selected={active} large={large}
+                        onClick={() => patch({ featureChips: toggle(filters.featureChips, value) })}
+                      >
+                        <FeatureDot tone={FEATURE_TONE[value]} active={active} />
+                        {FEATURE_CHIP_LABEL[value]}
+                        <Count n={count} />
+                      </Chip>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={sectionStyle}>
+              <SectionTitle>Закрытые</SectionTitle>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                minHeight: large ? 44 : 32,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: FS.base, color: C.textPrimary, fontFamily: FONT.sans }}>
+                    Показывать закрытые фичи · <span style={{ fontFamily: FONT.mono }}>{featureCounts.closed}</span>
+                  </div>
+                  <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>
+                    Секцией внизу списка, на втором плане
+                  </div>
+                </div>
+                <Toggle checked={filters.showClosed} onChange={v => patch({ showClosed: v })}
+                  ariaLabel="Показывать закрытые фичи" />
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Статус */}
       <div style={sectionStyle}>
@@ -328,7 +405,7 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 }
 
 export function FilterBar({
-  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm',
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm', features,
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -476,7 +553,7 @@ export function FilterBar({
           borderRadius: R.xl, boxShadow: SHADOW.dropdown,
           padding: SP.md, zIndex: Z.dropdown,
         }}>
-          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} />
+          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} features={features} />
           <div style={{
             marginTop: SP.xs, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
           }}>
@@ -489,7 +566,7 @@ export function FilterBar({
       {/* Мобайл: шторка через ui/Modal (единый bottom-sheet с overlay/Esc/safe-area) */}
       {open && isMobile && (
         <Modal title="Фильтры" onClose={() => setOpen(false)} footer={footerRow}>
-          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} large />
+          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} large features={features} />
         </Modal>
       )}
     </div>

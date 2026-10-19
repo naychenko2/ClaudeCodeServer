@@ -468,7 +468,9 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
 // только считает числа по chips[] и фильтрует список по выбранному чипу.
 
 // Подписи чипов: порядок = порядок ALL_FEATURE_FILTER_CHIPS (единый источник).
-const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
+// Экспортируется: секция «Фичи · что с ними» в FilterBar и строка снимаемых чипов
+// в SessionList берут подписи отсюда, а не заводят вторую точку правды.
+export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
   open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
   running: 'Идут',
 };

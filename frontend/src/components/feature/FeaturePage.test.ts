@@ -851,18 +851,18 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect((row as unknown as { style: Record<string, string> }).style.background).toBe('var(--c-accent-light)');
   });
 
-  it('Ф3.2: метка «ключевой» — подсказка «что значит ключевой» (единый текст, aria-label + Tooltip)', async () => {
+  it('Ф3.2: метка «ключевой» — подсказка «что значит ключевой» (M1: aria-describedby на кнопке-строке + Tooltip)', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
     const c = render({});
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
-    // Подсказка «что значит ключевой» — единый источник KEY_SESSION_TOOLTIP: на метке
-    // aria-label (скринридер/клавиатура) + по наведению ui/Tooltip; на тач — нативный title.
-    const chip = findNodeByAttr(row, 'aria-label', KEY_SESSION_TOOLTIP);
-    expect(chip, 'метка «ключевой» несёт подсказку (aria-label)').not.toBeNull();
-    expect(chip!.getAttribute('aria-label')).toBe('Здесь управляют фичей: запускают шаги и принимают результат');
+    // M1-минор: aria-label с неинтерактивного span метки убран (скринридер его игнорирует);
+    // описание подсказки — на кнопке-строке через aria-describedby (id плашки Tooltip).
+    expect(row.getAttribute('aria-describedby'), 'кнопка-строка ссылается на плашку').toBe('key-tip-chat-key');
+    const chip = findNodeByAttr(row, 'data-testid', 'feature-role-key');
+    expect(chip, 'метка «ключевой» (data-testid) есть').not.toBeNull();
   });
 
   it('R6-1: аватар 18 — персона из chatPersonas (инициалы); без персоны — нейтральный круг', async () => {
@@ -1104,6 +1104,75 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(tst.fontWeight).toBe('600');
     expect(tst.padding).toBe('1px 7px');
     expect(tst.borderRadius).toBe('6px');
+  });
+});
+
+// === M2: подсказка «ключевой» — рендер-тесты (наведение + фокус + уход) ===
+// Глеб (R6): тесты ловили только aria-label; мутация «убрать <Tooltip>» оставляла их
+// зелёными. Здесь — сам ТЕКСТ плашки в DOM: по наведению (задержка 350 мс) и по фокусу
+// на кнопке-строке (клавиатура), исчезает по уходу/blur. Мутация «убрать <Tooltip>»
+// краснит: без обёртки нет ни onMouseEnter, ни focused-состояния → текст не появляется.
+describe('FeaturePage: M2 подсказка «ключевой» (наведение + фокус + уход)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = { 'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }] };
+    mockChats.clear();
+    mockGetFeature.pending = false;
+    mockGetFeature.result = pageData();
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Tooltip использует window.setTimeout (задержка 350 мс); fake-window его не несёт —
+  // даём (fake) таймер глобала, чтобы advanceTimersByTime прогнал задержку.
+  const withWindowTimers = () => {
+    (globalThis as { window: Record<string, unknown> }).window.setTimeout = globalThis.setTimeout;
+    (globalThis as { window: Record<string, unknown> }).window.clearTimeout = globalThis.clearTimeout;
+  };
+  const keyWrapper = (c: FNodeLike) => {
+    const chip = findNodeByAttr(c as never, 'data-testid', 'feature-role-key')!;
+    return (chip as unknown as { parentNode: FNodeLike }).parentNode;
+  };
+  const allText = (c: FNodeLike) => textNodes(c as never).join('');
+
+  it('по наведению: плашка появляется (задержка 350 мс) и исчезает по уходу', async () => {
+    const c = render({});
+    withWindowTimers();
+    await settle();
+    const wp = reactProps(keyWrapper(c))!;
+    expect(allText(c), 'до наведения — плашки нет').not.toContain(KEY_SESSION_TOOLTIP);
+    await act(async () => { (wp.onMouseEnter as () => void)(); await vi.advanceTimersByTimeAsync(350); });
+    expect(allText(c), 'наведение → плашка в DOM').toContain(KEY_SESSION_TOOLTIP);
+    await act(async () => { (wp.onMouseLeave as () => void)(); });
+    expect(allText(c), 'уход → плашка исчезла').not.toContain(KEY_SESSION_TOOLTIP);
+  });
+
+  it('по фокусу на кнопке-строке (клавиатура): плашка появляется и исчезает по blur', async () => {
+    const c = render({});
+    await settle();
+    const button = findNodeByAttr(c as never, 'data-testid', 'feature-chat-chat-key')!;
+    expect(allText(c), 'до фокуса — плашки нет').not.toContain(KEY_SESSION_TOOLTIP);
+    await act(async () => { (reactProps(button)!.onFocus as () => void)(); });
+    expect(allText(c), 'фокус на кнопке-строке → плашка в DOM').toContain(KEY_SESSION_TOOLTIP);
+    await act(async () => { (reactProps(button)!.onBlur as () => void)(); });
+    expect(allText(c), 'blur → плашка исчезла').not.toContain(KEY_SESSION_TOOLTIP);
   });
 });
 

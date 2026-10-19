@@ -484,6 +484,135 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
   });
 });
 
+// === F3.3: строка «+N чат в группе «X»» (мультифичевый чат) — рендер-тесты ===
+// Глеб (R6): у строки не было ни одного теста рендера; мутация «otherLinks.length > 0 && →
+// false &&» (блок не рендерится) оставляла набор зелёным. Здесь: видимость, aria-label,
+// клик → onSelect, склонение (1/2/5), отсутствие дубля, где чат нарисован, и
+// согласованность счётчика. Мутация «не рендерить блок» краснит тест видимости.
+describe('SessionList: F3.3 строка «+N чат в группе …» (рендер)', () => {
+  const feat = (id: string, title: string, key: string | null, bucket: 'running' | 'closed') => ({
+    featureId: id, title, projectId: 'p1', bucket,
+    attention: null, rail: [], chips: [bucket === 'closed' ? 'closed' as const : 'open' as const],
+    stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
+    keySessionId: key, keyArchived: false, keyProjectId: 'p1', chatCount: 1,
+  });
+  const sess = (id: string): Session => ({
+    id, projectId: 'p1', mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual',
+  } as Session);
+
+  // Индекс: A (open, key chat-a) + B (closed, key chat-b); N мультифичевых чатов
+  // нарисованы в B (links[0]=fb), связаны и с A (links содержит fa) → «+N чат в группе B».
+  const buildIndex = (n: number) => {
+    const chats: Record<string, import('../types/featureIndex').FeatureChatLink[]> = {
+      'chat-a': [{ featureId: 'fa', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+      'chat-b': [{ featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+    };
+    for (let i = 1; i <= n; i++) {
+      chats[`chat-m${i}`] = [
+        { featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null },
+        { featureId: 'fa', kind: 'executor', taskRole: null, stepRef: null, lane: null },
+      ];
+    }
+    return { features: [feat('fa', 'Фича A', 'chat-a', 'running'), feat('fb', 'Фича B', 'chat-b', 'closed')], chats };
+  };
+
+  const findAttr = (c: _FakeNode, attr: string, value: string): _FakeNode | null => {
+    const walk = (n: _FakeNode): _FakeNode | null => {
+      if (n._attrs[attr] === value) return n;
+      for (const ch of n.childNodes) { const r = walk(ch); if (r) return r; }
+      return null;
+    };
+    return walk(c);
+  };
+  const textOf = (n: _FakeNode): string => {
+    let out = '';
+    const walk = (x: _FakeNode) => { if (x.nodeType === 3) out += x.textContent; for (const c of x.childNodes) walk(c); };
+    walk(n);
+    return out;
+  };
+
+  const renderAndExpandA = async (n: number, onSelect: (s: Session) => void) => {
+    setAllFlags({ 'features-overview': true });
+    featuresIndexTest.reset();
+    const idx = buildIndex(n);
+    featuresIndexTest.setIndex('p1', idx);
+    mockIndex = idx;
+    mockSessions = [sess('chat-a'), sess('chat-b'), ...Array.from({ length: n }, (_, i) => sess(`chat-m${i + 1}`))];
+    store.clear();
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect })); });
+    const chevron = findAttr(container, 'data-testid', 'feature-group-chevron');
+    if (chevron) await act(async () => { container.fireClick(chevron); });
+    return { container, root };
+  };
+
+  it('видна в группе, где чат НЕ нарисован; aria-label; клик → onSelect(чат)', async () => {
+    const onSelect = vi.fn();
+    const { container, root } = await renderAndExpandA(1, onSelect);
+    const link = findAttr(container, 'data-testid', 'other-group-link-fb');
+    expect(link, 'строка «+1 чат в группе «Фича B»» есть').not.toBeNull();
+    expect(link!._attrs['aria-label']).toBe('+1 чат в группе «Фича B»');
+    expect(textOf(link!)).toContain('+1 чат в группе «Фича B»');
+    // Клик → onSelect(мультифичевый чат). Точное число вызовов не валидируем: клик может
+    // булькнуть на предка (не валидируем здесь) — важно, что onSelect получил chat-m1.
+    await act(async () => { container.fireClick(link!); });
+    expect(onSelect.mock.calls.some(c => c[0]?.id === 'chat-m1'), 'onSelect(chat-m1)').toBe(true);
+    root.unmount();
+  });
+
+  it('склонение: 1 чат / 2 чата / 5 чатов', async () => {
+    for (const [n, expected] of [[1, '+1 чат'], [2, '+2 чата'], [5, '+5 чатов']] as const) {
+      const { container, root } = await renderAndExpandA(n, vi.fn());
+      const link = findAttr(container, 'data-testid', 'other-group-link-fb');
+      expect(link, `строка для n=${n} есть`).not.toBeNull();
+      expect(textOf(link!), `текст «${expected} …»`).toContain(expected);
+      root.unmount();
+    }
+  });
+
+  it('счётчик строки = число мультифичевых чатов (согласованность)', async () => {
+    const { container, root } = await renderAndExpandA(3, vi.fn());
+    const link = findAttr(container, 'data-testid', 'other-group-link-fb');
+    expect(link).not.toBeNull();
+    expect(textOf(link!)).toContain('+3 чата');
+    root.unmount();
+  });
+
+  it('нет строки и дубля, когда мультифичевый чат нарисован в ТЕКУЩЕЙ группе', async () => {
+    setAllFlags({ 'features-overview': true });
+    featuresIndexTest.reset();
+    // chat-multi нарисован в A (links[0]=fa) и связан с A и B → в группе A, не «чужой»
+    const idx = {
+      features: [feat('fa', 'Фича A', 'chat-a', 'running'), feat('fb', 'Фича B', 'chat-b', 'closed')],
+      chats: {
+        'chat-a': [{ featureId: 'fa', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
+        'chat-b': [{ featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+        'chat-multi': [
+          { featureId: 'fa', kind: 'executor', taskRole: null, stepRef: null, lane: null },
+          { featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null },
+        ],
+      },
+    };
+    featuresIndexTest.setIndex('p1', idx);
+    mockIndex = idx;
+    mockSessions = [sess('chat-a'), sess('chat-b'), sess('chat-multi')];
+    store.clear();
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: vi.fn() })); });
+    const chevron = findAttr(container, 'data-testid', 'feature-group-chevron');
+    if (chevron) await act(async () => { container.fireClick(chevron); });
+    // chat-multi нарисован в A → ссылки на «чужую» группу нет (и дубля нет)
+    expect(findAttr(container, 'data-testid', 'other-group-link-fb'), 'строки «+N чат» нет').toBeNull();
+    root.unmount();
+  });
+});
+
 // Открывающий тег <button ...> с заданным текстом-содержимым (SSR: style в открывающем
 // теге, текст — содержимое). Возвращает строку тега или null.
 function buttonTagWithText(html: string, text: string): string | null {

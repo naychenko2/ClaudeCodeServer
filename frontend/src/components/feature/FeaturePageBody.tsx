@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
@@ -90,26 +90,34 @@ function RowAvatar({ personaId }: { personaId: string | null }) {
 // R 6, padding 0 5. «Ключевой» — фон accentLight, текст accent, 700.
 // Роль — русским словом (M1: не коды curator/executor); у исполнителя —
 // код шага и линия, если есть.
-function RoleTag({ kind, stepRef, lane, isKey }: {
+function RoleTag({ kind, stepRef, lane, isKey, focused, tipId }: {
   kind: string; stepRef?: string | null; lane?: string | null; isKey?: boolean;
+  // M1: фокус на кнопке-строке (предок обёртки Tooltip) — плашка поднимается по фокусу.
+  focused?: boolean;
+  // M1 (минор): id плашки — кнопка-строка ссылается на неё через aria-describedby,
+  // т. к. aria-label на неинтерактивном span скринридер, скорее всего, проигнорирует.
+  tipId?: string;
 }) {
   // Ф3.2: подсказка «что значит ключевой» (единый KEY_SESSION_TOOLTIP). По наведению —
-  // ui/Tooltip; на тач Tooltip не поднимается (свой комментарий) → нативный title
-  // (long-press) + aria-label для скринридера/клавиатуры. Метка — span (не интерактив),
-  // поэтому вложенность в <button> строки чата клик по строке не ломает.
+  // ui/Tooltip; по клавиатуре (M1) — тоже Tooltip, когда фокус на кнопке-строке (focused);
+  // на тач Tooltip не поднимается (свой комментарий) → нативный title (long-press).
+  // Описание для скринридера — через aria-describedby на кнопке-строке (tipId), а не
+  // aria-label на span: метка неинтерактивна, и label на ней скринридер игнорирует.
+  // Метка — span (не интерактив), поэтому вложенность в <button> строки чата клик по
+  // строке не ломает (вложенный интерактив в <button> недопустим).
   const canHover = useCanHover();
   if (isKey) {
     const chip = (
       <span
+        data-testid="feature-role-key"
         title={!canHover ? KEY_SESSION_TOOLTIP : undefined}
-        aria-label={KEY_SESSION_TOOLTIP}
         style={{
           fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700,
           background: C.accentLight, color: C.accent, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
         }}
       >ключевой</span>
     );
-    return <Tooltip content={KEY_SESSION_TOOLTIP}>{chip}</Tooltip>;
+    return <Tooltip content={KEY_SESSION_TOOLTIP} focused={focused} id={tipId}>{chip}</Tooltip>;
   }
   const parts = [chatRoleLabel(kind)];
   if (stepRef) parts.push(stepRef);
@@ -130,12 +138,23 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
   onOpenChat: (chatId: string) => void;
   isMobile: boolean;
 }) {
+  // M1: фокус на кнопке-строке — подсказка «что значит ключевой» (Tooltip) поднимается
+  // по клавиатуре. Кнопка — единственный фокус-стоп строки (метка-span фокусом не
+  // является: вложенный интерактив в <button> недопустим), поэтому её onFocus/onBlur —
+  // единственный источник фокус-состояния для метки.
+  const [focused, setFocused] = useState(false);
+  // M1 (минор): описание подсказки «ключевой» — на кнопке-строке через aria-describedby
+  // (id плашки Tooltip), а не aria-label на неинтерактивном span метки.
+  const tipId = entry.isKey ? `key-tip-${entry.sessionId}` : undefined;
   return (
     <button
       type="button"
       data-testid={`feature-chat-${entry.sessionId}`}
       className={FOCUS_CLASS}
+      aria-describedby={tipId}
       onClick={() => onOpenChat(entry.sessionId)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={rowBase(isMobile, entry.isKey ? { background: C.accentLight } : undefined)}
     >
       <span style={{ display: 'flex', flexShrink: 0 }}>
@@ -155,7 +174,7 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
             borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
           }}>в архиве</span>
         )}
-        <RoleTag kind={entry.link.kind} stepRef={entry.link.stepRef} lane={entry.link.lane} isKey={entry.isKey} />
+        <RoleTag kind={entry.link.kind} stepRef={entry.link.stepRef} lane={entry.link.lane} isKey={entry.isKey} focused={focused} tipId={tipId} />
       </span>
     </button>
   );

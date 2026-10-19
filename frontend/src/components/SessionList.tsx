@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
-import type { FeatureIndexFeature } from '../types/featureIndex';
+import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
@@ -43,12 +43,68 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupLinks, pluralChat, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupLinks, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { plural } from '../lib/plural';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
 import { useReadStateVersion } from '../lib/chatReadState';
 import { autoNavigateToContinued } from '../lib/chatContinue';
+
+// Единый focus-visible ring (клавиатура) для строк-ссылок «+N чат в группе …» (F3.3):
+// проектный паттерн (один инжект <style> на модуль), не inline onFocus (минор).
+const FOCUS_CLASS = 'cc-sessionlist-link';
+if (typeof document !== 'undefined' && !document.getElementById('cc-sessionlist-link-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-sessionlist-link-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
+
+// F3.3: строка-ссылка на «чужую» группу (мультифичевый чат): чат, связанный с этой
+// фичей в индексе, но нарисованный в группе другой фичи. Считается из уже загруженного
+// индекса (без запросов); useMemo — не пересчитывать на каждом рендере списка (минор).
+// Мёртвая кнопка (минор): если чата нет среди загруженных сессий — ссылку не рисуем.
+function OtherGroupLinks({ featureId, featuresIndex, groupSessions, sessions, isMobile, onSelect }: {
+  featureId: string;
+  featuresIndex: FeaturesIndex;
+  groupSessions: Session[];
+  sessions: Session[];
+  isMobile: boolean;
+  onSelect: (s: Session) => void;
+}) {
+  const links = useMemo(() => {
+    const all = otherGroupLinks(featureId, featuresIndex, groupSessions);
+    return all.filter(l => sessions.some(s => s.id === l.firstChatId));
+  }, [featureId, featuresIndex, groupSessions, sessions]);
+  if (links.length === 0) return null;
+  return (
+    <div>
+      {links.map(link => (
+        <button
+          key={link.featureId}
+          type="button"
+          data-testid={`other-group-link-${link.featureId}`}
+          aria-label={`+${link.count} ${plural(link.count, 'чат', 'чата', 'чатов')} в группе «${link.featureTitle}»`}
+          className={FOCUS_CLASS}
+          onClick={() => {
+            const target = sessions.find(s => s.id === link.firstChatId);
+            if (target) onSelect(target);
+          }}
+          style={{
+            display: 'block', width: '100%', textAlign: 'left',
+            border: 'none', cursor: 'pointer',
+            background: 'transparent', color: C.textSecondary, fontFamily: FONT.sans,
+            fontSize: FS.xs, padding: `${SP.xs}px ${SP.xs}px`, marginTop: 2,
+            ...(isMobile ? { minHeight: 40 } : null),
+          }}
+        >
+          +{link.count} {plural(link.count, 'чат', 'чата', 'чатов')} в группе «{link.featureTitle}»
+        </button>
+      ))}
+    </div>
+  );
+}
 
 interface Props {
   project: Project;
@@ -910,9 +966,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       else next.add(g.feature!.featureId);
       return next;
     });
-    // F3.3: ссылки на «чужие» группы — чаты, связанные с этой фичей в индексе,
-    // но нарисованные в группе другой фичи (мультифичевый чат). Только в раскрытой группе.
-    const otherLinks = expanded ? otherGroupLinks(g.feature.featureId, featuresIndex, g.sessions) : [];
     return (
       <div key={g.feature.featureId} style={{ marginBottom: GROUP_GAP, display: 'flow-root' }}>
         <FeatureGroupHeader
@@ -955,33 +1008,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               ещё {layout.hiddenCount}
             </button>
           )}
-          {/* F3.3: строка-ссылка на «чужую» группу (мультифичевый чат). */}
-          {otherLinks.length > 0 && (
-            <div>
-              {otherLinks.map(link => (
-                <button
-                  key={link.featureId}
-                  type="button"
-                  data-testid={`other-group-link-${link.featureId}`}
-                  aria-label={`+${link.count} ${pluralChat(link.count)} в группе «${link.featureTitle}»`}
-                  onClick={() => {
-                    const target = sessions.find(s => s.id === link.firstChatId);
-                    if (target) onSelect(target);
-                  }}
-                  onFocus={e => { e.currentTarget.style.boxShadow = SHADOW.focus; }}
-                  onBlur={e => { e.currentTarget.style.boxShadow = 'none'; }}
-                  style={{
-                    display: 'block', width: '100%', textAlign: 'left',
-                    border: 'none', cursor: 'pointer',
-                    background: 'transparent', color: C.textSecondary, fontFamily: FONT.sans,
-                    fontSize: FS.xs, padding: `${SP.xs}px ${SP.xs}px`, marginTop: 2,
-                    ...(isMobile ? { minHeight: 40 } : null),
-                  }}
-                >
-                  +{link.count} {pluralChat(link.count)} в группе «{link.featureTitle}»
-                </button>
-              ))}
-            </div>
+          {/* F3.3: строка-ссылка на «чужую» группу (мультифичевый чат). Компонент,
+              чтобы otherGroupLinks был в useMemo (не пересчитывался на каждом рендере). */}
+          {expanded && (
+            <OtherGroupLinks
+              featureId={g.feature.featureId}
+              featuresIndex={featuresIndex}
+              groupSessions={g.sessions}
+              sessions={sessions}
+              isMobile={isMobile}
+              onSelect={onSelect}
+            />
           )}
         </div>
       </div>

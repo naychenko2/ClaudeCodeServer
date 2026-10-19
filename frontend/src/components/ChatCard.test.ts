@@ -8,12 +8,44 @@
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatCard, FeatureLabel, featureLabelFor } from './ChatCard';
 import { __test as featuresIndexTest } from '../lib/featuresIndex';
 import { setAllFlags } from '../lib/featureFlags';
+import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from './chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeatureRailKey, FeatureRailSegment } from '../types/featureIndex';
 import type { Session } from '../types';
+
+// ── Моки для fakeDom-монтажа ChatCard (M2): SSR-тесты эффектов не гоняют, но клиентский
+//    рендер (mount) их гоняет — подписки/запросы глушим, как в workspaceFeatureCenter ──
+vi.mock('../lib/signalr', () => {
+  const sub = () => () => {};
+  const actP = () => Promise.resolve(null);
+  return {
+    __esModule: true,
+    onMessage: sub, onReconnected: sub, onFilesChanged: sub, onPreviewMessage: sub,
+    onLocalModelMessage: sub, onGitStatusChanged: sub, onAgentHubMessage: sub,
+    joinProject: actP, leaveProject: actP, joinSession: actP, leaveSession: actP,
+    joinUser: actP, leaveUser: actP, sendMessage: actP, respondPermission: actP,
+    interruptSession: actP, compactSession: actP, answerQuestion: actP, respondPlan: actP,
+    respondTeamPlan: actP, respondTeamEscalation: actP, setMode: actP, resetConnection: actP,
+    joinPreviewLog: actP, leavePreviewLog: actP,
+  };
+});
+const { mockIndexData } = vi.hoisted(() => ({ mockIndexData: null as unknown }));
+vi.mock('../lib/api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../lib/api')>();
+  return { ...orig, api: { ...orig.api,
+    tasks: { ...orig.api.tasks, featuresIndex: async () => (mockIndexData ?? { features: [], chats: {} }) },
+    chats: { ...orig.api.chats, get: async () => null },
+  } };
+});
+vi.mock('../lib/toast', () => ({ showToast: () => {} }));
+vi.mock('../lib/personas', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../lib/personas')>();
+  return { ...orig, getPersonaById: () => undefined, usePersonasVersion: () => 0, ensurePersonasLoaded: () => Promise.resolve() };
+});
 
 // 7 стадий в порядке жизненного цикла; по умолчанию «идёт» (prod active run).
 const KEYS: FeatureRailKey[] = ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
@@ -134,9 +166,10 @@ describe('n1: метка фичи внутри группы (inFeatureGroup)', (
 
 // === Ф3.2: подсказка у метки «ключевой» (группа) ===
 // Метка «ключевой» — span в карточке; подсказка «что значит ключевой» — единый текст
-// (KEY_SESSION_TOOLTIP): aria-label (скринридер/клавиатура) + по наведению ui/Tooltip,
-// на тач — нативный title. Рендер — SSR (как остальные тесты файла).
-describe('Ф3.2: подсказка у метки «ключевой» (группа)', () => {
+// (KEY_SESSION_TOOLTIP). SSR (как остальные тесты файла): проверяем саму метку;
+// появление ТЕКСТА плашки по наведению/фокусу — в fakeDom-блоке ниже (M2).
+// (M1-минор: aria-label с неинтерактивного span убран — скринридер его игнорирует.)
+describe('Ф3.2: метка «ключевой» (группа, SSR)', () => {
   const session = (id: string): Session => ({
     id, mode: 'auto', status: 'finished', messageCount: 0,
     createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
@@ -150,17 +183,83 @@ describe('Ф3.2: подсказка у метки «ключевой» (груп
       featureRole: role,
     }));
 
-  it('«ключевой» — метка несёт подсказку (единый текст, aria-label + Tooltip)', () => {
+  it('«ключевой» — метка-чип с текстом «ключевой»', () => {
     const html = renderRoleCard('ключевой');
-    // Метка «ключевой» есть.
     expect(html).toContain('data-testid="chat-feature-role"');
-    // Подсказка «что значит ключевой» — единый текст (не два литерала).
-    expect(html).toContain('aria-label="Здесь управляют фичей: запускают шаги и принимают результат"');
+    expect(html).toContain('ключевой');
   });
 
-  it('«ещё N» (не ключевой) — подсказки «что значит ключевой» нет', () => {
+  it('«ещё N» (не ключевой) — метка «ещё 2», без слова «ключевой»', () => {
     const html = renderRoleCard('ещё 2');
     expect(html).toContain('data-testid="chat-feature-role"');
-    expect(html).not.toContain('aria-label="Здесь управляют фичей: запускают шаги и принимают результат"');
+    expect(html).toContain('ещё 2');
+  });
+});
+
+// === M2: подсказка «ключевой» — рендер-тесты (fakeDom: наведение + фокус + уход) ===
+// Глеб (R6): SSR-тесты ловили только aria-label; мутация «убрать <Tooltip>» оставляла
+// их зелёными. Здесь — сам ТЕКСТ плашки в DOM: по наведению (задержка 350 мс) и по
+// фокусу на карточке-строке (клавиатура), исчезает по уходу/blur. Мутация «убрать
+// <Tooltip>» краснит: без обёртки нет ни onMouseEnter, ни focused-состояния.
+describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: наведение + фокус + уход)', () => {
+  const session = (id: string): Session => ({
+    id, mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual',
+  } as Session);
+
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T10:00:00Z').getTime());
+    featuresIndexTest.reset();
+    setAllFlags({ 'features-overview': false });
+    // fake-window не несёт setTimeout/clearTimeout (Tooltip, задержка 350 мс) и
+    // addEventListener/removeEventListener (useActionVisibility) — даём no-op/(fake) таймеры.
+    const w = (globalThis as { window: Record<string, unknown> }).window;
+    w.setTimeout = globalThis.setTimeout;
+    w.clearTimeout = globalThis.clearTimeout;
+    w.addEventListener = () => {};
+    w.removeEventListener = () => {};
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const renderCard = () => {
+    const { container } = mount(createElement(ChatCard, {
+      session: session('chat-1'), isActive: false, isMobile: false, online: true,
+      onSelect: () => {}, onHover: () => {}, onDelete: () => {},
+      featureRole: 'ключевой',
+    }));
+    return container;
+  };
+  const allText = (c: Parameters<typeof findNodeByAttr>[0]) => textNodes(c).join('');
+  const KEY = 'Здесь управляют фичей: запускают шаги и принимают результат';
+
+  it('по наведению: плашка появляется (задержка 350 мс) и исчезает по уходу', async () => {
+    const c = renderCard();
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    // Обёртка Tooltip — родитель метки «ключевой» (data-testid="chat-feature-role").
+    const chip = findNodeByAttr(c, 'data-testid', 'chat-feature-role')!;
+    const wrapper = (chip as unknown as { parentNode: Parameters<typeof findNodeByAttr>[0] }).parentNode;
+    const wp = reactProps(wrapper)!;
+    expect(allText(c), 'до наведения — плашки нет').not.toContain(KEY);
+    await act(async () => { (wp.onMouseEnter as () => void)(); await vi.advanceTimersByTimeAsync(350); });
+    expect(allText(c), 'наведение → плашка в DOM').toContain(KEY);
+    await act(async () => { (wp.onMouseLeave as () => void)(); });
+    expect(allText(c), 'уход → плашка исчезла').not.toContain(KEY);
+  });
+
+  it('по фокусу на карточке (клавиатура): плашка появляется и исчезает по blur', async () => {
+    const c = renderCard();
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    // Карточка-строка — внешний div (tabIndex 0); его onFocus/onBlur — источник состояния.
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const cp = reactProps(card)!;
+    expect(allText(c), 'до фокуса — плашки нет').not.toContain(KEY);
+    await act(async () => { (cp.onFocus as () => void)(); });
+    expect(allText(c), 'фокус на карточке → плашка в DOM').toContain(KEY);
+    await act(async () => { (cp.onBlur as () => void)(); });
+    expect(allText(c), 'blur → плашка исчезла').not.toContain(KEY);
   });
 });

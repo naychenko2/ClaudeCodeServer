@@ -343,6 +343,10 @@ function ChatCardView({
   const feature = featureLabelFor(s.id, featuresOn);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  // M1: фокус на карточке-строке — подсказка «что значит ключевой» (Tooltip) поднимается
+  // по клавиатуре. Карточка — фокус-стоп (tabIndex 0), метка-span фокусом не является
+  // (вложенный интерактив недопустим), поэтому её onFocus/onBlur — источник фокус-состояния.
+  const [cardFocused, setCardFocused] = useState(false);
 
   // Быстрые действия карточки объявлены ниже — им нужны canRename/canMute/canEditChat
 
@@ -797,6 +801,11 @@ function ChatCardView({
       }}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
+      // M1: карточка — фокус-стоп (tabIndex 0), чтобы подсказка «ключевой» поднималась
+      // по клавиатуре; onFocus/onBlur — единственный источник фокус-состояния метки.
+      tabIndex={0}
+      onFocus={() => setCardFocused(true)}
+      onBlur={() => setCardFocused(false)}
       // Правый клик — меню действий прямо у курсора (desktop): тот же состав, что у
       // «⋮» и long-press, без прицеливания в мелкую кнопку. Якорь — точка курсора
       // (zero-size rect), ui/Menu в anchor-режиме раскроется под ней
@@ -1040,14 +1049,15 @@ function ChatCardView({
             // «ключевой» — accent/accentLight 700, «ещё N» — textSecondary/bgSelected 400.
             const isKey = featureRole.startsWith('ключевой');
             // Ф3.2: подсказка «что значит ключевой» — единый текст KEY_SESSION_TOOLTIP.
-            // По наведению — стилизованная плашка ui/Tooltip (canHover); на тач Tooltip
-            // не поднимается (свой комментарий) — тач-доступность даёт нативный title
-            // (long-press), а скринридеру/клавиатуре — aria-label.
+            // По наведению — стилизованная плашка ui/Tooltip (canHover); по клавиатуре (M1)
+            // — Tooltip, когда фокус на карточке-строке (cardFocused); на тач Tooltip не
+            // поднимается (свой комментарий) — тач-доступность даёт нативный title (long-press).
+            // aria-label на span НЕ ставим (минор): метка неинтерактивна, и label на ней
+            // скринридер, скорее всего, проигнорирует.
             const chip = (
               <span
                 data-testid="chat-feature-role"
                 title={isKey && !canHover ? KEY_SESSION_TOOLTIP : undefined}
-                aria-label={isKey ? KEY_SESSION_TOOLTIP : undefined}
                 style={{
                   display: 'inline-flex', flexShrink: 0, alignItems: 'center',
                   fontFamily: FONT.mono, fontSize: FS.xs,
@@ -1060,7 +1070,7 @@ function ChatCardView({
                 {featureRole}
               </span>
             );
-            return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP}>{chip}</Tooltip> : chip;
+            return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP} focused={cardFocused}>{chip}</Tooltip> : chip;
           })()}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (

@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -80,14 +81,23 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // Эпик фичи как ПРОЕКТНАЯ задача с worktree (merge-тесты): личная задача нормализует
     // WorktreePath/WorktreeBranch в null, поэтому worktree держит только проектная. Возвращает
-    // (epicId, worktreePath, branch, projectId); worktree — существующая temp-директория.
+    // (epicId, worktreePath, branch, projectId). Worktree — РЕАЛЬНЫЙ git-worktree: корень проекта
+    // `git init`'ится, а путь создаётся через `git worktree add -b` — гард мержа проверяет, что путь
+    // числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
     private async Task<(string EpicId, string WorktreePath, string Branch, string ProjectId)>
         CreateFeatureEpicWithWorktreeAsync()
     {
         var projectId = CreateProject("merge");
+        var projectRoot = Projects.GetById(projectId)!.RootPath;
         var wt = Path.Combine(_factory.TempDir, "merge_wt_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(wt);
         var branch = "feat/merge-" + Guid.NewGuid().ToString("N")[..6];
+
+        // Реальный git-worktree (те же операции, что в бою: init + worktree add -b).
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, projectRoot);
+        await git.WorktreeAddAsync(null, projectRoot, wt, branch);
+
         var epic = await CreateProjectTaskAsync(projectId, new
         {
             title = "эпик merge", role = "feature",
@@ -559,15 +569,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task MergeFeature_НетИсполнителяDevOps_409()
     {
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
-        var epicId = epic.GetProperty("id").GetString();
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
         // Финал принят → Ready=true.
-        var final = await CreateTaskAsync(new
-        {
-            title = "финал", featureId = epicId, role = "final",
-            status = "done",
-            verification = new { verdict = "accepted" },
-        });
+        await CreateAcceptedFinalAsync(projectId, epicId);
 
         var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
@@ -580,14 +584,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task MergeFeature_НесколькоИсполнителейDevOps_409()
     {
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
-        var epicId = epic.GetProperty("id").GetString();
-        await CreateTaskAsync(new
-        {
-            title = "финал", featureId = epicId, role = "final",
-            status = "done",
-            verification = new { verdict = "accepted" },
-        });
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
         var personas = _factory.Services.GetRequiredService<PersonaManager>();
         var p1 = personas.Create(OwnerId, "DevOps-multi-" + Guid.NewGuid().ToString("N")[..6],
             null, null, null, null, null, PersonaScope.Global, null,
@@ -616,14 +614,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task MergeFeature_СоздаётЗадачу_200()
     {
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
-        var epicId = epic.GetProperty("id").GetString();
-        await CreateTaskAsync(new
-        {
-            title = "финал", featureId = epicId, role = "final",
-            status = "done",
-            verification = new { verdict = "accepted" },
-        });
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
         // Персона напрямую: уникальное имя, чтобы не конфликтовать с персонами других тестов.
         var personas = _factory.Services.GetRequiredService<PersonaManager>();
         var persona = personas.Create(OwnerId, "DevOps-merge-test-" + Guid.NewGuid().ToString("N")[..6],
@@ -655,14 +647,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task MergeFeature_ДвойнойВызов_ОднаЗадача()
     {
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
-        var epicId = epic.GetProperty("id").GetString();
-        await CreateTaskAsync(new
-        {
-            title = "финал", featureId = epicId, role = "final",
-            status = "done",
-            verification = new { verdict = "accepted" },
-        });
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
         // Персона напрямую: уникальное имя, чтобы не конфликтовать с персонами других тестов.
         var personas = _factory.Services.GetRequiredService<PersonaManager>();
         var persona = personas.Create(OwnerId, "DevOps-merge-test-" + Guid.NewGuid().ToString("N")[..6],
@@ -873,6 +859,99 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epicId = epic.GetProperty("id").GetString()!;
         await CreateAcceptedFinalAsync(projectId, epicId);
         var persona = CreateDevopsPersona("DevOps-nowt");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("Worktree");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // M6a (fail-closed): у эпика нет worktree-пути (в tasks_create необязателен) → 409,
+    // иначе исполнитель тихо стартовал бы в корне проекта с описанием-заглушкой.
+    [Fact]
+    public async Task MergeFeature_БезWorktree_409()
+    {
+        var projectId = CreateProject("merge");
+        var branch = "feat/merge-nowt-" + Guid.NewGuid().ToString("N")[..6];
+        // Эпик с веткой, но без worktree-пути.
+        var epic = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "эпик без worktree", role = "feature",
+            worktreeBranch = branch,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-nowt");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("Worktree");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // M6b (fail-closed): у эпика есть worktree-путь, но нет ветки → 409.
+    [Fact]
+    public async Task MergeFeature_БезВетки_409()
+    {
+        var projectId = CreateProject("merge");
+        var wt = Path.Combine(_factory.TempDir, "merge_nobr_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(wt);
+        // Эпик с worktree-путём, но без ветки.
+        var epic = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "эпик без ветки", role = "feature",
+            worktreePath = wt,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-nobr");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("Ветка");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // M6c (fail-closed): worktree-путь есть на диске, но не числится в `git worktree list`
+    // проекта (корень проекта вообще не git-репо) → 409, иначе AttachWorktreeAsync молча
+    // деградирует в корень.
+    [Fact]
+    public async Task MergeFeature_ПутьНеWorktreeПроекта_409()
+    {
+        var projectId = CreateProject("merge");
+        // Простая директория на диске, но не worktree проекта.
+        var wt = Path.Combine(_factory.TempDir, "merge_notwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(wt);
+        var branch = "feat/merge-notwt-" + Guid.NewGuid().ToString("N")[..6];
+        var epic = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "эпик с чужим путём", role = "feature",
+            worktreePath = wt, worktreeBranch = branch,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-notwt");
 
         try
         {

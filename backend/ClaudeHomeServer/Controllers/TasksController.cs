@@ -8,6 +8,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
@@ -109,7 +110,11 @@ public class TasksController(
     // Агрегат фичи (режим «Исполнение фичи»): null, когда подсистема Tasks выключена
     // гейтом Subsystems:tasks:Enabled — тогда GET /features отвечает честным 503, а не 500
     // (правило отключаемости, ADR-014; образец — AgentDownloadsController).
-    FeatureProjector? features = null) : ControllerBase
+    FeatureProjector? features = null,
+    // Git-вертикаль (опционально, как в SessionManager): гард мержа проверяет, что worktree
+    // фичи числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
+    // null — подсистема Git выключена → мерж fail-closed (иначе исполнитель стартует в корне).
+    GitService? git = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -533,19 +538,23 @@ public class TasksController(
         // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
-        // Финал не принят → мерж преждевременно.
-        if (!run.Ready)
-            return Conflict(new { error = "Финал не принят: мерж преждевременно" });
-
-        // Уже смержено (merge-задача закрыта) или фича закрыта (эпик Done) → повторный мерж не нужен.
+        // «Уже смержена» (merge-задача Done) и «закрыта» (эпик Done) — ПЕРЕД «финал не принят»:
+        // у закрытой фичи без принятого финала причина — «закрыта», а не «финал не принят» (п.5).
         if (run.Merge is { Status: TaskItemStatus.Done })
             return Conflict(new { error = "Фича уже смержена" });
         if (run.Closed)
             return Conflict(new { error = "Фича закрыта" });
 
-        // Worktree эпика должен существовать на диске: иначе исполнитель тихо стартовал бы в корне проекта.
-        if (run.Epic.WorktreePath is { } wt && !Directory.Exists(wt))
-            return Conflict(new { error = $"Worktree фичи не найден: {wt}" });
+        // Финал не принят → мерж преждевременно.
+        if (!run.Ready)
+            return Conflict(new { error = "Финал не принят: мерж преждевременно" });
+
+        // Worktree фичи: непустые путь и ветка, путь на диске и числится в `git worktree list`
+        // проекта (тот же предикат, что AttachWorktreeAsync) — иначе исполнитель тихо стартовал бы
+        // в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
+        var worktreeError = await FeatureWorktreeErrorAsync(run.Epic);
+        if (worktreeError is not null)
+            return Conflict(new { error = worktreeError });
 
         // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
         // Те же externalScopes, что в Create: кросс-проектная ProjectTasks-привязка не даёт ложного 409.
@@ -572,15 +581,22 @@ public class TasksController(
         await gate.WaitAsync();
         try
         {
-            // Идемпотентность: открытая merge-задача уже есть (свежий снимок — после gate) → вернуть её.
-            if (features.Project(featureId, UserId)?.Merge is { } existing
-                && existing.Status != TaskItemStatus.Done)
+            // Идемпотентность: merge-задача уже есть (свежий снимок — после gate).
+            var existing = features.Project(featureId, UserId)?.Merge;
+            if (existing is not null)
             {
+                // п.2: merge-задача уже закрыта (Done) → 409: дубль не проходит в окне между
+                // снимком и гейтом (верхний гард смотрел на устаревший снимок).
+                if (existing.Status == TaskItemStatus.Done)
+                    return Conflict(new { error = "Фича уже смержена" });
+                // Открыта (todo/inProgress): если todo — запускаем исполнителя; возвращаем
+                // актуальную задачу (п.6: та же форма, что и ветка создания — с ClaudeStartedAt,
+                // если запуск прошёл).
                 if (existing.Status == TaskItemStatus.Todo)
                 {
                     try
                     {
-                        await executor.ExecuteAsync(existing, auto: false, null);
+                        existing = await executor.ExecuteAsync(existing, auto: false, null);
                     }
                     catch (InvalidOperationException ex)
                     {
@@ -631,6 +647,25 @@ public class TasksController(
         {
             gate.Release();
         }
+    }
+
+    // Причина, по которой worktree фичи непригоден для мержа (null — годен). Тот же предикат,
+    // что AttachWorktreeAsync (SessionManager): путь непустой, на диске и числится в
+    // `git worktree list` проекта — иначе чат-исполнитель не привяжется к дереву и тихо
+    // стартовал бы в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
+    private async Task<string?> FeatureWorktreeErrorAsync(TaskItem epic)
+    {
+        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return "Worktree фичи не задан";
+        if (string.IsNullOrWhiteSpace(epic.WorktreeBranch)) return "Ветка фичи не задана";
+        if (projects.GetById(epic.ProjectId) is not { } project) return "Worktree фичи не найден";
+        var path = Path.GetFullPath(epic.WorktreePath.Trim());
+        if (!Directory.Exists(path)) return "Worktree фичи не найден";
+        if (git is null) return "Worktree фичи не найден";
+        var wanted = PathNormalizer.NormalizePath(path);
+        var list = await git.WorktreeListAsync(UserId, project.RootPath);
+        if (!list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted))
+            return "Worktree фичи не найден";
+        return null;
     }
 
     // Шаблон постановки merge-задачи (M1): самодостаточный — исход/цель, push, конфликт, критерий, уборка.

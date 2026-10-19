@@ -347,6 +347,11 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
   const toggleFx = () => setFxOpen(o => !o);
   // Мультифича: выбор следующей фичи (цикл по порядку от бэка).
   const cycleFeature = () => setSelIdx(i => (i + 1) % entries.length);
+  // «Фича →» (Ф2.3): страница фичи. Указатель «чат → фича» и navPush исполняет
+  // WorkspacePage (cc-open-feature); fromChatId = этот чат (крошка «← К чату «…»»).
+  const openFeaturePage = () => {
+    window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: feature.featureId, fromChatId: sessionId } }));
+  };
 
   // Тело «Конвейер ▾»: FeatureModeBody (режим «Исполнение фичи») + легенда (внутри
   // FeatureRunView). Агрегат — из стора featureRuns по фиче (runs[0] = эта фича).
@@ -443,6 +448,12 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
             {model.button.kind === 'pipeline'
               ? <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
               : <ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          </GoButton>
+          {/* «Фича →» (Ф2.3): страница фичи. Компактная текстовая кнопка — тач-цель
+              выше остаётся для основной роли; название плашки уступает место (обрезка). */}
+          <GoButton testId="feature-page-go" tone="go" onClick={openFeaturePage}>
+            Фича
+            <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </GoButton>
         </div>
 
@@ -559,6 +570,12 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
             {model.button.kind === 'pipeline'
               ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
               : <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          </GoButton>
+          {/* «Фича →» (Ф2.3): страница фичи. Сосед основной кнопки, не её замена:
+              ключевой/конвейер ведут в чат, а это — на отдельную поверхность фичи. */}
+          <GoButton testId="feature-page-go" tone="go" onClick={openFeaturePage} style={{ marginLeft: 4 }}>
+            Фича
+            <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </GoButton>
         </div>
       </div>

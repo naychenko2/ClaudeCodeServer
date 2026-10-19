@@ -43,6 +43,9 @@ import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
+import { FeaturePage, type FeaturePageBackTarget } from '../components/feature/FeaturePage';
+import { openChatById } from '../lib/openChat';
+import { recordBackNav } from '../lib/featureBackNav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
@@ -385,6 +388,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const graphOpen = centerDoc === 'graph';
   const archOpen = centerDoc === 'arch';
   const setGraphOpen = useCallback((open: boolean) => setCenterDoc(open ? 'graph' : null), []);
+  // Страница фичи в центральной области (волна 2 «Обзор фич», Ф2.3): id эпика или null.
+  // Сосед ChatPanel'а, а не новая ветка тернарника: центр прячется display:none, чтобы
+  // стрим хода и черновик композера пережили переход (и возврат) на страницу.
+  const [openFeatureId, setOpenFeatureId] = useState<string | null>(null);
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -1509,6 +1516,9 @@ const windowWidth = useWindowWidth();
       if (f && s.revealInTree) revealPanelKey('files');
       setSelectedTaskId(s.task ?? null);
       setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
+      // Страница фичи из снимка: «назад/вперёд» открывает/закрывает её (чат под ней
+      // остаётся смонтированным, центр лишь переключает, что видно).
+      setOpenFeatureId(s.feature ?? null);
       // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
       if (s.persona !== undefined) {
         setLeftTab('personas');
@@ -1531,6 +1541,32 @@ const windowWidth = useWindowWidth();
     return () => window.removeEventListener('popstate', onPop);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- WorkspacePage перемонтируется на смену проекта (key={project.id} в App), подписка на весь жизненный цикл инстанса
   }, []);
+
+  // Страница фичи (Ф2.3): «Фича →» в плашке чата и тело группы в списке шлют
+  // cc-open-feature. Здесь: указатель возврата (чат → фича, только при входе из чата),
+  // показ страницы и запись истории. На мобиле страница занимает режим 'chat' (центр).
+  useEffect(() => {
+    const onOpenFeature = (e: Event) => {
+      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null }>).detail;
+      if (!d?.featureId) return;
+      if (d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
+      setOpenFeatureId(d.featureId);
+      if (isMobileRef.current) setMobileView('chat');
+      navPush({ screen: 'project', project, view: 'chat', file: null, task: null, feature: d.featureId, chatId: d.fromChatId ?? undefined });
+    };
+    window.addEventListener('cc-open-feature', onOpenFeature);
+    return () => window.removeEventListener('cc-open-feature', onOpenFeature);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- подписка на весь жизненный цикл инстанса (перемонтируется на смену проекта); isMobile — через ref
+  }, []);
+
+  // «← назад» со страницы фичи: закрываем страницу и ведём в target. Исходный чат
+  // (kind 'chat') и есть активный (плашка была в нём) — центр просто показываем;
+  // ключевой чат — переход, список — режим sidebar.
+  const handleFeatureBack = (target: FeaturePageBackTarget) => {
+    setOpenFeatureId(null);
+    if (target.kind === 'key') void openChatById(target.chatId);
+    else if (target.kind === 'list') setMobileView('sidebar');
+  };
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
   // любого диплинка (задача/чат/персона) возвращал именно в командный центр
@@ -1928,24 +1964,33 @@ const windowWidth = useWindowWidth();
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM; ридер,
             как и файл, вытесняет его из контентной зоны */}
         <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          {leftTab === 'tools'
-            ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
-            : personasMode
-            ? ((selectedPersonaId || personaCreating)
-                ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
-                : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
-            : tasksMode
-            ? (selectedTask
-                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={backFromTask} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={backFromTask} />
-                : showProjectBoard
-                ? ProjectBoardArea
-                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
-            : activeSession
-            ? (
-              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} />
-            )
-            : NoSession
-          }
+          {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
+              при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
+              и черновик композера) пережил переход и возврат (Ф2.3). */}
+          <div style={{ flex: 1, display: openFeatureId ? 'none' : 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {leftTab === 'tools'
+              ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
+              : personasMode
+              ? ((selectedPersonaId || personaCreating)
+                  ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
+                  : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
+              : tasksMode
+              ? (selectedTask
+                  ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={backFromTask} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={backFromTask} />
+                  : showProjectBoard
+                  ? ProjectBoardArea
+                  : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
+              : activeSession
+              ? (
+                <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} />
+              )
+              : NoSession
+            }
+          </div>
+          {/* Страница фичи (Ф2.3): сосед центра, показана при openFeatureId. */}
+          {openFeatureId && (
+            <FeaturePage featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} />
+          )}
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (

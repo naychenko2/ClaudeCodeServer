@@ -873,8 +873,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             feature={g.feature}
             expanded={expanded}
             onToggle={toggle}
-            // Тело открывает страницу фичи; до Ф2.3 — заглушка (no-op).
-            onOpen={() => {}}
+            // Тело открывает страницу фичи (Ф2.3): указатель «чат → фича» (активный чат)
+            // + navPush исполняет WorkspacePage (cc-open-feature).
+            onOpen={() => { if (g.feature) window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: g.feature.featureId, fromChatId: activeSessionId } })); }}
             isMobile={isMobile}
             compact
             personaName={personaNameOf(g.feature)}
@@ -915,8 +916,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           feature={g.feature}
           expanded={expanded}
           onToggle={toggle}
-          // Тело открывает страницу фичи; до Ф2.3 — заглушка (no-op).
-          onOpen={() => {}}
+          // Тело открывает страницу фичи (Ф2.3): указатель «чат → фича» (активный чат)
+          // + navPush исполняет WorkspacePage (cc-open-feature).
+          onOpen={() => { if (g.feature) window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: g.feature.featureId, fromChatId: activeSessionId } })); }}
           isMobile={isMobile}
           // «Кто · сколько» в статусе: персона-исполнитель (attention.personaId) + «сейчас»
           personaName={personaNameOf(g.feature)}

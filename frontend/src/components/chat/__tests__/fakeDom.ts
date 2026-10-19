@@ -20,12 +20,19 @@ class FNode {
   parentElement: FNode | null = null;
   parentNode: FNode | null = null;
   childNodes: FNode[] = [];
+  // children — только элементы (Array.from(probe.children) в WorkspacePage); childNodes — все
+  get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
   firstChild: FNode | null = null;
   lastChild: FNode | null = null;
   nextSibling: FNode | null = null;
   previousSibling: FNode | null = null;
   ownerDocument: FDoc;
-  style: Record<string, string> = {};
+  // style — как в реальном DOM: объект с setProperty/removeProperty (chatGutter и др.
+  // пишут CSS-переменные через них); plain-объект без методов роняет useLayoutEffect.
+  style: Record<string, string> & { setProperty: (k: string, v: string) => void; removeProperty: (k: string) => void } = {
+    setProperty: (k: string, v: string) => { (this.style as Record<string, string>)[k] = v; },
+    removeProperty: (k: string) => { delete (this.style as Record<string, string>)[k]; },
+  } as any;
   attributes: Record<string, string> = {};
   listeners: Record<string, Set<unknown>> = {};
 

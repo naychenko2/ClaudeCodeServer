@@ -427,6 +427,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private Turn.ITurnEventBus TurnEvents => _turnEvents ??= new Turn.TurnEventBus();
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
+    /// <summary>
+    /// Признак штатной остановки: одноразовый, назад не снимается (процесс после остановки
+    /// не живёт). KillAllProcesses поднимает его ПЕРВОЙ строкой (до гашения адаптеров).
+    /// Умирающий процесс присылает ErrorMessage/ExitedMessage, и OnMessageAsync при поднятом
+    /// признаке не переводит по ним статус — sessions.json сохранит Working, и LoadSessions
+    /// отберёт сессию в кандидаты на auto-resume (ADR-033). ResultMessage пишется как обычно.
+    /// Цикл «до готово», добивание сабагента, разбор очереди и штаб при поднятом признаке
+    /// новых ходов не запускают.
+    /// </summary>
+    private volatile bool _stopping;
     // Автосохранение сессий каждые 30с
     /// <summary>
     /// Период автосохранения (оно же — единственный фоновый триггер sweep-terminus, см. SaveSessions).
@@ -1413,11 +1423,19 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
         if (list is null) return;
         List<string> abortedMidTurn = [];
+        // Залипший Working (замечание Веры, ADR-033): живой статус (Working/Starting/Waiting)
+        // переводим в Orphaned только в памяти; на диск это попадёт лишь при следующем
+        // SaveSessions. Если активности по чату нет, файл держит Working, и при следующем
+        // старте с включённым флагом этот давно оборванный ход снова станет кандидатом — ломает
+        // правило «только ходы последнего рестарта». Помечаем, чтобы сохранить один раз.
+        var anyLiveOrphaned = false;
         foreach (var session in list)
         {
             // Процесс умер при рестарте — "живые" статусы переводим в orphaned
             var originalStatus = session.Status;
             var wasLive = originalStatus is SessionStatus.Working or SessionStatus.Waiting;
+            if (originalStatus is SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting)
+                anyLiveOrphaned = true;
             session.Status = originalStatus switch
             {
                 SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
@@ -1436,8 +1454,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
-        // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
-        if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
+        // Идемпотентно: на уже перенесённых сессиях это no-op. Один SaveSessions покрывает
+        // обе миграции: перенос темы + сохранение Orphaned (залипший Working, см. выше).
+        var migratedTopics = Llm.ChatTopicMigration.Apply(list);
+        if (migratedTopics || anyLiveOrphaned) SaveSessions();
         // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
         // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
         // запуском resume, чтобы маркер не обогнал снимок.
@@ -5676,6 +5696,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // застряло бы навсегда и блокировало остальные.
     private async Task DrainNextPendingAsync(string sessionId)
     {
+        // Окно штатной остановки: очередь осталась в памяти и новый ход не запускает
+        if (_stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.QueueFrozen) return;
 
@@ -8900,6 +8922,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task NudgeTruncatedSubagentAsync(string sessionId,
         Llm.SubagentRunPassport run, int attempt)
     {
+        // Окно штатной остановки: директива ушла бы в умирающий адаптер
+        if (_stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
         // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта
         // после перепроверки): последний паспорт агента уже штатный — директиву не шлём.
@@ -8925,6 +8949,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // либо уход в фазу waiting, если у чата есть живые делегированные задачи.
     private async Task ContinueWorkLoopAsync(string sessionId)
     {
+        // Окно штатной остановки: новый ход цикла поднял бы процесс, который тут же убьют
+        if (_stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.WorkLoop is not { } loop) return;
 
@@ -9918,6 +9944,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     _ => null,
                 };
 
+            // Штатная остановка (ADR-033): обрывы (error/exited умирающего процесса) статус не
+            // меняют — sessions.json сохранит Working, и LoadSessions отберёт сессию в кандидаты
+            // на auto-resume. Working живёт на диске только до следующего старта — там LoadSessions
+            // сразу переводит его в Orphaned. result хода пишется как обычно: ход честно
+            // завершился, и «продолжать» его после рестарта нельзя.
+            if (_stopping && msg is ErrorMessage or ExitedMessage)
+                newStatus = null;
+
             // Конец хода/обрыв — ожидающей карточки больше нет
             if (msg is ResultMessage or ErrorMessage or ExitedMessage)
                 entry.PendingInteraction = null;
@@ -9977,7 +10011,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
             }
 
-            if (msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
+            // При поднятом _stopping план штабу не кладём: разбор хода (HandleTeamTurnEndAsync)
+            // планирует новую работу, а процессы уже гасятся. Подписчик turn/completed без плана
+            // только пишет предупреждение; состояние штаба остаётся на диске как есть.
+            if (!_stopping && msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
             {
                 // Этап 4 / шаг 1в: кладём план вызова HandleTeamTurnEndAsync в LastTeamTurnEnds.
                 // Подписчик turn/completed изымает план и асинхронно зовёт HandleTeamTurnEndAsync
@@ -10382,6 +10419,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
     public void KillAllProcesses()
     {
+        // Первая строка — ДО гашения адаптеров: умирающий процесс присылает ErrorMessage/
+        // ExitedMessage, и OnMessageAsync при поднятом признаке гасит их (newStatus = null),
+        // не перетирая Working в Error/Active (ADR-033). Новый SaveSessions() здесь НЕ
+        // добавляем: его убрали (5c6606282) как источник зависаний остановки (ожидание _saveLock).
+        _stopping = true;
         // Таймер не должен пытаться писать одновременно с убийством процессов:
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
         // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же

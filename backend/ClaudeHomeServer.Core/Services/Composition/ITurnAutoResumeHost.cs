@@ -22,8 +22,12 @@ public interface ITurnAutoResumeHost
 
     Project? GetProject(string projectId);
 
-    /// <summary>Флаг turn-auto-resume владельца чата.</summary>
-    bool IsEnabledForOwner(string ownerId);
+    /// <summary>
+    /// Флаг turn-auto-resume владельца чата. Владелец резолвится через ResolveOwnerId:
+    /// у проектной сессии OwnerId пустой — владелец берётся из проекта (ADR-033, дефект:
+    /// проверка по пустому OwnerId отсеивала все проектные чаты).
+    /// </summary>
+    bool IsEnabledFor(Session session);
 
     /// <summary>Готово ли устройство локального проекта принять ход (серверный проект — всегда да).</summary>
     bool IsDeviceOnline(Project project);

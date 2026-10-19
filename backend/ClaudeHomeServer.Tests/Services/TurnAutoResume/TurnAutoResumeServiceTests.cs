@@ -41,11 +41,18 @@ public class TurnAutoResumeServiceTests
         // реальные отправки, а не попытки.
         public readonly List<string> SentIds = [];
 
+        // Подмена сессии, которую отдаёт GetSession (регресс-тест причины 2: проектный чат
+        // с OwnerId = null — владелец резолвится из проекта, а не из OwnerId).
+        public Func<string, Session>? SessionFactory;
         public Task AbortMarkersWritten => MarkersTcs.Task;
         public IReadOnlyList<string> TakeCandidates() { TakeCalls++; return Ids; }
-        public Session? GetSession(string id) => new Session { Id = id, OwnerId = "owner-" + id, ProjectId = null };
+        public Session? GetSession(string id) =>
+            SessionFactory?.Invoke(id) ?? new Session { Id = id, OwnerId = "owner-" + id, ProjectId = null };
         public Project? GetProject(string projectId) => null;
-        public bool IsEnabledForOwner(string ownerId) => FlagOn(ownerId);
+        // Владелец резолвится как в боевом адаптере (ResolveOwnerId): у проектной сессии
+        // OwnerId пустой — владелец из проекта. Тесты дают OwnerId напрямую, поэтому здесь
+        // резолв тривиальный; регресс-тест причины 2 подменяет GetSession на проектный чат.
+        public bool IsEnabledFor(Session session) => FlagOn(session.OwnerId ?? "");
         public bool IsDeviceOnline(Project project) => true;
         public bool LastTurnWasDeployOrRollback(Session session, Project? project) => false;
         public Task<TurnResumeSendResult> ResumeAsync(string sessionId)
@@ -114,6 +121,23 @@ public class TurnAutoResumeServiceTests
         await RunToEndAsync(svc, life);
 
         events.Should().NotContain(e => e.StartsWith("send:"), "флаг владельца выключен — возобновлять нельзя");
+    }
+
+    // Регресс (ADR-033, причина 2): у проектной сессии OwnerId пустой — владелец берётся
+    // из проекта. Здесь проверяется только оркестратор (FakeHost владельца не резолвит); сам
+    // резолв владельца в боевом адаптере покрыт SessionManagerTurnResumeHostTests (мутация
+    // «session.OwnerId вместо ResolveOwnerId(session)» краснит их, а не этот тест).
+    [Fact]
+    public async Task ПроектныйЧат_СПустымOwnerId_ФлагВладельцаПроектаВключён_Возобновляется()
+    {
+        var (svc, host, life, events) = Make(ids: 1);
+        // Проектный чат: OwnerId = null, владелец резолвится из проекта (флаг у него включён).
+        host.SessionFactory = id => new Session { Id = id, OwnerId = null, ProjectId = "proj-1" };
+        host.FlagOn = _ => true; // флаг включён у резолвлённого владельца
+        await RunToEndAsync(svc, life);
+
+        events.Should().Contain("send:s1",
+            "проектный чат с пустым OwnerId возобновляется: владелец резолвится из проекта, флаг у него включён");
     }
 
     [Fact]

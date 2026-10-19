@@ -14,7 +14,7 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
-import { setAllFlags } from '../lib/featureFlags';
+import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
 import { __test as indexTest } from '../lib/featuresIndex';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
@@ -504,11 +504,11 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
   });
 
-  // === M3: вход из списка (fromChat: false) — указатель возврата не пишется ===
-  it('M3: вход из списка — крошка «К ключевому чату», не в активный (не открытый) чат', async () => {
-    // Активный чат (chatA) ≠ ключевой чат фичи (chat-key). Если бы указатель возврата
-    // записался в chatA (как при входе из чата), крошка вела бы в chatA — чат, который
-    // пользователь не открывал (он был «активным» на мобиле, но на экране был список).
+  // === M3 + m4: вход из списка (fromChat: false) — крошка «К списку», не в активный чат ===
+  it('M3/m4: вход из списка — крошка «К списку» (мобила), не в активный (не открытый) чат', async () => {
+    // Активный чат (chatA) ≠ ключевой чат фичи (chat-key). m4: крошка и системное «назад»
+    // ведут в одно место — в список (не в ключевой чат и не в активный chatA, который
+    // пользователь не открывал: на экране был список).
     const idx = { features: [feat({ keySessionId: 'chat-key' })], chats: {} } as FeaturesIndex;
     indexTest.setIndex('p1', idx);
     mockData.index = idx;
@@ -527,10 +527,56 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
 
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
-    expect(back, 'крошка страницы фичи не найдена (M3)').not.toBeNull();
-    // Крошка ведёт в ключевой чат фичи (chat-key), НЕ в активный chatA.
+    expect(back, 'крошка страницы фичи не найдена (M3/m4)').not.toBeNull();
+    // m4: крошка «К списку» (мобила), НЕ «К ключевому чату» и НЕ «К чату».
     const text = textNodes(back!).join('');
-    expect(text, 'крошка не «К ключевому чату» (M3: указатель не должен вести в chatA)').toContain('К ключевому чату');
+    expect(text, 'крошка не «К списку» (m4: из списка — в список, не в ключевой/активный чат)').toContain('К списку');
+    expect(text, 'крошка ведёт в ключевой чат (m4: должна вести в список)').not.toContain('К ключевому чату');
     expect(text, 'крошка ведёт в активный (не открытый) чат (M3)').not.toContain('К чату');
+  });
+
+  // === M1: диплинк — флаги приходят ПОЗЖЕ разбора адреса ===
+  // (а) адрес с feature разбирается при НЕЗАГРУЖЕННЫХ флагах (featureId сохранён),
+  //     затем флаги приходят ВКЛЮЧЕННЫМИ → страница открывается.
+  it('M1(а): диплинк при незагруженных флагах → флаги пришли включёнными → страница открывается', async () => {
+    // Флаги ещё НЕ загружены (до ответа /me): parseHash сохраняет featureId, toHash не
+    // схлопывает адрес. Инициализатор openFeatureId берёт featureId из хэша (без гейта).
+    flagsTest.reset();
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Пока флаги не загружены — страница ещё не показана (гейт по флагу), но адрес цел.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'страница открыта до прихода флагов').toBeNull();
+
+    // Флаги «пришли» включёнными (ответ /me): страница открывается, крошка есть.
+    act(() => { setAllFlags({ 'features-overview': true }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back, 'крошка не появилась после прихода флагов (M1: страница не открылась)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (M1)').not.toBeNull();
+  });
+
+  // (б) флаги пришли ВЫКЛЮЧЕННЫМИ → страница не открывается, адрес приводится к проекту.
+  it('M1(б): диплинк, флаги пришли выключенными → страница не открывается, адрес = проект', async () => {
+    flagsTest.reset();
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Флаги «пришли» выключенными: страница не открывается, адрес приводится к проекту.
+    act(() => { setAllFlags({ 'features-overview': false }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка есть при выключенном флаге (M1б)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта при выключенном флаге (M1б)').toBeNull();
   });
 });

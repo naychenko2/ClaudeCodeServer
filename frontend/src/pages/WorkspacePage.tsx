@@ -47,7 +47,7 @@ import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { openChatById } from '../lib/openChat';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
-import { getFlag, FLAGS } from '../lib/featureFlags';
+import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
@@ -395,12 +395,21 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // стрим хода и черновик композера пережили переход (и возврат) на страницу.
   // Инициализация из nav-снимка/хэша (диплинк #/project/{pid}/feature/{fid} и
   // перезагрузка вкладки): первый рендер — history.state ещё не сидирован (null), берём
-  // из хэша; после смены проекта — из снимка. Только при включённом флаге «Обзор фич»;
-  // при выключенном сегмент игнорируется (parseHash сам его не отдаёт, снимок гейтим).
+  // из хэша; после смены проекта — из снимка. БЕЗ гейта по флагу: инициализатор работает
+  // на первом рендере, когда флаги ещё не пришли из /me, и гейт здесь терял бы featureId
+  // диплинка. Показ страницы гейтится отдельно (featurePageOpen), а адрес при выключенном
+  // флаге приводит к проекту эффект «один раз» ниже.
   const [openFeatureId, setOpenFeatureId] = useState<string | null>(() => {
-    if (!getFlag(FLAGS.featuresOverview)) return null;
     return getNav()?.feature ?? parseHash(window.location.hash)?.featureId ?? null;
   });
+  // Флаг «Обзор фич»: страница показана, только когда он включён (dark launch). До прихода
+  // флагов (не загружены) getFlag читает «выключено», но адрес ещё не схлопываем — этим
+  // занимается эффект «привести к проекту один раз» (ниже, рядом с handleFeatureBack).
+  const featuresOn = useFeature(FLAGS.featuresOverview);
+  const flagsLoaded = useFlagsLoaded();
+  // Показ страницы гейтится по флагу: openFeatureId ставится из хэша/снимка без гейта
+  // (инициализатор выше), а решаем, рисовать ли страницу, здесь.
+  const featurePageOpen = openFeatureId != null && featuresOn;
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -1554,8 +1563,9 @@ const windowWidth = useWindowWidth();
   // Страница фичи (Ф2.3): «Фича →» в плашке чата (fromChat=true) и тело группы в
   // списке (fromChat=false) шлют cc-open-feature. Указатель возврата (крошка «← К чату
   // «…»») записывается ТОЛЬКО при входе из чата: при входе из списка крошка ведёт в
-  // ключевой чат/список (M3), а записанный из чата указатель мажём, чтобы не вёл в
-  // чат, которого пользователь не открывал. Показ страницы и запись истории — общие.
+  // список (m4: «К списку»/«Назад», в одно место с системным «назад»), а записанный из
+  // чата указатель мажём, чтобы не вёл в чат, которого пользователь не открывал.
+  // Показ страницы и запись истории — общие.
   useEffect(() => {
     const onOpenFeature = (e: Event) => {
       const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean }>).detail;
@@ -1585,6 +1595,16 @@ const windowWidth = useWindowWidth();
   // (kind 'chat') и есть активный (плашка была в нём) — центр просто показываем;
   // ключевой чат — переход, список — режим sidebar.
   const handleFeatureBack = (target: FeaturePageBackTarget) => {
+    // m5: исходный чат и есть текущий (перешли из него, чат не переключали) — history.back()
+    // снимает запись страницы и возвращает в исходный чат: без дубля в истории, и первое
+    // системное «назад» — не «пустой шаг». navReplace здесь давал [чат, {feature, чат}] →
+    // [чат, чат]: два одинаковых, и первый «назад» ничего не менял. popstate-обработчик
+    // восстановит снимок (feature: null) — setOpenFeatureId(null) дублирует его синхронно.
+    if (target.kind === 'chat' && target.chatId === activeSessionRef.current?.id) {
+      setOpenFeatureId(null);
+      window.history.back();
+      return;
+    }
     setOpenFeatureId(null);
     // Синхронизация URL с состоянием (крошка и история — в одно место, разрез §4): крошка
     // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
@@ -1602,6 +1622,19 @@ const windowWidth = useWindowWidth();
       window.dispatchEvent(new Event('cc-pending-project-chat'));
     }
   };
+
+  // Флаги «Обзор фич» пришли выключенными, а в адресе/снимке ещё есть feature (диплинк,
+  // или флаг выключили через админ-панель, пока страница была открыта) — ОДИН РАЗ безопасно
+  // приводим адрес к проекту: navReplace на снимок БЕЗ feature (toHash схлопнет его, т.к.
+  // «загружено и выключено»), и сбрасываем openFeatureId, чтобы страница не открылась потом.
+  // Пока флаги НЕ загружены (flagsLoaded=false) не схлопываем — адрес ждёт ответа /me.
+  useEffect(() => {
+    if (!flagsLoaded || featuresOn || !openFeatureId) return;
+    navReplace({ screen: 'project', project, view: isMobile ? mobileView : 'sidebar', file: null, task: null, chatId: activeSessionId ?? undefined, feature: null });
+    setOpenFeatureId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
+    // в «загружено и выключено»; project/mobileView/activeSessionId в замыкании — текущие
+  }, [flagsLoaded, featuresOn, openFeatureId]);
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
   // любого диплинка (задача/чат/персона) возвращал именно в командный центр
@@ -2003,7 +2036,7 @@ const windowWidth = useWindowWidth();
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={!!openFeatureId} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2104,7 +2137,9 @@ const windowWidth = useWindowWidth();
       {/* Тело десктопа и планшета: рельсы панелей по краям, центр между ними */}
         <DesktopWorkspace
           isTablet={isTablet}
-          openFeatureId={openFeatureId}
+          // Показ страницы гейтится по флагу: при выключенном передаём null (open=false),
+          // чтобы DesktopWorkspace/FeatureCenter не рисовали страницу (dark launch).
+          openFeatureId={featurePageOpen ? openFeatureId : null}
           onFeatureBack={handleFeatureBack}
           project={project}
           projectForEdit={projectForEdit}

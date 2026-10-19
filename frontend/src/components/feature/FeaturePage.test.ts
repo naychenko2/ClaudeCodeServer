@@ -107,23 +107,34 @@ describe('FeaturePage: крошка и шапка', () => {
     expect(backNavTest.getBackNav()).toBeNull();
   });
 
-  it('без указателя, есть ключевой чат: крошка «← К ключевому чату», onBack → key', () => {
+  // m4: без указателя (вход из списка/диплинк) крошка НЕ ведёт в ключевой чат, а в список:
+  // десктоп — «Назад», мобила — «К списку» (макет §6). Ключевой чат — отдельная кнопка в теле.
+  it('m4: десктоп, без указателя: крошка «← Назад», onBack → list (не в ключевой чат)', () => {
     const onBack = vi.fn();
     const c = render(onBack);
     const back = findNodeByAttr(c, 'data-testid', 'feature-page-back');
     expect(back).not.toBeNull();
-    expect(textNodes(back!).join('')).toContain('К ключевому чату');
+    expect(textNodes(back!).join('')).toContain('Назад');
+    expect(textNodes(back!).join('')).not.toContain('К ключевому чату');
     act(() => { reactProps(back!)!.onClick(); });
-    expect(onBack).toHaveBeenCalledWith({ kind: 'key', chatId: 'chat-key' });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'list' });
   });
 
-  it('без указателя и без ключевого: крошка «← К списку», onBack → list', () => {
+  it('m4: мобила, без указателя: крошка «← К списку» (макет §6)', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', isMobile: true, onBack: () => {} }));
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    expect(back).not.toBeNull();
+    expect(textNodes(back!).join('')).toContain('К списку');
+  });
+
+  it('без указателя и без ключевого: крошка «← Назад» (десктоп), onBack → list', () => {
     mockIndex.features = [feat({ keySessionId: null, keyProjectId: null })];
     const onBack = vi.fn();
     const c = render(onBack);
     const back = findNodeByAttr(c, 'data-testid', 'feature-page-back');
     expect(back).not.toBeNull();
-    expect(textNodes(back!).join('')).toContain('К списку');
+    expect(textNodes(back!).join('')).toContain('Назад');
     act(() => { reactProps(back!)!.onClick(); });
     expect(onBack).toHaveBeenCalledWith({ kind: 'list' });
   });

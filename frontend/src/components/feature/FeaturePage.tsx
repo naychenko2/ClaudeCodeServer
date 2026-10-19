@@ -69,18 +69,21 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     return () => { cancelled = true; };
   }, [fromChat]);
 
-  // Крошка: куда ведёт и как подписана (указатель → ключевой чат → список).
+  // Крошка: куда ведёт и как подписана. Из чата — в исходный чат («К чату «…»»);
+  // из списка/диплинк — в список: мобила «К списку», десктоп «Назад» (макет §6).
+  // Ключевой чат — отдельная кнопка в теле страницы, а не крошка (m4: крошка и
+  // системное «назад» ведут в одно место, без «пустого шага»).
   let target: FeaturePageBackTarget;
   let label: string;
   if (fromChat) {
     target = { kind: 'chat', chatId: fromChat };
     label = fromTitle ? `К чату «${fromTitle}»` : 'К чату';
-  } else if (feature?.keySessionId) {
-    target = { kind: 'key', chatId: feature.keySessionId };
-    label = 'К ключевому чату';
-  } else {
+  } else if (isMobile) {
     target = { kind: 'list' };
     label = 'К списку';
+  } else {
+    target = { kind: 'list' };
+    label = 'Назад';
   }
 
   const goBack = () => { onBack(target); clearBackNav(); };

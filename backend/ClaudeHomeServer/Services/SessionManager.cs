@@ -7003,6 +7003,69 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         finally { _turnRestarts.TryRemove(sessionId, out _); }
     }
 
+    // === Авто-возобновление ходов, оборванных рестартом сервера (фича turn-auto-resume) ===
+
+    // Исход возобновления. Sent=true — resume-ход отправлен (агент продолжит с того же
+    // места); false — отказ (статус не Orphaned / битый хвост), ход не шлём, в ленте
+    // остаётся карточка-баннер. Reason — человекочитаемая причина отказа для лога/отчёта.
+    public sealed record RestartResumeResult(bool Sent, string? Reason = null);
+
+    // Шов для тестов: целостность хвоста транскрипта (true — можно возобновлять).
+    // По умолчанию — та же проверка, что RestartStuckTurnAsync: файл не найден (локальный
+    // проект) — проверку пропускаем, иначе проверяем IsTailIntact.
+    protected virtual bool IsTailIntactForResume(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return true;
+        var transcript = FindResumeTranscript(entry);
+        return transcript is null || Llm.Claude.TranscriptProbe.IsTailIntact(transcript);
+    }
+
+    // Шов для тестов: фактическая отправка resume-хода. По умолчанию — обычный путь
+    // SendMessageAsync: auto — для прохода через DeviceWaitGate, cause — атрибуция доставки.
+    protected virtual Task<SendUserOutcome> SendRestartResumeTurnAsync(string sessionId, string text)
+        => SendMessageAsync(sessionId, text, [], auto: true, cause: DeliveryCause.ServerRestartResume);
+
+    // Возобновление хода, оборванного рестартом сервера (B3). Кандидат — сессия, чей ход
+    // шёл (Working) в момент падения: LoadSessions перевёл её в Orphaned. Шаги строго по
+    // порядку, отказ любого — не шлём, в ленте остаётся карточка-баннер:
+    //   1. статус Orphaned (кандидат, а не idle/упавший);
+    //   2. хвост транскрипта цел (битый — через --resume не продолжится);
+    //   3. гидратация аккумулятора (ДО карточки — карточка пишется в историю);
+    //   4. карточка «Сервер был перезапущен — продолжаю ход с того же места»;
+    //   5. RestartResumeAttempts += 1 + SaveSessions (UpdatedAt не двигаем);
+    //   6. resume-ход обычным путём (auto, cause=ServerRestartResume).
+    public async Task<RestartResumeResult> ResumeAfterRestartAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            return new RestartResumeResult(false, "Сессия не найдена");
+
+        // 1. Кандидат: исходный Working → Orphaned при рестарте.
+        if (entry.Info.Status != SessionStatus.Orphaned)
+            return new RestartResumeResult(false,
+                $"Статус {entry.Info.Status}, ход не оборван рестартом");
+
+        // 2. Целостность хвоста: битый транскрипт через --resume не продолжится.
+        if (!IsTailIntactForResume(sessionId))
+            return new RestartResumeResult(false, "Хвост транскрипта повреждён");
+
+        // 3. Гидратация аккумулятора ДО карточки: карточка пишется в историю.
+        await EnsureAccumulatorAsync(entry);
+
+        // 4. Карточка в ленту: человек видит, что сервер перезапущен и ход продолжается.
+        await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "server_restart",
+            "Сервер был перезапущен — продолжаю ход с того же места");
+
+        // 5. Счётчик попыток + сохранение. UpdatedAt не двигаем: SaveSessions лишь
+        //    персистит, Touch/UpdatedAt=now здесь не вызываем (служебная операция).
+        entry.Info.RestartResumeAttempts += 1;
+        SaveSessions();
+
+        // 6. Resume-ход обычным путём: auto — для прохода через DeviceWaitGate.
+        var prompt = TurnResumePrompts.ServerRestartResume();
+        await SendRestartResumeTurnAsync(sessionId, prompt);
+        return new RestartResumeResult(true);
+    }
+
     // Рабочая папка хода для поиска транскрипта: дерево чата, иначе корень проекта.
     // Точность тут не критична — TranscriptProbe при промахе по конвенции сканирует
     // все проекты зарегистрированных корней, cwd лишь сужает первый поиск.

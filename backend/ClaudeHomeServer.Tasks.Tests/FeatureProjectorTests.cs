@@ -1194,4 +1194,104 @@ public class FeatureProjectorTests
         Stage(run, "review").Verdict.Should().Be("accepted",
             "исход стадии — последней по времени закрытой задачи, а не первой");
     }
+
+    // ─── Дефект: consult → стадия «Разрез», не «Мерж» ─────────────────────────────────────
+
+    // Эпик + одна живая consult (InProgress) → стадия «Разрез» active, «Мерж» НЕ active.
+    // До фикса: consult не входил ни в одну стадию → все стадии пусты → fallback merge active.
+    [Fact]
+    public void Build_ТолькоConsultInProgress_CutActive()
+    {
+        const string epicId = "epic-consult-active";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var consult = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Consult,
+            Status = TaskItemStatus.InProgress, PersonaId = "Александр",
+            ClaudeStartedAt = new DateTime(2026, 10, 19, 10, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, consult]);
+
+        // «Разрез» — active (consult входит в cut).
+        Stage(run, "cut").State.Should().Be("active",
+            "живая consult-задача делает стадию «Разрез» активной");
+        Stage(run, "cut").Passes.Should().Be(1);
+
+        // «Мерж» — НЕ active (задач нет → pending/absent, не active).
+        Stage(run, "merge").State.Should().NotBe("active",
+            "merge без задач не может быть active");
+
+        // Остальные стадии — pending/absent (задач нет).
+        foreach (var key in new[] { "plan", "prod", "review", "qa", "final" })
+            Stage(run, key).State.Should().NotBe("active", $"{key}: задач нет");
+    }
+
+    // Эпик без единой дочерней задачи → стадия «Разрез» active (фича ещё не стартовала).
+    // До фикса: все стадии пусты → fallback merge active.
+    [Fact]
+    public void Build_БезЗадач_CutActive()
+    {
+        const string epicId = "epic-no-tasks";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        Stage(run, "cut").State.Should().Be("active",
+            "задач нет — текущий этап «Разрез» (фича не стартовала)");
+        Stage(run, "merge").State.Should().NotBe("active",
+            "merge без задач не active");
+    }
+
+    // Consult done, шагов/плана/ревью нет → «Разрез» done, «План» pending (ещё не начат).
+    // Сценарий: между разрезом и планом.
+    [Fact]
+    public void Build_ConsultDoneБезШагов_CutDone()
+    {
+        const string epicId = "epic-consult-done";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var consult = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Consult,
+            Status = TaskItemStatus.Done, PersonaId = "Александр",
+            CompletedAt = new DateTime(2026, 10, 19, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, consult]);
+
+        Stage(run, "cut").State.Should().Be("done",
+            "consult done → «Разрез» пройден");
+        // «План» — задач нет, но «Разрез» уже начат → pending (не absent, не active).
+        Stage(run, "plan").State.Should().Be("pending",
+            "план не начат, но разрез пройден → pending");
+        Stage(run, "merge").State.Should().NotBe("active");
+    }
+
+    // Мутация: consult НЕ входит в cut (только Role == Cut) → все стадии пусты →
+    // fallback merge active. Тест Build_ТолькоConsultInProgress_CutActive краснеет
+    // (cut будет pending, а не active).
+    [Fact]
+    public void Build_Мутация_ConsultНеВходитВCut()
+    {
+        const string epicId = "epic-mut-consult";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var consult = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Consult,
+            Status = TaskItemStatus.InProgress, PersonaId = "Александр",
+            ClaudeStartedAt = new DateTime(2026, 10, 19, 10, 0, 0),
+        };
+
+        // Мутация: в FeatureProjector.Build заменить
+        //   t.Role is TaskRoles.Cut or TaskRoles.Consult
+        // на
+        //   t.Role == TaskRoles.Cut
+        // → consult не входит в cut → cut пуст → activeIndex = -1 → fallback.
+        // allEmpty = true → activeIndex = 0 (cut). Cut пуст → state = "active" (i == activeIndex).
+        // Но passes = 0, а тест ожидает passes = 1 → краснеет.
+        var run = FeatureProjector.Build(epic, [epic, consult]);
+
+        Stage(run, "cut").Passes.Should().Be(1,
+            "consult входит в cut: passes = 1; мутация (только Cut) → 0");
+    }
 }

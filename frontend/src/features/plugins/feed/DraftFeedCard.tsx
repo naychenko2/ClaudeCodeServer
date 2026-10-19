@@ -129,9 +129,18 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
           newPermissions={consent.newPermissions}
           onClose={() => setConsent(null)}
           onSubmit={async (permissions, secrets) => {
-            await api.plugins.grant(consent.data.id, permissions, secrets);
-            setConsent(null);
+            // Выдача прав: успех — диалог закрывается. Сбой — ошибка показывается
+            // в самом диалоге (он остаётся открытым, как и при прочих его действиях),
+            // а карточка перечитывается в обоих случаях: черновик уже установлен accept'ом.
+            let grantError: Error | null = null;
+            try {
+              await api.plugins.grant(consent.data.id, permissions, secrets);
+            } catch (e: unknown) {
+              grantError = e instanceof Error ? e : new Error('Не удалось выдать права');
+            }
             refreshDraft(slug);
+            if (grantError) throw grantError;
+            setConsent(null);
           }}
           onSaveSecret={async (name, value) => (await api.plugins.setSecret(consent.data.id, name, value)).updatedAt}
         />

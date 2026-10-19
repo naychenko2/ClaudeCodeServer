@@ -1082,8 +1082,7 @@ export const api = {
     draftRestore: (slug: string) =>
       request<PluginDraftRestoreResult>(`/plugins/drafts/${encodeURIComponent(slug)}/restore`, { method: 'POST' }),
     // Панель черновика для предпросмотра (GET /api/plugins/drafts/{slug}/panel, шаг 4.3d):
-    // сырой HTML, как panelHtml. Схема 4.3d ещё дописывается в CLAUDE.md — зеркалим
-    // panelHtml-паттерн (текст ответа)
+    // сырой HTML, как panelHtml (текст ответа)
     draftPanel: async (slug: string): Promise<string> => {
       const token = readStoredToken();
       const res = await fetch(`/api/plugins/drafts/${encodeURIComponent(slug)}/panel`, {

@@ -175,3 +175,75 @@ describe('DraftAnchor: событие plugin_draft_changed', () => {
     expect(text()).toContain('Черновик обновлён агентом');
   });
 });
+
+// === «Принять…» из ленты: сбой выдачи прав (grant) ===
+// Тип ноды fakeDom (класс не экспортируется) — через сигнатуру textNodes
+type FNode = Parameters<typeof textNodes>[0];
+
+// Весь текст поддерева (для проверок видимости)
+function textOf(n: FNode): string {
+  let out = '';
+  const walk = (x: FNode) => {
+    if (x.nodeType === 3) out += x.nodeValue;
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(n);
+  return out;
+}
+
+// Кнопка по её точной подписи: React держит props на узле под ключом __reactProps$<random>
+function findButton(container: FNode, label: string): { onClick: () => void } | null {
+  let hit: { onClick: () => void } | null = null;
+  const walk = (x: FNode) => {
+    if (hit) return;
+    if (x.nodeType === 1) {
+      const p = Object.keys(x).find(k => k.startsWith('__reactProps$'));
+      if (p) {
+        const props = (x as unknown as Record<string, unknown>)[p] as Record<string, unknown> | undefined;
+        if (props?.onClick && textOf(x) === label) hit = { onClick: props.onClick as () => void };
+      }
+    }
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(container);
+  return hit;
+}
+
+describe('DraftFeedCard: «Принять…» (диалог согласия)', () => {
+  it('сбой grant → ошибка видна, диалог остаётся открытым, карточка перечитана (мутация: убрать try/catch)', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftAccept).mockResolvedValue({
+      id: 'local-1/my-plugin',
+      version: '1.0.0',
+      sha256: 'abc12345',
+      source: 'upload:my-plugin',
+      enabled: true,
+      requested: ['notes:read'],
+      granted: [],
+      consentRequired: true,
+      newPermissions: [],
+      secrets: [],
+    });
+    vi.mocked(api.plugins.grant).mockRejectedValue(new Error('Сбой сети'));
+
+    const { container } = await renderAnchor(recordItem({ slug: SLUG }));
+
+    // «Принять…» на карточке → диалог согласия (портал в document.body)
+    const accept = findButton(container, 'Принять…');
+    expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { accept!.onClick(); });
+
+    const body = (globalThis as { document: { body: FNode } }).document.body;
+    const install = findButton(body, 'Установить');
+    expect(install, 'кнопка «Установить» не найдена').not.toBeNull();
+    await act(async () => { install!.onClick(); });
+
+    // grant упал: ошибка видна в диалоге, диалог не закрыт,
+    // карточка перечитана (предпросмотр запрошен повторно)
+    expect(textOf(body)).toContain('Сбой сети');
+    expect(findButton(body, 'Установить'), 'диалог закрылся после ошибки').not.toBeNull();
+    expect(vi.mocked(api.plugins.draftPreview).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});

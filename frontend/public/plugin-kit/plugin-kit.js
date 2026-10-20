@@ -43,7 +43,10 @@
     msg.source = SOURCE;
     msg.v = VERSION;
     try {
-      parent.postMessage(msg, '*');
+      // Адресат — window.top (окно хоста), а не parent: после оболочки (ADR-031 §3.6)
+      // parent панели — оболочка без скриптов, и сообщения в неё теряются. window.parent
+      // — запасной адресат, если панель смонтирована без оболочки (один уровень вложенности).
+      (window.top || window.parent).postMessage(msg, '*');
     } catch (e) { /* хоста больше нет — мост мёртв, панель просто не получит ответа */ }
   }
 
@@ -75,6 +78,9 @@
     var d = e.data;
     if (!d || typeof d !== 'object') return;
     if (d.source !== HOST_SOURCE || d.v !== VERSION) return;
+    // Источник — окно хоста (window.top || window.parent): хост шлёт в окно панели
+    // напрямую (frames[0]), сообщения из других окон (включая оболочку) отбрасываем.
+    if (e.source !== (window.top || window.parent)) return;
     if (d.type === 'init') {
       state.plugin = d.plugin || null;
       state.slot = typeof d.slot === 'string' ? d.slot : '';

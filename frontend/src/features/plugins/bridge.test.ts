@@ -346,6 +346,25 @@ describe('buildPanelSrcdoc: входы панели (edge cases, ADR-031 §3.6)'
   });
 });
 
+// Направление «панель → хост» (ADR-031 §3.6): адресат шима не проверялся ничем —
+// окно панели в тестах подменяли заглушкой, поэтому регрессия «parent.postMessage»
+// прошла зелёной. Ассерт по исходнику шима: отправка — в window.top (запасной
+// window.parent), НЕ в parent (после оболочки parent — это оболочка без скриптов);
+// приём ждёт источник window.top || window.parent (окно хоста). Мутация «вернуть
+// parent.postMessage» красит оба теста.
+describe('шим plugin-kit: адресат моста (панель → хост, ADR-031 §3.6)', () => {
+  it('отправка — в window.top (запасной window.parent), не в parent (оболочку)', () => {
+    expect(shimJs).toContain('(window.top || window.parent).postMessage');
+    // bare parent.postMessage — адресат оболочка; (window.top || window.parent).postMessage
+    // содержит window.parent, но НЕ подстроку parent.postMessage (между ними закрывающая скобка)
+    expect(shimJs).not.toContain('parent.postMessage');
+  });
+
+  it('приём ждёт источник window.top || window.parent (окно хоста)', () => {
+    expect(shimJs).toContain('e.source !== (window.top || window.parent)');
+  });
+});
+
 describe('сообщения хоста', () => {
   it('init несёт plugin/slot/context/theme/locale/granted', () => {
     expect(buildInitMessage({

@@ -326,6 +326,32 @@ public class PluginPackageValidatorTests
         Validate(root).Problems.Should().Contain(p => p.Code == "file-size-limit");
     }
 
+    // --- panel-file-too-large (QA-фикс H, ADR-031 §3.6): файл под panel/** > 256 КиБ ---
+    // Мутация: убрать проверку MaxPanelFileBytes в Walk → этот тест падает.
+
+    [Fact]
+    public void ПанельФайлБольше256КиБ_ДаетPanelFileTooLarge()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        // 257 КиБ > потолка 256 КиБ.
+        WriteBytes(root, "panel/big.html", PluginPackageValidator.MaxPanelFileBytes + 1);
+
+        Validate(root).Problems.Should().Contain(p => p.Code == "panel-file-too-large");
+    }
+
+    // --- panel-file-too-large: ровно 256 КиБ → НЕ даёт проблему (потолок не превышен) ---
+
+    [Fact]
+    public void ПанельФайлРовно256КиБ_НеДаетPanelFileTooLarge()
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        WriteBytes(root, "panel/exact.html", PluginPackageValidator.MaxPanelFileBytes);
+
+        Validate(root).Problems.Should().NotContain(p => p.Code == "panel-file-too-large");
+    }
+
     // --- C4: symlink-каталог → no-symlink (не только symlink-файл) ---
 
     [Fact]

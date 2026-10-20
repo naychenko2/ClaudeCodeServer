@@ -275,34 +275,31 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"IsValid\":true", "валидный черновик");
     }
 
-    // --- Panel: 200 (panel/index.html → srcdoc-ready HTML с CSP + шимом моста) ---
+    // --- Panel: 200 (сырой файл панели, QA-фикс H: сервер не разбирает HTML) ---
+    // Мутация: вернуть BuildSrcdoc (разбор head/body, вставка CSP-meta) → тест красный.
 
     [Fact]
-    public void Panel_ОтдаётSrcdocСCsp()
+    public void Panel_СыройФайл_БайтВБайт()
     {
         CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        AddPanelToDraft(OwnerA, "pkg", "<html><body><h1>Panel</h1></body></html>");
+        const string html = "<html><head><title>T</title></head><body><h1>Panel</h1></body></html>";
+        AddPanelToDraft(OwnerA, "pkg", html);
         var ctl = NewController(OwnerA);
 
-        var content = (ContentResult)ctl.Panel("pkg");
-        content.Content.Should().Contain("Content-Security-Policy", "CSP в meta");
-        content.Content.Should().Contain("ccsPlugin", "шим моста");
-        content.Content.Should().Contain("<h1>Panel</h1>", "HTML панели в теле");
+        var res = ctl.Panel("pkg");
+        var fileRes = (FileContentResult)res;
+        fileRes.FileContents.Should().BeEquivalentTo(
+            System.Text.Encoding.UTF8.GetBytes(html),
+            "ответ байт-в-байт равен файлу на диске (сервер не разобрал и не вставил ничего)");
     }
 
-    // --- Panel: полный HTML-документ со своим <head> (дефект 3caf4f13) ---
-    //
-    // До фикса: BuildSrcdoc просто вставлял весь HTML панели в <body> хоста.
-    // Если панель — полный документ со своим <head> (и meta CSP), тот <head>
-    // оказывался ВНУТРИ <body> — браузер его игнорировал и писал красную
-    // ошибку в консоль. Фикс: извлечь head/body панели и вставить их содержимое
-    // в head/body хоста; meta CSP хоста остаётся ПЕРВОЙ в <head>.
+    // --- Panel: полный HTML-документ со своим <head> — сервер не трогает (QA-фикс H) ---
+    // До фикса: BuildSrcdoc извлекал head/body и вставлял в хост. Теперь: сырой файл.
 
     [Fact]
-    public void Panel_ПолныйДокумент_CspMetaВнутриHead()
+    public void Panel_ПолныйДокумент_СыройФайлНеТрогнут()
     {
         CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        // Панель — ПОЛНЫЙ HTML-документ со своим <head> и meta CSP.
         const string panel =
             "<!DOCTYPE html>\n<html>\n<head>\n" +
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'\">\n" +
@@ -311,26 +308,32 @@ public class PluginDraftsControllerTests : IDisposable
         AddPanelToDraft(OwnerA, "pkg", panel);
         var ctl = NewController(OwnerA);
 
-        var content = (ContentResult)ctl.Panel("pkg");
-        var srcdoc = content.Content;
+        var res = ctl.Panel("pkg");
+        var fileRes = (FileContentResult)res;
+        // Ответ = сырой файл: <head> панели на месте, <title> на месте, CSP-meta панели не вырезана.
+        fileRes.FileContents.Should().BeEquivalentTo(
+            System.Text.Encoding.UTF8.GetBytes(panel),
+            "полный HTML-документ панели возвращается как есть (head/body не извлечены)");
+    }
 
-        // Вырезаем <head>...</head> итогового документа (от <head> до </head>).
-        var headStart = srcdoc.IndexOf("<head>");
-        var headEnd = srcdoc.IndexOf("</head>");
-        var head = srcdoc.Substring(headStart, headEnd - headStart);
+    // --- Panel: заголовки CSP + nosniff (QA-фикс H, пункт D) ---
+    // Мутация: вернуть PanelCsp (старый CSP) → тест заголовка красный.
 
-        // 1) Meta CSP хоста — ПЕРВАЯ в <head> (политика не ослаблена, та же строка).
-        head.Should().StartWith("<head>\n  <meta http-equiv=\"Content-Security-Policy\"",
-            "meta CSP хоста обязана быть первой в <head>");
+    [Fact]
+    public void Panel_Заголовки_CspSandboxINosniff()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        AddPanelToDraft(OwnerA, "pkg", "<html></html>");
+        var ctl = NewController(OwnerA);
 
-        // 2) Содержимое <head> панели (title, meta CSP панели) теперь ВНУТРИ <head> хоста
-        //    (до фикса — в <body>, браузер игнорировал). Проверяем по уникальному маркеру:
-        //    <title>Panel Title</title> — есть только в <head> панели.
-        head.Should().Contain("<title>Panel Title</title>",
-            "содержимое <head> панели обязано оказаться внутри <head> итогового документа");
+        ctl.Panel("pkg").Should().BeOfType<FileContentResult>();
 
-        // 3) Тело панели на месте.
-        srcdoc.Should().Contain("<h1>Panel</h1>", "HTML панели в теле");
+        var csp = ctl.Response.Headers["Content-Security-Policy"].ToString();
+        csp.Should().Be("sandbox; default-src 'none'",
+            "CSP сырого ответа: sandbox; default-src 'none'");
+
+        var nosniff = ctl.Response.Headers["X-Content-Type-Options"].ToString();
+        nosniff.Should().Be("nosniff", "X-Content-Type-Options: nosniff");
     }
 
     // --- Panel: 403 (сервисный JWT) ---
@@ -367,19 +370,34 @@ public class PluginDraftsControllerTests : IDisposable
         ctl.Panel("pkg").Should().BeOfType<NotFoundObjectResult>();
     }
 
-    // --- Panel: 413 (файл > 4 MiB) ---
-    // Мутация (критерий): убрать проверку лимита размера → этот тест падает.
+    // --- Panel: 413 (файл > 256 КиБ, QA-фикс H: потолок MaxPanelFileBytes) ---
+    // Мутация: убрать проверку MaxPanelFileBytes → этот тест падает.
 
     [Fact]
-    public void Panel_ФайлБольшой_Отдаёт413()
+    public void Panel_ФайлБольшой256КиБ_Отдаёт413()
     {
         CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var root = _store.DraftDir(OwnerA, "pkg");
         Directory.CreateDirectory(Path.Combine(root, "panel"));
-        File.WriteAllBytes(Path.Combine(root, "panel", "index.html"), new byte[4 * 1024 * 1024 + 1]);
+        File.WriteAllBytes(Path.Combine(root, "panel", "index.html"),
+            new byte[PluginPackageValidator.MaxPanelFileBytes + 1]);
         var ctl = NewController(OwnerA);
         var obj = (ObjectResult)ctl.Panel("pkg");
         obj.StatusCode.Should().Be(413);
+    }
+
+    // --- Panel: ровно 256 КиБ → 200 (потолок не превышен) ---
+
+    [Fact]
+    public void Panel_ФайлРовно256КиБ_Отдаёт200()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var root = _store.DraftDir(OwnerA, "pkg");
+        Directory.CreateDirectory(Path.Combine(root, "panel"));
+        File.WriteAllBytes(Path.Combine(root, "panel", "index.html"),
+            new byte[PluginPackageValidator.MaxPanelFileBytes]);
+        var ctl = NewController(OwnerA);
+        ctl.Panel("pkg").Should().BeOfType<FileContentResult>("ровно потолок → 200");
     }
 
     // --- Panel: «../» в slug отбит (slug не по грамматике → 404, не 500 от SafePath.Join) ---

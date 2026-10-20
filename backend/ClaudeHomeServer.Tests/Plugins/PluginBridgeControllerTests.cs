@@ -186,38 +186,118 @@ public class PluginBridgeControllerTests : IDisposable
         obj.StatusCode.Should().Be(403);
     }
 
-    // --- PanelSrcdoc: 403 (сервисный JWT, rework 12, minor 1) ---
-    // Мутация: убрать проверку IsServiceToken в PanelSrcdoc → этот тест падает.
+    // --- Assets: 413 (файл панели больше 256 КиБ, QA-фикс H: потолок MaxPanelFileBytes) ---
+    // Мутация: убрать проверку MaxPanelFileBytes в Assets → этот тест падает.
 
     [Fact]
-    public void PanelSrcdoc_СервисныйJwt_Отдаёт403()
-    {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        var ctl = NewBridgeController(OwnerA, serviceToken: true);
-
-        var res = ctl.PanelSrcdoc("local-a~pkg", "1.0.0");
-        var obj = (ObjectResult)res;
-        obj.StatusCode.Should().Be(403);
-    }
-
-    // --- PanelSrcdoc: 413 (index.html больше 256 КБ, rework 12, minor 3) ---
-    // Мутация: убрать проверку MaxPanelSrcdocBytes → этот тест падает.
-
-    [Fact]
-    public void PanelSrcdoc_ФайлБольшой_Отдаёт413()
+    public void Assets_ФайлБольшой256КиБ_Отдаёт413()
     {
         InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        // index.html панели больше потолка 256 КБ.
+        // index.html панели больше потолка 256 КиБ.
         var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
-        System.IO.File.WriteAllText(
+        System.IO.File.WriteAllBytes(
             System.IO.Path.Combine(packageDir, "panel", "index.html"),
-            "<html><body>" + new string('x', 256 * 1024 + 1024) + "</body></html>");
+            new byte[PluginPackageValidator.MaxPanelFileBytes + 1]);
 
-        var res = ctl.PanelSrcdoc("local-a~pkg", "1.0.0");
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(413);
+    }
+
+    // --- Assets: ровно 256 КиБ → 200 (потолок не превышен) ---
+
+    [Fact]
+    public void Assets_ФайлРовно256КиБ_Отдаёт200()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        System.IO.File.WriteAllBytes(
+            System.IO.Path.Combine(packageDir, "panel", "index.html"),
+            new byte[PluginPackageValidator.MaxPanelFileBytes]);
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        res.Should().BeOfType<FileContentResult>("ровно потолок → 200");
+    }
+
+    // --- Assets: сырой файл, байт-в-байт равен файлу на диске (QA-фикс H: нет разбора) ---
+    // Мутация: вернуть любую вставку/разбор (BuildSrcdoc, SplitPanelDocument) → тест красный.
+
+    [Fact]
+    public void Assets_СыройФайл_БайтВБайт()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // Записываем известный HTML с «ловушками» для разбора: </head> в строке скрипта,
+        // несколько <HEAD>, атрибуты с >, meta refresh.
+        const string html =
+            "<html><head><title>T</title></head><body>\n" +
+            "<script>var s = \"</head><body>\";</script>\n" +
+            "<HEAD foo=\"1\">\n" +
+            "<meta http-equiv=\"refresh\" content=\"0;url=https://evil\">\n" +
+            "<h1>Panel</h1>\n" +
+            "</body></html>";
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        System.IO.File.WriteAllText(System.IO.Path.Combine(packageDir, "panel", "index.html"), html);
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var fileRes = (FileContentResult)res;
+        fileRes.FileContents.Should().BeEquivalentTo(
+            System.IO.File.ReadAllBytes(System.IO.Path.Combine(packageDir, "panel", "index.html")),
+            "ответ байт-в-байт равен файлу на диске (сервер не разобрал и не вставил ничего)");
+    }
+
+    // --- Assets: 255 КиБ повторов <head — время ответа < 500 мс (ReDoS, MAJOR 1) ---
+    // Мутация: вернуть regex-разбор (SplitPanelDocument) → время растёт до секунд → тест красный.
+
+    [Fact]
+    public void Assets_255КиБПовторовHead_ВремяОтветыМенее500мс()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // 255 КиБ = 255 * 1024 байт, заполнено повторами "<head" (по 5 байт).
+        var chunk = new byte[255 * 1024];
+        var pattern = System.Text.Encoding.ASCII.GetBytes("<head");
+        for (var i = 0; i < chunk.Length; i += pattern.Length)
+            System.Buffer.BlockCopy(pattern, 0, chunk, i,
+                Math.Min(pattern.Length, chunk.Length - i));
+
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(packageDir, "panel", "index.html"), chunk);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        sw.Stop();
+
+        res.Should().BeOfType<FileContentResult>("255 КиB < потолка 256 КиB → 200");
+        sw.ElapsedMilliseconds.Should().BeLessThan(500,
+            "ответ на 255 КиБ повторов <head должен быть < 500 мс (нет квадратичного разбора)");
+    }
+
+    // --- Assets: заголовки CSP + nosniff (QA-фикс H, пункт D) ---
+    // Мутация: вернуть PanelCsp (старый CSP) → тест заголовка красный.
+
+    [Fact]
+    public void Assets_Заголовки_CspSandboxINosniff()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // Заголовки ставятся на Response — проверяем через HttpContext.
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        res.Should().BeOfType<FileContentResult>();
+
+        var csp = ctl.Response.Headers["Content-Security-Policy"].ToString();
+        csp.Should().Be("sandbox; default-src 'none'",
+            "CSP сырого ответа: sandbox; default-src 'none' (не старый PanelCsp)");
+
+        var nosniff = ctl.Response.Headers["X-Content-Type-Options"].ToString();
+        nosniff.Should().Be("nosniff", "X-Content-Type-Options: nosniff");
     }
 
     // --- Assets: 404 (symlink в СЕРЕДИНЕ пути, rework 12, minor 2) ---
@@ -565,71 +645,6 @@ public class PluginBridgeControllerTests : IDisposable
         obj.StatusCode.Should().Be(502);
     }
 
-    // --- Assets: файл больше 4 MiB → 413 (rework 12, minor 6) ---
-
-    [Fact]
-    public void Assets_ФайлБольшой_Отдаёт413()
-    {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        var ctl = NewBridgeController(OwnerA);
-
-        // Файл панели больше потолка 4 MiB.
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
-        System.IO.File.WriteAllBytes(
-            System.IO.Path.Combine(packageDir, "panel", "big.bin"),
-            new byte[4 * 1024 * 1024 + 1]);
-
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/big.bin");
-        var obj = (ObjectResult)res;
-        obj.StatusCode.Should().Be(413);
-    }
-
-    // --- Srcdoc: 200 (panel/index.html → srcdoc-ready HTML) ---
-
-    [Fact]
-    public void PanelSrcdoc_ФайлСуществует_ОтдаётContent()
-    {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        var ctl = NewBridgeController(OwnerA);
-
-        var res = ctl.PanelSrcdoc("local-a~pkg", "1.0.0");
-        var content = (ContentResult)res;
-        content.Content.Should().Contain("Content-Security-Policy");
-        content.Content.Should().Contain("ccsPlugin");
-    }
-
-    // --- Srcdoc: 404 (файла нет) ---
-
-    [Fact]
-    public void PanelSrcdoc_ФайлаНет_Отдаёт404()
-    {
-        // Пакет без panel/index.html.
-        var slug = "pkg";
-        var root = _store.DraftDir(OwnerA, slug);
-        System.IO.Directory.CreateDirectory(System.IO.Path.Combine(root, "skills", "a"));
-        System.IO.File.WriteAllText(System.IO.Path.Combine(root, "skills", "a", "SKILL.md"), "# A\n");
-        var manifest = new
-        {
-            id = "local-a/pkg", name = slug, version = "1.0.0",
-            contributes = new { skills = new[] { "skills/a" } },
-            permissions = new { requested = new[] { "notes:read" } },
-        };
-        System.IO.File.WriteAllText(System.IO.Path.Combine(root, "ccs-plugin.json"),
-            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
-        System.IO.Directory.CreateDirectory(System.IO.Path.Combine(root, ".claude-plugin"));
-        System.IO.File.WriteAllText(System.IO.Path.Combine(root, ".claude-plugin", "plugin.json"),
-            JsonSerializer.Serialize(new { name = slug, version = "1.0.0" },
-                new JsonSerializerOptions { WriteIndented = true }));
-        // panel/ каталог есть, но index.html нет.
-        System.IO.Directory.CreateDirectory(System.IO.Path.Combine(root, "panel"));
-
-        var ctl = NewPluginsController(OwnerA);
-        ctl.Install(new PluginInstallRequest { Source = "draft:" + slug }).Should().BeOfType<OkObjectResult>();
-
-        var bridgeCtl = NewBridgeController(OwnerA);
-        var res = bridgeCtl.PanelSrcdoc("local-a~pkg", "1.0.0");
-        res.Should().BeOfType<NotFoundResult>();
-    }
 
     // --- Тестовые заглушки ---
 

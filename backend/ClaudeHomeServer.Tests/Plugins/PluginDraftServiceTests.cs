@@ -191,16 +191,39 @@ public class PluginDraftServiceTests : IDisposable
         result.Code.Should().Be("file-size-limit");
     }
 
+    // ── draft_write_file: panel-file-too-large (QA-фикс H, ADR-031 §3.6) ─────────────
+    // Мутация: убрать проверку MaxPanelFileBytes в WriteFile → этот тест падает.
+
+    [Fact]
+    public void WriteFile_ПанельФайлБольше256КиБ_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        var big = new byte[PluginPackageValidator.MaxPanelFileBytes + 1];
+        var result = _service.WriteFile(Owner, "my-plugin", "panel/big.html", big);
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("panel-file-too-large");
+    }
+
+    [Fact]
+    public void WriteFile_ПанельФайлРовно256КиБ_Ок()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        var exact = new byte[PluginPackageValidator.MaxPanelFileBytes];
+        var result = _service.WriteFile(Owner, "my-plugin", "panel/exact.html", exact);
+        result.Ok.Should().BeTrue("ровно потолок → запись проходит");
+    }
+
     [Fact]
     public void WriteFile_ЛимитОбщегоРазмера_Отказ()
     {
         _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
         // Шаблон уже несёт ~240 байт; 3 файла по 5 МБ (15 МБ) проходят, 4-й (20 МБ + шаблон)
-        // выталкивает пакет за 20 МБ → size-limit.
+        // выталкивает пакет за 20 МБ → size-limit. Файлы под skills/a/ (не panel/), чтобы
+        // не задеть panel-file-too-large (256 КиБ).
         const long FiveMb = 5 * 1024 * 1024;
         for (var i = 0; i < 3; i++)
-            _service.WriteFile(Owner, "my-plugin", $"panel/f{i}.bin", new byte[FiveMb]).Ok.Should().BeTrue();
-        var result = _service.WriteFile(Owner, "my-plugin", "panel/f3.bin", new byte[FiveMb]);
+            _service.WriteFile(Owner, "my-plugin", $"skills/a/f{i}.md", new byte[FiveMb]).Ok.Should().BeTrue();
+        var result = _service.WriteFile(Owner, "my-plugin", "skills/a/f3.md", new byte[FiveMb]);
         result.Ok.Should().BeFalse();
         result.Code.Should().Be("size-limit");
     }

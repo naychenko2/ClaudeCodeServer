@@ -14,7 +14,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // featureTasks — в порядке, в котором их отдал вызывающий (фикстура/трекер): шаги/ревью/
     // проверки сохраняют этот порядок, финал/мерж берутся как последние по этому порядку.
     // now — «сейчас» для длительностей идущих задач (null = DateTime.UtcNow); тесты фиксируют.
+    // Выход — облегчённые копии задач (Slim, контракт master для списков/ответа:
+    // Project/ProjectAll/ProjectForSession/BuildIndexCore). Полный (необлегчённый) run —
+    // BuildCore: страница фичи (GetFeature) считает на нём ленту событий (BuildEvents:
+    // reason вердикта = Verification.Notes, который Slim обнуляет) и облегчает run для ответа.
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
+        => SlimRun(BuildCore(epic, featureTasks, now));
+
+    internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -373,26 +380,28 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
-        // Все расчёты выше идут по исходным задачам; в ВЫХОД (REST) уходят облегчённые копии:
-        // тексты (Description/ResultMarkdown), Verification.Notes, Repro, подзадачи и файлы
-        // пульту фичи не нужны (причина витка уже лежит в Rounds[].Reason), а на фиче из десятков
-        // задач именно они делали ответ в сотни КБ. Полную карточку пульт берёт по id.
+        // Все расчёты выше идут по исходным задачам. BuildCore возвращает ПОЛНЫЙ (необлегчённый)
+        // run: на нём страница фичи (GetFeature) считает ленту событий (BuildEvents: reason
+        // вердикта = Verification.Notes, который Slim обнуляет). Облегчение для списков/ответа
+        // (контракт master) — SlimRun: тексты (Description/ResultMarkdown), Verification.Notes,
+        // Repro, подзадачи и файлы пульту фичи не нужны (причина витка уже лежит в Rounds[].Reason),
+        // а на фиче из десятков задач именно они делали ответ в сотни КБ.
         return new FeatureRun
         {
             FeatureId = epic.Id,
-            Epic = Slim(epic),
-            Steps = SlimAll(steps),
-            Reviews = SlimAll(reviews),
-            Qa = SlimAll(qa),
-            Final = final is null ? null : Slim(final),
-            Merge = merge is null ? null : Slim(merge),
+            Epic = epic,
+            Steps = steps,
+            Reviews = reviews,
+            Qa = qa,
+            Final = final,
+            Merge = merge,
             AwaitingHumanSince = epic.AwaitingHumanSince,
             AwaitingHumanReason = epic.AwaitingHumanReason,
             Verdicts = verdicts,
             Progress = progress,
             Ready = ready,
-            Cut = SlimAll(cut),
-            Plan = SlimAll(plan),
+            Cut = cut,
+            Plan = plan,
             Stages = stages,
             StepChains = stepChains,
             ReturnsBySource = returnsBySource,
@@ -405,6 +414,137 @@ public sealed class FeatureProjector(TaskManager tasks)
             Closed = closed,
             Summary = summary,
         };
+    }
+
+    // ─── Б1.2: лента событий фичи (волна 2 «Обзор фич», разрез §2) ─────────────────────────
+    // Чистая проекция FeatureRun → события БЕЗ хранилища: каждое событие выводится из полей
+    // TaskItem/витков. На ней золотые тесты (FeatureEventsTests) — internal, как BuildIndexCore/
+    // BuildRow. sessionId наружу только если в снимке сессий владельца (иначе null — fail-closed,
+    // как KeySession/AttentionOf); reason ≤ 200 символов. Честное ограничение: видна ПОСЛЕДНЯЯ
+    // пара старт/стоп задачи (TaskItem держит одно ClaudeStartedAt/ExecutorStoppedAt) — журнал
+    // не заводим.
+    internal static List<FeatureEvent> BuildEvents(
+        FeatureRun run,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(sessions);
+
+        // Живые сессии владельца: sessionId события наружу только если в этом множестве.
+        var live = new HashSet<string>(sessions.Select(s => s.Id));
+
+        // Номер витка: из УЖЕ вычисленных FeatureRound (цепочки шагов + стадии qa/final) —
+        // N берём, арифметику (N = i + 1) не пересчитываем. Ревью, попавшее в несколько цепочек
+        // (связка многие-ко-многие), даёт минимальный N (детерминизм).
+        var roundByTask = new Dictionary<string, int>();
+        void AddRound(FeatureRound r)
+        {
+            if (r.ReviewTaskId is null) return;
+            if (roundByTask.TryGetValue(r.ReviewTaskId, out var cur))
+                roundByTask[r.ReviewTaskId] = Math.Min(cur, r.N);
+            else
+                roundByTask[r.ReviewTaskId] = r.N;
+        }
+        foreach (var chain in run.StepChains)
+            foreach (var r in chain.Rounds)
+                AddRound(r);
+        foreach (var stage in run.Stages)
+            foreach (var r in stage.Rounds)
+                AddRound(r);
+        int? RoundOf(TaskItem t) => roundByTask.TryGetValue(t.Id, out var n) ? n : null;
+
+        // Все задачи фичи: эпик + шаги/доработки + ревью + проверки + финал + мерж + cut + plan.
+        var tasks = new List<TaskItem> { run.Epic };
+        tasks.AddRange(run.Steps);
+        tasks.AddRange(run.Reviews);
+        tasks.AddRange(run.Qa);
+        if (run.Final is not null) tasks.Add(run.Final);
+        if (run.Merge is not null) tasks.Add(run.Merge);
+        tasks.AddRange(run.Cut);
+        tasks.AddRange(run.Plan);
+
+        var events = new List<FeatureEvent>();
+        // sessionId: LinkedSessionId задачи, наружу только если в снимке владельца (fail-closed).
+        string? SessionOf(TaskItem t) => t.LinkedSessionId is not null && live.Contains(t.LinkedSessionId)
+            ? t.LinkedSessionId : null;
+        // Событие задачи: kind/at/reason/round задаёт вид, остальное (role/stepRef/personaId/
+        // sessionId) — атрибуты самой задачи. Порядок аргументов — контракт §2:
+        // at, kind, taskId, role, stepRef?, personaId?, sessionId?, round?, reason?.
+        void Add(TaskItem t, string kind, DateTime at, string? reason, int? round = null) =>
+            events.Add(new FeatureEvent(at, kind, t.Id, t.Role, t.StepRef, t.PersonaId,
+                SessionOf(t), round, reason));
+
+        foreach (var t in tasks)
+        {
+            // created — всегда (момент создания задачи).
+            Add(t, "created", t.CreatedAt, null);
+
+            // started — последний старт исполнителя (ClaudeStartedAt); журнал не заводим.
+            if (t.ClaudeStartedAt is not null)
+                Add(t, "started", t.ClaudeStartedAt.Value, null);
+
+            // stopped — только у незакрытой (InProgress) задачи и только когда ExecutorStoppedAt >
+            // ClaudeStartedAt (то же правило, что у Attention: guard от stale-пометки).
+            // reason = ExecutorStopReason.
+            if (t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStoppedAt is not null
+                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
+                Add(t, "stopped", t.ExecutorStoppedAt.Value, Truncate(t.ExecutorStopReason));
+
+            // waiting — «ждёт вас» (AwaitingHumanSince); reason = AwaitingHumanReason.
+            if (t.AwaitingHumanSince is not null)
+                Add(t, "waiting", t.AwaitingHumanSince.Value, Truncate(t.AwaitingHumanReason));
+
+            // dropped — снято человеком (DroppedByHumanAt); причины в модели нет.
+            if (t.DroppedByHumanAt is not null)
+                Add(t, "dropped", t.DroppedByHumanAt.Value, null);
+
+            // Терминальное событие задачи — одно, по приоритету:
+            //   вердикт (accepted/awr/returned/withdrawn) — ревью/проверка/финал с вердиктом
+            //     (+ номер витка из FeatureRound);
+            //   merged — мерж закрыт; closed — эпик закрыт; completed — прочая задача Done.
+            if (t.CompletedAt is not null)
+            {
+                var verdict = t.Verification?.Verdict;
+                if (verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks
+                    or TaskVerdicts.Returned or TaskVerdicts.Withdrawn)
+                {
+                    Add(t, verdict, t.CompletedAt.Value, Truncate(t.Verification!.Notes), RoundOf(t));
+                }
+                else if (t.Role == TaskRoles.Merge)
+                {
+                    Add(t, "merged", t.CompletedAt.Value, null);
+                }
+                else if (t.Role == TaskRoles.Feature)
+                {
+                    Add(t, "closed", t.CompletedAt.Value, null);
+                }
+                else
+                {
+                    Add(t, "completed", t.CompletedAt.Value, null);
+                }
+            }
+        }
+
+        // Порядок: at desc, при равенстве — taskId (детерминизм).
+        return events
+            .OrderByDescending(e => e.At)
+            .ThenBy(e => e.TaskId)
+            .ToList();
+    }
+
+    // reason ≤ 200 символов (обрезка по кодовым позициям; null — как есть). internal — для золотого
+    // теста (ClaudeHomeServer.Tasks.Tests): кириллица (1 кодовая точка = 1 UTF-16-единица) и
+    // суррогатные пары (эмодзи, 2 единицы) не рвутся — разорванный старший суррогат отбрасывается.
+    internal static string? Truncate(string? s)
+    {
+        if (s is null) return null;
+        if (s.Length <= 200) return s;
+        var cut = s.AsSpan(0, 200);
+        // s[..200] режет по UTF-16-единицам: если 200-я позиция — старший суррогат пары, пара
+        // разорвана (висит без младшего) → отбрасываем его, чтобы не оставлять висячий суррогат.
+        if (char.IsHighSurrogate(cut[^1])) cut = cut.Slice(0, cut.Length - 1);
+        return cut.ToString();
     }
 
     // Облегчённая копия задачи для выхода агрегата: TaskListItem (без Description/ResultMarkdown,
@@ -429,6 +569,39 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     private static List<TaskItem> SlimAll(List<TaskItem> tasks) => tasks.Select(Slim).ToList();
+
+    // Облегчённая копия агрегата (контракт master для списков/ответа): коллекции задач заменяются
+    // облегчёнными копиями (Slim), вычисленные поля (стадии/цепочки/счётчики/«сейчас»/тревога)
+    // передаются по ссылке — они уже вычислены по исходным задачам. Страница фичи (GetFeature)
+    // сначала считает ленту событий (BuildEvents) по ПОЛНОМУ run, а в ответ run облегчает SlimRun.
+    internal static FeatureRun SlimRun(FeatureRun run) => new()
+    {
+        FeatureId = run.FeatureId,
+        Epic = Slim(run.Epic),
+        Steps = SlimAll(run.Steps),
+        Reviews = SlimAll(run.Reviews),
+        Qa = SlimAll(run.Qa),
+        Final = run.Final is null ? null : Slim(run.Final),
+        Merge = run.Merge is null ? null : Slim(run.Merge),
+        AwaitingHumanSince = run.AwaitingHumanSince,
+        AwaitingHumanReason = run.AwaitingHumanReason,
+        Verdicts = run.Verdicts,
+        Progress = run.Progress,
+        Ready = run.Ready,
+        Cut = SlimAll(run.Cut),
+        Plan = SlimAll(run.Plan),
+        Stages = run.Stages,
+        StepChains = run.StepChains,
+        ReturnsBySource = run.ReturnsBySource,
+        Lanes = run.Lanes,
+        Now = run.Now,
+        Attention = run.Attention,
+        StepsAccepted = run.StepsAccepted,
+        StepsTotal = run.StepsTotal,
+        LastActivityAt = run.LastActivityAt,
+        Closed = run.Closed,
+        Summary = run.Summary,
+    };
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
@@ -749,6 +922,17 @@ public sealed class FeatureProjector(TaskManager tasks)
         return epic is null ? null : Build(epic, FeatureTasks(epic, owner));
     }
 
+    // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
+    // Лента событий (BuildEvents) считается по полным задачам (reason вердикта =
+    // Verification.Notes, который Slim обнуляет для списков/ответа); run для ответа
+    // облегчается отдельно (SlimRun, контракт master). null — эпика нет (как у Project).
+    public FeatureRun? ProjectFull(string featureId, string ownerId)
+    {
+        var owner = tasks.GetByOwner(ownerId).ToList();
+        var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
+        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner));
+    }
+
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
     public IReadOnlyList<FeatureRun> ProjectAll(string ownerId)
     {
@@ -1038,7 +1222,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             key,
             keySession?.Archived ?? false,
             keySession?.ProjectId,
-            chatCount);
+            chatCount,
+            run.Epic.WorktreeBranch,
+            run.Epic.CreatedAt,
+            featureTasks.Count,
+            NowPersonaIdsOf(run));
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1082,7 +1270,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
-    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting.
+    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting;
+    // bucket = running (идёт, без тревоги) → чип «running».
     // (Чип «waiting» ≠ attention.kind «wait»: словарь чипов и словарь kind различаются.)
     internal static List<string> ChipsOf(FeatureRun run)
     {
@@ -1104,8 +1293,25 @@ public sealed class FeatureProjector(TaskManager tasks)
                 };
                 chips.Add(chip);
             }
+            else if (run.Now.Count > 0)
+            {
+                // bucket = running (идёт, без тревоги) → чип «running».
+                chips.Add("running");
+            }
         }
         return chips;
+    }
+
+    // «Сейчас»: уникальные PersonaId идущих задач (Now, по убыванию ClaudeStartedAt) в порядке
+    // их старта; null-персоны пропускаются. Пустой список — фича не идёт.
+    internal static List<string> NowPersonaIdsOf(FeatureRun run)
+    {
+        var seen = new HashSet<string>();
+        var ids = new List<string>();
+        foreach (var n in run.Now)
+            if (n.PersonaId is not null && seen.Add(n.PersonaId))
+                ids.Add(n.PersonaId);
+        return ids;
     }
 
     // Тревога строки: из FeatureRun.Attention; kind «wait»+«мерж» → merge; reason у merge — null;

@@ -226,7 +226,9 @@ export interface FeatureSummary {
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
 export interface FeatureRun {
   featureId: string;
-  epic: FeatureTask;
+  // p.32: nullable-терпимо (опционально), как и остальные новые поля — UI обязан
+  // пережить отсутствие epic (защита в taskCounters: run.epic ? [run.epic] : []).
+  epic?: FeatureTask;
   steps: FeatureTask[];
   reviews: FeatureTask[];
   qa: FeatureTask[];

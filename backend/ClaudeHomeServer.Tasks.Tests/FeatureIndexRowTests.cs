@@ -24,7 +24,8 @@ public class FeatureIndexRowTests
     }
 
     private static TaskItem Epic(string id, string? sourceSessionId = null,
-        string? executorLaunchedBy = null, string? projectId = null) => new()
+        string? executorLaunchedBy = null, string? projectId = null,
+        DateTime? createdAt = null) => new()
     {
         Id = id,
         Role = TaskRoles.Feature,
@@ -32,6 +33,7 @@ public class FeatureIndexRowTests
         SourceSessionId = sourceSessionId,
         ExecutorLaunchedBySessionId = executorLaunchedBy,
         ProjectId = projectId,
+        CreatedAt = createdAt ?? DateTime.UtcNow,
     };
 
     private static TaskItem Child(string id, string featureId, string role = TaskRoles.Step,
@@ -351,5 +353,90 @@ public class FeatureIndexRowTests
         row2.Attention.Should().NotBeNull();
         row2.Attention!.SessionId.Should().Be("chat-live",
             "живой чат (в снимке) → sessionId = id");
+    }
+
+    // ── 8. аддитивные поля (волна 2, без хранения) ───────────────────────────────────────────
+
+    // branch/createdAt — из полей эпика (WorktreeBranch/CreatedAt); null — эпик без worktree.
+    [Fact]
+    public void Строка_Аддитивные_ВеткаИСоздание()
+    {
+        var createdAt = new DateTime(2026, 10, 19, 7, 48, 50);
+        var epic = Epic("epic-ad", createdAt: createdAt);
+        epic.WorktreeBranch = "feat/features-overview-2";
+        var row = Row(epic, [epic]);
+        row.Branch.Should().Be("feat/features-overview-2", "ветка = epic.WorktreeBranch");
+        row.CreatedAt.Should().Be(createdAt, "createdAt = epic.CreatedAt");
+
+        // Эпик без worktree → branch null (createdAt всегда есть: DateTime по умолчанию).
+        var epic2 = Epic("epic-ad2");
+        var row2 = Row(epic2, [epic2]);
+        row2.Branch.Should().BeNull("эпик без worktree → branch null");
+        row2.CreatedAt.Should().NotBeNull();
+    }
+
+    // taskCount = эпик + дочерние (число задач фичи, как их дал вызывающий).
+    [Fact]
+    public void Строка_Аддитивные_ЧислоЗадач()
+    {
+        var epic = Epic("epic-tc");
+        var c1 = Child("c1", "epic-tc");
+        var c2 = Child("c2", "epic-tc");
+        Row(epic, [epic, c1, c2]).TaskCount.Should().Be(3, "эпик + 2 дочерних");
+        Row(epic, [epic]).TaskCount.Should().Be(1, "только эпик");
+    }
+
+    // nowPersonaIds: уникальные PersonaId идущих (Now, по убыванию ClaudeStartedAt) в порядке
+    // старта; дубль персоны схлопывается (первое, т.е. самое позднее, появление определяет место).
+    [Fact]
+    public void Строка_Аддитивные_СейчасПерсоны_ПорядокИУникальность()
+    {
+        var epic = Epic("epic-now");
+        // alpha стартует позже (10:00) → раньше в списке; beta (09:00) → позже;
+        // alpha снова (08:00) — дубль персоны, схлопывается.
+        var a = Child("a", "epic-now", status: TaskItemStatus.InProgress);
+        a.ClaudeStartedAt = new DateTime(2026, 10, 19, 10, 0, 0);
+        a.PersonaId = "alpha";
+        var b = Child("b", "epic-now", status: TaskItemStatus.InProgress);
+        b.ClaudeStartedAt = new DateTime(2026, 10, 19, 9, 0, 0);
+        b.PersonaId = "beta";
+        var c = Child("c", "epic-now", status: TaskItemStatus.InProgress);
+        c.ClaudeStartedAt = new DateTime(2026, 10, 19, 8, 0, 0);
+        c.PersonaId = "alpha";
+
+        var row = Row(epic, [epic, a, b, c]);
+        row.NowPersonaIds.Should().Equal(["alpha", "beta"],
+            "уникальные персоны идущих, по убыванию старта; дубль alpha схлопнут");
+    }
+
+    // Чип «running»: появляется ровно когда bucket = running (идёт, без тревоги);
+    // у закрытой и у тревожной фичи не появляется.
+    [Fact]
+    public void Строка_Аддитивные_ЧипRunning_ТолькоКогдаИдёт()
+    {
+        // Идёт (InProgress, без тревоги) → bucket = running, чипы [open, running].
+        var epicR = Epic("epic-run");
+        var running = Child("r1", "epic-run", status: TaskItemStatus.InProgress);
+        running.ClaudeStartedAt = new DateTime(2026, 10, 19, 9, 0, 0);
+        var rowR = Row(epicR, [epicR, running]);
+        rowR.Bucket.Should().Be("running");
+        rowR.Chips.Should().Equal(["open", "running"], "идёт без тревоги → чип running");
+
+        // Закрытая (epic Done) → bucket = closed, чип [closed]; running не появляется.
+        var epicC = Epic("epic-closed");
+        epicC.Status = TaskItemStatus.Done;
+        var rowC = Row(epicC, [epicC]);
+        rowC.Bucket.Should().Be("closed");
+        rowC.Chips.Should().Equal(["closed"], "у закрытой фичи running не появляется");
+
+        // Тревога (stopped) → bucket = attention, чип [open, stopped]; running не появляется.
+        var epicA = Epic("epic-att");
+        var stopped = Child("s1", "epic-att", status: TaskItemStatus.InProgress);
+        stopped.ClaudeStartedAt = new DateTime(2026, 10, 19, 8, 0, 0);
+        stopped.ExecutorStoppedAt = new DateTime(2026, 10, 19, 8, 30, 0);
+        stopped.ExecutorStopReason = "auth_failed";
+        var rowA = Row(epicA, [epicA, stopped]);
+        rowA.Bucket.Should().Be("attention");
+        rowA.Chips.Should().Equal(["open", "stopped"], "у тревоги (stopped) running не появляется");
     }
 }

@@ -617,6 +617,17 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return list;
     }
 
+    // Текущая ветка (HEAD) корня: git symbolic-ref --short HEAD. В отличие от `git branch`
+    // работает и до первого коммита; null — detached HEAD, не репо или сбой git.
+    public async Task<string?> CurrentBranchAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        var r = await RunReadAsync(ownerId, root, ["symbolic-ref", "--short", "HEAD"], ct: ct);
+        if (!r.Ok) return null;
+        var name = r.Stdout.Trim();
+        return string.IsNullOrWhiteSpace(name) ? null : name;
+    }
+
     // ---------- Запись (под per-repo семафором) ----------
 
     public Task StageAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>

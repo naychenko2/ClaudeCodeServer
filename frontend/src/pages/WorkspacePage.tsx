@@ -43,6 +43,11 @@ import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
+import { FeatureCenter } from '../components/feature/FeatureCenter';
+import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
+import { openChatById } from '../lib/openChat';
+import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
@@ -363,6 +368,20 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const [sessions, setSessions] = useState<Session[]>([]);
   const handleSessionsListChanged = useCallback((list: Session[]) => setSessions(list), []);
   const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
+  // Названия чатов (M4, «без новых запросов»): тот же список сессий, что и SessionList —
+  // страница фичи показывает название вместо GUID; нет названия — «Чат».
+  const chatNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const s of sessions) if (s.name) m[s.id] = s.name;
+    return m;
+  }, [sessions]);
+  // Персоны чатов (макет §5, аватары 18 в строках чатов): тот же список сессий —
+  // sessionId → personaId; чат без персоны (не ведётся от её лица) — в карте нет.
+  const chatPersonas = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const s of sessions) if (s.personaId) m[s.id] = s.personaId;
+    return m;
+  }, [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
@@ -392,6 +411,26 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const graphOpen = centerDoc === 'graph';
   const archOpen = centerDoc === 'arch';
   const setGraphOpen = useCallback((open: boolean) => setCenterDoc(open ? 'graph' : null), []);
+  // Страница фичи в центральной области (волна 2 «Обзор фич», Ф2.3): id эпика или null.
+  // Сосед ChatPanel'а, а не новая ветка тернарника: центр прячется display:none, чтобы
+  // стрим хода и черновик композера пережили переход (и возврат) на страницу.
+  // Инициализация из nav-снимка/хэша (диплинк #/project/{pid}/feature/{fid} и
+  // перезагрузка вкладки): первый рендер — history.state ещё не сидирован (null), берём
+  // из хэша; после смены проекта — из снимка. БЕЗ гейта по флагу: инициализатор работает
+  // на первом рендере, когда флаги ещё не пришли из /me, и гейт здесь терял бы featureId
+  // диплинка. Показ страницы гейтится отдельно (featurePageOpen), а адрес при выключенном
+  // флаге приводит к проекту эффект «один раз» ниже.
+  const [openFeatureId, setOpenFeatureId] = useState<string | null>(() => {
+    return getNav()?.feature ?? parseHash(window.location.hash)?.featureId ?? null;
+  });
+  // Флаг «Обзор фич»: страница показана, только когда он включён (dark launch). До прихода
+  // флагов (не загружены) getFlag читает «выключено», но адрес ещё не схлопываем — этим
+  // занимается эффект «привести к проекту один раз» (ниже, рядом с handleFeatureBack).
+  const featuresOn = useFeature(FLAGS.featuresOverview);
+  const flagsLoaded = useFlagsLoaded();
+  // Показ страницы гейтится по флагу: openFeatureId ставится из хэша/снимка без гейта
+  // (инициализатор выше), а решаем, рисовать ли страницу, здесь.
+  const featurePageOpen = openFeatureId != null && featuresOn;
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -573,8 +612,14 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const composerSkills = useMemo(
     () => [...(skillsData?.skills ?? []), ...(skillsData?.workflows ?? []), ...(skillsData?.plugins ?? [])],
     [skillsData]);
-  // мобайл: показываем либо sidebar, либо chat
-  const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
+  // мобайл: показываем либо sidebar, либо chat. Диплинк/перезагрузка на страницу фичи
+  // (#/project/{pid}/feature/{fid}): на мобиле страница живёт в виде chat (сосед центра),
+  // поэтому при feature-сегменте В АДРЕСЕ стартуем в chat — иначе адрес обещает страницу,
+  // а на экране список (M1-360). Читаем ТОЛЬКО адрес (не снимок): в тёплом браузере
+  // feature может жить в снимке, пока пользователь в списке (m7) — там mobileView=sidebar.
+  const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>(() => {
+    return parseHash(window.location.hash)?.featureId != null ? 'chat' : 'sidebar';
+  });
 
 const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
@@ -1516,6 +1561,9 @@ const windowWidth = useWindowWidth();
       if (f && s.revealInTree) revealPanelKey('files');
       setSelectedTaskId(s.task ?? null);
       setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
+      // Страница фичи из снимка: «назад/вперёд» открывает/закрывает её (чат под ней
+      // остаётся смонтированным, центр лишь переключает, что видно).
+      setOpenFeatureId(s.feature ?? null);
       // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
       if (s.persona !== undefined) {
         setLeftTab('personas');
@@ -1538,6 +1586,108 @@ const windowWidth = useWindowWidth();
     return () => window.removeEventListener('popstate', onPop);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- WorkspacePage перемонтируется на смену проекта (key={project.id} в App), подписка на весь жизненный цикл инстанса
   }, []);
+
+  // Предыдущая запись истории ДО открытия страницы фичи (m5): крошка «К списку» делает
+  // history.back() (а не navReplace), если предыдущая запись — список ЭТОГО проекта, иначе
+  // первый системное «назад» был бы пустым шагом (navReplace давал [список, список]).
+  const featurePrevStateRef = useRef<NavSnapshot | null>(null);
+  // Страница фичи (Ф2.3): «Фича →» в плашке чата (fromChat=true) и тело группы в
+  // списке (fromChat=false) шлют cc-open-feature. Указатель возврата (крошка «← К чату
+  // «…»») записывается ТОЛЬКО при входе из чата: при входе из списка крошка ведёт в
+  // список (m4: «К списку»/«Назад», в одно место с системным «назад»), а записанный из
+  // чата указатель мажём, чтобы не вёл в чат, которого пользователь не открывал.
+  // Показ страницы и запись истории — общие.
+  useEffect(() => {
+    const onOpenFeature = (e: Event) => {
+      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean }>).detail;
+      if (!d?.featureId) return;
+      if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
+      else if (!d.fromChat) clearBackNav();
+      setOpenFeatureId(d.featureId);
+      if (isMobileRef.current) setMobileView('chat');
+      // Снимок ДО navPush = предыдущая запись (список/чат, с которого открыли страницу)
+      featurePrevStateRef.current = getNav();
+      navPush({ screen: 'project', project, view: 'chat', file: null, task: null, feature: d.featureId, chatId: d.fromChatId ?? undefined });
+    };
+    window.addEventListener('cc-open-feature', onOpenFeature);
+    return () => window.removeEventListener('cc-open-feature', onOpenFeature);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- подписка на весь жизненный цикл инстанса (перемонтируется на смену проекта); isMobile — через ref
+  }, []);
+
+  // Смена проекта: WorkspacePage перемонтируется (key={project.id} в App), но указатель
+  // «← назад» (featureBackNav) — module-level и живёт до конца вкладки. Сбрасываем его,
+  // чтобы указатель из старого проекта (chat → фича/чат) не применился к новому, если
+  // id чата совпали (MINOR: «← назад» не должен перескакивать через границу проекта).
+  useEffect(() => {
+    clearBackNav();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по key={project.id} эффект
+    // исполняется ровно на перемонтировании (смену проекта); [project.id] дублирует это
+  }, []);
+
+  // «← назад» со страницы фичи: закрываем страницу и ведём в target. Исходный чат
+  // (kind 'chat') и есть активный (плашка была в нём) — центр просто показываем;
+  // ключевой чат — переход, список — режим sidebar.
+  const handleFeatureBack = (target: FeaturePageBackTarget) => {
+    // m5: исходный чат и есть текущий (перешли из него, чат не переключали) — history.back()
+    // снимает запись страницы и возвращает в исходный чат: без дубля в истории, и первое
+    // системное «назад» — не «пустой шаг». navReplace здесь давал [чат, {feature, чат}] →
+    // [чат, чат]: два одинаковых, и первый «назад» ничего не менял. popstate-обработчик
+    // восстановит снимок (feature: null) — setOpenFeatureId(null) дублирует его синхронно.
+    if (target.kind === 'chat' && target.chatId === activeSessionRef.current?.id) {
+      setOpenFeatureId(null);
+      window.history.back();
+      return;
+    }
+    // m5 (ветка «список»): предыдущая запись — список ЭТОГО проекта (вход из списка) —
+    // history.back() снимает запись страницы: без дубля [список, список], и первое
+    // системное «назад» ведёт в осмысленное предыдущее место, а не в тот же список.
+    // popstate-обработчик восстановит снимок (feature: null, view: sidebar) синхронно.
+    if (target.kind === 'list') {
+      const prev = featurePrevStateRef.current;
+      if (prev && prev.screen === 'project' && prev.project?.id === project.id && !prev.feature) {
+        setOpenFeatureId(null);
+        window.history.back();
+        return;
+      }
+    }
+    setOpenFeatureId(null);
+    // Синхронизация URL с состоянием (крошка и история — в одно место, разрез §4): крошка
+    // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
+    // «назад» (popstate) уводило не туда. navReplace на снимок БЕЗ feature: адрес схлопывается
+    // к чату/списку, и «назад» ведёт туда же, куда и крошка.
+    const chatId = target.kind === 'chat' || target.kind === 'key' ? target.chatId : undefined;
+    const restore = target.kind === 'chat' ? chatToRestore(chatId, activeSessionRef.current?.id) : null;
+    const view = target.kind === 'list' ? 'sidebar' : (restore ? 'chat' : mobileView);
+    navReplace({ screen: 'project', project, view, file: null, task: null, chatId, feature: null });
+    if (target.kind === 'key') void openChatById(target.chatId);
+    else if (target.kind === 'list') setMobileView('sidebar');
+    else if (target.kind === 'chat' && restore) {
+      // Исходный чат ≠ текущий (редкий): переключаем через штатный pending (как popstate).
+      sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restore, { file: null, task: null }));
+      window.dispatchEvent(new Event('cc-pending-project-chat'));
+    }
+  };
+
+  // Флаги «Обзор фич» пришли выключенными, а в адресе/снимке ещё есть feature (диплинк,
+  // или флаг выключили через админ-панель, пока страница была открыта) — ОДИН РАЗ безопасно
+  // приводим адрес к проекту: navReplace на снимок БЕЗ feature (toHash схлопнет его, т.к.
+  // «загружено и выключено»), и сбрасываем openFeatureId, чтобы страница не открылась потом.
+  // Пока флаги НЕ загружены (flagsLoaded=false) не схлопываем — адрес ждёт ответа /me.
+  useEffect(() => {
+    if (!flagsLoaded || featuresOn || !openFeatureId) return;
+    // m7: на мобиле вид sidebar = список — адрес не должен обещать /chat/{id} (экран — список).
+    // m7b: нормализация (флаг выключен, feature в адресе) → экран = список: mobileView
+    // сбрасываем в 'sidebar', иначе адрес #/project/{pid} (список) остаётся в виде chat
+    // (mobileView инициализирован 'chat' из feature-сегмента адреса). view/chatId — по
+    // РЕЗУЛЬТИРУЮЩЕМУ виду (sidebar), не по устаревшему mobileView.
+    const view = 'sidebar';
+    const chatShown = !isMobile; // на десктопе чат в центре всегда; на мобиле — список
+    if (isMobile && mobileView === 'chat') setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view, file: null, task: null, chatId: chatShown ? (activeSessionId ?? undefined) : undefined, feature: null });
+    setOpenFeatureId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
+    // в «загружено и выключено»; project/mobileView/activeSessionId в замыкании — текущие
+  }, [flagsLoaded, featuresOn, openFeatureId]);
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
   // любого диплинка (задача/чат/персона) возвращал именно в командный центр
@@ -1934,25 +2084,31 @@ const windowWidth = useWindowWidth();
         )}
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM; ридер,
             как и файл, вытесняет его из контентной зоны */}
-        <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          {leftTab === 'tools'
-            ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
-            : personasMode
-            ? ((selectedPersonaId || personaCreating)
-                ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
-                : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
-            : tasksMode
-            ? (selectedTask
-                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={backFromTask} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={backFromTask} />
-                : showProjectBoard
-                ? ProjectBoardArea
-                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
-            : activeSession
-            ? (
-              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} />
-            )
-            : NoSession
-          }
+        <div data-testid="workspace-center-container" style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
+              при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
+              и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
+              с десктопом — FeatureCenter (не копипаста). */}
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} chatNames={chatNames} chatPersonas={chatPersonas}>
+            {leftTab === 'tools'
+              ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
+              : personasMode
+              ? ((selectedPersonaId || personaCreating)
+                  ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
+                  : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
+              : tasksMode
+              ? (selectedTask
+                  ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={backFromTask} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={backFromTask} />
+                  : showProjectBoard
+                  ? ProjectBoardArea
+                  : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
+              : activeSession
+              ? (
+                <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} />
+              )
+              : NoSession
+            }
+          </FeatureCenter>
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
@@ -2034,6 +2190,12 @@ const windowWidth = useWindowWidth();
       {/* Тело десктопа и планшета: рельсы панелей по краям, центр между ними */}
         <DesktopWorkspace
           isTablet={isTablet}
+          // Показ страницы гейтится по флагу: при выключенном передаём null (open=false),
+          // чтобы DesktopWorkspace/FeatureCenter не рисовали страницу (dark launch).
+          openFeatureId={featurePageOpen ? openFeatureId : null}
+          onFeatureBack={handleFeatureBack}
+          chatNames={chatNames}
+          chatPersonas={chatPersonas}
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
@@ -2042,6 +2204,9 @@ const windowWidth = useWindowWidth();
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
           onSessionUpdated={handleSessionUpdated}
+          // N1: тот же колбэк, что у мобильной раскладки (SessionList:2030) — иначе на
+          // десктопе sessions/chatNames/chatPersonas пусты и у чатов фичи «Чат» + круг.
+          onSessionsListChanged={handleSessionsListChanged}
           onCreateSession={handleCreateSession}
           onClearSession={handleClearSession}
           creatingSession={creatingSession}

@@ -277,8 +277,10 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
 
 // Затравка для «Попросить Марка»: мерж фичи — задача Марку (оркестратор сам её создаст).
 function mergePrefill(run: FeatureRun): string {
-  const branch = run.epic.worktreeBranch ? ` (ветка ${run.epic.worktreeBranch})` : '';
-  return `Сделай мерж фичи «${run.epic.title}»${branch}. Все шаги приняты, ревью пройдено — отдавай в master.`;
+  // п.32: epic nullable-терпимо — без эпика название/ветка пустые.
+  const epic = run.epic;
+  const branch = epic?.worktreeBranch ? ` (ветка ${epic.worktreeBranch})` : '';
+  return `Сделай мерж фичи «${epic?.title ?? ''}»${branch}. Все шаги приняты, ревью пройдено — отдавай в master.`;
 }
 
 // Пустое состояние (шагов 0): «План появится, когда {исполнитель разреза} закончит разрез».
@@ -326,8 +328,9 @@ export function FeatureRunView({ run }: { run: FeatureRun }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* Шапка: имя + ветка (M-3: счётчик acc/tot · ↺N — в FeatureModeBody, % из шапки убран) */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{run.epic.title}</span>
-        {run.epic.worktreeBranch && (
+        {/* п.32: epic nullable-терпимо — без эпика имя/ветка пустые */}
+        <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{run.epic?.title}</span>
+        {run.epic?.worktreeBranch && (
           <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{run.epic.worktreeBranch}</span>
         )}
       </div>

@@ -10,6 +10,7 @@ import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch,
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FilterBar } from './FilterBar';
 import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder } from '../lib/chatFilters';
+import type { FeatureIndexFeature } from '../types/featureIndex';
 
 // === Однострочный тулбар списка чатов (макет chat-unified-view, вариант А) ===
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
@@ -71,6 +72,9 @@ interface ChatListToolbarProps {
   // Доступные режимы группировки. У глобального списка (чаты вне проектов) реестра
   // тегов нет — передавай ['days', 'none']
   groupByOptions?: ChatGroupBy[];
+  // Индекс фич проекта: секция «Фичи · что с ними» в поповере фильтров. Не задан —
+  // секция не рисуется (глобальный список фич не знает).
+  features?: FeatureIndexFeature[];
 }
 
 // Заголовок секции в мобильной шторке «Вид»
@@ -150,7 +154,7 @@ function GroupByMenuButton({ size, value, options, onChange }: {
 
 export function ChatListToolbar({
   onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
-  isMobile = false, groupByOptions = ['days', 'tags', 'none'],
+  isMobile = false, groupByOptions = ['days', 'tags', 'none'], features,
 }: ChatListToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Список живёт в карточке с шапкой — контролы уезжают туда (как у «Задач» и
@@ -208,7 +212,7 @@ export function ChatListToolbar({
         </div>
         <FilterBar
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
-          hiddenCount={hiddenCount} isMobile triggerSize="lg"
+          hiddenCount={hiddenCount} isMobile triggerSize="lg" features={features}
         />
         <IconButton size="lg" title="Вид: группировка, сортировка, архивные"
           onClick={() => setViewSheet(true)}>
@@ -283,7 +287,7 @@ export function ChatListToolbar({
       <PanelHeaderSlot>
         <FilterBar
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
-          hiddenCount={hiddenCount} triggerSize="xs"
+          hiddenCount={hiddenCount} triggerSize="xs" features={features}
         />
         <IconButton
           size="xs"
@@ -355,7 +359,7 @@ export function ChatListToolbar({
 
       <FilterBar
         sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
-        hiddenCount={hiddenCount} triggerSize={iconBtnSize}
+        hiddenCount={hiddenCount} triggerSize={iconBtnSize} features={features}
       />
       <IconButton
         size={iconBtnSize}

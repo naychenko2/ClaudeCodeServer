@@ -8,6 +8,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
@@ -109,7 +110,11 @@ public class TasksController(
     // Агрегат фичи (режим «Исполнение фичи»): null, когда подсистема Tasks выключена
     // гейтом Subsystems:tasks:Enabled — тогда GET /features отвечает честным 503, а не 500
     // (правило отключаемости, ADR-014; образец — AgentDownloadsController).
-    FeatureProjector? features = null) : ControllerBase
+    FeatureProjector? features = null,
+    // Git-вертикаль (опционально, как в SessionManager): гард мержа проверяет, что worktree
+    // фичи числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
+    // null — подсистема Git выключена → мерж fail-closed (иначе исполнитель стартует в корне).
+    GitService? git = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -472,11 +477,304 @@ public class TasksController(
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
         // Сессии владельца → узкий снимок (id, taskId, projectId, archived). GetAllOwnedBy
         // отдаёт только живые сессии владельца: чужие/удалённые id чатов в снимок не попадают.
-        var snapshot = sessions.GetAllOwnedBy(UserId)
+        return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
+    }
+
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived) — единый источник для
+    // индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
+    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца).
+    private List<FeatureIndexSession> SessionSnapshot() =>
+        sessions.GetAllOwnedBy(UserId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
             .ToList();
-        return Ok(features.BuildIndex(UserId, snapshot, projectId));
+
+    // Одна фича по id эпика (волна 2 «Обзор фич», GET /api/tasks/features/{featureId}):
+    // обёртка { run, events, eventsTotal } — агрегат (Project, без новой арифметики) + лента
+    // событий (BuildEvents, порядок как отдаёт функция) + общее число событий до обрезки.
+    // [Authorize], владелец из claim (не из маршрута); нет эпика/чужой/удалён → один 404
+    // (не отличаем: это же состояние «Фичу удалили» на фронте). Подсистема Tasks выключена
+    // (features == null) → честный 503 (ADR-014, как у GetFeatures/GetFeaturesIndex). Ручка
+    // от фич-флагов не зависит. ?eventsLimit=: не задан → 100; "all"/"0" → все; N (целое > 0)
+    // → N; прочее → 100.
+    // п.7: белый список символов id фичи (как resumeSessionId): GUID/строка id без спецсимволов.
+    // Нестандартный id (слеш, «..», >128) → 404 «Фича не найдена» (тело как у «нет эпика»).
+    private static readonly System.Text.RegularExpressions.Regex FeatureIdPattern =
+        new(@"^[A-Za-z0-9_-]{1,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    [HttpGet("features/{featureId}")]
+    public IActionResult GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // п.7: нестандартный id (символы вне белого списка) → тот же 404, что «нет эпика»:
+        // lookup по кривому id (с «/» или «..») не идёт, фронт 404 не различает.
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+        // ProjectFull: ПОЛНЫЙ (необлегчённый) run — null, если эпика нет (нет/чужой/удалён —
+        // один 404, см. выше). Тело совпадает с 404 POST merge: { error: "Фича не найдена" }
+        // (фронт читает error).
+        var run = features.ProjectFull(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+        // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
+        // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
+        // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
+        // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
+        var all = FeatureProjector.BuildEvents(run, SessionSnapshot());
+        var eventsTotal = all.Count;
+        var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal });
     }
+
+    // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»
+    // читается как «без лимита», а не как числовой ноль (отдельного числового 0 на wire нет:
+    // параметр всегда строка); N (целое > 0) → N; прочее → 100.
+    private static int ResolveEventsLimit(string? eventsLimit)
+    {
+        if (eventsLimit is null) return 100;
+        if (eventsLimit == "all" || eventsLimit == "0") return int.MaxValue;
+        if (int.TryParse(eventsLimit, out var n) && n > 0) return n;
+        return 100;
+    }
+
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{featureId}/merge):
+    // создаёт задачу role=merge с персоной-исполнителем DevopsExecutor и запускает её.
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик, тело { error: "Фича не найдена" }),
+    // 409 (финал не принят, уже смержено/закрыто, worktree не на диске, 0 или >1 исполнителей DevOps).
+    // Идемпотентна и атомарна: открытая merge-задача → вернуть её (создание сериализовано по featureId),
+    // если todo — запустить, вторую не заводить.
+    [HttpPost("features/{featureId}/merge")]
+    [DenyOnDelegatedTurn("Запуск мержа фичи", AllowInTeamImplement = true,
+        AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
+    public async Task<IActionResult> MergeFeature(string featureId)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+
+        // m2: нестандартный id (символы вне белого списка) → тот же 404, что у GET features/{id}
+        // (одинаковый код и тело { error: "Фича не найдена" } — фронт читает error).
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        // «Уже смержена» (merge-задача Done) и «закрыта» (эпик Done) — ПЕРЕД «финал не принят»:
+        // у закрытой фичи без принятого финала причина — «закрыта», а не «финал не принят» (п.5).
+        if (run.Merge is { Status: TaskItemStatus.Done })
+            return Conflict(new { error = "Фича уже смержена" });
+        if (run.Closed)
+            return Conflict(new { error = "Фича закрыта" });
+
+        // Финал не принят → мерж преждевременно.
+        if (!run.Ready)
+            return Conflict(new { error = "Финал не принят: мерж преждевременно" });
+
+        // Worktree фичи: непустые путь и ветка, путь на диске и числится в `git worktree list`
+        // проекта (тот же предикат, что AttachWorktreeAsync) — иначе исполнитель тихо стартовал бы
+        // в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
+        var (gitDisabled, worktreeError) = await FeatureWorktreeErrorAsync(run.Epic);
+        // п.57: подсистема Git выключена → честный 503 (как у Tasks), а не 409 «не найден».
+        if (gitDisabled)
+            return StatusCode(503, new { error = "Подсистема Git выключена на этом сервере" });
+        if (worktreeError is not null)
+            return Conflict(new { error = worktreeError });
+
+        // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
+        // Те же externalScopes, что в Create: кросс-проектная ProjectTasks-привязка не даёт ложного 409.
+        var devops = personas.GetByOwner(UserId)
+            .Where(p => p.Specialty == PersonaSpecialty.DevopsExecutor)
+            .Where(p =>
+            {
+                var scopes = bindings.BuildExternalTaskScopes(UserId, p);
+                return TaskPersonaValidator.Error(personas, UserId, p.Id,
+                    taskProjectId: run.Epic.ProjectId, externalScopes: scopes, spheres: spheres) is null;
+            })
+            .ToList();
+
+        if (devops.Count == 0)
+            return Conflict(new { error = "Нет исполнителя DevOps: задайте персона с специальностью DevopsExecutor" });
+        if (devops.Count > 1)
+            return Conflict(new { error = "Несколько исполнителей DevOps: уточните, кто ведёт мерж" });
+
+        var persona = devops[0];
+
+        // m1: основная ветка проекта (текущая ветка корня) — для шаблона постановки; null — git не дал.
+        var mainBranch = await ResolveMainBranchAsync(run.Epic);
+
+        // Создание идемпотентно и атомарно: два конкурентных POST сериализуем по featureId,
+        // иначе оба увидят «merge-задачи нет» и заведут две (два исполнителя на одном worktree).
+        var gate = MergeGates.GetOrAdd(featureId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
+        {
+            // Идемпотентность: merge-задача уже есть (свежий снимок — после gate).
+            var existing = features.Project(featureId, UserId)?.Merge;
+            if (existing is not null)
+            {
+                // п.2/п.73: merge-задача закрыта (Done) в окне между снимком и гейтом → 409: дубль
+                // не проходит (верхний гард смотрел на устаревший снимок). Текст отличен от верхнего
+                // гарда («Фича уже смержена»), чтобы тест гонки различал, какая ветка сработала.
+                if (existing.Status == TaskItemStatus.Done)
+                    return Conflict(new { error = "Фича смержена во время мержа" });
+                // Открыта (todo/inProgress): если todo — запускаем исполнителя; возвращаем
+                // актуальную задачу (п.6: та же форма, что и ветка создания — с ClaudeStartedAt,
+                // если запуск прошёл).
+                if (existing.Status == TaskItemStatus.Todo)
+                {
+                    try
+                    {
+                        existing = await executor.ExecuteAsync(existing, auto: false, null);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return BadRequest(new { error = ex.Message });
+                    }
+                }
+                return Ok(existing);
+            }
+
+            // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
+            // Description — самодостаточный шаблон постановки (исход/цель, push, конфликт, критерий, уборка).
+            // ProjectId! — здесь не null: гард worktree (FeatureWorktreeErrorAsync) выше уже вернул 409,
+            // если у эпика нет проекта.
+            var req = new CreateTaskRequest(
+                Title: $"Мерж фичи: {run.Epic.Title}",
+                Description: BuildMergeDescription(run, projects.GetById(run.Epic.ProjectId!)?.RootPath, mainBranch),
+                FeatureId: featureId,
+                Role: TaskRoles.Merge,
+                PersonaId: persona.Id,
+                Assignee: TaskItemAssignee.Claude,
+                WorktreePath: run.Epic.WorktreePath,
+                WorktreeBranch: run.Epic.WorktreeBranch);
+
+            TaskItem task;
+            try
+            {
+                task = tasks.Create(run.Epic.ProjectId, UserId, req);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+
+            // Возвращаем задачу ПОСЛЕ запуска: ClaudeStartedAt/статус подтверждают, что исполнитель стартовал.
+            TaskItem started;
+            try
+            {
+                started = await executor.ExecuteAsync(task, auto: false, null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            return Ok(started);
+        }
+        finally
+        {
+            gate.Release();
+            // Не снимаем запись из MergeGates (осознанно, отменяет минор п.42 «MergeGates растёт»):
+            // один SemaphoreSlim на фичу живёт до рестарта процесса, цена — десятки объектов.
+            // Снятие записи из словаря давало параллельные критические секции (два запроса на
+            // разных экземплярах гейта) и дубль merge-задачи; идемпотентность держит свежий снимок
+            // features.Project ПОСЛЕ gate, гейт лишь сериализует создание, а не гарантирует «один в секции».
+        }
+    }
+
+    // Причина, по которой worktree фичи непригоден для мержа (null — годен). Тот же предикат,
+    // что AttachWorktreeAsync (SessionManager): путь непустой, на диске и числится в
+    // `git worktree list` проекта — иначе чат-исполнитель не привяжется к дереву и тихо
+    // стартовал бы в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
+    // Возврат (gitDisabled, reason): gitDisabled=true → честный 503 (подсистема Git выключена,
+    // п.57, как у Tasks), иначе reason — текст 409 (null — worktree годен).
+    private async Task<(bool GitDisabled, string? Reason)> FeatureWorktreeErrorAsync(TaskItem epic)
+    {
+        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return (false, "Worktree фичи не задан");
+        if (string.IsNullOrWhiteSpace(epic.WorktreeBranch)) return (false, "Ветка фичи не задана");
+        // п.56: у эпика нет проекта (личная задача) → 409, а не ArgumentNullException из GetById(null).
+        if (epic.ProjectId is null) return (false, "Worktree фичи не найден");
+        if (projects.GetById(epic.ProjectId) is not { } project) return (false, "Worktree фичи не найден");
+        // п.56: некорректный путь (недопустимые символы) → 409, а не 500 из Path.GetFullPath.
+        string path;
+        try
+        {
+            path = Path.GetFullPath(epic.WorktreePath.Trim());
+        }
+        catch (Exception)
+        {
+            return (false, "Worktree фичи не найден");
+        }
+        if (!Directory.Exists(path)) return (false, "Worktree фичи не найден");
+        // п.54: гард принимает корень проекта как worktree (WorktreePath = RootPath) — запрещаем:
+        // иначе «мерж в основную ветку» происходил бы в том же дереве, что и исход.
+        if (PathNormalizer.NormalizePath(path) == PathNormalizer.NormalizePath(project.RootPath))
+            return (false, "Worktree фичи совпадает с корнем проекта");
+        // п.57: подсистема Git выключена → честный 503 (как у Tasks), а не 409 «не найден».
+        if (git is null) return (true, null);
+        var wanted = PathNormalizer.NormalizePath(path);
+        IReadOnlyList<GitWorktreeInfo> list;
+        try
+        {
+            // п.53: сбой git (worktree list) → 409 с честной причиной, не 500 (как AttachWorktreeAsync).
+            list = await git.WorktreeListAsync(UserId, project.RootPath);
+        }
+        catch (Exception)
+        {
+            return (false, "Не удалось прочитать git worktree list проекта");
+        }
+        if (!list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted))
+            return (false, "Worktree фичи не найден");
+        return (false, null);
+    }
+
+    // m1: основная ветка проекта — текущая ветка корня (git symbolic-ref). null — git выключен,
+    // корень не репо, detached HEAD или сбой git: шаблон тогда пишет «обычно master» без жёсткого имени.
+    private async Task<string?> ResolveMainBranchAsync(TaskItem epic)
+    {
+        if (git is null || epic.ProjectId is null) return null;
+        var project = projects.GetById(epic.ProjectId);
+        if (project is null) return null;
+        try
+        {
+            return await git.CurrentBranchAsync(UserId, project.RootPath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Шаблон постановки merge-задачи (M1): самодостаточный — исход/цель, push, конфликт, критерий, уборка.
+    // Названия ветки и пути worktree подставляются из эпика; основное рабочее дерево (корень проекта,
+    // куда мержим) — абсолютный путь (п.40; прецедент TeamImplementPrompts: путь дерева в постановке).
+    private static string BuildMergeDescription(FeatureRun run, string? projectRoot, string? mainBranch)
+    {
+        var branch = string.IsNullOrWhiteSpace(run.Epic.WorktreeBranch) ? "ветку фичи" : run.Epic.WorktreeBranch;
+        var worktree = string.IsNullOrWhiteSpace(run.Epic.WorktreePath) ? "worktree фичи" : run.Epic.WorktreePath;
+        var mainTree = string.IsNullOrWhiteSpace(projectRoot) ? "корень проекта" : projectRoot;
+        // m1: основная ветка — из git (текущая ветка корня проекта); если неизвестна — честно
+        // «основная ветка проекта (обычно master)», без жёсткого master в команде.
+        var target = string.IsNullOrWhiteSpace(mainBranch)
+            ? "основную ветку проекта (в этом проекте обычно master)"
+            : $"основную ветку проекта «{mainBranch}»";
+        return string.Join("\n",
+            $"Смержить ветку фичи «{branch}» в {target} в основном рабочем дереве проекта; исход — worktree фичи {worktree}.",
+            $"Основное рабочее дерево (сюда мержим): {mainTree}.",
+            "Предусловие: финал фичи принят (проверено сервером).",
+            "Push НЕ делать — только локальный мерж.",
+            "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
+            "После успешного мержа проверить git log/сборку по кратким критериям проекта и закрыть эпик через tasks_complete только если мерж прошёл чисто.",
+            "Worktree и ветки не удалять — уборка по слову человека.");
+    }
+
+    // Семафоры создания merge-задач по featureId: статика, т.к. контроллер transient (по одному на запрос).
+    // Запись НЕ убирается в finally (осознанно, отменяет минор п.42): один SemaphoreSlim на фичу живёт
+    // до рестарта процесса (цена — десятки объектов). Снятие записи давало параллельные критические секции
+    // и дубль merge-задачи; идемпотентность (свежий снимок после gate) держит корректность, гейт — сериализация.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> MergeGates = new();
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]

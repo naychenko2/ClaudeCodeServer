@@ -369,6 +369,30 @@ export function featureDisplayState(
   return { kind: 'run', alarm: null, status: join('идёт', who, null) };
 }
 
+// Тег статуса в шапке страницы фичи (волна 2, шаг Ф2.4; макет §5.1): короткое слово
+// + тон (run/wait/merge/stop/loop/merged/closed). Бэк считает bucket/attention/rail/
+// summary (контракт индекса фич); фронт только раскладывает в тег — не вычисляет.
+// Чистая функция. От `featureDisplayState` отличается: тот даёт длинный статус
+// («стоит · Денис · 25 мин») для плашки, здесь — короткое слово для тега шапки.
+export type FeatureStatusTone = 'run' | 'wait' | 'merge' | 'stop' | 'loop' | 'merged' | 'closed';
+export interface FeatureStatusTag { label: string; tone: FeatureStatusTone }
+
+export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
+  if (f.bucket === 'closed') {
+    return f.summary?.mergedAt != null
+      ? { label: 'Смержена', tone: 'merged' }
+      : { label: 'Без мержа', tone: 'closed' };
+  }
+  if (f.attention) {
+    if (f.attention.kind === 'stopped') return { label: 'Стоит', tone: 'stop' };
+    if (f.attention.kind === 'merge') return { label: 'К мержу', tone: 'merge' };
+    return { label: 'Ждёт вас', tone: 'wait' };
+  }
+  const active = f.rail.find(s => s.state === 'active');
+  if (active?.tone === 'loop') return { label: 'Доработка', tone: 'loop' };
+  return { label: 'Идёт', tone: 'run' };
+}
+
 // Живые (идёт) и вставшие (упал) статусы чата: по ним чат выводится наружу из
 // свёрнутой группы. «Живой» совпадает с «дышащими» статусами (RUNNING_STATUSES в
 // chatTree); «вставший» — статусы ошибки/осиревшего.
@@ -468,8 +492,11 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
 // только считает числа по chips[] и фильтрует список по выбранному чипу.
 
 // Подписи чипов: порядок = порядок ALL_FEATURE_FILTER_CHIPS (единый источник).
-const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
+// Экспортируется: секция «Фичи · что с ними» в FilterBar и строка снимаемых чипов
+// в SessionList берут подписи отсюда, а не заводят вторую точку правды.
+export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
   open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
+  running: 'Идут',
 };
 
 // Определения чипов для рендера ряда: значение + подпись, в порядке ALL_FEATURE_FILTER_CHIPS.
@@ -479,15 +506,18 @@ export const FEATURE_FILTER_CHIPS: { value: FeatureChip; label: string }[] =
 // Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
 // Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
 export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
-  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0 };
+  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0 };
   for (const f of features) for (const c of f.chips) counts[c]++;
   return counts;
 }
 
-// Фильтр фич по выбранному чипу: фича видна, если её chips[] содержит чип.
-// 'open' — все открытые (не закрытые), 'closed' — все закрытые, остальные — по тревоге.
-export function filterFeaturesByChip(features: FeatureIndexFeature[], chip: FeatureChip): FeatureIndexFeature[] {
-  return features.filter(f => f.chips.includes(chip));
+// Закрытые фичи, которые РИСУЮТСЯ (имеют хотя бы один чат: chatCount > 0). ОДНО число
+// для тумблера «Показывать закрытые фичи · N» (FilterBar) и заголовка секции
+// «Закрытые · M» (SessionList) (m2): раньше тумблер считал ВСЕ закрытые (featureChipCounts),
+// а секция — только нарисованные (closedGroups), и фича без чатов давала расхождение.
+// Фича без чатов не рисуется → не считаем.
+export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
+  return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
 }
 
 // Число ДРУГИХ фич, к которым принадлежит чат (кроме первой, в группе которой он
@@ -501,6 +531,46 @@ export function otherFeatureCount(chatId: string, index: FeaturesIndex): number 
   return links.length - 1;
 }
 
+
+// Чаты «чужой» группы по id (F3.3, п.49): chatIds, связанные с текущей фичей в
+// индексе и нарисованные в группе другой фичи. Список (не счётчик) — чтобы
+// потребитель (OtherGroupLinks) пересчитал «+N чат» по ЖИВЫМ сессиям, а не по индексу.
+export function otherGroupChatIds(
+  currentFeatureId: string,
+  index: FeaturesIndex,
+  currentGroupSessions: Session[],
+): { featureId: string; featureTitle: string; chatIds: string[] }[] {
+  const currentIds = new Set(currentGroupSessions.map(s => s.id));
+  const featureById = new Map(index.features.map(f => [f.featureId, f]));
+  // Все чаты, связанные с текущей фичей в индексе
+  const linkedToCurrent: string[] = [];
+  for (const [chatId, links] of Object.entries(index.chats)) {
+    if (links.some(l => l.featureId === currentFeatureId)) {
+      linkedToCurrent.push(chatId);
+    }
+  }
+  // Для каждого такого чата: если он НЕ в текущей группе — он нарисован в другой.
+  // Группируем по фиче, в которой он нарисован (первая в chats[id] = группа).
+  const byOther = new Map<string, string[]>();
+  for (const chatId of linkedToCurrent) {
+    if (currentIds.has(chatId)) continue;
+    const links = index.chats[chatId];
+    if (!links || links.length === 0) continue;
+    const drawnIn = links[0].featureId;
+    if (drawnIn === currentFeatureId) continue;
+    if (!featureById.has(drawnIn)) continue;
+    const list = byOther.get(drawnIn) ?? [];
+    list.push(chatId);
+    byOther.set(drawnIn, list);
+  }
+  const result: { featureId: string; featureTitle: string; chatIds: string[] }[] = [];
+  for (const [fid, chatIds] of byOther) {
+    const f = featureById.get(fid)!;
+    result.push({ featureId: fid, featureTitle: f.title, chatIds });
+  }
+  return result;
+}
+
 // Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»
 // (ключевой чат фичи) и/или «ещё N» (чат принадлежит ещё N фичам — C0, п.5: след
 // других фич). Считается по id САМОЙ строки, а не замыканием корня: ChatTreeBranch
@@ -510,4 +580,36 @@ export function featureRoleFor(sessionId: string, keyId: string | null, index: F
   const otherN = otherFeatureCount(sessionId, index);
   if (sessionId === keyId) return otherN > 0 ? `ключевой · ещё ${otherN}` : 'ключевой';
   return otherN > 0 ? `ещё ${otherN}` : undefined;
+}
+
+// Подсказка у метки «ключевой» (волна 2, Ф3.2): что значит «ключевой чат» —
+// единый источник текста для метки в группе (ChatCard) и в блоке «Чаты фичи»
+// (FeaturePageBody): не два литерала, а одна константа.
+export const KEY_SESSION_TOOLTIP = 'Здесь управляют фичей: запускают шаги и принимают результат';
+
+// === Плашка группы фичи, волна 2 (макет features-overview-2.html, .ha) ===
+// Чистые функции отображения: бэк считает bucket/attention/chips/keySessionId
+// (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»), фронт только
+// раскладывает их в быстрое действие и стопку аватаров — не вычисляет сам.
+
+// Быстрое действие плашки (макет .qa, «Общее: два действия у плашки»): «Ответить» /
+// «К мержу» / «Ключевой чат». Чистая функция по attention.kind, chips, keySessionId:
+//   closed (chip)          → null (действие живёт на странице фичи, не в списке);
+//   attention.kind 'merge' → 'К мержу';
+//   attention.kind 'wait'  → 'Ответить';
+//   иначе (идёт/стоит)      → 'Ключевой чат' (только если ключевой чат найден), иначе null.
+export function featureQuickAction(f: FeatureIndexFeature): string | null {
+  if (f.chips.includes('closed')) return null;
+  if (f.attention?.kind === 'merge') return 'К мержу';
+  if (f.attention?.kind === 'wait') return 'Ответить';
+  return f.keySessionId ? 'Ключевой чат' : null;
+}
+
+// Стопка аватаров «кто сейчас» (макет .l2): по nowPersonaIds (волна 2, массив идущих
+// персон, по убыванию старта); если массив пуст/отсутствует (старый ответ бэка) —
+// фолбэк на now0 (одна InProgress-задача волны 1). Чистая функция.
+export function featureAvatarPersonaIds(f: FeatureIndexFeature): string[] {
+  if (f.nowPersonaIds && f.nowPersonaIds.length > 0) return f.nowPersonaIds;
+  if (f.now0?.personaId) return [f.now0.personaId];
+  return [];
 }

@@ -13,11 +13,23 @@
 
 import { useSyncExternalStore } from 'react';
 
+// Куда перешли: в чат (id чата) или на страницу фичи (id фичи).
+export interface BackNavTarget {
+  kind: 'chat' | 'feature';
+  id: string;
+}
+
 export interface BackNav {
-  // Исходный чат (id), из которого перешли в ключевой.
+  // Исходный чат (id), из которого перешли.
   from: string;
-  // Куда перешли (id ключевого чата).
-  to: string;
+  // Куда перешли (чат или страница фичи).
+  to: BackNavTarget;
+}
+
+// Старая строка в хранилище (id чата) читается как переход в чат; объект — как есть.
+export function normalizeBackTarget(raw: string | BackNavTarget): BackNavTarget {
+  if (typeof raw === 'string') return { kind: 'chat', id: raw };
+  return raw;
 }
 
 let _back: BackNav | null = null;
@@ -29,10 +41,13 @@ function subscribe(fn: () => void): () => void {
   return () => { _listeners.delete(fn); };
 }
 
-// Записать переход: из чата `from` в ключевой чат `to`. `from === to` — не переход.
-export function recordBackNav(from: string, to: string): void {
-  if (!from || !to || from === to) return;
-  _back = { from, to };
+// Записать переход: из чата `from` в `to` (чат или страницу фичи).
+// `to` — строка (id чата, старый формат) или объект { kind, id }.
+// Переход «чат → тот же чат» (to.kind==='chat' && to.id===from) — не переход.
+export function recordBackNav(from: string, to: string | BackNavTarget): void {
+  const target = normalizeBackTarget(to);
+  if (!from || !target.id || (target.kind === 'chat' && target.id === from)) return;
+  _back = { from, to: target };
   emit();
 }
 
@@ -46,10 +61,10 @@ export function getBackNav(): BackNav | null {
   return _back;
 }
 
-// «← назад» для чата `sessionId`: id исходного чата, если мы сейчас в `to`; иначе null
-// (перехода не было или открыли чат не из плашки).
+// «← назад» для чата `sessionId`: id исходного чата, если мы сейчас в `to`-ЧАТЕ;
+// иначе null (перехода не было, открыли чат не из плашки, или `to` — страница фичи).
 export function backNavFrom(sessionId: string | null): string | null {
-  if (!sessionId || !_back || _back.to !== sessionId) return null;
+  if (!sessionId || !_back || _back.to.kind !== 'chat' || _back.to.id !== sessionId) return null;
   return _back.from;
 }
 
@@ -65,4 +80,5 @@ export const __test = {
   clearBackNav,
   getBackNav,
   backNavFrom,
+  normalizeBackTarget,
 };

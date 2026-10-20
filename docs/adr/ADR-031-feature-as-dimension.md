@@ -72,6 +72,96 @@
 - **`turn-plan-feature-mode`** — плашка фичи в чатах фичи: это та же поверхность чата, что режим «Исполнение фичи», поэтому отдельного флага у неё нет.
 - Флагами закрыт только UI: эндпоинт `features/index` от флагов не зависит, при выключенных флагах список сессий работает как раньше.
 
+## Волна 2: ручка одной фичи и лента событий
+
+Волна 1 (индекс «чат → фичи», §1–§5) даёт список фич; волна 2 добавляет ручку **одной** фичи по id —
+для страницы фичи (макет [features-overview-2-proposal.md](../mockups/features-overview-2-proposal.md) п. 2).
+Ручку разрешил Андрей; контракт — Александр (разрез §1).
+
+### Ручка `GET /api/tasks/features/{featureId}`
+
+Эндпоинт — [TasksController.GetFeature](../../backend/ClaudeHomeServer/Controllers/TasksController.cs).
+`[Authorize]`, владелец из claim (не из маршрута); от фич-флагов не зависит. Подсистема `Tasks`
+выключена (`features == null`) → честный `503` (ADR-014, как у `GetFeatures`/`GetFeaturesIndex`).
+
+**Ответ — обёртка** `{ run, events, eventsTotal }` (контракт — [turn-plan-feature-mode.md](../features/turn-plan-feature-mode.md),
+«Контракт `GET /api/tasks/features/{featureId}`»):
+
+- `run` — агрегат: существующий `FeatureProjector.Project(featureId, ownerId)`, новой арифметики нет.
+  Обёртка, а не поле в `FeatureRun`: тот же агрегат отдаёт `GET features?sessionId` (плашка чата),
+  а лента его раздула бы.
+- `events` — лента: `FeatureProjector.BuildEvents(run, снимок сессий)`, порядок как отдаёт функция
+  (`At desc`, при равенстве — `taskId`). `?eventsLimit=`: не задан → `100`; `all`/`0` → все;
+  `N` (целое > 0) → `N`; прочее → `100`.
+- `eventsTotal` — число событий **до** обрезки.
+
+**Коды:** нет эпика / чужой / удалён → один `404` (не отличаем: это же состояние «Фичу удалили» на
+фронте); подсистема выключена → `503`.
+
+### Шов: `InternalsVisibleTo` на Main
+
+`BuildEvents` — `internal static` (как `BuildIndexCore`). Контроллер (Main) зовёт его напрямую, поэтому
+в [ClaudeHomeServer.Tasks.csproj](../../backend/ClaudeHomeServer.Tasks/ClaudeHomeServer.Tasks.csproj) добавлен
+третий `InternalsVisibleTo("ClaudeHomeServer")` (к существующим `ClaudeHomeServer.Tests`/`ClaudeHomeServer.Tasks.Tests`).
+Направление `Main → Tasks` не меняется (Main уже ссылается на `FeatureProjector`), `SubsystemBoundaryTests`
+не задеты.
+
+### Ручка `POST /api/tasks/features/{featureId}/merge`
+
+Эндпоинт — [TasksController.MergeFeature](../../backend/ClaudeHomeServer/Controllers/TasksController.cs).
+`[Authorize]`, `[DenyOnDelegatedTurn]` (анти-рекурсия, как у `Execute`); от фич-флагов не зависит.
+Составная операция: создаёт задачу `role=merge` и запускает исполнителя штатным путём
+(`TaskExecutionService.ExecuteAsync`), прямого git в бэкенде нет.
+
+**Контракт:**
+
+| Код | Условие |
+|-----|---------|
+| `503` | подсистема `Tasks` выключена (`features == null`) |
+| `404` | эпик не найден / чужой / удалён; тело `{ error: "Фича не найдена" }` — то же, что у `GET` |
+| `409` | фича уже смержена (`run.Merge` `Done`) или закрыта (`run.Closed`, эпик `Done`) — проверяется ПЕРЕД «финал не принят» |
+| `409` | финал не принят (`!run.Ready`): `final` не `Done` или вердикт не `accepted`/`accepted_with_remarks` |
+| `409` | worktree фичи непригоден: путь или ветка пусты, путь не на диске, или путь не числится в `git worktree list` проекта (тот же предикат, что `AttachWorktreeAsync`) — иначе исполнитель тихо стартовал бы в корне проекта; текст 409 не несёт абсолютного пути хоста |
+| `409` | `0` или `>1` персоны с `Specialty=DevopsExecutor`, допустимых в проекте эпика |
+| `200` | задача `role=merge` создана (или существующая открытая возвращена) и исполнитель запущен (ответ — задача после запуска, `ClaudeStartedAt` стоит) |
+
+**Осознанные 409 (добивка ревью, волна 2):**
+
+- **Проект не git-репозиторий** — фича в нём **не мержится** (`409`): гард требует, чтобы worktree числился в `git worktree list` проекта, а без git-репо списка нет. Осознанно: мерж «в основную ветку» без git не имеет смысла, поэтому не деградируем в тихий старт в корне.
+- **Worktree совпадает с корнем проекта** (`WorktreePath = RootPath`) — `409` «worktree фичи совпадает с корнем проекта»: гард иначе принял бы корень как worktree, и «мерж в основную ветку» происходил бы в том же дереве, что и исход.
+- **Подсистема Git выключена** — честный `503` (как у `Tasks`), а не `409` «worktree не найден»: без Git проверить `git worktree list` нечем.
+- **Сбой `git worktree list`** — `409` с честной причиной (не `500`), тот же приём, что `AttachWorktreeAsync`.
+
+**Идемпотентность:** если задача `role=merge` уже существует — вернуть её в той же форме, что и ветка
+создания (если она `Todo` — сначала запустить исполнителя, ответ — актуальная задача с `ClaudeStartedAt`);
+если она уже закрыта (`Status == Done`) — `409` (верхний гард «Фича уже смержена»; если `Done` стало в
+окне между снимком и гейтом — «Фича смержена во время мержа»: дубль не проходит, гейт лишь сериализует
+создание, запись из `MergeGates` не снимается — один семафор на фичу живёт до рестарта процесса).
+
+**Исполнитель:** выбирается динамически через `PersonaSpecialty.DevopsExecutor`
+([PersonaContract.cs](../../backend/ClaudeHomeServer.Core/Models/PersonaContract.cs)):
+`personas.GetByOwner(ownerId)` → фильтр по `Specialty` → валидация `TaskPersonaValidator.Error`
+(зона `PersonaZone`). Имя персоны в код не зашито.
+
+**Поля задачи:** `FeatureId` = id эпика, `Role` = `merge`, `ProjectId`/`WorktreePath`/`WorktreeBranch`
+— из эпика, `PersonaId` — выбранный исполнитель, `Assignee` = `Claude`.
+`Description` — самодостаточный шаблон постановки (`BuildMergeDescription`): смержить ветку фичи
+(`WorktreeBranch` эпика) в основную ветку проекта (имя — текущая ветка корня по git; если неизвестна —
+«обычно master», без жёсткого имени) в основном дереве проекта (worktree эпика — источник),
+предусловие «финал принят», **push не делать**, при конфликте — доложить (не разрешать молча),
+после мержа проверить `git log`/сборку и закрыть эпик, worktree/ветки не удалять.
+
+### Ограничения ленты (честные, без журнала)
+
+Лента — чистая проекция `FeatureRun`/`TaskItem`, хранилища событий нет. Поэтому:
+
+- **Видна последняя пара старт/стоп** задачи: `TaskItem` держит одно `ClaudeStartedAt`/`ExecutorStoppedAt`,
+  перезапуск перезаписывает их — журнал не заводим.
+- **Нет снятого «ждёт вас»**: `waiting`-событие есть, пока `AwaitingHumanSince` стоит; сняли (→ `null`) —
+  события «снято» нет.
+- **Нет переносов**: смена исполнителя/персоны отдельного события не даёт.
+- **Нет автора кнопки**: кто запустил/снял — не атрибутируется (только `personaId` задачи, если есть).
+
 ## Что вынесено за волну
 
 Выкатку не блокирует ничего: флаги выключены, каждый пункт честно деградирует.

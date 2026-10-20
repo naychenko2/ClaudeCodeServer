@@ -9,6 +9,8 @@
 // Все поля аддитивны и nullable-терпимы: UI обязан пережить отсутствие любого
 // (старые ответы не несут новых полей).
 
+import type { FeatureRun } from './featureRun';
+
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
 export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
@@ -30,8 +32,9 @@ export interface FeatureRailSegment {
 }
 
 // Чипы-фильтры (контракт §1, «chips принят»): фронт фильтрует по chips, а не по attention.
-// open = bucket ≠ closed; waiting/stopped/merge = attention.kind; closed = bucket = closed.
-export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed';
+// open = bucket ≠ closed; waiting/stopped/merge = attention.kind; closed = bucket = closed;
+// running = bucket = running (идёт, без тревоги).
+export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed' | 'running';
 
 // Тревога фичи (контракт: `attention.kind` расширен значением `merge` —
 // маппинг сырой строки «мерж» делается на бэке, на фронт уходит только kind).
@@ -96,6 +99,16 @@ export interface FeatureIndexFeature {
   keyProjectId: string | null;
   // Чатов фичи в этом ответе (архивные включены).
   chatCount: number;
+  // Аддитивные (волна 2, без хранения): старые ответы их не несут — UI обязан пережить
+  // отсутствие (все четыре опциональны).
+  // Ветка worktree эпика; null — эпик без worktree.
+  branch?: string | null;
+  // Момент создания эпика (ISO-строка).
+  createdAt?: string | null;
+  // Число задач фичи: эпик + дочерние.
+  taskCount?: number;
+  // «Сейчас»: уникальные PersonaId идущих задач, по убыванию старта; [] — фича не идёт.
+  nowPersonaIds?: string[];
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:
@@ -123,4 +136,46 @@ export interface FeatureChatLink {
 export interface FeaturesIndex {
   features: FeatureIndexFeature[];
   chats: Record<string, FeatureChatLink[]>;
+}
+
+// ── Страница фичи (волна 2 «Обзор фич», разрез §2) ─────────────────────────────
+//
+// Событие ленты фичи: зеркало бэкового `FeatureEvent`
+// (backend/ClaudeHomeServer.Tasks/Projector/FeatureEvents.cs). Один факт из жизни
+// фичи, выведенный из полей TaskItem/витков без хранилища. Контракт:
+// { at, kind, taskId, role?, stepRef?, personaId?, sessionId?, round?, reason? }.
+// Все поля nullable-терпимы: UI обязан пережить отсутствие любого.
+export interface FeatureEvent {
+  // Момент события (UTC, ISO-строка): CreatedAt / ClaudeStartedAt /
+  // ExecutorStoppedAt / AwaitingHumanSince / DroppedByHumanAt / CompletedAt.
+  at: string;
+  // Вид: created | started | stopped | waiting | accepted | accepted_with_remarks |
+  // returned | withdrawn | completed | dropped | merged | closed.
+  kind: string;
+  // Id задачи, к которой относится событие.
+  taskId: string;
+  // Роль задачи: feature · cut · plan · step · rework · review · qa · final · merge · consult.
+  role?: string | null;
+  // Код шага («Ш1», «D1c»); у step/rework, иначе null.
+  stepRef?: string | null;
+  // Исполнитель (PersonaId задачи); null — без персоны.
+  personaId?: string | null;
+  // Чат исполнителя (task.LinkedSessionId); наружу только если в снимке сессий
+  // владельца, иначе null (fail-closed).
+  sessionId?: string | null;
+  // Номер витка (1-based); только у вердиктов, у остальных null.
+  round?: number | null;
+  // Причина (≤200): ExecutorStopReason / AwaitingHumanReason / Verification.Notes; иначе null.
+  reason?: string | null;
+}
+
+// Ответ страницы фичи `GET /api/tasks/features/{featureId}` (волна 2 «Обзор фич»):
+// агрегат `FeatureRun` одной фичи + лента событий.
+//   run        — полный агрегат (Project, без новой арифметики);
+//   events     — лента событий, обрезанная по `eventsLimit` (по умолчанию 100);
+//   eventsTotal — общее число событий ДО обрезки (лента может быть короче).
+export interface FeaturePage {
+  run: FeatureRun;
+  events: FeatureEvent[];
+  eventsTotal: number;
 }

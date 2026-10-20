@@ -2,7 +2,7 @@ import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type C
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
-import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
+import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip, handlePressableKey } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
@@ -34,9 +34,21 @@ import { useSlot } from '../lib/subsystems/registry';
 import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
-import { featureDisplayState } from '../lib/chatGroups';
+import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../types/featureIndex';
+
+// Единый focus-visible ring (клавиатура) для карточки-строки (m1): корень —
+// role="button" tabIndex 0, и нативное кольцо браузера в тёмной теме не видно.
+// SHADOW.focus через :focus-visible (паттерн FeaturePageHeader/SessionList).
+const FOCUS_CLASS = 'cc-chat-card-focus';
+if (typeof document !== 'undefined' && !document.getElementById('cc-chat-card-focus-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-chat-card-focus-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  // head ?? body: fake-DOM тестов (vi.hoisted) не всегда несёт head — не роняем импорт.
+  (document.head ?? document.body).appendChild(el);
+}
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -343,6 +355,10 @@ function ChatCardView({
   const feature = featureLabelFor(s.id, featuresOn);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  // M1: фокус на карточке-строке — подсказка «что значит ключевой» (Tooltip) поднимается
+  // по клавиатуре. Карточка — фокус-стоп (tabIndex 0), метка-span фокусом не является
+  // (вложенный интерактив недопустим), поэтому её onFocus/onBlur — источник фокус-состояния.
+  const [cardFocused, setCardFocused] = useState(false);
 
   // Быстрые действия карточки объявлены ниже — им нужны canRename/canMute/canEditChat
 
@@ -782,21 +798,57 @@ function ChatCardView({
   const backdropPersona = group.length > 1 ? group[0] : persona;
   const padV = isMobile ? 14 : 11;
   const minHeight = Math.max(padV * 2 + TWO_LINES, ACTION_BOX + 8);
+  // M4 (минор 47): скрытое описание подсказки «ключевой» — aria-describedby корня
+  // ведёт на постоянный id (не на Tooltip, который в DOM только когда открыт).
+  const isKeyRole = featureRole !== undefined && featureRole.startsWith('ключевой');
+  // Общий обработчик открытия чата (п.61): мышиный onClick и клавиатурный onKeyDown
+  // (Enter/Space) идут теми же гардами — свайп/long-press/раскрытие/подсистема.
+  // (п.68) Мышь и клавиатура — РАЗНЫЕ ветки: флаги свайпа/long-press (swipeMoved/lpFired)
+  // — тач-состояния, и клавиатурное нажатие их НЕ тратит (иначе после свайпа первый Enter
+  // «съедал» бы флаг и чат не открылся). Мышиный клик флаги трать (поведение мыши/тача
+  // сохранено), клавиатура — нет.
+  const openChat = () => {
+    // Свайп-жест прошёл (даже без открытия) — клик не открывает чат
+    if (swipeMoved.current) { swipeMoved.current = false; return; }
+    if (lpFired.current) { lpFired.current = false; return; }
+    openChatByKeyboard();
+  };
+  // Клавиатура (Enter/Space): не тратит флаги свайпа/long-press (п.68), но уважает
+  // раскрытие свайпом (тап закрывает) и подсистему (action.open).
+  const openChatByKeyboard = () => {
+    // Раскрытая свайпом карточка: нажатие закрывает раскрытие, а не открывает чат
+    if (swipeOpen) { onSwipeToggle?.(false); return; }
+    // Подсистема может открыть чат по-своему (чат картинки — в редакторе)
+    if (badges.some(b => b.action?.open?.(s))) return;
+    onSelect();
+  };
 
   return (
     <div
-      onClick={() => {
-        // Свайп-жест прошёл (даже без открытия) — клик не открывает чат
-        if (swipeMoved.current) { swipeMoved.current = false; return; }
-        if (lpFired.current) { lpFired.current = false; return; }
-        // Раскрытая свайпом карточка: тап закрывает раскрытие, а не открывает чат
-        if (swipeOpen) { onSwipeToggle?.(false); return; }
-        // Подсистема может открыть чат по-своему (чат картинки — в редакторе)
-        if (badges.some(b => b.action?.open?.(s))) return;
-        onSelect();
-      }}
+      onClick={openChat}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
+      // M1: карточка — фокус-стоп (tabIndex 0), чтобы подсказка «ключевой» поднималась
+      // по клавиатуре; onFocus/onBlur — единственный источник фокус-состояния метки.
+      // M4: role="button" + onKeyDown (handlePressableKey) — Enter/Space открывают чат;
+      // e.target === e.currentTarget защищает от перехвата Enter на вложенных кнопках.
+      // m1: кольцо фокуса — SHADOW.focus через :focus-visible (FOCUS_CLASS), не браузерное.
+      className={FOCUS_CLASS}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => {
+        // M1': Escape гасит плашку «ключевой» (фокус с клавиатуры), не открывая чат.
+        if (e.key === 'Escape' && e.target === e.currentTarget) { setCardFocused(false); return; }
+        handlePressableKey(e, openChatByKeyboard);
+      }}
+      aria-describedby={isKeyRole ? `key-desc-${s.id}` : undefined}
+      // п.51: «ключевой» поднимается ТОЛЬКО при фокусе самой карточки, не от вложенных
+      // действий (фокус на вложенной кнопке — e.target ≠ e.currentTarget).
+      // M1': гейт по :focus-visible (клавиатура), НЕ по canHover: клик мышью/тап дают
+      // фокус без :focus-visible → плашка не поднимается и не залипает; Tab (в т.ч. на
+      // планшете с внешней клавиатурой) — :focus-visible → поднимается.
+      onFocus={e => { if (e.target === e.currentTarget && e.currentTarget.matches(':focus-visible')) setCardFocused(true); }}
+      onBlur={e => { if (e.target === e.currentTarget) setCardFocused(false); }}
       // Правый клик — меню действий прямо у курсора (desktop): тот же состав, что у
       // «⋮» и long-press, без прицеливания в мелкую кнопку. Якорь — точка курсора
       // (zero-size rect), ui/Menu в anchor-режиме раскроется под ней
@@ -822,6 +874,12 @@ function ChatCardView({
         cursor: 'pointer',
       }}
     >
+      {/* M4 (минор 47): скрытое описание подсказки «ключевой» — aria-describedby
+          корня ведёт сюда (постоянный id), а не на плашку Tooltip (её id живёт
+          только пока плашка открыта). На тач-устройствах Tooltip не поднимается,
+          но скринридер всё равно прочитает описание. Описание — ТЕКСТОМ внутри
+          скрытого span (п.59), не aria-label: aria-describedby читает содержимое. */}
+      {isKeyRole && <span id={'key-desc-' + s.id} style={{ display: 'none' }}>{KEY_SESSION_TOOLTIP}</span>}
       {/* Кнопки свайпа (мобила): под карточкой у правого края, видны, когда карточка
           уехала. Высота — вся карточка, ширина — вылет раскрытия.
           Слой висит постоянно, а прячет его непрозрачный фон карточки — поэтому фон
@@ -1039,18 +1097,31 @@ function ChatCardView({
             // m4: вид — как в плашке/шторке (макет .role): mono, R 6, 0/5;
             // «ключевой» — accent/accentLight 700, «ещё N» — textSecondary/bgSelected 400.
             const isKey = featureRole.startsWith('ключевой');
-            return (
-              <span data-testid="chat-feature-role" style={{
-                display: 'inline-flex', flexShrink: 0, alignItems: 'center',
-                fontFamily: FONT.mono, fontSize: FS.xs,
-                fontWeight: isKey ? 700 : 400,
-                color: isKey ? C.accent : C.textSecondary,
-                background: isKey ? C.accentLight : C.bgSelected,
-                borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
-              }}>
+            // Ф3.2: подсказка «что значит ключевой» — единый текст KEY_SESSION_TOOLTIP.
+            // По наведению — стилизованная плашка ui/Tooltip (canHover); по клавиатуре (M1)
+            // — Tooltip, когда фокус на карточке-строке (cardFocused); на тач Tooltip не
+            // поднимается (свой комментарий) — тач-доступность даёт нативный title (long-press).
+            // aria-label на span НЕ ставим (минор): метка неинтерактивна, и label на ней
+            // скринридер, скорее всего, проигнорирует.
+            const chip = (
+              <span
+                data-testid="chat-feature-role"
+                title={isKey && !canHover ? KEY_SESSION_TOOLTIP : undefined}
+                style={{
+                  display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+                  fontFamily: FONT.mono, fontSize: FS.xs,
+                  fontWeight: isKey ? 700 : 400,
+                  color: isKey ? C.accent : C.textSecondary,
+                  background: isKey ? C.accentLight : C.bgSelected,
+                  borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
+                }}
+              >
                 {featureRole}
               </span>
             );
+            // m-b: якорь метки — zIndex 3 (над hover-кнопками, zIndex 2): метка остаётся
+            // наводимой, и плашка поднимается от неё, а не от центра карточки.
+            return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP} focused={cardFocused} style={{ zIndex: 3 }}>{chip}</Tooltip> : chip;
           })()}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (

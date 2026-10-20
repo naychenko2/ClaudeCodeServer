@@ -1,7 +1,7 @@
 import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { readStoredToken, request } from './offline';
 import type { FeatureRun } from '../types/featureRun';
-import type { FeaturesIndex } from '../types/featureIndex';
+import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 import type { HistoryCursorQuery, HistoryReply } from './historyTail';
@@ -1429,6 +1429,23 @@ export const api = {
     // 503 при выключенной подсистеме Tasks (как getFeatures).
     featuresIndex: (projectId?: string) =>
       request<FeaturesIndex>(`/tasks/features/index${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+    // Страница фичи (волна 2 «Обзор фич»): агрегат `FeatureRun` одной фичи + лента событий.
+    // fid — id эпика; eventsLimit — «all»/«0» → все, N (целое > 0) → N, иначе 100 (бэк).
+    // 404 — фичи нет/чужая/удалена (один 404); 503 — подсистема Tasks выключена.
+    // signal — отмена в-полёте запроса (быстрая смена fid в useFeaturePage): не плодим
+    // параллельных GET, устаревший отменяется (AbortError игнорируется в featurePage).
+    getFeature: (fid: string, eventsLimit?: string, signal?: AbortSignal) =>
+      request<FeaturePage>(
+        `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
+        signal ? { signal } : undefined,
+      ),
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
+    // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:
+    // 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят / 0 или >1
+    // исполнителей DevOps) — причина в err.body.error (и err.message). Идемпотентна:
+    // открытая merge-задача → вернуть её (повторный вызов — та же задача, вторую не заводим).
+    mergeFeature: (fid: string) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, { method: 'POST' }),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

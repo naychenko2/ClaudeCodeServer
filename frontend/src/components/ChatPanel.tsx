@@ -2742,10 +2742,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     <PersonaContext.Provider value={persona}>
     {/* embedded (колонка стены) — тоже прозрачный: подложку даёт стеклянный остров
         колонки, а собственный плотный фон закрывал бы дудл-холст под ней */}
-    <div style={{
-      display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
-      background: headerIsland || embedded ? 'transparent' : C.bgMain,
-    }}>
+    <div
+      data-testid="chat-panel"
+      style={{
+        display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
+        background: headerIsland || embedded ? 'transparent' : C.bgMain,
+      }}
+    >
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
           холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
           (embedded) шапка тоже штатная — канонический вид чата; над ней колонка

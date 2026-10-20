@@ -610,7 +610,10 @@ export default function App() {
       && !!initialHash.projectId && initialHash.projectId !== project?.id
     if (hubTab === 'projects' && project && !hashOtherProject) {
       const chatFromHash = initialHash?.screen === 'project' && initialHash.chatId ? initialHash.chatId : undefined
-      navPush({ screen: 'project', project, view: chatFromHash ? undefined : 'sidebar', file: null, chatId: chatFromHash })
+      // Диплинк #/project/{id}/feature/{fid}: сохраняем страницу фичи в снимке, иначе сид
+      // схлопнул бы адрес, и WorkspacePage не открыл бы страницу при первом монтировании.
+      const featureFromHash = initialHash?.screen === 'project' && initialHash.featureId ? initialHash.featureId : null
+      navPush({ screen: 'project', project, view: chatFromHash ? undefined : 'sidebar', file: null, chatId: chatFromHash, feature: featureFromHash })
       const ws = loadWorkspaceState(project.id)
       if (ws?.openFile && !chatFromHash) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
     }
@@ -705,8 +708,11 @@ export default function App() {
         if (p) {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           setProject(p)
-          // Пишем проект из диплинка в историю (сид его пропустил из-за расхождения)
-          navPush({ screen: 'project', project: p, view: 'sidebar', file: null, chatId: initialHash.chatId || undefined })
+          // Пишем проект из диплинка в историю (сид его пропустил из-за расхождения).
+          // featureId из хэша кладём в снимок (и view как в сиде): инициализатор openFeatureId
+          // WorkspacePage берёт getNav()?.feature, и без него адрес схлопывается в #/project/{pid}
+          // ещё до прихода /me — страница не открывается в свежем браузере / из другого проекта.
+          navPush({ screen: 'project', project: p, view: initialHash.chatId ? undefined : 'sidebar', file: null, chatId: initialHash.chatId || undefined, feature: initialHash.featureId ?? null })
         }
       })
       .catch(() => { /* офлайн/нет доступа — остаёмся на восстановленном состоянии */ })

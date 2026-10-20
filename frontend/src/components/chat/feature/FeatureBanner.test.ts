@@ -368,6 +368,15 @@ describe('FeatureBanner: рендер (SSR)', () => {
     expect(html).toContain('overflow:auto');
   });
 
+  // === M2: «Фича →» на 360 — minHeight 40 (тач-цель), десктоп без minHeight ===
+  it('M2: «Фича →» на 360 — minHeight 40 (тач-цель), десктоп — без minHeight', () => {
+    seedIndex(feat(), link(), 'chat-exec', 'p1');
+    // Мобила (360): «Фича →» — minHeight 40 (тач-цель, §6).
+    expect(renderBannerMobile('chat-exec', 'p1')).toContain('min-height:40px');
+    // Десктоп: «Фича →» без minHeight (натуральная высота); minHeight 40 в плашке не появляется.
+    expect(renderBanner('chat-exec', 'p1')).not.toContain('min-height:40px');
+  });
+
   // === m2: тон текста статуса (ждёт → C.info, стоит → C.dangerText) ===
   it('m2: тон текста статуса — «ждёт» C.info, «стоит» C.dangerText', () => {
     seedIndex(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec', 'p1');

@@ -149,7 +149,8 @@ export function FeatureModeBody({ sessionId, todos, runs, isMobile, title, varia
 function FeatureCardFooter({ run, isMobile }: { run: FeatureRun; isMobile: boolean }) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
-  const open = () => openTaskInSection({ id: run.epic.id, projectId: run.epic.projectId ?? undefined });
+  // п.32: epic nullable-терпимо — без эпика действие недоступно (guard, не каст).
+  const open = () => { if (!run.epic) return; openTaskInSection({ id: run.epic.id, projectId: run.epic.projectId ?? undefined }); };
   return (
     <button
       onClick={open}

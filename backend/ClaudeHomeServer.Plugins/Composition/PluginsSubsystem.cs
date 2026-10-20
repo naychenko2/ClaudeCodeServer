@@ -36,6 +36,11 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // Секреты плагинов (M7): per-owner архив plugin-secrets.json, отдельно от installed.json.
         services.AddSingleton<PluginSecretsStore>();
         services.AddSingleton<IPluginDirSource, PluginDirSource>();
+        // Шов «навык плагина существует» (QA-фикс L3): PersonaBindingsService (Main) проверяет
+        // Skill-привязку plugin:{id}/{skill} при создании. Stateless поверх PluginStore +
+        // IFeatureFlagGate (Core-швы); Main берёт его опциональной зависимостью (null =
+        // подсистема выключена).
+        services.AddSingleton<IPluginSkillResolver, PluginSkillResolver>();
         // Валидатор пакета (ADR-031 §2.3, шаг 1.3): allow-list файлов + sha256.
         // Stateless — singleton; вызывается PluginInstaller при установке.
         services.AddSingleton<PluginPackageValidator>();

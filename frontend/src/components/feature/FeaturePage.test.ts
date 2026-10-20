@@ -232,6 +232,16 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-body')).not.toBeNull();
   });
 
+  // п.1: тултип НАЗВАНИЯ фичи = title (nameTitle={title}), а не label «К чату «…»».
+  // Мутация (в отчёте): вернуть nameTitle={label} → title ≠ название → тест краснеет.
+  it('п.1: title имени фичи = название (не «К чату «…»»)', async () => {
+    const c = render({});
+    await settle();
+    const name = findNodeByAttr(c, 'data-testid', 'feature-page-title')!;
+    const title = (name as unknown as { attributes: Record<string, string> }).attributes?.title;
+    expect(title, 'title имени = название фичи (не label возврата)').toBe('Моя фича');
+  });
+
   // === 2b. «как файл»: белый фон C.bgCard, Toolbar-шапка, убранных блоков нет в DOM ===
   it('as a file: фон C.bgCard, Toolbar-шапка; нет тревоги/чатов/задач/ленты/⋯/главного действия', async () => {
     const c = render({});

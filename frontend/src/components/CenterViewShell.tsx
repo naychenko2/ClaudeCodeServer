@@ -59,7 +59,7 @@ export function CenterViewShell({
   // Тело (прокрутка, контент) — рендерит вызывающий.
   children: ReactNode;
 }) {
-  useEscapeClose(onClose);
+  useEscapeClose(onClose, rootRef);
   return (
     <div
       ref={rootRef}

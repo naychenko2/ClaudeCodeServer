@@ -230,7 +230,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       closeTitle="Закрыть"
       closeTestId="feature-page-close"
       name={title}
-      nameTitle={label}
+      nameTitle={title}
       nameTestId="feature-page-title"
       leading={
         // Глиф состояния — аналог плитки типа файла (14 px).

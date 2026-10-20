@@ -68,7 +68,6 @@ import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { MidiEditor } from '../lib/shell-kit';
 import { CenterViewShell } from './CenterViewShell';
-import { useEscapeClose } from '../lib/useEscapeClose';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
@@ -1026,10 +1025,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     }
   };
 
-  // Escape закрывает файл (handleClose сам спросит про несохранённое) — общим хуком
-  // useEscapeClose (в CenterViewShell): не перехватываем, если печатают в поле/редакторе
-  // или уже открыт диалог/меню — там Escape нужнее им.
-  useEscapeClose(handleClose);
+  // Escape закрывает файл (handleClose сам спросит про несохранённое) — слушатель вешает
+  // оболочка CenterViewShell (общий хук useEscapeClose, onClose = handleClose): не
+  // перехватываем, если печатают в поле/редакторе или уже открыт диалог/меню. Второй
+  // useEscapeClose здесь был дублем: одно нажатие Esc звало handleClose дважды.
 
   // Смена режима «сплит ↔ на весь экран»: FileViewer при этом пересоздаётся
   // (в WorkspacePage это две разные ветки дерева), поэтому несохранённые правки
@@ -1736,6 +1735,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         </>
       }
       nameTitle={filePath}
+      nameTestId="file-name"
       leftExtra={
         // ☰ + back/forward (в fixedLeftRef, после close): useToolbarOverflow учитывает их.
         <>

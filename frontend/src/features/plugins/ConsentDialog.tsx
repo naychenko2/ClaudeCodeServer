@@ -5,7 +5,7 @@ import { Modal, Button, Checkbox, Badge } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import {
-  isNetPermission, permissionLabel, NET_PERMISSION_WARNING,
+  isNetPermission, netHostOf, permissionLabel, NET_PERMISSION_WARNING,
 } from './permissionLabels';
 
 // === Данные диалога согласия (экран 2 макетов, ADR-031 §4) ===
@@ -139,6 +139,43 @@ export function showsResidualRiskNote(requested: string[]): boolean {
   return requested.some(p => p === 'notes:read' || p === 'tasks:read');
 }
 
+// Форматирует список хостов: до трёх перечисляем, дальше «и ещё N».
+function formatHosts(hosts: string[]): string {
+  if (hosts.length <= 3) return hosts.join(', ');
+  return `${hosts.slice(0, 3).join(', ')} и ещё ${hosts.length - 3}`;
+}
+
+// Чистая функция выбора текста подписи о риске (minor 2 Александра, финальное
+// ревью). `perms` — итоговый набор прав, который человек подтверждает кнопкой:
+//   install:  отмеченные из requested
+//   modify:   отмеченные из requested + inheritedPermissions
+//
+// Три ветки:
+//   нет чтения (notes:read/tasks:read)  → null (подписи нет)
+//   есть чтение, нет net:{host}         → RESIDUAL_RISK_NOTE (остаточный риск)
+//   есть чтение И есть net:{host}       → честная подпись: прямой канал утечки —
+//                                         сам разрешённый хост, шире WebRTC/DNS
+export function riskNoteFor(perms: string[]): string | null {
+  const hasRead = perms.some(p => p === 'notes:read' || p === 'tasks:read');
+  if (!hasRead) return null;
+
+  const hosts = perms
+    .filter(p => isNetPermission(p))
+    .map(p => netHostOf(p))
+    .filter((h): h is string => h !== null && h.length > 0);
+
+  if (hosts.length === 0) return RESIDUAL_RISK_NOTE;
+
+  // Что именно читает: «заметки», «задачи» или «заметки и задачи»
+  const reads: string[] = [];
+  if (perms.includes('notes:read')) reads.push('заметки');
+  if (perms.includes('tasks:read')) reads.push('задачи');
+  const readText = reads.join(' и ');
+
+  return `Плагин сможет читать ваши ${readText} и отправлять данные на ${formatHosts(hosts)}. `
+    + 'Выдавайте оба права, только если доверяете этому адресу.';
+}
+
 // Инициалы для плитки: первые буквы слов имени (до 2)
 function initialsOf(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -205,6 +242,18 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, new
   );
 
   const submitLabel = submitLabelFor(mode, checkedCount, totalCount);
+
+  // Подпись о риске: по итоговому набору, который человек подтверждает кнопкой.
+  // install: отмеченные из requested; modify: отмеченные + inheritedPermissions.
+  const riskNote = useMemo(
+    () => {
+      const effective = mode === 'modify'
+        ? [...data.requested.filter(p => checked[p]), ...(inheritedPermissions ?? [])]
+        : data.requested.filter(p => checked[p]);
+      return riskNoteFor(effective);
+    },
+    [data.requested, checked, mode, inheritedPermissions],
+  );
 
   // «Задан» для бейджа: на сервере, сохранён в этой сессии или (установить) подтверждён.
   const isSet = (s: PluginConsentSecret): boolean =>
@@ -377,10 +426,10 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, new
               );
             })}
           </div>
-          {/* Остаточный риск: только когда запрошено чтение данных (notes:read/tasks:read) */}
-          {showsResidualRiskNote(data.requested) && (
+          {/* Подпись о риске: по итоговому набору подтверждённых прав (minor 2) */}
+          {riskNote && (
             <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5, marginTop: SP.sm }}>
-              {RESIDUAL_RISK_NOTE}
+              {riskNote}
             </div>
           )}
         </div>

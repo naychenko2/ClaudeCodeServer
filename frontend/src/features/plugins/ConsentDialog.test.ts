@@ -28,7 +28,7 @@ vi.stubGlobal('document', {
 
 const {
   ConsentDialog, defaultCheckedState, findBlockingSecret, grantSecretsToSend, submitLabelFor,
-  RESIDUAL_RISK_NOTE, showsResidualRiskNote,
+  RESIDUAL_RISK_NOTE, showsResidualRiskNote, riskNoteFor,
 } = await import('./ConsentDialog');
 type PluginConsentData = import('./ConsentDialog').PluginConsentData;
 type PluginConsentSecret = import('./ConsentDialog').PluginConsentSecret;
@@ -266,6 +266,114 @@ describe('ConsentDialog: остаточный риск (ADR-031 §3.6)', () => {
     expect(showsResidualRiskNote(['net:api.example.com'])).toBe(false);
     expect(showsResidualRiskNote(['secret:API_TOKEN'])).toBe(false);
     expect(showsResidualRiskNote([])).toBe(false);
+  });
+});
+
+// === riskNoteFor: честная подпись о риске (minor 2 Александра) ===
+// Три ветки: нет чтения → null; чтение без net → RESIDUAL_RISK_NOTE;
+// чтение + net:{host} → текст про прямой канал утечки (хост шире WebRTC/DNS).
+describe('riskNoteFor (minor 2)', () => {
+  // --- Ветка 1: нет чтения → null ---
+  it('нет чтения (только net) → null', () => {
+    expect(riskNoteFor(['net:api.example.com'])).toBeNull();
+  });
+
+  it('нет чтения (пустой список) → null', () => {
+    expect(riskNoteFor([])).toBeNull();
+  });
+
+  it('нет чтения (только secret) → null', () => {
+    expect(riskNoteFor(['secret:API_TOKEN'])).toBeNull();
+  });
+
+  // --- Ветка 2: чтение, нет net → RESIDUAL_RISK_NOTE ---
+  it('notes:read, нет net → RESIDUAL_RISK_NOTE', () => {
+    expect(riskNoteFor(['notes:read'])).toBe(RESIDUAL_RISK_NOTE);
+  });
+
+  it('tasks:read, нет net → RESIDUAL_RISK_NOTE', () => {
+    expect(riskNoteFor(['tasks:read'])).toBe(RESIDUAL_RISK_NOTE);
+  });
+
+  it('notes:read + tasks:read, нет net → RESIDUAL_RISK_NOTE (один раз)', () => {
+    expect(riskNoteFor(['notes:read', 'tasks:read'])).toBe(RESIDUAL_RISK_NOTE);
+  });
+
+  // --- Ветка 3: чтение + net:{host} → новый текст ---
+  it('notes:read + net:api.example.com → текст с хостом', () => {
+    const note = riskNoteFor(['notes:read', 'net:api.example.com']);
+    expect(note).not.toBeNull();
+    expect(note).not.toBe(RESIDUAL_RISK_NOTE);
+    expect(note).toContain('заметки');
+    expect(note).toContain('api.example.com');
+    expect(note).toContain('доверяете');
+  });
+
+  it('tasks:read + net:api.example.com → текст с «задачи»', () => {
+    const note = riskNoteFor(['tasks:read', 'net:api.example.com']);
+    expect(note).not.toBeNull();
+    expect(note).toContain('задачи');
+    expect(note).toContain('api.example.com');
+  });
+
+  it('notes:read + tasks:read + net → «заметки и задачи»', () => {
+    const note = riskNoteFor(['notes:read', 'tasks:read', 'net:api.example.com']);
+    expect(note).not.toBeNull();
+    expect(note).toContain('заметки и задачи');
+  });
+
+  // --- Два права net: → оба хоста перечислены ---
+  it('notes:read + два net: → оба хоста в тексте', () => {
+    const note = riskNoteFor(['notes:read', 'net:a.com', 'net:b.com']);
+    expect(note).not.toBeNull();
+    expect(note).toContain('a.com');
+    expect(note).toContain('b.com');
+  });
+
+  // --- 4+ хоста → «и ещё N» ---
+  it('notes:read + 4 хоста → три перечислены + «и ещё 1»', () => {
+    const note = riskNoteFor(['notes:read', 'net:a.com', 'net:b.com', 'net:c.com', 'net:d.com']);
+    expect(note).not.toBeNull();
+    expect(note).toContain('a.com');
+    expect(note).toContain('b.com');
+    expect(note).toContain('c.com');
+    expect(note).toContain('и ещё 1');
+    // четвёртый хост не перечислен полностью
+    expect(note).not.toContain('d.com');
+  });
+
+  it('notes:read + ровно 3 хоста → все три, без «и ещё»', () => {
+    const note = riskNoteFor(['notes:read', 'net:a.com', 'net:b.com', 'net:c.com']);
+    expect(note).not.toBeNull();
+    expect(note).toContain('a.com');
+    expect(note).toContain('b.com');
+    expect(note).toContain('c.com');
+    expect(note).not.toContain('и ещё');
+  });
+
+  // --- Обновление: inheritedPermissions без новых прав → подпись по итоговому набору ---
+  it('modify: inherited=[notes:read, net:x.com], requested=[] → подпись с хостом', () => {
+    // Имитация: эффективный набор = inherited (checked из requested пуст)
+    const effective = ['notes:read', 'net:x.com'];
+    const note = riskNoteFor(effective);
+    expect(note).not.toBeNull();
+    expect(note).toContain('x.com');
+    expect(note).not.toBe(RESIDUAL_RISK_NOTE);
+  });
+
+  it('modify: inherited=[notes:read], requested=[net:y.com] (отмечено) → подпись с хостом', () => {
+    // Эффективный набор: checked из requested (net:y.com) + inherited (notes:read)
+    const effective = ['net:y.com', 'notes:read'];
+    const note = riskNoteFor(effective);
+    expect(note).not.toBeNull();
+    expect(note).toContain('y.com');
+  });
+
+  it('modify: inherited=[notes:read], requested=[net:y.com] (НЕ отмечено) → RESIDUAL_RISK_NOTE', () => {
+    // net:y.com не отмечено → эффективный набор только [notes:read]
+    const effective = ['notes:read'];
+    const note = riskNoteFor(effective);
+    expect(note).toBe(RESIDUAL_RISK_NOTE);
   });
 });
 

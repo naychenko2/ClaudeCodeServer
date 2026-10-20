@@ -71,7 +71,9 @@ export function CenterViewShell({
           <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             {isMobile ? (
               <span data-testid={closeTestId}>
-                <BackButton onClick={onClose} title={mobileTitle} style={{ height: 32 }}>
+                {/* m2 (Майя): полный текст возврата («К чату «…»»/«К списку») — в title И aria-label;
+                    видимая подпись остаётся короткой (closeLabel), высота 32 px — паритет с файлом. */}
+                <BackButton onClick={onClose} title={mobileTitle} ariaLabel={mobileTitle} style={{ height: 32 }}>
                   <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>{closeLabel}</span>
                 </BackButton>
               </span>
@@ -85,16 +87,26 @@ export function CenterViewShell({
             {leftExtra}
           </div>
           {leading}
+          {/* m1 (Майя, регрессия оболочки): ellipsis — на ВНУТРЕННЕМ span, а не на flex-родителе.
+              textOverflow:ellipsis на display:flex не срабатывает (текст = анонимный flex-item →
+              обрезка посреди буквы без «…»). Внешний span — flex-родитель (minWidth:0, чтобы
+              цепочка сжималась), внутренний — блок с overflow/ellipsis/nowrap и minWidth:0. */}
           <span
             data-testid={nameTestId}
             title={nameTitle}
             style={{
               display: 'flex', alignItems: 'baseline', flex: '1 1 auto', minWidth: 0,
               fontFamily: FONT.mono, fontWeight: 700, fontSize: FS.base, color: C.textHeading,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}
           >
-            {name}
+            <span
+              style={{
+                flex: '1 1 auto', minWidth: 0,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
+              {name}
+            </span>
           </span>
           {trailing}
         </div>

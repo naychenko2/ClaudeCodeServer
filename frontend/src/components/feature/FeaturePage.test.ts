@@ -540,6 +540,29 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(onBack).toHaveBeenCalledWith({ kind: 'list' });
   });
 
+  // === m2 (Майя): aria-label с полным текстом возврата; видимая подпись — короткая ===
+  // Полный текст («К чату «…»»/«К списку») раньше был ТОЛЬКО в title; добавлен aria-label
+  // (скринридеры читают aria-label, не title). Видимая подпись остаётся короткой.
+  it('m2: aria-label «К чату «…»» (полный текст), видимая подпись короткая «Чат»', async () => {
+    recordBackNav('chatA', { kind: 'feature', id: 'f1' });
+    mockChats.set('chatA', { id: 'chatA', name: 'Чат Дениса', mode: 'chat', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session);
+    const c = render({ isMobile: true });
+    await settle();
+    // aria-label — полный текст возврата (мутация «убрать aria-label» красит).
+    const back = findNodeByAttr(c, 'aria-label', 'К чату «Чат Дениса»');
+    expect(back, 'aria-label с полным текстом «К чату «…»»').not.toBeNull();
+    // Видимая подпись — короткая «Чат» (не длинный «К чату «…»»).
+    const close = findNodeByAttr(c, 'data-testid', 'feature-page-close')!;
+    expect(textNodes(close).join(''), 'видимая подпись короткая').toBe('Чат');
+  });
+
+  it('m2: aria-label «К списку» (мобила, без указателя), видимая подпись «К списку»', async () => {
+    const c = render({ isMobile: true });
+    await settle();
+    const back = findNodeByAttr(c, 'aria-label', 'К списку');
+    expect(back, 'aria-label «К списку» (мобила, без указателя)').not.toBeNull();
+  });
+
   // === Esc закрывает страницу (ровно как файл: FileViewer) — onBack(target) ===
   it('Esc: закрывает → onBack (target по back-nav); в поле — не перехватывает', async () => {
     recordBackNav('chatA', { kind: 'feature', id: 'f1' });

@@ -57,11 +57,11 @@ function wireWindow() {
   return { win, doc };
 }
 
-function mountViewer(onClose: () => void) {
+function mountViewer(onClose: () => void, isMobile = false) {
   installFakeDom();
   const { win, doc } = wireWindow();
   const { root, container } = mount(createElement(FileViewer, {
-    project, filePath: 'docs/readme.txt', onClose,
+    project, filePath: 'docs/readme.txt', onClose, isMobile,
   }));
   return { root, container, win, doc };
 }
@@ -73,6 +73,23 @@ async function flush() {
 
 function esc(win: any, target: unknown = { tagName: 'DIV', isContentEditable: false }) {
   win.window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target });
+}
+
+// Элемент role=button, чей потомок-текст равен `text` (BackButton: видимая подпись → кнопка).
+function findButtonByText(container: unknown, text: string): { getAttribute: (k: string) => string | null } | null {
+  let hit: { getAttribute: (k: string) => string | null } | null = null;
+  const walk = (n: { nodeType?: number; nodeValue?: string; parentNode?: unknown; childNodes?: unknown[] }) => {
+    if (hit) return;
+    if (n.nodeType === 3 && n.nodeValue === text) {
+      let p = n.parentNode as { getAttribute?: (k: string) => string | null; parentNode?: unknown } | null;
+      while (p && p.getAttribute?.('role') !== 'button') p = p.parentNode ?? null;
+      hit = p as { getAttribute: (k: string) => string | null } | null;
+      return;
+    }
+    for (const c of n.childNodes ?? []) walk(c as never);
+  };
+  walk(container as never);
+  return hit;
 }
 
 describe('FileViewer: Esc / закрытие / имя в шапке', () => {
@@ -133,22 +150,56 @@ describe('FileViewer: Esc / закрытие / имя в шапке', () => {
     expect(onClose, 'клик по X → handleClose').toHaveBeenCalledTimes(1);
   });
 
+  // m2 (Майя): aria-label с полным текстом возврата (BackButton, мобила). Полный текст
+  // «К списку файлов» — в title И aria-label; видимая подпись — короткая «Файлы».
+  // Мутация «убрать aria-label из BackButton/CenterViewShell» красит.
+  it('m2: aria-label «К списку файлов» (BackButton, мобила), видимая подпись «Файлы»', async () => {
+    const onClose = vi.fn();
+    const { container } = mountViewer(onClose, true);
+    await flush();
+    // aria-label — полный текст возврата.
+    const back = findNodeByAttr(container, 'aria-label', 'К списку файлов');
+    expect(back, 'aria-label «К списку файлов» (BackButton, мобила)').not.toBeNull();
+    // Видимая подпись — короткая «Файлы» (текст внутри кнопки).
+    expect(textNodes(back as never).join(''), 'видимая подпись «Файлы»').toContain('Файлы');
+  });
+
   it('имя файла в шапке (mono 700) + ellipsis (п.4: осознанное улучшение)', async () => {
     const onClose = vi.fn();
     const { container } = mountViewer(onClose);
     await flush();
-    // Имя — span[data-testid=file-name] (CenterViewShell): mono 700 + ellipsis.
+    // Имя — span[data-testid=file-name] (CenterViewShell): mono 700.
     const name = findNodeByAttr(container, 'data-testid', 'file-name');
     expect(name, 'имя файла в шапке (data-testid=file-name)').not.toBeNull();
     const style = (name as unknown as { style: Record<string, string> }).style;
     expect(style.fontWeight, 'имя — mono 700').toBe('700');
-    // п.4: внешний span имени получил overflow/textOverflow/whiteSpace (ellipsis) —
-    // осознанное улучшение (имя сжимается многоточием, а не переносится).
-    expect(style.overflow, 'ellipsis: overflow hidden').toBe('hidden');
-    expect(style.textOverflow, 'ellipsis: textOverflow ellipsis').toBe('ellipsis');
-    expect(style.whiteSpace, 'ellipsis: whiteSpace nowrap').toBe('nowrap');
-    // Имя реально содержит basename файла.
-    expect(textNodes(name as never).join('')).toContain('readme');
+    // m1 (Майя, регрессия оболочки): ellipsis — на ВНУТРЕННЕМ span (ребёнок data-testid),
+    // а НЕ на обёртке: textOverflow:ellipsis на display:flex не срабатывает (текст =
+    // анонимный flex-item → обрезка посреди буквы без «…»). Внутренний span — блок с
+    // overflow/ellipsis/nowrap + minWidth:0, и именно он содержит текст имени.
+    // Мутация «перенести стиль на обёртку» красит: внутренний span теряет ellipsis.
+    // Первый ЭЛЕМЕНТ-ребёнок обёртки (text-node с пробелом пропускаем) — носитель ellipsis.
+    const inner = (name as unknown as { childNodes: { nodeType: number; style: Record<string, string> }[] })
+      .childNodes.find(c => c.nodeType === 1);
+    expect(inner, 'внутренний span имени (носитель ellipsis)').not.toBeNull();
+    expect(inner.style.overflow, 'ellipsis: overflow hidden').toBe('hidden');
+    expect(inner.style.textOverflow, 'ellipsis: textOverflow ellipsis').toBe('ellipsis');
+    expect(inner.style.whiteSpace, 'ellipsis: whiteSpace nowrap').toBe('nowrap');
+    // ...и именно он (а не обёртка) содержит текст имени.
+    expect(textNodes(inner as never).join(''), 'внутренний span содержит имя файла').toContain('readme');
+    // Обёртка (data-testid) — БЕЗ ellipsis (мутация: перенести стиль на обёртку → red).
+    expect(style.textOverflow, 'ellipsis НЕ на обёртке (data-testid)').toBeUndefined();
+  });
+
+  // m2 (Майя): у BackButton полный текст возврата — не только в title, но и в aria-label
+  // (видимая подпись короткая, «Файлы»). Мутация «убрать ariaLabel» → aria-label пуст → red.
+  it('m2: BackButton (мобила) — aria-label с полным текстом («К списку файлов»)', async () => {
+    const onClose = vi.fn();
+    const { container } = mountViewer(onClose, true);
+    await flush();
+    const btn = findButtonByText(container, 'Файлы');
+    expect(btn, 'BackButton (role=button) с подписью «Файлы»').not.toBeNull();
+    expect(btn!.getAttribute('aria-label'), 'aria-label = полный текст возврата').toBe('К списку файлов');
   });
 
   // п.5: скрытый центр (display:none → offsetParent === null) — Esc не закрывает файл.

@@ -726,7 +726,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     // M1: у merge-задачи есть самодостаточный шаблон Description: имя ветки, путь worktree,
-    // «push не делать» и правило конфликта.
+    // «push не делать» и правило конфликта. m1: основная ветка — из git (тут git init -b main → «main»),
+    // а не зашитый «master».
     [Fact]
     public async Task MergeFeature_ОписаниеСодержитШаблон()
     {
@@ -748,6 +749,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             // п.40: шаблон несёт абсолютный путь корня проекта (основное рабочее дерево — сюда мержим).
             var projectRoot = Projects.GetById(projectId)!.RootPath;
             description.Should().Contain(projectRoot);
+            // m1: основная ветка проекта — из git (git init -b main → «main»), не зашитый «master».
+            description.Should().Contain("«main»");
+            description.Should().NotContain("(master)");
         }
         finally
         {
@@ -1019,11 +1023,13 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
-    // п.52/41: гонка — merge-задача уже Done внутри гейта. Снимок ПЕРЕД гейтом (верхний гард)
-    // видел Todo, а внутри гейта (после await gate.WaitAsync) задача уже Done → 409 «смержена».
+    // п.52/41/73: гонка — merge-задача становится Done в окне между снимком (верхний гард) и гейтом.
+    // Снимок ПЕРЕД гейтом (верхний гард) видел Todo; внутри гейта (после await gate.WaitAsync) задача
+    // уже Done → 409. Тест утверждает ТОЧНЫЙ текст «Фича смержена во время мержа» (отличен от верхнего
+    // гарда «Фича уже смержена»): так он различает, какая ветка сработала, и не зеленеет вакуумно.
     // Воспроизведение: гейт заранее удержан (reflection), фоновая задача переворачивает merge в Done
     // и отпускает гейт; верхний гард (до гейта) уже отработал на Todo. Мутация: снять
-    // `if (existing.Status == Done) return Conflict` → тест краснеет.
+    // `if (existing.Status == Done) return Conflict` → 200 вместо 409 → тест краснеет.
     [Fact]
     public async Task MergeFeature_Гонка_MergeDoneВнутриГейта_409()
     {
@@ -1055,8 +1061,16 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var result = await BuildController(RealGit()).MergeFeature(epicId);
 
             await flip;
-            result.Should().BeAssignableTo<Microsoft.AspNetCore.Mvc.ObjectResult>()
-                .Which.StatusCode.Should().Be(409, "merge-задача стала Done внутри гейта → 409 «смержена»");
+            var obj = result.Should().BeAssignableTo<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
+            obj.StatusCode.Should().Be(409, "merge-задача стала Done внутри гейта → 409");
+            // Точный текст: доказывает, что сработала ВНУТРЕННЯЯ проверка (гонка), а не верхний гард.
+            // RelaxedJsonEscaping — чтобы кириллица не ушла в \uXXXX и сравнение по тексту шло честно.
+            var body = System.Text.Json.JsonSerializer.Serialize(obj.Value,
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                });
+            body.Should().Contain("Фича смержена во время мержа");
         }
         finally
         {
@@ -1206,9 +1220,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
-    // п.42: после завершения создания merge-задачи запись из MergeGates убрана (словарь не растёт).
+    // п.42 (осознанно отменён): гейт НЕ убирается из MergeGates после мержа — один SemaphoreSlim на
+    // фичу живёт до рестарта процесса (цена — десятки объектов). Снятие записи давало параллельные
+    // критические секции (разные экземпляры гейта) и дубль merge-задачи; идемпотентность держит
+    // свежий снимок после gate. Мутация: вернуть TryRemove в finally → запись исчезнет → тест краснеет.
     [Fact]
-    public async Task MergeFeature_GейтУбранПослеМержа()
+    public async Task MergeFeature_ГейтЖивётДоРестарта()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
         await CreateAcceptedFinalAsync(projectId, epicId);
@@ -1219,57 +1236,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
             response.StatusCode.Should().Be(HttpStatusCode.OK);
 
-            MergeGatesDict().ContainsKey(epicId).Should().BeFalse(
-                "после завершения мержа гейт убран из словаря (MergeGates не растёт безboundedly)");
-        }
-        finally
-        {
-            Personas.Delete(persona.Id, OwnerId);
-            MergeGatesDict().TryRemove(epicId, out _);
-        }
-    }
-
-    // п.42: гейт снимается по экземпляру, не по ключу. Сценарий: A получает гейт X,
-    // параллельно словарь подменяют на Y; A в finally снимает «свой» X — TryRemove(KeyValuePair)
-    // не трогает Y (экземпляры различаются), TryRemove(key) сносит Y. После A: словарь держит Y
-    // (фикс) или пуст (мутация) → следующий запрос либо получает Y (сериализуется с B),
-    // либо создаёт свежий гейт (параллельная критическая секция → дубль merge-задачи).
-    // Мутация: TryRemove(KeyValuePair) → TryRemove(key) → словарь пуст → тест краснеет.
-    [Fact]
-    public async Task MergeFeature_ГейтСнимаетсяПоЭкземпляру()
-    {
-        var (epicId, wt, branch, projectId) = await CreateFeatureEpicWithWorktreeAsync();
-        await CreateAcceptedFinalAsync(projectId, epicId);
-        var persona = CreateDevopsPersona("DevOps-gate-instance");
-        var tasks = _factory.Services.GetRequiredService<TaskManager>();
-
-        try
-        {
-            // Гейт X заранее удержан (count=0): MergeFeature заблокируется на WaitAsync.
-            var gateX = new SemaphoreSlim(0, 1);
-            MergeGatesDict()[epicId] = gateX;
-
-            // Фоновая задача: после 50 мс подменяет X на Y в словаре и отпускает X.
-            // К моменту подмены A уже выполнил GetOrAdd (держит ссылку на X),
-            // но ещё не дошёл до finally.
-            var gateY = new SemaphoreSlim(1, 1);
-            var swap = Task.Run(async () =>
-            {
-                await Task.Delay(50);
-                MergeGatesDict()[epicId] = gateY;
-                gateX.Release();
-            });
-
-            var result = await BuildController(RealGit()).MergeFeature(epicId);
-            await swap;
-
-            // A завершён: в finally TryRemove «своего» X.
-            // Фикс: TryRemove(KeyValuePair(fid, X)) → словарь имеет Y ≠ X → НЕ снят.
-            // Мутация: TryRemove(key) → снимает Y по ключу → словарь пуст.
-            var dict = MergeGatesDict();
-            dict.TryGetValue(epicId, out var remaining);
-            remaining.Should().BeSameAs(gateY,
-                "гейт в словаре — Y (подменённый), а не X: TryRemove по экземпляру не снёс чужую запись");
+            MergeGatesDict().ContainsKey(epicId).Should().BeTrue(
+                "после мержа гейт остаётся в словаре: один SemaphoreSlim на фичу живёт до рестарта (п.42 отменён)");
         }
         finally
         {
@@ -1297,6 +1265,24 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var getBody = await get404.Content.ReadAsStringAsync();
 
         mergeBody.Should().Be(getBody, "тело 404 мержа совпадает с телом 404 GET");
+        mergeBody.Should().Contain("Фича не найдена");
+    }
+
+    // m2: нестандартный id (символ вне белого списка FeatureIdPattern, «.») → 404 с тем же телом,
+    // что у GET features/{id}: MergeFeature применяет тот же паттерн, что GET (одинаковый 404).
+    [Fact]
+    public async Task MergeFeature_НестандартныйId_404КакGet()
+    {
+        // «.» вне белого списка [A-Za-z0-9_-] → lookup не идёт, 404 «Фича не найдена» (как у GET).
+        var merge404 = await _client.PostAsync("/api/tasks/features/abc.def/merge", null);
+        merge404.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var mergeBody = await merge404.Content.ReadAsStringAsync();
+
+        var get404 = await _client.GetAsync("/api/tasks/features/abc.def");
+        get404.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var getBody = await get404.Content.ReadAsStringAsync();
+
+        mergeBody.Should().Be(getBody, "m2: тело 404 мержа совпадает с телом 404 GET (FeatureIdPattern)");
         mergeBody.Should().Contain("Фича не найдена");
     }
 

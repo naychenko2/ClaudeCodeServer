@@ -547,6 +547,11 @@ public class TasksController(
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
 
+        // m2: нестандартный id (символы вне белого списка) → тот же 404, что у GET features/{id}
+        // (одинаковый код и тело { error: "Фича не найдена" } — фронт читает error).
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
         var run = features.Project(featureId, UserId);
         // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
         if (run is null) return NotFound(new { error = "Фича не найдена" });
@@ -591,6 +596,9 @@ public class TasksController(
 
         var persona = devops[0];
 
+        // m1: основная ветка проекта (текущая ветка корня) — для шаблона постановки; null — git не дал.
+        var mainBranch = await ResolveMainBranchAsync(run.Epic);
+
         // Создание идемпотентно и атомарно: два конкурентных POST сериализуем по featureId,
         // иначе оба увидят «merge-задачи нет» и заведут две (два исполнителя на одном worktree).
         var gate = MergeGates.GetOrAdd(featureId, _ => new SemaphoreSlim(1, 1));
@@ -601,10 +609,11 @@ public class TasksController(
             var existing = features.Project(featureId, UserId)?.Merge;
             if (existing is not null)
             {
-                // п.2: merge-задача уже закрыта (Done) → 409: дубль не проходит в окне между
-                // снимком и гейтом (верхний гард смотрел на устаревший снимок).
+                // п.2/п.73: merge-задача закрыта (Done) в окне между снимком и гейтом → 409: дубль
+                // не проходит (верхний гард смотрел на устаревший снимок). Текст отличен от верхнего
+                // гарда («Фича уже смержена»), чтобы тест гонки различал, какая ветка сработала.
                 if (existing.Status == TaskItemStatus.Done)
-                    return Conflict(new { error = "Фича уже смержена" });
+                    return Conflict(new { error = "Фича смержена во время мержа" });
                 // Открыта (todo/inProgress): если todo — запускаем исполнителя; возвращаем
                 // актуальную задачу (п.6: та же форма, что и ветка создания — с ClaudeStartedAt,
                 // если запуск прошёл).
@@ -628,7 +637,7 @@ public class TasksController(
             // если у эпика нет проекта.
             var req = new CreateTaskRequest(
                 Title: $"Мерж фичи: {run.Epic.Title}",
-                Description: BuildMergeDescription(run, projects.GetById(run.Epic.ProjectId!)?.RootPath),
+                Description: BuildMergeDescription(run, projects.GetById(run.Epic.ProjectId!)?.RootPath, mainBranch),
                 FeatureId: featureId,
                 Role: TaskRoles.Merge,
                 PersonaId: persona.Id,
@@ -664,15 +673,11 @@ public class TasksController(
         finally
         {
             gate.Release();
-            // п.42: убираем запись из словаря, чтобы MergeGates не рос безboundedly
-            // (по одному SemaphoreSlim на featureId). TryRemove(KeyValuePair), а не TryRemove(key):
-            // снимаем запись, только если в словаре всё ещё лежит ТОТ ЖЕ семафор, что держим мы —
-            // иначе снесём чужую (параллельный запрос уже заменил нашу запись свежей и работает на ней).
-            // Гонка двух запросов в критической секции на РАЗНЫХ экземплярах гейта возможна
-            // (один ждёт на старом, другой — на свежем); дубль merge-задачи не даёт идемпотентность:
-            // свежий снимок features.Project ПОСЛЕ gate видит задачу, созданную первым. Гейт лишь
-            // сериализует создание, а не гарантирует «один в секции».
-            MergeGates.TryRemove(new KeyValuePair<string, SemaphoreSlim>(featureId, gate));
+            // Не снимаем запись из MergeGates (осознанно, отменяет минор п.42 «MergeGates растёт»):
+            // один SemaphoreSlim на фичу живёт до рестарта процесса, цена — десятки объектов.
+            // Снятие записи из словаря давало параллельные критические секции (два запроса на
+            // разных экземплярах гейта) и дубль merge-задачи; идемпотентность держит свежий снимок
+            // features.Project ПОСЛЕ gate, гейт лишь сериализует создание, а не гарантирует «один в секции».
         }
     }
 
@@ -722,16 +727,38 @@ public class TasksController(
         return (false, null);
     }
 
+    // m1: основная ветка проекта — текущая ветка корня (git symbolic-ref). null — git выключен,
+    // корень не репо, detached HEAD или сбой git: шаблон тогда пишет «обычно master» без жёсткого имени.
+    private async Task<string?> ResolveMainBranchAsync(TaskItem epic)
+    {
+        if (git is null || epic.ProjectId is null) return null;
+        var project = projects.GetById(epic.ProjectId);
+        if (project is null) return null;
+        try
+        {
+            return await git.CurrentBranchAsync(UserId, project.RootPath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     // Шаблон постановки merge-задачи (M1): самодостаточный — исход/цель, push, конфликт, критерий, уборка.
     // Названия ветки и пути worktree подставляются из эпика; основное рабочее дерево (корень проекта,
     // куда мержим) — абсолютный путь (п.40; прецедент TeamImplementPrompts: путь дерева в постановке).
-    private static string BuildMergeDescription(FeatureRun run, string? projectRoot)
+    private static string BuildMergeDescription(FeatureRun run, string? projectRoot, string? mainBranch)
     {
         var branch = string.IsNullOrWhiteSpace(run.Epic.WorktreeBranch) ? "ветку фичи" : run.Epic.WorktreeBranch;
         var worktree = string.IsNullOrWhiteSpace(run.Epic.WorktreePath) ? "worktree фичи" : run.Epic.WorktreePath;
         var mainTree = string.IsNullOrWhiteSpace(projectRoot) ? "корень проекта" : projectRoot;
+        // m1: основная ветка — из git (текущая ветка корня проекта); если неизвестна — честно
+        // «основная ветка проекта (обычно master)», без жёсткого master в команде.
+        var target = string.IsNullOrWhiteSpace(mainBranch)
+            ? "основную ветку проекта (в этом проекте обычно master)"
+            : $"основную ветку проекта «{mainBranch}»";
         return string.Join("\n",
-            $"Смержить ветку фичи «{branch}» в основную ветку проекта (master) в основном рабочем дереве проекта; исход — worktree фичи {worktree}.",
+            $"Смержить ветку фичи «{branch}» в {target} в основном рабочем дереве проекта; исход — worktree фичи {worktree}.",
             $"Основное рабочее дерево (сюда мержим): {mainTree}.",
             "Предусловие: финал фичи принят (проверено сервером).",
             "Push НЕ делать — только локальный мерж.",
@@ -741,8 +768,9 @@ public class TasksController(
     }
 
     // Семафоры создания merge-задач по featureId: статика, т.к. контроллер transient (по одному на запрос).
-    // Запись живёт, пока есть идущий/ждущий мерж этой фичи, и убирается в finally (п.42) — словарь не
-    // растёт навсегда; идемпотентность (свежий снимок после gate) держит корректность, гейт — лишь сериализация.
+    // Запись НЕ убирается в finally (осознанно, отменяет минор п.42): один SemaphoreSlim на фичу живёт
+    // до рестарта процесса (цена — десятки объектов). Снятие записи давало параллельные критические секции
+    // и дубль merge-задачи; идемпотентность (свежий снимок после gate) держит корректность, гейт — сериализация.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> MergeGates = new();
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)

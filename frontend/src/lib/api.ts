@@ -732,6 +732,28 @@ function pluginUrlId(id: string): string {
   return id.replace(/\//g, '~');
 }
 
+// entry панели из манифеста (contributes.panels[].entry) — НЕДОВЕРЕННЫЙ источник
+// (пакет собрал агент). Без проверки подстановка `.../assets/${entry}` позволяла
+// `../../../../api/plugins/drafts` увести запрос с Bearer пользователя на чужой маршрут
+// (обход allow-list `panel/**`). Принимаем только форму `panel/...`: первый сегмент
+// «panel», остальные — обычные имена (без «.», «..», пустых); в строке нет «\», «?»,
+// «#», «%», управляющих символов (C0/C1) и схемы (двоеточие в первом сегменте).
+// Каждый сегмент кодируем encodeURIComponent ПОСЛЕ проверки — иначе «..» переживёт
+// кодировку. null — entry невалиден (запрос не делаем, понятная ошибка в PluginFrame).
+export function panelEntryPath(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null;
+  if (/[\\?#%]/.test(entry)) return null;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(entry)) return null;
+  const segs = entry.split('/');
+  if (segs.length < 2) return null;
+  if (segs[0] !== 'panel') return null;
+  if (/:/.test(segs[0])) return null;
+  for (const s of segs) {
+    if (s === '' || s === '.' || s === '..') return null;
+  }
+  return segs.map(s => encodeURIComponent(s)).join('/');
+}
+
 // Projects
 export const api = {
   auth: {
@@ -1059,13 +1081,19 @@ export const api = {
     // HTML панели пакета (ADR-031 §3.1): хост забирает его по REST с user JWT
     // (навигация iframe не несёт Authorization) и сам строит srcdoc. entry — путь
     // панели из манифеста (contributes.panels[].entry, например panel/index.html);
-    // маршрут {**path} — catch-all, слэши entry остаются литеральными.
+    // маршрут {**path} — catch-all, слэши entry остаются литеральными. entry —
+    // недоверенный (пакет собрал агент): валидируем form'ой panel/... (panelEntryPath)
+    // и кодируем сегменты, иначе «..»/«?»/«#» уведут запрос на чужой маршрут.
     // Прямой fetch (не request()): ответ — текст, а не JSON, и request() упёрся бы
     // в JSON.parse. 404 — у плагина нет панели (макет 3, «пусто»).
     panelHtml: async (id: string, version: string, entry: string): Promise<string> => {
+      // entry из недоверенного манифеста: валидируем ДО запроса (иначе «..»/«?»/«#»
+      // уводят запрос на чужой маршрут). Невалидно — понятная ошибка, запрос не идёт.
+      const path = panelEntryPath(entry);
+      if (path === null) throw new Error('Панель плагина указана неверно');
       const token = readStoredToken();
       const res = await fetch(
-        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/${entry}`,
+        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/${path}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
       );
       if (!res.ok) {

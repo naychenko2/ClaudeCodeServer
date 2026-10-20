@@ -364,7 +364,10 @@ function glyph(kind, s=14) {
 }
 
 /* ===== Состояние макета ===== */
-const q = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+// Hash — необязательное удобство (ссылка на срез). В песочнице просмотра файлов (iframe sandbox, srcdoc)
+// location и history недоступны или бросают SecurityError — тогда макет живёт без hash.
+let q = {};
+try { q = Object.fromEntries(new URLSearchParams(location.hash.slice(1))); } catch (e) { q = {}; }
 const V = { st: q.st in S ? q.st : 'waiting', n: q.n==='2' ? 2 : 1, theme: q.theme==='dark'?'dark':'light', w: q.w==='360'?360:1280,
   marks: q.marks!=='0', menu:true, mode:'feature', feat:0, open:undefined, modal:false, toast:'' };
 const app = document.getElementById('app'), isl = document.getElementById('isl');
@@ -381,7 +384,7 @@ function sync() {
   document.documentElement.dataset.theme = V.theme;
   document.body.classList.toggle('nomarks', !V.marks);
   app.classList.toggle('m', V.w===360);
-  history.replaceState(null, '', `#st=${V.st}&n=${V.n}&theme=${V.theme}&w=${V.w}${V.marks?'':'&marks=0'}`);
+  try { history.replaceState(null, '', `#st=${V.st}&n=${V.n}&theme=${V.theme}&w=${V.w}${V.marks?'':'&marks=0'}`); } catch (e) { /* песочница: без hash */ }
   pills('pSt', Object.keys(S).map(k => [k, ST_LABEL[k]]), 'st');
   pills('pN', [[1,'одна'],[2,'две']], 'n');
   pills('pTh', [['light','светлая'],['dark','тёмная']], 'theme');

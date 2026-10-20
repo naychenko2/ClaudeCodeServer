@@ -99,10 +99,13 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
   ```json
   [{ "Slug": "pkg", "Id": "local-a/pkg", "Version": "1.0.0",
      "UpdatedAt": "2026-10-19T05:24:56Z", "Problems": 0, "InstalledSameVersion": false,
-     "Rejected": false, "ExpiresAt": null }]
+     "InstalledVersion": "0.9.0", "Rejected": false, "ExpiresAt": null }]
   ```
   `Problems` — число проблем последней проверки (валидатор пакета, тот же, что при установке);
-  `InstalledSameVersion` — есть ли запись `installed.json` с тем же `Id`+`Version`.
+  `InstalledSameVersion` — есть ли запись `installed.json` с тем же `Id`+`Version`;
+  `InstalledVersion` — версия УСТАНОВЛЕННОГО плагина с тем же `Id` (QA-фикс R: карточка
+  показывает «установлена версия N»/«обновление»); `null`, если плагин не установлен.
+  `Id` в обоих полях — выведенный сервером (`PluginIdentity.Resolve`), не сырой `manifest.Id`.
   `Rejected` — `true` у отклонённых черновиков (`_rejected/{slug}`); `ExpiresAt` — дата, когда
   отклонённый исчезнет (`rejectedAt + 30 дней`, UTC); у активных `Rejected: false`, `ExpiresAt: null`.
   Просроченные отклонённые (> 30 дней) удаляются лениво при этом обращении, без фонового сервиса.
@@ -110,13 +113,19 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
 - **`GET /api/plugins/drafts/{slug}/preview`** — предпросмотр; ответ = `PluginDraftService.Preview`
   (тот же, что у `draft_preview` для агента; `PluginDraftPreview`, PascalCase):
   ```json
-  { "Slug": "pkg", "Name": "pkg", "Version": "1.0.0",
+  { "Slug": "pkg", "Name": "pkg", "Version": "1.0.0", "InstalledVersion": "0.9.0",
     "Panels": [], "Commands": [], "Skills": ["skills/a"],
     "RequestedPermissions": ["notes:read"],
-    "Secrets": [{ "Name": "LINEAR_TOKEN", "Required": true }],
+    "Secrets": [{ "Name": "LINEAR_TOKEN", "Required": true, "Set": true }],
     "Files": [{ "Path": "ccs-plugin.json", "IsDir": false, "Size": 217 }],
     "Validation": { "IsValid": true, "Problems": [] } }
   ```
+  `InstalledVersion` — версия УСТАНОВЛЕННОГО плагина с тем же id (выводится
+  `PluginIdentity.Resolve`, сырой `manifest.Id` не читается); `null` — плагин не установлен
+  (QA-фикс R: карточка показывает «установлена версия N»/«обновление», а не «ещё не установлен»).
+  `Secrets[].Set` — задано ли значение секрета с таким именем у УСТАНОВЛЕННОГО плагина
+  (по `record.Secrets` с тем же id); `false`, если плагин не установлен. Значение секрета
+  (живёт в `plugin-secrets.json`) наружу никогда не уходит — только булев признак.
 
 - **`GET /api/plugins/drafts/{slug}/panel`** — предпросмотр ПАНЕЛИ черновика (шаг 4.3d):
   **сырой файл** панели (ADR-031 §3.6: сервер HTML не разбирает; документ панели собирает фронт).

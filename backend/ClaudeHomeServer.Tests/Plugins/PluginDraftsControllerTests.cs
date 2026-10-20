@@ -266,6 +266,7 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"Version\":\"1.0.0\"", "версия из манифеста");
         json.Should().Contain("\"Problems\":0", "валидный черновик — 0 проблем");
         json.Should().Contain("\"InstalledSameVersion\":false", "ещё не установлена такая версия");
+        json.Should().Contain("\"InstalledVersion\":null", "плагин не установлен → null (QA-фикс R)");
     }
 
     [Fact]
@@ -278,6 +279,7 @@ public class PluginDraftsControllerTests : IDisposable
         var ok = (OkObjectResult)ctl.List();
         var json = JsonSerializer.Serialize(ok.Value);
         json.Should().Contain("\"InstalledSameVersion\":true", "после accept — установлена такая же версия");
+        json.Should().Contain("\"InstalledVersion\":\"1.0.0\"", "после accept — версия установленного плагина (QA-фикс R)");
         _ = source;
     }
 
@@ -295,6 +297,29 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"Version\":\"1.0.0\"", "версия");
         json.Should().Contain("notes:read", "запрошенные права");
         json.Should().Contain("\"IsValid\":true", "валидный черновик");
+        json.Should().Contain("\"InstalledVersion\":null", "плагин не установлен → null (QA-фикс R)");
+    }
+
+    // --- Preview: установленный плагин (QA-фикс R) ---
+    // После accept + grant (секрет задан) превью несёт InstalledVersion и Secrets[].Set:
+    // карточка показывает «установлена версия N» и «секрет задан», а не «ещё не установлен»/«не задан».
+
+    [Fact]
+    public void Preview_УстановленПлагин_InstalledVersionИСекретЗадан()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read", "secret:TOKEN"],
+            secrets: [("TOKEN", true)]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+        // Выдача прав + значение секрета (как делает человек через grant в диалоге согласия).
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["notes:read", "secret:TOKEN"],
+            [("TOKEN", "top-secret-value")]);
+
+        var ok = (OkObjectResult)ctl.Preview("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"InstalledVersion\":\"1.0.0\"", "версия установленного плагина с тем же id");
+        json.Should().Contain("\"Set\":true", "секрет задан в записи установленного плагина");
+        json.Should().NotContain("top-secret-value", "значение секрета (plugin-secrets.json) в ответ не уходит");
     }
 
     // --- Panel: 200 (сырой файл панели, QA-фикс H: сервер не разбирает HTML) ---

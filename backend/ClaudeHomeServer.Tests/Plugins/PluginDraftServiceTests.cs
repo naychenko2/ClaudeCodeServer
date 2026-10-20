@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Plugins;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -562,6 +564,108 @@ public class PluginDraftServiceTests : IDisposable
         preview.Secrets.Should().BeEmpty();
         // Дерево файлов содержит записанный файл
         preview.Files.Should().Contain(f => f.Path == "skills/s/SKILL.md");
+    }
+
+    // ── draft_preview: установленный плагин (QA-фикс R) ─────────────────────────
+    // Превью черновика несёт состояние УСТАНОВЛЕННОГО плагина с тем же id: InstalledVersion
+    // (null — не установлен) и Secrets[].Set (значение задано в записи установленного
+    // плагина; само значение с сервера никогда не уходит). id выводит PluginIdentity.Resolve
+    // (единая точка): тесты пишут манифест БЕЗ сырого id, поэтому мутация «читать установленный
+    // плагин по сырому manifest.Id» красная (сырой id = "" → записи нет → null).
+
+    // Черновик с манифестом без сырого id (id выводит сервер, QA-фикс N): вклад (skill) +
+    // обязательный секрет TOKEN + известные права. Версия черновика 2.0.0 (установлен будет 1.0.0).
+    private void CreateDraftWithSecret(string owner)
+    {
+        _service.Create(owner, "my-plugin").Ok.Should().BeTrue();
+        _service.WriteFile(owner, "my-plugin", "skills/a/SKILL.md",
+            Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
+        const string manifest = """
+        {"name":"my-plugin","version":"2.0.0","contributes":{"skills":["skills/a"],
+         "requires":{"secrets":[{"name":"TOKEN","required":true}]}},
+         "permissions":{"requested":["notes:read","secret:TOKEN"]}}
+        """;
+        _service.WriteFile(owner, "my-plugin", "ccs-plugin.json",
+            Encoding.UTF8.GetBytes(manifest)).Ok.Should().BeTrue();
+    }
+
+    // Запись установки в installed.json: id — выведенный сервером (тот же, что использует превью).
+    private void InstallRecord(string owner, string version, params (string Name, bool Set)[] secrets)
+    {
+        _store.SaveInstalled(owner, [new PluginInstall
+        {
+            Id = PluginIdentity.DeriveId(owner, "my-plugin"),
+            Version = version,
+            Secrets = secrets.Select(s => new PluginInstallSecret { Name = s.Name, Set = s.Set }).ToList(),
+        }]);
+    }
+
+    [Fact]
+    public void Preview_УстановленПлагин_ВерсияИСекретЗадан()
+    {
+        CreateDraftWithSecret(Owner);
+        InstallRecord(Owner, "1.0.0", ("TOKEN", true));
+
+        var preview = _service.Preview(Owner, "my-plugin");
+        preview.InstalledVersion.Should().Be("1.0.0", "версия установленного плагина с тем же id");
+        preview.Secrets.Should().HaveCount(1);
+        preview.Secrets[0].Name.Should().Be("TOKEN");
+        preview.Secrets[0].Set.Should().BeTrue("секрет задан в записи установленного плагина");
+    }
+
+    [Fact]
+    public void Preview_НеУстановлен_ВерсияNull_СекретНеЗадан()
+    {
+        CreateDraftWithSecret(Owner);
+
+        var preview = _service.Preview(Owner, "my-plugin");
+        preview.InstalledVersion.Should().BeNull("плагин не установлен");
+        preview.Secrets[0].Set.Should().BeFalse("не установлен → секрет не задан");
+    }
+
+    [Fact]
+    public void Preview_СекретОбъявленНоНеЗадан_SetFalse()
+    {
+        CreateDraftWithSecret(Owner);
+        // Плагин установлен, но значение секрета в его записи не задано (Set = false).
+        InstallRecord(Owner, "1.0.0", ("TOKEN", false));
+
+        var preview = _service.Preview(Owner, "my-plugin");
+        preview.InstalledVersion.Should().Be("1.0.0");
+        preview.Secrets[0].Set.Should().BeFalse("секрет объявлен в манифесте, но значение не задано");
+    }
+
+    // Значение секрета живёт в plugin-secrets.json (PluginSecretsStore), а не в превью:
+    // сериализуем превью той же политикой, что MVC (Web: camelCase), и проверяем, что
+    // значение в ответ не попало, а признак «задан» — да.
+    [Fact]
+    public void Preview_Сериализация_ЗначениеСекретаНеУходит()
+    {
+        CreateDraftWithSecret(Owner);
+        InstallRecord(Owner, "1.0.0", ("TOKEN", true));
+        var secrets = new PluginSecretsStore(BuildConfig(_dir));
+        secrets.Set(Owner, PluginIdentity.DeriveId(Owner, "my-plugin"), "TOKEN", "top-secret-value");
+
+        var preview = _service.Preview(Owner, "my-plugin");
+        var json = JsonSerializer.Serialize(preview, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        json.Should().Contain("\"installedVersion\":\"1.0.0\"", "установленная версия в ответе (camelCase)");
+        json.Should().Contain("\"set\":true", "признак «задан» в ответе");
+        json.Should().NotContain("top-secret-value", "значение секрета (plugin-secrets.json) с сервера не уходит");
+    }
+
+    // Per-owner: установленный плагин ЧУЖОГО владельца (другой id — другой издатель)
+    // в превью моего черновика не виден, даже при совпадении slug.
+    [Fact]
+    public void Preview_ЧужойВладелец_НеВидитЧужойУстановленныйПлагин()
+    {
+        CreateDraftWithSecret(Owner);
+        CreateDraftWithSecret(Stranger);
+        // Установлен только у чужого владельца (id = local-{ownerShort(Stranger)}/my-plugin).
+        InstallRecord(Stranger, "1.0.0", ("TOKEN", true));
+
+        var preview = _service.Preview(Owner, "my-plugin");
+        preview.InstalledVersion.Should().BeNull("установленный плагин чужого владельца не виден (per-owner)");
+        preview.Secrets[0].Set.Should().BeFalse();
     }
 
     // ── Изоляция владельца ─────────────────────────────────────────────────────

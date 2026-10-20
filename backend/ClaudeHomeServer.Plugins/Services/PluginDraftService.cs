@@ -190,8 +190,9 @@ public class PluginDraftService
 
     // ── draft_preview ──────────────────────────────────────────────────────────
     // Сводка «что будет после установки» для карточки: вклады, запрошенные права и секреты
-    // (с признаком обязательного), дерево файлов, результат последней проверки. Без
-    // содержимого секретов, без хостовых путей (только относительные).
+    // (с признаками обязательного и «значение задано» — QA-фикс R), версия УСТАНОВЛЕННОГО
+    // плагина с тем же id (InstalledVersion; null — не установлен), дерево файлов, результат
+    // последней проверки. Без содержимого секретов, без хостовых путей (только относительные).
     public PluginDraftPreview Preview(string ownerId, string slug)
     {
         if (DraftDir(ownerId, slug) is not { } dir)
@@ -200,6 +201,14 @@ public class PluginDraftService
             throw new FileNotFoundException($"Черновик {slug} не найден", nameof(slug));
 
         var manifest = ReadManifest(dir);
+        // id — ТОЛЬКО из PluginIdentity.Resolve (единая точка, как в List/Accept/Diff):
+        // сырой manifest.Id не читаем (агент мог записать другой id — bad-id).
+        var (resolvedId, _) = PluginIdentity.Resolve(manifest, ownerId, slug);
+        var id = resolvedId ?? PluginIdentity.DeriveId(ownerId, slug);
+        // Установленный плагин с тем же id (installed.json владельца): версия и заданные
+        // секреты. Не установлен → null/false (карточка: «ещё не установлен» / «не задан»).
+        var installed = LoadInstalledById(ownerId, id);
+
         var files = new List<PluginDraftFile>();
         var validation = _validator.ValidateFull(dir, ownerId, slug);
         AddTree(dir, dir, files);
@@ -209,14 +218,28 @@ public class PluginDraftService
             slug,
             manifest?.Name ?? slug,
             manifest?.Version ?? TemplateVersion,
+            installed?.Version,
             manifest?.Contributes?.Panels?.Select(p => new PluginDraftPanel(p.Id, p.Slot, p.Title)).ToList() ?? [],
             manifest?.Contributes?.Commands ?? [],
             manifest?.Contributes?.Skills ?? [],
             manifest?.Permissions?.Requested ?? [],
-            manifest?.Contributes?.Requires?.Secrets?.Select(s => new PluginDraftSecret(s.Name, s.Required)).ToList() ?? [],
+            manifest?.Contributes?.Requires?.Secrets?.Select(s => new PluginDraftSecret(
+                s.Name, s.Required,
+                // «значение задано» — по записи УСТАНОВЛЕННОГО плагина (record.Secrets с тем же id);
+                // не установлен → false. Значение секрета (plugin-secrets.json) наружу не идёт.
+                installed?.Secrets.Any(x => x.Name == s.Name && x.Set) == true)).ToList() ?? [],
             files,
             new PluginDraftValidation(validation.IsValid, validation.Problems.Select(p => new PluginDraftProblem(p.Code, p.Message)).ToList()));
     }
+
+    // Установленный плагин с тем же id (installed.json владельца): одна запись на id;
+    // если записей несколько — максимальная по semver (то же правило, что в PluginDraftDiff).
+    // null — не установлен.
+    private PluginInstall? LoadInstalledById(string ownerId, string id) =>
+        _store.LoadInstalled(ownerId)
+            .Where(r => r.Id == id)
+            .OrderByDescending(r => r.Version, VersionComparer.Instance)
+            .FirstOrDefault();
 
     // ── draft_list (REST, шаги 4.3a/4.3c) ─────────────────────────────────────
     // Список черновиков владельца: активные (_drafts) + отклонённые (_rejected, признак
@@ -245,9 +268,16 @@ public class PluginDraftService
                 var id = resolvedId ?? PluginIdentity.DeriveId(ownerId, slug);
                 var version = manifest?.Version ?? TemplateVersion;
                 var validation = _validator.ValidateFull(dir, ownerId, slug);
+                // Установленный плагин с тем же id: версия (QA-фикс R); одна запись на id,
+                // несколько — максимальная по semver (то же правило, что в PluginDraftDiff).
+                var installedRec = installed
+                    .Where(r => r.Id == id)
+                    .OrderByDescending(r => r.Version, VersionComparer.Instance)
+                    .FirstOrDefault();
                 result.Add(new PluginDraftSummary(
                     slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),
+                    installedRec?.Version,
                     Rejected: false, ExpiresAt: null));
             }
         }
@@ -275,9 +305,14 @@ public class PluginDraftService
                 var id = resolvedId ?? PluginIdentity.DeriveId(ownerId, slug);
                 var version = manifest?.Version ?? TemplateVersion;
                 var validation = _validator.ValidateFull(dir, ownerId, slug);
+                var installedRec = installed
+                    .Where(r => r.Id == id)
+                    .OrderByDescending(r => r.Version, VersionComparer.Instance)
+                    .FirstOrDefault();
                 result.Add(new PluginDraftSummary(
                     slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),
+                    installedRec?.Version,
                     Rejected: true, ExpiresAt: expiresAt));
             }
         }
@@ -514,6 +549,9 @@ public sealed class PluginDraftPreview
     public string Slug { get; }
     public string Name { get; }
     public string Version { get; }
+    // Версия УСТАНОВЛЕННОГО плагина с тем же id (installed.json владельца); null — не установлен
+    // (QA-фикс R: карточка показывает «установлена версия N»/«обновление», а не «ещё не установлен»).
+    public string? InstalledVersion { get; }
     public List<PluginDraftPanel> Panels { get; }
     public List<string> Commands { get; }
     public List<string> Skills { get; }
@@ -523,12 +561,12 @@ public sealed class PluginDraftPreview
     public PluginDraftValidation Validation { get; }
 
     public PluginDraftPreview(
-        string slug, string name, string version,
+        string slug, string name, string version, string? installedVersion,
         List<PluginDraftPanel> panels, List<string> commands, List<string> skills,
         List<string> requestedPermissions, List<PluginDraftSecret> secrets,
         List<PluginDraftFile> files, PluginDraftValidation validation)
     {
-        Slug = slug; Name = name; Version = version;
+        Slug = slug; Name = name; Version = version; InstalledVersion = installedVersion;
         Panels = panels; Commands = commands; Skills = skills;
         RequestedPermissions = requestedPermissions; Secrets = secrets;
         Files = files; Validation = validation;
@@ -536,8 +574,9 @@ public sealed class PluginDraftPreview
 }
 
 // Сводка черновика для списка (REST, шаги 4.3a/4.3c): slug, id, версия, время изменения,
-// число проблем последней проверки, признак «установлена такая же версия», признак «отклонён»
-// (rejected) и дата, когда отклонённый черновик исчезнет (ExpiresAt; null у активных).
+// число проблем последней проверки, признак «установлена такая же версия», версия
+// УСТАНОВЛЕННОГО плагина с тем же id (InstalledVersion; null — не установлен, QA-фикс R),
+// признак «отклонён» (rejected) и дата, когда отклонённый черновик исчезнет (ExpiresAt; null у активных).
 public sealed record PluginDraftSummary(
     string Slug,
     string Id,
@@ -545,6 +584,7 @@ public sealed record PluginDraftSummary(
     DateTime UpdatedAt,
     int Problems,
     bool InstalledSameVersion,
+    string? InstalledVersion,
     bool Rejected,
     DateTime? ExpiresAt);
 
@@ -553,7 +593,10 @@ public sealed record PluginDraftSummary(
 public sealed record PluginRejectedMeta(DateTime RejectedAt);
 
 public sealed record PluginDraftPanel(string Id, string Slot, string Title);
-public sealed record PluginDraftSecret(string Name, bool Required);
+// Секрет в предпросмотре: имя + признак «обязательный» + признак «значение задано» (QA-фикс R:
+// последний — по записи УСТАНОВЛЕННОГО плагина с тем же id; само значение с сервера никогда
+// не уходит — только булев признак, как и в PluginInstallSecret).
+public sealed record PluginDraftSecret(string Name, bool Required, bool Set);
 public sealed record PluginDraftFile(string Path, bool IsDir, long Size);
 public sealed record PluginDraftProblem(string Code, string Message);
 public sealed class PluginDraftValidation

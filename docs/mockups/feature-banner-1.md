@@ -1,5 +1,9 @@
 # Панель фичи в чате: разбор и четыре варианта (Майя, 20.10)
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** утверждён
+- **Файлы:** feature-banner-1.html, feature-banner-1-tokens.md
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), шаг **М2** (lane front).
 Прототип: [`feature-banner-1.html`](feature-banner-1.html). Токены: [`feature-banner-1-tokens.md`](feature-banner-1-tokens.md).
 Страница фичи, с которой плашка согласована: `features-overview-3-final.html` (соседняя ветка `feat/feature-page-3-mockups`).

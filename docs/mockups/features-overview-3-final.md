@@ -1,5 +1,9 @@
 # Страница фичи: финальный макет (вкладки, «Хронология» основная, «Статистика» с графиком)
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** утверждён
+- **Файлы:** features-overview-3-final.html, features-overview-3-final-tokens.md
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), шаг **М1** (lane front), задачи
 `f457213d` (первая редакция) и `1bedcd7b` (правка: график и навигация). Макет:
 [`features-overview-3-final.html`](features-overview-3-final.html). Токены:

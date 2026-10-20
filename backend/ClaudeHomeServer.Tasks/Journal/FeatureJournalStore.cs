@@ -15,8 +15,11 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 // - ownerId/featureId сверяются с белым списком ^[A-Za-z0-9_-]{1,128}$:
 //   кривой id («..», слэш) не доходит до диска — отказ без исключения наружу.
 // - Потолок 20 000 строк: при переполнении записи kind=turn больше не пишутся,
-//   переходы пишутся; чтение возвращает truncated=true.
-// - Дедуп строк turn по (sessionId, turnSeq) при чтении; у turnSeq=0 — по startedAt.
+//   переходы (created/started/stopped/stop_cleared/waiting/waiting_cleared/device_wait/
+//   device_wait_cleared/status/verdict/dropped) пишутся всегда — они редки (по числу
+//   мутаций, не по числу ходов); чтение возвращает truncated=true (lines >= MaxLines).
+// - Дедуп строк turn по (sessionId, turnSeq) при чтении; у turnSeq<=0 — по startedAt,
+//   а если startedAt==null — по endedAt, затем по outcome (уникальность хода).
 // - Потокобезопасность: запись под замком на featureId; сбой ловится и логируется,
 //   наружу не летит (хранилище не должно ронять мутацию задачи).
 // - Бэкап: каталог в data/ попадает в архив по умолчанию (BackupPaths.ShouldInclude → true);
@@ -24,6 +27,19 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 
 /// <summary>
 /// Строка журнала: одно событие фичи. JSON camelCase, null-поля не сериализуются.
+///
+/// Контракт формата v:1 (контракт для Б5 timeline / Б6):
+/// - <see cref="Kind"/> — словарь видов (см. поле): переходы задач + device_wait + turn.
+/// - <see cref="From"/>/<see cref="To"/> — для status/verdict: ИМЕНА enum
+///   (TaskItemStatus: Todo/InProgress/Done; TaskVerdicts: accepted/accepted_with_remarks/
+///   returned/withdrawn), а не числовые коды.
+/// - <see cref="TurnSeq"/> — номер хода; 0/null — ход без номера (дедуп по startedAt/endedAt).
+/// - <see cref="StartedAt"/>/<see cref="EndedAt"/>/<see cref="Outcome"/> — интервалы:
+///   работа = turn (startedAt..endedAt), ожидание = waiting..waiting_cleared,
+///   простой-ожидание-устройства = device_wait..device_wait_cleared,
+///   ошибка = turn.outcome=error (+errorClass) / stopped.reason.
+/// - Потолок: 20 000 строк на файл; при переполнении пишутся ТОЛЬКО переходы,
+///   turn пропускаются (truncated=true при чтении, см. Read).
 /// </summary>
 public sealed record FeatureJournalEntry
 {
@@ -37,7 +53,9 @@ public sealed record FeatureJournalEntry
 
     /// <summary>
     /// Вид события: created | started | stopped | stop_cleared | waiting |
-    /// waiting_cleared | status | verdict | dropped | turn.
+    /// waiting_cleared | device_wait | device_wait_cleared | status | verdict | dropped | turn.
+    /// device_wait/device_wait_cleared — ожидание устройства локального проекта
+    /// (DeviceWaitSince; добавлено в v:1, пока формат не застыл — рекомендация Александра).
     /// </summary>
     [JsonPropertyName("kind")]
     public string Kind { get; init; } = "";
@@ -50,11 +68,17 @@ public sealed record FeatureJournalEntry
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }
 
-    /// <summary>Старое значение (для status/verdict: от чего перешли).</summary>
+    /// <summary>
+    /// Старое значение (для status/verdict: от чего перешли). Значения — ИМЕНА enum:
+    /// status → TaskItemStatus (Todo/InProgress/Done); verdict → TaskVerdicts
+    /// (accepted/accepted_with_remarks/returned/withdrawn).
+    /// </summary>
     [JsonPropertyName("from")]
     public string? From { get; init; }
 
-    /// <summary>Новое значение (для status/verdict: к чему перешли).</summary>
+    /// <summary>
+    /// Новое значение (для status/verdict: к чему перешли). Те же имена enum, что <see cref="From"/>.
+    /// </summary>
     [JsonPropertyName("to")]
     public string? To { get; init; }
 
@@ -120,6 +144,12 @@ public sealed class FeatureJournalStore
     // Ключ — "{ownerId}/{featureId}"; ConcurrentDictionary гарантирует атомарность GetOrAdd.
     private readonly ConcurrentDictionary<string, object> _locks = new();
 
+    // Счётчик строк в памяти (под тем же замком на featureId): раньше потолок
+    // пересчитывал файл построчно (CountLines) на КАЖДЫЙ turn-append — O(n) на горячем
+    // пути (~2–4 МБ чтения на ход при 20 000 строк). Ключ — "{ownerId}/{featureId}".
+    // Инициализация: при первом обращении считаем файл; далее — инкремент на каждый append.
+    private readonly ConcurrentDictionary<string, int> _lineCounts = new();
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -161,10 +191,12 @@ public sealed class FeatureJournalStore
             {
                 // Потолок: если файл уже ≥ MaxLines и запись — turn, пропускаем.
                 // Переходы (created/started/stopped/…) пишутся всегда.
-                if (entry.Kind == "turn" && CountLines(path) >= MaxLines) return;
+                // Счётчик — в памяти (инициализация при первом обращении), не перечитывание.
+                if (entry.Kind == "turn" && GetLineCount(key, path) >= MaxLines) return;
 
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOpts) + "\n");
+                _lineCounts.AddOrUpdate(key, 1, (_, old) => old + 1);
             }
         }
         catch (Exception ex)
@@ -182,14 +214,24 @@ public sealed class FeatureJournalStore
     {
         try
         {
-            // [MUTATION] if (!IsValidId(ownerId) || !IsValidId(featureId))
-            //     return new FeatureJournalReadResult();
+            // Невалидный id («..», слэш, >128, пустой) → пустой результат БЕЗ обращения к
+            // диску: иначе SafePath.Join(_dir, "{owner}/{featureId}.jsonl") уходит в соседний
+            // каталог/файл и читает журнал ЧУЖОГО владельца (обход изоляции по владельцу).
+            // Та же проверка, что в Append/Delete/SweepOrphans — fail-closed.
+            if (!IsValidId(ownerId) || !IsValidId(featureId))
+                return new FeatureJournalReadResult();
             var path = GetPath(ownerId, featureId);
             if (!File.Exists(path))
                 return new FeatureJournalReadResult();
 
             var lines = File.ReadAllLines(path);
-            var truncated = lines.Length > MaxLines;
+            // Потолок ограничивает ТОЛЬКО kind=turn: переходы (created/started/stopped/
+            // stop_cleared/waiting/waiting_cleared/status/verdict/dropped) пишутся всегда —
+            // они редки (по числу мутаций, не по числу ходов). Файл, дошедший до MaxLines,
+            // уже теряет turn-записи (Append пропускает turn при >= MaxLines), поэтому
+            // truncated = «пропущены ходы из-за потолка» = lines >= MaxLines, а не > MaxLines
+            // (при ровно потолке > не срабатывало, хотя ходы уже терялись — мутация).
+            var truncated = lines.Length >= MaxLines;
 
             // Парсим строки; битая строка (не JSON) пропускается.
             var entries = new List<FeatureJournalEntry>(lines.Length);
@@ -271,6 +313,33 @@ public sealed class FeatureJournalStore
         }
     }
 
+    /// <summary>
+    /// Подметает каталоги владельцев, у которых нет живых задач (fail-safe: вызывающий
+    /// сам решает, «без задач» — это факт или неполная загрузка, и передаёт это в
+    /// <paramref name="ownerHasTasks"/>). Каталог владельца с задачами не трогается.
+    /// </summary>
+    public void SweepEmptyOwners(Func<string, bool> ownerHasTasks)
+    {
+        try
+        {
+            if (!Directory.Exists(_dir)) return;
+            foreach (var ownerDir in Directory.GetDirectories(_dir))
+            {
+                var ownerId = Path.GetFileName(ownerDir);
+                // Кривой каталог (не проходит белый список id) — не наш, не трогаем.
+                if (!IsValidId(ownerId)) continue;
+                if (ownerHasTasks(ownerId)) continue;
+                // Владелец без задач: удаляем весь его каталог (все файлы журнала).
+                try { Directory.Delete(ownerDir, recursive: true); }
+                catch { /* файлы заняты — оставим, подберём на следующем круге */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "FeatureJournalStore: SweepEmptyOwners");
+        }
+    }
+
     // --- Вспомогательные ---
 
     private string GetPath(string ownerId, string featureId) =>
@@ -279,10 +348,20 @@ public sealed class FeatureJournalStore
     private static bool IsValidId(string id) =>
         !string.IsNullOrEmpty(id) && IdPattern.IsMatch(id);
 
+    // Счётчик строк: из памяти, если уже инициализирован; иначе — первичный подсчёт файла.
+    // Вызывается под замком на featureId, поэтому race на инициализации нет.
+    private int GetLineCount(string key, string path)
+    {
+        if (_lineCounts.TryGetValue(key, out var cached)) return cached;
+        var count = CountLines(path);
+        _lineCounts[key] = count;
+        return count;
+    }
+
+    // Первичный подсчёт строк файла (без полного чтения): инициализация счётчика.
     private static int CountLines(string path)
     {
         if (!File.Exists(path)) return 0;
-        // Считаем строки без полного чтения: достаточно для проверки потолка.
         var count = 0;
         using var reader = new StreamReader(path);
         while (reader.ReadLine() is not null) count++;
@@ -306,10 +385,20 @@ public sealed class FeatureJournalStore
                 continue;
             }
 
-            // Ключ дедупа: (sessionId, turnSeq) или (sessionId, startedAt) при turnSeq=0/null.
-            var key = e.TurnSeq is > 0
-                ? $"turn:{e.SessionId}:{e.TurnSeq}"
-                : $"turn:{e.SessionId}:{e.StartedAt?.Ticks ?? 0}";
+            // Ключ дедупа: (sessionId, turnSeq) при turnSeq>0; иначе (sessionId, startedAt);
+            // если startedAt==null — endedAt, а если и он null — outcome. Старый ключ
+            // `turn:{session}:0` (turnSeq<=0 && startedAt==null) схлопывал ВСЕ такие ходы
+            // сессии в один (потеря строк) — мутация: два хода с turnSeq<=0, startedAt==null
+            // и РАЗНЫМ endedAt больше не дубль.
+            string key;
+            if (e.TurnSeq is > 0)
+                key = $"turn:{e.SessionId}:{e.TurnSeq}";
+            else if (e.StartedAt is not null)
+                key = $"turn:{e.SessionId}:s{e.StartedAt.Value.Ticks}";
+            else if (e.EndedAt is not null)
+                key = $"turn:{e.SessionId}:e{e.EndedAt.Value.Ticks}";
+            else
+                key = $"turn:{e.SessionId}:o{e.Outcome}";
 
             if (seen.Add(key))
                 result.Add(e);

@@ -324,6 +324,108 @@ public class FeatureJournalStoreTests
         finally { Directory.Delete(dir, true); }
     }
 
+    // ─── Read: кривой id не читает чужой журнал (изоляция по владельцу) ─────────────
+    // Приманка: реальный журнал другого владельца. Кривой id в Read, если не валидировать,
+    // уходит SafePath.Join'ом (GetFullPath нормализует "..") в файл приманки → чужой журнал
+    // читается. Мутация «снять IsValidId в Read» краснит (a) и (b): приманка становится
+    // достижимой. (c)/(d) — дополнительные случаи (приманку не достигают, но id кривой).
+
+    [Fact]
+    public void Read_InvalidId_НеЧитаетЧужойЖурнал()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var store = new FeatureJournalStore(dir);
+            // Приманка: реальный журнал ownerB/featB.
+            store.Append("ownerB", "featB", MakeEntry("created", taskId: "t-bait"));
+
+            // (a) featureId с ".." и "/" → путь ownerA/../ownerB/featB.jsonl = ownerB/featB.jsonl.
+            var a = store.Read("ownerA", "../ownerB/featB");
+            a.Entries.Should().BeEmpty("кривой featureId не читает журнал чужого владельца");
+
+            // (b) ownerId с ".." и "/" → путь ownerB/../ownerB/featB.jsonl = ownerB/featB.jsonl.
+            var b = store.Read("ownerB/../ownerB", "featB");
+            b.Entries.Should().BeEmpty("кривой ownerId не читает журнал чужого владельца");
+
+            // (c) ownerId = "/" → путь {dir}/featB.jsonl (не приманка), но id кривой.
+            var c = store.Read("/", "featB");
+            c.Entries.Should().BeEmpty();
+
+            // (d) пустой ownerId → id кривой.
+            var d = store.Read("", "featB");
+            d.Entries.Should().BeEmpty();
+
+            // Приманка на месте (Read её не тронул).
+            store.Read("ownerB", "featB").Entries.Should().HaveCount(1);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    // ─── Дедуп: turnSeq<=0 + startedAt==null — ключ по endedAt, не схлопывание ──────
+
+    [Fact]
+    public void Dedup_Turn_NoSeqNoStartedAt_ПоEndedAt_НеСхлопывает()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var store = new FeatureJournalStore(dir);
+            var at = DateTime.UtcNow;
+
+            // Два хода: turnSeq=0, startedAt==null, РАЗНЫЙ endedAt → не дубль (старый
+            // ключ turn:{session}:0 схлопывал их в один).
+            store.Append("owner1", "feat-1", new FeatureJournalEntry
+            {
+                At = at, Kind = "turn", SessionId = "s1", TurnSeq = 0,
+                EndedAt = at,
+            });
+            store.Append("owner1", "feat-1", new FeatureJournalEntry
+            {
+                At = at.AddSeconds(1), Kind = "turn", SessionId = "s1", TurnSeq = 0,
+                EndedAt = at.AddSeconds(5),
+            });
+            // Третий: тот же endedAt, что и первый → дубль (схлопывается).
+            store.Append("owner1", "feat-1", new FeatureJournalEntry
+            {
+                At = at.AddSeconds(2), Kind = "turn", SessionId = "s1", TurnSeq = 0,
+                EndedAt = at,
+            });
+
+            var result = store.Read("owner1", "feat-1");
+            // 2 уникальных (разный endedAt), третий (дубль endedAt) схлопнут.
+            result.Entries.Should().HaveCount(2);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    // ─── SweepEmptyOwners: каталог владельца без задач подметается ─────────────────
+
+    [Fact]
+    public void SweepEmptyOwners_УдаляетКаталогВладельцаБезЗадач()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var store = new FeatureJournalStore(dir);
+            // Два владельца: ownerA (без задач), ownerB (с задачей).
+            store.Append("ownerA", "featA", MakeEntry("created", taskId: "t1"));
+            store.Append("ownerB", "featB", MakeEntry("created", taskId: "t2"));
+
+            var dirA = Path.Combine(dir, "ownerA");
+            var dirB = Path.Combine(dir, "ownerB");
+            Directory.Exists(dirA).Should().BeTrue();
+            Directory.Exists(dirB).Should().BeTrue();
+
+            // ownerA без задач → каталог удаляется; ownerB с задачей → остаётся.
+            store.SweepEmptyOwners(ownerId => ownerId == "ownerB");
+
+            Directory.Exists(dirA).Should().BeFalse("каталог владельца без задач подметён");
+            Directory.Exists(dirB).Should().BeTrue("каталог владельца с задачей не тронут");
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     // --- Параллельный append ---
 
     [Fact]

@@ -39,7 +39,6 @@ import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
 import { PluginFrame, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';

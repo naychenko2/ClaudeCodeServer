@@ -175,6 +175,9 @@ beforeEach(() => {
   (window as unknown as { history: unknown }).history = {
     state: null, replaceState: () => {}, pushState: () => {}, go: () => {}, back: () => {},
   };
+  // window.location: инициализатор openFeatureId читает window.location.hash (parseHash замокан,
+  // но само обращение к location остаётся)
+  (window as unknown as { location: unknown }).location = { hash: '', pathname: '/', search: '' };
   // чистим prefill-ключ и активный чат между тестами
   sessionStorage.removeItem('cc_pending_chat_prompt');
   sessionStorage.removeItem('cc_pending_session');

@@ -27,7 +27,7 @@ vi.stubGlobal('document', {
 });
 
 const {
-  ConsentDialog, defaultCheckedState, findBlockingSecret, submitLabelFor,
+  ConsentDialog, defaultCheckedState, findBlockingSecret, grantSecretsToSend, submitLabelFor,
   RESIDUAL_RISK_NOTE, showsResidualRiskNote,
 } = await import('./ConsentDialog');
 type PluginConsentData = import('./ConsentDialog').PluginConsentData;
@@ -60,6 +60,9 @@ describe('findBlockingSecret (В2)', () => {
   });
   it('обязательный, задан на сервере → не блокирует', () => {
     expect(findBlockingSecret([{ ...req, set: true }], {}, {}, 'install')).toBeNull();
+  });
+  it('изменить: обязательный, задан на сервере (set=true), не введён повторно → не блокирует', () => {
+    expect(findBlockingSecret([{ ...req, set: true }], {}, {}, 'modify')).toBeNull();
   });
   it('обязательный, сохранён в этой сессии → не блокирует', () => {
     expect(findBlockingSecret([req], {}, { LINEAR_TOKEN: '2026-01-01T00:00:00Z' }, 'install')).toBeNull();
@@ -125,9 +128,50 @@ describe('ConsentDialog (рендер)', () => {
     expect(html).not.toMatch(/<button[^>]*disabled/);
   });
 
+  it('изменить: обязательный секрет уже задан (set=true), не введён повторно → «Сохранить» не блокируется', () => {
+    const html = renderConsent(
+      { secrets: [{ name: 'T', required: true, set: true, setAt: '2026-01-01T00:00:00Z' }], granted: [] },
+      'modify',
+    );
+    expect(html).toContain('Сохранить');
+    expect(html).not.toMatch(/<button[^>]*disabled/);
+  });
+
   it('значение секрета не в данных диалога (поле пустое при открытии/повторном)', () => {
     const s: PluginConsentSecret = { name: 'T', required: true, set: true, setAt: '2026-01-01T00:00:00Z' };
     expect('value' in s).toBe(false);
+  });
+});
+
+// === Контракт submit (Grant «изменить», не «заменить»; бэк 0d44617a2) ===
+// Присланное значение устанавливает/обновляет, value:null — явное удаление, НЕ присланный
+// секрет бэк не трогает. Поэтому модификационный диалог с уже заданным (set=true) секретом,
+// если человек не ввёл новое значение, НЕ шлёт его: ни value:'', ни null — иначе это стирание.
+describe('grantSecretsToSend (контракт submit)', () => {
+  const setSecret: PluginConsentSecret = { name: 'T', required: true, set: true };
+
+  it('set=true, не введён повторно → [] (не value:"" и не null)', () => {
+    expect(grantSecretsToSend([setSecret], {})).toEqual([]);
+  });
+
+  it('set=true, введено новое значение → {name, value}', () => {
+    expect(grantSecretsToSend([setSecret], { T: 'new-value' })).toEqual([{ name: 'T', value: 'new-value' }]);
+  });
+
+  it('введённое значение с пробелами → trim', () => {
+    expect(grantSecretsToSend([setSecret], { T: '  abc  ' })).toEqual([{ name: 'T', value: 'abc' }]);
+  });
+
+  it('необязательный, не задан на сервере и не введён → []', () => {
+    expect(grantSecretsToSend([{ name: 'O', required: false }], {})).toEqual([]);
+  });
+
+  it('несколько секретов: шлется только введённый', () => {
+    const list: PluginConsentSecret[] = [
+      { name: 'A', required: true, set: true },
+      { name: 'B', required: false },
+    ];
+    expect(grantSecretsToSend(list, { B: 'x' })).toEqual([{ name: 'B', value: 'x' }]);
   });
 });
 

@@ -594,9 +594,10 @@ export interface PluginPanelView {
   entry: string;
 }
 // Тело POST /api/plugins/{id}/grant: выданные права (подмножество requested) + значения секретов
+// value: null — явное удаление секрета; не присланный (нет в списке) бэк не трогает («изменить», не «заменить»)
 export interface PluginGrantSecret {
   name: string;
-  value: string;
+  value: string | null;
 }
 export interface PluginPermissionsView {
   requested: string[];

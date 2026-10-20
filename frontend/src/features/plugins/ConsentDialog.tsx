@@ -105,6 +105,18 @@ export function findBlockingSecret(
   return null;
 }
 
+// Какие секреты уедут с grant: только те, у кого подтверждено значение в этой сессии (values).
+// Уже заданный на сервере (set=true), но НЕ введённый повторно, — НЕ в списке: «не присланный»
+// бэк не трогает (Grant «изменить», не «заменить»). value:'' и null для не введённых не шлём.
+export function grantSecretsToSend(
+  secrets: PluginConsentSecret[],
+  values: Record<string, string>,
+): { name: string; value: string }[] {
+  return secrets
+    .filter(s => (values[s.name] ?? '').trim().length > 0)
+    .map(s => ({ name: s.name, value: values[s.name].trim() }));
+}
+
 // Подпись основной кнопки по числу отмеченных прав (макет, экран 2).
 export function submitLabelFor(mode: 'install' | 'modify', checkedCount: number, totalCount: number): string {
   if (mode === 'modify') return 'Сохранить';
@@ -245,9 +257,7 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, new
     setError(null);
     try {
       const permissions = data.requested.filter(p => checked[p]);
-      const secrets = data.secrets
-        .filter(s => (values[s.name] ?? '').trim().length > 0)
-        .map(s => ({ name: s.name, value: values[s.name].trim() }));
+      const secrets = grantSecretsToSend(data.secrets, values);
       await onSubmit(permissions, secrets);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Не получилось');

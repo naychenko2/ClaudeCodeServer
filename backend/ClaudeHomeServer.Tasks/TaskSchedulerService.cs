@@ -1,6 +1,7 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Tasks.Journal;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
@@ -15,8 +16,14 @@ public class TaskSchedulerService(
     IDailyBriefingRunner briefing,
     IPersonaAutomationRunner automation,
     ITaskNotificationDispatcher notif,
-    ILogger<TaskSchedulerService> log) : BackgroundService
+    ILogger<TaskSchedulerService> log,
+    FeatureTurnJournalSubscriber turnJournal) : BackgroundService
 {
+    // Зависимость только ради гарантированного создания подписчика ходов фичи (Б8c) при
+    // старте: hosted-сервис стартует первым, и его DI-резолв создаёт подписчика (подписка
+    // на шину — в конструкторе подписчика). Сам планировщик подписчика не использует.
+    private readonly FeatureTurnJournalSubscriber _turnJournal = turnJournal;
+
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
     // Автозапуск только для сроков, наступивших недавно: защита от лавины сессий
     // по старым просроченным задачам при включении флага или долгом простое сервера

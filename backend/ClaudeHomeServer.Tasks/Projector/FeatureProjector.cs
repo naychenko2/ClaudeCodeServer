@@ -89,6 +89,18 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Тревога: приоритет stopped → wait явный → wait «мерж».
         FeatureAttention? attention = null;
 
+        // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted/mergeNotDone —
+        // для «мерж» (attention) и для state (merge_pending). Вынесены в scope метода: используются
+        // и в attention, и в расчёте state.
+        var waitTask = featureTasks
+            .Where(t => t.AwaitingHumanSince is not null)
+            .OrderBy(t => t.AwaitingHumanSince)
+            .FirstOrDefault();
+        bool finalAccepted = final is not null
+            && final.Status == TaskItemStatus.Done
+            && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+        bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
+
         // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
         //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
         //    перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt), но пометка
@@ -113,46 +125,32 @@ public sealed class FeatureProjector(TaskManager tasks)
         }
 
         // 2. wait явный: AwaitingHumanSince у эпика или задачи (ждущий дольше всех).
-        if (attention is null)
+        if (attention is null && waitTask is not null)
         {
-            var waitTask = featureTasks
-                .Where(t => t.AwaitingHumanSince is not null)
-                .OrderBy(t => t.AwaitingHumanSince)
-                .FirstOrDefault();
-            if (waitTask is not null)
+            attention = new FeatureAttention
             {
-                attention = new FeatureAttention
-                {
-                    Kind = "wait",
-                    TaskId = waitTask.Id,
-                    Since = waitTask.AwaitingHumanSince,
-                    Reason = waitTask.AwaitingHumanReason,
-                    PersonaId = waitTask.PersonaId,
-                    LinkedSessionId = waitTask.LinkedSessionId,
-                };
-            }
+                Kind = "wait",
+                TaskId = waitTask.Id,
+                Since = waitTask.AwaitingHumanSince,
+                Reason = waitTask.AwaitingHumanReason,
+                PersonaId = waitTask.PersonaId,
+                LinkedSessionId = waitTask.LinkedSessionId,
+            };
         }
 
         // 3. wait «мерж» — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
         //    а merge-задачи нет или она не Done. since = CompletedAt финала.
-        if (attention is null)
+        if (attention is null && finalAccepted && mergeNotDone)
         {
-            bool finalAccepted = final is not null
-                && final.Status == TaskItemStatus.Done
-                && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
-            bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
-            if (finalAccepted && mergeNotDone)
+            attention = new FeatureAttention
             {
-                attention = new FeatureAttention
-                {
-                    Kind = "wait",
-                    TaskId = final!.Id,
-                    Since = final.CompletedAt,
-                    Reason = "мерж",
-                    PersonaId = final.PersonaId,
-                    LinkedSessionId = final.LinkedSessionId,
-                };
-            }
+                Kind = "wait",
+                TaskId = final!.Id,
+                Since = final.CompletedAt,
+                Reason = "мерж",
+                PersonaId = final.PersonaId,
+                LinkedSessionId = final.LinkedSessionId,
+            };
         }
 
         // Конвейер: 7 стадий в порядке жизненного цикла.
@@ -380,6 +378,16 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
+        // Состояние фичи (единая точка правды; из него bucket строки и порядок OrderRuns —
+        // см. FeatureStates). Приоритет: merged → closed → stopped → waiting → merging →
+        // merge_pending → running → not_started → idle. finalAccepted/waitTask — выше (scope метода).
+        string featureState = ComputeState(
+            epic, merge, finalAccepted,
+            hasStopped: stoppedTask is not null,
+            hasExplicitWait: waitTask is not null,
+            nowCount: nowList.Count,
+            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
+
         // Все расчёты выше идут по исходным задачам. BuildCore возвращает ПОЛНЫЙ (необлегчённый)
         // run: на нём страница фичи (GetFeature) считает ленту событий (BuildEvents: reason
         // вердикта = Verification.Notes, который Slim обнуляет). Облегчение для списков/ответа
@@ -407,6 +415,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             ReturnsBySource = returnsBySource,
             Lanes = lanes,
             Now = nowList,
+            State = featureState,
             Attention = attention,
             StepsAccepted = stepsAccepted,
             StepsTotal = stepsTotal,
@@ -595,6 +604,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         ReturnsBySource = run.ReturnsBySource,
         Lanes = run.Lanes,
         Now = run.Now,
+        State = run.State,
         Attention = run.Attention,
         StepsAccepted = run.StepsAccepted,
         StepsTotal = run.StepsTotal,
@@ -1210,6 +1220,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.Epic.Title,
             run.Epic.ProjectId,
             Bucket(run),
+            run.State,
             AttentionOf(run, sessions),
             RailOf(run),
             ChipsOf(run),
@@ -1259,15 +1270,55 @@ public sealed class FeatureProjector(TaskManager tasks)
         return chain.Distinct().ToList();
     }
 
-    // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
-    // OrderRuns выведены из неё, не расходятся): closed → attention → running → idle.
-    internal static string Bucket(FeatureRun run)
+    // Состояние фичи (9 значений, приоритет сверху вниз; первое совпавшее побеждает):
+    // merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
+    // Чистая функция от полей эпика/merge/тревог/«сейчас» — на ней золотые тесты (FeatureProjectorTests).
+    // hasExplicitWait — явный wait (AwaitingHumanSince), КРОМЕ вычисленного «мерж» (тот → merge_pending).
+    internal static string ComputeState(
+        TaskItem epic,
+        TaskItem? merge,
+        bool finalAccepted,
+        bool hasStopped,
+        bool hasExplicitWait,
+        int nowCount,
+        bool anyStarted)
     {
-        if (run.Closed) return "closed";
-        if (run.Attention is not null) return "attention";
-        if (run.Now.Count > 0) return "running";
-        return "idle";
+        // 1. merged: merge-задача Done.
+        if (merge is not null && merge.Status == TaskItemStatus.Done) return FeatureStates.Merged;
+        // 2. closed: эпик Done, мержа нет (merged уже отфильтрован выше).
+        if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
+        // 3. stopped: есть остановленная задача (как тревога kind=stopped).
+        if (hasStopped) return FeatureStates.Stopped;
+        // 4. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).
+        if (hasExplicitWait) return FeatureStates.Waiting;
+        // 5. merging: merge-задача есть и не Done.
+        if (merge is not null && merge.Status != TaskItemStatus.Done) return FeatureStates.Merging;
+        // 6. merge_pending: финал принят, merge-задачи нет (сегодняшняя тревога «мерж»).
+        if (finalAccepted && merge is null) return FeatureStates.MergePending;
+        // 7. running: Now не пуст (идут задачи).
+        if (nowCount > 0) return FeatureStates.Running;
+        // 8. not_started: ни одна задача фичи не стартовала.
+        if (!anyStarted) return FeatureStates.NotStarted;
+        // 9. idle: иначе (ничего не идёт, ничего не ждёт, фича не закрыта).
+        return FeatureStates.Idle;
     }
+
+    // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
+    // OrderRuns выведены из state, не расходятся): closed → attention → running → idle.
+    // Изменение против старой версии: merging (идёт мерж) → running, а не attention —
+    // «мерж идёт» теперь не «ждёт вас» (merge_pending — ждёт, merging — идёт).
+    internal static string Bucket(FeatureRun run) => run.State switch
+    {
+        FeatureStates.Merged => "closed",
+        FeatureStates.Closed => "closed",
+        FeatureStates.Stopped => "attention",
+        FeatureStates.Waiting => "attention",
+        FeatureStates.MergePending => "attention",
+        FeatureStates.Merging => "running",
+        FeatureStates.Running => "running",
+        FeatureStates.NotStarted => "idle",
+        _ => "idle", // idle
+    };
 
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
     // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting;

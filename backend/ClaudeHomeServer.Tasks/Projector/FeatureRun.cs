@@ -52,6 +52,11 @@ public sealed class FeatureRun
     // «Сейчас»: все InProgress-задачи фичи, по убыванию ClaudeStartedAt. У закрытой фичи — пусто.
     // Стадия пилюли фронт берёт у первого элемента; имена — уникальные через запятую.
     public List<FeatureNow> Now { get; init; } = [];
+    // Состояние фичи (единая точка правды; из него выводится bucket строки индекса и порядок
+    // OrderRuns — см. FeatureProjector.Bucket). 9 значений, приоритет сверху вниз (первое
+    // совпавшее побеждает): merged → closed → stopped → waiting → merging → merge_pending →
+    // running → not_started → idle. Значения — константы FeatureStates (camelCase, как в JSON).
+    public string State { get; init; } = FeatureStates.Idle;
     // Тревога: stopped → wait явный → wait «мерж»; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
     // Счётчик шагов: принятые (Done) / все (из StepChains).
@@ -250,4 +255,30 @@ public sealed class FeatureLane
     public int Accepted { get; init; }
     // Шаги с возвратом (их ревью/проверка/финал вернул: returned/accepted_with_remarks).
     public int Returns { get; init; }
+}
+
+// Состояния фичи (FeatureRun.State) — единая точка правды: 9 значений, camelCase (как в JSON).
+// Приоритет расчёта (первое совпавшее побеждает): merged → closed → stopped → waiting → merging →
+// merge_pending → running → not_started → idle. Из state выводится bucket строки индекса
+// (FeatureProjector.Bucket) и порядок OrderRuns — они не расходятся.
+public static class FeatureStates
+{
+    // merge-задача фичи Done — фича смержена.
+    public const string Merged = "merged";
+    // Эпик Done, мержа нет — фича закрыта (без мержа).
+    public const string Closed = "closed";
+    // Есть остановленная задача (тревога kind=stopped).
+    public const string Stopped = "stopped";
+    // Явное ожидание человека (тревога kind=wait, КРОМЕ ожидания «мерж»).
+    public const string Waiting = "waiting";
+    // merge-задача есть и не Done — мерж идёт.
+    public const string Merging = "merging";
+    // Финал принят, merge-задачи нет — ждём мержа (сегодняшняя тревога «мерж»).
+    public const string MergePending = "merge_pending";
+    // Now не пуст — идут задачи.
+    public const string Running = "running";
+    // Ни одна задача фичи не стартовала (нет ни одного ClaudeStartedAt).
+    public const string NotStarted = "not_started";
+    // Иначе: ничего не идёт, ничего не ждёт, фича не закрыта.
+    public const string Idle = "idle";
 }

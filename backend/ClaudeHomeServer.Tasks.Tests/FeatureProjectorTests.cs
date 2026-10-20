@@ -1446,4 +1446,200 @@ public class FeatureProjectorTests
         after.Should().BeLessThan(before / 3,
             $"до {before} симв. (сырые задачи), после {after} симв. (агрегат; Reason витков остаётся)");
     }
+
+    // ─── Б1a: состояние фичи (state) — 9 значений, приоритет сверху вниз ──────────────────────
+
+    // Каждое из 9 состояний: фикстура → Build → сверка run.State. Приоритет (первое совпавшее
+    // побеждает): merged → closed → stopped → waiting → merging → merge_pending → running →
+    // not_started → idle. Мутация: сдвиг приоритета (например, merging/merge_pending) красит
+    // соответствующий подкейс.
+    [Fact]
+    public void Build_State_ДевятьСостояний()
+    {
+        var t = new DateTime(2026, 10, 17);
+
+        // 1. merged: merge-задача Done.
+        {
+            var epic = new TaskItem { Id = "e-merged", Role = TaskRoles.Feature };
+            var merge = new TaskItem { Id = "m1", FeatureId = "e-merged", Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
+            var run = FeatureProjector.Build(epic, [epic, merge]);
+            run.State.Should().Be(FeatureStates.Merged, "merge Done → merged");
+        }
+
+        // 2. closed: эпик Done, мержа нет.
+        {
+            var epic = new TaskItem { Id = "e-closed", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+            var run = FeatureProjector.Build(epic, [epic]);
+            run.State.Should().Be(FeatureStates.Closed, "эпик Done, мержа нет → closed");
+        }
+
+        // 3. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
+        {
+            var epic = new TaskItem { Id = "e-stopped", Role = TaskRoles.Feature };
+            var step = new TaskItem
+            {
+                Id = "s1", FeatureId = "e-stopped", Role = TaskRoles.Step, StepRef = "Ш1",
+                Status = TaskItemStatus.InProgress,
+                ClaudeStartedAt = t,
+                ExecutorStoppedAt = t.AddMinutes(30),
+                ExecutorStopReason = "auth_failed",
+            };
+            var run = FeatureProjector.Build(epic, [epic, step]);
+            run.State.Should().Be(FeatureStates.Stopped, "остановленная задача → stopped");
+        }
+
+        // 4. waiting: явное ожидание человека (AwaitingHumanSince), без stopped.
+        {
+            var epic = new TaskItem { Id = "e-waiting", Role = TaskRoles.Feature };
+            var step = new TaskItem
+            {
+                Id = "s1", FeatureId = "e-waiting", Role = TaskRoles.Step, StepRef = "Ш1",
+                Status = TaskItemStatus.InProgress,
+                AwaitingHumanSince = t,
+                AwaitingHumanReason = "ждём решения",
+            };
+            var run = FeatureProjector.Build(epic, [epic, step]);
+            run.State.Should().Be(FeatureStates.Waiting, "явный wait (AwaitingHumanSince) → waiting");
+        }
+
+        // 5. merging: merge-задача есть и не Done (идёт).
+        {
+            var epic = new TaskItem { Id = "e-merging", Role = TaskRoles.Feature };
+            var merge = new TaskItem { Id = "m1", FeatureId = "e-merging", Role = TaskRoles.Merge, Status = TaskItemStatus.InProgress };
+            var run = FeatureProjector.Build(epic, [epic, merge]);
+            run.State.Should().Be(FeatureStates.Merging, "merge-задача InProgress (не Done) → merging");
+        }
+
+        // 6. merge_pending: финал принят, merge-задачи нет (сегодняшняя тревога «мерж»).
+        {
+            var epic = new TaskItem { Id = "e-merge-pending", Role = TaskRoles.Feature };
+            var final = new TaskItem
+            {
+                Id = "f1", FeatureId = "e-merge-pending", Role = TaskRoles.Final,
+                Status = TaskItemStatus.Done,
+                CompletedAt = t,
+                Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            };
+            var run = FeatureProjector.Build(epic, [epic, final]);
+            run.State.Should().Be(FeatureStates.MergePending, "финал принят, мержа нет → merge_pending");
+        }
+
+        // 7. running: Now не пуст (идут задачи), без тревоги.
+        {
+            var epic = new TaskItem { Id = "e-running", Role = TaskRoles.Feature };
+            var step = new TaskItem
+            {
+                Id = "s1", FeatureId = "e-running", Role = TaskRoles.Step, StepRef = "Ш1",
+                Status = TaskItemStatus.InProgress,
+                ClaudeStartedAt = t,
+            };
+            var run = FeatureProjector.Build(epic, [epic, step]);
+            run.State.Should().Be(FeatureStates.Running, "идёт задача (Now не пуст) → running");
+        }
+
+        // 8. not_started: ни одна задача фичи не стартовала (нет ни одного ClaudeStartedAt).
+        {
+            var epic = new TaskItem { Id = "e-not-started", Role = TaskRoles.Feature };
+            var step = new TaskItem
+            {
+                Id = "s1", FeatureId = "e-not-started", Role = TaskRoles.Step, StepRef = "Ш1",
+                Status = TaskItemStatus.Todo,
+            };
+            var run = FeatureProjector.Build(epic, [epic, step]);
+            run.State.Should().Be(FeatureStates.NotStarted, "ни одна задача не стартовала → not_started");
+        }
+
+        // 9. idle: задача стартовала (ClaudeStartedAt) и закрыта (Done), но фича не закрыта,
+        //    ничего не идёт и не ждёт.
+        {
+            var epic = new TaskItem { Id = "e-idle", Role = TaskRoles.Feature };
+            var step = new TaskItem
+            {
+                Id = "s1", FeatureId = "e-idle", Role = TaskRoles.Step, StepRef = "Ш1",
+                Status = TaskItemStatus.Done,
+                ClaudeStartedAt = t,
+                CompletedAt = t.AddHours(1),
+            };
+            var run = FeatureProjector.Build(epic, [epic, step]);
+            run.State.Should().Be(FeatureStates.Idle, "задача стартовала и закрыта, фича не закрыта, не идёт → idle");
+        }
+    }
+
+    // SlimRun облегчает run для ответа (GET features/{id}): вычисленные поля (включая State)
+    // обязаны пережить облегчение. Мутация: убрать копирование State из SlimRun → тест краснеет.
+    [Fact]
+    public void Build_SlimRun_StateСохраняется()
+    {
+        var t = new DateTime(2026, 10, 17);
+        var epic = new TaskItem { Id = "e-slim", Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = "e-slim", Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done, CompletedAt = t,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        // Полный run (BuildCore) и облегчённый (Build = SlimRun(BuildCore)) обязаны совпасть по State.
+        var full = FeatureProjector.BuildCore(epic, [epic, final]);
+        var slim = FeatureProjector.Build(epic, [epic, final]);
+        slim.State.Should().Be(FeatureStates.MergePending, "после SlimRun state = merge_pending");
+        slim.State.Should().Be(full.State, "SlimRun не теряет State (полный run = облегчённый)");
+    }
+
+    // Bucket выводится из state (единая точка правда): merging → running (не «ждёт вас»),
+    // merge_pending → attention, merged/closed → closed, running → running, not_started/idle → idle.
+    [Fact]
+    public void Bucket_ВыводитсяИзState()
+    {
+        var t = new DateTime(2026, 10, 17);
+
+        // merging: merge-задача InProgress → bucket = running (не attention, как было раньше).
+        var epicM = new TaskItem { Id = "e-bk-merging", Role = TaskRoles.Feature };
+        var merge = new TaskItem { Id = "m1", FeatureId = "e-bk-merging", Role = TaskRoles.Merge, Status = TaskItemStatus.InProgress };
+        var runMerging = FeatureProjector.Build(epicM, [epicM, merge]);
+        runMerging.State.Should().Be(FeatureStates.Merging);
+        FeatureProjector.Bucket(runMerging).Should().Be("running", "merging → running: «мерж идёт» теперь не «ждёт вас»");
+
+        // merge_pending: финал принят, мержа нет → bucket = attention (ждёт мержа).
+        var epicP = new TaskItem { Id = "e-bk-pending", Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = "e-bk-pending", Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done, CompletedAt = t,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var runPending = FeatureProjector.Build(epicP, [epicP, final]);
+        runPending.State.Should().Be(FeatureStates.MergePending);
+        FeatureProjector.Bucket(runPending).Should().Be("attention", "merge_pending → attention (ждёт мержа)");
+
+        // merged: merge Done → bucket = closed.
+        var epicMg = new TaskItem { Id = "e-bk-merged", Role = TaskRoles.Feature };
+        var mergeDone = new TaskItem { Id = "m1", FeatureId = "e-bk-merged", Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
+        var runMerged = FeatureProjector.Build(epicMg, [epicMg, mergeDone]);
+        runMerged.State.Should().Be(FeatureStates.Merged);
+        FeatureProjector.Bucket(runMerged).Should().Be("closed", "merged → closed");
+
+        // closed: эпик Done, мержа нет → bucket = closed.
+        var epicC = new TaskItem { Id = "e-bk-closed", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var runClosed = FeatureProjector.Build(epicC, [epicC]);
+        runClosed.State.Should().Be(FeatureStates.Closed);
+        FeatureProjector.Bucket(runClosed).Should().Be("closed", "closed → closed");
+
+        // running: идёт задача, без тревоги → bucket = running.
+        var epicR = new TaskItem { Id = "e-bk-running", Role = TaskRoles.Feature };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-bk-running", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+        };
+        var runRunning = FeatureProjector.Build(epicR, [epicR, step]);
+        runRunning.State.Should().Be(FeatureStates.Running);
+        FeatureProjector.Bucket(runRunning).Should().Be("running", "running → running");
+
+        // not_started: ни одна задача не стартовала → bucket = idle.
+        var epicN = new TaskItem { Id = "e-bk-notstarted", Role = TaskRoles.Feature };
+        var todo = new TaskItem { Id = "s1", FeatureId = "e-bk-notstarted", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.Todo };
+        var runNotStarted = FeatureProjector.Build(epicN, [epicN, todo]);
+        runNotStarted.State.Should().Be(FeatureStates.NotStarted);
+        FeatureProjector.Bucket(runNotStarted).Should().Be("idle", "not_started → idle");
+    }
 }

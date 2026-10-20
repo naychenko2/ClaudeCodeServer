@@ -41,7 +41,11 @@ public sealed record FeatureIndexRow(
     string Title,
     string? ProjectId,
     // Группа фичи: attention — требует внимания; running — идёт; idle — стоит; closed — закрыта.
+    // Выводится из State (единая точка правда, FeatureProjector.Bucket) — bucket и state не расходятся.
     string Bucket,
+    // Состояние фичи (FeatureRun.State; 9 значений, см. FeatureStates): merged · closed · stopped ·
+    // waiting · merging · merge_pending · running · not_started · idle.
+    string State,
     // Тревога; null — тревоги нет.
     FeatureIndexAttention? Attention,
     // Рельса: ровно 7 стадий в порядке жизненного цикла.

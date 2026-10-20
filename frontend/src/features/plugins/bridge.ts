@@ -11,9 +11,10 @@
 
 // Шим plugin-kit: мост + CSS-токены тем (ADR-031 §3.1). ?raw — содержимое строкой;
 // файл одновременно доступен как статика (PWA precache), но в srcdoc нужен текстом.
-// buildPanelSrcdoc встраивает его сам, поэтому сборка не зависит от React/DOM.
+// buildPanelSrcdoc (panelSrcdoc.ts) встраивает его сам; bridge.ts подставляет ?raw.
 import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
 import shimCss from '../../../public/plugin-kit/theme.css?raw';
+import { buildPanelSrcdoc as buildPanelSrcdocRaw, PANEL_CSP as _PANEL_CSP } from './panelSrcdoc';
 
 // === Протокол ===
 
@@ -24,14 +25,8 @@ export const HOST_SOURCE = 'ccs-host';
 // Origin sandbox-iframe без allow-same-origin — строка 'null' (не null)
 export const OPAQUE_ORIGIN = 'null';
 
-// CSP srcdoc (ADR-031 §3.1): внешних ресурсов нет, inline-скрипты/стили работают,
-// сеть из кадра закрыта — весь выход наружу только мостом. Единая константа: стоит
-// и в meta оболочки, и в meta панели (§3.6) — оболочка держит навигацию (frame-src 'none'),
-// base-uri 'none' закрывает <base>.
-export const PANEL_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src data: blob:; connect-src 'none'; form-action 'none'; " +
-  "base-uri 'none'; frame-src 'none'";
+// CSP srcdoc (ADR-031 §3.1) — из panelSrcdoc.ts (единая константа: meta оболочки + meta панели).
+export const PANEL_CSP = _PANEL_CSP;
 
 // Таймаут ожидания ready (макет 3: «Скелет 3 с, затем — состояние «не отвечает»»)
 export const READY_TIMEOUT_MS = 3000;
@@ -191,40 +186,12 @@ export function buildContextMessage(context: SlotContext): HostMessage {
 // опустить — нет.
 export const MAX_PANEL_FILE_BYTES = 256 * 1024;
 
-// Экранирование значения атрибута srcdoc (ADR-031 §3.6): & → &amp;, " → &quot;,
-// и больше ничего. < и > не экранируются: внутри двойнокавычного атрибута они
-// значение не закрывают, а HTML панели идёт «как есть» (без разбора).
-function escapeSrcdoc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-}
-
 // ЕДИНАЯ сборка документа панели: для установленной панели (PluginFrame) и для
-// предпросмотра черновика (DraftCard) — одна функция, одна PANEL_CSP. Возвращает
-// ВНЕШНИЙ документ (оболочку): meta-CSP PANEL_CSP + ровно один
-// <iframe sandbox="allow-scripts" srcdoc="…">. Навигацию панели держит оболочка
-// (frame-src 'none' в PANEL_CSP): браузер сверяет навигацию фрейма с политикой
-// родителя. srcdoc — внутренний документ: CSP + шим + HTML панели (простая
-// конкатенация, без разбора); значение экранировано.
-//
-// theme — тема в первом кадре (ADR-031 §3.3): до init панель рисовалась светлой,
-// затем переключалась сообщением (вспышка в тёмной теме). Атрибут data-cc-theme
-// встраивается в ВНУТРЕННИЙ <html> (шим обновляет его по init/theme); HTML панели
-// не меняется.
+// предпросмотра черновика (DraftCard) — одна функция, одна PANEL_CSP. Тело — в
+// panelSrcdoc.ts (без ?raw); здесь — обёртка, подставляющая ?raw-импорты шима.
+// theme — тема в первом кадре (ADR-031 §3.3): data-cc-theme на ВНУТРЕННЕМ <html>.
 export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light'): string {
-  const themeAttr = theme === 'dark' ? ' data-cc-theme="dark"' : '';
-  const inner =
-    '<!doctype html><html' + themeAttr + '><head>' +
-    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
-    '<style>' + shimCss + '</style>' +
-    '<script>' + shimJs + '</script>' +
-    '</head><body>' + panelHtml + '</body></html>';
-  return (
-    '<!doctype html><html><head>' +
-    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
-    '</head><body>' +
-    '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +
-    '</body></html>'
-  );
+  return buildPanelSrcdocRaw(panelHtml, theme, shimJs, shimCss);
 }
 
 // === Высота ===

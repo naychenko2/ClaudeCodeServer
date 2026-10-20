@@ -12,36 +12,19 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-// Те же файлы, что встраивает buildPanelSrcdoc (frontend/src/features/plugins/bridge.ts).
+// Те же файлы, что встраивает buildPanelSrcdoc (frontend/src/features/plugins/panelSrcdoc.ts).
 // cwd — корень frontend/ (отсюда запускается playwright), public/ — рядом.
 const KIT = path.join(process.cwd(), 'public', 'plugin-kit');
 const shimJs = fs.readFileSync(path.join(KIT, 'plugin-kit.js'), 'utf8');
 const shimCss = fs.readFileSync(path.join(KIT, 'theme.css'), 'utf8');
 
-// CSP — та же константа PANEL_CSP из bridge.ts (ADR-031 §3.1/§3.6).
-const PANEL_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src data: blob:; connect-src 'none'; form-action 'none'; " +
-  "base-uri 'none'; frame-src 'none'";
+// buildPanelSrcdoc — из panelSrcdoc.ts (БЕЗ ?raw): CSP и экранирование — только там.
+// bridge.ts подставляет ?raw-импорты; e2e передаёт файлы через fs.readFileSync.
+import { buildPanelSrcdoc } from '../src/features/plugins/panelSrcdoc';
 
-// buildPanelSrcdoc (bridge.ts): оболочка (CSP + ровно один iframe) + внутренний
-// документ (CSP + шим + html панели). Экранирование srcdoc: & → &amp;, " → &quot;.
+// Экранирование srcdoc для outer iframe (та же логика, что escapeSrcdoc в panelSrcdoc.ts):
+// & → &amp;, " → &quot; (для вставки shell в атрибут srcdoc outer iframe).
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-function buildPanelSrcdoc(panelHtml: string): string {
-  const inner =
-    '<!doctype html><html><head>' +
-    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
-    '<style>' + shimCss + '</style>' +
-    '<script>' + shimJs + '</script>' +
-    '</head><body>' + panelHtml + '</body></html>';
-  return (
-    '<!doctype html><html><head>' +
-    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
-    '</head><body>' +
-    '<iframe sandbox="allow-scripts" srcdoc="' + esc(inner) + '"></iframe>' +
-    '</body></html>'
-  );
-}
 
 // Панель (недоверенный код, но в тесте наша): по init делает «пустой» call,
 // по result — resize(200). Флаги window.__panel читаем из фрейма панели.
@@ -61,7 +44,7 @@ const panelHtml =
 // Хост-страница: outer iframe (оболочка) + слушатель message. Адресат — окно панели
 // (frames[0] оболочки), не оболочка: e.source сверяем с ним, init/result шлём в него.
 function hostHtml(): string {
-  const shell = buildPanelSrcdoc(panelHtml);
+  const shell = buildPanelSrcdoc(panelHtml, 'light', shimJs, shimCss);
   return (
     '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
     '<iframe id="outer" style="width:900px;height:400px;border:0" srcdoc="' + esc(shell) + '"></iframe>' +

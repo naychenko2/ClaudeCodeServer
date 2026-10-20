@@ -229,7 +229,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   // входит, чтобы смена темы НЕ перемонтировала панель (только init/theme сообщением).
   const srcdoc = useMemo(() => {
     if (fetch.kind !== 'html') return null;
-    if (fetch.html.length > MAX_PANEL_FILE_BYTES) return null;
+    // Размер — в БАЙТАХ (TextEncoder), не в символах: 100 000 русских символов
+    // ≈ 200 КиБ байт, но .length = 100 000 (символы) — потолок 256 КиБ не срабатывал.
+    if (new TextEncoder().encode(fetch.html).length > MAX_PANEL_FILE_BYTES) return null;
     return buildPanelSrcdoc(fetch.html, theme);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- theme намерено вне deps
   }, [fetch]);
@@ -434,8 +436,10 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     if (fetch.kind === 'fetching') {
       return <LoadingSkeleton />;
     }
-    // Панель больше потолка (256 КиБ): не монтируем, показываем понятную ошибку
-    if (fetch.kind === 'html' && fetch.html.length > MAX_PANEL_FILE_BYTES) {
+    // Панель больше потолка (256 КиБ): не монтируем, показываем понятную ошибку.
+    // Размер — в БАЙТАХ (TextEncoder), не в символах: 100 000 русских символов
+    // ≈ 200 КиБ байт, но .length = 100 000 (символы) — потолок 256 КиБ не срабатывал.
+    if (fetch.kind === 'html' && new TextEncoder().encode(fetch.html).length > MAX_PANEL_FILE_BYTES) {
       return (
         <Notice tone="warning" icon={AlertTriangle} title="Панель слишком большая">
           Файл панели больше 256 КиБ — панель не смонтирована.

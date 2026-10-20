@@ -190,7 +190,9 @@ function PanelPreview({ slug }: { slug: string }) {
   // Панель больше потолка (256 КиБ) — не монтируем (показываем «слишком большая»).
   // Тема входит в ключ фрейма: смена темы перемонтирует iframe (простой предпросмотр —
   // без живого обновления темы сообщением, как в PluginFrame).
-  const tooBig = html != null && html.length > MAX_PANEL_FILE_BYTES;
+  // Размер — в БАЙТАХ (TextEncoder), не в символах: 100 000 русских символов
+  // ≈ 200 КиБ байт, но .length = 100 000 (символы) — потолок 256 КиБ не срабатывал.
+  const tooBig = html != null && new TextEncoder().encode(html).length > MAX_PANEL_FILE_BYTES;
   // theme — тема первого кадра (ADR-031 §3.3); здесь смена темы и так перемонтирует
   // (frameKey включает theme), поэтому тема идёт напрямую, без замыкания.
   const srcdoc = html != null && !tooBig ? buildPanelSrcdoc(html, theme) : null;

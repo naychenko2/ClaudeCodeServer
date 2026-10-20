@@ -1159,7 +1159,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 && (t.SourceSessionId == sessionId || t.ExecutorLaunchedBySessionId == sessionId))
             .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
-        return OrderRuns(runs);
+        var ordered = OrderRuns(runs);
+        // Фича, чья задача — TaskId чата, первой (общий сортировщик, не две копии).
+        var byId = owner.ToDictionary(t => t.Id);
+        var own = OwnFeatureId(sessionId, sessions ?? Array.Empty<FeatureIndexSession>(), byId);
+        return PreferFirst(ordered, r => r.FeatureId, own);
     }
 
     // Порядок фич (правило v2): 4 группы, внутри каждой — свой ключ сортировки.
@@ -1205,6 +1209,40 @@ public sealed class FeatureProjector(TaskManager tasks)
         result.AddRange(running);
         result.AddRange(other);
         result.AddRange(closed);
+        return result;
+    }
+
+    // Фича, чья задача — TaskId чата (executor-членство): FeatureId задачи или id эпика.
+    // null — чат не исполнитель задачи фичи (оркестратор/куратор/нет TaskId) → прежний порядок.
+    // internal — для тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
+    internal static string? OwnFeatureId(
+        string sessionId,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        IReadOnlyDictionary<string, TaskItem> byId)
+    {
+        var session = sessions.FirstOrDefault(s => s.Id == sessionId);
+        if (session?.TaskId is null) return null;
+        if (!byId.TryGetValue(session.TaskId, out var task)) return null;
+        return task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
+    }
+
+    // Общий сортировщик «своя фича первой»: элемент с preferredId — первым, остальное —
+    // в исходном порядке. preferredId == null или не найден → исходный список.
+    // internal — для тестов; используется и ProjectForSession, и BuildIndexCore (не две копии).
+    internal static IReadOnlyList<T> PreferFirst<T>(
+        IReadOnlyList<T> items,
+        Func<T, string> featureIdOf,
+        string? preferredId)
+    {
+        if (preferredId is null) return items;
+        var idx = -1;
+        for (var i = 0; i < items.Count; i++)
+            if (featureIdOf(items[i]) == preferredId) { idx = i; break; }
+        if (idx < 0) return items;
+        var result = new List<T>(items.Count);
+        result.Add(items[idx]);
+        for (var i = 0; i < items.Count; i++)
+            if (i != idx) result.Add(items[i]);
         return result;
     }
 
@@ -1350,6 +1388,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Chats: sessionId → записи, упорядоченные по силе связи (key > curator > orchestrator
         // > executor); при равенстве — по порядку фичи в Features. Членство в фичу, чей эпик
         // исчез (удалён), не показываем — фича «исчезает целиком», чат за ней не тянется.
+        // Фича, чья задача — TaskId чата, первой (общий сортировщик PreferFirst, не две копии).
         var surviving = new HashSet<string>(rows.Select(r => r.FeatureId));
         var chats = new Dictionary<string, List<FeatureIndexChatEntry>>();
         foreach (var (sessionId, feats) in map)
@@ -1361,6 +1400,9 @@ public sealed class FeatureProjector(TaskManager tasks)
                 .Select(kv => new FeatureIndexChatEntry(
                     kv.Key, kv.Value.Kind, kv.Value.Role, kv.Value.StepRef, kv.Value.Lane))
                 .ToList();
+            // Фича, чья задача — TaskId чата, первой (общий сортировщик, не две копии).
+            var own = OwnFeatureId(sessionId, sessions, byId);
+            entries = PreferFirst(entries, e => e.FeatureId, own).ToList();
             if (entries.Count > 0)
                 chats[sessionId] = entries;
         }

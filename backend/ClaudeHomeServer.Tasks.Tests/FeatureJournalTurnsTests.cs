@@ -3,6 +3,8 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Journal;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -86,6 +88,8 @@ public class FeatureJournalTurnsTests : IDisposable
 
         await _bus.PublishAsync(new TurnCompleted(
             new TurnContext("sess-1", "u", 1, 0), "success", null, Passport("sess-1", now)));
+        // Запись диска — в фоне (очередь): дожидаемся, пока запись дошла до файла.
+        await _subscriber.WaitForDrainAsync();
 
         var turn = _journal.Read("u", epic.Id).Entries
             .Should().ContainSingle(e => e.Kind == "turn").Which;
@@ -109,6 +113,7 @@ public class FeatureJournalTurnsTests : IDisposable
         // Сессия, к которой не привязана ни одна задача (общий оркестраторский/куратор-чат).
         await _bus.PublishAsync(new TurnCompleted(
             new TurnContext("sess-orphan", "u", 1, 0), "success", null, Passport("sess-orphan", now)));
+        await _subscriber.WaitForDrainAsync();
 
         _journal.Read("u", epic.Id).Entries.Should().NotContain(e => e.Kind == "turn",
             "ход чата без привязки к задаче фичи не пишется");
@@ -126,6 +131,7 @@ public class FeatureJournalTurnsTests : IDisposable
 
         await _bus.PublishAsync(new TurnCompleted(
             new TurnContext("sess-2", "u", 1, 0), "success", null, Passport("sess-2", now)));
+        await _subscriber.WaitForDrainAsync();
 
         // Файла журнала нет (нет ни эпика, ни фичи) → Read пуст.
         _journal.Read("u", "no-feature").Entries.Should().BeEmpty(
@@ -146,6 +152,7 @@ public class FeatureJournalTurnsTests : IDisposable
             new TurnContext("sess-1", "u", 1, 0), "success", null, Passport("sess-1", now));
         await _bus.PublishAsync(turn);
         await _bus.PublishAsync(turn);
+        await _subscriber.WaitForDrainAsync();
 
         _journal.Read("u", epic.Id).Entries
             .Should().ContainSingle(e => e.Kind == "turn",
@@ -175,6 +182,45 @@ public class FeatureJournalTurnsTests : IDisposable
             new TurnCompleted(new TurnContext("sess-1", "u", 1, 0), "success", null,
                 Passport("sess-1", now))));
         ex.Should().BeNull("сбой записи не роняет шину (подписчик Notification)");
+        // Фоновая запись (отравленное хранилище) дойдёт до диска: сбой гасится потребителем.
+        await poisonSubscriber.WaitForDrainAsync();
+    }
+
+    // ─── После старта хоста подписчик на шине (явная IHostedService, не побочный эффект) ──
+
+    [Fact]
+    public async Task ПослеСтартаХоста_ПодписчикНаШине_ПишетTurn()
+    {
+        // Отдельная шина (не _bus теста): DI-подписчик подписывается только на неё,
+        // поэтому ход пишется ровно один раз.
+        var diBus = new TurnEventBus();
+        var services = new ServiceCollection();
+        services.AddSingleton(_tasks);
+        services.AddSingleton(_journal);
+        services.AddSingleton<ITurnEventBus>(diBus);
+        // Как AddGatedHostedService: singleton + IHostedService (один экземпляр).
+        services.AddSingleton<FeatureTurnJournalSubscriber>();
+        services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<FeatureTurnJournalSubscriber>());
+        var sp = services.BuildServiceProvider();
+
+        // Старт хоста: все IHostedService получают StartAsync — создаётся подписчик
+        // (конструктор: подписка на шину + фоновый потребитель).
+        foreach (var hs in sp.GetServices<IHostedService>())
+            await hs.StartAsync(CancellationToken.None);
+
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        _tasks.MarkClaudeStarted(step.Id, "sess-1", now);
+
+        await diBus.PublishAsync(new TurnCompleted(
+            new TurnContext("sess-1", "u", 1, 0), "success", null, Passport("sess-1", now)));
+
+        var subscriber = sp.GetRequiredService<FeatureTurnJournalSubscriber>();
+        await subscriber.WaitForDrainAsync();
+
+        _journal.Read("u", epic.Id).Entries
+            .Should().Contain(e => e.Kind == "turn",
+                "после старта хоста подписчик на шине: ход записан в журнал");
     }
 
     // Logger, который бросает в Log: заставляет сбой хранилища вырваться из его try/catch.

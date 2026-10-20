@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Turn;
@@ -19,14 +20,29 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 // - Сбой не роняет подписчика/шину: Notification-шина сама гасит исключения подписчиков,
 //   страховка try/catch держит ещё и наш собственный код (GetBySession, сборка записи).
 //
-// Создание при старте: plain singleton (не IHostedService — фоновых циклов нет),
-// подписка — в конструкторе. Гарантированное создание при старте — через зависимость
-// TaskSchedulerService (hosted, стартует первым); см. TasksSubsystem.Register.
-public sealed class FeatureTurnJournalSubscriber
+// Создание: IHostedService (Tasks, не Main — граница подсистем держится), регистрация
+// явная в TasksSubsystem.Register (AddGatedHostedService) — НЕ побочный эффект создания
+// TaskSchedulerService (тот был хрупкой связью: убрали параметр — журнал ходов молча пуст).
+//
+// Запись диска — в фоне: обработчик хода только enqueue'ит запись в очередь, фоновый
+// потребитель (один поток) делает Append. Порядок записей = порядок enqueue (один
+// потребитель); идемпотентность — дедуп при чтении (FeatureJournalStore.DedupTurns), не здесь.
+public sealed class FeatureTurnJournalSubscriber : IHostedService
 {
     private readonly TaskManager _tasks;
     private readonly FeatureJournalStore _journal;
     private readonly ILogger<FeatureTurnJournalSubscriber>? _log;
+
+    // Очередь записей: синхронная запись диска (Append: чтение+append) уходит с потока
+    // завершения хода. Unbounded — не блокируем ход; один потребитель → порядок сохраняется.
+    private readonly Channel<QueuedWrite> _queue = Channel.CreateUnbounded<QueuedWrite>();
+    // Счётчик «в работе» (enqueue'd, ещё не записан) + сигнал «очередь опустела» для
+    // WaitForDrainAsync (тесты: дождаться, пока фоновая запись дошла до диска).
+    private readonly object _drainGate = new();
+    private int _inFlight;
+    private TaskCompletionSource? _drained;
+
+    private sealed record QueuedWrite(string OwnerId, string FeatureId, FeatureJournalEntry Entry);
 
     public FeatureTurnJournalSubscriber(TaskManager tasks, FeatureJournalStore journal,
         ITurnEventBus bus, ILogger<FeatureTurnJournalSubscriber>? log = null)
@@ -34,12 +50,30 @@ public sealed class FeatureTurnJournalSubscriber
         _tasks = tasks;
         _journal = journal;
         _log = log;
-        // Подписка в конструкторе: экземпляр создаётся при старте (hosted-зависимость),
+        // Подписка в конструкторе: экземпляр создаётся при старте хоста (IHostedService),
         // и к первому завершённому ходу подписчик уже на шине.
         bus.OnNotification<TurnCompleted>(HandleTurnCompleted, "Tasks.FeatureTurnJournal");
+        // Фоновый потребитель: один поток, порядок записей = порядок enqueue.
+        _ = Task.Run(ConsumeLoopAsync);
     }
 
-    // Один завершённый ход → одна строка kind=turn в журнале фичи.
+    // IHostedService: гарантированное создание при старте хоста. StartAsync/StopAsync —
+    // no-op: подписка на шину и очередь уже развёрнуты в конструкторе.
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    // Дождаться, пока все принятые записи дойдут до диска (тесты). Возвращает Task,
+    // завершающийся, когда очередь пуста и текущая запись сделана.
+    public Task WaitForDrainAsync()
+    {
+        lock (_drainGate)
+        {
+            if (_inFlight == 0) return Task.CompletedTask;
+            return (_drained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        }
+    }
+
+    // Один завершённый ход → одна запись в очередь (disk write — в фоне, не здесь).
     private Task HandleTurnCompleted(TurnCompleted e)
     {
         try
@@ -57,30 +91,69 @@ public sealed class FeatureTurnJournalSubscriber
             if (featureId is null) return Task.CompletedTask;
 
             var passport = e.Passport;
-            _journal.Append(task.OwnerId ?? "", featureId, new FeatureJournalEntry
+            var entry = new FeatureJournalEntry
             {
                 // Момент события — конец хода; у хода без собранного паспорта — сейчас.
                 At = passport?.EndedAt ?? DateTime.UtcNow,
                 Kind = "turn",
                 TaskId = task.Id,
                 SessionId = sessionId,
-                // turnSeq — из контекста хода (в паспорте поля нет); у TurnCompleted всегда
-                // реальный номер поданного хода.
+                // turnSeq — из контекста хода (в паспорте поля нет); у TurnCompleted
+                // всегда реальный номер поданного хода.
                 TurnSeq = e.Turn.TurnSeq,
                 StartedAt = passport?.StartedAt,
                 EndedAt = passport?.EndedAt,
-                // Outcome/ErrorClass: паспорт и событие несут одно значение; паспорт первичен,
-                // событие — страховка, когда паспорт не собран (событие уходит и без него).
+                // Outcome/ErrorClass: паспорт и событие несут одно значение; паспорт
+                // первичен, событие — страховка, когда паспорт не собран.
                 Outcome = passport?.Outcome ?? e.Outcome,
                 ErrorClass = passport?.LastErrorClass ?? e.ErrorClass,
                 Model = passport?.FinalModel,
-            });
+            };
+
+            // Счётчик «в работе» — ДО TryWrite: очередь unbounded (TryWrite не падает),
+            // а consumer мог бы decrement'нуть раньше инкремента → отрицательный счёт.
+            lock (_drainGate)
+            {
+                _inFlight++;
+            }
+            _queue.Writer.TryWrite(new QueuedWrite(task.OwnerId ?? "", featureId, entry));
         }
         catch (Exception ex)
         {
             // Сбой не роняет подписчика/шину: Notification гасит, но держим и свой код.
-            _log?.LogWarning(ex, "Журнал фичи: не удалось записать ход {Session}", e.Turn.SessionId);
+            _log?.LogWarning(ex, "Журнал фичи: не удалось принять ход {Session}", e.Turn.SessionId);
         }
         return Task.CompletedTask;
+    }
+
+    // Фоновый потребитель: читает очередь и пишет в хранилище. Один поток → порядок.
+    private async Task ConsumeLoopAsync()
+    {
+        await foreach (var write in _queue.Reader.ReadAllAsync())
+        {
+            try
+            {
+                _journal.Append(write.OwnerId, write.FeatureId, write.Entry);
+            }
+            catch (Exception ex)
+            {
+                // Сбой одной записи не роняет цикл: остальные ходы всё равно пишутся.
+                _log?.LogWarning(ex, "Журнал фичи: не удалось записать ход {Feature}", write.FeatureId);
+            }
+            finally
+            {
+                TaskCompletionSource? toComplete = null;
+                lock (_drainGate)
+                {
+                    _inFlight--;
+                    if (_inFlight == 0 && _drained is not null)
+                    {
+                        toComplete = _drained;
+                        _drained = null;
+                    }
+                }
+                toComplete?.SetResult();
+            }
+        }
     }
 }

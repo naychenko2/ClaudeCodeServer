@@ -71,10 +71,11 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Зависимость только на IConfiguration (DataPath) — новых швов нет.
         services.AddSingleton<FeatureJournalStore>();
         // Журнал ходов фичи (волна 3, Б8c): подписчик TurnCompleted пишет строку kind=turn
-        // для ходов сессий, привязанных к задаче фичи. Plain singleton (не IHostedService):
-        // подписка — в конструкторе, а гарантированное создание при старте — через зависимость
-        // TaskSchedulerService (hosted, стартует первым; см. ниже).
-        services.AddSingleton<FeatureTurnJournalSubscriber>();
+        // для ходов сессий, привязанных к задаче фичи. IHostedService (Tasks, не Main —
+        // граница подсистем держится): явная регистрация, НЕ побочный эффект TaskSchedulerService
+        // (тот был хрупкой связью: убрали параметр — журнал ходов молча пуст). Запись диска —
+        // в фоне (очередь), не на потоке завершения хода.
+        services.AddGatedHostedService<FeatureTurnJournalSubscriber>(config, "tasks");
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

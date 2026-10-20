@@ -105,10 +105,11 @@ public class FeatureJournalTransitionsTests : IDisposable
         var result = _journal.Read("u", epic.Id);
         var kinds = result.Entries.Select(e => e.Kind).ToList();
 
-        // created (эпик) + started + status + waiting + stopped + status + verdict + dropped —
-        // ровно в этом порядке (Equal проверяет и состав, и порядок).
+        // created (эпик) + started + status + waiting + stopped + waiting_cleared (переход
+        // в Done снимает ожидание) + status + verdict + dropped — ровно в этом порядке
+        // (Equal проверяет и состав, и порядок).
         kinds.Should().Equal(
-            "created", "started", "status", "waiting", "stopped", "status", "verdict", "dropped");
+            "created", "started", "status", "waiting", "stopped", "waiting_cleared", "status", "verdict", "dropped");
         // started — время = момент запуска (ClaudeStartedAt).
         result.Entries.Single(e => e.Kind == "started").StartedAt.Should().NotBeNull();
         // waiting — причина переносится.
@@ -236,6 +237,129 @@ public class FeatureJournalTransitionsTests : IDisposable
         _sut.DeleteByProject("proj-1");
 
         File.Exists(path).Should().BeFalse();
+    }
+
+    // ─── Каскад: удаление дочерней задачи НЕ сносит журнал живой фичи (critical) ─────
+    // Мутация «вернуть task.FeatureId в DeleteJournalFor» краснит: удаление шага снова
+    // стирает файл журнала эпика.
+
+    [Fact]
+    public void УдалениеШага_НеТрогаетФайлЖурналаФичи()
+    {
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        _sut.MarkClaudeStarted(step.Id, "sess-1", now);
+
+        var path = Path.Combine(_dir, "feature-journal", "u", $"{epic.Id}.jsonl");
+        File.Exists(path).Should().BeTrue();
+
+        // Удаление ШАГА (Role=step): эпик жив, файл журнала фичи не сносится.
+        _sut.Delete(step.Id);
+
+        File.Exists(path).Should().BeTrue("удаление шага не сносит журнал живой фичи");
+        _sut.GetById(epic.Id).Should().NotBeNull("эпик (Role=feature) не удалён");
+    }
+
+    [Fact]
+    public void УдалениеРевью_НеТрогаетФайлЖурналаФичи()
+    {
+        var (epic, _) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        // Ревью (Role=review) — дочерняя задача фичи.
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review));
+        _sut.MarkClaudeStarted(review.Id, "sess-2", now);
+
+        var path = Path.Combine(_dir, "feature-journal", "u", $"{epic.Id}.jsonl");
+        File.Exists(path).Should().BeTrue();
+
+        _sut.Delete(review.Id);
+
+        File.Exists(path).Should().BeTrue("удаление ревью не сносит журнал живой фичи");
+    }
+
+    // ─── DeleteByProject: эпик в другом проекте не сносится ─────────────────────────
+
+    [Fact]
+    public void DeleteByProject_ЭпикВДругомПроекте_НеСносится()
+    {
+        // Эпик A + шаг A в proj-A.
+        var epicA = _sut.Create("proj-A", "u", new CreateTaskRequest("эпик A", Role: TaskRoles.Feature));
+        var stepA = _sut.Create("proj-A", "u", new CreateTaskRequest("шаг A",
+            FeatureId: epicA.Id, Role: TaskRoles.Step));
+        var now = DateTime.UtcNow;
+        _sut.MarkClaudeStarted(stepA.Id, "sess-1", now);
+
+        // Эпик B + шаг B в proj-B (другой проект).
+        var epicB = _sut.Create("proj-B", "u", new CreateTaskRequest("эпик B", Role: TaskRoles.Feature));
+        var stepB = _sut.Create("proj-B", "u", new CreateTaskRequest("шаг B",
+            FeatureId: epicB.Id, Role: TaskRoles.Step));
+        _sut.MarkClaudeStarted(stepB.Id, "sess-2", now);
+
+        var pathA = Path.Combine(_dir, "feature-journal", "u", $"{epicA.Id}.jsonl");
+        var pathB = Path.Combine(_dir, "feature-journal", "u", $"{epicB.Id}.jsonl");
+        File.Exists(pathA).Should().BeTrue();
+        File.Exists(pathB).Should().BeTrue();
+
+        // Удаляем proj-A: эпик A (в proj-A) сносит свой журнал; эпик B (в proj-B) — нет.
+        _sut.DeleteByProject("proj-A");
+
+        File.Exists(pathA).Should().BeFalse("эпик удалённого проекта сносит свой журнал");
+        File.Exists(pathB).Should().BeTrue("эпик в другом проекте не сносится");
+    }
+
+    // ─── Снятие ожидания: старт исполнителя и переход в Done пишут waiting_cleared ───
+    // Мутация «убрать ClearAwaitingHuman в одной из трёх точек» краснит соответствующий тест.
+
+    [Fact]
+    public void Ожидание_СтартИсполнителя_ПишетWaitingCleared()
+    {
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        // Ожидание человека (Update ставит AwaitingHumanSince → waiting).
+        _sut.Update(step.Id, new UpdateTaskRequest(AwaitingHumanSince: now, AwaitingHumanReason: "merge"));
+        // Исполнитель снова запущен → ожидание снято (waiting_cleared).
+        _sut.MarkClaudeStarted(step.Id, "sess-1", now.AddMinutes(1));
+
+        var result = _journal.Read("u", epic.Id);
+        result.Entries.Should().Contain(e => e.Kind == "waiting");
+        result.Entries.Should().Contain(e => e.Kind == "waiting_cleared",
+            "старт исполнителя снимает ожидание");
+    }
+
+    [Fact]
+    public void Ожидание_ПереходВДone_ПишетWaitingCleared()
+    {
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        // Ожидание человека.
+        _sut.Update(step.Id, new UpdateTaskRequest(AwaitingHumanSince: now, AwaitingHumanReason: "merge"));
+        // Переход в Done → ожидание снято (waiting_cleared).
+        _sut.Update(step.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var result = _journal.Read("u", epic.Id);
+        result.Entries.Should().Contain(e => e.Kind == "waiting");
+        result.Entries.Should().Contain(e => e.Kind == "waiting_cleared",
+            "переход в Done снимает ожидание");
+    }
+
+    // ─── device_wait / device_wait_cleared ─────────────────────────────────────────
+
+    [Fact]
+    public void ОжиданиеУстройства_ПишетDeviceWait_ИСнятие_ПишетCleared()
+    {
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        // Ожидание устройства (MarkDeviceWait) → device_wait.
+        _sut.MarkDeviceWait(step.Id, now, "device offline");
+        // Снятие (ClearDeviceWait) → device_wait_cleared.
+        _sut.ClearDeviceWait(step.Id);
+
+        var result = _journal.Read("u", epic.Id);
+        result.Entries.Should().Contain(e => e.Kind == "device_wait");
+        result.Entries.Should().Contain(e => e.Kind == "device_wait_cleared");
+        // Причина переносится.
+        result.Entries.Single(e => e.Kind == "device_wait").Reason.Should().Be("device offline");
     }
 
     // ─── SweepOrphans при старте ───────────────────────────────────────────────

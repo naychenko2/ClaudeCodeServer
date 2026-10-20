@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
-import { centerOccupiedByOther, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
+import { centerOccupiedByOther, centerFingerprint, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import type { Project, Session } from '../types';
@@ -337,6 +337,17 @@ function composerTextarea(container: any): any {
   };
   walk(wrap);
   return hit;
+}
+
+// Есть ли у узла (или его предка) display:none: файл/ридер под открытой страницей прячутся
+// так (без размонтирования). Ходит вверх по parentNode до корня.
+function hasHiddenAncestor(node: any): boolean {
+  let cur = node;
+  while (cur) {
+    if (cur.nodeType === 1 && cur.style && cur.style.display === 'none') return true;
+    cur = cur.parentNode;
+  }
+  return false;
 }
 
 describe('WorkspacePage: центр — страница фичи соседом, ChatPanel в DOM', () => {
@@ -1155,6 +1166,9 @@ describe('WorkspacePage: центр — страница фичи соседом
   // Полнота: ключи берутся из единого источника (CENTER_OCCUPANCY_KEYS, tsc требует каждое
   // поле интерфейса). Каждое поле обязано быть отнесено либо к поведенческим тестам этого
   // файла, либо к «только предикат»; новое окно без классификации красит тест.
+  // «behavioral» = поле ИЗОЛИРОВАНО в поведенческом тесте (оно — единственное занятое окно):
+  //   file/task/videoCenter — параметризованный M1/M2; board — MAJOR-2 (пустой id задачи,
+  //   task=false); teamCenter — minor-4. Остальные — «только предикат» (centerOccupiedByOther).
   it('полнота: каждое поле CenterOccupancy классифицировано и занимает центр в предикате', () => {
     const behavioral = ['file', 'task', 'videoCenter', 'board', 'teamCenter'];
     const predicateOnly = ['commit', 'graph', 'reader', 'persona', 'preview', 'terminalMobile'];
@@ -1168,12 +1182,55 @@ describe('WorkspacePage: центр — страница фичи соседом
     }
   });
 
+  // (MAJOR-1, корень) Отпечаток занятости = «тип:идентичность» каждого занятого окна.
+  // Смена окна ТОГО ЖЕ типа (файл→файл, задача→задача, коммит→коммит) меняет идентичность →
+  // отпечаток → штамп окна → автоскрытие. Старый отпечаток (набор типов) при такой смене не
+  // менялся → страница оставалась (проба Глеба). Окна без пер-экземплярной идентичности
+  // (teamCenter/board) — пустая строка: отпечаток меняется только при open/close.
+  it('MAJOR-1 (корень): centerFingerprint отличает смену окна того же типа от «окно открыто»', () => {
+    const base = (o: Partial<CenterOccupancy>): CenterOccupancy =>
+      ({ file: false, commit: false, task: false, graph: false, reader: false, persona: false, teamCenter: false, board: false, preview: false, terminalMobile: false, videoCenter: false, ...o }) as CenterOccupancy;
+    const ident = (o: Partial<CenterOccupancy>): Record<keyof CenterOccupancy, string> =>
+      ({ file: '', commit: '', task: '', graph: '', reader: '', persona: '', teamCenter: '', board: '', preview: '', terminalMobile: '', videoCenter: '', ...o }) as Record<keyof CenterOccupancy, string>;
+
+    // Задача → другая задача: id меняется → отпечаток меняется.
+    const taskA = centerFingerprint(base({ task: true }), ident({ task: 'task1' }));
+    const taskB = centerFingerprint(base({ task: true }), ident({ task: 'task2' }));
+    expect(taskA, 'задача: отпечаток пуст').not.toBe('');
+    expect(taskB, 'задача→другая: отпечаток не изменился (MAJOR-1)').not.toBe(taskA);
+
+    // Файл → другой файл: путь меняется → отпечаток меняется.
+    const fileA = centerFingerprint(base({ file: true }), ident({ file: 'src/foo.ts' }));
+    const fileB = centerFingerprint(base({ file: true }), ident({ file: 'src/bar.ts' }));
+    expect(fileB, 'файл→другой файл: отпечаток не изменился (MAJOR-1)').not.toBe(fileA);
+
+    // Коммит → другой коммит: sha меняется → отпечаток меняется.
+    const commitA = centerFingerprint(base({ commit: true }), ident({ commit: 'abc123' }));
+    const commitB = centerFingerprint(base({ commit: true }), ident({ commit: 'def456' }));
+    expect(commitB, 'коммит→другой коммит: отпечаток не изменился (MAJOR-1)').not.toBe(commitA);
+
+    // То же окно (идентичность не изменилась) → отпечаток стабильен (лишний штамп не выдаётся).
+    expect(centerFingerprint(base({ task: true }), ident({ task: 'task1' })),
+      'стабильность: повторный отпечаток того же окна отличается').toBe(taskA);
+
+    // Окно без пер-экземплярной идентичности (board): open → отпечаток, close → пуст.
+    expect(centerFingerprint(base({ board: true }), ident({})), 'board open: отпечаток пуст').not.toBe('');
+    expect(centerFingerprint(base({}), ident({})), 'board close: отпечаток не пуст').toBe('');
+
+    // Пустой центр (никто не занят) → пустой отпечаток.
+    expect(centerFingerprint(base({}), ident({})), 'пустой центр: отпечаток не пуст').toBe('');
+  });
+
   // (MAJOR-2, поведение) Доска на мобиле: включена (persist), но не в режиме «Задачи» — центр
   // НЕ занят: окно (штамп) не возникает, страница открывается и остаётся. В режиме «Задачи»
   // доска занимает центр — открытая ДО неё страница закрывается (окно позже страницы).
-  // Фиксирует поведение (доска вне «Задачи» страницу не трогает). Мутация board: showProjectBoard →
-  // projectBoard при модели штампов ЭКВИВАЛЕНТНА (отпечаток меняется только вместе с реальным окном),
-  // поэтому этот тест её не краснит — честно отмечено в отчёте.
+  // Изоляция board (MAJOR-3, проба Глеба): переключение в «Задачи» идёт с ПУСТЫМ id задачи
+  // (cc_pending_task 'p1|' → selectedTaskId='' falsy → task=false, а showProjectBoard=true →
+  // board=true). Старый тест шёл через 'p1|nonexistent' → selectedTaskId='nonexistent' → task=true
+  // маскировал board: мутация board: showProjectBoard → projectBoard была эквивалентна и не краснела.
+  // Теперь board изолирован: мутация board: showProjectBoard → projectBoard краснит (в части 1
+  // projectBoard=true даёт board=true ещё на mount → штамп окна до страницы; в части 2 отпечаток
+  // не меняется → новый штамп не выдаётся → страница остаётся).
   it('MAJOR-2 (поведение): доска включена без режима «Задачи» — страница остаётся; в «Задачи» доска закрывает страницу', async () => {
     recordHistory();
     (globalThis as any).localStorage.setItem('cc_proj_board_p1', '1');
@@ -1187,8 +1244,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     await openFeature(container);
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
       'доска вне режима «Задачи» закрыла страницу').not.toBeNull();
-    // Режим «Задачи»: доска занимает центр (cc-pending-task без id задачи в сторе → leftTab tasks)
-    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|nonexistent');
+    // Режим «Задачи» БЕЗ выбора задачи: cc_pending_task 'p1|' → leftTab='tasks', selectedTaskId=''
+    // (falsy → task=false), showProjectBoard=true (board=true) — доска изолирована.
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|');
     act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
@@ -1215,6 +1273,23 @@ describe('WorkspacePage: центр — страница фичи соседом
       'командный центр не закрыл страницу (minor-4)').toBeNull();
   });
 
+  // (Minor) Мобила: уход в список/сайдбар (mobileView='sidebar') при открытой странице
+  // закрывает её ПО-НАСТОЯЩЕМУ (setOpenFeatureId(null) + navReplace без /feature/), а не
+  // гасит молча. Поведенческий тест требует re-triggerable перехода в 'sidebar' при открытой
+  // странице, но все штатные пути (handleSelectSession/handleFeatureBack/handleTabSwitch) либо
+  // сами закрывают страницу, либо недоступны в fake-DOM (PillSwitch) — поэтому эффект
+  // фиксируем по исходнику: мутация (убрать guard mobileView!=='sidebar' || setOpenFeatureId(null)
+  // + navReplace view:'sidebar') красит тест.
+  it('Minor: уход в сайдбар на мобиле закрывает страницу по-настоящему (эффект)', () => {
+    const src = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
+    // Guard эффекта: mobileView='sidebar' + openFeatureId != null (и флаги пришли, фичи вкл).
+    expect(src, 'guard «уход в сайдбар» не найден (mobileView !== \'sidebar\' || openFeatureId == null)')
+      .toContain("mobileView !== 'sidebar' || openFeatureId == null");
+    // Действие эффекта: настоящее закрытие — setOpenFeatureId(null) + navReplace view:'sidebar', feature:null.
+    expect(src, 'действие «уход в сайдбар» не закрывает страницу (navReplace view:sidebar, feature:null)')
+      .toContain("view: 'sidebar', file: null, task: null,");
+  });
+
   // (M1, смена окна) Центр занят ДО открытия страницы; страницу открыли поверх; затем окно
   // СМЕНИЛОСЬ (файл уступил задаче) — флаг занятости не меняется, но окно позже страницы →
   // страница закрыта (штамп, а не ребро булева).
@@ -1237,6 +1312,59 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((globalThis as any).window.location.hash).not.toContain('/feature/');
   });
 
+  // (MAJOR-1, смена окна того же типа) Страница открыта; окно ТОГО ЖЕ типа сменилось
+  // (задача → другая задача / коммит → другой коммит) — отпечаток «тип:идентичность» меняется
+  // (старый набор типов — нет) → штамп окна позже страницы → настоящее закрытие.
+  // Мутация centerFingerprint (убрать идентичность, оставить набор типов) красит оба теста.
+  const runTaskSwap = async (mobile: boolean) => {
+    recordHistory();
+    if (!mobile) (globalThis as any).window.innerWidth = 1280;
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не поверх задачи').not.toBeNull();
+    // Смена окна того же типа: задача task1 → task2 (идентичность меняется).
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task2');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'смена окна задача→другая задача не закрыла страницу (MAJOR-1)').toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес содержит /feature/ после смены задачи (MAJOR-1)')
+      .not.toContain('/feature/');
+  };
+  it('MAJOR-1: задача → другая задача (мобила 360) — страница закрыта', () => runTaskSwap(true));
+  it('MAJOR-1: задача → другая задача (десктоп) — страница закрыта', () => runTaskSwap(false));
+
+  const runCommitSwap = async (mobile: boolean) => {
+    recordHistory();
+    if (!mobile) (globalThis as any).window.innerWidth = 1280;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Коммит abc123 открыт ДО страницы → явное открытие рисует страницу ПОВЕРХ (M2).
+    act(() => { (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-commit', { detail: { projectId: 'p1', sha: 'abc123' } })); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не поверх коммита').not.toBeNull();
+    // Смена окна того же типа: коммит abc123 → def456 (идентичность меняется).
+    act(() => { (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-commit', { detail: { projectId: 'p1', sha: 'def456' } })); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'смена окна коммит→другой коммит не закрыл страницу (MAJOR-1)').toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес содержит /feature/ после смены коммита (MAJOR-1)')
+      .not.toContain('/feature/');
+  };
+  it('MAJOR-1: коммит → другой коммит (мобила 360) — страница закрыта', () => runCommitSwap(true));
+  it('MAJOR-1: коммит → другой коммит (десктоп) — страница закрыта', () => runCommitSwap(false));
+
   // (M2, мобила) Страница поверх файла видима: контейнер центра display:flex.
   it('M2 (мобила): страница поверх файла — контейнер центра виден (flex)', async () => {
     recordHistory();
@@ -1250,6 +1378,38 @@ describe('WorkspacePage: центр — страница фичи соседом
     await openFeature(container);
     const center = findNodeByAttr(container, 'data-testid', 'workspace-center-container');
     expect((center as any).style?.display, 'контейнер центра скрыт при странице над файлом').toBe('flex');
+  });
+
+  // (MAJOR-2, мобила) Страница над файлом: файл (FileViewer) — СОСЕД контейнера центра, а не
+  // его ребёнок, поэтому прячется display:none (без размонтирования — состояние файла
+  // сохраняется для Esc), иначе на 360 страница и файл делили экран 50/50. «Закрыть»/Esc →
+  // файл виден снова. Мутация (убрать display:none у файла/ридера) красит тест.
+  it('MAJOR-2 (мобила): страница над файлом — файл скрыт (display:none), страница занимает экран; «Закрыть» → файл виден', async () => {
+    recordHistory();
+    (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    // Страница над файлом: file-name в DOM, но у него есть скрытый предок (display:none).
+    const fileName = findNodeByAttr(container, 'data-testid', 'file-name');
+    expect(fileName, 'file-name не в DOM (файл не открыт)').not.toBeNull();
+    expect(hasHiddenAncestor(fileName!), 'файл не скрыт при открытой странице (MAJOR-2, сплит 50/50)').toBe(true);
+    // Страница занимает экран: контейнер центра flex (страница в нём), «Закрыть» есть.
+    const center = findNodeByAttr(container, 'data-testid', 'workspace-center-container');
+    expect((center as any).style?.display, 'контейнер центра не flex при странице над файлом').toBe('flex');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), '«Закрыть» страницы нет').not.toBeNull();
+    // «Закрыть» → файл виден снова (скрытый предок снят, display не none).
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close')!;
+    act(() => { (reactProps(back.childNodes[0]) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не закрылась по «Закрыть»').toBeNull();
+    const fileNameAfter = findNodeByAttr(container, 'data-testid', 'file-name');
+    expect(fileNameAfter, 'file-name пропал после «Закрыть»').not.toBeNull();
+    expect(hasHiddenAncestor(fileNameAfter!), 'файл остался скрыт после «Закрыть» (MAJOR-2)').toBe(false);
   });
 
   // Тест на сброс featureBackNav при автоскрытии: страница скрыта (другое окно открыто),

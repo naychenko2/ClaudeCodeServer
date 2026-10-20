@@ -46,6 +46,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { centerFingerprint as computeCenterFingerprint } from '../lib/centerOccupancy';
 import type { CenterOccupancy } from '../lib/centerOccupancy';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
@@ -835,9 +836,26 @@ const windowWidth = useWindowWidth();
   const stampCounterRef = useRef(0);
   const windowStampRef = useRef(0); // штамп последнего открытия/смены окна центра
   const pageStampRef = useRef(0);   // штамп последнего явного открытия страницы
-  // Отпечаток занятости центра: меняется при каждом открытии/смене окна (не ребро булева).
-  const centerFingerprint = (Object.keys(centerOccupancy) as (keyof CenterOccupancy)[])
-    .filter(k => centerOccupancy[k]).join(',');
+  // Отпечаток занятости центра: «тип:идентичность» каждого занятого окна (lib/centerOccupancy).
+  // Идентичность (путь/id/sha/url/…) отличает СМЕНУ окна того же типа («файл → другой файл»,
+  // «задача → другая задача», «коммит → другой коммит») от простого «окно открыто»: набор
+  // типов (старый отпечаток) при такой смене не менялся → автоскрытие страницы не срабатывало
+  // (проба Глеба, MAJOR). Окна без пер-экземплярной идентичности (teamCenter/board) — пустая
+  // строка: для них отпечаток меняется только при открытии/закрытии (булев).
+  const windowIdentity: Record<keyof CenterOccupancy, string> = {
+    file: openFile ?? '',
+    commit: openCommitSha ?? '',
+    task: selectedTaskId ?? '',
+    graph: centerDoc ?? '',
+    reader: reader.state.url ?? '',
+    persona: selectedPersonaId ?? (personaCreating ? 'creating' : ''),
+    teamCenter: '',
+    board: '',
+    preview: activePreviewId ?? '',
+    terminalMobile: activeTerminalId ?? '',
+    videoCenter: videoCenter ?? '',
+  };
+  const centerFingerprint = computeCenterFingerprint(centerOccupancy, windowIdentity);
   const prevFingerprintRef = useRef(centerFingerprint);
   const prevOpenFeatureIdRef = useRef(openFeatureId);
   // Окно открылось/сменилось (отпечаток изменился и теперь не пуст) → штамп окна.
@@ -2228,16 +2246,19 @@ const windowWidth = useWindowWidth();
             }
           </FeatureCenter>
         </div>
-        {/* Просмотр файла — FileViewer имеет свою шапку */}
+        {/* Просмотр файла — FileViewer имеет свою шапку. Файл/ридер — СОСЕДЫ контейнера
+            центра (не его дети): при открытой странице прячутся display:none (без
+            размонтирования — состояние файла/ридера сохраняется для Esc), иначе на 360
+            страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: featurePageOpen ? 'none' : 'block' }}>
             <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
           </div>
         )}
         {/* Ридер ссылок из контекста чата — та же контентная зона, что у файла.
             isTablet=true убирает тумблер «Сплит|Полный»: разворачивать некуда */}
         {readerOpenMobile && (
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: featurePageOpen ? 'none' : 'flex', flexDirection: 'column' }}>
             <ReaderHeaderBar state={reader.state} actions={reader.actions} onClose={closeReaderMobile} isTablet />
             <ReaderBody state={reader.state} actions={reader.actions} onClose={closeReaderMobile} />
           </div>

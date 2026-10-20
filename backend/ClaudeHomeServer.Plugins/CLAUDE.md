@@ -166,13 +166,21 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
   пакета). Права НЕ выдаёт сам: `granted = []` (первая установка) или `granted = старые ∩ новые`
   (обновление). Статусы: 400 (проблемы валидатора, `problems` — список),
   409 (та же `id`+`version`, другой sha — «поднимите версию»), 200 (установлено / no-op).
-  **`consentRequired` + `newPermissions`** (дефект 86dec98d, ADR-031 §4):
+  **`consentRequired` + `newPermissions` + `inheritedPermissions`** (дефект 86dec98d, ADR-031 §4;
+  MAJOR-1 QA-фикс O):
   - **первая установка** (`oldById == null`): `newPermissions = Requested` (ВСЕ запрошенные —
-    «новые» для человека), `consentRequired = Requested непусто`. Фронт открывает диалог согласия;
+    «новые» для человека), `inheritedPermissions = []` (granted пуст),
+    `consentRequired = Requested непусто`. Фронт открывает диалог согласия;
     человек выдаёт права через `grant`.
-  - **обновление** (`oldById != null`): `newPermissions = Requested \ старые Requested`,
-    `consentRequired = newPermissions непусто`.
-  - **no-op** (совпал sha): `newPermissions = []`, `consentRequired = false`.
+  - **обновление** (`oldById != null`): `newPermissions = Requested \ старые Requested`;
+    `inheritedPermissions = старые выданные (existing.Granted) ∩ новые Requested`
+    (= `record.Granted`, то, что унаследуется на новое содержимое);
+    `consentRequired = newPermissions непусто ИЛИ (granted непусто)`.
+    **MAJOR-1**: если у установленного плагина есть выданные права (`granted` непусто),
+    согласие требуется ВСЕГДА, даже когда `newPermissions` пусто (права переносятся на
+    новое содержимое). Если `granted` пуст и новых прав нет — согласия не нужно, как раньше.
+  - **no-op** (совпал sha): `newPermissions = []`; `inheritedPermissions = granted` (не сбрасываются);
+    `consentRequired = granted непусто` (MAJOR-1: accept ВСЕГДА требует согласия, если granted непусто).
   **`isUpdate` + `previousVersion`** (Глеб MAJOR 4): признак, что это обновление уже
   установленного плагина, а не первая установка.
   - `isUpdate = true`, когда запись этого `id` уже существовала (обновление/повторный accept);
@@ -187,6 +195,7 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
   { "id": "local-a/pkg", "version": "2.0.0", "sha256": "…", "source": "draft:pkg",
     "enabled": true, "requested": ["notes:read", "net:api.linear.app"],
     "granted": ["notes:read"], "consentRequired": true, "newPermissions": ["net:api.linear.app"],
+    "inheritedPermissions": ["notes:read"],
     "isUpdate": true, "previousVersion": "1.0.0",
     "secrets": [{ "name": "LINEAR_TOKEN", "set": true, "updatedAt": "2026-10-19T05:24:56Z" }] }
   ```
@@ -235,7 +244,8 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
    вне вертикали нет (потребители берут `IPluginDirSource` опциональной зависимостью).
 7. **Два манифеста (R10-1).** Нативный манифест (`.claude-plugin/plugin.json`) обязателен —
    из него CLI берёт имя пакета (валидатор отбивает отсутствие как `deny-native-manifest-missing`,
-   пустой/отсутствующий `name` — как `deny-name-missing`, `name` обязан равняться slug).
+   пустой/отсутствующий `name` — как `deny-name-missing`, `name` обязан равняться slug КАТАЛОГА
+   — черновика/источника, а не slug из `id` манифеста: шаблон `id` не пишет, QA-фикс O минор 1).
    `ccs-plugin.json` — источник `id`/прав/метаданных; без него `id` берётся из нативного.
    Корневой `plugin.json` — НЕ нативный манифест (из allow-list убран).
 8. **id/version — единая точка (QA-фикс L4).** `id`/`version` разрешает и проверяет

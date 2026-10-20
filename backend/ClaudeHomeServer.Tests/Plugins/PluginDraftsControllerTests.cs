@@ -534,10 +534,13 @@ public class PluginDraftsControllerTests : IDisposable
         record.Requested.Should().BeEmpty();
     }
 
-    // --- Accept: обновление БЕЗ новых прав → consentRequired = false ---
+    // --- Accept: обновление БЕЗ новых прав, НО granted непусто → consentRequired = true (MAJOR-1) ---
+    // Выданные права переносятся на новое содержимое → согласие требуется, даже если новых прав нет.
+    // inheritedPermissions = старые выданные ∩ новые запрошенные = [notes:read].
+    // Это и есть сценарий S5 из ревью Глеба (тот же slug, v2, те же права, granted непусто).
 
     [Fact]
-    public void Accept_ОбновлениеБезНовыхПрав_ConsentRequiredFalse()
+    public void Accept_ОбновлениеБезНовыхПрав_GrantedНеПусто_ConsentRequiredTrue_InheritedЗаполнен()
     {
         // v1: requested = [notes:read]; accept → granted = [notes:read].
         CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
@@ -549,12 +552,40 @@ public class PluginDraftsControllerTests : IDisposable
         CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
         var ok = (OkObjectResult)ctl.Accept("pkg");
         var json = JsonSerializer.Serialize(ok.Value);
-        json.Should().Contain("\"consentRequired\":false", "обновление без новых прав → согласия не требуется");
+        json.Should().Contain("\"consentRequired\":true",
+            "обновление с непустым granted → согласие требуется (MAJOR-1), даже без новых прав");
         json.Should().Contain("\"newPermissions\":[", "newPermissions пуст");
+        json.Should().Contain("\"inheritedPermissions\":[\"notes:read\"]",
+            "inheritedPermissions = старые выданные ∩ новые запрошенные");
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted = старые ∩ новые");
+    }
+
+    // --- Accept: обновление, granted ПУСТО (человек не выдавал) → consentRequired = false ---
+    // MAJOR-1: согласие нужно только если granted непусто ИЛИ есть новые права; здесь ни то, ни другое.
+
+    [Fact]
+    public void Accept_Обновление_GrantedПусто_БезНовыхПрав_ConsentRequiredFalse()
+    {
+        // v1: requested = [notes:read]; accept (granted = [] — человек НЕ выдал).
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        // v2: та же id, версия 2.0.0, тот же requested = [notes:read] (нет новых прав).
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"consentRequired\":false",
+            "обновление: granted пуст и новых прав нет → согласия не нужно (MAJOR-1)");
+        json.Should().Contain("\"newPermissions\":[", "newPermissions пуст");
+        json.Should().Contain("\"inheritedPermissions\":[", "inheritedPermissions пуст (granted пуст)");
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Version.Should().Be("2.0.0");
+        record.Granted.Should().BeEmpty("granted пуст (человек не выдавал)");
     }
 
     // --- Accept: обновление с новым правом → consentRequired, granted не расширяется ---
@@ -774,7 +805,9 @@ public class PluginDraftsControllerTests : IDisposable
         var res = ctl.Accept("pkg");
         var ok = (OkObjectResult)res;
         var json = JsonSerializer.Serialize(ok.Value);
-        json.Should().Contain("\"consentRequired\":false", "no-op — новых прав нет");
+        // MAJOR-1: granted непусто → consentRequired=true (accept ВСЕГДА требует согласия,
+        // даже no-op: новые прав нет, но выданные переносятся).
+        json.Should().Contain("\"consentRequired\":true", "no-op с непустым granted → согласие (MAJOR-1)");
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Granted.Should().Equal(new[] { "notes:read", "secret:LINEAR_TOKEN" }, "granted не сброшен no-op");

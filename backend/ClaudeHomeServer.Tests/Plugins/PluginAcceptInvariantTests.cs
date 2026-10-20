@@ -111,7 +111,8 @@ public class PluginAcceptInvariantTests : IDisposable
     public void БезId_IdВыведен_AcceptOkСВыведеннымId()
     {
         const string slug = "qaagent";
-        var source = CreateDraft(slug, """{"name":"QA виджет","version":"0.1.0","contributes":{"skills":["skills/a"]}}""");
+        // name = slug каталога (qaagent): файловая проверка name==slug чистая (QA-фикс O минор 1).
+        var source = CreateDraft(slug, """{"name":"qaagent","version":"0.1.0","contributes":{"skills":["skills/a"]}}""");
         var draftDir = _store.DraftDir(Owner, slug);
 
         var validation = _validator.ValidateFull(draftDir, Owner, slug);
@@ -190,14 +191,14 @@ public class PluginAcceptInvariantTests : IDisposable
         ]);
 
         // Черновик с slug "other", но id в манифесте = id установленного плагина.
-        // name в обоих манифестах = "pkg" (slug из id), чтобы файловая проверка
-        // name==slug не заслоняла bad-id (manifest-проверка идёт только при чистых файлах).
+        // name в обоих манифестах = "other" (slug КАТАЛОГА, QA-фикс O минор 1), чтобы файловая
+        // проверка name==slug не заслоняла bad-id (manifest-проверка идёт только при чистых файлах).
         const string slug = "other";
-        var json = "{\"id\":\"" + installedId + "\",\"name\":\"pkg\",\"version\":\"2.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]}}";
+        var json = "{\"id\":\"" + installedId + "\",\"name\":\"other\",\"version\":\"2.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]}}";
         var source = CreateDraft(slug, json);
         var draftDir = _store.DraftDir(Owner, slug);
         File.WriteAllText(Path.Combine(draftDir, ".claude-plugin", "plugin.json"),
-            "{\"name\":\"pkg\",\"version\":\"2.0.0\"}");
+            "{\"name\":\"other\",\"version\":\"2.0.0\"}");
 
         _validator.ValidateFull(draftDir, Owner, slug).Problems
             .Should().Contain(p => p.Code == "bad-id",
@@ -227,13 +228,13 @@ public class PluginAcceptInvariantTests : IDisposable
         });
 
         // 2) Черновик другого slug (other) с id УСТАНОВЛЕННОГО плагина, версия 2.0.0.
-        // name = "pkg" (slug из id) в обоих манифестах: файловая проверка name==slug чистая,
-        // bad-id (manifest-уровень) не заслонён.
-        var json2 = "{\"id\":\"" + installedId + "\",\"name\":\"pkg\",\"version\":\"2.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]}}";
+        // name = "other" (slug КАТАЛОГА, QA-фикс O минор 1) в обоих манифестах: файловая
+        // проверка name==slug чистая, bad-id (manifest-уровень) не заслонён.
+        var json2 = "{\"id\":\"" + installedId + "\",\"name\":\"other\",\"version\":\"2.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]}}";
         var source2 = CreateDraft("other", json2);
         var draftDir2 = _store.DraftDir(Owner, "other");
         File.WriteAllText(Path.Combine(draftDir2, ".claude-plugin", "plugin.json"),
-            "{\"name\":\"pkg\",\"version\":\"2.0.0\"}");
+            "{\"name\":\"other\",\"version\":\"2.0.0\"}");
         var result = _installer.Install(Owner, source2);
 
         // 3) Отказ (bad-id): granted не унаследован.

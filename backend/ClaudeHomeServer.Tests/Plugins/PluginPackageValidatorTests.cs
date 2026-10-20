@@ -56,8 +56,9 @@ public class PluginPackageValidatorTests
         File.CreateSymbolicLink(link, target);
     }
 
-    private static PluginPackageValidationResult Validate(string root) =>
-        new PluginPackageValidator().Validate(root);
+    // slug — slug КАТАЛОГА (референс сверки name==slug, QA-фикс O минор 1); по умолчанию «pkg».
+    private static PluginPackageValidationResult Validate(string root, string slug = "pkg") =>
+        new PluginPackageValidator().Validate(root, slug);
 
     // Полная валидация (файлы + манифест, включая bad-panel-entry): установка и черновик
     // идут через ValidateFull (единый арбитр), поэтому тесты entry используют её.
@@ -219,6 +220,40 @@ public class PluginPackageValidatorTests
 
         var r = Validate(root);
         r.Problems.Should().NotContain(p => p.Code == "deny-name-not-equal-slug");
+        r.IsValid.Should().BeTrue();
+    }
+
+    // --- QA-фикс O (минор 1): name сверяется со slug КАТАЛОГА, а не со slug из id манифеста ---
+    // Шаблон id не пишет (QA-фикс N), поэтому старая сверка по slug из id мертва. Референс —
+    // slug каталога (черновик _drafts/{slug} / источник draft:{slug}).
+
+    // Каталог pkg, native name=other (≠ pkg) → deny (требование задачи: «каталог pkg, native
+    // name=other → deny-name-not-equal-slug»).
+    [Fact]
+    public void NameНеРавенSlugКаталога_ДаетDenyNameNotEqualSlug()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"other","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        Validate(root, "pkg").Problems.Should().Contain(p => p.Code == "deny-name-not-equal-slug");
+    }
+
+    // id=local-x/other (slug из id = other), но name=pkg = slug КАТАЛОГА (pkg) → без deny.
+    // Старая сверка по slug из id дала бы deny (pkg ≠ other); новая — нет. Мутация: вернуть
+    // сверку по slug из id → тест красный.
+    [Fact]
+    public void IdSlugДругой_НоNameРавенSlugКаталога_БезDeny()
+    {
+        var root = NewPackage(
+            ("ccs-plugin.json", """{"id":"local-x/other","name":"pkg","version":"0.1.0"}"""),
+            (".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}"""),
+            ("skills/a/SKILL.md", "текст"));
+
+        var r = Validate(root, "pkg");
+        r.Problems.Should().NotContain(p => p.Code == "deny-name-not-equal-slug",
+            "name=pkg совпадает со slug каталога pkg; slug из id (other) не референс");
         r.IsValid.Should().BeTrue();
     }
 

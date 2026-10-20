@@ -13,7 +13,9 @@ namespace ClaudeHomeServer.Tests.Plugins;
 public class PluginUninstallTests : IDisposable
 {
     private const string Owner = "owner-a";
-    private const string Id = "local-a/pkg";
+    // id — выведенный (DeriveId(Owner, slug)): сверка черновика при uninstall идёт по
+    // выведенному id (QA-фикс O минор 3), поэтому тестовый id = выведенный, а не фейковый.
+    private static readonly string Id = PluginIdentity.DeriveId(Owner, "pkg");
     private const string Version = "1.0.0";
     private const string Slug = "pkg"; // хвост id после '/'
 
@@ -163,12 +165,14 @@ public class PluginUninstallTests : IDisposable
     }
 
     // --- Publisher check (minor): черновик _drafts/{slug} общий для всех publisher'ов,
-    //     поэтому удаляется ТОЛЬКО если id из его манифеста совпадает с uninstall-имым id. ---
+    //     поэтому удаляется ТОЛЬКО если ВЫВЕДЕННЫЙ id черновика (DeriveId(ownerId, slug),
+    //     QA-фикс O минор 3) совпадает с uninstall-имым id. ---
 
     [Fact]
     public void Uninstall_ЧерновикЧужогоPublisher_НеУдаляется()
     {
-        // Запись local-b/pkg; черновик _drafts/pkg с манифестом id=local-a/pkg (чужой publisher).
+        // Запись local-b/pkg (чужой publisher: b ≠ ownerShort(Owner)); черновик _drafts/pkg.
+        // Выведенный id черновика (DeriveId(Owner, pkg)) ≠ local-b/pkg → черновик не тронут.
         var draft = _store.DraftDir(Owner, "pkg");
         Directory.CreateDirectory(draft);
         File.WriteAllText(Path.Combine(draft, "ccs-plugin.json"),
@@ -180,25 +184,49 @@ public class PluginUninstallTests : IDisposable
 
         _sut.Uninstall(Owner, "local-b/pkg").Should().BeTrue();
 
-        Directory.Exists(draft).Should().BeTrue("черновик чужого publisher (manifest id ≠ uninstall id) не тронут");
+        Directory.Exists(draft).Should().BeTrue("черновик чужого publisher (выведенный id ≠ uninstall id) не тронут");
     }
 
     [Fact]
     public void Uninstall_ЧерновикСвоегоPublisher_Удаляется()
     {
-        // Запись local-a/pkg; черновик _drafts/pkg с манифестом id=local-a/pkg (свой publisher).
+        // Запись с ВЫВЕДЕННЫМ id владельца (DeriveId(Owner, pkg)); черновик _drafts/pkg.
+        // Выведенный id черновика = uninstall id → черновик удалён.
+        var id = PluginIdentity.DeriveId(Owner, "pkg");
         var draft = _store.DraftDir(Owner, "pkg");
         Directory.CreateDirectory(draft);
         File.WriteAllText(Path.Combine(draft, "ccs-plugin.json"),
-            """{ "id": "local-a/pkg", "name": "P", "version": "1.0.0" }""");
+            """{ "name": "pkg", "version": "1.0.0" }""");
         _store.SaveInstalled(Owner,
         [
-            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+            new PluginInstall { Id = id, Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
         ]);
 
-        _sut.Uninstall(Owner, "local-a/pkg").Should().BeTrue();
+        _sut.Uninstall(Owner, id).Should().BeTrue();
 
-        Directory.Exists(draft).Should().BeFalse("черновик своего publisher (manifest id = uninstall id) удалён");
+        Directory.Exists(draft).Should().BeFalse("черновик своего publisher (выведенный id = uninstall id) удалён");
+    }
+
+    // QA-фикс O (минор 3): черновик БЕЗ id в манифесте (новый шаблон, QA-фикс N) — сверка
+    // по выведенному id, не по сырому manifest.Id (он null → черновик не удалялся).
+    // Мутация: вернуть сверку по manifest.Id → тест красный.
+    [Fact]
+    public void Uninstall_ЧерновикБезIdВМанифесте_СвойPublisher_Удаляется()
+    {
+        var id = PluginIdentity.DeriveId(Owner, "pkg");
+        var draft = _store.DraftDir(Owner, "pkg");
+        Directory.CreateDirectory(draft);
+        // Новый шаблон: ccs-plugin.json без id (name = slug, version).
+        File.WriteAllText(Path.Combine(draft, "ccs-plugin.json"),
+            """{ "name": "pkg", "version": "1.0.0" }""");
+        _store.SaveInstalled(Owner,
+        [
+            new PluginInstall { Id = id, Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        _sut.Uninstall(Owner, id).Should().BeTrue();
+
+        Directory.Exists(draft).Should().BeFalse("черновик без id в манифесте удалён по выведенному id");
     }
 
     // --- Каскад (minor): шов бросил → запись installed.json ещё на месте (откат, «коммит» после шова). ---

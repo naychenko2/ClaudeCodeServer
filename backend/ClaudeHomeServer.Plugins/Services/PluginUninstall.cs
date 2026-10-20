@@ -56,15 +56,13 @@ public class PluginUninstall
             Directory.Delete(packageDir, recursive: true);
 
         // 2) Черновик: _drafts/{slug}/ — slug общий для всех publisher'ов, поэтому
-        //    удаляем ТОЛЬКО вместе с проверкой publisher (minor): сверяем id из манифеста
-        //    черновика с uninstall-имым id; не совпало (чужой publisher) — черновик не трогаем.
+        //    удаляем ТОЛЬКО вместе с проверкой publisher (minor): сверяем ВЫВЕДЕННЫЙ id
+        //    черновика (DeriveId(ownerId, slug), QA-фикс O минор 3: не сырой manifest.Id —
+        //    для манифестов без id он null и черновик не удалялся) с uninstall-имым id;
+        //    не совпало (чужой publisher) — черновик не трогаем.
         var draftDir = _store.DraftDir(ownerId, SlugOf(id));
-        if (Directory.Exists(draftDir))
-        {
-            var (manifest, _) = PluginInstaller.ReadManifest(draftDir);
-            if (manifest is null || manifest.Id == id)
-                Directory.Delete(draftDir, recursive: true);
-        }
+        if (Directory.Exists(draftDir) && PluginIdentity.DeriveId(ownerId, SlugOf(id)) == id)
+            Directory.Delete(draftDir, recursive: true);
 
         // 3) Внешние ссылки (привязки персон, слоты) — шов. До записи: если шов бросит,
         //    запись ещё на месте (идемпотентный повтор), «сироты» нет.

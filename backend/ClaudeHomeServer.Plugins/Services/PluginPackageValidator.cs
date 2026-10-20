@@ -85,10 +85,13 @@ public class PluginPackageValidator
     /// <see cref="PluginPackageValidationResult.Problems"/>, <see cref="PluginPackageValidationResult.Sha256"/>
     /// и <see cref="PluginPackageValidationResult.ScannedFileCount"/> (M9: обрыв по лимиту).
     /// </summary>
-    public PluginPackageValidationResult Validate(string packageRoot)
+    // <paramref name="slug"/> — slug КАТАЛОГА (черновик _drafts/{slug} / источник draft:{slug}):
+    // сверка name==slug (CheckNameEqualsSlug) идёт по нему, а не по slug из id манифеста
+    // (шаблон id не пишет → проверка по id мертва, QA-фикс O минор 1).
+    public PluginPackageValidationResult Validate(string packageRoot, string slug = "pkg")
     {
         // Файловые проверки (allow/deny, symlink, лимиты, нативный манифест, name==slug, content).
-        var (problems, files, limitHit) = ValidateFiles(packageRoot);
+        var (problems, files, limitHit) = ValidateFiles(packageRoot, slug);
 
         // M9: хеш — только валидного пакета (нет проблем), до лимита (limitHit → null).
         // Невалидный пакет хеш не несёт: sha256 = null.
@@ -112,7 +115,7 @@ public class PluginPackageValidator
     /// </summary>
     public PluginPackageValidationResult ValidateFull(string packageRoot, string ownerId, string slug)
     {
-        var (problems, files, limitHit) = ValidateFiles(packageRoot);
+        var (problems, files, limitHit) = ValidateFiles(packageRoot, slug);
 
         // Манифестная валидация — та же, что в установщике: ccs-plugin.json → модель →
         // PluginManifest.Validate (no-contribution / unknown-permission / required secrets,
@@ -156,7 +159,8 @@ public class PluginPackageValidator
     //   * файл: лимиты (прерывают обход) + size + IsSymlink + EscapesRoot + deny + allow + size;
     //   * обычные подкаталоги — рекурсия.
     // Возвращает (проблемы, файлы, limitHit) — для Validate (только файлы) и ValidateFull (+ манифест).
-    private (List<PluginPackageProblem> Problems, List<PackageFile> Files, bool LimitHit) ValidateFiles(string packageRoot)
+    // <paramref name="slug"/> — slug каталога (черновик/источник): референс сверки name==slug.
+    private (List<PluginPackageProblem> Problems, List<PackageFile> Files, bool LimitHit) ValidateFiles(string packageRoot, string slug)
     {
         var problems = new List<PluginPackageProblem>();
         var files = new List<PackageFile>();
@@ -179,10 +183,12 @@ public class PluginPackageValidator
         // пустой/отсутствующий name → deny-name-missing.
         CheckNativeManifest(packageRoot, problems);
 
-        // M3: name == slug. CLI берёт имя пакета из .claude-plugin/plugin.json (спайк
-        // plugin-dir-name-spike-2026-10.md), а Skill-привязка адресует навык по slug из id;
-        // name != slug → привязка указывает в никуда.
-        CheckNameEqualsSlug(raws, problems);
+        // M3: name == slug КАТАЛОГА. CLI берёт имя пакета из .claude-plugin/plugin.json (спайк
+        // plugin-dir-name-spike-2026-10.md), а Skill-привязка адресует навык по slug каталога
+        // (черновик _drafts/{slug} / источник draft:{slug}); name != slug → привязка указывает
+        // в никуда. Референс — slug каталога, а не slug из id манифеста (шаблон id не пишет,
+        // QA-фикс O минор 1).
+        CheckNameEqualsSlug(raws, slug, problems);
 
         return (problems, files, limitHit);
     }
@@ -524,36 +530,32 @@ public class PluginPackageValidator
                 $"В нативном манифесте {native} нет name (CLI берёт из него имя пакета)"));
     }
 
-    // M3: name == slug. CLI берёт имя пакета ТОЛЬКО из .claude-plugin/plugin.json (спайк
-    // plugin-dir-name-spike-2026-10.md: ccs-plugin.json CLI не читает; без нативного манифеста
-    // имя = имя каталога), а Skill-привязка адресует навык по slug из id ({publisher}/{slug}).
-    // name != slug → привязка указывает в никуда. Код deny-name-not-equal-slug.
+    // M3: name == slug КАТАЛОГА. CLI берёт имя пакета ТОЛЬКО из .claude-plugin/plugin.json
+    // (спайк plugin-dir-name-spike-2026-10.md: ccs-plugin.json CLI не читает; без нативного
+    // манифеста имя = имя каталога), а Skill-привязка адресует навык по slug КАТАЛОГА
+    // (черновик _drafts/{slug} / источник draft:{slug}). name != slug → привязка указывает
+    // в никуда. Код deny-name-not-equal-slug.
+    // Референс — slug КАТАЛОГА (параметр), а НЕ slug из id манифеста: шаблон id не пишет
+    // (QA-фикс N), поэтому сверка по id мертва (QA-фикс O минор 1).
     // M3a: сверяем `name` у КАЖДОГО манифеста, где оно есть (не только у ccs-plugin.json):
     // пакет с расхождением (name в ccs-plugin.json ≠ name в .claude-plugin/plugin.json)
-    // раньше проходил, т.к. проверялся только первый. slug — из id первого манифеста, несущего
-    // id в формате {publisher}/{slug}; без извлекаемого slug проверка не применима (не отказ).
-    private static void CheckNameEqualsSlug(IReadOnlyList<string> rawJsons, List<PluginPackageProblem> problems)
+    // раньше проходил, т.к. проверялся только первый.
+    // Дедупликация (дефект 9c7a0fca): два манифеста с ОДИНАКОВЫМ name давали два идентичных
+    // пункта; теперь один name — один problem (seen по значению name).
+    private static void CheckNameEqualsSlug(IReadOnlyList<string> rawJsons, string slug, List<PluginPackageProblem> problems)
     {
-        if (rawJsons.Count == 0) return;
+        if (rawJsons.Count == 0 || string.IsNullOrEmpty(slug)) return;
 
-        string? slug = null;
-        foreach (var raw in rawJsons)
-        {
-            var id = ReadStringProp(raw, "id");
-            if (id is null) continue;
-            var s = SlugFromId(id);
-            if (s is not null) { slug = s; break; }
-        }
-        if (slug is null) return;
-
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var raw in rawJsons)
         {
             var name = ReadStringProp(raw, "name");
             if (string.IsNullOrEmpty(name)) continue;
+            if (!seen.Add(name)) continue; // тот же name уже отчитан (дубль)
             if (!string.Equals(name, slug, StringComparison.Ordinal))
                 problems.Add(new PluginPackageProblem(
                     "deny-name-not-equal-slug",
-                    $"name манифеста «{name}» не равен slug пакета «{slug}» (CLI берёт имя пакета из .claude-plugin/plugin.json, привязка — по slug)"));
+                    $"name «{name}» ≠ slug «{slug}»: имя пакета (CLI берёт его из .claude-plugin/plugin.json) должно совпадать с slug, который вы выбираете; id пакета выводит сервер из этого slug"));
         }
     }
 
@@ -575,14 +577,6 @@ public class PluginPackageValidator
         }
         catch (JsonException) { }
         return null;
-    }
-
-    // slug — часть id после последнего '/'; null, если id не по формату {publisher}/{slug}.
-    private static string? SlugFromId(string id)
-    {
-        var slash = id.LastIndexOf('/');
-        if (slash < 0 || slash == id.Length - 1) return null;
-        return id[(slash + 1)..];
     }
 
     // Файл пакета: относительный путь (через «/»), полный путь (для symlink), метаданные.

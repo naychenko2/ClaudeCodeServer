@@ -171,7 +171,9 @@ public class PluginDraftsController(
     // валидация, no-op по совпавшему sha, 409 при смене пакета). Права НЕ выдаёт:
     //   - первая установка  → granted = [];
     //   - обновление        → granted = старые ∩ новые запрошенные;
-    //   - в ответе consentRequired: true + список НОВЫХ прав (появились при обновлении).
+    //   - в ответе consentRequired: true + список НОВЫХ прав (появились при обновлении);
+    //     consentRequired = новые права ИЛИ (обновление И granted непусто — MAJOR-1);
+    //     inheritedPermissions = старые выданные ∩ новые запрошенные (то, что унаследуется).
     // Заданные секреты прошлой версии сохраняются; черновик после успеха НЕ удаляется.
 
     [HttpPost("{slug}/accept")]
@@ -222,25 +224,27 @@ public class PluginDraftsController(
         // NoOp: существующая (granted/secrets уже на месте, новые права не появляются).
         record = result.Record!;
 
-        // consentRequired + newPermissions:
-        //   - первая установка (oldById == null): ВСЕ запрошенные права «новые» для человека
-        //     (ADR-031 §4, макет: «Принять…» → диалог согласия → выдача). newPermissions = Requested,
-        //     consentRequired = Requested непусто. granted = [] (accept ничего не выдаёт сам).
-        //   - обновление (oldById != null): newPermissions = Requested \ старые Requested;
-        //     consentRequired = newPermissions непусто. granted = старые ∩ новые (выше).
-        bool consentRequired;
+        // newPermissions: новые запрошенные права (появились при обновлении); первая установка —
+        // ВСЕ запрошенные («новые» для человека, ADR-031 §4: «Принять…» → диалог согласия → выдача).
+        // granted = [] (первая) / старые ∩ новые (обновление) — выше, в PluginInstaller.
         List<string> newPermissions;
         if (oldById is null)
-        {
-            consentRequired = record.Requested.Count > 0;
             newPermissions = record.Requested.ToList();
-        }
         else
-        {
-            var newRequested = record.Requested.Except(oldById.Requested, StringComparer.Ordinal).ToList();
-            consentRequired = newRequested.Count > 0;
-            newPermissions = newRequested;
-        }
+            newPermissions = record.Requested.Except(oldById.Requested, StringComparer.Ordinal).ToList();
+
+        // inheritedPermissions (QA-фикс O, MAJOR-1): то, что УНАСЛЕДУЕТСЯ на новое содержимое =
+        // старые выданные (existing.Granted) ∩ новые запрошенные (record.Requested). Это ровно
+        // record.Granted (инсталлер считает granted = existing.Granted ∩ requested). Пустой
+        // массив, если не обновление (первая установка: granted = []).
+        List<string> inheritedPermissions = oldById is null
+            ? []
+            : record.Granted.ToList();
+
+        // consentRequired (QA-фикс O, MAJOR-1): новые права ИЛИ (обновление И у установленного
+        // уже есть выданные права — они переносятся на новое содержимое, даже если новых прав нет).
+        // Если права не выдавались (granted пуст) и новых прав нет — согласия не нужно, как раньше.
+        bool consentRequired = newPermissions.Count > 0 || (oldById is not null && oldById.Granted.Any());
 
         // Секреты и включённость (minor 3): PluginInstaller.Install уже перенёс их из старой
         // записи (existing) в record — здесь дублирование не повторяем (одна точка поведения
@@ -270,6 +274,7 @@ public class PluginDraftsController(
             granted = record.Granted,
             consentRequired,
             newPermissions,
+            inheritedPermissions,
             isUpdate = oldById is not null,
             previousVersion = oldById?.Version,
             secrets = record.Secrets

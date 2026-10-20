@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Plugins;
 
 namespace ClaudeHomeServer.Services;
 
@@ -121,6 +122,10 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly Mcp.McpRegistry? _mcpRegistry;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaBindingsService> _log;
+    // Шов «навык плагина существует» (QA-фикс L3): проверка Skill-привязки plugin:{id}/{skill}
+    // при СОЗДАНИИ. Опциональная зависимость: подсистема Plugins выключена → null (Main
+    // отвечает «Подсистема плагинов выключена», не 500). Реализация — в вертикали Plugins.
+    private readonly IPluginSkillResolver? _pluginSkillResolver;
 
     // Кэш имён Dify-датасетов (id → отображаемое имя без префикса владельца).
     private readonly ISphereDirectory? _spheres;
@@ -142,7 +147,10 @@ public class PersonaBindingsService : IPersonaServerToolGate
         // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
         INoteSemanticIndex? notesKb = null,
         // Зона персоны сферы; без справочника (юнит-тесты) сфер нет
-        ISphereDirectory? spheres = null)
+        ISphereDirectory? spheres = null,
+        // Шов «навык плагина существует» (QA-фикс L3): опциональная зависимость —
+        // подсистема Plugins выключена (Subsystems:plugins:Enabled=false) → null.
+        IPluginSkillResolver? pluginSkillResolver = null)
     {
         _spheres = spheres;
         _personas = personas;
@@ -156,6 +164,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
         _mcpRegistry = mcpRegistry;
         _config = config;
         _log = log;
+        _pluginSkillResolver = pluginSkillResolver;
     }
 
     // --- Tool-рубильники ---
@@ -1134,6 +1143,22 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     return "Источник заметок не найден";
                 break;
             case PersonaBindingType.Skill:
+                // Плагин владельца (ADR-031 §2.5): target «plugin:{id}/{skill}» — навык из
+                // пакета владельца. Проверяем через шов IPluginSkillResolver: плагин с таким
+                // id установлен ВЛАДЕЛЬЦЕМ ПЕРСОНЫ (не чужим), включён, в пакете объявлен
+                // такой навык, флаг plugins-mvp вкл. Подсистема выключена (шов null) — понятный
+                // отказ, не 500. Не-plugin цели — прежняя проверка по глобальным навыкам.
+                if (binding.Target.StartsWith(PluginSkillTarget.Prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PluginSkillTarget.TryParse(binding.Target, out var pluginTarget))
+                        return "Некорректная цель привязки навыка плагина (ожидается plugin:{id}/{skill})";
+                    if (_pluginSkillResolver is null)
+                        return "Подсистема плагинов выключена";
+                    var check = _pluginSkillResolver.Check(ownerId, pluginTarget.PluginId, pluginTarget.Skill);
+                    if (check is not null)
+                        return check.Reason;
+                    break;
+                }
                 if (_skills.GetGlobalSkills()
                         .All(s => !string.Equals(s.Name, binding.Target, StringComparison.OrdinalIgnoreCase)))
                     return "Скилл не найден среди глобальных";

@@ -81,10 +81,12 @@
   оставался `Working` для авто-продолжения (инцидент 20.10 15:33). Обёртка ставит
   `--property=Before=<юнит сервера>`, и scope гасится ПОСЛЕ `ccs.service` — путь сводится к
   штатной остановке (`KillAllProcesses` → `_stopping`). Юнит определяется один раз при старте:
-  последний сегмент `/proc/self/cgroup`, если он `*.service`; dev-стенд из `dotnet run` и
-  Windows — без свойства. `Before=` — только порядок: членство в cgroup, OOM-лимиты slice,
-  `KillMode` scope и `ScopeOrphanSweeper` не меняются. Container-владельцы при перезагрузке
-  машины пока не покрыты (см. ADR-033, «Исключения v1»).
+  последний сегмент `/proc/self/cgroup`, если он валидное имя `*.service` (сомнительное —
+  без свойства: лучше не ставить `Before=`, чем провалить пробу `systemd-run` и, с ней,
+  всю обёртку scope); dev-стенд из `dotnet run` и Windows — без свойства. `Before=` —
+  только порядок: членство в cgroup, OOM-лимиты slice, `KillMode` scope и
+  `ScopeOrphanSweeper` не меняются. Container-владельцы при перезагрузке машины пока не
+  покрыты (см. ADR-033, «Сценарии отказа и реакция», п. 6).
 
   **Приватные узлы сборок сервера вне scope** (`ProcessSpec.PrivateBuildNodes`). Сборки, которые
   запускает сам бэкенд, — `run_tests`, `build`, фаза сборки `start_stand`, прогрев свежего

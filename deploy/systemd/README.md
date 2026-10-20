@@ -54,7 +54,10 @@ scope агентов и бэкенд — сиблинги под `user@<uid>.ser
 **Container-владельцы при перезагрузке машины пока не покрыты**: CLI живёт в
 `cc-sandbox`, а контейнер гасит системный `docker.service`, чей порядок относительно
 `user@<uid>.service` не задан — docker может погасить ход раньше нашего сервера.
-Лечится системным drop-in `user@.service.d/` с `After=docker.service` (отдельный шаг).
+`After=docker.service`, уже стоящий в user-`ccs.service`, висячий: менеджер
+пользователя системных юнитов не видит, и сегодня он не работает. Лечится
+системным drop-in `user@.service.d/` с `After=docker.service` (отдельный шаг;
+файл кладётся рядом с `system/user@.service.d/50-ccs-oomd.conf`).
 
 ## Применение
 

@@ -151,11 +151,13 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
     } catch (e: unknown) { setActionError(slug, e); }
   };
   const handleReject = async (slug: string) => {
+    // «Отклонить»: как «Принять…»/«Вернуть» — ошибка (409/сеть/5xx) видна на карточке
+    clearActionError(slug);
     try {
       await api.plugins.draftReject(slug);
       void loadList();
       onUpdated?.(project);
-    } catch { /* отклонить не вышло — карточка остаётся */ }
+    } catch (e: unknown) { setActionError(slug, e); }
   };
   const handleRestore = async (slug: string) => {
     clearActionError(slug);

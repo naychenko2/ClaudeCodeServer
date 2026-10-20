@@ -109,7 +109,10 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
     } catch (e: unknown) { setActionError(errText(e)); }
   };
   const handleReject = async () => {
-    try { await api.plugins.draftReject(slug); void refreshDraft(slug); } catch { /* карточка остаётся */ }
+    // «Отклонить»: как «Принять…»/«Вернуть» — ошибка (409/сеть/5xx) видна на карточке
+    setActionError(null);
+    try { await api.plugins.draftReject(slug); void refreshDraft(slug); }
+    catch (e: unknown) { setActionError(errText(e)); }
   };
   const handleRestore = async () => {
     setActionError(null);

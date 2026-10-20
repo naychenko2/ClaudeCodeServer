@@ -281,3 +281,22 @@ describe('DraftsSection: MAJOR 4 — режим диалога согласия 
     expect(checked(b, 'Читать задачи проекта'), 'право не отмечено (install, без isUpdate)').toBe(true);
   });
 });
+
+// === Минор 7: «Отклонить» — ошибка (409/сеть) видна на карточке, а не проглатывается ===
+// Как «Принять…»/«Вернуть»: текст сервера на карточке, состояние согласовано. Мутация
+// «вернуть пустой catch» красит тест.
+describe('DraftsSection: «Отклонить» — ошибка видна (минор 7)', () => {
+  it('«Отклонить» → 409 → текст ошибки сервера виден на карточке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftReject).mockRejectedValue(new Error('Черновик уже существует'));
+
+    const { container, text } = await renderSection();
+    const reject = findButton(container, 'Отклонить');
+    expect(reject, 'кнопка «Отклонить» не найдена').not.toBeNull();
+    await act(async () => { reject!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    expect(text()).toContain('Черновик уже существует');
+  });
+});

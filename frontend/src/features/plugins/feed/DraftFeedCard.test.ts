@@ -465,6 +465,36 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
     expect(text()).toContain('Действие недоступно офлайн');
   });
 
+  // Минор 7: «Отклонить» — как «Принять…»/«Вернуть», ошибка (409/сеть) видна на карточке,
+  // а не проглатывается (пустой catch). Мутация «вернуть пустой catch» красит эти тесты.
+  it('«Отклонить» → 409 → текст ошибки сервера виден на карточке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftReject).mockRejectedValue(new Error('Черновик уже существует'));
+
+    const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
+    const reject = findButton(container, 'Отклонить');
+    expect(reject, 'кнопка «Отклонить» не найдена').not.toBeNull();
+    await act(async () => { reject!.onClick(); await flushDrafts(SLUG); });
+
+    expect(text()).toContain('Черновик уже существует');
+  });
+
+  it('«Отклонить» → сбой сети → понятный текст на карточке', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftReject).mockRejectedValue(new Error('Действие недоступно офлайн'));
+
+    const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
+    const reject = findButton(container, 'Отклонить');
+    expect(reject, 'кнопка «Отклонить» не найдена').not.toBeNull();
+    await act(async () => { reject!.onClick(); await flushDrafts(SLUG); });
+
+    expect(text()).toContain('Действие недоступно офлайн');
+  });
+
   it('«Вернуть» → 409 → текст ошибки виден на свёрнутой строке', async () => {
     setFlagLocal('plugins-build-yourself', true);
     vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_REJECTED]);

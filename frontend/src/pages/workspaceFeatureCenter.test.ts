@@ -770,6 +770,166 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(win.window.location.hash, 'адрес не #/project/p1 (m7b)').toBe('#/project/p1');
     void container;
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Автоскрытие (дефект 20.10): страница фичи уступает центр любому другому окну
+  // (файл/задача/граф/…) и при явном выборе чата. Единый источник — otherCenterOpen
+  // (вычисляемый признак) + closeFeaturePage (явный выбор чата).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Открыть страницу фичи (cc-open-feature, fromChat: true) и дождаться рендера.
+  const openFeature = async (container: any) => {
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    void container;
+  };
+
+  it('автоскрытие: файл в центре (мобила) — страница фичи скрыта, чат в DOM, адрес без /feature/', async () => {
+    // Файл открыт на маунте (cc-pending-file) — центр занят, страница фичи уступает.
+    (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+
+    // Страница фичи скрыта (файл в центре): «Закрыть» нет.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не скрыта при открытом файле (мобила)').toBeNull();
+    // Чат в DOM (не размонтирован).
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не в DOM при автоскрытии (мобила)').not.toBeNull();
+  });
+
+  it('автоскрытие: файл в центре (десктоп) — страница фичи скрыта, чат в DOM', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не скрыта при открытом файле (десктоп)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не в DOM при автоскрытии (десктоп)').not.toBeNull();
+  });
+
+  it('автоскрытие: выбор другого чата (мобила) — страница фичи скрыта, адрес без /feature/', async () => {
+    const win = globalThis as any;
+    // Второй чат (chatB) — в списке (listProjectSessions вернёт его).
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chat = chatB;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    // Страница открыта.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не открыта перед выбором чата').not.toBeNull();
+
+    // Явный выбор chatB (cc-pending-project-chat → handleSelectSession → closeFeaturePage).
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница фичи скрыта (чат выбран): «Закрыть» нет.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не скрыта при выборе чата (мобила)').toBeNull();
+    // Чат в DOM.
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не в DOM после выбора (мобила)').not.toBeNull();
+    // Адрес не содержит /feature/ (navPush в handleSelectSession записал chatId).
+    expect(win.window.location.hash, 'адрес содержит /feature/ после выбора чата (мобила)')
+      .not.toContain('/feature/');
+  });
+
+  it('автоскрытие: выбор другого чата (десктоп) — страница фичи скрыта', async () => {
+    const win = globalThis as any;
+    win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chat = chatB;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не открыта перед выбором чата (десктоп)').not.toBeNull();
+
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не скрыта при выборе чата (десктоп)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не в DOM после выбора (десктоп)').not.toBeNull();
+    expect(win.window.location.hash, 'адрес содержит /feature/ после выбора чата (десктоп)')
+      .not.toContain('/feature/');
+  });
+
+  it('автоскрытие: задача в центре (мобила) — страница фичи скрыта', async () => {
+    // Задача открыта на маунте (cc-pending-task) — центр занят, страница фичи уступает.
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не скрыта при открытой задаче (мобила)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не в DOM при автоскрытии задачей (мобила)').not.toBeNull();
+    // Адрес не содержит /feature/ (cc-pending-task → navPush записал task).
+    expect((globalThis as any).window.location.hash, 'адрес содержит /feature/ после открытия задачи')
+      .not.toContain('/feature/');
+  });
+
+  // Мутация: убрать автоскрытие (otherCenterOpen) — файл в центре, страница фичи остаётся.
+  // В коде: featurePageOpen = openFeatureId != null && featuresOn && !otherCenterOpen.
+  // Мутация: убрать !otherCenterOpen → страница не скрывается при открытом файле → тест красный.
+  it('мутация: убрать otherCenterOpen из featurePageOpen → файл не скрывает страницу (красный)', async () => {
+    // Мутация: временно меняем featurePageOpen на openFeatureId != null && featuresOn (без !otherCenterOpen).
+    // Для этого читаем исходник и проверяем, что otherCenterOpen в нём.
+    const src = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
+    // otherCenterOpen должен входить в вычисление featurePageOpen.
+    expect(src, 'otherCenterOpen не используется в featurePageOpen (мутация: автоскрытие отключено)')
+      .toContain('!otherCenterOpen');
+    // И сам otherCenterOpen должен учитывать файл/задачу/граф.
+    expect(src, 'otherCenterOpen не покрывает файл').toContain('openFile');
+    expect(src, 'otherCenterOpen не покрывает задачу').toContain('selectedTaskId');
+    expect(src, 'otherCenterOpen не покрывает граф').toContain('centerDoc');
+  });
 });
 
 // Вспомогательный: toHash для фейк-истории (m5) — упрощённый, только project/feature/chat

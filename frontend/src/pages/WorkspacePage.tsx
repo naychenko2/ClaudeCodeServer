@@ -413,9 +413,6 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // занимается эффект «привести к проекту один раз» (ниже, рядом с handleFeatureBack).
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const flagsLoaded = useFlagsLoaded();
-  // Показ страницы гейтится по флагу: openFeatureId ставится из хэша/снимка без гейта
-  // (инициализатор выше), а решаем, рисовать ли страницу, здесь.
-  const featurePageOpen = openFeatureId != null && featuresOn;
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -770,6 +767,42 @@ const windowWidth = useWindowWidth();
   });
 
   const showProjectBoard = tasksMode && projectBoard && !selectedTask;
+
+  // Страница фичи — СОСЕД центра: при открытой она прячет центр (чат) display:none.
+  // Автоскрытие (дефект 20.10): страница должна вести себя как открытый файл — уступать
+  // центр ЛЮБОМУ другому окну (файл/задача/граф/коммит/ридер/персона/командный центр/
+  // доска/превью/терминал). Единый источник: один вычисляемый признак «центр занят
+  // другим окном» — новое окно центра в будущем добавляется сюда, а не в россыпь
+  // обработчиков. Чат — базовый режим (не «другое окно»), его выбор закрывает страницу
+  // отдельно (closeFeaturePage в handleSelectSession).
+  const otherCenterOpen = !!(
+    openFile || openCommitSha || selectedTaskId || centerDoc
+    || reader.state.open || selectedPersonaId || personaCreating || teamCenterOpen
+    || projectBoard || ccActivePreview
+    // Терминал — в центре только на мобиле (leftTab 'tools'); на десктопе он в правой
+    // рельсе и центр не занимает. Превью (ccActivePreview) — в центре на обеих раскладках.
+    || (isMobile && leftTab === 'tools' && activeTerminalId)
+  );
+  // Показ страницы гейтится по флагу (openFeatureId ставится из хэша/снимка без гейта —
+  // инициализатор выше) и по «центр не занят другим окном»: при открытом другом окне
+  // страница уступает ему (автоскрытие).
+  const featurePageOpen = openFeatureId != null && featuresOn && !otherCenterOpen;
+
+  // Единая точка закрытия страницы фичи: сбрасываем openFeatureId и указатель возврата
+  // (featureBackNav), чтобы «назад» не вёл на невидимую страницу. Вызывается при ЯВНОМ
+  // выборе чата (handleSelectSession): чат — базовый режим, не «другое окно», поэтому
+  // вычисляемым otherCenterOpen его выбор не покрывается.
+  const closeFeaturePage = useCallback(() => {
+    setOpenFeatureId(null);
+    clearBackNav();
+  }, []);
+  // Автоскрытие (otherCenterOpen): страница скрыта, но openFeatureId ещё задан — указатель
+  // возврата (chat → фича) не должен вести на невидимую страницу: сбрасываем. Явное
+  // закрытие (closeFeaturePage/«Закрыть») уже чистит его, там openFeatureId=null.
+  useEffect(() => {
+    if (openFeatureId != null && !featurePageOpen) clearBackNav();
+  }, [openFeatureId, featurePageOpen]);
+
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);
     try { localStorage.setItem(`cc_proj_board_${project.id}`, on ? '1' : '0'); } catch { /* ignore */ }
@@ -1160,6 +1193,9 @@ const windowWidth = useWindowWidth();
       setOpenCommitFile(null);
       setSelectedTaskId(null);
       setGraphOpen(false);
+      // Явный выбор чата закрывает страницу фичи (автоскрытие, дефект 20.10): чат —
+      // базовый режим, otherCenterOpen его не покрывает, поэтому единая точка closeFeaturePage.
+      closeFeaturePage();
       // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
       // и кнопки «назад/вперёд» браузера. Оставленный в сплите файл несём в том же
       // снимке: popstate восстанавливает file и chatId независимо, иначе «назад»

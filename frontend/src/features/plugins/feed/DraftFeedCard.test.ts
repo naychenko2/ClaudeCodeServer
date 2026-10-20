@@ -10,7 +10,7 @@ import { act, createElement } from 'react';
 import type { ChatItem, ServerMessage } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { PluginDraftPreview, PluginDraftSummary } from '../../../lib/api';
-import { shouldAcceptDraftReply } from '../../../pages/ChatsPage';
+import { acceptDraftReplyByChat } from '../../../lib/draftReply';
 
 // onMessage — захватываем подписчика, чтобы «сдвинуть» событие в тесте
 const handlers: ((m: ServerMessage) => void)[] = [];
@@ -524,36 +524,85 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
   });
 });
 
-// === Минор 6 (б): cc-draft-reply попадает в композер текущего чата во всех вариантах ===
-// Реплика «Править»/«Попросить агента исправить» из карточки черновика должна попасть в
-// композер ТОГО чата, для которого она, не отправляясь сама и не уходя в чужой чат.
-// shouldAcceptDraftReply(replyProject, activeProjectId, reply): принимаем, когда проект
-// реплики совпадает с проектом активного чата. Три варианта: чат вне проекта (replyProject
-// null, active null), проектный чат из ChatsPage (replyProject {id}, active тот же id —
-// раньше терялось), проектный чат в WorkspacePage (replyProject {id}, active null — ChatsPage
-// показывает не его). Мутация «вернуть условие» (project == null) красит тест проектного
-// чата из ChatsPage.
-describe('cc-draft-reply: композер текущего чата (минор 6б)', () => {
+// === QA-фикс M: cc-draft-reply несёт chatId и попадает в композер ТОГО чата, где карточка ===
+// Реплика «Править»/«Просить агента исправить» из карточки черновика кладётся в поле ввода
+// ТОГО чата, в чьей ленте нарисована карточка, и нигде больше. Событие несёт chatId (id
+// чата, в чьей ленте карточка); слушатели (ChatsPage/WorkspacePage) принимают, только если
+// chatId = их активный чат. Проект НЕ сравниваем: черновик может быть из проекта, а чат —
+// вне проекта (и наоборот) — сравнение проектов роняло реплику в чате вне проекта.
+//
+// acceptDraftReplyByChat(chatId, activeChatId, reply):
+//  (1) чат вне проекта (баг): chatId = активный чат → принимается (проект черновика ≠ проект
+//      чата, но chatId совпадает — мутация «вернуть сравнение проектов» красит этот тест);
+//  (2) проектный чат из списка чатов: chatId = активный чат → принимается;
+//  (3) проектный чат в рабочей области: chatId = активный чат воркспейса → принимается;
+//  (4) чужой chatId / пустой / не строка → не принимается (мутация «принимать любой chatId»
+//      красит эти тесты);
+//  (5) пустая реплика → не принимается (реплика не отправляется сама — префилл, не send).
+describe('cc-draft-reply: приём по chatId (QA-фикс M)', () => {
 
-  it('чат вне проекта (replyProject null, active null) → принимается', () => {
-    expect(shouldAcceptDraftReply(undefined, null, 'Поправь плагин «X»')).toBe(true);
-    expect(shouldAcceptDraftReply(null, null, 'text')).toBe(true);
+  it('(1) чат вне проекта: chatId = активный чат → принимается (баг: проект черновика ≠ проект чата)', () => {
+    // Черновик из проекта 'p1', но чат вне проекта; карточка в чате 'chat-1', активен 'chat-1'
+    expect(acceptDraftReplyByChat('chat-1', 'chat-1', 'Поправь плагин «X»')).toBe(true);
   });
 
-  it('проектный чат из ChatsPage (replyProject {id}, active тот же id) → принимается (фикс)', () => {
-    expect(shouldAcceptDraftReply({ id: 'p1' }, 'p1', 'test')).toBe(true);
+  it('(2) проектный чат из списка чатов: chatId = активный чат → принимается', () => {
+    expect(acceptDraftReplyByChat('chat-2', 'chat-2', 'test')).toBe(true);
   });
 
-  it('проектный чат в WorkspacePage (replyProject {id}, active null — ChatsPage не его) → не принимается', () => {
-    expect(shouldAcceptDraftReply({ id: 'p1' }, null, 'test')).toBe(false);
+  it('(3) проектный чат в рабочей области: chatId = активный чат воркспейса → принимается', () => {
+    expect(acceptDraftReplyByChat('chat-3', 'chat-3', 'test')).toBe(true);
   });
 
-  it('реплика для другого проекта (replyProject {id: p1}, active p2) → не принимается (не в чужой чат)', () => {
-    expect(shouldAcceptDraftReply({ id: 'p1' }, 'p2', 'test')).toBe(false);
+  it('(4) чужой chatId → не принимается (реплика не уходит в чужой чат)', () => {
+    expect(acceptDraftReplyByChat('other-chat', 'chat-1', 'test')).toBe(false);
   });
 
-  it('пустая реплика → не принимается', () => {
-    expect(shouldAcceptDraftReply(undefined, null, '')).toBe(false);
+  it('(4) пустой chatId → не принимается (нет идентификатора чата)', () => {
+    expect(acceptDraftReplyByChat('', 'chat-1', 'test')).toBe(false);
+    expect(acceptDraftReplyByChat(null, 'chat-1', 'test')).toBe(false);
+    expect(acceptDraftReplyByChat(undefined, 'chat-1', 'test')).toBe(false);
+  });
+
+  it('(5) пустая реплика → не принимается (даже если chatId совпадает)', () => {
+    expect(acceptDraftReplyByChat('chat-1', 'chat-1', '')).toBe(false);
+    expect(acceptDraftReplyByChat('chat-1', 'chat-1', undefined)).toBe(false);
+  });
+});
+
+// === QA-фикс M: карточка шлёт chatId своего чата (из ctx.sessionId), а не проект ===
+// «Править»/«Просить агента исправить» на карточке → cc-draft-reply с detail.chatId = id чата,
+// в чьей ленте карточка (ctx.sessionId). НЕ проект: черновик может быть из проекта, а чат —
+// вне проекта (сравнение проектов роняло реплику). Мутация «вернуть project в detail» (убрать
+// chatId) красит этот тест: слушатель не найдёт chatId и отбросит реплику.
+describe('cc-draft-reply: карточка шлёт chatId своего чата (QA-фикс M)', () => {
+  it('«Править» → cc-draft-reply несёт chatId = id чата (ctx.sessionId) и готовую реплику', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+
+    // renderAnchor монтирует якорь с ctx.sessionId = 'chat-1' (см. ctxFor) и ставит fake window
+    const { container } = await renderAnchor(recordItem({ slug: SLUG }));
+
+    // Захват события на fake window (после installFakeDom внутри renderAnchor)
+    const captured: Array<{ chatId?: unknown; reply?: string }> = [];
+    const onEvt = (e: Event) => {
+      captured.push((e as CustomEvent<{ chatId?: unknown; reply?: string }>).detail ?? {});
+    };
+    window.addEventListener('cc-draft-reply', onEvt);
+    try {
+      const edit = findButton(container, 'Править');
+      expect(edit, 'кнопка «Править» не найдена').not.toBeNull();
+      await act(async () => { edit!.onClick(); });
+    } finally {
+      window.removeEventListener('cc-draft-reply', onEvt);
+    }
+
+    // Событие отправлено ровно один раз; несёт chatId = id чата ('chat-1') и готовую реплику;
+    // проект в detail не фигурирует
+    expect(captured.length).toBe(1);
+    expect(captured[0].chatId).toBe('chat-1');
+    expect(captured[0].reply).toBe('Поправь плагин «My Plugin»: ');
   });
 });
 

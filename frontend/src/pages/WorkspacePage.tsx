@@ -30,6 +30,7 @@ import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFil
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
+import { acceptDraftReplyByChat } from '../lib/draftReply';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
@@ -369,15 +370,24 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const handleSessionsListChanged = useCallback((list: Session[]) => setSessions(list), []);
   const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
-  // «Попросить агента исправить» из настроек проекта (PluginsProjectSection → EditDialog):
-  // готовая реплика кладётся в ПОЛЕ ВВОДА активного чата (префилл), а не отправляется
-  // (документация: «кладёт готовую просьбу в поле ввода, но не отправляет её за вас»).
-  // Префилл — тем же механизмом, что ChatsPage: cc_pending_chat_prompt + cc-compose-prefill
-  // (Composer.setText), а не setPendingMessage → ChatPanel.send (автосабмит).
+  // «Попросить агента исправить» из настроек проекта (PluginsProjectSection → EditDialog) и из
+  // карточки черновика в ленте: готовая реплика кладётся в ПОЛЕ ВВОДА активного чата (префилл),
+  // а не отправляется (документация: «кладёт готовую просьбу в поле ввода, но не отправляет её
+  // за вас»). Префилл — тем же механизмом, что ChatsPage: cc_pending_chat_prompt +
+  // cc-compose-prefill (Composer.setText), а не setPendingMessage → ChatPanel.send (автосабмит).
+  //
+  // Два источника события: (1) карточка черновика в ленте — несёт chatId чата, в чьей ленте она
+  // нарисована; принимаем, только если chatId = активный чат этого воркспейса (activeSession) —
+  // проект НЕ сравниваем (черновик может быть из проекта, а чат — вне проекта). (2) настройки
+  // проекта — несут project; принимаем, если project = этот проект (прежний путь). Ref — чтобы
+  // handler видел свежий activeSession без перерегистрации слушателя.
   useEffect(() => {
     const onDraftReply = (e: Event) => {
-      const { project: p, reply } = (e as CustomEvent<{ project: Project; reply: string }>).detail ?? {};
-      if (p?.id !== project.id || !reply) return;
+      const { chatId, project: p, reply } = (e as CustomEvent<{ chatId?: unknown; project?: { id?: string }; reply?: string }>).detail ?? {};
+      if (!reply) return;
+      const isCard = acceptDraftReplyByChat(chatId, activeSessionRef.current?.id, reply);
+      const isSettings = p?.id != null && p.id === project.id;
+      if (!isCard && !isSettings) return;
       sessionStorage.setItem('cc_pending_chat_prompt', reply);
       window.dispatchEvent(new Event('cc-compose-prefill'));
     };

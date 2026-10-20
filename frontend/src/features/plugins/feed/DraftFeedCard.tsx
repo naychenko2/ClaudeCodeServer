@@ -9,7 +9,6 @@ import { useEffect, useRef, useState } from 'react';
 import { C, FS } from '../../../lib/design';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
 import { api, type PluginDraftAcceptResult } from '../../../lib/api';
-import { getCachedProject } from '../../projects/useAllProjects';
 import { ConsentDialog, type PluginConsentData } from '../ConsentDialog';
 import { DraftCard } from '../DraftCard';
 import { refreshDraft, useDraftEntry } from './draftsStore';
@@ -55,10 +54,15 @@ function NeutralLine({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function DraftFeedCard({ slug, fallback, projectId }: {
+export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
   slug: string;
   fallback: string | null;
   projectId: string | null;
+  // Id чата, в чьей ленте нарисована карточка: «Править»/«Просить агента исправить»
+  // кладут реплику в композер именно этого чата (cc-draft-reply несёт chatId, слушатели
+  // принимают, только если chatId = их активный чат). Проект не сравниваем: черновик может
+  // быть из проекта, а чат — вне проекта (и наоборот).
+  chatId: string | null;
 }) {
   const buildYourself = useFeature(FLAGS.pluginsBuildYourself);
   const entry = useDraftEntry(slug);
@@ -118,10 +122,12 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
     setActionError(null);
     try { await api.plugins.draftRestore(slug); void refreshDraft(slug); } catch (e: unknown) { setActionError(errText(e)); }
   };
-  // «Править»/«Попросить агента исправить»: готовая реплика → композер активного чата (cc-draft-reply)
+  // «Править»/«Попросить агента исправить»: готовая реплика → композер ТОГО чата, в чьей
+  // ленте нарисована карточка (cc-draft-reply несёт chatId; слушатели принимают, только если
+  // chatId = их активный чат). Проект не сравниваем: черновик может быть из проекта, а чат —
+  // вне проекта (и наоборот) — сравнение проектов роняло реплику в чате вне проекта.
   const handleEdit = (reply: string) => {
-    const project = projectId ? getCachedProject(projectId) : undefined;
-    window.dispatchEvent(new CustomEvent('cc-draft-reply', { detail: { project, reply } }));
+    window.dispatchEvent(new CustomEvent('cc-draft-reply', { detail: { chatId, reply } }));
   };
 
   return (

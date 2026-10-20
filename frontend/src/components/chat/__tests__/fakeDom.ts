@@ -66,6 +66,8 @@ class FNode {
   focus() {}
   blur() {}
   querySelector(): null { return null; }
+  // Элементные потомки (как DOM-children): centerOffset и др. итерируют root.children
+  get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
   getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }; }
 
   _link(child: FNode, at: number) {

@@ -42,25 +42,9 @@ import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { autoNavigateToContinued } from '../lib/chatContinue';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
+import { acceptDraftReplyByChat } from '../lib/draftReply';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
-
-// Условие приёма cc-draft-reply: реплика принадлежит ТОМУ чату, который сейчас открыт.
-// replyProject — проект, для которого реплика (undefined/null — чат вне проекта);
-// activeProjectId — проект активного чата (null/undefined — чат вне проекта); reply — текст.
-// Принимаем, только когда проект реплики совпадает с проектом активного чата (и reply
-// непустой): так реплика попадает в композер текущего чата во всех вариантах (чат вне
-// проекта, проектный чат из ChatsPage, проектный чат в WorkspacePage) и не уходит в чужой.
-// Экспортировано для теста (мутация условия → красный тест).
-export function shouldAcceptDraftReply(
-  replyProject: unknown,
-  activeProjectId: string | null | undefined,
-  reply: string | undefined,
-): boolean {
-  if (!reply) return false;
-  const replyId = replyProject != null ? ((replyProject as { id?: string }).id ?? null) : null;
-  return replyId === (activeProjectId ?? null);
-}
 
 interface Props {
   auth: AuthState;
@@ -227,17 +211,17 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   }, []);
 
   // «Править»/«Попросить агента исправить» из карточки черновика в ленте: готовая реплика
-  // → поле ввода активного чата (cc-compose-prefill), не отправляется сама. Принимаем, когда
-  // проект реплики совпадает с проектом активного чата: так «Править» работает и в чате вне
-  // проекта, и в проектном чате, открытом из ChatsPage (раньше реплика терялась — WorkspacePage
-  // не смонтирован, а shouldAcceptDraftReply отбрасывал проектные). Ref — чтобы handler видел
-  // свежий проект активного чата без перерегистрации слушателя на каждом обновлении списка.
-  const activeProjectIdRef = useRef<string | null>(null);
-  activeProjectIdRef.current = chats.find(c => c.id === activeId)?.projectId ?? null;
+  // → поле ввода ТОГО чата, в чьей ленте нарисована карточка (cc-compose-prefill), не
+  // отправляется сама. Событие несёт chatId карточки; принимаем, только если chatId = id
+  // активного чата. Проект не сравниваем: черновик может быть из проекта, а чат — вне
+  // проекта (сравнение проектов роняло реплику в чате вне проекта). Ref — чтобы handler
+  // видел свежий activeId без перерегистрации слушателя на каждом обновлении списка.
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
   useEffect(() => {
     const onDraftReply = (e: Event) => {
-      const { project: p, reply } = (e as CustomEvent<{ project?: unknown; reply?: string }>).detail ?? {};
-      if (!shouldAcceptDraftReply(p, activeProjectIdRef.current, reply)) return;
+      const { chatId, reply } = (e as CustomEvent<{ chatId?: unknown; reply?: string }>).detail ?? {};
+      if (!acceptDraftReplyByChat(chatId, activeIdRef.current, reply)) return;
       sessionStorage.setItem('cc_pending_chat_prompt', reply!);
       window.dispatchEvent(new Event('cc-compose-prefill'));
     };

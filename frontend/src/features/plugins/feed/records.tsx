@@ -58,5 +58,8 @@ export function DraftAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
     if (raw != null) return <FallbackLine text="Черновик больше недоступен" />;
     return null;
   }
-  return <DraftFeedCard slug={slug} fallback={rec?.fallback ?? null} projectId={ctx.projectId} />;
+  // chatId — id чата, в чьей ленте нарисована карточка (ctx.sessionId): «Править»/
+  // «Просить агента исправить» кладут реплику в композер именно этого чата, а не в чат
+  // «по проекту» (черновик может быть из проекта, а чат — вне проекта, и наоборот).
+  return <DraftFeedCard slug={slug} fallback={rec?.fallback ?? null} projectId={ctx.projectId} chatId={ctx.sessionId} />;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, FONT } from '../../lib/design';
@@ -123,6 +123,9 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
+  // Корень «просмотра» — для правила «скрытый центр не перехватывает Esc» (useEscapeClose):
+  // если страница скрыта (display:none → offsetParent=null), Esc её не закрывает. Как у файла.
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Название: из индекса, фолбэк — эпик страницы, затем нейтральное. Контракт:
   // UI обязан пережить отсутствие любого поля ответа — эпик без title не роняет страницу.
@@ -229,7 +232,11 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       mobileTitle={label}
       closeTitle="Закрыть"
       closeTestId="feature-page-close"
-      name={title}
+      name={
+        // Название — единственный гибкий элемент (как имя файла): flex-item с ellipsis
+        // (сжимается «…»). У страницы расширения нет — длинное название обрезается «…» (m1 Майи).
+        <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+      }
       nameTitle={title}
       nameTestId="feature-page-title"
       leading={
@@ -239,6 +246,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
         </span>
       }
       trailing={statusTag && <StatusTag tag={statusTag} />}
+      rootRef={rootRef}
       rootTestId="feature-page"
       // Мобила: страница — прямой ребёнок колонки центра (flex: 1); десктоп — в Island
       // (FeatureCenter), корень height:100% по умолчанию.

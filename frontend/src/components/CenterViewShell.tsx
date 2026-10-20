@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode, Ref, RefObject } from 'react';
 import { X } from 'lucide-react';
-import { C, FONT, FS } from '../lib/design';
+import { C, FONT, FS, TB } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
 import { BackButton } from './ui/BackButton';
@@ -21,6 +21,7 @@ export function CenterViewShell({
   leftExtra, leading, trailing,
   rootRef, stripRef, fixedLeftRef,
   rootStyle, rootTestId,
+  gap = TB.gap,
   children,
 }: {
   // Мобила? (FileViewer — опциональный, undefined = desktop; FeaturePage — всегда boolean).
@@ -56,6 +57,8 @@ export function CenterViewShell({
   rootStyle?: CSSProperties;
   // data-testid корня (тесты FeaturePage: feature-page); FileViewer — нет.
   rootTestId?: string;
+  // Зазор шапки (strip + fixedLeft): файл — rowGap (4 в tight, иначе TB.gap); страница — TB.gap.
+  gap?: number;
   // Тело (прокрутка, контент) — рендерит вызывающий.
   children: ReactNode;
 }) {
@@ -67,8 +70,8 @@ export function CenterViewShell({
       style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative', ...rootStyle }}
     >
       <Toolbar isMobile={isMobile}>
-        <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-          <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap, flex: 1, minWidth: 0 }}>
+          <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap, flexShrink: 0 }}>
             {isMobile ? (
               <span data-testid={closeTestId}>
                 {/* m2 (Майя): полный текст возврата («К чату «…»»/«К списку») — в title И aria-label;
@@ -87,26 +90,22 @@ export function CenterViewShell({
             {leftExtra}
           </div>
           {leading}
-          {/* m1 (Майя, регрессия оболочки): ellipsis — на ВНУТРЕННЕМ span, а не на flex-родителе.
-              textOverflow:ellipsis на display:flex не срабатывает (текст = анонимный flex-item →
-              обрезка посреди буквы без «…»). Внешний span — flex-родитель (minWidth:0, чтобы
-              цепочка сжималась), внутренний — блок с overflow/ellipsis/nowrap и minWidth:0. */}
+          {/* m1 (Майя) + расширение (Глеб m1 = Майя m4): имя — flex-контейнер, {name} —
+              flex-item'ы. У файла: основа (flex:1 1 auto, minWidth:0, ellipsis — сжимается «…»)
+              + расширение (flexShrink:0 — всегда видно, не уходит под многоточие). У страницы:
+              одно название (ellipsis). textOverflow:ellipsis на display:flex не срабатывает
+              (текст = анонимный flex-item → обрезка посреди буквы) — поэтому ellipsis на
+              children, а не на контейнере; overflow:hidden — клип хвоста. */}
           <span
             data-testid={nameTestId}
             title={nameTitle}
             style={{
               display: 'flex', alignItems: 'baseline', flex: '1 1 auto', minWidth: 0,
+              overflow: 'hidden',
               fontFamily: FONT.mono, fontWeight: 700, fontSize: FS.base, color: C.textHeading,
             }}
           >
-            <span
-              style={{
-                flex: '1 1 auto', minWidth: 0,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}
-            >
-              {name}
-            </span>
+            {name}
           </span>
           {trailing}
         </div>

@@ -164,31 +164,33 @@ describe('FileViewer: Esc / закрытие / имя в шапке', () => {
     expect(textNodes(back as never).join(''), 'видимая подпись «Файлы»').toContain('Файлы');
   });
 
-  it('имя файла в шапке (mono 700) + ellipsis (п.4: осознанное улучшение)', async () => {
+  it('имя файла в шапке (mono 700): основа — ellipsis, расширение — отдельный flex-item (Глеб m1 = Майя m4)', async () => {
     const onClose = vi.fn();
     const { container } = mountViewer(onClose);
     await flush();
-    // Имя — span[data-testid=file-name] (CenterViewShell): mono 700.
+    // Имя — span[data-testid=file-name] (CenterViewShell): mono 700, flex-контейнер.
     const name = findNodeByAttr(container, 'data-testid', 'file-name');
     expect(name, 'имя файла в шапке (data-testid=file-name)').not.toBeNull();
     const style = (name as unknown as { style: Record<string, string> }).style;
     expect(style.fontWeight, 'имя — mono 700').toBe('700');
-    // m1 (Майя, регрессия оболочки): ellipsis — на ВНУТРЕННЕМ span (ребёнок data-testid),
-    // а НЕ на обёртке: textOverflow:ellipsis на display:flex не срабатывает (текст =
-    // анонимный flex-item → обрезка посреди буквы без «…»). Внутренний span — блок с
-    // overflow/ellipsis/nowrap + minWidth:0, и именно он содержит текст имени.
-    // Мутация «перенести стиль на обёртку» красит: внутренний span теряет ellipsis.
-    // Первый ЭЛЕМЕНТ-ребёнок обёртки (text-node с пробелом пропускаем) — носитель ellipsis.
-    const inner = (name as unknown as { childNodes: { nodeType: number; style: Record<string, string> }[] })
-      .childNodes.find(c => c.nodeType === 1);
-    expect(inner, 'внутренний span имени (носитель ellipsis)').not.toBeNull();
-    expect(inner.style.overflow, 'ellipsis: overflow hidden').toBe('hidden');
-    expect(inner.style.textOverflow, 'ellipsis: textOverflow ellipsis').toBe('ellipsis');
-    expect(inner.style.whiteSpace, 'ellipsis: whiteSpace nowrap').toBe('nowrap');
-    // ...и именно он (а не обёртка) содержит текст имени.
-    expect(textNodes(inner as never).join(''), 'внутренний span содержит имя файла').toContain('readme');
     // Обёртка (data-testid) — БЕЗ ellipsis (мутация: перенести стиль на обёртку → red).
     expect(style.textOverflow, 'ellipsis НЕ на обёртке (data-testid)').toBeUndefined();
+    // Имя — flex-контейнер: дети = [основа, расширение] (readme.txt → 'readme' + '.txt').
+    const kids = (name as unknown as { childNodes: { nodeType: number; style: Record<string, string> }[] })
+      .childNodes.filter(c => c.nodeType === 1);
+    // 1) Основа — первый flex-item: ellipsis (сжимается «…»). Мутация «убрать ellipsis» → red.
+    const base = kids[0] as { style: Record<string, string> } | undefined;
+    expect(base, 'основа имени (первый flex-item)').toBeDefined();
+    expect(base!.style.overflow, 'ellipsis: overflow hidden').toBe('hidden');
+    expect(base!.style.textOverflow, 'ellipsis: textOverflow ellipsis').toBe('ellipsis');
+    expect(base!.style.whiteSpace, 'ellipsis: whiteSpace nowrap').toBe('nowrap');
+    expect(textNodes(base! as never).join(''), 'основа содержит имя файла').toContain('readme');
+    // 2) Расширение — ОТДЕЛЬНЫЙ flex-item с flexShrink:0 (не уходит под многоточие).
+    // Мутация «вложить расширение внутрь обрезаемого span» → flexShrink:0 пропадает → red.
+    const ext = kids[1] as { style: Record<string, string> } | undefined;
+    expect(ext, 'расширение — отдельный элемент (второй flex-item)').toBeDefined();
+    expect(ext!.style.flexShrink, 'расширение — flexShrink:0 (всегда видно)').toBe('0');
+    expect(textNodes(ext! as never).join(''), 'расширение = .txt').toBe('.txt');
   });
 
   // m2 (Майя): у BackButton полный текст возврата — не только в title, но и в aria-label

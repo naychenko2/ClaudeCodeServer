@@ -579,6 +579,27 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(onBack, 'Esc в поле перехватил закрытие (должен уступить полю)').not.toHaveBeenCalled();
   });
 
+  // п.3 (Глеб, желательно): правило «скрытый центр не перехватывает Esc» — и для страницы.
+  // Страница передаёт rootRef в оболочку (useEscapeClose): скрытая (display:none →
+  // offsetParent=null) — Esc её не закрывает. Мутация «не передавать rootRef» → проверка
+  // offsetParent не идёт (el=null) → Esc закрывает скрытую → red.
+  it('п.3: скрытая страница (offsetParent=null) — Esc не перехватывает', async () => {
+    const onBack = vi.fn();
+    const c = render({ onBack });
+    await settle();
+    // Корень страницы (data-testid=feature-page) — тот, что useEscapeClose проверяет (rootRef).
+    const root = findNodeByAttr(c, 'data-testid', 'feature-page') as unknown as { offsetParent?: unknown } | null;
+    expect(root, 'корень страницы (rootRef оболочки)').not.toBeNull();
+    // Скрытый центр (display:none → offsetParent=null) — Esc не закрывает.
+    root!.offsetParent = null;
+    act(() => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: null }); });
+    expect(onBack, 'скрытая страница — Esc не закрывает').not.toHaveBeenCalled();
+    // Контроль: видимая страница (offsetParent ≠ null) — Esc закрывает.
+    root!.offsetParent = { tagName: 'BODY' };
+    act(() => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: null }); });
+    expect(onBack, 'видимая страница — Esc закрывает').toHaveBeenCalledTimes(1);
+  });
+
   // === M2: крошка на 360 — minHeight 40 (тач-цель, §6) ===
   it.skip('M2: крошка на 360 — minHeight 40 (тач-цель)', () => {
     const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', isMobile: true, onBack: () => {} }));

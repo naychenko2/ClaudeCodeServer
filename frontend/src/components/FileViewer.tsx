@@ -1723,14 +1723,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       rootRef={rootRef}
       stripRef={stripRef}
       fixedLeftRef={fixedLeftRef}
+      gap={rowGap}
       closeLabel="Файлы"
       mobileTitle="К списку файлов"
       closeTitle="Закрыть"
       name={
-        // Имя файла — единственный гибкий элемент. Расширение отдельным span'ом:
-        // ellipsis режет хвост, а по нему и узнают файл. title — полный путь.
+        // Имя файла — единственный гибкий элемент. Основа — flex-item (flex:1 1 auto, minWidth:0,
+        // ellipsis — сжимается «…»), расширение — отдельный flex-item (flexShrink:0 — всегда видно,
+        // не уходит под многоточие; Глеб m1 = Майя m4). title — полный путь.
         <>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameBase}</span>
+          <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameBase}</span>
           {nameExt && <span style={{ flexShrink: 0 }}>{nameExt}</span>}
         </>
       }

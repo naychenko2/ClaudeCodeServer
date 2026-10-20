@@ -542,6 +542,80 @@ public class PluginDraftsControllerTests : IDisposable
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted = старые ∩ новые: новое право не выдано");
     }
 
+    // --- Accept: bump (новая версия) кладёт пакет НОВОЙ версии на диск (defect 8565ccff) ---
+    //
+    // До фикса: Install возвращал Conflict ДО Directory.Move, и контроллер писал запись
+    // 2.0.0 в installed.json, а каталога packages/{id}/2.0.0/ на диске не было (навыки/панель
+    // этой версии не доставлялись). Теперь: штатное обновление кладёт новую версию на диск,
+    // старая версия остаётся, granted = старые ∩ новые.
+
+    [Fact]
+    public void Accept_Bump_УкладываетНовуюВерсиюНаДиск_СтараяОстаётся()
+    {
+        // v1: устанавливаем.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        // v2: bump версии (содержимое навыка то же, версия в манифесте 2.0.0 → другой sha).
+        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        // Пакет НОВОЙ версии на диске (навык + панель этой версии доставляются).
+        var newDir = _store.PackageDir(OwnerA, "local-a/pkg", "2.0.0");
+        Directory.Exists(newDir).Should().BeTrue("каталог packages/{id}/2.0.0/ создан при bump");
+        File.Exists(Path.Combine(newDir, "skills", "a", "SKILL.md")).Should().BeTrue(
+            "навык новой версии на диске");
+
+        // Старая версия остаётся на диске (пакеты неизменяемы, bump не затирает старую).
+        var oldDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        Directory.Exists(oldDir).Should().BeTrue("каталог старой версии 1.0.0 остаётся");
+
+        // Запись: версия 2.0.0, granted = старые ∩ новые.
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Version.Should().Be("2.0.0");
+    }
+
+    // --- Accept: bump с ошибкой валидации → запись не остаётся, старая версия работает ---
+    //
+    // Если новая версия не проходит валидацию (например, битый манифест), установка
+    // прерывается: запись 2.0.0 НЕ пишется, старая запись 1.0.0 (с granted) остаётся,
+    // и пакет старой версии на диске работает.
+
+    [Fact]
+    public void Accept_Bump_ОшибкаВалидации_СтараяВерсияРаботает()
+    {
+        // v1: устанавливаем + выдаём право.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+        GrantDirectly(OwnerA, "local-a/pkg", ["notes:read"]);
+
+        // v2: bump версии, но битый манифест (unknown-permission) → валидация падает.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        var root = _store.DraftDir(OwnerA, "pkg");
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(new
+            {
+                id = "local-a/pkg", name = "pkg", version = "2.0.0",
+                contributes = new { skills = new[] { "skills/a" } },
+                permissions = new { requested = new[] { "unknown:perm" } },
+            }, new JsonSerializerOptions { WriteIndented = true }));
+
+        var res = ctl.Accept("pkg");
+        res.Should().BeOfType<BadRequestObjectResult>("ошибка валидации → 400, не 200");
+
+        // Старая запись 1.0.0 (с granted) остаётся, битой записи 2.0.0 нет.
+        var records = _store.LoadInstalled(OwnerA);
+        var rec = records.Single(r => r.Id == "local-a/pkg");
+        rec.Version.Should().Be("1.0.0", "запись осталась старой версией");
+        rec.Granted.Should().Equal(new[] { "notes:read" }, "granted старой версии не сброшен");
+        records.Count(r => r.Version == "2.0.0").Should().Be(0, "битой записи 2.0.0 нет");
+
+        // Пакет старой версии на диске работает.
+        Directory.Exists(_store.PackageDir(OwnerA, "local-a/pkg", "1.0.0")).Should().BeTrue();
+    }
+
     // --- Accept: 409 при том же id+version и другом sha ---
 
     [Fact]

@@ -176,53 +176,33 @@ public class PluginDraftsController(
 
         // Манифест черновика: id/version/permissions (потолок). id из него — ключ старой записи.
         var (manifest, _) = PluginInstaller.ReadManifest(store!.DraftDir(UserId, slug));
-        var records = store.LoadInstalled(UserId);
-        // Старая запись той же id+version (для 409 «поднимите версию»); любая по id (для
-        // granted/secrets при обновлении версии).
-        var oldSameVersion = manifest?.Id is { } mid
-            ? records.FirstOrDefault(r => r.Id == mid && r.Version == manifest.Version)
-            : null;
-        var oldById = manifest?.Id is { } mid2
-            ? records.FirstOrDefault(r => r.Id == mid2)
+        // Старая запись по id (любой версии) — для granted/secrets при обновлении версии.
+        // (Bump vs 409 решает сам Install: Conflict — только та же id+version, другой sha.)
+        var oldById = manifest?.Id is { } mid
+            ? store.LoadInstalled(UserId).FirstOrDefault(r => r.Id == mid)
             : null;
 
-        // Установка: валидация, no-op/409/400 — единственный арбитр PluginInstaller.
+        // Установка: валидация, no-op/409/400 — единственный арбитр PluginInstaller:
+        //   - Ok: первая установка (granted = []) ИЛИ штатное обновление/bump (granted = старые
+        //     ∩ новые; Install сам кладёт пакет новой версии на диск и возвращает запись —
+        //     defect 8565ccff: раньше bump уходил в Conflict ДО Directory.Move, и пакет
+        //     новой версии на диск не попадал, а контроллер писал «битую» запись);
+        //   - NoOp: совпал sha (granted/secrets не сбрасываются);
+        //   - Conflict: ТОЛЬКО та же id+version, другой sha (неизменяемость версии) → 409.
         var result = installer!.Install(UserId, "draft:" + slug);
 
-        // 409: Install ругается на «sha изменился» по id. Конфликт ТОЛЬКО если та же id+version
-        // (содержимое изменилось, версию не подняли). Если существующая запись — ДРУГАЯ версия
-        // (bump) → это обновление, не конфликт: запись собираем сами (Install при Conflict её не
-        // возвращает) — sha256 из валидатора (тот же, что в Install), requested/id/version из манифеста.
-        // Права: первая установка → granted = []; обновление → granted = старые ∩ новые запрошенные
-        // (minor 14, D2: считаем сразу, без обходной записи Granted = [], которую потом перезаписывали).
         PluginInstall record;
         if (result.Status == InstallStatus.Conflict)
         {
-            if (oldSameVersion is not null)
-                return Conflict(new { error = result.Error });
-            var validation = drafts.Validate(UserId, slug);
-            var requested = manifest.Permissions?.Requested ?? [];
-            record = new PluginInstall
-            {
-                Id = manifest!.Id,
-                Version = manifest.Version,
-                Sha256 = validation.Sha256 ?? "",
-                Requested = requested,
-                Granted = oldById is null ? [] : oldById.Granted
-                    .Where(p => requested.Contains(p, StringComparer.Ordinal))
-                    .ToList(),
-                Enabled = true,
-                Source = "draft:" + slug,
-            };
+            // 409: содержимое той же версии изменилось, версию не подняли.
+            return Conflict(new { error = result.Error });
         }
-        else
-        {
-            if (result.Status is not (InstallStatus.Ok or InstallStatus.NoOp))
-                return BadRequest(new { error = result.Error, problems = result.Problems });
-            // Ok: новая запись (granted = [] по C2, старой записи того же id нет),
-            // NoOp: существующая (granted/secrets уже на месте, новые права не появляются).
-            record = result.Record!;
-        }
+
+        if (result.Status is not (InstallStatus.Ok or InstallStatus.NoOp))
+            return BadRequest(new { error = result.Error, problems = result.Problems });
+        // Ok: новая запись (первая установка granted = [] / обновление granted = старые ∩ новые);
+        // NoOp: существующая (granted/secrets уже на месте, новые права не появляются).
+        record = result.Record!;
 
         // consentRequired + newPermissions:
         //   - первая установка (oldById == null): ВСЕ запрошенные права «новые» для человека

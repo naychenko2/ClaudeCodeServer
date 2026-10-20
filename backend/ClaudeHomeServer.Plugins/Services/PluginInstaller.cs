@@ -63,6 +63,9 @@ public class PluginInstaller
         PluginManifest? manifest = null;
         string? id = null;
         string? version = null;
+        // existing — за пределами try: после finally (когда staging уже убран) из неё считаем
+        // granted = старые ∩ новые для штатного обновления (bump). null — первая установка.
+        PluginInstall? existing = null;
         try
         {
             Directory.CreateDirectory(stagingDir);
@@ -108,12 +111,16 @@ public class PluginInstaller
 
             // M6: повторная установка того же пакета (совпал sha) — no-op: вернуть
             // существующую запись, Granted/Secrets не сбрасываем.
-            var existing = _store.LoadInstalled(ownerId).FirstOrDefault(r => r.Id == id);
+            existing = _store.LoadInstalled(ownerId).FirstOrDefault(r => r.Id == id);
             if (existing is not null && existing.Sha256 == sha256)
                 return InstallResult.NoOp(existing);
 
-            // 409: запись с тем же id, но sha256 пакета изменился → «обновить».
-            if (existing is not null && existing.Sha256 != sha256)
+            // 409 (неизменяемость версии): ТОЛЬКО если та же id+version, но sha256 изменился
+            // (содержимое поменяли, версию не подняли). Другая версия того же id — штатное
+            // обновление (bump): не выходим, а кладём новую версию на диск ниже (Directory.Move)
+            // и пишем запись granted = старые ∩ новые (defect 8565ccff: раньше bump уходил
+            // сюда как Conflict ДО Directory.Move, и пакет новой версии на диск не попадал).
+            if (existing is not null && existing.Sha256 != sha256 && existing.Version == version)
                 return InstallResult.Conflict(id, version);
 
             // Атомарная замена: удалить старый, переместить копию. Родитель target
@@ -132,15 +139,24 @@ public class PluginInstaller
             if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, recursive: true);
         }
 
-        // Запись PluginInstall: requested из манифеста, granted = [] (C2), source = метка (C1).
+        // Запись PluginInstall: requested из манифеста, source = метка (C1).
         // sha256 здесь не null: валидация копии прошла (иначе return FailValidation внутри try).
+        // granted:
+        //   - первая установка (existing == null) → granted = [] (C2: человек выдаёт через grant);
+        //   - обновление (existing, другая версия) → granted = старые ∩ новые запрошенные
+        //     (defect 8565ccff: запись пишется ТОЛЬКО после Directory.Move, пакет на диске).
+        // no-op (совпал sha) возвращён выше, до записи.
+        var requested = manifest!.Permissions?.Requested ?? [];
+        var granted = existing is null
+            ? []
+            : existing.Granted.Where(p => requested.Contains(p, StringComparer.Ordinal)).ToList();
         var record = new PluginInstall
         {
             Id = id!,
             Version = version!,
             Sha256 = sha256!,
-            Requested = manifest!.Permissions?.Requested ?? [],
-            Granted = [],
+            Requested = requested,
+            Granted = granted,
             Enabled = true,
             Source = sourceLabel,
         };

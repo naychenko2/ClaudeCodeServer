@@ -32,7 +32,7 @@ vi.mock('../../lib/api', () => ({
 
 const { api } = await import('../../lib/api');
 const { setAllFlags, setFlagLocal } = await import('../../lib/featureFlags');
-const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
+const { installFakeDom, mount, textNodes, uninstallFakeDom, findNodeByAttr } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
 const { DraftsSection } = await import('./DraftsSection');
@@ -218,5 +218,66 @@ describe('DraftsSection: «Установлен» → ссылка «Откры�
     // бейдж «Установлен · 1.0.0» и ссылка «Открыть в «Плагинах»» на месте
     expect(text()).toContain('Установлен');
     expect(findButton(container, 'Открыть в «Плагинах»'), 'ссылка «Открыть в «Плагинах»» не найдена').not.toBeNull();
+  });
+});
+
+// === MAJOR 4: режим диалога согласия по isUpdate (обновление → modify, установка → install) ===
+// Обновление (isUpdate: true) с новым правом: диалог в режиме modify — выданное ранее
+// (granted) отмечено, новое (не в granted) НЕ отмечено. Первая установка (isUpdate false/
+// undefined) — режим install: все запрошенные (кроме net:*) отмечены. Мутация «игнорировать
+// isUpdate» (всегда install) красит тест обновления (новое право становится отмеченным).
+describe('DraftsSection: MAJOR 4 — режим диалога согласия (isUpdate)', () => {
+  const body = () => (globalThis as { document: { body: FNode } }).document.body;
+  // Состояние чекбокса права по его подписи: null — чекбокс не найден
+  function checked(b: FNode, label: string): boolean | null {
+    const node = findNodeByAttr(b, 'aria-label', label);
+    if (!node) return null;
+    const v = node.getAttribute('aria-checked');
+    return v === null ? null : v === 'true';
+  }
+  // accept → «Принять…» → диалог согласия (портал в body); body чистим от leftover-диалога
+  async function openConsent(accept: object) {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftAccept).mockResolvedValue(accept as never);
+    const { container } = await renderSection();
+    const b = body();
+    for (const c of [...b.childNodes]) b.removeChild(c);
+    const acceptBtn = findButton(container, 'Принять…');
+    expect(acceptBtn, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { acceptBtn!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+  }
+
+  it('обновление (isUpdate: true) с новым правом → новое НЕ отмечено, выданное отмечено (modify)', async () => {
+    await openConsent({
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read', 'tasks:read'], granted: ['notes:read'],
+      consentRequired: true, newPermissions: ['tasks:read'], isUpdate: true, previousVersion: '1.0.0', secrets: [],
+    });
+    const b = body();
+    expect(checked(b, 'Читать заметки проекта'), 'выданное право не отмечено').toBe(true);
+    expect(checked(b, 'Читать задачи проекта'), 'новое право отмечено (должно быть нет)').toBe(false);
+  });
+
+  it('первая установка (isUpdate: false) → все запрошенные (кроме net:*) отмечены (install)', async () => {
+    await openConsent({
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read', 'tasks:read'], granted: [],
+      consentRequired: true, newPermissions: ['notes:read', 'tasks:read'], isUpdate: false, previousVersion: null, secrets: [],
+    });
+    const b = body();
+    expect(checked(b, 'Читать заметки проекта'), 'право не отмечено (install)').toBe(true);
+    expect(checked(b, 'Читать задачи проекта'), 'право не отмечено (install)').toBe(true);
+  });
+
+  it('ответ без isUpdate (старый сервер) → считать false → install (все запрошенные отмечены)', async () => {
+    await openConsent({
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read', 'tasks:read'], granted: [],
+      consentRequired: true, newPermissions: ['notes:read', 'tasks:read'], secrets: [],
+    });
+    const b = body();
+    expect(checked(b, 'Читать задачи проекта'), 'право не отмечено (install, без isUpdate)').toBe(true);
   });
 });

@@ -76,8 +76,9 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
     return undefined;
   }, [entry.revision]);
 
-  // «Принять…»: consentRequired → диалог согласия с newPermissions
-  const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[] } | null>(null);
+  // «Принять…»: consentRequired → диалог согласия с newPermissions + режим (MAJOR 4:
+  // обновление → modify, первая установка → install)
+  const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[]; mode: 'install' | 'modify' } | null>(null);
   // Ошибка действия («Принять…», «Вернуть»): текст сервера, пока действие не повторят
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -97,7 +98,11 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
     try {
       const res = await api.plugins.draftAccept(slug);
       if (res.consentRequired) {
-        setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions });
+        // MAJOR 4: обновление (isUpdate) → modify (новые права не отмечены, выданные —
+        // отмечены); первая установка (isUpdate false/undefined) → install (все запрошенные,
+        // кроме net:*). Иначе новое право при обновлении приходило бы уже отмеченным.
+        const mode: 'install' | 'modify' = res.isUpdate ? 'modify' : 'install';
+        setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions, mode });
       } else {
         void refreshDraft(slug);
       }
@@ -138,7 +143,7 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
       {consent && (
         <ConsentDialog
           data={consent.data}
-          mode="install"
+          mode={consent.mode}
           newPermissions={consent.newPermissions}
           onClose={() => setConsent(null)}
           onSubmit={async (permissions, secrets) => {

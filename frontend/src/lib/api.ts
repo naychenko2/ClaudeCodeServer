@@ -713,6 +713,11 @@ export interface PluginDraftAcceptResult {
   // true + newPermissions — только если обновление добавило новые запрошенные права
   consentRequired: boolean;
   newPermissions: string[];
+  // Глеб MAJOR 4: признак обновления уже установленного плагина (true) vs первая установка
+  // (false). Старый сервер поле не отдаёт → undefined → фронт считает false (режим install).
+  isUpdate?: boolean;
+  // Версия, на которую плагин был установлен ДО этого accept (null при первой установке)
+  previousVersion?: string | null;
   secrets: PluginSecretView[];
 }
 // Ответ «Отклонить» (POST /api/plugins/drafts/{slug}/reject)

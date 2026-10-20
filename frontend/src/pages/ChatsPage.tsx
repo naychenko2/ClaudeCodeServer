@@ -45,10 +45,21 @@ import { useWatchdogPresence } from '../lib/watchdogPresence';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
-// Условие приёма cc-draft-reply в чате вне проекта: project — undefined (не проектный
-// чат) и reply непустой. Экспортировано для теста (мутация условия → красный тест).
-export function shouldAcceptDraftReply(project: unknown, reply: string | undefined): boolean {
-  return project == null && !!reply;
+// Условие приёма cc-draft-reply: реплика принадлежит ТОМУ чату, который сейчас открыт.
+// replyProject — проект, для которого реплика (undefined/null — чат вне проекта);
+// activeProjectId — проект активного чата (null/undefined — чат вне проекта); reply — текст.
+// Принимаем, только когда проект реплики совпадает с проектом активного чата (и reply
+// непустой): так реплика попадает в композер текущего чата во всех вариантах (чат вне
+// проекта, проектный чат из ChatsPage, проектный чат в WorkspacePage) и не уходит в чужой.
+// Экспортировано для теста (мутация условия → красный тест).
+export function shouldAcceptDraftReply(
+  replyProject: unknown,
+  activeProjectId: string | null | undefined,
+  reply: string | undefined,
+): boolean {
+  if (!reply) return false;
+  const replyId = replyProject != null ? ((replyProject as { id?: string }).id ?? null) : null;
+  return replyId === (activeProjectId ?? null);
 }
 
 interface Props {
@@ -215,13 +226,18 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     return () => window.removeEventListener('cc-open-chat', open);
   }, []);
 
-  // «Править»/«Попросить агента исправить» из карточки черновика в ленте (вне проекта):
-  // готовая реплика → поле ввода активного чата (cc-compose-prefill), не отправляется сама.
-  // detail.project — undefined (чат вне проекта); в проектных чатах слушает WorkspacePage.
+  // «Править»/«Попросить агента исправить» из карточки черновика в ленте: готовая реплика
+  // → поле ввода активного чата (cc-compose-prefill), не отправляется сама. Принимаем, когда
+  // проект реплики совпадает с проектом активного чата: так «Править» работает и в чате вне
+  // проекта, и в проектном чате, открытом из ChatsPage (раньше реплика терялась — WorkspacePage
+  // не смонтирован, а shouldAcceptDraftReply отбрасывал проектные). Ref — чтобы handler видел
+  // свежий проект активного чата без перерегистрации слушателя на каждом обновлении списка.
+  const activeProjectIdRef = useRef<string | null>(null);
+  activeProjectIdRef.current = chats.find(c => c.id === activeId)?.projectId ?? null;
   useEffect(() => {
     const onDraftReply = (e: Event) => {
       const { project: p, reply } = (e as CustomEvent<{ project?: unknown; reply?: string }>).detail ?? {};
-      if (!shouldAcceptDraftReply(p, reply)) return;
+      if (!shouldAcceptDraftReply(p, activeProjectIdRef.current, reply)) return;
       sessionStorage.setItem('cc_pending_chat_prompt', reply!);
       window.dispatchEvent(new Event('cc-compose-prefill'));
     };

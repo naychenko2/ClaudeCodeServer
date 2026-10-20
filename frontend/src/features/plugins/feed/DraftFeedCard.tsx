@@ -136,9 +136,13 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
         onRestore={() => void handleRestore()}
         onEdit={handleEdit}
         onLoadDiff={() => { /* diff — по требованию в шторке; в ленте не грузим заранее */ }}
-        // «Открыть в «Плагинах»» (установлен): существующий способ — открыть настройки проекта
-        // (секция плагинов там); WorkspacePage слушает cc-open-plugins и раскрывает диалог.
-        onOpenInPlugins={() => window.dispatchEvent(new CustomEvent('cc-open-plugins', { detail: { projectId } }))}
+        // «Открыть в «Плагинах»» (установлен): настройки проекта (секция плагинов); WorkspacePage
+        // слушает cc-open-plugins и раскрывает диалог. Вне проекта (projectId null) настроек
+        // проекта нет — кнопку скрываем, а не показываем мёртвой (ChatsPage cc-open-plugins не
+        // слушает, и в этом контексте вести некуда).
+        onOpenInPlugins={projectId
+          ? () => window.dispatchEvent(new CustomEvent('cc-open-plugins', { detail: { projectId } }))
+          : undefined}
       />
       {consent && (
         <ConsentDialog

@@ -113,6 +113,18 @@ async function renderAnchor(item: ChatItem) {
   return { container, text: () => textNodes(container).join(' ') };
 }
 
+// То же, но с произвольным projectId контекста (null — чат вне проекта) — для теста
+// «Открыть в «Плагинах»» (минор 6а): вне проекта кнопка скрыта, в проектном чате — видна.
+async function renderAnchorAs(item: ChatItem, projectId: string | null) {
+  installFakeDom();
+  const ctx: ChatItemToolCtx = { item, online: true, projectId, sessionId: 'chat-1', persona: null };
+  const { root, container } = mount(createElement(DraftAnchor, { ctx }));
+  mountedRoots.push(root);
+  const slug = String((item as { data?: { slug?: unknown } }).data?.slug ?? '');
+  await act(async () => { await flushDrafts(slug); });
+  return { container, text: () => textNodes(container).join(' ') };
+}
+
 beforeEach(() => {
   handlers.length = 0;
   vi.mocked(api.plugins.draftsList).mockReset();
@@ -482,26 +494,36 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
   });
 });
 
-// === Шаг 1: cc-draft-reply в чате вне проекта (дефект 659560f9) ===
-// Реплика «Править»/«Попросить агента исправить» из карточки черновика в ленте (вне
-// проекта) должна попасть в поле ввода активного чата (cc-compose-prefill), не
-// отправляясь сама. Условие приёма — shouldAcceptDraftReply (ChatsPage); мутация → красный.
-describe('cc-draft-reply: чат вне проекта (шаг 1)', () => {
+// === Минор 6 (б): cc-draft-reply попадает в композер текущего чата во всех вариантах ===
+// Реплика «Править»/«Попросить агента исправить» из карточки черновика должна попасть в
+// композер ТОГО чата, для которого она, не отправляясь сама и не уходя в чужой чат.
+// shouldAcceptDraftReply(replyProject, activeProjectId, reply): принимаем, когда проект
+// реплики совпадает с проектом активного чата. Три варианта: чат вне проекта (replyProject
+// null, active null), проектный чат из ChatsPage (replyProject {id}, active тот же id —
+// раньше терялось), проектный чат в WorkspacePage (replyProject {id}, active null — ChatsPage
+// показывает не его). Мутация «вернуть условие» (project == null) красит тест проектного
+// чата из ChatsPage.
+describe('cc-draft-reply: композер текущего чата (минор 6б)', () => {
 
-  it('project: undefined + reply → принимается (реплика в композере)', () => {
-    expect(shouldAcceptDraftReply(undefined, 'Поправь плагин «X»')).toBe(true);
+  it('чат вне проекта (replyProject null, active null) → принимается', () => {
+    expect(shouldAcceptDraftReply(undefined, null, 'Поправь плагин «X»')).toBe(true);
+    expect(shouldAcceptDraftReply(null, null, 'text')).toBe(true);
   });
 
-  it('project: {id} + reply → не принимается (проектный чат слушает WorkspacePage)', () => {
-    expect(shouldAcceptDraftReply({ id: 'p1' }, 'test')).toBe(false);
+  it('проектный чат из ChatsPage (replyProject {id}, active тот же id) → принимается (фикс)', () => {
+    expect(shouldAcceptDraftReply({ id: 'p1' }, 'p1', 'test')).toBe(true);
   });
 
-  it('project: undefined + reply: "" → не принимается (пустая реплика)', () => {
-    expect(shouldAcceptDraftReply(undefined, '')).toBe(false);
+  it('проектный чат в WorkspacePage (replyProject {id}, active null — ChatsPage не его) → не принимается', () => {
+    expect(shouldAcceptDraftReply({ id: 'p1' }, null, 'test')).toBe(false);
   });
 
-  it('project: null + reply → принимается', () => {
-    expect(shouldAcceptDraftReply(null, 'text')).toBe(true);
+  it('реплика для другого проекта (replyProject {id: p1}, active p2) → не принимается (не в чужой чат)', () => {
+    expect(shouldAcceptDraftReply({ id: 'p1' }, 'p2', 'test')).toBe(false);
+  });
+
+  it('пустая реплика → не принимается', () => {
+    expect(shouldAcceptDraftReply(undefined, null, '')).toBe(false);
   });
 });
 
@@ -563,5 +585,28 @@ describe('DraftFeedCard: MAJOR 4 — режим диалога согласия 
     });
     const b = body();
     expect(checked(b, 'Читать задачи проекта'), 'право не отмечено (install, без isUpdate)').toBe(true);
+  });
+});
+
+// === Минор 6 (а): «Открыть в «Плагинах»» — не показывать мёртвой ===
+// Вне проекта (projectId null) настроек проекта нет, и ChatsPage cc-open-plugins не слушает —
+// кнопка вела в никуда. Скрываем её (onOpenInPlugins undefined), а в проектном чате (projectId
+// задан) оставляем: WorkspacePage слушает cc-open-plugins и раскрывает диалог.
+describe('cc-open-plugins: «Открыть в «Плагинах»» (минор 6а)', () => {
+  it('чат вне проекта (projectId null) → кнопка скрыта (не мёртвая)', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_INSTALLED]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    const { container, text } = await renderAnchorAs(recordItem({ slug: SLUG }), null);
+    expect(text()).toContain('Установлен');
+    expect(findButton(container, 'Открыть в «Плагинах»'), 'кнопка должна быть скрыта вне проекта').toBeNull();
+  });
+
+  it('проектный чат (projectId задан) → кнопка «Открыть в «Плагинах»» видна', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_INSTALLED]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    const { container } = await renderAnchorAs(recordItem({ slug: SLUG }), 'proj-1');
+    expect(findButton(container, 'Открыть в «Плагинах»'), 'кнопка должна быть видна в проектном чате').not.toBeNull();
   });
 });

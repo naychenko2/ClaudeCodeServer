@@ -40,4 +40,15 @@ public static class TreeExcludes
         new([.. Names, ".omc"], StringComparer.OrdinalIgnoreCase);
 
     public static bool WatchContains(string name) => WatchNames.Contains(name);
+
+    // Каталог с СОБСТВЕННЫМ .git: файл — у git worktree (gitdir: …), каталог — у вложенного
+    // репозитория. Это полная копия чужого дерева: наблюдатель ставит слежку на его корень
+    // (удаление и правки в нём видны), но вглубь не заходит — иначе бюджет inotify ушёл бы
+    // на чужую копию. Корень проекта под правило не попадает: его собственный .git (репо)
+    // не мешает наблюдать сам корень, а вот подкаталог с .git — уже чужое дерево.
+    //
+    // Правило по признаку, а не по имени: имя worktree произвольное (feature-x, minimax-m31…),
+    // а .git — единственный надёжный маркер «здесь начинается отдельное git-дерево».
+    public static bool HasOwnGit(string dir) =>
+        File.Exists(Path.Combine(dir, ".git")) || Directory.Exists(Path.Combine(dir, ".git"));
 }

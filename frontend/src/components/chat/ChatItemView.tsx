@@ -680,6 +680,10 @@ interface ItemProps {
   // Для kind='interrupted': отметка ещё хвост разговора (после неё не было сообщения
   // пользователя) — только тогда показываем «Повторить». Считает ChatPanel
   canRetryInterrupted?: boolean;
+  // Красный баннер обрыва хода (kind='error') избыточен, если сразу за ним в ленте идёт
+  // карточка work_loop_stopped с reason='server_restart' (авто-продолжение): синяя пилюля
+  // уже сообщает об обрыве и говорит, что ход продолжается. Соседство решает ChatPanel.
+  hideAbortBanner?: boolean;
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
@@ -1103,7 +1107,17 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, onContinue, availableChatIds, taskPlan, isCurrentPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+// Красный баннер обрыва хода (kind='error') избыточен, если сразу за ним в ленте идёт
+// карточка work_loop_stopped с reason='server_restart' (авто-продолжение): синяя пилюля уже
+// сообщает об обрыве и говорит, что ход продолжается. Решение — по соседству записей, не по
+// тексту баннера (тексты могут меняться). next — следующая запись ленты (undefined — конец).
+export function shouldHideAbortBanner(item: ChatItem, next: ChatItem | undefined): boolean {
+  return item.kind === 'error'
+    && next?.kind === 'work_loop_stopped'
+    && next.reason === 'server_restart';
+}
+
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, hideAbortBanner, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, onContinue, availableChatIds, taskPlan, isCurrentPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -2125,6 +2139,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     }
 
     case 'error':
+      // Обрыв хода, за которым сразу идёт карточка server_restart (авто-продолжение):
+      // красный баннер «отправьте ещё раз» избыточен — синяя пилюля уже сообщает об
+      // обрыве и говорит, что ход продолжается. Соседство решает ChatPanel (hideAbortBanner).
+      if (hideAbortBanner) return null;
       return (
         <ErrorCard
           item={item}

@@ -25,13 +25,21 @@ public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<Perso
         var name = ImageAssetHelper.AvatarThumbName(persona.Avatar.ImageFile, step);
         if (name is null) return null;
         var dir = Path.GetDirectoryName(originalPath)!;
-        var path = Path.Combine(dir, name);
+        var path = SafePath.Join(dir, name);
         if (File.Exists(path)) return path;
 
         var original = await File.ReadAllBytesAsync(originalPath);
         // Заголовок без декодирования: формат/размер известны до пикселей
         var probe = raster.Probe(original);
-        if (probe is null) return null;
+        if (probe is null)
+        {
+            // Формат растр не распознал (напр. SVG-аватар, который Skia не декодирует):
+            // вызывающий отдаёт оригинал. Логируем — иначе в проде не видно, почему
+            // миниатюра не сгенерировалась (дефект: оригинал залипал в кэше браузера)
+            log.LogInformation("Миниатюра {Step} аватара персоны {Persona} не сгенерирована: формат не распознан",
+                step, persona.Id);
+            return null;
+        }
         // Без апскейла: оригинал меньше ступени — браузер растянет его сам, сервер
         // не плодит большую копию меньшей картинки
         if (Math.Max(probe.DisplayWidth, probe.DisplayHeight) <= step) return null;
@@ -49,7 +57,7 @@ public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<Perso
 
         // Временный файл + переименование: параллельный второй запрос не увидит
         // наполовину записанную миниатюру; победил последний Move, обе копии валидны
-        var tmp = Path.Combine(dir, $".{name}.tmp-{Guid.NewGuid():N}");
+        var tmp = SafePath.Join(dir, $".{name}.tmp-{Guid.NewGuid():N}");
         await File.WriteAllBytesAsync(tmp, result.Image!.Bytes);
         try
         {

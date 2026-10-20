@@ -284,9 +284,11 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         // меняют состояния, поэтому их версии стабильны между GET и этой проверкой.
         var pool = _factory.Services.GetRequiredService<ClaudeSubscriptionPool>();
         var oauth = _factory.Services.GetRequiredService<SubscriptionOAuthUsageService>();
+        var providers = _factory.Services.GetRequiredService<LlmProviderRegistry>();
         var cache = _factory.Services.GetRequiredService<UsageResponseCache>();
         var fp = new UsageResponseCache.Fingerprint(
-            Usage: usage.Version, Pool: pool.Version, Poll: oauth.Version, Plan: usage.PlanVersion);
+            Usage: usage.Version, Pool: pool.Version, Poll: oauth.Version, Plan: usage.PlanVersion,
+            Providers: UsageResponseCache.ProviderFingerprint(providers.All));
         cache.TryGet("limits", admin: true, fp, out _).Should().BeTrue("после GET кэш лёгкого ответа заполнен");
 
         // Новая запись (версия выросла) — кэш пересобран, ответ отражает свежий процент

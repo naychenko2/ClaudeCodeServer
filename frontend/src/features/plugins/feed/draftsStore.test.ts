@@ -120,3 +120,22 @@ describe('draftsStore: устаревший ответ предпросмотр�
     expect(getDraftSnapshot(SLUG).preview?.version).toBe('2.0.0');
   });
 });
+
+// === Шаг 2: 404 preview отклонённого черновика (дефект 6579d346) ===
+// После «Отклонить» refreshDraft перечитывает список; если черновик отклонён,
+// preview не запрашивается (иначе 404 в консоли). Мутация: вернуть запрос → красный.
+describe('draftsStore: preview отклонённого черновика (шаг 2)', () => {
+  const SUMMARY_REJECTED: PluginDraftSummary = { ...SUMMARY, rejected: true };
+
+  it('отклонён → draftPreview НЕ вызывается (нет 404)', async () => {
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY_REJECTED]);
+    await refreshDraft(SLUG);
+    expect(vi.mocked(api.plugins.draftPreview)).not.toHaveBeenCalled();
+  });
+
+  it('активен → draftPreview вызывается (нормальный случай)', async () => {
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    await refreshDraft(SLUG);
+    expect(vi.mocked(api.plugins.draftPreview)).toHaveBeenCalledTimes(1);
+  });
+});

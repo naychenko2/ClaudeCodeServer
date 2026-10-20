@@ -99,16 +99,16 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
       if (res.consentRequired) {
         setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions });
       } else {
-        refreshDraft(slug);
+        void refreshDraft(slug);
       }
     } catch (e: unknown) { setActionError(errText(e)); }
   };
   const handleReject = async () => {
-    try { await api.plugins.draftReject(slug); refreshDraft(slug); } catch { /* карточка остаётся */ }
+    try { await api.plugins.draftReject(slug); void refreshDraft(slug); } catch { /* карточка остаётся */ }
   };
   const handleRestore = async () => {
     setActionError(null);
-    try { await api.plugins.draftRestore(slug); refreshDraft(slug); } catch (e: unknown) { setActionError(errText(e)); }
+    try { await api.plugins.draftRestore(slug); void refreshDraft(slug); } catch (e: unknown) { setActionError(errText(e)); }
   };
   // «Править»/«Попросить агента исправить»: готовая реплика → композер активного чата (cc-draft-reply)
   const handleEdit = (reply: string) => {
@@ -151,7 +151,7 @@ export function DraftFeedCard({ slug, fallback, projectId }: {
             } catch (e: unknown) {
               grantError = e instanceof Error ? e : new Error('Не удалось выдать права');
             }
-            refreshDraft(slug);
+            void refreshDraft(slug);
             // throw — диалог остаётся открытым, чтобы показать ошибку; карточка уже перечитана
             if (grantError) throw grantError;
             setConsent(null);

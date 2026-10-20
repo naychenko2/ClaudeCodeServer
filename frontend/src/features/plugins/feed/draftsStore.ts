@@ -57,10 +57,11 @@ function put(slug: string, patch: Partial<DraftEntry>): void {
 
 // Список черновиков владельца: один запрос на всех карточек (они одного владельца).
 // Найденные slug получают сводку; не найденные — null (404).
-function loadList(): void {
-  if (_listLoaded || _listInflight) return;
+// Возвращает promise: refreshDraft ждёт его, чтобы не запрашивать preview отклонённого.
+function loadList(): Promise<void> {
+  if (_listLoaded || _listInflight) return Promise.resolve();
   _listInflight = true;
-  api.plugins.draftsList()
+  return api.plugins.draftsList()
     .then(list => {
       const bySlug = new Map(list.map(s => [s.slug, s]));
       for (const slug of _entries.keys()) put(slug, { summary: bySlug.get(slug) ?? null, listResolved: true });
@@ -118,13 +119,15 @@ function ensureSubscribed(): void {
 
 // Перечитать черновик (после действий «Принять/Отклонить/Вернуть»): предпросмотр
 // принудительно, список — заново. Ревизию не трогаем — подсветка «обновлён» не мигает.
-export function refreshDraft(slug: string): void {
+// Ждём loadList: если черновик отклонён, preview не запрашиваем (404 в консоли).
+export async function refreshDraft(slug: string): Promise<void> {
   const cur = _entries.get(slug) ?? EMPTY;
   put(slug, { preview: null, loading: true, revision: cur.revision });
-  void loadPreview(slug, true);
   _listLoaded = false;
   if (_listInflight) _listDirty = true;
-  void loadList();
+  await loadList();
+  const summary = _entries.get(slug)?.summary;
+  if (!summary?.rejected) void loadPreview(slug, true);
 }
 
 // Хук: запись черновика по slug. Запускает общую загрузку (список + предпросмотр)

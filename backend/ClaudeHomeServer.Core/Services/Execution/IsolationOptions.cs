@@ -23,6 +23,16 @@ public sealed class IsolationOptions
     public string? MemoryMax { get; init; }
     // Явный путь к systemd-run; пусто — поиск по PATH
     public string? SystemdRunPath { get; init; }
+    // Юнит сервера, ПОСЛЕ которого systemd обязан гасить scope хода (Before=, инцидент
+    // 20.10 15:33): при выключении МАШИНЫ менеджер пользователя systemd останавливает
+    // ccs.service и scope-юниты CLI одной транзакцией БЕЗ порядка — CLI раньше сервера
+    // получал SIGTERM, присылал result{subtype:error} и чат уходил в Error, а не оставался
+    // Working для авто-продолжения. Before=<юнит> ставит scope ПОСЛЕ сервера, и путь
+    // сводится к уже проверенной штатной остановке (KillAllProcesses → _stopping).
+    // Автоопределяется по /proc/self/cgroup (последний сегмент *.service) и
+    // переопределяется в конфиге; null — свойство Before= не ставится (dev-стенд из
+    // dotnet run, Windows, нет systemd). Имя ccs.service в код НЕ зашито.
+    public string? StopAfterUnit { get; init; }
     // Реюз узлов MSBuild и общего компилятора ВНУТРИ scope (замер 2026-09-19: пересборка
     // тестов 7,1 с → 3,4–4,0 с на тёплых узлах). Хвосты гасятся остановкой scope по выходу
     // процесса, узлы приватны scope (соль рукопожатия = имя юнита). false — прежний режим:
@@ -51,6 +61,59 @@ public sealed class IsolationOptions
             MemoryMax = config["Execution:Isolation:MemoryMax"],
             SystemdRunPath = config["Execution:Isolation:SystemdRunPath"],
             BuildNodeReuse = config.GetValue("Execution:Isolation:BuildNodeReuse", true),
+            // Явный конфиг сильнее автоопределения; пустой ключ — детект по /proc/self/cgroup.
+            StopAfterUnit = config["Execution:Isolation:StopAfterUnit"] is { Length: > 0 } unit
+                ? unit
+                : DetectServerUnit(),
         };
+    }
+
+    // Юнит сервера из /proc/self/cgroup: последний сегмент пути, если он *.service.
+    // cgroup v2 — одна строка «0::/path»; cgroup v1 — несколько строк «N:subsys:/path»,
+    // релевантна иерархия name=systemd (там и живёт юнит). Чистая функция от содержимого
+    // файла: тестам настоящий /proc не нужен. Не нашёлся (scope, пусто, dev-стенд) — null.
+    internal static string? ParseServerUnit(string cgroupContent)
+    {
+        foreach (var line in cgroupContent.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+            // Путь — после ВТОРОГО ':': v1 «N:subsys:/path», v2 «0::/path» (пустой subsys).
+            var path = trimmed;
+            var firstColon = trimmed.IndexOf(':');
+            if (firstColon >= 0)
+            {
+                var secondColon = trimmed.IndexOf(':', firstColon + 1);
+                if (secondColon >= 0) path = trimmed[(secondColon + 1)..];
+            }
+            var last = LastSegment(path);
+            if (last is not null && last.EndsWith(".service")) return last;
+        }
+        return null;
+    }
+
+    // Последний сегмент пути: «/a/b/c» → «c»; «/» или «» → null.
+    private static string? LastSegment(string path)
+    {
+        var trimmed = path.TrimEnd('/');
+        if (trimmed.Length == 0) return null;
+        var idx = trimmed.LastIndexOf('/');
+        return idx < 0 ? trimmed : trimmed[(idx + 1)..];
+    }
+
+    // Один раз при старте: читает /proc/self/cgroup (v1/v2) и возвращает юнит сервера.
+    // Не нашёлся (dev-стенд из dotnet run, Windows, нет systemd) — null, Before= не ставим.
+    // Fail-open: любой сбой чтения — null, обёртка работает как раньше.
+    public static string? DetectServerUnit()
+    {
+        try
+        {
+            if (!File.Exists("/proc/self/cgroup")) return null;
+            return ParseServerUnit(File.ReadAllText("/proc/self/cgroup"));
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

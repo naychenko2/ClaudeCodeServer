@@ -246,6 +246,11 @@ public sealed class LocalProcessRunner : IProcessLauncher
             yield return $"--property=MemoryHigh={options.MemoryHigh}";
         if (!string.IsNullOrWhiteSpace(options.MemoryMax))
             yield return $"--property=MemoryMax={options.MemoryMax}";
+        // Before=<юнит сервера>: при выключении машины scope хода гасится ПОСЛЕ ccs.service,
+        // а не раньше (инцидент 20.10 15:33 — CLI раньше сервера получал SIGTERM и чат
+        // уходил в Error). Только порядок, членство в cgroup и OOM-лимиты slice не меняет.
+        if (!string.IsNullOrWhiteSpace(options.StopAfterUnit))
+            yield return $"--property=Before={options.StopAfterUnit}";
         yield return "--";
     }
 

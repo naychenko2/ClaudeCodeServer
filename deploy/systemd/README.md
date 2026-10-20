@@ -33,6 +33,29 @@ scope агентов и бэкенд — сиблинги под `user@<uid>.ser
 (`-maxcpucount:6`) режет число узлов MSBuild для любой сборки под `backend/`,
 включая ту, что агент запускает своим Bash внутри хода.
 
+## Порядок остановки scope ↔ сервис
+
+При **выключении машины** менеджер пользователя systemd останавливает `ccs.service`
+и scope-юниты CLI (`ccs-run-*.scope`) одной транзакцией **без порядка**: CLI раньше
+сервера получал SIGTERM, успевал прислать `result{subtype:error}` и чат уходил в
+`Error`, а не оставался `Working` для авто-продолжения (инцидент 20.10 15:33 — ни один
+чат не продолжился). При `systemctl --user restart ccs.service` порядок не важен:
+остановку ведёт сам сервер (`KillAllProcesses` → `_stopping`), и CLI умирает от руки
+сервера, а не от systemd.
+
+Лечение — свойство `Before=` на scope: бэкенд определяет юнит сервера один раз при
+старте по `/proc/self/cgroup` (последний сегмент, если `*.service`) и ставит
+`systemd-run … --property=Before=<юнит>` (ключ `Execution:Isolation:StopAfterUnit`,
+автоопределение, переопределение в конфиге; имя `ccs.service` в код не зашито).
+Тогда scope гасится **ПОСЛЕ** `ccs.service`, и путь сводится к штатной остановке.
+`Before=` — только порядок: членство в cgroup, OOM-лимиты slice, `KillMode` scope и
+`ScopeOrphanSweeper` не меняются. Dev-стенд из `dotnet run` и Windows — без свойства.
+
+**Container-владельцы при перезагрузке машины пока не покрыты**: CLI живёт в
+`cc-sandbox`, а контейнер гасит системный `docker.service`, чей порядок относительно
+`user@<uid>.service` не задан — docker может погасить ход раньше нашего сервера.
+Лечится системным drop-in `user@.service.d/` с `After=docker.service` (отдельный шаг).
+
 ## Применение
 
 ```bash

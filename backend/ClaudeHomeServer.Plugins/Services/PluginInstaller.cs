@@ -168,6 +168,10 @@ public class PluginInstaller
             return records;
         });
 
+        // Кэш манифестов (rework 12, minor 4): запись установлена/обновлена (новый sha) —
+        // освободить старые (version, sha) этого id из кэша.
+        PluginManifestCache.Invalidate(id);
+
         return InstallResult.Ok(record);
     }
 

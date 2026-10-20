@@ -172,6 +172,84 @@ public class PluginBridgeControllerTests : IDisposable
         res.Should().BeOfType<FileContentResult>("файл панели отдаётся FileContentResult (200)");
     }
 
+    // --- Assets: 403 (сервисный JWT, rework 12, minor 1: единообразие с call/черновиками) ---
+    // Мутация: убрать проверку IsServiceToken в Assets → этот тест падает.
+
+    [Fact]
+    public void Assets_СервисныйJwt_Отдаёт403()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA, serviceToken: true);
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
+    }
+
+    // --- PanelSrcdoc: 403 (сервисный JWT, rework 12, minor 1) ---
+    // Мутация: убрать проверку IsServiceToken в PanelSrcdoc → этот тест падает.
+
+    [Fact]
+    public void PanelSrcdoc_СервисныйJwt_Отдаёт403()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA, serviceToken: true);
+
+        var res = ctl.PanelSrcdoc("local-a~pkg", "1.0.0");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(403);
+    }
+
+    // --- PanelSrcdoc: 413 (index.html больше 256 КБ, rework 12, minor 3) ---
+    // Мутация: убрать проверку MaxPanelSrcdocBytes → этот тест падает.
+
+    [Fact]
+    public void PanelSrcdoc_ФайлБольшой_Отдаёт413()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // index.html панели больше потолка 256 КБ.
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(packageDir, "panel", "index.html"),
+            "<html><body>" + new string('x', 256 * 1024 + 1024) + "</body></html>");
+
+        var res = ctl.PanelSrcdoc("local-a~pkg", "1.0.0");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(413);
+    }
+
+    // --- Assets: 404 (symlink в СЕРЕДИНЕ пути, rework 12, minor 2) ---
+    // Мутация: проверять ReparsePoint только у финального файла (старое поведение) →
+    // symlink-каталог в середине пути не отбивается → этот тест падает.
+
+    [Fact]
+    public void Assets_SymlinkВСерединеПути_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewBridgeController(OwnerA);
+
+        // panel/sub — symlink на внешний каталог; файл sub/inner.html «внутри» ссылки.
+        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var outsideDir = Path.Combine(_dir, "outside_dir");
+        System.IO.Directory.CreateDirectory(outsideDir);
+        System.IO.File.WriteAllText(Path.Combine(outsideDir, "inner.html"), "<html>inner</html>");
+        var linkDir = Path.Combine(packageDir, "panel", "sub");
+        try { System.IO.Directory.CreateSymbolicLink(linkDir, outsideDir); }
+        catch (PlatformNotSupportedException)
+        {
+            // Без symlink (Windows без прав) — создаём обычный каталог: тест всё равно
+            // проверяет, что путь panel/sub/inner.html отбивается (реальный symlink-кейс
+            // покрыт Assets_Symlink_Отдаёт404 для финального файла).
+            System.IO.Directory.CreateDirectory(linkDir);
+            System.IO.File.Copy(Path.Combine(outsideDir, "inner.html"), Path.Combine(linkDir, "inner.html"));
+        }
+
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/sub/inner.html");
+        res.Should().BeOfType<NotFoundResult>("symlink-каталог в середине пути → 404 (не следовать)");
+    }
+
     // --- Assets: 404 (файла нет под panel/) ---
 
     [Fact]
@@ -231,6 +309,34 @@ public class PluginBridgeControllerTests : IDisposable
         InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA, subsystemEnabled: false);
 
+        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(503);
+    }
+
+    // --- Активация: подсистема выключена → PluginStore/PluginBridge не в DI (null),
+    // гейт даёт 503, а не 500 (NullReferenceException) — по образцу двух соседних
+    // контроллеров (rework 12, minor 5: = null в конструкторе, чтобы активация не падала).
+
+    [Fact]
+    public void ПодсистемаВыключена_АктивацияСNullStore_Отдаёт503Не500()
+    {
+        // Подсистема выключена → DI не регистрирует PluginStore/PluginBridge: контроллер
+        // активируется с null-зависимостями (значения по умолчанию конструктора).
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["Subsystems:plugins:Enabled"] = "false",
+            })
+            .Build();
+        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = true }, null, null, null);
+        ctl.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = Principal(OwnerA, serviceToken: false) },
+        };
+
+        // Гейт (503) срабатывает ДО обращения к null-store → не 500.
         var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(503);

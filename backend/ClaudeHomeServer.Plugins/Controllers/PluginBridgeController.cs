@@ -59,6 +59,11 @@ public class PluginBridgeController(
     // установка не выкачивала неограниченный файл в память сервера.
     private const long MaxAssetBytes = 4 * 1024 * 1024; // 4 MiB
 
+    // Потолок размера index.html панели для srcdoc (rework 12, minor 3): srcdoc встраивает
+    // HTML в страницу хоста, поэтому его раздувание бьёт по памяти. Константа в одном месте:
+    // Александр может поменять число в своём решении (256 КБ → 413).
+    private const long MaxPanelSrcdocBytes = 256 * 1024; // 256 КБ
+
     // Гейт: null — прошёл; иначе отказ.
     private IActionResult? Gate()
     {
@@ -85,6 +90,11 @@ public class PluginBridgeController(
     public IActionResult Assets(string id, string ver, string path)
     {
         var gate = Gate(); if (gate is not null) return gate;
+
+        // Сервисный JWT → 403: статика панели — только пользовательский токен (rework 12,
+        // minor 1: единообразие с call и ручками черновиков).
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: статика/панель — только пользовательский токен" });
 
         var pluginId = NormalizeId(id);
         if (!PluginVersion.IsValid(ver))
@@ -114,9 +124,22 @@ public class PluginBridgeController(
             && !filePath.Equals(panelRoot, StringComparison.Ordinal))
             return NotFound();
 
-        // symlink/ReparsePoint не следовать (как в PanelSrcdoc / Panel черновика).
-        if (!System.IO.File.Exists(filePath)
-            || (System.IO.File.GetAttributes(filePath) & System.IO.FileAttributes.ReparsePoint) != 0)
+        // symlink/ReparsePoint не следовать: каждый сегмент пути от корня версии (rework 12,
+        // minor 2: раньше только финальный файл — symlink-каталог в середине выводил за корень
+        // пакета). cursor идёт от packageRoot по сегментам path (тот же путь, что filePath).
+        // GetAttributes бросает FileNotFoundException на несуществующий путь — проверяем
+        // существование сегмента перед чтением атрибутов (несуществующий = не reparse).
+        string cursor = packageRoot;
+        foreach (var seg in path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (seg.Length == 0) continue;
+            cursor = Path.Combine(cursor, seg);
+            if ((System.IO.File.Exists(cursor) || System.IO.Directory.Exists(cursor))
+                && (System.IO.File.GetAttributes(cursor) & System.IO.FileAttributes.ReparsePoint) != 0)
+                return NotFound();
+        }
+        // Финальный файл: существует (reparse-сегменты отбиты циклом выше).
+        if (!System.IO.File.Exists(filePath))
             return NotFound();
 
         // Потолок размера (rework 12, minor 6): больше 4 MiB → 413.
@@ -138,6 +161,11 @@ public class PluginBridgeController(
     {
         var gate = Gate(); if (gate is not null) return gate;
 
+        // Сервисный JWT → 403: панель (srcdoc) — только пользовательский токен (rework 12,
+        // minor 1: единообразие с call, Assets и ручками черновиков).
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: статика/панель — только пользовательский токен" });
+
         var pluginId = NormalizeId(id);
         if (!PluginVersion.IsValid(ver))
             return NotFound();
@@ -150,6 +178,12 @@ public class PluginBridgeController(
         var panelDir = Path.Combine(store.PackageDir(UserId, pluginId, ver), "panel");
         var indexPath = SafePath.Join(panelDir, "index.html");
         if (!System.IO.File.Exists(indexPath)) return NotFound();
+
+        // Потолок размера index.html для srcdoc (rework 12, minor 3): srcdoc встраивает HTML
+        // в страницу хоста, поэтому его раздувание бьёт по памяти. Константа в одном месте
+        // (Александр может поменять число в своём решении): 256 КБ → 413.
+        if (new System.IO.FileInfo(indexPath).Length > MaxPanelSrcdocBytes)
+            return StatusCode(413, new { error = "Панель превышает лимит размера (256 КБ)" });
 
         var html = System.IO.File.ReadAllText(indexPath);
         var srcdoc = BuildSrcdoc(html);

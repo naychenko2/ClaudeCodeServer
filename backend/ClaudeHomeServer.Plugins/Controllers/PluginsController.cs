@@ -66,8 +66,12 @@ public class PluginsController(
     // источник contributes (panels) для DTO. Пакет неизменяем, id/version валидны (M3) —
     // PackageDir безопасен. Манифест исчез после установки → (null, null): панели деградируют
     // в пустой список (фронт покажет «панелей нет»), не 500.
+    // Кэш (rework 12, minor 4): N+1 чтений ccs-plugin.json на каждый GET /api/plugins убран —
+    // манифест неизменяем по (id, version, sha), кэш в PluginManifestCache, инвалидация при
+    // установке/обновлении/удалении (в PluginInstaller/PluginUninstall).
     private PluginManifest? ManifestFor(PluginInstall record) =>
-        PluginInstaller.ReadManifest(store!.PackageDir(UserId, record.Id, record.Version)).Manifest;
+        PluginManifestCache.GetOrLoad(record.Id, record.Version, record.Sha256,
+            () => PluginInstaller.ReadManifest(store!.PackageDir(UserId, record.Id, record.Version)).Manifest);
 
     // --- GET /api/plugins — список установленных (DTO без значений секретов, C5) ---
 

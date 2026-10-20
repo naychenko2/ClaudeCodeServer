@@ -12,6 +12,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- RemoteCommands.Tests (шаг 3.12, пачка G): Spec/Loop-тесты вызывают internal static
+         RemoteProcessRunner.BuildSpawn/SanitizeMcpConfig/ModelOf (сборка spec, разбор MCP, модель
+         из argv) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.RemoteCommands.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

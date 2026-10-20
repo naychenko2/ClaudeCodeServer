@@ -16,6 +16,10 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Шаг 3.4: тесты вертикали переехали в ClaudeHomeServer.Personas.Tests. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

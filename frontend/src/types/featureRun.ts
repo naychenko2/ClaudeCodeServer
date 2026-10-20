@@ -16,6 +16,8 @@
 export interface FeatureTask {
   id: string;
   title: string;
+  // Проект задачи (бэк шлёт полный TaskItem): нужен футеру карточки для openTaskInSection.
+  projectId?: string | null;
   status?: 'todo' | 'inProgress' | 'done' | null;
   kind?: 'task' | 'defect' | null;
   // Роль в конвейере: feature · cut · plan · step · rework · review · qa · final · merge · consult.
@@ -28,20 +30,44 @@ export interface FeatureTask {
   personaId?: string | null;
   createdAt?: string | null;
   completedAt?: string | null;
+  // Запуск исполнителя: отметка старта Claude-исполнителя (у step/rework/финала).
+  // Уже приходит в JSON — просто не было описано.
+  claudeStartedAt?: string | null;
+  // Остановка исполнителя: когда встал и почему (карточка «ждёт человека»).
+  executorStoppedAt?: string | null;
+  executorStopReason?: string | null;
+  // Связанный чат исполнителя (по нему «Сейчас»/тревога открывают чат).
+  linkedSessionId?: string | null;
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
   verification?: { verdict?: string | null; notes?: string | null } | null;
 }
 
-// Один виток ревью/проверки/финала для отображения («пружина»). `verdict='running'`
-// — виток открыт, вердикта ещё нет. Строится в `FeatureRunView` из бэковых задач.
+// Исход витка: строго пять значений (бэк: `FeatureRound.Verdict`).
+// `running` — виток открыт, вердикта ещё нет. «Принял с правками»
+// (accepted_with_remarks) считается возвратом: работа вернулась к исполнителю.
+export type FeatureRoundVerdict =
+  | 'returned'
+  | 'accepted_with_remarks'
+  | 'accepted'
+  | 'withdrawn'
+  | 'running';
+
+// Один виток ревью/проверки/финала (бэк: `FeatureRound`). Живёт в цепочке шагов
+// (`FeatureStepChain.rounds`) и в стадиях qa/final (`FeatureStage.rounds`).
 export interface FeatureRound {
   n: number;
-  verdict: string;   // 'accepted' | 'accepted_with_remarks' | 'returned' | 'withdrawn' | 'running'
-  who?: string | null;
-  at?: string | null;
+  verdict: FeatureRoundVerdict;
+  // Id задачи ревью/проверки/финала, которая и есть этот виток.
+  reviewTaskId?: string | null;
+  // Исполнитель витка (PersonaId задачи).
+  personaId?: string | null;
+  // Старт витка: ClaudeStartedAt задачи, иначе CreatedAt.
+  startedAt?: string | null;
+  // Закрытие витка: CompletedAt задачи; null — ещё идёт.
+  completedAt?: string | null;
+  // Причина: Verification.Notes.
   reason?: string | null;
-  ghost?: boolean;
 }
 
 // Счётчики исходов витков (бэк: `FeatureVerdicts`). `loops` — СЧЁТЧИК
@@ -54,20 +80,187 @@ export interface FeatureVerdicts {
   loops: number;
 }
 
+// Ключ стадии конвейера (бэк: `FeatureStage.Key`), в порядке жизненного цикла.
+export type StageKey = 'cut' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
+// Состояние стадии (бэк: `FeatureStage.State`).
+export type StageState = 'done' | 'active' | 'pending' | 'absent';
+// Тон активной стадии (бэк: `FeatureStage.Tone`): run — идёт; wait — ждёт человека;
+// stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
+export type StageTone = 'run' | 'wait' | 'stopped' | 'loop';
+
+// Стадия конвейера фичи (бэк: `FeatureStage`). Арифметику считает бэк, фронт
+// только показывает (шаг Ф5).
+export interface FeatureStage {
+  key: StageKey;
+  state: StageState;
+  // Тон — только у active, иначе null.
+  tone?: StageTone | null;
+  // Число проходов через стадию (у prod — 1 + возвраты, у остальных — число задач).
+  passes: number;
+  // Id задач стадии (в порядке, в котором их дал вызывающий).
+  taskIds: string[];
+  // ClaudeStartedAt идущей (InProgress) задачи стадии; null — не идёт.
+  runningSince?: string | null;
+  // Витки стадии (только у стадий qa/final); у остальных — пусто.
+  rounds: FeatureRound[];
+  // Шаг с наибольшим числом витков (только у стадии review); null — витков нет.
+  longestStepRef?: string | null;
+  // F8: исполнители стадии (имена для подписи-мета), число задач стадии (склонение
+  // «N задач» в мета) и исход стадии (returned/accepted_with_remarks/accepted/withdrawn/
+  // running → слово в мета). Аддитивные и nullable: старые ответы их не несут — UI обязан
+  // пережить отсутствие (без подписи-мета).
+  personaIds?: string[];
+  taskCount?: number;
+  verdict?: FeatureRoundVerdict | null;
+}
+
+// Цепочка шага (бэк: `FeatureStepChain`): задача шага + её доработки, в порядке времени.
+export interface FeatureStepChain {
+  // Код шага («Ш1», «D1c»).
+  stepRef: string;
+  // Линия шага как есть.
+  lane?: string | null;
+  // Название шага (первая задача цепочки).
+  title: string;
+  // Исполнитель шага (PersonaId первой задачи цепочки).
+  personaId?: string | null;
+  // Задачи цепочки (шаг + доработки) в порядке времени.
+  taskIds: string[];
+  // Исход: accepted | withdrawn | returned | running | pending.
+  outcome: string;
+  // Шапка деталей шага (строка по-русски).
+  status: string;
+  // Длительность (минуты): от старта первой задачи до закрытия последней.
+  durationMinutes: number;
+  // Откуда родилась доработка: review | qa | final | null.
+  source?: string | null;
+  // Число витков с возвратом (returned/accepted_with_remarks) по этому шагу.
+  loops: number;
+  // Витки цепочки: ревью/проверки/финалы, связанные через ReviewOf, в порядке времени.
+  rounds: FeatureRound[];
+}
+
+// Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).
+export interface FeatureSourceReturns {
+  // Число уникальных задач с вердиктом returned/accepted_with_remarks.
+  count: number;
+  // Сколько из них, чья доработка ещё не done (бейдж в тревожный тон).
+  open: number;
+}
+
+// Возвраты по источникам: ревью/проверка/финал (бэк: `FeatureReturnsBySource`).
+export interface FeatureReturnsBySource {
+  review: FeatureSourceReturns;
+  qa: FeatureSourceReturns;
+  final: FeatureSourceReturns;
+}
+
+// Линия фичи (back/front/прочее) (бэк: `FeatureLane`): исполнители и счётчики.
+export interface FeatureLane {
+  // Нормализованная линия: back | front | other.
+  lane: string;
+  // Исполнители (уникальные, в порядке первого появления).
+  personaIds: string[];
+  // Всего шагов в линии.
+  total: number;
+  // Принятые (Done) шаги.
+  accepted: number;
+  // Шаги с возвратом.
+  returns: number;
+}
+
+// «Сейчас»: одна InProgress-задача фичи (бэк: `FeatureNow`).
+export interface FeatureNow {
+  taskId: string;
+  // Стадия конвейера: cut | plan | prod | review | qa | final | merge.
+  stage: string;
+  // Исполнитель (PersonaId задачи).
+  personaId?: string | null;
+  // Код шага (у step/rework).
+  stepRef?: string | null;
+  title: string;
+  // Старт: ClaudeStartedAt задачи; null — не запускалась.
+  startedAt?: string | null;
+  // Связанный чат исполнителя.
+  linkedSessionId?: string | null;
+}
+
+// Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
+// Приоритет: stopped → wait явный → wait «мерж».
+export interface FeatureAttention {
+  // wait | stopped.
+  kind: string;
+  // Id задачи, к которой относится тревога (у «мерж» — финал).
+  taskId?: string | null;
+  // С какого момента: ExecutorStoppedAt / AwaitingHumanSince / CompletedAt финала.
+  since?: string | null;
+  // Причина: ExecutorStopReason / AwaitingHumanReason / "мерж".
+  reason?: string | null;
+  // Исполнитель (PersonaId задачи).
+  personaId?: string | null;
+  // Связанный чат исполнителя.
+  linkedSessionId?: string | null;
+}
+
+// Итог смерженной фичи (бэк: `FeatureSummary`): только у закрытой, иначе null.
+export interface FeatureSummary {
+  // Момент мержа: CompletedAt merge-задачи; null — мержа нет (итог по закрытию эпика).
+  mergedAt?: string | null;
+  // Длительность (минуты): от старта первой задачи до мержа/закрытия.
+  durationMinutes: number;
+  // Число задач фичи (эпик + дочерние).
+  tasks: number;
+  // Число шагов (из StepChains).
+  steps: number;
+  // Число возвратов (Loops).
+  loops: number;
+}
+
 // Агрегат фичи — зеркало бэкового `FeatureRun`. `epic`/`steps`/`reviews`/`qa`/
 // `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
 // `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
+// Старые поля (epic/steps/reviews/qa/final/merge/verdicts/progress/ready) пока
+// использует `PipelineFlow` (его переделает Ф5) — не удалять.
+// Новые поля (cut/plan/stages/stepChains/now/attention/returnsBySource/lanes/
+// stepsAccepted/stepsTotal/lastActivityAt/closed/summary) — аддитивные и
+// nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
 export interface FeatureRun {
   featureId: string;
-  epic: FeatureTask;
+  // p.32: nullable-терпимо (опционально), как и остальные новые поля — UI обязан
+  // пережить отсутствие epic (защита в taskCounters: run.epic ? [run.epic] : []).
+  epic?: FeatureTask;
   steps: FeatureTask[];
   reviews: FeatureTask[];
   qa: FeatureTask[];
   final: FeatureTask | null;
   merge: FeatureTask | null;
+  // Разрез (role=cut) и план (role=plan) фичи.
+  cut?: FeatureTask[];
+  plan?: FeatureTask[];
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
   verdicts: FeatureVerdicts;
   progress: number;   // доля решённых витков, 0..1
   ready: boolean;     // финал закрыт с accepted/accepted_with_remarks
+  // Конвейер: 7 стадий в порядке жизненного цикла (cut → plan → prod → review → qa → final → merge).
+  stages?: FeatureStage[];
+  // Цепочки шагов: по одной на шаг (stepRef) — задача шага + её доработки, по времени.
+  stepChains?: FeatureStepChain[];
+  // «Сейчас»: все InProgress-задачи фичи, по убыванию ClaudeStartedAt. У закрытой — пусто.
+  now?: FeatureNow[];
+  // Тревога: stopped → wait явный → wait «мерж»; один элемент либо null.
+  attention?: FeatureAttention | null;
+  // Возвраты по источникам (ревью/проверка/финал).
+  returnsBySource?: FeatureReturnsBySource;
+  // Линии (back/front/прочее): исполнители и счётчики.
+  lanes?: FeatureLane[];
+  // Счётчик шагов: принятые (Done) / все (из StepChains).
+  stepsAccepted?: number;
+  stepsTotal?: number;
+  // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
+  lastActivityAt?: string | null;
+  // Закрыта: merge-задача Done или эпик Done.
+  closed?: boolean;
+  // Итог смерженной фичи: только у закрытой, иначе null.
+  summary?: FeatureSummary | null;
 }

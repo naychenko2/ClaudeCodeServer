@@ -4,6 +4,7 @@
 import base64
 import contextlib
 import copy
+import gzip
 import http.client
 import io
 import json
@@ -696,6 +697,39 @@ class КомпактРаспознаваниеTests(unittest.TestCase):
         self.assertEqual(proxy.compact_verdict(self.тело(большое))[0], "route")
 
 
+class _CI:
+    """Case-insensitive header dict: имитирует email.message.Message.get (реальные self.headers)."""
+
+    def __init__(self, d):
+        self._d = {k.lower(): v for k, v in d.items()}
+
+    def get(self, k):
+        return self._d.get(k.lower())
+
+
+class КомпактМаркерTests(unittest.TestCase):
+    """Заголовок-маркер сжатия — ГЛАВНЫЙ признак маршрута в облако (шлюз или сырой CLI)."""
+
+    def test_маркер_шлюза(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-ccs-compaction": "auto"})), "auto")
+
+    def test_сырой_cli_маркер_мимо_шлюза(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-claude-code-compaction": "manual"})), "manual")
+
+    def test_маркер_шлюза_имеет_приоритет(self):
+        h = _CI({"x-ccs-compaction": "auto", "x-claude-code-compaction": "reactive"})
+        self.assertEqual(proxy.compact_header_kind(h), "auto")
+
+    def test_мусорное_значение_не_маркер(self):
+        self.assertIsNone(proxy.compact_header_kind(_CI({"x-ccs-compaction": "banana"})))
+
+    def test_без_заголовка_маркера_нет(self):
+        self.assertIsNone(proxy.compact_header_kind(_CI({})))
+
+    def test_регистр_и_пробелы_нормализуются(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-ccs-compaction": "  AUTO "})), "auto")
+
+
 class КомпактТелоTests(unittest.TestCase):
     def test_подменяется_только_модель(self):
         doc = {"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True,
@@ -938,6 +972,146 @@ class UsageИзОтветаTests(unittest.TestCase):
                 self.assertEqual(proxy.usage_totals(self.копилка(кусок)), (None, None))
 
 
+class НормализацияUsageTests(unittest.TestCase):
+    """`usage` локального ответа: итог, который CLI собирает из `message_start` и `message_delta`.
+
+    Формы СНЯТЫ ЖИВЬЁМ с vLLM (2026-10-18, README «Нормализация usage»): `message_start` несёт
+    `input_tokens` = ВЕСЬ промпт, `message_delta` — `input` мимо кэша + `cache_read` +
+    `cache_creation` (сумма = промпт). CLI берёт `input` дельты, только если он > 0 (иначе
+    остаётся старт) — поэтому модель CLI в тестах такая же (`_итог_cli`).
+    """
+
+    def setUp(self):
+        proxy.stats["usage_normalized"] = 0
+
+    # Снятые формы: (старт.input, дельта) — промпт во всех случаях равен сумме слагаемых дельты.
+    ПРОМАХ = (21440, {"input_tokens": 832, "output_tokens": 2,
+                      "cache_creation_input_tokens": 20608, "cache_read_input_tokens": 0})
+    ПОПАДАНИЕ = (21440, {"input_tokens": 832, "output_tokens": 2,
+                         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 20608})
+    ЧАСТИЧНО = (21749, {"input_tokens": 693, "output_tokens": 2,
+                        "cache_creation_input_tokens": 448, "cache_read_input_tokens": 20608})
+    # Сбой 15:06:20: дельта с input 0 — старт остаётся в итоге CLI целиком
+    ПОЛНОЕ_ПОПАДАНИЕ = (129024, {"input_tokens": 0, "output_tokens": 40,
+                                 "cache_creation_input_tokens": 896,
+                                 "cache_read_input_tokens": 128128})
+
+    @staticmethod
+    def _итог_cli(события):
+        """Итог usage по модели CLI: старт задаёт `input`, дельта переписывает его, если > 0."""
+        итог = {}
+        for e in события:
+            if e.get("type") == "message_start":
+                итог.update(e["message"]["usage"])
+            elif e.get("type") == "message_delta":
+                for k, v in e["usage"].items():
+                    if k != "input_tokens" or v > 0:
+                        итог[k] = v
+        return (итог.get("input_tokens", 0) + итог.get("cache_read_input_tokens", 0)
+                + итог.get("cache_creation_input_tokens", 0))
+
+    def _прогнать(self, старт, дельта):
+        """Поток старт+дельта+стоп через нормализатор; вернуть события, как их увидит CLI."""
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
+        n.усвоить(self._sse({"input_tokens": старт, "output_tokens": 0}, "message_start"))
+        n.усвоить(self._sse(дельта))
+        n.усвоить(b"event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n")
+        n.дослать()
+        события = []
+        for кусок in собрано:
+            for строка in кусок.split(b"\n"):
+                if строка.startswith(b"data:"):
+                    события.append(json.loads(строка[5:]))
+        return события
+
+    def _sse(self, usage, тип="message_delta"):
+        if тип == "message_start":
+            data = {"type": "message_start", "message": {"usage": usage}}
+        else:
+            data = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage}
+        return ("event: " + тип + "\ndata: " + json.dumps(data) + "\n\n").encode()
+
+    def test_все_снятые_формы_дают_промпт_один_раз(self):
+        """Итог CLI = реальный промпт на промахе, попадании, частичном попадании и input 0."""
+        for имя, (старт, дельта) in [("промах", self.ПРОМАХ), ("попадание", self.ПОПАДАНИЕ),
+                                     ("частично", self.ЧАСТИЧНО),
+                                     ("input 0", self.ПОЛНОЕ_ПОПАДАНИЕ)]:
+            with self.subTest(имя):
+                события = self._прогнать(старт, дельта)
+                self.assertEqual(self._итог_cli(события), старт,
+                                 "итог CLI должен совпасть с реальным промптом")
+
+    def test_без_нормализатора_формы_удваиваются(self):
+        """Контроль модели CLI: сырые события (как до правки) дают удвоение на промахе и input 0."""
+        for старт, дельта in (self.ПОЛНОЕ_ПОПАДАНИЕ,):
+            события = [{"type": "message_start", "message": {"usage": {"input_tokens": старт}}},
+                       {"type": "message_delta", "usage": дельта}]
+            self.assertEqual(self._итог_cli(события), старт + 128128 + 896)
+
+    def test_старт_обнуляется_дельта_не_ломается(self):
+        события = self._прогнать(*self.ПРОМАХ)
+        self.assertEqual(события[0]["message"]["usage"]["input_tokens"], 0)
+        self.assertEqual(события[1]["usage"], self.ПРОМАХ[1], "правильная дельта не трогается")
+        self.assertEqual(события[2]["type"], "message_stop")
+
+    def test_полная_форма_в_дельте_страхуется(self):
+        """Страховка: дельта, где input = весь промпт при ненулевом кэше, переписывается."""
+        полная = {"input_tokens": 21440, "cache_read_input_tokens": 20608,
+                  "cache_creation_input_tokens": 0, "output_tokens": 2}
+        события = self._прогнать(21440, полная)
+        self.assertEqual(события[1]["usage"]["input_tokens"], 832)
+        self.assertEqual(self._итог_cli(события), 21440)
+
+    def test_normalize_usage_без_промпта_старта_не_трогает(self):
+        u = {"input_tokens": 500, "cache_read_input_tokens": 100, "output_tokens": 4}
+        n, changed = proxy.normalize_usage(u)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_без_кэша_не_трогает(self):
+        u = {"input_tokens": 500, "output_tokens": 4}
+        n, changed = proxy.normalize_usage(u, 500)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_не_мутирует_вход(self):
+        u = {"input_tokens": 250, "cache_read_input_tokens": 200,
+             "cache_creation_input_tokens": 50}
+        n, changed = proxy.normalize_usage(u, 250)
+        self.assertTrue(changed)
+        self.assertEqual(n["input_tokens"], 0)
+        self.assertEqual(u["input_tokens"], 250)
+
+    def test_json_без_потока_проходит_как_есть(self):
+        """Не-SSE (снято живьём: одна верная форма `usage`) — тело байт в байт."""
+        тело = json.dumps({"type": "message", "usage": {
+            "input_tokens": 851, "output_tokens": 2, "cache_creation_input_tokens": 38976,
+            "cache_read_input_tokens": 0}}).encode()
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=False)
+        n.усвоить(тело)
+        n.дослать()
+        self.assertEqual(b"".join(собрано), тело)
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_облачный_ответ_minimax_не_ломается_нормализатором(self):
+        """Снятая форма MiniMax: старт input 0, дельта — слагаемые. Старт не растёт, дельта цела."""
+        дельта = {"input_tokens": 63043, "output_tokens": 3, "cache_read_input_tokens": 128}
+        события = self._прогнать(0, дельта)
+        self.assertEqual(события[0]["message"]["usage"]["input_tokens"], 0)
+        self.assertEqual(события[1]["usage"], дельта)
+        self.assertEqual(self._итог_cli(события), 63171)
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_мутация_обнуление_старта_красит(self):
+        """Сломать обнуление старта — итог CLI на промахе и при input 0 снова удвоен."""
+        with unittest.mock.patch.object(proxy.НормализаторUsage, "_событие",
+                                        lambda self, сырое: self.отдать(сырое)):
+            события = self._прогнать(*self.ПОЛНОЕ_ПОПАДАНИЕ)
+        self.assertNotEqual(self._итог_cli(события), self.ПОЛНОЕ_ПОПАДАНИЕ[0])
+
+
 class ОтправкаСобытияTests(unittest.TestCase):
     """Канал до бэкенда: выключен без адреса и без секрета, fail-open при любом отказе."""
 
@@ -1067,7 +1241,8 @@ class КомпактСквознойTests(unittest.TestCase):
         proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
         proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
         proxy._compact_key = "sk-test"
-        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0)
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0,
+                            compact_routed_header=0, compact_cloud_retry=0)
 
     def tearDown(self):
         (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
@@ -1078,12 +1253,14 @@ class КомпактСквознойTests(unittest.TestCase):
             с.shutdown()
             с.server_close()
 
-    def спросить(self, msgs):
+    def спросить(self, msgs, заголовки=None):
         тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
                            "messages": msgs}).encode()
+        h = {"Content-Type": "application/json", "Content-Length": str(len(тело))}
+        if заголовки:
+            h.update(заголовки)
         c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
-        c.request("POST", "/v1/messages", body=тело,
-                  headers={"Content-Type": "application/json", "Content-Length": str(len(тело))})
+        c.request("POST", "/v1/messages", body=тело, headers=h)
         ответ = c.getresponse().read()
         c.close()
         return ответ
@@ -1164,6 +1341,121 @@ class КомпактСквознойTests(unittest.TestCase):
         self.assertIn("локальный".encode(), self.спросить(self.запрос_сжатия()))
         self.assertEqual(self.Облако.принятые, [])
         self.assertEqual((proxy.stats["compact_routed"], proxy.stats["compact_fallback"]), (0, 0))
+
+
+class МаршрутПоЗаголовкуTests(unittest.TestCase):
+    """Маршрут автосжатия по заголовку-маркеру (2026-10-18): главный признак — x-ccs-compaction
+    (шлюз) или x-claude-code-compaction (ход мимо шлюза) — тело любого размера в облако, без
+    порога; сигнатура + порог — запасной путь, когда заголовка нет. Ретрай облака при отказе."""
+
+    def setUp(self):
+        class Облако(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+
+        class Локальный(Заглушка):
+            метка = "локальный".encode()
+            принятые = []
+
+        self.Облако, self.Локальный = Облако, Локальный
+        self.облако, self.локальный = поднять(Облако), поднять(Локальный)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+                          proxy._compact_key, proxy.COMPACT_PRESERVE, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        proxy.COMPACT_PRESERVE = "off"
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0,
+                           compact_routed_header=0, compact_cloud_retry=0)
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+         proxy._compact_key, proxy.COMPACT_PRESERVE, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.облако, self.локальный, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, msgs, заголовки=None):
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
+                           "messages": msgs}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело,
+                  headers=dict({"Content-Type": "application/json",
+                                "Content-Length": str(len(тело))}, **(заголовки or {})))
+        ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def малое_сжатие(self):
+        """Сигнатура сжатия в маленьком теле: ниже порога, поэтому по сигнатуре — локаль."""
+        return [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."}]
+
+    def test_заголовок_малое_тело_идёт_в_облако(self):
+        """Главный признак: маркер шлёт в облако тело любого размера, без проверки порога."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "auto"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual((proxy.stats["compact_routed_header"], proxy.stats["compact_routed"],
+                           proxy.stats["compact_fallback"], proxy.stats["compact_signature_small"]),
+                         (1, 0, 0, 0), "маркер → облако (свой счётчик), порог не смотрим, сигнатура-малое не растёт")
+
+    def test_сырой_заголовок_мимо_шлюза_тоже_в_облако(self):
+        """Ход мимо шлюза несёт сырой x-claude-code-compaction — он тоже главный признак."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-claude-code-compaction": "manual"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(proxy.stats["compact_routed_header"], 1)
+
+    def test_без_заголовка_сигнатура_малое_тело_в_локаль(self):
+        """Запасной путь: без маркера маленькое тело с сигнатурой — локаль, как раньше."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие())
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [], "без маркера в облако не ходит")
+        self.assertEqual((proxy.stats["compact_signature_small"], proxy.stats["compact_routed_header"],
+                           proxy.stats["compact_routed"]), (1, 0, 0))
+
+    def test_маркер_с_мусором_игнорируется(self):
+        """Значение вне словаря — мусор: маршрут по нему не едет, запрос честно на локаль."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "banana"})
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [])
+        self.assertEqual((proxy.stats["compact_routed_header"], proxy.stats["compact_signature_small"]),
+                         (0, 1), "мусорный маркер → запасной путь по сигнатуре")
+
+    def test_повтор_облака_при_первом_отказе(self):
+        """Первая попытка облака упала, ответ клиенту ещё не начат — повтор один раз, спасает ход."""
+        class ОблакоСРетраем(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+            вызовы = 0
+
+            def do_POST(self):
+                type(self).вызовы += 1
+                if type(self).вызовы == 1:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    self.rfile.read(n)
+                    self.send_response(500)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                super().do_POST()
+
+        облако = поднять(ОблакоСРетраем)
+        self.addCleanup(lambda: (облако.shutdown(), облако.server_close()))
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{облако.server_address[1]}"
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "auto"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(ОблакоСРетраем.вызовы, 2, "первый отказ + один повтор")
+        self.assertEqual((proxy.stats["compact_cloud_retry"], proxy.stats["compact_routed_header"],
+                           proxy.stats["compact_routed"], proxy.stats["compact_fallback"]),
+                         (1, 1, 0, 0), "повтор спас: header-routed, не fallback")
 
 
 class МодельЗаглушка(Заглушка):
@@ -1919,6 +2211,19 @@ def события(сырое):
     return итог
 
 
+def события_клиента(сырое):
+    """То же, что `события`, но так, как ответ локальной модели видит клиент: прокси обнуляет
+    `input_tokens` в `message_start` (настоящую цифру CLI берёт из дельты; см.
+    НормализаторUsage), остальное — байт в байт."""
+    итог = события(сырое)
+    for тип, данные in итог:
+        if тип == "message_start":
+            usage = данные["message"].get("usage")
+            if isinstance(usage, dict) and usage.get("input_tokens"):
+                usage["input_tokens"] = 0
+    return итог
+
+
 def проверить_целостность(тест, список):
     """Поток, который примет CLI: одно начало, блоки открыты-закрыты по порядку, конец в конце."""
     типы = [т for т, _ in список]
@@ -2016,6 +2321,61 @@ class РелеПотокаTests(unittest.TestCase):
         self.assertEqual(doc["presence_penalty"], 2.0, "потолок vLLM")
         self.assertEqual(doc["temperature"], 1.1, "без поля — от дефолта vLLM")
         self.assertIsNone(proxy.retry_body(b"not json"))
+
+    def test_повтор_несёт_соль_а_исходное_тело_нет(self):
+        тело = json.dumps({"model": "m", "messages": []}).encode()
+        self.assertNotIn("cache_salt", json.loads(тело), "исходное тело — как есть")
+        # Повтор: retry_body сдвигает сэмплинг, salted_body кладёт соль карантина.
+        # uuid4 на каждый повтор убран (сирота KV) — соль теперь из карантина сессии.
+        doc = json.loads(proxy.salted_body(proxy.retry_body(тело), "q-sess-1"))
+        self.assertEqual(doc["cache_salt"], "q-sess-1", "повтор несёт соль карантина")
+        # retry_body сам соль не добавляет: без salted_body cache_salt отсутствует.
+        self.assertNotIn("cache_salt", json.loads(proxy.retry_body(тело)))
+        # Тело не JSON — повтор не строится, соль не добавляется.
+        self.assertIsNone(proxy.retry_body(b"not json"))
+        self.assertIsNone(proxy.salted_body(b"not json", "q-sess-1"))
+
+
+class ОбрывКлиентаTests(unittest.TestCase):
+    """Обрыв клиента (BrokenPipe/ConnectionReset) не должен инкрементировать loop_guard_errors."""
+
+    def setUp(self):
+        self.сохранено = proxy.stats.get("loop_guard_errors", 0)
+        proxy.stats["loop_guard_errors"] = 0
+
+    def tearDown(self):
+        proxy.stats["loop_guard_errors"] = self.сохранено
+
+    def _прогнать_с_обрывом(self, ошибка, после_n=0):
+        """Прогоняет поток через РелеПотока, где отдать бросает `ошибка` после `после_n` вызовов."""
+        вызовы = [0]
+
+        def отдать(сырое):
+            вызовы[0] += 1
+            if вызовы[0] > после_n:
+                raise ошибка("клиент ушёл")
+
+        реле = proxy.РелеПотока(отдать)
+        сырое = поток_ответа([("text", "Привет")])
+        for i in range(0, len(сырое), 97):
+            try:
+                if реле.усвоить(сырое[i:i + 97]):
+                    break
+            except (BrokenPipeError, ConnectionResetError):
+                break
+        return реле
+
+    def test_connection_reset_на_первом_байте_не_считается(self):
+        """Upstream-поток: ConnectionResetError на первом байте — loop_guard_errors не дёргается."""
+        реле = self._прогнать_с_обрывом(ConnectionResetError, после_n=0)
+        self.assertEqual(proxy.stats["loop_guard_errors"], 0,
+                         "ConnectionResetError на первом байте не должна инкрементировать loop_guard_errors")
+
+    def test_broken_pipe_после_первого_байта_не_считается(self):
+        """Клиент рвёт после отдачи первого события — loop_guard_errors не дёргается."""
+        реле = self._прогнать_с_обрывом(BrokenPipeError, после_n=1)
+        self.assertEqual(proxy.stats["loop_guard_errors"], 0,
+                         "BrokenPipeError после первого байта не должна инкрементировать loop_guard_errors")
 
 
 class ПетляЗаглушка(BaseHTTPRequestHandler):
@@ -2127,6 +2487,40 @@ class ПетляСквознаяTests(unittest.TestCase):
                           событие["resultBlocks"], событие["thinkingBlocks"]),
                          ("loop_guard", "sess-loop", 1, 1, 0))
 
+    def test_повтор_несёт_соль_а_исходное_тело_нет(self):
+        # Две последовательные петли той же сессии: повтор идёт с солью карантина,
+        # исходное тело первого запроса — как есть; сессия и дальше ходит со своей солью.
+        было = proxy.CACHE_QUARANTINE
+        proxy.CACHE_QUARANTINE = "on"
+        try:
+            self.Модель.ответы = [
+                поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+                поток_ответа([("text", "Нашёл хуки.")]),
+                поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+                поток_ответа([("text", "Готово.")])]
+            with contextlib.redirect_stderr(io.StringIO()):
+                список = self.спросить()
+                self.спросить()
+            проверить_целостность(self, список)
+            принятые = self.Модель.принятые
+            self.assertEqual(len(принятые), 4, "два запроса, каждый с повтором")
+            # [0] исходное тело первого запроса — без соли; [1] его повтор — с солью S_A.
+            self.assertNotIn("cache_salt", принятые[0], "исходное тело #0 — как есть")
+            соль_a = принятые[1]["cache_salt"]
+            self.assertIsInstance(соль_a, str) and self.assertTrue(соль_a)
+            # [2] второй запрос той же сессии: parse_body подставляет соль S_A из _карантин.
+            self.assertEqual(принятые[2].get("cache_salt"), соль_a,
+                             "сессия и дальше ходит со своей солью")
+            # [3] повтор второго запроса — та же соль S_A: петля в уже засоленной сессии
+            # соль не меняет, _карантин не перезаписан (новый префилл не тратится).
+            соль_b = принятые[3]["cache_salt"]
+            self.assertEqual(соль_b, соль_a, "повтор в засоленной сессии — та же соль")
+            self.assertEqual(proxy._карантин["sess-loop"], соль_a,
+                             "после второй петли _карантин держит прежнюю соль")
+        finally:
+            proxy.CACHE_QUARANTINE = было
+            proxy._карантин.clear()
+
     def test_петля_в_размышлениях_закрыта_с_подписью(self):
         self.Модель.ответы = [поток_ответа([("thinking", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
                               поток_ответа([("text", "Ответ.")])]
@@ -2170,14 +2564,14 @@ class ПетляСквознаяTests(unittest.TestCase):
         сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
         self.Модель.ответы = [сырое]
         список = self.спросить(ждать_карточку=False)
-        self.assertEqual(список, события(сырое))
+        self.assertEqual(список, события_клиента(сырое))
         self.assertEqual(proxy.stats["loops_detected"], 0)
         self.assertEqual(self.Бэкенд.принятые, [])
 
     def test_обычный_ответ_без_изменений_и_карточки(self):
         сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ * 2), ("text", "Сделано.")])
         self.Модель.ответы = [сырое]
-        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
         self.assertEqual(len(self.Модель.принятые), 1)
         self.assertEqual(self.Бэкенд.принятые, [])
 
@@ -2295,6 +2689,95 @@ class ДетекторМусораTests(unittest.TestCase):
             self.assertFalse(proxy.мусорное_слово(w), w)
 
 
+# Ход 17.10 17:53, дословно до вырождения: дальше сотни строк из одного «-» до конца хода.
+ВЫРОЖДЕНИЕ = ("ImageEditor.Tests зависит-зависит от `FakeImageEditor` (monoлит, "
+              "`ImageEditor/FakeImageEditor.cs`) и `ImageEditorFakes.cs`. Про-типов. Про-ов-\nПроверя-\n")
+
+
+class ЦепочкаБезБуквTests(unittest.TestCase):
+    """Второй признак мусора: run одинаковых «слов» без букв и цифр подряд."""
+
+    def test_вырождение_инцидента_ловится(self):
+        текст = РУССКАЯ_ПРОЗА + ВЫРОЖДЕНИЕ + "-\n" * 150
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(текст, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN}×"), д.причина)
+        # Доля мусорных слов тут ни при чём: без второго признака детектор молчит
+        self.assertIsNone(прогнать_мусор(текст, proxy.ДетекторМусора(run=10 ** 6)))
+
+    def test_повтор_одного_слова_ловится(self):
+        # 17.10 22:38: размышление ушло в «like like like…» до среза бюджета, ответ — в тысячи «like»
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "Program.cs`-у`-у` " + "like " * 100, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN_WORD}× 'like'"), д.причина)
+        self.assertIsNotNone(прогнать_мусор("Like, LIKE like. " * 30), "без регистра и пунктуации")
+
+    def test_числа_и_обычные_повторы_не_цепочка(self):
+        for имя, текст in {"нули матрицы": "0 " * 300, "единицы": "1, " * 300,
+                           "очень-очень": (РУССКАЯ_ПРОЗА + " очень очень очень ") * 10}.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(текст))
+
+    def test_цепочка_короче_порога_не_мусор(self):
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "-\n" * (proxy.JUNK_RUN - 1) + РУССКАЯ_ПРОЗА))
+        # У «слов» без букв порог прежний: 12 разделителей подряд — ещё не вырождение
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "- " * (proxy.JUNK_RUN - 1) + РУССКАЯ_ПРОЗА))
+
+    def test_пробег_символов_инцидента_ловится_до_конца(self):
+        # 19.10 17:46: после «(сод-т-в-ог-д) … из-за-ог-ог-ог» ответ ушёл в 16 321 пятёрку до лимита
+        # вывода; 64 «слова» на 18 000 символов — доля и цепочка молчали, чат останавливал человек.
+        вступление = РУССКАЯ_ПРОЗА + "- **Com-тг**: `C3F3048F` — **как в оригинале** (сод-т-в-ог-д).\n"
+        for имя, мусор in {"пробег пятёрок": "5" * 16321,
+                           "узор -ог-": "- **Like-ог**: like-ог из-за" + "-ог" * 30 + " 199" + "9" * 120,
+                           "склейка слова": "like" * 30}.items():
+            with self.subTest(имя):
+                д = proxy.ДетекторМусора()
+                текст, увидел, сработал = вступление + мусор, 0, None
+                for кусок in по_кусочкам(текст, 7):
+                    увидел += len(кусок)
+                    if д.усвоить(кусок):
+                        сработал = увидел
+                        break
+                self.assertIsNotNone(сработал, "детектор не сработал")
+                # Обрыв ещё в начале мусора, а не по пробелу после 16 тысяч символов
+                self.assertLessEqual(сработал - len(вступление), 4 * proxy.JUNK_CHAR_RUN, д.причина)
+                self.assertTrue(д.причина.startswith(("пробег", "узор")), д.причина)
+
+    def test_цепочка_слов_с_буквами_порог_ниже(self):
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "like- " * proxy.JUNK_RUN_WORD + РУССКАЯ_ПРОЗА, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN_WORD}×"), д.причина)
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "like " * (proxy.JUNK_RUN_WORD - 1) + РУССКАЯ_ПРОЗА))
+
+    def test_узор_не_путает_нормальный_текст(self):
+        случаи = {
+            "число с нулями": "итого 1000000000000 рублей и 0.000000000001 долей",
+            "base64 в тексте": "подпись AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= совпала",
+            "хеш": "коммит " + "a1b2c3d4e5f6" * 5 + " и ещё " + "0123456789abcdef" * 4,
+            "разделители": "─" * 80 + "\n" + "-" * 70 + "\n" + "=" * 60 + "\n" + "*" * 50,
+            "путь с ..": "/".join([".."] * 11) + "/x.cs",
+            "смех и дефисы": "ха-ха-ха-ха-ха, так-так-так, по-по-по",
+            "пробег в коде": "```\n" + "5" * 200 + "\n" + "ab" * 40 + "\n```\n" + РУССКАЯ_ПРОЗА,
+            "инлайн-код": "`" + "x" * 100 + "` и `" + "ab" * 30 + "`",
+        }
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + текст + "\n" + РУССКАЯ_ПРОЗА), имя)
+
+    def test_разметка_не_цепочка(self):
+        строки = 3 * proxy.JUNK_RUN
+        случаи = {
+            "список": "".join(f"- пункт {i}\n" for i in range(строки)),
+            "таблица с пустыми ячейками": "| a | b | c |\n|---|---|---|\n" + "| - | - | - |\n" * строки,
+            "дерево": "".join(f"│   ├── файл{i}.cs\n" for i in range(строки)),
+            "разделители между абзацами": (РУССКАЯ_ПРОЗА + "\n---\n") * 10,
+            "цепочка в заборе кода": "```\n" + "-\n" * строки + "```\n" + РУССКАЯ_ПРОЗА,
+        }
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(текст))
+
+
 class МусорСквознойTests(unittest.TestCase):
     """CLI → прокси → vLLM-заглушка с мусором → обрыв без повтора, пометка и счётчики."""
 
@@ -2302,13 +2785,90 @@ class МусорСквознойTests(unittest.TestCase):
 
     def setUp(self):
         ПетляСквознаяTests.setUp(self)
-        self.мусор_был = proxy.JUNK_GUARD
+        self.мусор_был = proxy.JUNK_GUARD, proxy.GUARD_DUMP_DIR, proxy.GUARD_DUMP_KEEP
         proxy.JUNK_GUARD = "on"
+        self.дампы = os.path.join(tempfile.mkdtemp(), "guard")
+        proxy.GUARD_DUMP_DIR = self.дампы
         proxy.stats["junk_aborts"], proxy.stats["junk_words_max_ratio"] = 0, 0.0
+        proxy.stats["guard_dumps"] = 0
 
     def tearDown(self):
-        proxy.JUNK_GUARD = self.мусор_был
+        proxy.JUNK_GUARD, proxy.GUARD_DUMP_DIR, proxy.GUARD_DUMP_KEEP = self.мусор_был
+        shutil.rmtree(os.path.dirname(self.дампы), ignore_errors=True)
         ПетляСквознаяTests.tearDown(self)
+
+    def файлы_дампа(self):
+        return sorted(os.listdir(self.дампы)) if os.path.isdir(self.дампы) else []
+
+    def мета_дампа(self):
+        тела = [f for f in self.файлы_дампа() if f.endswith(".req.json.gz")]
+        self.assertEqual(len(тела), 1, self.файлы_дампа())
+        основа = os.path.join(self.дампы, тела[0][:-len(".req.json.gz")])
+        with gzip.open(основа + ".req.json.gz") as f:
+            тело = json.loads(f.read())
+        with open(основа + ".meta.json", encoding="utf-8") as f:
+            мета = json.load(f)
+        for путь in (основа + ".req.json.gz", основа + ".meta.json"):
+            self.assertEqual(os.stat(путь).st_mode & 0o777, 0o600, путь)
+        self.assertEqual(os.stat(self.дампы).st_mode & 0o777, 0o700)
+        return тело, мета
+
+    def test_дамп_сработки_мусора(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        тело, мета = self.мета_дампа()
+        self.assertEqual(тело, self.Модель.принятые[0], "в дампе ровно то, что ушло в движок")
+        self.assertEqual((мета["guard"], мета["path"], мета["session"]), ("мусор", "/v1/messages", "sess-loop"))
+        self.assertTrue(мета["reason"].startswith("доля"), мета["reason"])
+        self.assertEqual(proxy.stats["guard_dumps"], 1)
+
+    def test_дамп_сработки_вырождения(self):
+        self.Модель.ответы = [поток_ответа([("thinking", "Plan quickly."),
+                                            ("text", ВСТУПЛЕНИЕ + ВЫРОЖДЕНИЕ + "-\n" * 300000)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        _, мета = self.мета_дампа()
+        self.assertTrue(мета["reason"].startswith("цепочка"), мета["reason"])
+        self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
+
+    def test_дамп_сработки_петли(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        тело, мета = self.мета_дампа()
+        self.assertEqual(тело, self.Модель.принятые[0], "дамп первой попытки, не повтора")
+        self.assertEqual((мета["guard"], мета["block"]), ("петля", "text"))
+        self.assertTrue(мета["reason"])
+
+    def test_без_сработки_дампа_нет(self):
+        self.Модель.ответы = [поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.файлы_дампа(), [])
+        self.assertEqual(proxy.stats["guard_dumps"], 0)
+
+    def test_дамп_выключен_без_каталога(self):
+        proxy.GUARD_DUMP_DIR = ""
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        self.assertFalse(os.path.exists(self.дампы))
+        self.assertEqual(proxy.stats["junk_aborts"], 1, "обрыв работает и без дампа")
+
+    def test_хранятся_только_свежие(self):
+        proxy.GUARD_DUMP_KEEP = 2
+        for i in range(4):
+            proxy.dump_guard(json.dumps({"n": i}).encode(), "s", {"guard": "мусор"})
+            time.sleep(0.02)
+        тела = [f for f in self.файлы_дампа() if f.endswith(".req.json.gz")]
+        self.assertEqual(len(тела), 2)
+        self.assertEqual(len(self.файлы_дампа()), 4, "у каждого тела своя мета, сироты удалены")
+        номера = sorted(json.loads(gzip.open(os.path.join(self.дампы, f)).read())["n"] for f in тела)
+        self.assertEqual(номера, [2, 3])
 
     def мусорный_поток(self):
         # Мусор длиннее буферов сокета (~2,5 МБ): иначе заглушка успела бы дописать его до обрыва
@@ -2324,8 +2884,7 @@ class МусорСквознойTests(unittest.TestCase):
         self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
                          ["end_turn"])
         текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
-        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор (vLLM #60174, DFlash2 + prefix "
-                      "cache). Повтори ход.]", текст)
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
         self.assertLess(текст.count("PunchTransfer"), 20, "мусор оборван рано")
         self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
         # Обрыв заглушка замечает на следующей записи в сокет — уже после ответа клиенту
@@ -2354,7 +2913,7 @@ class МусорСквознойTests(unittest.TestCase):
         proxy.LOOP_GUARD = "off"
         сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
         self.Модель.ответы = [сырое]
-        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
         self.assertEqual((proxy.stats["loops_detected"], proxy.stats["junk_aborts"]), (0, 0))
 
     def test_обычный_ответ_без_изменений(self):
@@ -2362,7 +2921,7 @@ class МусорСквознойTests(unittest.TestCase):
         сырое = поток_ответа([("thinking", АНГЛИЙСКАЯ_ПРОЗА),
                               ("text", РУССКАЯ_ПРОЗА + ПУТИ_И_ХЕШИ + BASE64_В_КОДЕ)])
         self.Модель.ответы = [сырое]
-        self.assertEqual(self.спросить(ждать_карточку=False), события(сырое))
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
         self.assertEqual((proxy.stats["junk_aborts"], proxy.stats["loops_detected"]), (0, 0))
 
 
@@ -2743,11 +3302,12 @@ class СохранениеДословногоTests(unittest.TestCase):
         # Последнее сообщение в этих тестах — чистая инструкция сжатия: блок по истории без неё.
         return "\n\n" + proxy.compactor.build_preserved(dict(doc, messages=doc["messages"][:-1]))
 
-    def проверить_вставку(self, ответ, блок):
+    def проверить_вставку(self, ответ, блок, локаль=False):
+        """локаль=True — ответ идёт через локальный upstream: старт с обнулённым input."""
         список = события(ответ)
         проверить_целостность(self, список)
         проверить_индексы(self, список)
-        модель = события(self.поток)
+        модель = (события_клиента if локаль else события)(self.поток)
         # Ровно одно лишнее событие — дельта с блоком перед стопом текстового блока (index 1).
         self.assertEqual(len(список), len(модель) + 1)
         стоп = список.index(("content_block_stop", {"type": "content_block_stop", "index": 1}))
@@ -2842,7 +3402,7 @@ class СохранениеДословногоTests(unittest.TestCase):
         doc = self.запрос()
         блок = self.ожидаемый_блок(doc)
         ответ = self.спросить(doc)
-        self.проверить_вставку(ответ, блок)
+        self.проверить_вставку(ответ, блок, локаль=True)
         self.assertEqual(proxy.stats["compact_fallback"], 1)
         self.assertEqual(proxy.stats["compact_preserved"], 1)
         реплика = self.последняя_реплика(self.Локальный.принятые[-1])
@@ -2853,7 +3413,7 @@ class СохранениеДословногоTests(unittest.TestCase):
         proxy.LOOP_GUARD = proxy.JUNK_GUARD = "on"
         self.Облако.статус = 500
         doc = self.запрос()
-        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc), локаль=True)
 
     def test_фолбэк_петля_после_сводки_и_повтор(self):
         """Петля после <summary> → обрыв, повтор; в запись CLI идёт сводка повтора с блоком."""
@@ -2892,7 +3452,7 @@ class СохранениеДословногоTests(unittest.TestCase):
     def test_без_облака_блок_тоже_вставляется(self):
         proxy.COMPACT_UPSTREAM = ""
         doc = self.запрос()
-        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc))
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc), локаль=True)
         self.assertEqual(self.Облако.принятые, [])
 
     def test_выключено_поток_байт_в_байт(self):
@@ -2907,7 +3467,7 @@ class СохранениеДословногоTests(unittest.TestCase):
     def test_обычный_ход_не_трогается(self):
         doc = self.запрос()
         doc["messages"][-1] = {"role": "user", "content": "проверь сборку"}
-        self.assertEqual(self.спросить(doc), self.поток)
+        self.assertEqual(события(self.спросить(doc)), события_клиента(self.поток))
         self.assertEqual(self.Облако.принятые, [])
 
     def test_исключение_compactor_запрос_проходит(self):
@@ -3028,3 +3588,199 @@ class ВставкаБлокаTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class КарантинСессииTests(unittest.TestCase):
+    """Мусор → повтор с cache_salt мимо испорченного кэша; сессия и дальше ходит со своей солью."""
+
+    спросить = ПетляСквознаяTests.спросить
+    мусорный_поток = МусорСквознойTests.мусорный_поток
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.было = proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, dict(proxy._карантин)
+        proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE = "on", "on"
+        proxy._карантин.clear()
+        for к in ("junk_aborts", "quarantine_retries", "quarantine_failed", "quarantine_salted",
+                  "quarantine_loop_reused"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, карантин = self.было
+        proxy._карантин.clear()
+        proxy._карантин.update(карантин)
+        ПетляСквознаяTests.tearDown(self)
+
+    def текст(self, список):
+        return "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+
+    def test_повтор_мимо_кэша_и_соль_сессии(self):
+        self.Модель.ответы = [self.мусорный_поток(), поток_ответа([("text", РУССКАЯ_ПРОЗА)]),
+                              поток_ответа([("text", "второй ход")]), поток_ответа([("text", "чужой")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = self.текст(список)
+        self.assertIn("ответ пересчитывается заново", текст)
+        self.assertIn(РУССКАЯ_ПРОЗА.strip()[:40], текст, "ответ повтора приклеен к тому же сообщению")
+        self.assertNotIn("Повтори ход", текст)
+        первый, повтор = self.Модель.принятые[:2]
+        self.assertNotIn("cache_salt", первый)
+        соль = повтор["cache_salt"]
+        self.assertEqual({k: v for k, v in повтор.items() if k != "cache_salt"}, первый,
+                         "повтор — то же тело, только с солью")
+        self.assertEqual(proxy._карантин["sess-loop"], соль)
+        # Следующий ход той же сессии — с той же солью: кэш работает, но в чистом пространстве
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[2]["cache_salt"], соль)
+        # Чужая сессия соли не получает
+        self.спросить(сессия="sess-other", ждать_карточку=False)
+        self.assertNotIn("cache_salt", self.Модель.принятые[3])
+        self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"],
+                          proxy.stats["quarantine_salted"]), (1, 0, 1))
+
+    def test_мусор_в_засоленной_сессии_соль_новая(self):
+        # Мусор в сессии, которая уже ходит с солью: новая соль на каждый срыв,
+        # _карантин перезаписан (испорченный кэш мог появиться и в засоленном пространстве).
+        proxy._карантин["sess-loop"] = "q-sess-loop-предварительная"
+        self.Модель.ответы = [self.мусорный_поток(), поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        повтор = self.Модель.принятые[1]["cache_salt"]
+        self.assertNotEqual(повтор, "q-sess-loop-предварительная", "мусор берёт новую соль")
+        self.assertEqual(proxy._карантин["sess-loop"], повтор, "_карантин перезаписан новой солью")
+
+    def test_мусор_и_в_повторе_обрыв(self):
+        self.Модель.ответы = [self.мусорный_поток(), self.мусорный_поток()]
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = self.текст(список)
+        self.assertIn("ответ пересчитывается заново", текст)
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        # Оператор видит в журнале, что повтор тоже не ушёл: строка master.
+        self.assertIn("карантин: мусор или петля и в повторе — ответ оборван", журнал.getvalue())
+        self.assertEqual(len(self.Модель.принятые), 2, "повтор один")
+        self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"]), (0, 1))
+
+    def test_без_карантина_повтора_нет(self):
+        proxy.CACHE_QUARANTINE = "off"
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        self.assertIn("Повтори ход", self.текст(список))
+        self.assertEqual(len(self.Модель.принятые), 1)
+        self.assertEqual(proxy._карантин, {})
+
+
+class КарантинLoopTests(unittest.TestCase):
+    """Петля → повтор с cache_salt мимо испорченного кэша; сессия и дальше ходит со своей солью.
+
+    Зеркало КарантинСессииTests, но для петли: повтор идёт с солью карантина (не uuid4),
+    и следующий ход той же сессии получает ту же соль через parse_body."""
+
+    спросить = ПетляСквознаяTests.спросить
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.было = (proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE,
+                     dict(proxy._карантин))
+        proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE = "on", "on", "on"
+        proxy._карантин.clear()
+        for к in ("loops_detected", "loops_retried", "loops_truncated",
+                  "quarantine_retries", "quarantine_failed", "quarantine_salted",
+                  "quarantine_loop_reused"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        (proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE, карантин) = self.было
+        proxy._карантин.clear()
+        proxy._карантин.update(карантин)
+        ПетляСквознаяTests.tearDown(self)
+
+    def текст(self, список):
+        return "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+
+    def test_повтор_мимо_кэша_и_соль_сессии(self):
+        # Петля → повтор с солью; сессия и дальше ходит со своей солью; чужая — нет.
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77),
+            поток_ответа([("text", "второй ход")]),
+            поток_ответа([("text", "чужой")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertIn("Нашёл хуки.", self.текст(список), "повтор приклеен к тому же сообщению")
+        первый, повтор = self.Модель.принятые[:2]
+        self.assertNotIn("cache_salt", первый, "исходное тело — как есть")
+        соль = повтор["cache_salt"]
+        self.assertIsInstance(соль, str) and self.assertTrue(соль, "повтор несёт соль карантина")
+        self.assertEqual(proxy._карантин["sess-loop"], соль, "повтор кладёт соль в _карантин")
+        # Следующий ход той же сессии — с той же солью: кэш работает, но в чистом пространстве.
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[2]["cache_salt"], соль)
+        # Чужая сессия соли не получает.
+        self.спросить(сессия="sess-other", ждать_карточку=False)
+        self.assertNotIn("cache_salt", self.Модель.принятые[3])
+        self.assertEqual(proxy.stats["quarantine_salted"], 1, "подстановка соли в parse_body")
+
+    def test_повторная_петля_в_засоленной_сессии_соль_та_же(self):
+        # Две петли подряд в одной сессии: первый срыв выдаёт соль, второй — берёт её,
+        # новую не выдаёт и _карантин не перезаписывает (quarantine_loop_reused == 1).
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77),
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+            self.спросить(ждать_карточку=False)
+        соль = self.Модель.принятые[1]["cache_salt"]
+        self.assertEqual(self.Модель.принятые[3]["cache_salt"], соль,
+                         "второй повтор — та же соль, что в _карантин")
+        self.assertEqual(proxy._карантин["sess-loop"], соль, "_карантин не перезаписан")
+        self.assertEqual(proxy.stats["quarantine_loop_reused"], 1,
+                         "повторная петля в засоленной сессии учтена")
+
+    def test_первая_петля_без_соли_повторное_поведение(self):
+        # Первая петля в сессии без соли: новая соль, как раньше (quarantine_loop_reused == 0).
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        соль = self.Модель.принятые[1]["cache_salt"]
+        self.assertTrue(соль.startswith("q-sess-loop-"), "первая петля выдаёт новую соль")
+        self.assertEqual(proxy._карантин["sess-loop"], соль)
+        self.assertEqual(proxy.stats["quarantine_loop_reused"], 0,
+                         "первая петля — не переиспользование")
+
+    def test_петля_и_в_повторе_обрыв(self):
+        # Петля и в повторе: ответ усечён, соль всё равно в _карантин (сессия не ходит в испорченный кэш).
+        self.Модель.ответы = [
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertIn("модель зациклилась, повтор запроса тоже", self.текст(список))
+        self.assertEqual(len(self.Модель.принятые), 2, "повтор один")
+        self.assertEqual(self.Модель.принятые[1]["cache_salt"],
+                         proxy._карантин["sess-loop"], "соль повторения в _карантин")
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["loops_retried"],
+                          proxy.stats["loops_truncated"]), (2, 1, 1))
+
+    def test_без_карантина_повтор_без_соли(self):
+        # CACHE_QUARANTINE=off: повтор петли идёт со сдвигом сэмплинга, но без cache_salt.
+        proxy.CACHE_QUARANTINE = "off"
+        self.Модель.ответы = [
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Готово.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertEqual(len(self.Модель.принятые), 2)
+        self.assertNotIn("cache_salt", self.Модель.принятые[1], "без карантина — без соли")
+        self.assertEqual(proxy._карантин, {})

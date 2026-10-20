@@ -25,11 +25,20 @@ export const FLAGS = {
   pluginsMvp: 'plugins-mvp',
   // Плагины (ADR-031): build-it-yourself — агент собирает пакет (черновики) через MCP-тулсет.
   pluginsBuildYourself: 'plugins-build-yourself',
+  // «Обзор фич»: фасет «Фичи» в списке сессий + плашка фичи в чате (волна 1, dark launch).
+  featuresOverview: 'features-overview',
+  // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы дотягиваются
+  // через Claude CLI resume. Dark launch, выключено по умолчанию.
+  turnAutoResume: 'turn-auto-resume',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];
 
 let _flags: Record<string, boolean> = {};
+// Флаги пришли с сервера (setAllFlags/mergeFlags). Пока false — getFlag читает «выключено»,
+// но это «ещё не загружено», а не «загружено и выключено»: для навигации (адрес страницы
+// фичи) разница важна — до загрузки адрес не схлопывают, а после — приводят к проекту.
+let _loaded = false;
 const _listeners = new Set<() => void>();
 
 function emit() {
@@ -39,6 +48,7 @@ function emit() {
 // Заменить весь набор флагов (на старте/после логина из ответа me)
 export function setAllFlags(flags: Record<string, boolean>) {
   _flags = { ...flags };
+  _loaded = true;
   emit();
 }
 
@@ -47,10 +57,12 @@ export function setAllFlags(flags: Record<string, boolean>) {
 export function mergeFlags(flags: Record<string, boolean> | null | undefined) {
   if (!flags) return;
   _flags = { ..._flags, ...flags };
+  _loaded = true;
   emit();
 }
 
-// Оптимистичное локальное обновление одного флага (для мгновенной реакции тумблера)
+// Оптимистичное локальное обновление одного флага (для мгновенной реакции тумблера).
+// Тумблер крутят только после загрузки каталога, поэтому _loaded здесь не трогаем.
 export function setFlagLocal(key: string, value: boolean) {
   _flags = { ..._flags, [key]: value };
   emit();
@@ -64,10 +76,24 @@ export function getAllFlags(): Record<string, boolean> {
   return _flags;
 }
 
+// Флаги загружены с сервера (setAllFlags/mergeFlags). До этого getFlag возвращает false
+// по «не загружено», а не по «загружено и выключено» — см. _loaded.
+export function flagsLoaded(): boolean {
+  return _loaded;
+}
+
 export function subscribeFlags(fn: () => void): () => void {
   _listeners.add(fn);
   return () => _listeners.delete(fn);
 }
+
+// Тестовые швы: сброс в «не загружено» (сценарии, где флаги приходят позже разбора
+// адреса) и прямой доступ к состоянию.
+export const __test = {
+  reset() { _flags = {}; _loaded = false; },
+  setLoaded(v: boolean) { _loaded = v; },
+  isLoaded() { return _loaded; },
+};
 
 // Подписка компонента на конкретный флаг. Возвращает true, если фича включена.
 export function useFeature(key: FlagKey): boolean {
@@ -75,6 +101,16 @@ export function useFeature(key: FlagKey): boolean {
     subscribeFlags,
     () => getFlag(key),
     () => getFlag(key),
+  );
+}
+
+// Подписка на «флаги загружены»: true после setAllFlags/mergeFlags (ответ /me).
+// До этого getFlag читает false по «не загружено», а не по «выключено».
+export function useFlagsLoaded(): boolean {
+  return useSyncExternalStore(
+    subscribeFlags,
+    () => _loaded,
+    () => _loaded,
   );
 }
 

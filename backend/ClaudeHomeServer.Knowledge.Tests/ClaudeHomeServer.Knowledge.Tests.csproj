@@ -17,10 +17,12 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main ради ProjectManager/FileService/PersonaManager/UserStore
-         и HubRecorder (хаб-рекордер для FileWatcherFullResyncTests). Прецедент — Notes.Tests. -->
-    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit (Core-only хелперы: FakeHostEnvironment/NoopPersonaEvents/NullDifyMetrics/
+         RecordingHubNotifier) + TestKit.Host (TestWebApplicationFactory) — шаг 1.3.
+         Main приходит транзитно через TestKit.Host (TestWebApplicationFactory поднимает
+         хост) — прямая ссылка на Main убрана в шаге 2.1. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>

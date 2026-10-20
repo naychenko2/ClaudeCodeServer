@@ -20,6 +20,59 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Prompts.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- TestKit.Host (шаг 1.2): SessionManagerTestAccess читает internal TurnAccumulator
+         через рефлексию на приватную запись сессии. Program здесь public, допуск не ради него. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.TestKit.Host</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Llm.Tests (шаг 3.3): перенесённые Llm-тесты читают internal-члены Main-типов
+         (SessionManager.ShouldNudgeSubagent/MaxSubagentNudges/…, TaskExecutionService.
+         SubagentStateFor/ExecutorStopText, FileWatcherService.Inspect/Warnings/RecreateCount/
+         DropWatcherKeepEntry) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): перенесённые Persona-тесты читают internal-члены Main-типов
+         (PersonaMemoryAutolearnService.Parse/AutolearnItem, PersonaAutomationService.InQuietWindow,
+         PersonaBindingsService.IsDatasetVisibleToUser, PersonaPromptBuilder.BuildCore). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Team.Tests (шаг 3.5): перенесённые Team-тесты читают internal-члены Main-типов
+         (Services.Team: TeamServices и internal-члены, на которые опираются Team*Tests). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Team.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): перенесённые Mcp/Gateway-тесты читают internal-члены Main-типов
+         (Services.Mcp/Services.Gateway: internal-члены, на которые опираются Mcp*Tests/Gateway*Tests). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- RemoteCommands.Tests (шаг 3.12, пачка G): перенесённые RemoteCommands/RemoteProcessRunner-тесты
+         читают internal-члены Main-типов (Services.RemoteCommands) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.RemoteCommands.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Watchdog.Tests (шаг 3.13, пачка G): Watchdog — отдельная сборка (ClaudeHomeServer.Watchdog),
+         не папка Main, поэтому функциональный InternalsVisibleTo (internal WatchdogService.ShouldPoll/
+         ClipOutput) стоит в ClaudeHomeServer.Watchdog.csproj. Допуск в Main — по шагу 4 задачи, на
+         ровне с остальными вертикальными тестами; перенесённые тесты Main-типов не используют. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Watchdog.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Telemetry.Tests (шаг 3.14, пачка G): Telemetry — папка Main (backend/ClaudeHomeServer/Telemetry/),
+         не отдельная сборка, поэтому функциональный InternalsVisibleTo (internal
+         ObservabilityExtensions.ResolveSampler/ParseEndpoint, GaugesRegistrarService.CountLive/ErrorDocuments,
+         IncidentQueries.Expression) стоит здесь, в Main. Перенесённые тесты читают эти internal-члены. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Telemetry.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Guards.Tests (шаг 4.1, пачка H): McpToolsetStabilityTests читает internal-члены
+         Main-типов (TurnContextToolset.Schemas, TasksToolset.ProjectChatTools/PersonalTools) —
+         тот же шов, что у монолита; перенесённые сторожи Main-типов не используют иначе. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Guards.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

@@ -141,7 +141,8 @@ public class ChatHistoryService
 
     // Время последней записи файла истории чата (для инвалидации кешей, построенных над
     // историей — см. ProjectFileSessionsIndex). null — истории ещё нет (файла не существует).
-    public DateTime? LastWriteUtc(string claudeSessionId)
+    // virtual — для тестов PrefixFingerprintCache: фейк управляет версией без реального файла.
+    public virtual DateTime? LastWriteUtc(string claudeSessionId)
     {
         var path = GetPath(claudeSessionId);
         return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;

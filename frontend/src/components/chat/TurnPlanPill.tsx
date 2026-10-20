@@ -1,57 +1,75 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ListChecks, Route } from 'lucide-react';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, FS } from '../../lib/design';
 import { Menu } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { TodoList } from './TodoList';
 import { planHint, type TodoItem } from '../../hooks/useSessionArtifacts';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useTurnPlanMode, usePillMenuOpen } from '../../lib/featureRuns';
 import type { FeatureRun } from '../../types/featureRun';
-import { ModeSwitcher, type TurnPlanMode } from './feature/ModeSwitcher';
-import { FeaturePicker } from './feature/FeaturePicker';
-import { FeatureRunView } from './feature/FeatureRunView';
+import { TodoList } from './TodoList';
+import { FeatureModeBody } from './feature/FeatureModeBody';
+import { buildPillModel, type PillModel } from './feature/pillModel';
+import { FeatureGlyph } from './feature/FeatureGlyphs';
 
 // Пилюля прогресса «Плана хода» и, когда у чата есть фичи, режима «Исполнение фичи».
 //
-// Два режима, один переключатель в шапке меню:
-//   • «План хода» — прежний чек-лист (TodoList), байт-в-байт как раньше;
-//   • «Исполнение фичи» — сводка по фиче: конвейер, шаги, витки.
-// Режим по умолчанию — «фича», если она есть, иначе «план». Без фичи в чате
-// переключатель не рендерится, и пилюля/меню остаются прежними.
+// Кнопка-пилюля всегда показывает runs[0] (порядок отсортировал бэк) и НЕ слушает
+// выбор фичи в теле (Ф1): выбранный в меню/карточке режим и фичу она не отражает.
+// Режим по умолчанию — «фича», если она есть, иначе «план»; хранится в сторе Ф1
+// (useTurnPlanMode per sessionId), поэтому выбор в карточке виден и здесь, и наоборот.
+// Без фичи в чате переключатель не рендерится, и пилюля/меню остаются прежними.
 //
 // `runs` — агрегаты фич чата (из useFeatureRuns, бэковый FeatureRun); `todos` — план хода.
 // Пилюля показывается, когда есть хоть что-то: todos.length > 0 ИЛИ runs.length > 0.
+//
+// Вся логика 5 состояний (идёт/ждёт вас/исполнитель упал/закрыта/все закрыты) — в чистой
+// функции buildPillModel (feature/pillModel.ts): компонент только рисует модель.
 
-// Текущая стадия для подписи: по идущим задачам ролей (бэк уже сгруппировал).
-function activeStageName(run: FeatureRun): string {
-  if (run.steps.some(t => t.status === 'inProgress')) return 'Производство';
-  if (run.reviews.some(t => t.status === 'inProgress')) return 'Ревью';
-  if (run.qa.some(t => t.status === 'inProgress')) return 'Проверка';
-  if (run.final && run.final.status === 'inProgress') return 'Финальное ревью';
-  return 'План';
+// Значок пилюли в режиме фичи: ромб (wait) / квадрат (stopped) / Route (идёт/закрыта).
+function FeaturePillIcon({ model }: { model: PillModel }) {
+  if (model.icon === 'diamond') return <FeatureGlyph kind="wait" size={ICON_SIZE.xs} />;
+  if (model.icon === 'square') return <FeatureGlyph kind="stopped" size={ICON_SIZE.xs} />;
+  return <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={model.iconColor} />;
 }
 
-// Подпись пилюли в режиме фичи: состояние (ждёт вас / смержена / финал) или стадия.
-function featurePillLabel(run: FeatureRun): string {
-  if (run.awaitingHumanSince) return 'ждёт вас · мерж';
-  if (run.merge && run.merge.status === 'done') return 'Фича смержена';
-  if (run.ready) return 'Финал зелёный';
-  return activeStageName(run);
+// n-2/n-3: на десктопе меню пилюли — фиксированная ширина 380 в обоих режимах
+// («План хода» и «Исполнение фичи»), чтобы переключатель режима не дёргал ширину
+// (раньше фича 336, план 280–296 — по содержимому). min=max → ровно 380. На мобиле —
+// прежние min/max (280–380); фактическая ширина на мобиле — во всю (pillMenuFullWidth).
+export function pillMenuWidths(isMobile: boolean): { minWidth: number; maxWidth: number } {
+  return isMobile ? { minWidth: 280, maxWidth: 380 } : { minWidth: 380, maxWidth: 380 };
 }
 
-export function TurnPlanPill({ todos, runs = [] }: { todos: TodoItem[]; runs?: FeatureRun[] }) {
+// r-3: fullWidth меню (left/right 8, min/max не действуют): на МОБИЛЕ — в обоих режимах
+// (фича и план), чтобы переключение режима не дёргало ширину (раньше фича fullWidth,
+// план по содержимому 280–296); на ДЕСКТОПЕ — false (фикс. 380 из pillMenuWidths).
+export function pillMenuFullWidth(isMobile: boolean, _featureMode: boolean): boolean {
+  return isMobile;
+}
+
+export function TurnPlanPill({ todos, runs = [], sessionId }: {
+  todos: TodoItem[];
+  runs?: FeatureRun[];
+  sessionId: string | null;
+}) {
   const isMobile = useIsMobile();
+  const mode = useTurnPlanMode(sessionId);
   const hasFeatures = runs.length > 0;
-  // Режим по умолчанию: «фича», если она есть, иначе «план».
-  const [mode, setMode] = useState<TurnPlanMode>(hasFeatures ? 'feature' : 'plan');
-  // M4: пересчёт режима при изменении НАЛИЧИЯ фич (не только на mount): фичи
-  // появились — дефолт «фича», исчезли — «план». Ручной выбор пользователя
-  // сохраняется, пока наличие фич не меняется.
-  useEffect(() => {
-    setMode(hasFeatures ? 'feature' : 'plan');
-  }, [hasFeatures]);
-  const [selected, setSelected] = useState(0);
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  const pillBtnRef = useRef<HTMLButtonElement>(null);
+
+  // F9: одноразовый сигнал «открыть меню» (стор Ф1, per chat): чип «Шаг N фичи»
+  // (TaskCreatedView) шлёт его, когда в ленте нет живой карточки плана. Потреблённый
+  // seq запоминается — ререндер сам по себе меню не переоткрывает.
+  const pillMenu = usePillMenuOpen(sessionId);
+  const pillMenuSeq = useRef(0);
+  useEffect(() => {
+    if (!pillMenu || pillMenu.seq === pillMenuSeq.current) return;
+    pillMenuSeq.current = pillMenu.seq;
+    const rect = pillBtnRef.current?.getBoundingClientRect();
+    if (rect) setMenu(rect);
+  }, [pillMenu]);
 
   if (!todos.length && !hasFeatures) return null;
 
@@ -59,81 +77,149 @@ export function TurnPlanPill({ todos, runs = [] }: { todos: TodoItem[]; runs?: F
   const done = todos.filter(t => t.status === 'completed').length;
   const planLabel = hint?.text ?? 'План выполнен';
 
-  // Выбранная фича (индекс клампится, если фич стало меньше).
-  const sel = Math.min(selected, Math.max(0, runs.length - 1));
-  const run = runs[sel];
+  // Кнопка-пилюля: всегда runs[0] (порядок отсортировал бэк), выбор в теле не слушает.
   const featureMode = hasFeatures && mode === 'feature';
+  const model = buildPillModel(runs);
 
-  // Счётчик в шапке: по режиму. Прогресс фичи — доля решённых витков (0..1 → %),
-  // ↺ — число витков возврата (бэк: verdicts.loops).
-  const counter = featureMode && run
-    ? `${Math.round(run.progress * 100)}%${run.verdicts.loops ? ` · ↺${run.verdicts.loops}` : ''}`
-    : `${done}/${todos.length}`;
+  // Счётчик: по режиму. Фича — шаги принято/всего (8/9) + ↺ + +N; план — done/total.
+  // В режиме фичи берём featureCounter КАК ЕСТЬ, включая null: «все закрыты» (N>1)
+  // счётчика шагов не имеет (model.counter === null) — и ↺/+N тоже не выводятся.
+  // planCounter — только в режиме «План хода» или когда модели нет (фич нет).
+  const planCounter = `${done}/${todos.length}`;
+  const featureCounter = model && model.counter != null
+    ? `${model.counter}${model.loops > 0 ? ` ↺${model.loops}` : ''}`
+    : null;
+  const counter = featureMode && model ? featureCounter : planCounter;
 
-  // Текст кнопки-пилюли.
-  let label = planLabel;
-  let iconColor: string = C.accent;
-  if (featureMode && run) {
-    label = featurePillLabel(run);
-    iconColor = run.awaitingHumanSince ? C.info : C.accent;
-  } else if (!hint) {
-    iconColor = C.textMuted;
-  }
+  // Текст/цвет/вес кнопки-пилюли: по модели (фича) или по плану.
+  const label = featureMode && model ? model.text : planLabel;
+  const iconColor = featureMode && model ? model.iconColor : (hint ? C.accent : C.textMuted);
+  const textColor = featureMode && model ? model.textColor : null;
+  const textWeight = featureMode && model ? model.textWeight : 400;
+  const loops = featureMode && model ? model.loops : 0;
+  const loopsHot = featureMode && model ? model.loopsHot : false;
+  const more = featureMode && model ? model.more : 0;
+  const word = featureMode && model ? model.word : null;
 
-  // Потолок меню: режим фичи выше (560 мобила / 520 десктоп), план — как раньше (340).
+  // Точка-сигнал: пилюля в режиме «План хода», а фича ждёт/упала — сигнал не теряется.
+  const showDot = !featureMode && model != null && (model.state === 'wait' || model.state === 'stopped');
+  const dotColor = model?.iconColor ?? C.info;
+  const ariaLabel = (featureMode ? 'Показать исполнение фичи' : 'Показать план хода')
+    + (showDot && model?.ariaExtra ? ` · ${model.ariaExtra}` : '');
+
+  // Потолок меню: режим фичи выше (520 десктоп / 560 мобила; во всю ширину left/right 8 —
+  // только мобила), план — как раньше (340).
   const menuMaxHeight = isMobile ? (featureMode ? 560 : 340) : (featureMode ? 520 : 340);
+  // n-2/n-3: ширина меню — одна у обоих режимов (380 на десктопе, 280–380 на мобиле).
+  const { minWidth: menuMin, maxWidth: menuMax } = pillMenuWidths(isMobile);
 
   return (
     <>
       <button
+        ref={pillBtnRef}
         onClick={e => setMenu(menu ? null : e.currentTarget.getBoundingClientRect())}
         title={featureMode ? 'Показать исполнение фичи' : 'Показать план хода'}
+        aria-label={ariaLabel}
         style={{
-          fontSize: 11, color: C.textMuted, fontFamily: FONT.mono,
+          // R-7: в режиме фичи текст и счётчик пилюли — C.textSecondary (4,02:1), не C.textMuted.
+          fontSize: FS.xs, color: featureMode ? C.textSecondary : C.textMuted, fontFamily: FONT.mono,
           background: C.bgSelected, border: 'none', borderRadius: 8, padding: '4px 11px',
           display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
           maxWidth: 300, minWidth: 0, flexShrink: 1,
+          // R-8: высота пилюли на 360 — 28 (макет .app.m .tpp); на десктопе — по контенту.
+          ...(isMobile ? { minHeight: 28 } : {}),
         }}
       >
-        {featureMode ? (
-          <Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={iconColor} style={{ flexShrink: 0 }} />
-        ) : (
-          <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={iconColor} style={{ flexShrink: 0 }} />
+        {/* Значок (+ точка-сигнал, когда пилюля в режиме плана, а фича ждёт/упала). */}
+        <span style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
+          {featureMode && model
+            ? <FeaturePillIcon model={model} />
+            : <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={iconColor} />}
+          {showDot && (
+            <span style={{
+              position: 'absolute', right: -3, top: -3, width: 6, height: 6,
+              borderRadius: '50%', background: dotColor, boxShadow: `0 0 0 1.5px ${C.bgSelected}`,
+            }} />
+          )}
+        </span>
+        {/* Слово-метка режима: на мобиле (360 px) скрыто — значок и так отличает режим. */}
+        {word && !isMobile && (
+          <>
+            <span style={{ flexShrink: 0 }}>{word}</span>
+            <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
+          </>
         )}
-        <span style={{ flexShrink: 0 }}>{counter}</span>
-        <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
-        <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {/* Счётчик шагов + ↺ + +N (без счётчика — «все закрыты», N>1). */}
+        {counter != null && (
+          <>
+            <span style={{ flexShrink: 0 }}>{counter}</span>
+            {loops > 0 && (
+              <span style={{
+                flexShrink: 0,
+                ...(loopsHot ? { color: C.warningText, fontWeight: 700 } : {}),
+              }}>↺{loops}</span>
+            )}
+            {more > 0 && (
+              <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, opacity: 0.8, flexShrink: 0 }}>+{more}</span>
+            )}
+            <span style={{ opacity: 0.45, flexShrink: 0 }}>·</span>
+          </>
+        )}
+        {/* Текст состояния: обрезается многоточием, цвет/вес — по модели. */}
+        <span style={{
+          minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...(textColor ? { color: textColor } : {}),
+          fontWeight: textWeight,
+        }}>
           {label}
         </span>
       </button>
       {menu && (
-        <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={280} maxWidth={380} maxHeight={menuMaxHeight}>
-          <div style={{ padding: '9px 12px 11px' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,
-              borderBottom: `1px solid ${C.divider}`,
-            }}>
-              {hasFeatures ? (
-                <ModeSwitcher mode={mode} onMode={setMode} hasFeatures={hasFeatures} />
-              ) : (
-                <span style={{ fontFamily: FONT.serif, fontSize: 13, fontWeight: 700, color: C.textHeading }}>
+        hasFeatures ? (
+          // Есть фичи: общее тело (переключатель + выбор фичи + FeatureRunView/TodoList),
+          // шапка липкая, в режиме фичи меню выше и во всю ширину.
+          <Menu
+            onClose={() => setMenu(null)}
+            anchor={menu}
+            minWidth={menuMin}
+            maxWidth={menuMax}
+            maxHeight={menuMaxHeight}
+            // r-3: во всю ширину (left/right 8) — на мобиле в обоих режимах (одна ширина);
+            // на десктопе — фикс. 380 (fullWidth=false).
+            fullWidth={pillMenuFullWidth(isMobile, featureMode)}
+          >
+            <FeatureModeBody
+              sessionId={sessionId}
+              todos={todos}
+              runs={runs}
+              isMobile={isMobile}
+              variant="pill"
+              // M-2: шапка padding-bottom 7 + (margin-bottom 5 даёт bodyPad-top 5); тело top 0 (макет .hd/.in).
+              headerPad="9px 12px 7px"
+              bodyPad="5px 12px 11px"
+              headerBorder={`1px solid ${C.divider}`}
+            />
+          </Menu>
+        ) : (
+          // Без фич — прежняя разметка меню (байт-в-байт): заголовок «План хода» + чек-лист.
+          // r-3: на мобиле — во всю ширину (одна ширина с режимом фичи); на десктопе — фикс. 380.
+          <Menu onClose={() => setMenu(null)} anchor={menu} minWidth={menuMin} maxWidth={menuMax} maxHeight={340} fullWidth={pillMenuFullWidth(isMobile, false)}>
+            <div data-testid="turn-plan-menu" style={{ padding: '9px 12px 11px' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 7, marginBottom: 5,
+                borderBottom: `1px solid ${C.divider}`,
+              }}>
+                <span style={{ fontFamily: FONT.serif, fontSize: FS.base, fontWeight: 700, color: C.textHeading }}>
                   План хода
                 </span>
-              )}
-              <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
-                {counter}
-              </span>
-            </div>
-            {featureMode && run ? (
-              <>
-                <FeaturePicker runs={runs} selected={sel} onSelect={setSelected} />
-                <FeatureRunView run={run} />
-              </>
-            ) : (
+                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+                  {planCounter}
+                </span>
+              </div>
               <TodoList todos={todos} />
-            )}
-          </div>
-        </Menu>
+            </div>
+          </Menu>
+        )
       )}
     </>
   );

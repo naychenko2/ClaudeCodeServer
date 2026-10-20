@@ -71,6 +71,14 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Guards.Tests (шаг 4.1): 5 guard-тестов + BoundaryIlScanner переехали в отдельную
+         тестовую сборку. Допуск internals монолита Guards.Tests: McpToolsetStabilityTests
+         использует internal HandsTurnHarness (живёт в монолите, HandsTurnTests.cs) —
+         harness «руки» для сквозного теста хода. Internal-члены монолита доступны
+         Guards.Tests через этот InternalsVisibleTo. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Guards.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
@@ -95,6 +103,19 @@
          через Main типы в bin попадают, но для компиляции C#-файлов нужна явная
          ссылка на сборку. -->
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- TestKit — общие тестовые хелперы (шаг 1.1): вынесены из Helpers/ в отдельную
+         библиотеку, компилируемую только против Core. Namespace не менялся
+         (ClaudeHomeServer.Tests.Helpers.*), поэтому using'и монолита не тронуты —
+         типы просто теперь резолвятся из TestKit. Internal-хелперы (TestLauncherFactory
+         и др.) доступны через InternalsVisibleTo в TestKit. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host (шаг 1.2): Main-зависимые хелперы (TestWebApplicationFactory,
+         DeviceWaitTestHost, FakeLlmSessionAdapter, LoopbackRelayChannel, AgentReleaseFixture,
+         LocalMediaFakes, TestSpecialtyStore, FakeFeatureFlagGate, FakeCodeGraphProvider,
+         SessionManagerTestAccess) переехали сюда из Helpers/. Namespace не менялся,
+         using'и монолита не тронуты — типы теперь резолвятся из TestKit.Host.
+         Internal-хелперы этой сборки доступны монолиту через InternalsVisibleTo в нём. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
     <!--
       Знание — отдельная сборка (этап 5). Нужен ProjectReference, чтобы тесты
       видели IKnowledgeIndex/IKnowledgeSyncParticipant/KnowledgeDtos из Core,
@@ -138,9 +159,11 @@
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
     <!--
-      Llm — отдельная сборка (Этап 5, финал линии). Тесты вертикали остались здесь
-      (отдельной ClaudeHomeServer.Llm.Tests нет), плюс статические конструкторы трёх
-      сторожей форс-загружают сборку через typeof(LlmSubsystem).Assembly.
+      Llm — отдельная сборка (Этап 5, финал линии). Все тесты Llm-семейства
+      (ClaudeSession*/Claude*/Provider/Fallback/Subscription/Transcript и остальное)
+      переехали в ClaudeHomeServer.Llm.Tests (шаги 3.1–3.3); ссылка держится ради
+      статических конструкторов трёх сторожей, форс-загружающих сборку через
+      typeof(LlmSubsystem).Assembly.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <!--
@@ -150,6 +173,104 @@
       и чтобы юниты PluginStoreTests резолвили PluginStore/PluginDirSource напрямую.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Plugins\ClaudeHomeServer.Plugins.csproj" />
+      Personas.Tests (шаг 3.4): 30 Persona*Tests переехали в отдельную тестовую сборку
+      вертикали. Монолит тянет её как ProjectReference, чтобы в переходный период
+      (до финальной чистки) обе копии перенесённых тестов компилировались
+      и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Personas.Tests\ClaudeHomeServer.Personas.Tests.csproj" />
+    <!--
+      Team.Tests (шаг 3.5): 13 Team*Tests переехали в отдельную тестовую сборку вертикали.
+      Монолит тянет её как ProjectReference, чтобы в переходный период (до финальной чистки)
+      обе копии перенесённых тестов компилировались и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Team.Tests\ClaudeHomeServer.Team.Tests.csproj" />
+    <!--
+      Mcp.Tests (шаг 3.6): 21 Mcp*Tests/Gateway*Tests переехали в отдельную тестовую сборку
+      вертикали. Монолит тянет её как ProjectReference, чтобы в переходный период (до финальной
+      чистки) обе копии перенесённых тестов компилировались и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Mcp.Tests\ClaudeHomeServer.Mcp.Tests.csproj" />
+    <!--
+      TestRuns.Tests (шаг 3.7, пачка F): 7 TestRuns*Tests + хелпер TreeLinks переехали в
+      отдельную тестовую сборку вертикали. Монолит тянет её как ProjectReference, чтобы в
+      переходный период (до финальной чистки) обе копии перенесённых тестов компилировались
+      и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestRuns.Tests\ClaudeHomeServer.TestRuns.Tests.csproj" />
+    <!--
+      ChatContext.Tests (шаг 3.8, пачка F): 12 ChatContext*Tests + хелпер ChatContextTestSupport
+      переехали в отдельную тестовую сборку вертикали. Монолит тянет её как ProjectReference,
+      чтобы в переходный период (до финальной чистки) обе копии перенесённых тестов компилировались
+      и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.ChatContext.Tests\ClaudeHomeServer.ChatContext.Tests.csproj" />
+    <!--
+      Architecture.Tests (шаг 3.9, пачка F): 10 Architecture*Tests (9 Services/Architecture +
+      DynamicModules/ArchitectureModuleEndpointTests) переехали в отдельную тестовую сборку
+      вертикали. Монолит тянет её как ProjectReference, чтобы в переходный период (до финальной
+      чистки) перенесённые тесты компилировались и новый проект был в графе сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture.Tests\ClaudeHomeServer.Architecture.Tests.csproj" />
+    <!--
+      LocalStats.Tests (шаг 3.10, пачка F, последний): 8 LocalStats*Tests
+      (1 LocalStats/ + 7 Services/LocalStats) переехали в отдельную тестовую сборку
+      вертикали. Монолит тянет её как ProjectReference, чтобы в переходный период (до
+      финальной чистки) перенесённые тесты компилировались и новый проект был в графе
+      сборки монолита.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.LocalStats.Tests\ClaudeHomeServer.LocalStats.Tests.csproj" />
+    <!--
+      Deploy.Tests (шаг 3.11, пачка G): 8 Deploy*Tests (Composition/Controllers/Services)
+      переехали в отдельную тестовую сборку вертикали. Deploy — отдельная сборка
+      (ClaudeHomeServer.Deploy), не папка Main, поэтому InternalsVisibleTo на Deploy.Tests
+      стоит в ClaudeHomeServer.Deploy.csproj (internal-члены PendingReport/Compose живут там),
+      а не в Main. Монолит тянет Deploy.Tests как ProjectReference, чтобы в переходный период
+      (до финальной чистки) перенесённые тесты компилировались и новый проект был в графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Deploy.Tests\ClaudeHomeServer.Deploy.Tests.csproj" />
+    <!--
+      RemoteCommands.Tests (шаг 3.12, пачка G): 6 RemoteCommands/RemoteProcessRunner*Tests
+      (Controllers/RemoteCommands + Services/RemoteCommands + Services/RemoteProcessRunner*)
+      переехали в отдельную тестовую сборку вертикали. RemoteCommands — папка Main
+      (ClaudeHomeServer/Services/RemoteCommands/), поэтому InternalsVisibleTo на RemoteCommands.Tests
+      стоит в Main (ClaudeHomeServer.csproj), а не в отдельной сборке. Монолит тянет
+      RemoteCommands.Tests как ProjectReference, чтобы в переходный период (до финальной чистки)
+      перенесённые тесты компилировались и новый проект был в графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.RemoteCommands.Tests\ClaudeHomeServer.RemoteCommands.Tests.csproj" />
+    <!--
+      Watchdog.Tests (шаг 3.13, пачка G): 5 Watchdog*Tests (Services/Watchdog:
+      WatchdogService/WatchdogStore/WatchdogCommandRunner/WatchdogCommandRunnerDevice/
+      WatchdogPresence) переехали в отдельную тестовую сборку вертикали. Watchdog — отдельная
+      сборка (ClaudeHomeServer.Watchdog), не папка Main, поэтому InternalsVisibleTo на
+      Watchdog.Tests стоит в ClaudeHomeServer.Watchdog.csproj (internal WatchdogService.ShouldPoll/
+      ClipOutput), а не в Main. Монолит тянет Watchdog.Tests как ProjectReference, чтобы в
+      переходный период (до финальной чистки) перенесённые тесты компилировались и новый проект
+      был в графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Watchdog.Tests\ClaudeHomeServer.Watchdog.Tests.csproj" />
+    <!--
+      Telemetry.Tests (шаг 3.14, пачка G, последний): 22 Telemetry*Tests (21 Telemetry/ +
+      1 Controllers/TelemetryIncidentsController) переехали в отдельную тестовую сборку
+      вертикали. Telemetry — папка Main (backend/ClaudeHomeServer/Telemetry/), поэтому
+      InternalsVisibleTo на Telemetry.Tests стоит в Main (ClaudeHomeServer.csproj), а не в
+      отдельной сборке. Монолит тянет Telemetry.Tests как ProjectReference, чтобы в переходный
+      период (до финальной чистки) перенесённые тесты компилировались и новый проект был в
+      графе сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Telemetry.Tests\ClaudeHomeServer.Telemetry.Tests.csproj" />
+    <!--
+      Guards.Tests (шаг 4.1, пачка H): 5 guard-тестов (SubsystemBoundaryTests/
+      SubsystemBoundaryCoverageTests/IlBoundaryRegressionTests/McpToolsetStabilityTests/
+      ProjectMapHygieneGuardTests) + хелпер BoundaryIlScanner переехали в отдельную тестовую
+      сборку. Монолит тянет её как ProjectReference, чтобы в переходный период (до финальной
+      чистки) перенесённые тесты компилировались и новый проект был в графе сборки монолита.
+      Обратный допуск (Guards.Tests → монолит) стоит в Guards.Tests.csproj: оставшиеся в
+      монолите LauncherProjectContextGuardTests/LocalLlmClientBoundaryTests используют
+      internal BoundaryIlScanner.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Guards.Tests\ClaudeHomeServer.Guards.Tests.csproj" />
     <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
          настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
          агента с сайдкаром (internals) -->

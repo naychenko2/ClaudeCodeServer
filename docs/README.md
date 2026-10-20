@@ -152,7 +152,9 @@ MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.
 [ADR-024](adr/ADR-024-spheres.md) (сферы: зона персоны `PersonaZone` и две полки памяти над проектами, fail-closed, членство меняет только человек; описание — [features/spheres.md](features/spheres.md)),
 [ADR-027](adr/ADR-027-character-smart-photos.md) (умный подбор фото персонажа под сюжет: метки ракурса и эмоции в манифесте, места разметки с картинками на вход, маршрут `face-pose`, шов `IImageLabeler`, фолбэк к прежнему порядку байт в байт; за флагом `character-smart-photos`),
 [ADR-028](adr/ADR-028-multi-character-faces.md) (подстановка персонажей на лица картинки, этапы 1–3: одна детекция и цепочка проходов в задаче, одна версия на запрос, частичный результат, MCP `faces`; за флагом `character-face-swap`),
-[ADR-029](adr/ADR-029-local-model-stats.md) (статистика локальных моделей: учёт за ход в шлюзе `/gw`, очередь текста без номера, реестр prompt_id ComfyUI как единственная точка атрибуции, чужим — только агрегаты; описание — [features/local-model-stats.md](features/local-model-stats.md));
+[ADR-029](adr/ADR-029-local-model-stats.md) (статистика локальных моделей: учёт за ход в шлюзе `/gw`, очередь текста без номера, реестр prompt_id ComfyUI как единственная точка атрибуции, чужим — только агрегаты; описание — [features/local-model-stats.md](features/local-model-stats.md)),
+[ADR-031](adr/ADR-031-feature-as-dimension.md) (фича как сквозное измерение чатов: членство «чат → фича» вычисляется индексом `features/index`, `Session` не расширяется, ключевой чат — цепочкой, «одна строка — одна группа»; за флагом `features-overview`),
+[ADR-033](adr/ADR-033-turn-auto-resume.md) (авто-возобновление ходов после рестарта сервера: фоновый `TurnAutoResumeService` с прогревом, снимок кандидатов из `Working` в `LoadSessions`, сторож crash-loop, фронт-ветка `server_restart` в `ChatItemView`; за флагом `turn-auto-resume`),
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

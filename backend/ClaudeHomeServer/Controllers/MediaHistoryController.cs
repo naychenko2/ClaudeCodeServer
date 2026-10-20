@@ -6,32 +6,50 @@ using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.MediaHistory;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Controllers;
 
-// История медиа-генераций (ADR-030): 7 дней на диске, админ видит промпты, параметры,
-// результаты и логин владельца. Обе ручки — [Authorize(Roles="admin")] (не-админ — 403) плюс
-// серверная проверка флага local-model-stats (без флага — 404). Название чужого чата/проекта и
-// переход в чат скрыты: наружу только логин.
+// История медиа-генераций (ADR-030): 7 дней на диске. Админ видит промпты, параметры,
+// результаты и логин владельца; не-админ — только свои записи (логин не раскрывается, чужая
+// запись — 404, не 403: не подтверждаем существование чужой). Обе ручки — [Authorize] (любой
+// аутентифицированный) плюс серверная проверка: админ — флаг local-model-stats (как раньше),
+// не-админ — рубильник MediaForUsers (без него — 404). Название чужого чата/проекта и переход
+// в чат скрыты: наружу только логин (у админа).
 [ApiController]
-[Authorize(Roles = "admin")]
 [Route("api/local-model/history")]
 public class MediaHistoryController(
     MediaHistoryIndex index,
     FeatureFlagService flags,
     IEnumerable<IMediaHistoryResultSource> sources,
     MediaHistoryThumbService thumbs,
+    IOptions<LocalModelStatsMediaOptions> mediaOptions,
     TimeProvider? time = null) : ControllerBase
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
-    // Флаг local-model-stats у текущего пользователя; без него — 404 (UI-гейта мало: наружу чужие файлы)
-    private bool Enabled() => UserId is { } id && flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats);
+    private bool IsAdmin => User.IsInRole("admin");
+
+    // Доступ (ADR-030, 2026-10-18): админ — серверный флаг local-model-stats (как раньше);
+    // не-админ — флаг не требуется, доступ даёт рубильник MediaForUsers. Без доступа — 404
+    // (UI-гейта мало: наружу чужие файлы). fail-closed: не-админ без непустого sub — 404
+    // (та же общая проверка, что и в /stats/media, через MediaSelfScope).
+    private bool Enabled()
+    {
+        if (UserId is not { } id) return false;
+        if (!MediaSelfScope.HasOwner(User)) return false;
+        return IsAdmin
+            ? flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats)
+            : mediaOptions.Value.MediaForUsers;
+    }
 
     // Список: фильтры (вид, модель, исход, логин, период) + курсорная пагинация (50 на страницу).
     // kind/outcome/period — фиксированные наборы (контракт api.md): незнакомое значение — 400.
+    // Аутентифицированный (ADR-030, 2026-10-18): админ — все записи (scope "all"); не-админ —
+    // только свои (scope "self", фильтр OwnerId == sub на уровне индекса, логин не раскрывается).
+    [Authorize]
     [HttpGet]
     public IActionResult List(
         [FromQuery] string? kind,
@@ -65,12 +83,17 @@ public class MediaHistoryController(
             qTo ??= pTo;
         }
 
+        var isAdmin = IsAdmin;
         var query = new MediaHistoryQuery
         {
             Kind = kind,
             Model = model,
             Outcome = outcome,
-            Login = login,
+            // Не-админ: фильтр по владельцу на уровне индекса (OwnerId == sub), логин игнорируем
+            // (только свои записи, логин не раскрываем); админ — фильтр по логину, как раньше.
+            Login = isAdmin ? login : null,
+            OwnerId = isAdmin ? null : UserId,
+            Scope = isAdmin ? "all" : "self",
             From = qFrom,
             To = qTo,
             Cursor = cursor,
@@ -81,6 +104,9 @@ public class MediaHistoryController(
 
     // Файл результата: только id записи и номер варианта n (путь с клиента не приходит).
     // size=thumb — миниатюра (лениво), full — оригинал. 410 — файла нет (reason — причина).
+    // Аутентифицированный (ADR-030, 2026-10-18): не-админ — только своя запись (чужая — 404,
+    // не 403: не подтверждаем существование чужой); админ — любая.
+    [Authorize]
     [HttpGet("{recordId}/file")]
     public async Task<IActionResult> File(string recordId, [FromQuery] int n = 0,
         [FromQuery] string size = "full", CancellationToken ct = default)
@@ -94,6 +120,11 @@ public class MediaHistoryController(
         index.Load();
         var record = index.Get(recordId);
         if (record is null) return NotFound();
+
+        // Не-админ: запись должна принадлежать ему, иначе 404 (не 403 — не подтверждаем
+        // существование чужой записи). Админ — любая запись.
+        if (!IsAdmin && record.Origin?.OwnerId != UserId)
+            return NotFound();
 
         var origin = record.Origin;
         if (origin is null) return Gone("missing");

@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · попап плана хода · вкладка «Исполнение фичи» (макет 1)</title>
+<!--
+  Макет вкладки «Исполнение фичи» в попапе плана хода (меню пилюли TurnPlanPill и карточка плана в ленте —
+  общее тело FeatureModeBody). Записка — turn-plan-feature-popup-1.md, токены — turn-plan-feature-popup-1-tokens.md.
+  Код продукта не правится.
+  Привязка: featureId 9919bd75-0b1c-4fda-8196-72354cbcba29 (эпик «Обзор фич, волна 3»); задача 3a4f64d1
+  (макет попапа под новый дизайн). Согласовано со страницей фичи features-overview-3-final.html (тег, тревога,
+  пара «чат · задача», чип модели) и панелью в чате feature-banner-1.html, вариант А «Строка» + кликабельные
+  этапы из Г (строка состояния «Этап · ждёт вас · 25 мин» и одно главное действие).
+  Пометка .be «проекция Б-n» (переключатель «Пометки бэка») — аддитивное поле ответа, см. записку.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css (сверено 20.10), семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2; --c-pill-track:#EDE7DC;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815; --c-pill-track:#272320;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; -webkit-appearance:none; appearance:none; cursor:pointer; text-align:left; }
+button:focus-visible, [tabindex]:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg { flex-shrink:0; }
+
+/* ===== Пометка цены ===== */
+.be { display:inline-flex; align-items:center; font:700 10px/16px "Hanken Grotesk",sans-serif; border-radius:6px; padding:0 6px;
+  white-space:nowrap; background:var(--c-info-bg); color:var(--c-text-primary); flex-shrink:0; }
+.new { outline:1.5px dashed var(--c-accent-muted); outline-offset:2px; }
+.nomarks .be { display:none; } .nomarks .new { outline:none; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { max-width:1100px; margin:10px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+#meas { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+
+/* ===== Окно продукта (фрагмент чата) ===== */
+.stage { padding:14px 16px 40px; display:flex; justify-content:center; }
+.app { position:relative; width:900px; height:720px; flex-shrink:0; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; padding:8px; transform:translateZ(0); }
+.app.m { width:360px; height:760px; border-radius:28px; padding:0; }
+.isl { position:relative; height:100%; background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; }
+.app.m .isl { border-radius:0; box-shadow:none; }
+.chead { display:flex; align-items:center; gap:8px; min-height:52px; padding:8px 16px; background:var(--c-bg-main); border-bottom:1px solid var(--c-border); }
+.app.m .chead { min-height:56px; padding:8px 8px 8px 14px; }
+.chead .t { font-weight:600; color:var(--c-text-heading); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chead .sub { font-size:11px; color:var(--c-text-muted); }
+.feed { flex:1; padding:16px; overflow:hidden; display:flex; flex-direction:column; gap:10px; max-width:950px; }
+.msg { max-width:520px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:8px 12px; color:var(--c-text-primary); }
+.msg.me { align-self:flex-end; background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.pillbar { display:flex; justify-content:flex-end; padding:6px 16px 0; }
+.app.m .pillbar { padding:6px 8px 0; }
+
+/* Пилюля плана хода (TurnPlanPill, режим фичи) — как сейчас, меняется только текст состояния */
+.tpp { display:inline-flex; align-items:center; gap:6px; max-width:420px; min-height:28px; padding:3px 10px; border-radius:999px;
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); font-size:12px; color:var(--c-text-secondary); position:relative; }
+.tpp:hover { background:var(--c-bg-selected); }
+.tpp.open { background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.app.m .tpp { min-height:40px; max-width:330px; }
+.tpp .x { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.tpp .x b { color:var(--c-text-heading); font-weight:600; }
+.tpp .x.wait { color:var(--c-info); } .tpp .x.stop { color:var(--c-danger-text); } .tpp .x.ok { color:var(--c-success-text); }
+
+/* ===== Попап (ui/Menu) ===== */
+.menu { position:absolute; z-index:5; width:380px; max-height:520px; overflow:auto; background:var(--c-bg-white); border:1px solid var(--c-border);
+  border-radius:12px; box-shadow:var(--shadow-dropdown); }
+.app.m .menu { left:8px; right:8px; width:auto; max-height:560px; }
+.mhead { position:sticky; top:0; z-index:2; background:var(--c-bg-white); display:flex; align-items:center; gap:8px; padding:9px 12px 9px; border-bottom:1px solid var(--c-divider); }
+.seg { display:inline-flex; padding:2px; background:var(--c-pill-track); border-radius:8px; gap:2px; }
+.seg button { padding:3px 10px; border-radius:6px; font-size:12px; color:var(--c-text-secondary); min-height:26px; }
+.seg button.on { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.app.m .seg button { min-height:40px; padding:0 12px; }
+.mbody { padding:10px 12px 12px; display:flex; flex-direction:column; gap:10px; }
+
+.slbl { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px 6px; }
+.slbl .be { text-transform:none; letter-spacing:0; }
+
+/* выбор фичи */
+.pick { display:flex; gap:4px; flex-wrap:wrap; }
+.app.m .pick { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+.chip { display:inline-flex; align-items:center; gap:5px; max-width:170px; min-height:26px; padding:2px 8px; border-radius:8px; font-size:12px;
+  border:1px solid var(--c-border-light); background:var(--c-bg-card); color:var(--c-text-secondary); flex-shrink:0; }
+.chip:hover { background:var(--c-bg-selected); }
+.chip.on { background:var(--c-accent-light); border-color:var(--c-accent-muted); color:var(--c-text-heading); font-weight:600; }
+.app.m .chip { min-height:40px; max-width:220px; }
+.chip .n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+
+/* шапка фичи */
+.fh { display:flex; align-items:center; gap:7px; min-width:0; }
+.fh .nm { font-family:"JetBrains Mono",monospace; font-size:13px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.meta { display:flex; align-items:center; gap:4px 12px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); margin-top:-4px; }
+.meta .br { font-family:"JetBrains Mono",monospace; font-size:11px; display:inline-flex; align-items:center; gap:4px; color:var(--c-text-muted); }
+
+/* тег статуса (StatusTag, как на странице) */
+.tag { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 7px; border-radius:6px; white-space:nowrap; flex-shrink:0; line-height:16px; }
+.tag .d { width:6px; height:6px; border-radius:6px; background:var(--c-info); }
+.t-neutral { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-run { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.t-wait { background:var(--c-info-bg); color:var(--c-text-primary); }
+.t-stop { background:var(--c-danger-bg); color:var(--c-danger-text); box-shadow:inset 0 0 0 1px var(--c-danger); }
+.t-ok { background:var(--c-success-bg); color:var(--c-success-text); }
+
+/* строка состояния (тон панели А) */
+.st { border-radius:10px; padding:8px 10px; display:flex; flex-direction:column; gap:7px; font-size:12px; color:var(--c-text-primary); }
+.st .l1 { display:flex; gap:8px; align-items:flex-start; }
+.st .l1 .g { margin-top:2px; }
+.st b { font-weight:700; color:var(--c-text-heading); }
+.st .why { color:var(--c-text-secondary); }
+.st-now { background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.st-wait { background:var(--c-info-bg); }
+.st-stop { background:var(--c-danger-bg); } .st-stop b { color:var(--c-danger-text); }
+.st-neutral { background:var(--c-bg-selected); }
+.st-ok { background:var(--c-success-bg); } .st-ok b { color:var(--c-success-text); }
+.acts { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+
+/* кнопки кита (ui/Button) */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:5px; border-radius:8px; font-weight:600; white-space:nowrap; }
+.btn.xs { min-height:24px; padding:0 9px; font-size:11.5px; }
+.app.m .btn.xs { min-height:40px; padding:0 12px; font-size:12px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(1.05); }
+.btn.sec { background:var(--c-bg-white); color:var(--c-text-primary); box-shadow:inset 0 0 0 1px var(--c-border); }
+.btn.sec:hover { background:var(--c-bg-selected); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.btn[disabled] { opacity:.55; cursor:default; }
+
+/* пара «чат · задача» (NavTargetButton, как на странице) */
+.nav { display:inline-flex; align-items:center; gap:4px; min-height:24px; padding:0 7px; border-radius:6px; font-size:11px; font-weight:600;
+  border:1px solid var(--c-border-light); background:var(--c-bg-white); color:var(--c-accent); white-space:nowrap; }
+.nav:hover { background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.nav.task { color:var(--c-text-secondary); }
+.nav.task:hover { background:var(--c-bg-selected); color:var(--c-text-heading); border-color:var(--c-border-light); }
+.nav.none { border:0; background:none; color:var(--c-text-muted); font-weight:400; cursor:default; padding:0 2px; }
+.app.m .ex .nav { min-width:40px; min-height:40px; justify-content:center; padding:0; }
+.app.m .ex .nav .tx { display:none; }
+.app.m .ex .nav.none { display:none; }
+.app.m .st .nav { min-height:40px; padding:0 10px; }
+
+/* этапы */
+.stages { display:flex; flex-direction:column; position:relative; }
+.sr { position:relative; display:grid; grid-template-columns:16px 1fr auto; gap:9px; align-items:center; width:100%; min-height:32px; padding:4px 6px 4px 0; border-radius:8px; }
+.app.m .sr { min-height:44px; }
+button.sr:hover { background:var(--c-bg-selected); }
+.sr.cur { background:var(--c-bg-card); }
+.sr .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sr.fut .nm, .sr.abs .nm { color:var(--c-text-muted); }
+.sr .rt { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+.sr .rt .w { font-weight:600; } .sr .rt .w.wait { color:var(--c-info); } .sr .rt .w.stop { color:var(--c-danger-text); } .sr .rt .w.run { color:var(--c-text-heading); }
+.sr .chev { color:var(--c-text-muted); transition:transform .15s; }
+.sr[aria-expanded="true"] .chev { transform:rotate(90deg); }
+.dot { width:14px; height:14px; border-radius:14px; margin-left:1px; position:relative; z-index:1; }
+.dot.done { background:var(--c-success); }
+.dot.run { background:var(--c-text-heading); box-shadow:0 0 0 3px var(--c-bg-selected); }
+.dot.wait { background:var(--c-info); box-shadow:0 0 0 3px var(--c-info-bg); }
+.dot.stop { background:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.dot.ovl { background:var(--c-bg-white); box-shadow:inset 0 0 0 3px var(--c-text-heading); }
+.dot.fut { background:var(--c-bg-white); box-shadow:inset 0 0 0 2px var(--c-progress-track); }
+.dot.abs { background:var(--c-bg-white); box-shadow:inset 0 0 0 1.5px var(--c-dashed); }
+.rail { position:absolute; left:8px; top:16px; bottom:16px; width:2px; background:var(--c-progress-track); }
+.avs { display:inline-flex; }
+.avs .av { width:18px; height:18px; font-size:9px; margin-left:-4px; box-shadow:0 0 0 1.5px var(--c-bg-white); }
+.avs .av:first-child { margin-left:0; }
+.app.m .sr .avs { display:none; }
+
+/* исполнители этапа */
+.ex { margin:0 0 4px 25px; padding-left:8px; border-left:1px solid var(--c-divider); display:flex; flex-direction:column; gap:2px; }
+.er { display:flex; align-items:center; gap:8px; min-height:36px; padding:2px 0; }
+.app.m .er { min-height:44px; flex-wrap:wrap; }
+.er .who { flex:1; min-width:0; display:flex; flex-direction:column; }
+.er .who .a { font-size:12px; font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:6px; min-width:0; }
+.er .who .a .nmx { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.er .who .b { font-size:11px; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.er .who .b .wait { color:var(--c-info); font-weight:600; } .er .who .b .stop { color:var(--c-danger-text); font-weight:600; }
+.role { font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; padding:0 5px; border-radius:5px; background:var(--c-bg-selected); color:var(--c-text-secondary); line-height:15px; flex-shrink:0; }
+.app.m .role { display:none; }
+.empty-ex { margin:0 0 4px 25px; font-size:12px; color:var(--c-text-muted); padding:4px 0 6px; }
+
+/* аватар с чипом модели (кнопка-аватар, как в «Чатах» страницы) */
+.avb { position:relative; width:32px; height:36px; display:inline-flex; align-items:flex-start; justify-content:center; padding-top:2px; border-radius:8px; flex-shrink:0; }
+.app.m .avb { width:40px; height:40px; }
+.av { width:24px; height:24px; border-radius:24px; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700;
+  background:var(--c-accent-light); color:var(--c-accent); }
+.av.p2 { background:var(--c-info-bg); color:var(--c-info); } .av.p3 { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.p4 { background:var(--c-warning-bg); color:var(--c-warning-text); } .av.p5 { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.mchip { position:absolute; left:50%; transform:translateX(-50%); top:21px; font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; line-height:14px;
+  padding:0 4px; border-radius:5px; background:var(--c-nav-ink); color:var(--c-on-nav-ink); box-shadow:0 0 0 1.5px var(--c-bg-white); white-space:nowrap; }
+.app.m .mchip { top:24px; }
+
+/* подсказка (ui/Tooltip) */
+.tip { position:fixed; z-index:200; max-width:260px; padding:7px 10px; border-radius:8px; background:var(--c-nav-ink); color:var(--c-on-nav-ink); font-size:12px; line-height:1.4; pointer-events:none; }
+
+/* подвал попапа */
+.foot { display:flex; align-items:center; justify-content:flex-end; gap:5px; width:100%; padding:8px 13px; border-top:1px solid var(--c-divider);
+  font-size:12px; font-weight:600; color:var(--c-accent); }
+.foot:hover .ar { transform:translateX(3px); }
+.foot .ar { display:flex; transition:transform .15s; }
+.app.m .foot { min-height:44px; }
+
+/* загрузка и ошибка */
+.sk { background:var(--c-bg-selected); border-radius:6px; height:12px; }
+.err { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--c-text-primary); display:flex; flex-direction:column; gap:8px; }
+.err b { color:var(--c-danger-text); }
+
+/* модалка мержа и тост */
+.scrim { position:absolute; inset:0; z-index:20; background:var(--c-overlay); display:flex; align-items:center; justify-content:center; }
+.app.m .scrim { align-items:flex-end; }
+.modal { width:440px; background:var(--c-bg-white); border-radius:20px; box-shadow:var(--shadow-modal); padding:20px; display:flex; flex-direction:column; gap:10px; }
+.app.m .modal { width:100%; border-radius:20px 20px 0 0; }
+.modal h3 { margin:0; font-family:"PT Serif",Georgia,serif; font-size:18px; color:var(--c-text-heading); }
+.modal p { margin:0; color:var(--c-text-secondary); font-size:13px; }
+.modal .row { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+.app.m .modal .row .btn { flex:1; min-height:40px; }
+.modal .btn { min-height:32px; padding:0 14px; font-size:13px; }
+.toast { position:absolute; left:50%; bottom:20px; transform:translateX(-50%); z-index:30; background:var(--c-nav-ink); color:var(--c-on-nav-ink); border-radius:10px; padding:8px 12px; font-size:12px; max-width:320px; }
+.app.m .toast { top:64px; bottom:auto; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Попап плана хода · «Исполнение фичи»</h1>
+  <div class="grp"><span class="lbl">состояние</span><div class="pills" id="pSt"></div></div>
+  <div class="grp"><span class="lbl">фич в чате</span><div class="pills" id="pN"></div></div>
+  <div class="grp"><span class="lbl">тема</span><div class="pills" id="pTh"></div></div>
+  <div class="grp"><span class="lbl">ширина</span><div class="pills" id="pW"></div></div>
+  <div class="grp"><span class="lbl">пометки бэка</span><div class="pills" id="pMk"></div></div>
+  <span id="meas"></span>
+</div>
+<p class="note">Клик по <b>пилюле</b> открывает и закрывает попап. Клик по <b>этапу</b> раскрывает его исполнителей; у каждого — роль,
+<b>чип модели</b> (подсказка с полной моделью по наведению, фокусу и тапу) и пара <b>«чат · задача»</b>. Переход закрывает попап.
+Адрес: <span class="mono">#st=waiting&amp;n=2&amp;theme=dark&amp;w=360</span>.</p>
+<div class="stage"><div class="app" id="app"><div class="isl" id="isl"></div></div></div>
+
+<script>
+/* ===== Данные макета ===== */
+const P = {
+  alex:  { n:'Александр', i:'А', c:'p5' }, egor:{ n:'Егор', i:'Е', c:'p4' }, denis:{ n:'Денис', i:'Д', c:'p2' },
+  kira:  { n:'Кира', i:'К', c:'' }, gleb:{ n:'Глеб', i:'Г', c:'p3' }, vera:{ n:'Вера', i:'В', c:'p2' }, mark:{ n:'Марк', i:'М', c:'p4' },
+};
+const M = { opus:['Opus','Claude Opus 5.5'], sonnet:['Sonnet','Claude Sonnet 5.5'], qwen:['Qwen','Qwen3.8-27B · локальная'],
+  autoOpus:['Авто','Авто → Claude Opus 5.5 (слот «сильная»)'], autoSonnet:['Авто','Авто → Claude Sonnet 5.5 (слот «средняя»)'] };
+const STAGES = [['cut','Разрез'],['plan','План'],['prod','Производство'],['review','Ревью'],['qa','Проверка'],['final','Финальное ревью'],['merge','Мерж']];
+// Исполнители этапа: персона, роль (roleLabel, Б3), модель (modelLabel/modelFull, Б4), есть ли чат (chatId, Б7).
+const EX = {
+  cut:   [{ p:'alex',  role:'разрез', t:'Разрез «Обзор фич, волна 3»', m:'opus' }],
+  plan:  [{ p:'egor',  role:'план',   t:'План волны 3', m:'autoSonnet' }],
+  prod:  [{ p:'denis', role:'Ш1 · бэк', t:'Проекция run.state и связи навигации', m:'opus' },
+          { p:'kira',  role:'Ш2 · фронт', t:'Каркас страницы и вкладки', m:'qwen' },
+          { p:'kira',  role:'Ш3 · фронт', t:'Хронология и мини-сводка', m:'qwen' }],
+  review:[{ p:'gleb',  role:'ревью Ш1', t:'Ревью: проекция run.state', m:'autoOpus' },
+          { p:'gleb',  role:'ревью Ш2', t:'Ревью: каркас страницы', m:'autoOpus' }],
+  qa:    [{ p:'vera',  role:'проверка', t:'Приёмка Веры', m:'sonnet' }],
+  final: [{ p:'alex',  role:'финал', t:'Финальное ревью фичи', m:'opus' }],
+  merge: [{ p:'mark',  role:'мерж', t:'Мерж · Обзор фич, волна 3', m:'autoSonnet' }],
+};
+const FEATURES = [
+  { name:'Обзор фич, волна 3', branch:'feat/feature-page-3', mine:true },
+  { name:'Голосовой ввод: шторка и диктовка', branch:'feat/voice-sheet', mine:false },
+];
+
+// Состояние фичи = run.state (Б1). Для каждого — тег, пилюля, строка состояния, этапы и статусы исполнителей.
+const S = {
+  not_started: { tag:['t-neutral','не начата'], glyph:'empty', pill:['','<b>Не начата</b>'],
+    st:{ c:'st-neutral', h:'Не начата.', why:'Разрез ещё не запускался — шаги появятся после него.' },
+    stg:{ cut:'fut', plan:'fut', prod:'fut', review:'fut', qa:'fut', final:'fut', merge:'fut' }, open:null },
+  running: { tag:['t-run','идёт · производство'], glyph:'run', pill:['','фича · <b>Производство</b> · Кира, Денис'],
+    st:{ c:'st-now', h:'Производство · идёт · 1 ч 10 мин.', why:'Работают Кира и Денис; ревью идёт по шагам.' },
+    stg:{ cut:'done', plan:'done', prod:'run', review:'ovl', qa:'fut', final:'fut', merge:'fut' }, open:'prod',
+    exs:{ prod:['принят · 3 витка','идёт · 1 ч 10 мин','идёт · 25 мин'], review:['принял','идёт'] } },
+  waiting: { tag:['t-wait','ждёт вас'], dot:true, glyph:'wait', pill:['wait','фича · <b>Производство</b> · ждёт вас'],
+    st:{ c:'st-wait', h:'Производство · ждёт вас · 25 мин.', why:'Кира спрашивает: делать ли шторку фильтра на 360 или хватит прокрутки?',
+      acts:[['pri','Ответить Кире','chat','kira'],['task','Ш3 · фронт']] },
+    stg:{ cut:'done', plan:'done', prod:'wait', review:'ovl', qa:'fut', final:'fut', merge:'fut' }, open:'prod',
+    exs:{ prod:['принят','идёт · 40 мин','<span class="wait">ждёт вас · 25 мин</span>'], review:['принял','идёт'] } },
+  stopped: { tag:['t-stop','стоит'], glyph:'stop', pill:['stop','фича · <b>стоит</b> · Денис'],
+    st:{ c:'st-stop', h:'Производство · стоит · 12 мин.', why:'Денис · Ш1 — процесс исполнителя завершился с кодом 137.',
+      acts:[['pri','Чат Дениса','chat','denis'],['task','Ш1 · бэк'],['gh','Перезапустить']] },
+    stg:{ cut:'done', plan:'done', prod:'stop', review:'fut', qa:'fut', final:'fut', merge:'fut' }, open:'prod',
+    exs:{ prod:['<span class="stop">стоит · 12 мин</span>','идёт · 40 мин','впереди'] } },
+  merge_pending: { tag:['t-wait','ждёт согласия на мерж'], dot:true, glyph:'wait', pill:['wait','фича · <b>Мерж</b> · ждёт согласия'],
+    st:{ c:'st-wait', h:'Мерж ждёт согласия · 40 мин.', why:'Все 3 шага приняты, финальное ревью Александра пройдено.',
+      acts:[['pri','Мерж…','merge'],['chat2','финал'],['task','финал']] },
+    stg:{ cut:'done', plan:'done', prod:'done', review:'done', qa:'done', final:'done', merge:'wait' }, open:'merge', mergeNoChat:true },
+  merging: { tag:['t-run','мерж · идёт'], glyph:'run', pill:['','фича · <b>Мерж</b> · идёт · Марк'],
+    st:{ c:'st-now', h:'Мерж идёт · 6 мин.', why:'Марк сливает ветку в master.', acts:[['chat2','Марк'],['task','мерж']] },
+    stg:{ cut:'done', plan:'done', prod:'done', review:'done', qa:'done', final:'done', merge:'run' }, open:'merge', exs:{ merge:['идёт · 6 мин'] } },
+  merged: { tag:['t-ok','смержена'], glyph:'done', pill:['ok','фича · <b>смержена</b>'],
+    st:{ c:'st-ok', h:'Смержена 20.10 · 21:09.', why:'Шла 23 ч 29 мин · 14 задач · 3 шага · ↺3.' },
+    stg:{ cut:'done', plan:'done', prod:'done', review:'done', qa:'done', final:'done', merge:'done' }, open:null },
+  closed: { tag:['t-neutral','закрыта без мержа'], glyph:'empty', pill:['','фича · <b>закрыта</b>'],
+    st:{ c:'st-neutral', h:'Закрыта без мержа 20.10 · 18:00.', why:'Ветка не слита; задачи остались в трекере.', acts:[['task','эпик']] },
+    stg:{ cut:'done', plan:'done', prod:'done', review:'done', qa:'abs', final:'abs', merge:'abs' }, open:null },
+  loading: { pill:['','фича · …'] },
+  error: { pill:['','фича · …'] },
+};
+const ST_LABEL = { not_started:'не начата', running:'идёт', waiting:'ждёт вас', stopped:'стоит', merge_pending:'ждёт согласия',
+  merging:'мерж идёт', merged:'смержена', closed:'закрыта', loading:'загрузка', error:'ошибка' };
+const STAGE_WORD = { done:['','пройден'], run:['run','идёт'], wait:['wait','ждёт вас'], stop:['stop','стоит'], ovl:['run','по шагам'], fut:['','впереди'], abs:['','не было'] };
+
+/* ===== Иконки ===== */
+const I = {
+  chat:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>',
+  task:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>',
+  chev:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+  arr:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
+  br:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
+  route:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>',
+};
+// Глиф состояния фичи (FeatureGlyph): только токены.
+function glyph(kind, s=14) {
+  const c = { run:'var(--c-text-heading)', wait:'var(--c-info)', stop:'var(--c-danger)', done:'var(--c-success)', empty:'var(--c-text-muted)' }[kind];
+  if (kind==='wait') return `<svg width="${s}" height="${s}" viewBox="0 0 14 14"><path d="M7 1 13 7 7 13 1 7Z" fill="${c}"/></svg>`;
+  if (kind==='stop') return `<svg width="${s}" height="${s}" viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="2" fill="${c}"/></svg>`;
+  if (kind==='done') return `<svg width="${s}" height="${s}" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="${c}"/><path d="m4.3 7.2 1.8 1.8 3.6-3.8" fill="none" stroke="var(--c-bg-white)" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+  if (kind==='empty') return `<svg width="${s}" height="${s}" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="${c}" stroke-width="1.5" stroke-dasharray="2.4 2"/></svg>`;
+  return `<svg width="${s}" height="${s}" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="none" stroke="${c}" stroke-width="1.6"/><path d="M7 1a6 6 0 0 1 0 12Z" fill="${c}"/></svg>`;
+}
+
+/* ===== Состояние макета ===== */
+// Hash — необязательное удобство (ссылка на срез). В песочнице просмотра файлов (iframe sandbox, srcdoc)
+// location и history недоступны или бросают SecurityError — тогда макет живёт без hash.
+let q = {};
+try { q = Object.fromEntries(new URLSearchParams(location.hash.slice(1))); } catch (e) { q = {}; }
+const V = { st: q.st in S ? q.st : 'waiting', n: q.n==='2' ? 2 : 1, theme: q.theme==='dark'?'dark':'light', w: q.w==='360'?360:1280,
+  marks: q.marks!=='0', menu:true, mode:'feature', feat:0, open:undefined, modal:false, toast:'' };
+const app = document.getElementById('app'), isl = document.getElementById('isl');
+let toastT = 0;
+
+function pills(id, opts, key) {
+  const el = document.getElementById(id);
+  el.innerHTML = opts.map(([v,l]) => `<button data-v="${v}" class="${String(V[key])===String(v)?'on':''}">${l}</button>`).join('');
+  el.onclick = e => { const b = e.target.closest('button'); if (!b) return;
+    let v = b.dataset.v; if (key==='n'||key==='w') v = +v; if (key==='marks') v = v==='1';
+    V[key] = v; if (key==='st') { V.open = undefined; V.feat = 0; V.modal=false; } render(); };
+}
+function sync() {
+  document.documentElement.dataset.theme = V.theme;
+  document.body.classList.toggle('nomarks', !V.marks);
+  app.classList.toggle('m', V.w===360);
+  try { history.replaceState(null, '', `#st=${V.st}&n=${V.n}&theme=${V.theme}&w=${V.w}${V.marks?'':'&marks=0'}`); } catch (e) { /* песочница: без hash */ }
+  pills('pSt', Object.keys(S).map(k => [k, ST_LABEL[k]]), 'st');
+  pills('pN', [[1,'одна'],[2,'две']], 'n');
+  pills('pTh', [['light','светлая'],['dark','тёмная']], 'theme');
+  pills('pW', [[1280,'десктоп'],[360,'360']], 'w');
+  pills('pMk', [['1','да'],['0','нет']], 'marks');
+}
+
+/* ===== Рендер ===== */
+function avatar(pk, model, extra='') {
+  const p = P[pk], m = M[model];
+  return `<button class="avb" data-tip="Модель чата: ${m[1]}" aria-label="${p.n}. Модель чата: ${m[1]}" ${extra}>
+    <span class="av ${p.c}">${p.i}</span><span class="mchip new">${m[0]}</span></button>`;
+}
+function navPair(name, hasChat=true, label='') {
+  const chat = hasChat
+    ? `<button class="nav new" data-go="chat" data-name="${name}" data-tip="Открыть чат «${name}». Попап закроется." aria-label="Открыть чат «${name}»">${I.chat}<span class="tx">чат</span></button>`
+    : `<span class="nav none">чата нет</span>`;
+  return `${chat}<button class="nav task new" data-go="task" data-name="${label||name}" data-tip="Открыть задачу «${label||name}» в «Задачах». Попап закроется." aria-label="Открыть задачу «${label||name}»">${I.task}<span class="tx">задача</span></button>`;
+}
+function stageState(s, key) {
+  if (V.feat===1) { // вторая фича в выборе — идёт производство
+    return { cut:'done', plan:'done', prod:'run', review:'fut', qa:'fut', final:'fut', merge:'fut' }[key];
+  }
+  return s.stg[key];
+}
+function stagesHtml(s) {
+  const openKey = V.open===undefined ? (V.feat===1 ? 'prod' : s.open) : V.open;
+  const rows = STAGES.map(([k,label]) => {
+    const st = stageState(s, k), [wc,word] = STAGE_WORD[st];
+    const exs = EX[k];
+    const clickable = st!=='fut' && st!=='abs';
+    const cur = ['run','wait','stop'].includes(st);
+    const time = { run: k==='merge'?'6 мин':'1 ч 10 мин', wait: k==='merge'?'40 мин':'25 мин', stop:'12 мин' }[st];
+    const avs = clickable ? `<span class="avs">${[...new Set(exs.map(e=>e.p))].slice(0,3).map(pk=>`<span class="av ${P[pk].c}">${P[pk].i}</span>`).join('')}</span>` : '';
+    const right = `<span class="rt"><span class="w ${wc}">${word}${time?` · <span class="mono">${time}</span>`:''}</span>${avs}${clickable?`<span class="chev">${I.chev}</span>`:''}</span>`;
+    const head = clickable
+      ? `<button class="sr ${cur?'cur':''}" data-stage="${k}" aria-expanded="${openKey===k}"><span class="dot ${st}"></span><span class="nm">${label}</span>${right}</button>`
+      : `<div class="sr ${st}" aria-label="${label}: ${word}"><span class="dot ${st}"></span><span class="nm">${label}</span>${right}</div>`;
+    let body = '';
+    if (clickable && openKey===k) {
+      const statuses = (V.feat===0 && s.exs && s.exs[k]) || [];
+      body = `<div class="ex">${exs.map((e,i) => {
+        const fut = statuses[i]==='впереди';
+        const status = statuses[i] || (st==='done' ? 'готово' : st==='run'||st==='ovl' ? 'идёт' : st==='wait' ? '<span class="wait">ждёт вас · 40 мин</span>' : 'готово');
+        const noChat = fut || (k==='merge' && s.mergeNoChat);
+        return `<div class="er">${avatar(e.p, e.m)}
+          <div class="who"><span class="a"><span class="nmx">${P[e.p].n}</span><span class="role new">${e.role}</span></span>
+          <span class="b">${status} · ${e.t}</span></div>${navPair(`${P[e.p].n} · ${e.role}`, !noChat, e.t)}</div>`;
+      }).join('')}</div>`;
+      if (k==='merge' && s.mergeNoChat) body = `<div class="empty-ex">Задачи мержа ещё нет — её создаст «Мерж…» выше.</div>`;
+    }
+    return head + body;
+  }).join('');
+  return `<div class="slbl">Этапы <span class="be">Б7 · chatId, taskId</span><span class="be">Б3 · roleLabel</span><span class="be">Б4 · modelLabel</span></div>
+    <div class="stages"><span class="rail"></span>${rows}</div>`;
+}
+function actsHtml(acts) {
+  if (!acts) return '';
+  return `<div class="acts">${acts.map(a => {
+    const [kind, label, go, who] = a;
+    if (kind==='pri' && go==='merge') return `<button class="btn xs pri" data-go="merge">${label}</button>`;
+    if (kind==='pri') return `<button class="btn xs pri" data-go="chat" data-name="${P[who].n}">${label} ${I.arr}</button>`;
+    if (kind==='gh') return `<button class="btn xs gh" data-go="restart">${label}</button>`;
+    if (kind==='chat2') return `<button class="nav new" data-go="chat" data-name="${label}">${I.chat}<span class="tx">чат</span></button>`;
+    return `<button class="nav task new" data-go="task" data-name="${label}">${I.task}<span class="tx">задача</span></button>`;
+  }).join('')}</div>`;
+}
+function bodyHtml() {
+  const s = S[V.st];
+  if (V.mode==='plan') return `<div class="slbl">План хода</div><div style="font-size:12px;color:var(--c-text-secondary)">Список TodoList хода — без изменений.</div>`;
+  if (V.st==='loading') return `<div class="sk" style="width:60%;height:14px"></div><div class="sk" style="width:40%"></div>
+    <div class="sk" style="height:44px;border-radius:10px"></div>${STAGES.map(()=>'<div class="sk" style="height:18px"></div>').join('')}`;
+  if (V.st==='error') return `<div class="err" role="alert"><span><b>Не удалось загрузить фичу.</b> Сервер не ответил (503: подсистема задач выключена или недоступна).</span>
+    <div class="acts"><button class="btn xs sec" data-go="retry">Повторить</button></div></div>`;
+  const f = FEATURES[V.feat];
+  const ss = V.feat===1 ? S.running : s;
+  const pick = V.n===2 ? `<div><div class="slbl" style="margin-bottom:4px">Фичи чата · 2</div><div class="pick" role="radiogroup" aria-label="Фича">
+      ${FEATURES.map((x,i)=>`<button class="chip ${i===V.feat?'on':''}" role="radio" aria-checked="${i===V.feat}" data-feat="${i}" title="${x.name}">
+        ${glyph(i===0 ? (s.glyph||'run') : 'run', 12)}<span class="n">${x.name}</span></button>`).join('')}</div></div>` : '';
+  const tag = `<span class="tag ${ss.tag[0]} new">${ss.dot?'<span class="d"></span>':''}${ss.tag[1]}</span>`;
+  const why = V.feat===1 ? 'Работает Кира; ревью ещё не начиналось.' : ss.st.why;
+  const h = V.feat===1 ? 'Производство · идёт · 2 ч 5 мин.' : ss.st.h;
+  return `${pick}
+    <div class="fh">${glyph(V.feat===1?'run':(s.glyph||'run'))}<span class="nm" title="${f.name}">${f.name}</span>${tag}</div>
+    <div class="meta"><span class="br">${I.br}${f.branch}</span>${f.mine?'<span>этот чат — Ш2 · фронт</span>':'<span>этот чат — оркестратор</span>'}<span class="be">Б1 · run.state</span></div>
+    <div class="st ${V.feat===1?'st-now':ss.st.c}" role="status"><div class="l1"><span class="g">${glyph(V.feat===1?'run':(s.glyph||'run'))}</span>
+      <span><b>${h}</b> <span class="why">${why}</span></span></div>${V.feat===1?'':actsHtml(ss.st.acts)}</div>
+    ${stagesHtml(ss)}`;
+}
+function render() {
+  sync();
+  const s = S[V.st];
+  const desk = V.w===1280;
+  const pill = `<button class="tpp ${V.menu?'open':''}" id="pill" aria-expanded="${V.menu}" aria-haspopup="menu">${I.route}<span class="x ${s.pill[0]}">${s.pill[1]}</span></button>`;
+  const menu = !V.menu ? '' : `<div class="menu" id="menu" role="dialog" aria-label="План хода" style="${desk?'right:24px;':''}top:${desk?104:112}px">
+      <div class="mhead"><div class="seg" role="group" aria-label="Что показать">
+        <button class="${V.mode==='plan'?'on':''}" data-mode="plan">План хода</button><button class="${V.mode==='feature'?'on':''}" data-mode="feature">Исполнение фичи</button></div></div>
+      <div class="mbody">${bodyHtml()}</div>
+      ${V.mode==='feature' && V.st!=='loading' && V.st!=='error' ? `<button class="foot new" data-go="page">Открыть страницу фичи<span class="ar">${I.arr}</span></button>` : ''}
+    </div>`;
+  isl.innerHTML = `<div class="chead"><div style="flex:1;min-width:0"><div class="t">Исполнитель Ш2 · Обзор фич, волна 3</div><div class="sub">Кира · Qwen</div></div></div>
+    <div class="pillbar">${pill}</div>
+    <div class="feed"><div class="msg">Беру Ш2: каркас страницы фичи и вкладки. Начну с шапки и тревоги.</div>
+      <div class="msg me">Ок. Шторку фильтра на 360 обсудим отдельно.</div>
+      <div class="msg">Шапка готова, перехожу к вкладкам. Прогоняю tsc и lint:design.</div></div>
+    ${menu}
+    ${V.modal ? `<div class="scrim" id="scrim"><div class="modal" role="dialog" aria-label="Подтверждение мержа"><h3>Смержить «Обзор фич, волна 3» в master?</h3>
+      <p>Марк получит задачу мержа и сольёт ветку feat/feature-page-3.</p>
+      <div class="row"><button class="btn gh" data-go="cancel">Отмена</button><button class="btn pri" data-go="domerge">Мерж</button></div></div></div>` : ''}
+    ${V.toast ? `<div class="toast" role="status">${V.toast}</div>` : ''}`;
+  measure();
+}
+function toast(t) { V.toast = t; clearTimeout(toastT); toastT = setTimeout(() => { V.toast=''; render(); }, 2600); }
+
+isl.addEventListener('click', e => {
+  const t = e.target;
+  if (t.closest('#pill')) { V.menu = !V.menu; render(); return; }
+  const m = t.closest('[data-mode]'); if (m) { V.mode = m.dataset.mode; render(); return; }
+  const fe = t.closest('[data-feat]'); if (fe) { V.feat = +fe.dataset.feat; V.open = undefined; render(); return; }
+  const sr = t.closest('[data-stage]'); if (sr) { const k = sr.dataset.stage; const cur = V.open===undefined ? (V.feat===1?'prod':S[V.st].open) : V.open; V.open = cur===k ? null : k; render(); return; }
+  const av = t.closest('.avb'); if (av) { showTip(av, true); return; }
+  const g = t.closest('[data-go]'); if (!g) return;
+  const go = g.dataset.go, name = g.dataset.name;
+  if (go==='chat') { V.menu=false; toast(`Открыт чат «${name}». Попап закрыт.`); }
+  else if (go==='task') { V.menu=false; toast(`Открыта задача «${name}» в «Задачах».`); }
+  else if (go==='page') { V.menu=false; toast('Открыта страница фичи на «Хронологии».'); }
+  else if (go==='merge') { V.modal=true; }
+  else if (go==='cancel') { V.modal=false; }
+  else if (go==='domerge') { V.modal=false; V.st='merging'; V.open=undefined; toast('Задача мержа создана: Марк начал мерж.'); }
+  else if (go==='restart') { toast('Подтверждение «Перезапустить исполнителя?» — как сейчас (ConfirmDialog).'); }
+  else if (go==='retry') { V.st='waiting'; }
+  render();
+});
+document.addEventListener('keydown', e => { if (e.key==='Escape') { V.modal ? V.modal=false : V.menu=false; hideTip(); render(); } });
+
+/* Подсказка: наведение, фокус и тап (на тач — повторный тап закрывает) */
+let tipEl = null, tipFor = null, tipBy = '';
+function showTip(el, toggle) {
+  if (toggle && tipFor===el && tipBy==='tap') { hideTip(); return; }
+  hideTip(); tipFor = el; tipBy = toggle ? 'tap' : 'hover';
+  tipEl = document.createElement('div'); tipEl.className = 'tip'; tipEl.textContent = el.dataset.tip; document.body.appendChild(tipEl);
+  const r = el.getBoundingClientRect(), w = tipEl.offsetWidth;
+  tipEl.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width/2 - w/2)) + 'px';
+  tipEl.style.top = (r.bottom + 6) + 'px';
+}
+function hideTip() { if (tipEl) tipEl.remove(); tipEl = null; tipFor = null; tipBy = ''; }
+isl.addEventListener('mouseover', e => { const el = e.target.closest('[data-tip]'); if (el && el!==tipFor) showTip(el); });
+isl.addEventListener('mouseout', e => { const el = e.target.closest('[data-tip]'); if (el && !el.contains(e.relatedTarget)) hideTip(); });
+isl.addEventListener('focusin', e => { const el = e.target.closest('[data-tip]'); if (el) showTip(el); });
+isl.addEventListener('focusout', hideTip);
+
+/* Замер: ширина попапа, горизонтальная прокрутка, мелкие цели на 360 */
+function measure() {
+  const menu = document.getElementById('menu'), out = document.getElementById('meas');
+  if (!menu) { out.textContent = 'попап закрыт'; return; }
+  const small = V.w===360 ? [...menu.querySelectorAll('button')].filter(b => { const r = b.getBoundingClientRect(); return r.width && (r.height < 40 || r.width < 40); }).length : 0;
+  out.textContent = `попап ${Math.round(menu.getBoundingClientRect().width)} px · гориз. прокрутка ${menu.scrollWidth > menu.clientWidth ? 'есть' : 'нет'}${V.w===360 ? ` · кнопок < 40: ${small}` : ''}`;
+}
+render();
+</script>
+</body>
+</html>

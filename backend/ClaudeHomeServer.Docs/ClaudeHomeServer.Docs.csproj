@@ -16,6 +16,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Guards.Tests (шаг 4.1, пачка H): ProjectMapHygieneGuardTests читает internal
+         MapHygieneReport.TokensNote (пояснение «оценка: байты ÷ 3») — тот же шов, что у
+         монолита; перенесённый сторож Docs-типов не использует иначе. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Guards.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

@@ -9,7 +9,7 @@ import {
   buildThroughputSegments, cacheHitAvg,
   chartAriaLabel, chartNow, evChartAriaLabel, formatAxisTps, intervalCountFor, intervalGrid,
   kvChartAriaLabel, maxSeriesOf, maxThroughputOf,
-  niceAxisMax, peakPerStreamOf, percentile10,
+  niceAxisMax, peakPerStreamOf,
   perStreamBreakRuns, preemptionTotal, shouldShowNoDataLabel,
   timeSharesAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type TimeShares, type TimeState, type ThroughputSample,
@@ -118,12 +118,21 @@ describe('maxThroughputOf', () => {
   });
 });
 
-describe('niceAxisMax: «круглая» шкала (1, 2, 5 × 10ⁿ, не меньше 10)', () => {
+describe('niceAxisMax: «круглая» шкала (до 100 — 1, 2, 5; от 100 мельче; не меньше 10)', () => {
   it('0 → 10 (не 0: ось не схлопывается)', () => {
     expect(niceAxisMax(0)).toBe(10);
   });
   it('37 → 50 (ряд 1,2,5: 5×10=50 ≥ 37)', () => {
     expect(niceAxisMax(37)).toBe(50);
+  });
+  it('210 → 250, а не 500 (пик чуть выше 200 не раздувает ось вдвое)', () => {
+    expect(niceAxisMax(210)).toBe(250);
+  });
+  it('260 → 300', () => {
+    expect(niceAxisMax(260)).toBe(300);
+  });
+  it('101 → 150', () => {
+    expect(niceAxisMax(101)).toBe(150);
   });
   it('412 → 500', () => {
     expect(niceAxisMax(412)).toBe(500);
@@ -134,8 +143,9 @@ describe('niceAxisMax: «круглая» шкала (1, 2, 5 × 10ⁿ, не м�
   it('ровно 1000 → 1000', () => {
     expect(niceAxisMax(1000)).toBe(1000);
   });
-  it('1500 → 2000', () => {
-    expect(niceAxisMax(1500)).toBe(2000);
+  it('1500 → 1500, 1600 → 2000', () => {
+    expect(niceAxisMax(1500)).toBe(1500);
+    expect(niceAxisMax(1600)).toBe(2000);
   });
   it('1 → 10 (не меньше 10)', () => {
     expect(niceAxisMax(1)).toBe(10);
@@ -208,7 +218,6 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     itlCount: p.itlCount ?? null,
     prefillSeconds: p.prefillSeconds ?? null,
     queueSeconds: p.queueSeconds ?? null,
-    promptTokens: p.promptTokens ?? null,
   };
 }
 
@@ -253,13 +262,14 @@ describe('buildIntervals: доля попаданий из СУММ приращ
     expect(intervals[0].kvUsage).toBe(0.8);
   });
 
-  it('выработка — среднее ненулевых; вытеснения — сумма', () => {
+  it('выработка = Σ genTokens / длина интервала; вытеснения — сумма', () => {
     const samples = [
-      sample({ t: 5_000, throughput: 100, running: 1, preemptions: 2 }),
-      sample({ t: 10_000, throughput: 200, running: 1, preemptions: 3 }),
+      sample({ t: 5_000, genTokens: 300, itlSeconds: 1, preemptions: 2 }),
+      sample({ t: 10_000, genTokens: 300, itlSeconds: 1, preemptions: 3 }),
     ];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].throughput).toBe(150);
+    // Σ genTokens = 600; интервал 30 с → 600/30 = 20
+    expect(intervals[0].throughput).toBeCloseTo(20, 6);
     expect(intervals[0].preemptions).toBe(5);
   });
 
@@ -276,9 +286,10 @@ describe('buildIntervals: доля попаданий из СУММ приращ
   });
 
   it('пустой интервал (точек нет) — null; интервалы не смешиваются', () => {
-    const samples = [sample({ t: 5_000, throughput: 100, running: 1, prefixHits: 10, prefixQueries: 20 })];
+    const samples = [sample({ t: 5_000, genTokens: 300, itlSeconds: 1, prefixHits: 10, prefixQueries: 20 })];
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    expect(intervals[0].throughput).toBe(100);
+    // interval 0 = 30 с; Σ genTokens = 300 → 300/30 = 10
+    expect(intervals[0].throughput).toBeCloseTo(10, 6);
     expect(intervals[0].prefix).toBeCloseTo(0.5, 6);
     // второй интервал пуст
     expect(intervals[1].throughput).toBeNull();
@@ -321,8 +332,8 @@ describe('preemptionTotal: сумма вытеснений по окну', () =>
 });
 
 describe('intervalCountFor: число интервалов окна', () => {
-  it('1m → 12 (по 5 с), 5m → 20 (по 15 с), 15m → 60 (по 15 с), 1h → 60 (по 60 с)', () => {
-    expect(intervalCountFor('1m')).toBe(12);
+  it('1m → 4 (по 15 с), 5m → 20 (по 15 с), 15m → 60 (по 15 с), 1h → 60 (по 60 с)', () => {
+    expect(intervalCountFor('1m')).toBe(4);
     expect(intervalCountFor('5m')).toBe(20);
     expect(intervalCountFor('15m')).toBe(60);
     expect(intervalCountFor('1h')).toBe(60);
@@ -360,17 +371,18 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «На одного агента, ток/с» обновляется на hover', () => {
-  it('базовый: окно + среднее + кэш', () => {
+describe('tpChartAriaLabel: SVG «На запрос, ток/с» обновляется на hover', () => {
+  it('базовый: окно + кэш (среднее под графиком не дублируем)', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('На одного агента, ток/с за 15 минут');
-    expect(label).toContain('на агента в среднем 412 ток/с');
+    expect(label).toContain('На запрос, ток/с за 15 минут');
+    expect(label).toContain('кэш 87 %');
     expect(label).not.toContain('интервал');
+    expect(label).not.toContain('в среднем');
   });
-  it('hover: интервал со скоростью на одного агента', () => {
+  it('hover: интервал со скоростью на запрос', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('на одного агента 250 ток/с');
+    expect(label).toContain('на запрос 250 ток/с');
   });
   it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
     const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
@@ -569,7 +581,7 @@ describe('buildIntervals: кэш — несение при «не спрашив
   });
 });
 
-// === Вторая линия «на агента, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
+// === Вторая линия «на запрос, в среднем»: скорость = ΣgenTokens/ΣitlSeconds ===
 // Мутации: «суммы → среднее долей» красит тест на расчёт; «null → 0» — на разрыв;
 // «max одной серии → max обеих» — на ось.
 
@@ -581,7 +593,7 @@ function mkIt(tStart: number, tEnd: number, perStream: number | null, throughput
     preemptions: null, hasData: { prefix: false, ram: false }, timeShares };
 }
 
-describe('buildIntervals: скорость на агента из СУММ приращений', () => {
+describe('buildIntervals: скорость на запрос из СУММ приращений', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
 
   it('ΣgenTokens/ΣitlSeconds по точкам интервала (не среднее долей точек)', () => {
@@ -658,7 +670,7 @@ describe('maxSeriesOf: верх общей оси по максимуму ОБЕ
   });
 });
 
-describe('avgPerStreamOf: средняя на агента за окно', () => {
+describe('avgPerStreamOf: средняя на запрос за окно', () => {
   it('ΣgenTokens/ΣitlSeconds по всем точкам окна', () => {
     const samples = [
       sample({ t: 1, genTokens: 100, itlSeconds: 10 }),
@@ -688,8 +700,22 @@ describe('buildIntervals: скорость генерации и «выдано 
     const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
     // скорость генерации = 200/2 = 100 — паузы в знаменатель не входят
     expect(intervals[0].perStream).toBeCloseTo(100, 6);
-    // выдано стендом = среднее (40+0+0)/3 — паузы размывают (так и задумано)
-    expect(intervals[0].throughput).toBeCloseTo(40 / 3, 6);
+    // выдано стендом = Σ genTokens / 15 с = 200/15 ≈ 13.3 — паузы размывают (так и задумано)
+    expect(intervals[0].throughput).toBeCloseTo(200 / 15, 6);
+  });
+
+  it('один агент в простое: throughput интервала ≤ perStream (часть времени в декодировании не тратилась)', () => {
+    const samples = [
+      sample({ t: 0, genTokens: 100, itlSeconds: 2 }),    // 100 токенов за 2 с декодирования
+      sample({ t: 5000, genTokens: 0, itlSeconds: 0 }),    // простой
+      sample({ t: 10000, genTokens: 0, itlSeconds: 0 }),  // простой
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    // perStream = 100/2 = 50 (скорость в декодировании); throughput = 100/15 ≈ 6.7 (за весь интервал)
+    expect(intervals[0].perStream).toBeCloseTo(50, 6);
+    expect(intervals[0].throughput).toBeCloseTo(100 / 15, 6);
+    // «всего по стенду» за 15 с не превышает скорость в декодировании: агент простаивал
+    expect(intervals[0].throughput as number).toBeLessThanOrEqual(intervals[0].perStream as number);
   });
 
   it('два агента параллельно: выдано стендом выше скорости генерации на поток', () => {
@@ -711,16 +737,17 @@ describe('buildIntervals: скорость генерации и «выдано 
   });
 });
 
-describe('avgIssuedOf: «выдано стендом» за окно — среднее с простоем', () => {
-  it('нули простоя входят в среднее; null пропускается', () => {
+describe('avgIssuedOf: «выдано стендом» за окно — Σ genTokens / длина окна', () => {
+  it('Σ genTokens / (tMax − tMin); простой (genTokens=0) размывает, null не входит в сумму', () => {
     const samples = [
-      sample({ t: 1, throughput: 100 }),
-      sample({ t: 2, throughput: 0 }),
-      sample({ t: 3, throughput: null }),
+      sample({ t: 0, genTokens: 300 }),
+      sample({ t: 10_000, genTokens: 0 }),     // простой
+      sample({ t: 20_000, genTokens: null }),   // разрыв — не в сумму, но в длину окна
     ];
-    expect(avgIssuedOf(samples)).toBeCloseTo(50, 6);
+    // span = 20_000 − 0 = 20 с; Σ genTokens = 300 → 300/20 = 15
+    expect(avgIssuedOf(samples)).toBeCloseTo(15, 6);
   });
-  it('нет данных → null', () => {
+  it('нет точек с genTokens → null', () => {
     expect(avgIssuedOf([sample({ t: 1 })])).toBeNull();
   });
 });
@@ -768,34 +795,23 @@ describe('buildIssuedSegments: линия «всего по стенду» (genT
 });
 
 // === «Куда уходит время агентов» (ADR-029, v2.3): составная полоса долей ===
-// gen = ΣitlCount × чистый шаг; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
-// гистограмм. «Чистый шаг» — перцентиль 10 времени шага по «чистым» интервалам (без
-// prefill); доли = каждая / сумма четырёх. Мутации: «wait → gen» красит тест на доли;
-// «cleanStep → среднее» — на перцентиль.
+// gen = ΣitlCount × база шага; wait = max(0, ΣitlSec − gen); prefill/queue — приращения
+// гистограмм. База шага приходит СНАРУЖИ (stats.cleanStepMs, мс) — одна на весь стенд,
+// не зависит от окна. Мутации: «wait → gen» красит тест на доли; «база из окна» —
+// на независимость долей от окна (см. ThroughputChart.live.test.ts).
 
-describe('percentile10: 10-й перцентиль', () => {
-  it('пусто → null; один элемент → он', () => {
-    expect(percentile10([])).toBeNull();
-    expect(percentile10([5])).toBe(5);
-  });
-  it('10 элементов → индекс floor(0.1×10)=1', () => {
-    expect(percentile10([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toBe(2);
-  });
-});
-
-describe('buildIntervals: «куда уходит время» — доли из сумм и чистого шага', () => {
+describe('buildIntervals: «куда уходит время» — доли из сумм и базы шага', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
 
-  it('чистый шаг = перцентиль 10; wait = ΣitlSec − ΣitlCnt×чистый шаг', () => {
+  it('база шага из ответа бэкенда: wait = ΣitlSec − ΣitlCnt×база', () => {
     const samples = [
-      // интервал 0: step = 10/20 = 0.5 (чистый), promptTokens=0
-      sample({ t: 5_000, itlSeconds: 10, itlCount: 20, promptTokens: 0 }),
-      // интервал 1: step = 40/20 = 2.0 (длинный — ждёт соседа), promptTokens=0
-      sample({ t: 35_000, itlSeconds: 40, itlCount: 20, promptTokens: 0 }),
+      // интервал 0: шаг 10/20 = 0.5 с — ровно база (чистая генерация)
+      sample({ t: 5_000, itlSeconds: 10, itlCount: 20 }),
+      // интервал 1: шаг 40/20 = 2.0 с — длинный (генерация стояла, ждёт соседа)
+      sample({ t: 35_000, itlSeconds: 40, itlCount: 20 }),
     ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
-    // чистый шаг = percentile10([0.5, 2.0]) = 0.5
-    // интервал 0: gen = 20×0.5 = 10, wait = 10−10 = 0 → 100 % генерации
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, 500);
+    // база 500 мс: интервал 0: gen = 20×0.5 = 10, wait = 10−10 = 0 → 100 % генерации
     expect(intervals[0].timeShares).toEqual({ kind: 'shares', shares: { gen: 1, prefill: 0, wait: 0, queue: 0 } });
     // интервал 1: gen = 20×0.5 = 10, wait = 40−10 = 30 → 25 % генерации, 75 % ждёт
     expect(intervals[1].timeShares).toEqual({ kind: 'shares', shares: { gen: 0.25, prefill: 0, wait: 0.75, queue: 0 } });
@@ -803,10 +819,10 @@ describe('buildIntervals: «куда уходит время» — доли из
 
   it('prefill/очередь — приращения гистограмм; доли в сумме 1', () => {
     const samples = [
-      // step = 20/20 = 1.0 = чистый шаг (единственный интервал); gen = 20×1.0 = 20, wait = 0
-      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, promptTokens: 0, prefillSeconds: 5, queueSeconds: 3 }),
+      // база 1 с: gen = 20×1.0 = 20, wait = 20−20 = 0
+      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, prefillSeconds: 5, queueSeconds: 3 }),
     ];
-    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS);
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, 1000);
     const st = intervals[0].timeShares;
     expect(st.kind).toBe('shares');
     if (st.kind !== 'shares') return;
@@ -817,6 +833,23 @@ describe('buildIntervals: «куда уходит время» — доли из
     expect(s.prefill).toBeCloseTo(5 / 28, 6);
     expect(s.queue).toBeCloseTo(3 / 28, 6);
     expect(s.gen + s.wait + s.prefill + s.queue).toBeCloseTo(1, 6);
+  });
+
+  it('без базы шага: «ждёт соседа» не выделяется (wait = null), всё декодирование — «генерирует»', () => {
+    const samples = [
+      sample({ t: 5_000, itlSeconds: 20, itlCount: 20, prefillSeconds: 5, queueSeconds: 3 }),
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, null);
+    const st = intervals[0].timeShares;
+    expect(st.kind).toBe('shares');
+    if (st.kind !== 'shares') return;
+    const s = st.shares;
+    // total = 20 (всё декодирование — «генерирует») + 5 (prefill) + 3 (queue) = 28
+    expect(s.wait).toBeNull();
+    expect(s.gen).toBeCloseTo(20 / 28, 6);
+    expect(s.prefill).toBeCloseTo(5 / 28, 6);
+    expect(s.queue).toBeCloseTo(3 / 28, 6);
+    expect(s.gen + s.prefill + s.queue).toBeCloseTo(1, 6);
   });
 
   it('молчание (без itl) → break (заливки нет, фон-разрыв)', () => {
@@ -860,6 +893,15 @@ describe('buildTimeSharesBar: сегменты полосы на x-диапаз�
     expect(segs[0].x).toBe(0);
     expect(segs[0].w).toBeCloseTo(100, 6);
   });
+  it('wait = null (базы шага нет) — сегмента «ждёт соседа» нет, остальные дают всю ширину', () => {
+    const shares: TimeShares = { gen: 0.7, prefill: 0.2, wait: null, queue: 0.1 };
+    const segs = buildTimeSharesBar({ kind: 'shares', shares }, 0, 100);
+    expect(segs).toHaveLength(3);
+    expect(segs[0].w).toBeCloseTo(70, 6);
+    expect(segs[1].w).toBeCloseTo(20, 6);
+    expect(segs[2].w).toBeCloseTo(10, 6);
+    expect(segs.reduce((a, s) => a + s.w, 0)).toBeCloseTo(100, 6);
+  });
 });
 
 describe('avgTimeSharesOf: средние доли за окно (легенда без считывания)', () => {
@@ -874,6 +916,15 @@ describe('avgTimeSharesOf: средние доли за окно (легенда
     const avg = avgTimeSharesOf(intervals);
     expect(avg!.gen).toBeCloseTo(0.6, 6);
     expect(avgTimeSharesOf([mkIt(0, 1, null, null, { kind: 'break' })])).toBeNull();
+  });
+  it('«ждёт соседа» не выделяется (wait = null) — средняя доля тоже null, не ноль', () => {
+    const intervals = [
+      mkIt(0, 1, 10, null, { kind: 'shares', shares: { gen: 0.7, prefill: 0.2, wait: null, queue: 0.1 } }),
+      mkIt(1, 2, 10, null, { kind: 'shares', shares: { gen: 0.5, prefill: 0.4, wait: null, queue: 0.1 } }),
+    ];
+    const avg = avgTimeSharesOf(intervals);
+    expect(avg!.wait).toBeNull();
+    expect(avg!.gen).toBeCloseTo(0.6, 6);
   });
 });
 
@@ -890,5 +941,10 @@ describe('timeSharesAriaLabel: SVG «Куда уходит время» обно
     expect(label).toContain('в очереди 5 %');
     expect(timeSharesAriaLabel('15m', '14:32', { kind: 'break' })).toContain('движок не отвечал');
     expect(timeSharesAriaLabel('15m', '14:32', { kind: 'idle' })).toContain('простой');
+  });
+  it('hover без базы шага: «ждёт соседа» — «—», а не 0 %', () => {
+    const label = timeSharesAriaLabel('15m', '14:32', { kind: 'shares', shares: { gen: 0.7, prefill: 0.2, wait: null, queue: 0.1 } });
+    expect(label).toContain('ждёт соседа — (нет базы шага)');
+    expect(label).not.toContain('ждёт соседа 0 %');
   });
 });

@@ -103,7 +103,7 @@ public class HandsMachineHoldTests
     }
 
     [Fact]
-    public void Именованный_мьютекс_один_на_машину_и_отпускается_из_любого_потока()
+    public async Task Именованный_мьютекс_один_на_машину_и_отпускается_из_любого_потока()
     {
         var name = UniqueName();
         using var first = new NamedHandsMachineMutex(name);
@@ -112,10 +112,10 @@ public class HandsMachineHoldTests
         var b = new HandsMachineHold(second);
 
         // Берём и отпускаем из разных потоков: привязку мьютекса к потоку держит поток-владелец
-        Assert.True(Task.Run(() => a.TryHold(HandsTools.UiClick)).Result);
-        Assert.False(Task.Run(() => b.TryHold(HandsTools.UiClick)).Result);
-        Assert.True(Task.Run(a.Release).Result);
-        Assert.True(Task.Run(() => b.TryHold(HandsTools.UiClick)).Result);
+        Assert.True(await Task.Run(() => a.TryHold(HandsTools.UiClick)));
+        Assert.False(await Task.Run(() => b.TryHold(HandsTools.UiClick)));
+        Assert.True(await Task.Run(a.Release));
+        Assert.True(await Task.Run(() => b.TryHold(HandsTools.UiClick)));
     }
 
     [Fact]

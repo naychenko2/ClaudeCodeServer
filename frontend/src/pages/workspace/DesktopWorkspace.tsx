@@ -38,6 +38,7 @@ import { ChatContextBar, type ContextTarget } from '../../features/chatContext/C
 import { useHasChatContext } from '../../lib/chatContext';
 import { getTaskById } from '../../lib/tasks';
 import { canSplitCenter, CHAT_SPLIT_MIN_PX, SPLIT_SIDE_MIN_PX } from './splitLayout';
+import { FeatureCenter } from '../../components/feature/FeatureCenter';
 
 // Минимумы колонок разделённого центра — в splitLayout.ts; на узком центре соседка (минимум 200) всё равно
 // остаётся, поэтому минимум ленты — это то, что остаётся от неё
@@ -56,6 +57,9 @@ interface Props {
   activeSession: Session | null;
   onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated: (s: Session) => void;
+  // Полный список сессий проекта → WorkspacePage (N1): тот же колбэк, что у мобильной
+  // раскладки. Без него на десктопе sessions пуст.
+  onSessionsListChanged?: (sessions: Session[]) => void;
   // Создание чата по клику (кнопка в пустом состоянии центра) + сброс при удалении последнего
   onCreateSession: () => void;
   onClearSession: () => void;
@@ -145,6 +149,10 @@ interface Props {
   availableChatIds?: Set<string>;
   // Человек закрыл панель (крестик или рельса) — для признака автооткрытия генерации
   onPanelUserClose?: (k: PanelKey) => void;
+  // Страница фичи (Ф2.3/C1): открыта (fid ≠ null) — центр прячется display:none,
+  // страница рисуется соседом (FeatureCenter). Исполнитель «← назад» — от WorkspacePage.
+  openFeatureId: string | null;
+  onFeatureBack: (t: import('../../components/feature/FeaturePage').FeaturePageBackTarget) => void;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -274,7 +282,7 @@ export function DesktopWorkspace(p: Props) {
   // Пустой список сам показывает empty-state с кнопкой «Новый чат» (см. SessionList).
   const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsListChanged={p.onSessionsListChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
   );
 
@@ -467,7 +475,11 @@ export function DesktopWorkspace(p: Props) {
         }
       />
 
-      {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат === */}
+      {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат ===
+          Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
+          прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
+          общий паттерн с мобильной веткой. */}
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
@@ -622,6 +634,7 @@ export function DesktopWorkspace(p: Props) {
           <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
         </div>
       )}
+      </FeatureCenter>
 
       {/* === Справа: стек рабочих панелей + рельса иконок === */}
       <PanelZone

@@ -26,6 +26,18 @@ describe('loadChatFilters: groupBy=subjects (темы чатов)', () => {
   });
 });
 
+describe('loadChatFilters: groupBy=features (фичи)', () => {
+  it('значение переживает запись и чтение — оно в белом списке normalize', () => {
+    persistChatFilters('p-feat', { ...loadChatFilters('p-feat'), groupBy: 'features' });
+    expect(loadChatFilters('p-feat').groupBy).toBe('features');
+  });
+
+  it('старое значение из localStorage не ломается: features читается, а не откатывается в days', () => {
+    store.set('cc_chat_filters:p-feat', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    expect(loadChatFilters('p-feat').groupBy).toBe('features');
+  });
+});
+
 describe('loadChatFilters: оси вида и миграция cc_chat_view', () => {
   it('дефолт: groupBy=days, sortOrder=newest, hierarchy=true (список всегда деревом)', () => {
     const f = loadChatFilters('p1');
@@ -269,6 +281,105 @@ describe('archivedOnly: ось, а не фильтр', () => {
   it('режим архива персистится и читается обратно', () => {
     persistChatFilters('p1', { ...defaultChatFilters(), archivedOnly: true });
     expect(loadChatFilters('p1').archivedOnly).toBe(true);
+  });
+});
+
+// featureChips[]/showClosed — оси режима фич (как archivedOnly): персистятся;
+// isDefaultFilters и «Сбросить всё» учитывают их ТОЛЬКО при groupBy='features'
+// (в других режимах спят, как archivedOnly).
+describe('featureChips/showClosed: миграция из одиночного featureFilter', () => {
+  it('дефолт — пустой набор чипов, showClosed=false', () => {
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual([]);
+    expect(f.showClosed).toBe(false);
+  });
+
+  it('«open» → [] / false', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'open' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual([]);
+    expect(f.showClosed).toBe(false);
+  });
+
+  it("«waiting» → ['waiting'] / false", () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'waiting' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual(['waiting']);
+    expect(f.showClosed).toBe(false);
+  });
+
+  it("«stopped» → ['stopped'] / false", () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'stopped' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual(['stopped']);
+    expect(f.showClosed).toBe(false);
+  });
+
+  it("«merge» → ['merge'] / false", () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'merge' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual(['merge']);
+    expect(f.showClosed).toBe(false);
+  });
+
+  it('«closed» → [] / true', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'closed' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual([]);
+    expect(f.showClosed).toBe(true);
+  });
+
+  it('мусор → [] / false, остальные поля целы', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ featureFilter: 'zzz', search: 'ревью' }));
+    const f = loadChatFilters('p1');
+    expect(f.featureChips).toEqual([]);
+    expect(f.showClosed).toBe(false);
+    expect(f.search).toBe('ревью');
+  });
+  it('featureChips персистится и читается обратно', () => {
+    persistChatFilters('p1', { ...defaultChatFilters(), featureChips: ['stopped', 'merge'] });
+    expect(loadChatFilters('p1').featureChips).toEqual(['stopped', 'merge']);
+  });
+
+  it('showClosed персистится и читается обратно', () => {
+    persistChatFilters('p1', { ...defaultChatFilters(), showClosed: true });
+    expect(loadChatFilters('p1').showClosed).toBe(true);
+  });
+});
+
+describe('featureChips/showClosed: isDefaultFilters в обоих режимах', () => {
+  it('режим фич: выбранный чип / showClosed → не-дефолт (триггер красится)', () => {
+    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features', featureChips: ['stopped'] })).toBe(false);
+    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features', showClosed: true })).toBe(false);
+  });
+
+  it('режим фич: пусто/false → дефолт', () => {
+    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'features' })).toBe(true);
+  });
+
+  it('другой режим: чипы/showClosed спят → дефолт (триггер не красится)', () => {
+    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'days', featureChips: ['stopped'] })).toBe(true);
+    expect(isDefaultFilters({ ...defaultChatFilters(), groupBy: 'days', showClosed: true })).toBe(true);
+  });
+});
+
+describe('featureChips/showClosed: «Сбросить всё» в обоих режимах', () => {
+  it('режим фич: сброс очищает чипы и showClosed, сохраняет groupBy', () => {
+    const f: ChatFilters = { ...defaultChatFilters(), groupBy: 'features', featureChips: ['waiting'], showClosed: true, search: 'ревью' };
+    const r = defaultChatFiltersKeepingView(f);
+    expect(r.featureChips).toEqual([]);
+    expect(r.showClosed).toBe(false);
+    expect(r.search).toBe('');
+    expect(r.groupBy).toBe('features');
+  });
+
+  it('другой режим: сброс сохраняет чипы и showClosed (спят)', () => {
+    const f: ChatFilters = { ...defaultChatFilters(), groupBy: 'days', featureChips: ['waiting'], showClosed: true, search: 'ревью' };
+    const r = defaultChatFiltersKeepingView(f);
+    expect(r.featureChips).toEqual(['waiting']);
+    expect(r.showClosed).toBe(true);
+    expect(r.search).toBe('');
+    expect(r.groupBy).toBe('days');
   });
 });
 

@@ -1,4 +1,4 @@
-import { C, FONT } from '../../../lib/design';
+import { C, FONT, FS, SP } from '../../../lib/design';
 import type { FeatureRound } from '../../../types/featureRun';
 
 // «Пружина» витков: каждый виток — кольцо, цвет и штрих кодируют исход
@@ -8,12 +8,16 @@ import type { FeatureRound } from '../../../types/featureRun';
 // Кольца нарисованы inline-SVG (эллипсы внахлёст, как витки спирали), а не
 // иконками lucide: нужен именно «спиральный» силуэт, готовой такой иконки нет.
 
-// Штрих и толщина кольца по исходу витка.
-const RING: Record<string, { stroke: string; width: number; dash?: string }> = {
+// Штрих и толщина кольца по исходу витка. Экспортируется: PipelineFlow берёт
+// stroke по verdict для дуги возврата (тот же кодировщик исходов, что и кольца).
+// withdrawn — приглушённое сплошное кольцо (C.textMuted, штрих 1.6) БЕЗ пульса:
+// «снят с выкладки» не «идёт» (running — C.textHeading + пунктир + пульс).
+export const RING: Record<string, { stroke: string; width: number; dash?: string }> = {
   returned:             { stroke: C.warning, width: 2 },
   accepted_with_remarks:{ stroke: C.warning, width: 1.6, dash: '2.4 1.8' },
   accepted:             { stroke: C.success, width: 2 },
   running:              { stroke: C.textHeading, width: 1.6, dash: '2 2' },
+  withdrawn:            { stroke: C.textMuted, width: 1.6 },
 };
 
 // Подпись исхода витка (для title/aria).
@@ -27,14 +31,16 @@ export function roundVerdictLabel(v: FeatureRound['verdict']): string {
   }
 }
 
-export function Rounds({ rounds, max = 6 }: { rounds: FeatureRound[]; max?: number }) {
+// caption — подписывать ли кольца строкой «N витков · ↺N» (по умолчанию да, прежнее
+// поведение). Легенда рисует те же кольца БЕЗ подписи (caption={false}): только силуэт.
+export function Rounds({ rounds, max = 6, caption = true }: { rounds: FeatureRound[]; max?: number; caption?: boolean }) {
   if (!rounds.length) return null;
   const shown = rounds.slice(-max);
   const extra = rounds.length - shown.length;
   const gap = 7;
   const w = 12 + (shown.length - 1) * gap;
   const rets = rounds.filter(r => r.verdict === 'returned' || r.verdict === 'accepted_with_remarks').length;
-  const label = `${rounds.length} ${plural(rounds.length, 'виток', 'витка', 'витков')}${rets ? ` · ↺${rets}` : ''}`;
+  const baseLabel = `${rounds.length} ${plural(rounds.length, 'виток', 'витка', 'витков')}`;
 
   return (
     <span
@@ -43,7 +49,7 @@ export function Rounds({ rounds, max = 6 }: { rounds: FeatureRound[]; max?: numb
       aria-label={rounds.map(r => `${r.n} — ${roundVerdictLabel(r.verdict)}`).join(', ')}
     >
       {extra > 0 && (
-        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>+{extra}</span>
+        <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>+{extra}</span>
       )}
       <svg width={w} height={16} viewBox={`0 0 ${w} 16`} aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
         {shown.map((r, i) => {
@@ -66,9 +72,14 @@ export function Rounds({ rounds, max = 6 }: { rounds: FeatureRound[]; max?: numb
           );
         })}
       </svg>
-      <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
-        {label}
-      </span>
+      {caption && (
+        // ↺N — C.warningText 700 (отдельный span), остальная подпись — C.textMuted.
+        // m-1: зазор gap между подписью и ↺N (вместо ведущего « · »).
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, fontFamily: FONT.mono, whiteSpace: 'nowrap' }}>
+          <span style={{ color: C.textMuted }}>{baseLabel}</span>
+          {rets > 0 && <span style={{ color: C.warningText, fontWeight: 700 }}>↺{rets}</span>}
+        </span>
+      )}
     </span>
   );
 }

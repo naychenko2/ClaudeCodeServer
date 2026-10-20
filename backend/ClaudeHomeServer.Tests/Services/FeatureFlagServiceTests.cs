@@ -158,7 +158,7 @@ public class FeatureFlagServiceTests : IDisposable
             FeatureFlagCatalog.Exists(key).Should().BeFalse($"флаг {key} снят и не должен возвращаться в каталог");
 
         FeatureFlagCatalog.All.Select(f => f.Key).Should().BeEquivalentTo(
-            ["workspace-destructive", "spheres", "change-dossiers-recall", "character-smart-photos", "character-face-swap", "local-model-stats", "turn-plan-feature-mode", "plugins-mvp", "plugins-build-yourself"]);
+            ["workspace-destructive", "spheres", "change-dossiers-recall", "character-smart-photos", "character-face-swap", "local-model-stats", "turn-plan-feature-mode", "plugins-mvp", "plugins-build-yourself", "features-overview", "turn-auto-resume"]);
     }
 
     // --- Режим «Исполнение фичи» (этап 2.5): ключ в каталоге + конвенция записи ---

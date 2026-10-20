@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Personas (шаг 3.4). По образцу Llm.Tests:
+         SDK=Web ради FrameworkReference Microsoft.AspNetCore.App (ILogger/IServiceCollection
+         и пр. ASP.NET-типы, на которые опираются Persona*Tests), OutputType=Library
+         ради отсутствия Main. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core — спинка: Models/Protocol/Services.Execution, на которые ссылаются using'ы
+         перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Personas — продуктовая сборка вертикали: PersonaDraftService и другие
+         ClaudeHomeServer.Services.Personas-типы. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
+    <!-- TestKit — Core-only хелперы (TestConfig и соседи), используемые тестами. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host — Main-зависимые хелперы (TestWebApplicationFactory),
+         используемые PersonaAskServiceTests/PersonaLightContextTests/
+         ProjectSessionPersonaLayerGuardTests. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
+    <!-- Llm — ClaudeHomeServer.Services.Llm-типы (ILlmSessionAdapter и др.),
+         на которые ссылаются 9 перенесённых файлов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <!-- Architecture: PersonaAccessPolicyTests проверяет состав ArchitectureToolset.AllTools/WriteTools. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" />
+    <!-- Memory: PersonaMemoryAutolearnService/PersonaMemoryConsolidationService —
+         internal-члены Parse/AutolearnItem/FilterOps/ParseOps, на которые
+         опираются PersonaMemoryAutolearnParseTests/PersonaMemoryConsolidationTests. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
+    <!-- Main: PersonaManager, ClaudeHomeServer.Services.* и ClaudeHomeServer.Services.Mcp.Http
+         — основные типы, на которые опираются все 30 перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <!-- [SkippableFact] в PersonasToolsetParityTests. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+</Project>

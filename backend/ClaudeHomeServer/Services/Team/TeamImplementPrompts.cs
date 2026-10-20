@@ -576,6 +576,26 @@ public static class TeamImplementPrompts
             ? "Работа сделана и проверена фактическим прогоном (сборка/тесты), результат приложен к задаче."
             : subtask.DoneCriteria.Trim());
 
+        // Шаг 5.3 фичи «Модульные тесты»: отвязать от монолита и разнести по вертикалям.
+        // На итерации — только затронутые тест-проекты (scripts/tests-affected.sh, шаг 5.1),
+        // полный slnx — перед мержем, агентские сборки — с `-v q -clp:ErrorsOnly`.
+        // Имя скрипта синхронизировано с docs/processes/executor-task-template.md.
+        sb.AppendLine();
+        sb.AppendLine("## Тестирование");
+        sb.AppendLine("На итерации запускай **только** затронутые тест-проекты. " +
+                      "Определить их: `bash scripts/tests-affected.sh` (по `git diff` + графу " +
+                      "`ProjectReference`). Полный прогон `dotnet test backend/ClaudeHomeServer.slnx` " +
+                      "— только перед мержем в master. Агентские сборки: " +
+                      "`dotnet build -v q -clp:ErrorsOnly` (минимум шума, максимум сигнала).");
+        sb.AppendLine();
+        sb.AppendLine("## Сверка числа тестов");
+        sb.AppendLine("Сверять число тестов через **trx-сводку** прогона " +
+                      "(`--logger \"trx;LogFileName=…\"`), не через stdout `--list-tests` " +
+                      "(stdout теряет строки при параллельном выводе testhost). " +
+                      "Эталон числа тестов: 15414 FQN (per-project `--list-tests`, `sort -u`; замер на 84856ba8c). " +
+                      "Исходный снимок шага 0.2 — 15203 FQN; разница и методика — " +
+                      "в docs/research/tests-by-module-baseline-2026-10.md.");
+
         sb.AppendLine();
         sb.AppendLine("## Контекст");
         if (!string.IsNullOrWhiteSpace(plan.Summary)) sb.AppendLine($"План команды: {plan.Summary.Trim()}");

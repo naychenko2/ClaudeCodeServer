@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Mcp+Gateway (шаг 3.6). По образцу Personas.Tests (3.4)
+         и Team.Tests (3.5): SDK=Web ради FrameworkReference Microsoft.AspNetCore.App
+         (ILogger/IServiceCollection/TestHost и пр. ASP.NET-типы, на которые опираются
+         Mcp*Tests/Gateway*Tests), OutputType=Library ради отсутствия Main.
+         Mcp (Services/Mcp) и Gateway (Services/Gateway) — папки Main, не отдельные сборки:
+         проект ссылается на Main, как и монолит; это ожидаемо и не «утечка». -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Монолит (ClaudeHomeServer.Tests) в переходный период (до финальной чистки)
+         потребляет internal-члены перенесённых тестов (напр. TestsToolsetTests.BuildSessionManager
+         из SessionManagerToolStartedTests): допуск internals Mcp.Tests монолиту. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core — спинка: Models/Protocol/Services.Execution, на которые ссылаются using'ы
+         перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Main: Mcp (Services/Mcp) и Gateway (Services/Gateway) — папки Main, а также
+         Services.Llm.Gateway/Services.Composition/Services.Devices/Services.Mcp.Http,
+         на которые опираются все 21 перенесённый тест. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- TestKit — Core-only хелперы (FakeHostEnvironment/TestSessionBroadcaster/
+         TestLauncherFactory/TestConfig), используемые Mcp/Gateway-тестами. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host — Main-зависимые хелперы (TestWebApplicationFactory),
+         используемые Mcp/Http и Gateway-тестами. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
+    <!-- Llm — ClaudeHomeServer.Services.Llm-типы (ILlmSessionAdapter и др.),
+         на которые ссылаются Gateway-тесты (LlmGateway*/TurnToken*). -->
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <!-- ProjectServices — DevServerLaunchPolicy (internal), на который опирается DevToolsetTests.
+         Отдельная сборка (не транзитивна через Main), ссылка прямая, как в монолите. -->
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
+    <!-- TestRuns — TestRunService.IsNodeBinShape (internal), на который опирается TestsToolsetTests.
+         Отдельная сборка (не транзитивна через Main), ссылка прямая, как в монолите. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestRuns\ClaudeHomeServer.TestRuns.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <!-- [SkippableFact] в Mcp/Http/TestsToolsetTests. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- LlmGatewayObserverTests читает живой vLLM-поток из fixture, общего с монолитом
+         (ClaudeHomeServer.Tests/Fixtures/LocalStats, его же используют LocalStats-тесты).
+         Файл не дублируем: относительная ссылка на источник + Link, чтобы он лёг в output
+         Mcp.Tests по пути Fixtures/LocalStats/… (тест резолвит AppContext.BaseDirectory +
+         "Fixtures"/"LocalStats"/…). -->
+    <None Include="..\ClaudeHomeServer.Tests\Fixtures\LocalStats\vllm-messages-stream.sse"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="Fixtures/LocalStats/vllm-messages-stream.sse" />
+  </ItemGroup>
+
+</Project>

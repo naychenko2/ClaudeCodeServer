@@ -1,0 +1,84 @@
+// Тело режима «План хода / Исполнение фичи» (общее для меню пилюли и карточки в ленте).
+// Rендер — renderToStaticMarkup (окружение node: useIsMobile()=false, effects не идут).
+// Проверяем M-3: счётчик шапки — шаги принято/всего · ↺N на ОБЕХ поверхностях
+// (пилюля и карточка), а не «100%» как раньше; при нуле шагов «0/—».
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FeatureRun } from '../../../types/featureRun';
+import { FeatureModeBody } from './FeatureModeBody';
+import { __test } from '../../../lib/featureRuns';
+
+// useIsMobile — управляемый флаг (SSR по умолчанию false).
+const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { value: false } }));
+vi.mock('../../../lib/breakpoints', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/breakpoints')>();
+  return { ...orig, useIsMobile: () => mobileFlag.value };
+});
+// Стор персон (lib/personas) — мок: FeatureRunView внутри тела читает getPersonaById.
+const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+vi.mock('../../../lib/personas', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/personas')>();
+  return { ...orig, getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined) };
+});
+// api (lib/api) — FeatureRunView вызывает api.tasks.execute в обработчиках (SSR — не идёт).
+vi.mock('../../../lib/api', () => ({
+  api: { tasks: { execute: async (_id: string) => {} } },
+}));
+
+beforeEach(() => { personaMap.clear(); mobileFlag.value = false; __test.reset(); });
+
+// Агрегат фичи со счётчиком: stepsAccepted/stepsTotal + loops (↺N).
+function run(over: Partial<FeatureRun> = {}): FeatureRun {
+  return {
+    featureId: 'epic-1',
+    epic: { id: 'epic-1', title: 'Фича', status: 'todo' },
+    steps: [],
+    reviews: [],
+    qa: [],
+    final: null as never,
+    merge: null,
+    awaitingHumanSince: null,
+    awaitingHumanReason: null,
+    verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+    progress: 0,
+    ready: false,
+    now: [],
+    attention: null,
+    closed: false,
+    summary: null,
+    ...over,
+  } as FeatureRun;
+}
+
+// Рендер тела: счётчик шапки — в шапке (controls) на обеих поверхностях.
+function renderBody(runs: FeatureRun[], variant: 'pill' | 'card', sessionId: string): string {
+  // Стор: срез фич → modeFor(sessionId)='feature'; выбор не задан → runs[0].
+  __test.setRuns(sessionId, runs);
+  return renderToStaticMarkup(
+    createElement(FeatureModeBody, { sessionId, todos: [], runs, isMobile: mobileFlag.value, variant }),
+  );
+}
+
+describe('FeatureModeBody — счётчик шапки (M-3)', () => {
+  it('обе поверхности — «принято/всего · ↺N» (не «100%»)', () => {
+    const r = run({ stepsAccepted: 2, stepsTotal: 4, verdicts: { accepted: 2, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 1 } });
+    const pill = renderBody([r], 'pill', 'sess-pill');
+    const card = renderBody([r], 'card', 'sess-card');
+    // Счётчик — acc/tot · ↺N на обеих поверхностях.
+    expect(pill).toContain('2/4 · ↺1');
+    expect(card).toContain('2/4 · ↺1');
+    // Старый «100%» (доля решённых витков) из шапки убран: текстового узла «100%» нет
+    // (width:100% в стилях конвейера — не текст).
+    expect(pill).not.toMatch(/>100%</);
+    expect(card).not.toMatch(/>100%</);
+  });
+
+  it('ноль шагов — «0/—» на обеих поверхностях', () => {
+    const r = run({ stepsAccepted: 0, stepsTotal: 0, verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 2 } });
+    const pill = renderBody([r], 'pill', 'sess-pill0');
+    const card = renderBody([r], 'card', 'sess-card0');
+    expect(pill).toContain('0/— · ↺2');
+    expect(card).toContain('0/— · ↺2');
+  });
+});

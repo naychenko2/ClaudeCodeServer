@@ -1,15 +1,20 @@
 import { memo, useContext, useEffect, useMemo, useState } from 'react';
-import { SquareCheck, ArrowRight } from 'lucide-react';
+import { SquareCheck, ArrowRight, Route } from 'lucide-react';
 import type { ChatItem, Task } from '../../types';
-import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
+import { C, FONT, FS, SHADOW, TB } from '../../lib/design';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
-import { dueLabel, isDueUrgent, openTaskInSection, PRIORITY_LABEL } from '../../lib/tasks';
+import { dueLabel, ensureFullTask, isDueUrgent, openTaskInSection, PRIORITY_LABEL, useTasks } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { useIsMobile } from '../../lib/breakpoints';
+import { focusFeatureStep, getHasPlanCard, openPillMenu } from '../../lib/featureRuns';
+import { laneOfChain } from './feature/PipelineFlow';
+import { Button } from '../ui';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolUseView } from './ToolUseView';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, ChatSessionContext } from './contexts';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -28,11 +33,35 @@ function parseTask(result: string): Task | null {
   return null;
 }
 
+// Вызов tasks_run_executor (mcp__tasks__tasks_run_executor) — сравнение по суффиксу, без регистра
+export function isTasksRunExecutor(name: string): boolean {
+  return name.toLowerCase().endsWith('__tasks_run_executor');
+}
+
+// Результат tasks_run_executor неполный: {id, title, status, executorSessionId, note}.
+// Нужен только id (для добора полной задачи); остальное не используем.
+function parseRunExecutorResult(result: string | undefined): { id?: string } | null {
+  if (!result) return null;
+  try {
+    const o = JSON.parse(result) as { id?: unknown };
+    if (o && typeof o.id === 'string' && o.id) return { id: o.id };
+  } catch { /* не JSON */ }
+  return null;
+}
+
+// Геометрия чипа «Шаг N фичи» (макет v1 .featchip): значения вне шкалы SP (gap 6,
+// padding 3/9, margin-top 11, minHeight 28) — константы; minHeight мобилы — TB.iconHitMobile (40).
+const CHIP_GAP = 6;
+const CHIP_PAD_Y = 3;
+const CHIP_PAD_X = 9;
+const CHIP_MARGIN_TOP = 11;
+const CHIP_MIN_H = 28;
+
 // Подпись ячейки сетки деталей
 function CellLabel({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
-      fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
       color: C.textMuted, marginBottom: 4,
     }}>
       {children}
@@ -42,26 +71,40 @@ function CellLabel({ children }: { children: React.ReactNode }) {
 
 const cellValueStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6,
-  fontSize: 12.5, fontWeight: 600, color: C.textPrimary, minWidth: 0,
+  fontSize: FS.sm, fontWeight: 600, color: C.textPrimary, minWidth: 0,
 };
 
 // Карточка «Задача создана» — вызов MCP tasks_create в ленте чата (макет варианта C).
 // Вместо технического блока: тонированная шапка с техподписью, название, описание,
 // сетка деталей (исполнитель/срок/приоритет/подзадачи), метки, футер-ссылка.
 // Вся карточка кликабельна → задача в её разделе (проектная — «Задачи», личная — «Календарь»).
-export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onOpenFile }: {
+export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onOpenFile, toolName = 'create' }: {
   item: ToolUseItem;
   online: boolean;
   onOpenFile?: (path: string) => void;
+  // Техподпись в шапке — по имени инструмента: tasks_create → «create» (дефолт),
+  // tasks_run_executor → «run_executor». Не хардкод, чтобы карточка запуска не вешала
+  // чужую подпись.
+  toolName?: string;
 }) {
   // Резолв персоны-исполнителя: в чатах без персоны стор мог быть не загружен
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
   const project = useContext(ChatProjectContext);
+  // Id сессии чата: чип «Шаг N фичи» (F9) шлёт по ней сигнал фокуса в стор Ф1.
+  const sessionId = useContext(ChatSessionContext);
+  const isMobile = useIsMobile();
   const [hovered, setHovered] = useState(false);
   // Чип «Шаг N фичи» — за гейтом фич-флага: разметка (featureId/stepRef) уже в проде,
   // но чип показываем только когда режим «Исполнение фичи» включён.
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
+  // F9: есть ли в ленте живая карточка плана (пишет ChatPanel): есть — сигнал фокуса
+  // потребляется в ней, нет — клик по чипу открывает меню пилюли. Флаг читаем императивно
+  // (getHasPlanCard) на следующем кадре ПОСЛЕ клика, а не из stale-значения хука (Глеб:
+  // гонка ремоунта ChatPanel — при клике эффект ещё не написал флаг).
+  // Hover/фокус чипа: hover — подложка C.bgSelected + текст C.textPrimary, фокус — кольцо SHADOW.focus.
+  const [chipHot, setChipHot] = useState(false);
+  const [chipFocused, setChipFocused] = useState(false);
 
   const running = item.result === undefined;
   const task = useMemo(
@@ -87,6 +130,12 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   // Описание клампится в 2 строки — блочный markdown ломает кламп, показываем плоский текст
   const description = markdownToPlain(task?.description ?? '');
   const dueUrgent = task ? isDueUrgent(task) : false;
+  // F9: подпись чипа. Линия — из task.lane с той же нормализацией, что в конвейере
+  // (back/бэк → бэк, front/фронт → фронт); линии нет или она другая — суффикса нет.
+  const chipLane = task?.lane ? laneOfChain(task.lane) : 'other';
+  const chipLabel = task?.stepRef
+    ? `Шаг ${task.stepRef} фичи · Производство${chipLane === 'back' ? ', бэк' : chipLane === 'front' ? ', фронт' : ''}`
+    : '';
 
   return (
     <div
@@ -125,7 +174,7 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
           </span>
         ) : (
           <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
-            tasks · create
+            tasks · {toolName}
           </span>
         )}
       </div>
@@ -204,18 +253,53 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
             {labels.map(l => <LabelChip key={l} label={l} />)}
           </div>
         )}
-        {/* Чип «Шаг N фичи»: только когда режим «Исполнение фичи» включён И в ответе
-            tasks_create есть featureId И stepRef (Major 3 Глеба: без них чипа нет, чтобы
-            не врать про неразмеченные задачи) */}
+        {/* Чип «Шаг N фичи» (макет v1 п. 5): кнопка, открывающая план на этом шаге.
+            Только когда режим «Исполнение фичи» включён И в ответе tasks_create есть
+            featureId И stepRef (Major 3 Глеба: без них чипа нет, чтобы не врать про
+            неразмеченные задачи). Клик — stopPropagation: вся карточка — ссылка на задачу,
+            а чип открывает план (сигнал фокуса в сторе Ф1; без живой карточки плана —
+            меню пилюли). */}
         {featureMode && task?.featureId && task?.stepRef && (
-          <div style={{ marginTop: SP.md }}>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm,
-              color: C.textSecondary, background: C.bgCard, border: `1px solid ${C.borderLight}`,
-              borderRadius: R.md, padding: `${SP.xxs}px ${SP.sm}px`,
-            }}>
-              <span style={{ color: C.accent, fontWeight: 700 }}>●</span>
-              Шаг {task.stepRef} фичи
+          <div style={{ marginTop: CHIP_MARGIN_TOP }}>
+            <span
+              onMouseEnter={() => setChipHot(true)}
+              onMouseLeave={() => setChipHot(false)}
+              onFocus={() => setChipFocused(true)}
+              onBlur={() => setChipFocused(false)}
+            >
+              <Button
+                size="xs"
+                variant="ghost"
+                title="Открыть план фичи на этом шаге"
+                leftIcon={<Route size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (task && sessionId) {
+                    focusFeatureStep(sessionId, task.featureId!, task.id);
+                    // Гонка (Глеб): при ремоунте ChatPanel флаг «живая карточка плана» может быть
+                    // ещё false в момент клика (эффект не отработал) → чип откроет меню пилюли,
+                    // а карточка в ленте тоже раскроется. Читаем флаг на следующем кадре (после
+                    // клика, когда эффект уже отработал), а не из stale-значения при клике.
+                    requestAnimationFrame(() => {
+                      if (!getHasPlanCard(sessionId)) openPillMenu(sessionId);
+                    });
+                  }
+                }}
+                style={{
+                  display: 'inline-flex',
+                  gap: CHIP_GAP,
+                  padding: `${CHIP_PAD_Y}px ${CHIP_PAD_X}px`,
+                  minHeight: isMobile ? TB.iconHitMobile : CHIP_MIN_H,
+                  height: 'auto',
+                  background: chipHot ? C.bgSelected : C.bgCard,
+                  color: chipHot ? C.textPrimary : C.textSecondary,
+                  border: `1px solid ${C.borderLight}`,
+                  boxShadow: chipFocused ? SHADOW.focus : 'none',
+                  fontWeight: 400,
+                }}
+              >
+                {chipLabel}
+              </Button>
             </span>
           </div>
         )}
@@ -240,4 +324,42 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
       )}
     </div>
   );
+});
+
+// Карточка задачи на месте вызова tasks_run_executor: задача «отдана в исполнение».
+// Результат вызова неполный ({id, title, status, executorSessionId, note}) — задачу берём
+// из стора (useTasks); облегчённой (listItem) достаточно для карточки. Сетевой запрос —
+// только если задачи в сторе нет (чужая/удалённая/стор не загружен), через ensureFullTask
+// (общий дедуп in-flight по id). Карточка обновляется вместе со стором (realtime task_changed).
+// Пока задачи нет — обычная строка инструмента (ToolUseView), не падение.
+// id — из input (taskId, надёжнее) или из result (id, фолбэк).
+export const TaskRunExecutorView = memo(function TaskRunExecutorView({ item, online, onOpenFile }: {
+  item: ToolUseItem; online: boolean; onOpenFile?: (path: string) => void;
+}) {
+  const inp = (item.input ?? {}) as { taskId?: unknown };
+  const res = parseRunExecutorResult(item.result);
+  const id = (typeof inp.taskId === 'string' && inp.taskId) || res?.id || null;
+
+  // Задача из стора: облегчённой (listItem) достаточно. useTasks() — реактивная
+  // подписка: task_changed обновит карточку без отдельного запроса.
+  const tasks = useTasks();
+  const storeTask = id ? tasks.find(t => t.id === id) : undefined;
+
+  // Задачи в сторе нет — добираем через общий дедуп. Результат upsert'ится в стор,
+  // useTasks() перерендерит компонент. .catch — ошибка/404: карточки нет (строка инструмента),
+  // но rejection не должен улетать в unhandled.
+  useEffect(() => {
+    if (!id || storeTask) return;
+    void ensureFullTask(id).catch(() => {});
+  }, [id, storeTask]);
+
+  // Пока задачи нет (ещё грузится) — обычная строка инструмента
+  if (!storeTask) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+
+  // Карточка: description из listItem — descriptionPreview, из полной — description.
+  const displayTask: Task = storeTask.listItem
+    ? { ...storeTask, description: storeTask.descriptionPreview ?? '' }
+    : storeTask;
+  const synth: ToolUseItem = { ...item, result: JSON.stringify(displayTask) };
+  return <TaskCreatedView item={synth} online={online} onOpenFile={onOpenFile} toolName="run_executor" />;
 });

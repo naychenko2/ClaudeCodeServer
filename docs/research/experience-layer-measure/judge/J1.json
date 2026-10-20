@@ -1,0 +1,44 @@
+[
+ {"target":"T056","total_tool_calls":90,
+  "useful":[
+   {"id":"E044","episode":"run_tests kind=vitest target=frontend с files 'src/components/chat/feature/PipelineFlow.test.ts' → «Путь ... в files не найден», повтор с префиксом frontend/","why_not_in_brief":"В постановке нет формата путей run_tests, только требование «Vitest зелёный»","est_saved_calls":1},
+   {"id":"E016","episode":"Выяснение, что ловит lint:design и пройдут ли C.bgCard/C.borderLight: grep package.json, Read eslint.design.config.js, Grep eslint.config.js, Read no-raw-color.js (4 вызова)","why_not_in_brief":"Постановка требует «lint:design зелёный», но не говорит, что он проверяет только сырой hex","est_saved_calls":3},
+   {"id":"E080","episode":"Написала интерактивный тест с поиском контейнера stage-details-review подстрокой, тут же переписала на findNodeByAttr по id (лишний Edit); позже та же путаница id/aria-controls в отладке","why_not_in_brief":"Про fakeDom/поиск по атрибуту id в постановке ничего нет","est_saved_calls":1}
+  ],
+  "harmful":[],
+  "relevant_no_gain":["E036","E063","E045","E054","E015","E064","E052","E073","E043","E039","E072"],
+  "note":"Главная яма — проп key не попадает в props (~10 вызовов отладки SSR) и поиск lib/personas.ts (~5) — в пуле этого нет (E090/E091 рождены самой T056). Пул сэкономил бы мелочи."},
+ {"target":"T063","total_tool_calls":106,
+  "useful":[
+   {"id":"E101","episode":"После 'cd tools/thinking-strip-proxy' (прогон тестов) серия git log -G/-S/diff с pathspec от корня давала пусто, затем grep 'No such file', pwd, повторы git log, пока не сделал cd в корень worktree (~16 вызовов на историю опечатки «пойтан»)","why_not_in_brief":"Постановка сама велит cd в tools/thinking-strip-proxy и не предупреждает о сохранении cwd","est_saved_calls":8},
+   {"id":"E103","episode":"tasks_complete с коротким id '3382532d' → «не найдена или недоступна», повторный tasks_get ради полного UUID и повторный tasks_complete","why_not_in_brief":"В постановке id задачи не дан вовсе","est_saved_calls":2}
+  ],
+  "harmful":[
+   {"id":"E077","why":"Утверждает, что retry есть только у петли, а у мусора нет; после карантина f3bd64489 мусор переспрашивает с солью — устарело и противоречит постановке и коду (риск низкий: постановка прямо описывает повтор)"}
+  ],
+  "relevant_no_gain":["E043","E085","E098","E087","E086","E099","E039","E079"],
+  "note":"Ревью шло ровно, команда прогона и флейк были в постановке. Реальная потеря — спираль с cwd при поиске истории опечатки, её покрывает E101."},
+ {"target":"T065","total_tool_calls":82,
+  "useful":[],
+  "harmful":[
+   {"id":"E077","why":"Говорит, что у мусора нет retry; в текущем коде и постановке мусор повторяется с солью карантина — устарело (постановка перекрывает)"}
+  ],
+  "relevant_no_gain":["E085","E098","E087","E086","E099","E039"],
+  "note":"~44 вызова ушли на зацикленный memory_recall и отсутствующий dossier_lookup; запись об этом (E106) рождена самой T065, в пуле её нет. Остальное шло без спотыканий."},
+ {"target":"T068","total_tool_calls":61,
+  "useful":[
+   {"id":"E104","episode":"8 Bash-вызовов grep-анализа using/типов 21 файла и сборок SessionManager/ProjectManager, чтобы понять, нужен ли Main; сборка затем упала только на TestCollections — Main и так пришёл транзитом через TestKit.Host","why_not_in_brief":"Постановка перечисляет ссылки без Main и не говорит о транзитиве через TestKit.Host и методе «собери и читай CS0246»","est_saved_calls":5},
+   {"id":"E017","episode":"Сверка с baseline: сначала tail -n +4 (предположил 3 строки шапки), получил расхождение, затем пересчёт grep -vE '^#' — в шапке 16 строк, реальный эталон 15203","why_not_in_brief":"Постановка даёт 15216 и не говорит про шапку файла эталона","est_saved_calls":1},
+   {"id":"E106","episode":"mcp__memory__team_memory_remember → «No such tool available», потом memory_remember","why_not_in_brief":"Не про задачу, в постановке нет","est_saved_calls":1}
+  ],
+  "harmful":[],
+  "relevant_no_gain":["E093","E056","E094","E041","E055","E034","E069","E050","E049","E032","E107","E105","E070"],
+  "note":"Пул хорошо покрывает тему отвязки тестов (транзитив Main, подсчёт тестов). Перенос TestCollections в TestKit и using Xunit — новое, в пуле нет (E108 рождена самой T068)."},
+ {"target":"T070","total_tool_calls":26,
+  "useful":[],
+  "harmful":[
+   {"id":"E077","why":"Утверждает отсутствие retry у мусора — противоречит проверяемому поведению (повтор с солью при CACHE_QUARANTINE=on)"}
+  ],
+  "relevant_no_gain":["E098","E085","E087","E099","E086","E101","E039"],
+  "note":"Короткое чистое ревью без спотыканий: команда прогона в постановке, мутация через Edit прошла с первого раза."}
+]

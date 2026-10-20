@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseHash, navPush, type NavSnapshot } from '../nav';
+import { setAllFlags, __test as flagsTest, FLAGS } from '../featureFlags';
 
 // Минимальный снимок проекта — нужен только для экрана 'project', в этом тесте
 // используется лишь как заполнитель типа (NavSnapshot.project обязателен).
@@ -148,5 +149,72 @@ describe('navPush — сборка URL', () => {
     };
     navPush(s);
     expect(pushStateMock.mock.calls[0][2]).toBe('#/personas/id%20with%20spaces');
+  });
+});
+
+// Страница фичи (#/project/{id}/feature/{fid}):
+//   • parseHash ВСЕГДА сохраняет featureId (без гейта по флагу): разбор идёт при загрузке
+//     модуля, когда флаги ещё не пришли из /me, и гейт здесь терял бы сегмент (M1);
+//   • toHash пишет сегмент, пока не «загружено и выключено»: до прихода флагов адрес не
+//     схлопывают, а к проекту деградируют только когда флаг пришёл и выключен (dark launch).
+// toHash приватна — сборку проверяем через navPush (тот же приём, что в блоке «navPush —
+// сборка URL» выше), а parseHash — напрямую (чистая функция).
+describe('nav: страница фичи (#/project/{id}/feature/{fid})', () => {
+  let pushStateMock: ReturnType<typeof vi.fn>;
+  let originalWindow: unknown;
+
+  beforeEach(() => {
+    setAllFlags({ [FLAGS.featuresOverview]: true });
+    pushStateMock = vi.fn();
+    originalWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      history: { pushState: pushStateMock, replaceState: vi.fn() },
+      dispatchEvent: vi.fn(),
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { window?: unknown }).window = originalWindow;
+    flagsTest.reset();
+    vi.restoreAllMocks();
+  });
+
+  it('round-trip: снимок { project, feature } → адрес → parseHash → featureId (флаг включён)', () => {
+    navPush({ screen: 'project', project: minimalProject, feature: 'f1' });
+    const url = pushStateMock.mock.calls[0][2];
+    expect(url).toBe('#/project/p1/feature/f1');
+    expect(parseHash(url)).toEqual({ screen: 'project', projectId: 'p1', featureId: 'f1' });
+  });
+
+  it('parseHash: #/project/{id}/feature/{fid} → featureId (флаг включён)', () => {
+    expect(parseHash('#/project/p1/feature/f1')).toEqual({ screen: 'project', projectId: 'p1', featureId: 'f1' });
+  });
+
+  it('флаг выключен (загружен): navPush НЕ кладёт сегмент фичи (адрес = проект)', () => {
+    setAllFlags({ [FLAGS.featuresOverview]: false });
+    navPush({ screen: 'project', project: minimalProject, feature: 'f1' });
+    expect(pushStateMock.mock.calls[0][2]).toBe('#/project/p1');
+  });
+
+  // M1: parseHash НЕ гейтит по флагу — featureId сохраняется, даже когда флаг выключен.
+  // Мутация «вернуть гейт по флагу в parseHash» красит этот тест (featureId пропадает).
+  it('M1: parseHash сохраняет featureId при выключенном флаге (гейт — в toHash/WorkspacePage)', () => {
+    setAllFlags({ [FLAGS.featuresOverview]: false });
+    expect(parseHash('#/project/p1/feature/f1')).toEqual({ screen: 'project', projectId: 'p1', featureId: 'f1' });
+  });
+
+  // Пока флаги не загружены (до ответа /me) toHash НЕ схлопывает адрес: сегмент feature
+  // остаётся, чтобы диплинк не потерял его до того, как станет известно состояние флага.
+  it('флаги не загружены: toHash (navPush) НЕ схлопывает адрес (feature остаётся)', () => {
+    flagsTest.reset(); // _loaded = false
+    navPush({ screen: 'project', project: minimalProject, feature: 'f1' });
+    expect(pushStateMock.mock.calls[0][2]).toBe('#/project/p1/feature/f1');
+  });
+
+  it('featureId URL-декодируется (сборка и разбор)', () => {
+    navPush({ screen: 'project', project: minimalProject, feature: 'id with space' });
+    const url = pushStateMock.mock.calls[0][2];
+    expect(url).toBe('#/project/p1/feature/id%20with%20space');
+    expect(parseHash(url)?.featureId).toBe('id with space');
   });
 });

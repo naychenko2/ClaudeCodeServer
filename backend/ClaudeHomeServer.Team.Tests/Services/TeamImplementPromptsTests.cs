@@ -1,0 +1,370 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Team;
+using FluentAssertions;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// Лимит раундов интервью (Minor, волна 3): раньше InterviewProtocol/ClarifyInterviewTurn
+// только ПРОСИЛИ модель остановиться словами, а факт бэкенд не проверял — 3-й раунд так же
+// уходил в карточку, и ClarifyInterviewTurn при уже исчерпанном лимите безусловно велел
+// «задай вопросы», противореча InterviewProtocol в том же ходе (CoordinatorTurn).
+// InterviewRoundsExhausted — общая проверка для текста и для permission-гейта
+// (ClaudeSession.HandleControlRequestAsync денаит AskUserQuestion сверх лимита).
+public class TeamImplementPromptsTests
+{
+    private static SessionTeamImplement MkTeam(int rounds) => new() { InterviewRounds = rounds };
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    [InlineData(2, true)]
+    [InlineData(3, true)]
+    public void InterviewRoundsExhausted_СверяетСПотолком(int rounds, bool expected)
+    {
+        TeamImplementPrompts.InterviewRoundsExhausted(MkTeam(rounds)).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ClarifyInterviewTurn_ЛимитНеИсчерпан_ВелитЗадатьВопросы()
+    {
+        var text = TeamImplementPrompts.ClarifyInterviewTurn("неясен формат выгрузки", MkTeam(0));
+
+        text.Should().Contain("AskUserQuestion");
+        text.Should().NotContain("не спрашивай");
+    }
+
+    [Fact]
+    public void ClarifyInterviewTurn_ЛимитИсчерпан_ВелитОформитьДопущением_БезПротиворечияInterviewProtocol()
+    {
+        // Раньше текст безусловно требовал спросить — а следом в этом же ходу CoordinatorTurn
+        // дописывал InterviewProtocol с «лимит исчерпан, больше не спрашивай»: два взаимо-
+        // исключающих указания в одном ходу.
+        var team = MkTeam(TeamImplementPrompts.MaxInterviewRounds);
+
+        var clarifyTurn = TeamImplementPrompts.ClarifyInterviewTurn("неясен формат выгрузки", team);
+        var protocol = TeamImplementPrompts.InterviewProtocol(team);
+
+        clarifyTurn.Should().NotContain("AskUserQuestion",
+            "при исчерпанном лимите ход не должен просить задавать вопросы");
+        clarifyTurn.Should().Contain("допущением");
+        protocol.Should().Contain("больше не спрашивай");
+    }
+
+    // Прод 2026-08-03 (находка Веры): просили hello5.txt/«QA smoke test file 5», а координатор
+    // отдал в маркере работы smoke5.txt/«smoke run 5 ok» — конкретика из вводной подменена ещё
+    // ДО планировщика, самим маркером <team:work> (протокол требовал сжать постановку до
+    // «одной-двух фраз», не оговаривая точные значения). Обе точки, где координатор формулирует
+    // маркер работы, обязаны требовать дословный перенос.
+    [Fact]
+    public void WorkClassificationProtocol_ТребуетДословныйПереносЗначений()
+    {
+        TeamImplementPrompts.WorkClassificationProtocol.Should().Contain("дословно");
+    }
+
+    [Fact]
+    public void InterviewProtocol_МаркерРаботы_ТребуетДословныйПереносЗначений()
+    {
+        TeamImplementPrompts.InterviewProtocol(MkTeam(0)).Should().Contain("дословно");
+    }
+
+    // Единый канал вопросов (запрос владельца 2026-08-04): интервью спрашивает ASK-карточками,
+    // и эскалации в живом ходу обязаны тем же каналом — а не карточкой-«простынёй» с полем.
+    [Fact]
+    public void EscalationProtocol_Вопросы_ТолькоИнструментом_КакВИнтервью()
+    {
+        var protocol = TeamImplementPrompts.EscalationProtocol;
+
+        protocol.Should().Contain("AskUserQuestion");
+        protocol.Should().Contain("не пиши вопросы текстом",
+            "формулировка согласована с InterviewProtocol — оба протокола запрещают вопросы текстом");
+        protocol.Should().Contain("Другое",
+            "свободный ответ текстом остаётся запасным путём — в ASK это вариант «Другое»");
+    }
+
+    [Fact]
+    public void EscalationProtocol_ПродуктоваяРазвилка_УшлаИзМаркеровВОпрос()
+    {
+        // Живой вопрос координатора задаётся ASK; маркер <escalate:decision> из протокола ушёл
+        // (парсер терпит его только как фолбэк). Останавливающие маркеры остались.
+        var protocol = TeamImplementPrompts.EscalationProtocol;
+
+        protocol.Should().NotContain("escalate:decision");
+        protocol.Should().Contain("<escalate:deviation>");
+        protocol.Should().Contain("<escalate:check>");
+        protocol.Should().Contain("<escalate:clarify>");
+    }
+
+    [Fact]
+    public void EscalationProtocol_ВопросНеОстанавливаетРаботу()
+    {
+        // Развилка по природе случая: ASK живёт внутри хода и продолжает его после ответа,
+        // в отличие от карточки, которая публикуется, когда ход уже завершён.
+        TeamImplementPrompts.EscalationProtocol.Should().Contain("продолжай");
+    }
+
+    // Правка плана на подтверждении (прод 2026-08-04): текстовая правка обязана стать
+    // перепланированием через маркер работы — ответ «план готов, жду согласования» текстом
+    // оставляет человека со старой карточкой. Правило сформулировано так же жёстко, как
+    // запрет вопросов текстом в интервью.
+    [Fact]
+    public void PlanEditProtocol_ЗапрещаетОтветТекстом_ТребуетМаркерРаботы()
+    {
+        var protocol = TeamImplementPrompts.PlanEditProtocol;
+
+        protocol.Should().Contain("<team:work>");
+        protocol.Should().Contain("ЗАПРЕЩЕНО", "жёсткость — как у правила про AskUserQuestion");
+        protocol.Should().Contain("жду согласования",
+            "названа ровно та формулировка, что зависла на проде");
+    }
+
+    [Fact]
+    public void CoordinatorTurn_ВСтадииПодтверждения_СодержитПротоколПравки()
+    {
+        var turn = TeamImplementPrompts.CoordinatorTurn(new SessionTeamImplement
+        {
+            Stage = TeamImplementStage.Confirming,
+        });
+
+        turn.Should().Contain("ждёт подтверждения");
+        turn.Should().Contain("<team:work>",
+            "координатор в Confirming обязан знать путь пересборки плана маркером");
+        turn.Should().Contain("ЗАПРЕЩЕНО");
+    }
+
+    // Заголовок карточки остановки, push (TeamWaveService, Body: escalation.Title) и цитаты
+    // в ходах координатора берут первую строку текста модели — а модель пишет markdown,
+    // и в заголовке были видны сырые «##», «**», бэктики и «- ». FirstLine приватный,
+    // проверяем через EscalationTitle с видом WaveGate: он отдаёт результат один в один.
+    [Theory]
+    [InlineData("## Волна 2 готова", "Волна 2 готова")]
+    [InlineData("**Сборка упала** в `backend`", "Сборка упала в backend")]
+    [InlineData("- пункт состава", "пункт состава")]
+    [InlineData("1. первый шаг", "первый шаг")]
+    [InlineData("> цитата исполнителя", "цитата исполнителя")]
+    [InlineData("см. [документацию](docs/a.md)", "см. документацию")]
+    [InlineData("![схема](shots/a.png) готова", "схема готова")]
+    [InlineData("__итог__ и ~~старое~~", "итог и старое")]
+    [InlineData("правим *ядро* режима", "правим ядро режима")]
+    [InlineData("падает team_wave_service после правки", "падает team_wave_service после правки")]
+    [InlineData("```\nсборка упала\n```", "сборка упала")]
+    [InlineData("---\nВолна закрыта", "Волна закрыта")]
+    [InlineData("", "")]
+    [InlineData("   \n \t ", "")]
+    public void EscalationTitle_СнимаетMarkdownРазметку(string details, string expected)
+    {
+        TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveGate, details)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void EscalationTitle_Обрезает120_УжеПоОчищеннойСтроке()
+    {
+        // Разметка не должна съедать полезный хвост: 120 символов считаем после чистки.
+        var body = new string('я', 130);
+
+        var title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveGate, $"**{body}**");
+
+        title.Should().Be(new string('я', 120) + "…");
+    }
+
+    [Fact]
+    public void EscalationTitle_РовноГраница_БезМноготочия()
+    {
+        var body = new string('я', 120);
+
+        TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveGate, $"## {body}")
+            .Should().Be(body);
+    }
+
+    [Fact]
+    public void EscalationTitle_ВидСоШаблоном_ПодставляетОчищеннуюСтроку()
+    {
+        TeamImplementPrompts.EscalationTitle(TeamEscalationKind.Blocker, "## Не хватает **прав** на `data/`")
+            .Should().Be("Исполнитель застрял: Не хватает прав на data/");
+    }
+
+    // «Остановить» сервер применяет сам — ход с «Продолжай с этого места» противоречил
+    // остановке, и координатор уходил разбираться с «конфликтом сигналов» (сбой 28.08.2026).
+    [Fact]
+    public void EscalationResolvedTurn_Остановка_ВелитПодвестиИтогИЖдать_БезПродолжения()
+    {
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.WaveAdded,
+            Title = "Добавочная волна: выгрузка в XLSX",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
+        };
+
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(escalation, "stop", "Остановить", null);
+
+        turn.Should().Contain("Решение: Остановить");
+        turn.Should().NotContain("Продолжай с этого места",
+            "остановка уже применена сервером — «продолжай» противоречило бы ей");
+        turn.Should().Contain("сервер уже применил",
+            "координатор обязан знать, что остановка действует без его участия");
+        turn.Should().Contain("Ничего не запускай и не раздавай");
+        turn.Should().Contain("жди решения человека");
+    }
+
+    [Fact]
+    public void EscalationResolvedTurn_ДругоеДействие_ТекстПрежний()
+    {
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(null, "answer", "Ответить", "доступ выдал");
+
+        turn.Should().Contain("Решение: Ответить");
+        turn.Should().Contain("Комментарий: доступ выдал");
+        turn.Should().Contain("Продолжай с этого места",
+            "прочие решения работу возобновляют — их текст не меняется");
+    }
+
+    // Волна 2 team-blocker-honest: «Снять задачу» (drop, кнопка Blocker) и «Пропустить» (skip,
+    // кнопка TaskFailed) закрывают под-задачу через SubtaskDropHandler. Координатор должен
+    // увидеть в ходе явный отбой — иначе следующим ходом он предлагал перевыдать только что
+    // снятую задачу (прод 2026-09, чат «Выделение подсистем для Француза»).
+    [Fact]
+    public void EscalationResolvedTurn_Drop_ГоворитЧтоЗадачаСнята_ИИсполнительПолучилОтбой()
+    {
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(null, "drop", "Снять задачу", null);
+
+        turn.Should().Contain("Решение: Снять задачу");
+        turn.Should().Contain("снята", "явное подтверждение закрытия задачи");
+        turn.Should().Contain("получил отбой", "исполнитель уведомлён, что работа не нужна");
+        turn.Should().Contain("в работе её больше нет",
+            "иначе координатор следующим ходом предлагал бы перевыдать уже снятую задачу");
+        turn.Should().NotContain("Продолжай с этого места",
+            "снимать и продолжать — взаимоисключающие действия");
+    }
+
+    [Fact]
+    public void EscalationResolvedTurn_Skip_ГоворитЧтоЗадачаСнята_ИИсполнительПолучилОтбой()
+    {
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(null, "skip", "Пропустить", null);
+
+        turn.Should().Contain("Решение: Пропустить");
+        turn.Should().Contain("снята");
+        turn.Should().Contain("получил отбой");
+        turn.Should().Contain("в работе её больше нет");
+        turn.Should().NotContain("Продолжай с этого места");
+    }
+
+    // Волна 2 team-blocker-honest: промпт реакции на блокер (BlockerReactionTurn) обязан
+    // перечислить конкретные ходы снятия с их инструментами. Прежняя формулировка «уточнить
+    // постановку, перевыдать работу, поправить план» была без имён, и в чате «Выделение
+    // подсистем для Француза» координатор «снял блокер правкой критерия», но Вере в её чат
+    // никто не написал — сторож закрыл задачу как зависшую.
+    [Fact]
+    public void BlockerReactionTurn_ПеречисляетКонкретныеИнструментыСнятия()
+    {
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера QA", "sess-vera-1");
+
+        // Четыре канала снятия блокера, каждый со своим инструментом
+        text.Should().Contain("chats_send",
+            "главный забытый ход: ответить исполнителю в его чат");
+        text.Should().Contain("sessionId=\"sess-vera-1\"",
+            "id чата исполнителя прокидывается в промпт, чтобы координатор не искал его");
+        text.Should().Contain("tasks_update",
+            "уточнить постановку без переоткрытия карточки");
+        text.Should().Contain("tasks_run_executor",
+            "перезапустить исполнителя, если задача уже корректна");
+        text.Should().Contain("tasks_create",
+            "перевыдача через новую задачу");
+        text.Should().Contain("tasks_complete",
+            "снятие старой задачи при перевыдаче");
+        // Правило про самогашение карточки: координатор больше не должен искать «кнопку
+        // Продолжить», которой у карточки блокера нет (прод 2026-09).
+        text.Should().Contain("погаснет сама",
+            "карточка гаснет по факту снятия — координатору не нужно звать человека");
+    }
+
+    [Fact]
+    public void BlockerReactionTurn_БезIDЧата_ВсёРавноПеречисляетChatsSend()
+    {
+        // На случай, когда вызывающая сторона не передала id чата (например, исторический
+        // путь вызова): промпт всё равно упоминает chats_send, но без подстановки конкретного
+        // sessionId. Координатору придётся самому найти id через чтение задачи.
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера QA", null);
+
+        text.Should().Contain("chats_send");
+        text.Should().NotContain("sessionId=\"sess-vera-1\"",
+            "без id конкретного чата подстановки быть не должно");
+    }
+
+    [Fact]
+    public void BlockerReactionTurn_ГоворитПроЭскалациюКакКрайнийСлучай()
+    {
+        // Маркер эскалации — запасной путь, а не первая реакция: если снять блокер не выходит,
+        // карточка остаётся человеку, а не «позови человека и всё».
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера", "sess-vera");
+
+        text.Should().Contain("эскалации");
+        text.Should().Contain("escalate:check");
+        text.Should().Contain("escalate:deviation");
+    }
+
+    // Шаг 5.3 фичи «Модульные тесты: отвязать от монолита и разнести по вертикалям»:
+    // шаблон задачи исполнителя обязан нести блок «Тестирование» (только затронутые
+    // тест-проекты, полный slnx — перед мержем, агентские сборки — `-v q -clp:ErrorsOnly`)
+    // и блок «Сверка числа тестов» (trx-сводка вместо stdout `--list-tests`). Без этих
+    // блоков исполнитель запустит полный прогон slnx на каждой итерации и потеряет тест
+    // за дублем — грабли, на которых уже сидели в пачке A.
+    private static string SubtaskDescriptionText() => TeamImplementPrompts.SubtaskDescription(
+        new TeamImplementPlan { Summary = "план" },
+        new TeamImplementSubtask { Title = "шаг", Goal = "шаг", Wave = 1, DoneCriteria = "готово" },
+        worktreePath: null, worktreeBranch: null);
+
+    [Fact]
+    public void SubtaskDescription_СодержитБлокТестирование_СЗатронутымиПроектами()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().Contain("## Тестирование",
+            "блок «Тестирование» — часть шаблона задачи исполнителя (шаг 5.3)");
+        text.Should().Contain("затронутые тест-проекты",
+            "правило: на итерации — только затронутые, полный slnx — перед мержем");
+        text.Should().Contain("scripts/");
+        text.Should().Contain("перед мержем",
+            "явное упоминание, что полный прогон — только перед мержем");
+    }
+
+    [Fact]
+    public void SubtaskDescription_УчитАгентскиеСборкиМинимизироватьШум()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().Contain("-v q");
+        text.Should().Contain("-clp:ErrorsOnly",
+            "агентские сборки должны подавлять лишний шум — иначе контекст забивается");
+    }
+
+    // Шаг 5.3 пачки I: блок «Тестирование» ссылается на scripts/tests-affected.sh
+    // (шаг 5.1 Марка) точным именем, а не placeholder. Подмена placeholder на мусор
+    // ловится здесь: тест краснеет и на возврате placeholder, и на чужом имени.
+    // Тест читает вывод функции SubtaskDescription — это и есть контракт для исполнителя.
+    [Fact]
+    public void SubtaskDescription_НеСодержитPlaceholderСкрипта_И_ЗоветСкриптПоТочномуИмени()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().NotContain("<скрипт из 5.1>",
+            "placeholder сдан после шага 5.1 — заменить на scripts/tests-affected.sh");
+        text.Should().Contain("bash scripts/tests-affected.sh",
+            "исполнитель должен звать скрипт по точному имени (шаг 5.1), не абстрактно «scripts/»");
+        text.Should().NotContain("bash scripts/wrong.sh",
+            "конкретное «мусорное» имя в блоке — явный сигнал отката placeholder");
+        text.Should().NotContain("scripts/<",
+            "синтаксис вида `scripts/<…>` в сданном коде недопустим — placeholder не должен вернуться");
+    }
+
+    [Fact]
+    public void SubtaskDescription_СодержитБлокСверкиЧерезTrx()
+    {
+        var text = SubtaskDescriptionText();
+
+        text.Should().Contain("## Сверка числа тестов",
+            "блок «Сверка числа тестов» — часть шаблона задачи исполнителя (шаг 5.3)");
+        text.Should().Contain("trx",
+            "сверять число тестов через trx-сводку, не через stdout `--list-tests`");
+        text.Should().Contain("15414",
+            "baseline-число FQN должно быть в блоке как явный эталон");
+    }
+}

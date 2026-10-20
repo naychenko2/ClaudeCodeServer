@@ -57,6 +57,14 @@ public static class FeatureFlagKeys
     // Плагины (ADR-031): build-it-yourself — агент собирает пакет через MCP-тулсет plugins.
     // Dark launch, выключено по умолчанию.
     public const string PluginsBuildYourself = "plugins-build-yourself";
+
+    // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
+    // Dark launch, выключено по умолчанию. Запись в каталоге — шаг Б3.
+    public const string FeaturesOverview = "features-overview";
+
+    // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы
+    // дотягиваются через Claude CLI resume. Dark launch, выключено по умолчанию.
+    public const string TurnAutoResume = "turn-auto-resume";
 }
 
 /// <summary>
@@ -147,6 +155,24 @@ public static class FeatureFlagCatalog
             Description: "Агент собирает пакет плагина (черновик) по вашему промпту; принять его, выдать права и ввести секреты — только вы, кнопкой.",
             Default: false,
             Stage: "experimental"),
+
+        // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
+        // Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.FeaturesOverview,
+            Title: "Обзор фич",
+            Description: "Фасет «Фичи» в списке сессий и плашка фичи в чате: какие фичи ведутся, их стадии и ключевые чаты.",
+            Default: false,
+            Stage: "dev"),
+
+        // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы
+        // дотягиваются через Claude CLI resume. Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TurnAutoResume,
+            Title: "Продолжать ходы после перезапуска сервера",
+            Description: "Автоматически дотягивать прерванные активные ходы через Claude CLI resume после рестарта. Default false, per-owner.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

@@ -1,8 +1,19 @@
 import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { readStoredToken, request } from './offline';
 import type { FeatureRun } from '../types/featureRun';
+import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
+import type { HistoryCursorQuery, HistoryReply } from './historyTail';
+
+// Query-строка курсора докачки истории: after обязателен, fp — только для настоящего курсора
+const historyCursorParams = (q: HistoryCursorQuery) =>
+  `after=${q.after}${q.fp ? `&fp=${encodeURIComponent(q.fp)}` : ''}`;
+
+// Версия схемы миниатюр аватаров (?size=): bump-ит URL, чтобы браузеры, закэшировавшие
+// оригинал (1,5 МБ) с immutable, сделали один свежий запрос и получили миниатюру.
+// Сервер параметр может игнорировать; при смене схемы миниатюр поднять число.
+const AVATAR_THUMB_SCHEME_VERSION = 2;
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -42,6 +53,12 @@ export interface LocalModelStats {
   // speculativeSpeedup — «ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δitl_count
   // за окно ~60 с, во сколько раз DFlash ускоряет генерацию; null — нет данных/рестарт или шагов не было
   speed?: { genPerStream?: number; prefillPerStream?: number; speculativeSpeedup?: number | null };
+  // cleanStepMs — база шага (мс): длительность прохода модели без помех, ОДНА на весь
+  // стенд и НЕ зависящая от окна графика. Нужна полосе «Куда уходит время агентов»:
+  // «генерирует» = ΣitlCount × база, «ждёт соседа» = ΣitlSeconds − «генерирует».
+  // Раньше база считалась на фронте по окну — величина прыгала при сдвиге окна.
+  // null/отсутствует — базы нет: «ждёт соседа» не выделяется (доля «—», не ноль).
+  cleanStepMs?: number | null;
   // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
   // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
   // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;
@@ -92,6 +109,8 @@ export interface LocalModelStats {
   // только projectId (и только для своих чатов) — имя проекта резолвит фронт из
   // стора проектов; для чужого чата подстроки нет вовсе.
   chats?: { own: boolean; sessionId?: string; projectId?: string; title?: string; phase: string; genTps?: number }[];
+  // Сводка «Железо» (только админ): для строки-ссылки «Видеокарты» и точки на вкладке.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   unsupported?: string[];
 }
 
@@ -105,6 +124,11 @@ export interface LocalModelStats {
 // gpus=null — данные карты медиа ещё не приходят с узла ComfyUI (шаг 31).
 export interface LocalModelMedia {
   configured: boolean;
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
+  // Сколько задач стоит перед текущим пользователем в очереди; null — сервер не сообщает
+  queueAhead?: number | null;
   comfy: {
     // working | busy | down | disabled
     status: 'working' | 'busy' | 'down' | 'disabled';
@@ -116,6 +140,8 @@ export interface LocalModelMedia {
   slots: { used: number; limit: number };
   // Видеокарта медиа; null до шага 31 (данные карты — с узла ComfyUI, не с хоста)
   gpus?: MediaGpu[] | null;
+  // Сводка «Железо» (только админ): строка-ссылка «Видеокарты» по картам с ролью media.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
   // «Загружено сейчас»: имена моделей в памяти узла (basename, ≤ 96 символов);
   // null/отсутствует — узел не сообщает (маршрут /ccs/stats не установлен)
   loadedModels?: string[] | null;
@@ -237,6 +263,9 @@ export interface MediaHistoryRecord {
 // ленты), счётчики для меню фильтров (с учётом остальных активных фильтров).
 export interface MediaHistoryPage {
   records: MediaHistoryRecord[];
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
   nextCursor: string | null;
   counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
 }
@@ -840,6 +869,9 @@ export const api = {
 
   usage: {
     get: () => request<UsageResponse>('/usage'),
+    // Лёгкий ответ для шапки чата (перф-3 B6): только последний снимок на окно, без истории —
+    // в десятки раз меньше; тип тот же UsageResponse (проекция той же службы, не второй источник)
+    getLimits: () => request<UsageResponse>('/usage?scope=limits'),
     // Снять пометку «модель недоступна на этой подписке» досрочно (кнопка «Проверить
     // сейчас», только админ). Модель — ровно в том виде, в каком пришла в выдаче: в именах
     // встречаются точки и суффикс окна «[1m]», поэтому она в теле, а не в пути. В ответе —
@@ -890,6 +922,11 @@ export const api = {
       if (since != null) qs.set('since', String(since));
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`);
     },
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;
+    // 403 не-админу, 404 без флага). window — окно графика «Температуры» (дефолт 15m).
+    // Тип ответа — в feature-слое (hardwareTypes.ts); type-only импорт, без цикла рантайма.
+    hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m') =>
+      request<import('../features/localModel/hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}`),
     // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
     lastTurn: (sessionId: string) =>
       request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`),
@@ -1701,6 +1738,9 @@ export const api = {
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
+    // в облегчённом списке); элементы ответа — облегчённые, нужны id совпавших
+    search: (q: string) => request<Task[]>(`/tasks?q=${encodeURIComponent(q)}`),
     // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
     listByPersona: (personaId: string) =>
       request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),
@@ -1708,6 +1748,28 @@ export const api = {
     // sessionId — id сессии-чата; без него — все фичи владельца.
     getFeatures: (sessionId?: string) =>
       request<FeatureRun[]>(`/tasks/features${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
+    // Индекс фич (фасет «Фичи» и плашка в чате): строки фич + связи «чат × фича».
+    // projectId — область ответа; без него — все проекты владельца и чаты вне проектов.
+    // 503 при выключенной подсистеме Tasks (как getFeatures).
+    featuresIndex: (projectId?: string) =>
+      request<FeaturesIndex>(`/tasks/features/index${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+    // Страница фичи (волна 2 «Обзор фич»): агрегат `FeatureRun` одной фичи + лента событий.
+    // fid — id эпика; eventsLimit — «all»/«0» → все, N (целое > 0) → N, иначе 100 (бэк).
+    // 404 — фичи нет/чужая/удалена (один 404); 503 — подсистема Tasks выключена.
+    // signal — отмена в-полёте запроса (быстрая смена fid в useFeaturePage): не плодим
+    // параллельных GET, устаревший отменяется (AbortError игнорируется в featurePage).
+    getFeature: (fid: string, eventsLimit?: string, signal?: AbortSignal) =>
+      request<FeaturePage>(
+        `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
+        signal ? { signal } : undefined,
+      ),
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
+    // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:
+    // 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят / 0 или >1
+    // исполнителей DevOps) — причина в err.body.error (и err.message). Идемпотентна:
+    // открытая merge-задача → вернуть её (повторный вызов — та же задача, вторую не заводим).
+    mergeFeature: (fid: string) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, { method: 'POST' }),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),
@@ -1984,12 +2046,20 @@ export const api = {
     // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
     // Возвращает null, если у персоны нет картинки. cache-busting по imageFile —
     // иначе после перегенерации браузер покажет старый кадр из кэша.
-    avatarUrl: (persona: Persona): string | null => {
+    // size — размер показа (device px, 0 — оригинал): сервер отдаёт миниатюру ближайшей
+    // ступени (64/128/256), сгенерированную один раз; v в URL — имя файла, поэтому
+    // смена аватара сбрасывает кэш.
+    avatarUrl: (persona: Persona, size = 0): string | null => {
       if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
       const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
+      if (size > 0) {
+        params.set('size', String(size));
+        // Версия схемы миниатюр: сменила URL у всех, кто закэшировал оригинал (см. константу).
+        params.set('t', String(AVATAR_THUMB_SCHEME_VERSION));
+      }
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.
@@ -2208,6 +2278,13 @@ export const api = {
       }); return api.sessions.getContext(projectId, sessionId); },
     getHistory: (projectId: string, sessionId: string) =>
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+    // Докачка хвоста истории по курсору сервера (см. lib/historyTail). after=-1 — первая
+    // загрузка (полная история + якорь), её можно кэшировать офлайн; настоящий курсор — live:
+    // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты)
+    getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery) =>
+      request<HistoryReply>(
+        `/projects/${projectId}/sessions/${sessionId}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0 }),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
@@ -2443,6 +2520,9 @@ export const api = {
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
       .then(r => { forgetChatContextSession(id); return r; }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
+    // То же, что api.sessions.getHistoryTail, для чата вне проекта
+    getHistoryTail: (id: string, q: HistoryCursorQuery) =>
+      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`, { live: q.after >= 0 }),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1
     uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {

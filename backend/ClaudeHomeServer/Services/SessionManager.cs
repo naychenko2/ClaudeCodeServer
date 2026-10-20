@@ -349,6 +349,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
         SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
         ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
+        ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 
@@ -426,6 +427,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private Turn.ITurnEventBus TurnEvents => _turnEvents ??= new Turn.TurnEventBus();
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
+    /// <summary>
+    /// Признак штатной остановки: одноразовый, назад не снимается (процесс после остановки
+    /// не живёт). KillAllProcesses поднимает его ПЕРВОЙ строкой (до гашения адаптеров).
+    /// Умирающий процесс присылает ErrorMessage/ExitedMessage, и OnMessageAsync при поднятом
+    /// признаке не переводит по ним статус — sessions.json сохранит Working, и LoadSessions
+    /// отберёт сессию в кандидаты на auto-resume (ADR-033). ResultMessage пишется как обычно.
+    /// Цикл «до готово», добивание сабагента, разбор очереди и штаб при поднятом признаке
+    /// новых ходов не запускают.
+    /// </summary>
+    private volatile bool _stopping;
     // Автосохранение сессий каждые 30с
     /// <summary>
     /// Период автосохранения (оно же — единственный фоновый триггер sweep-terminus, см. SaveSessions).
@@ -441,6 +452,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     /// </summary>
     private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
+    // Дебаунс лёгких мутаций (MarkRead): не писать sessions.json синхронно в запросе, а
+    // скопить изменения и записать один раз с короткой задержкой. Активен, когда включён
+    // автосейв (Session:AutoSaveSeconds > 0) — тот же гейт, что у _autoSaveTimer: в тестах
+    // (AutoSaveSeconds=0) отметка пишется синхронно, и фоновый таймер не гонит sweep-terminus
+    // между ассертами. Задержка — Session:MarkReadDebounceSeconds (дефолт 1с).
+    private readonly object _debounceLock = new();
+    private Timer? _pendingSaveTimer;
+    private readonly bool _debounceEnabled;
+    private readonly TimeSpan _debounceDelay;
     // Тик ожидания по маркеру `<waiting>` (фаза waiting И WaitingReason != null). Тикает
     // ТОЛЬКО ожидание модели — ожидание по живой делегированной задаче НЕ трогаем
     // (доклад придёт сам, смерть исполнителя ловит алерт молчания). Отдельный таймер
@@ -958,6 +978,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (autoSave > TimeSpan.Zero)
             _autoSaveTimer = new Timer(_ => SaveSessions(), null, autoSave, autoSave);
 
+        // Дебаунс лёгких мутаций: тот же гейт autoSave > 0, что у автосейва (см. поле).
+        // Задержка — Session:MarkReadDebounceSeconds (дефолт 1с).
+        _debounceEnabled = autoSave > TimeSpan.Zero;
+        _debounceDelay = TimeSpan.FromSeconds(
+            double.TryParse(config["Session:MarkReadDebounceSeconds"], out var debounceSecs) ? debounceSecs : 1);
+
         // Тик ожидания по маркеру `<waiting>`. Тот же гейт `autoSave > Zero` — чтобы тесты
         // с `Session:AutoSaveSeconds = 0` не оставляли тик работающим: фоновые таймеры
         // выполняют произвольный код в произвольный момент и между ассертами теста гонят
@@ -1400,32 +1426,60 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // --- Персистентность сессий ---
 
+    // Кандидаты на auto-resume, захваченные LoadSessions: исходный Working (ход оборван,
+    // result не пришёл). TakeRestartResumeCandidates возвращает и очищает список (второй
+    // вызов — пусто).
+    private readonly List<string> _restartResumeCandidates = [];
+
+    // Task записи маркеров обрыва ходов (LoadSessions). Не fire-and-forget: B2 дождётся его
+    // перед запуском resume, чтобы маркер не обогнал снимок. Task.CompletedTask — маркеров не было.
+    public Task AbortMarkersWritten { get; private set; } = Task.CompletedTask;
+
     private void LoadSessions()
     {
         var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
         if (list is null) return;
         List<string> abortedMidTurn = [];
+        // Залипший Working (замечание Веры, ADR-033): живой статус (Working/Starting/Waiting)
+        // переводим в Orphaned только в памяти; на диск это попадёт лишь при следующем
+        // SaveSessions. Если активности по чату нет, файл держит Working, и при следующем
+        // старте с включённым флагом этот давно оборванный ход снова станет кандидатом — ломает
+        // правило «только ходы последнего рестарта». Помечаем, чтобы сохранить один раз.
+        var anyLiveOrphaned = false;
         foreach (var session in list)
         {
             // Процесс умер при рестарте — "живые" статусы переводим в orphaned
-            var wasLive = session.Status is SessionStatus.Working or SessionStatus.Waiting;
-            session.Status = session.Status switch
+            var originalStatus = session.Status;
+            var wasLive = originalStatus is SessionStatus.Working or SessionStatus.Waiting;
+            if (originalStatus is SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting)
+                anyLiveOrphaned = true;
+            session.Status = originalStatus switch
             {
                 SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
                     => SessionStatus.Orphaned,
                 SessionStatus.Active => SessionStatus.Finished,
-                _ => session.Status,
+                _ => originalStatus,
             };
             if (wasLive && session.ClaudeSessionId is not null)
                 abortedMidTurn.Add(session.ClaudeSessionId);
+            // Кандидат на auto-resume — исходный Working из sessions.json: ход шёл,
+            // result не пришёл. Waiting/Starting/Orphaned не кандидаты: Waiting — ход
+            // ещё не шёл, Starting — CLI ещё не стартовал, Orphaned — уже был оборван
+            // раньше («только последний рестарт»).
+            if (originalStatus == SessionStatus.Working)
+                _restartResumeCandidates.Add(session.Id);
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
-        // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
-        if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
-        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт
+        // Идемпотентно: на уже перенесённых сессиях это no-op. Один SaveSessions покрывает
+        // обе миграции: перенос темы + сохранение Orphaned (залипший Working, см. выше).
+        var migratedTopics = Llm.ChatTopicMigration.Apply(list);
+        if (migratedTopics || anyLiveOrphaned) SaveSessions();
+        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
+        // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
+        // запуском resume, чтобы маркер не обогнал снимок.
         if (abortedMidTurn.Count > 0)
-            _ = Task.Run(async () =>
+            AbortMarkersWritten = Task.Run(async () =>
             {
                 foreach (var csid in abortedMidTurn)
                     try { await _history.AppendTurnAbortedAsync(csid); }
@@ -1436,9 +1490,70 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             });
     }
 
+    // Выдача кандидатов на auto-resume: возвращает захваченный LoadSessions список и
+    // очищает его в памяти, чтобы второй вызов не получил кандидатов повторно.
+    public IReadOnlyList<string> TakeRestartResumeCandidates()
+    {
+        lock (_restartResumeCandidates)
+        {
+            var result = _restartResumeCandidates.ToList();
+            _restartResumeCandidates.Clear();
+            return result;
+        }
+    }
+
     // Счётчик вызовов SaveSessions — для тестов «пачка пишет файл один раз» (ApplySubjects)
     private int _saveSessionsCalls;
     internal int SaveSessionsCalls => Volatile.Read(ref _saveSessionsCalls);
+
+    // Дебаунс лёгких мутаций (MarkRead): не писать sessions.json синхронно в запросе.
+    // Быстрые повторные отметки (открытие чата на нескольких устройствах) сливаются в одну
+    // запись: первый вызов заводит one-shot таймер, следующие в окне задержки его не трогают.
+    // Таймер живёт, пока включён автосейв; в тестах (AutoSaveSeconds=0) — синхронная запись,
+    // как раньше. Запись сама идёт под _saveLock (SaveSessions), поэтому параллельность
+    // с автосейвом/другими мутациями безопасна.
+    private void ScheduleDebouncedSave()
+    {
+        if (!_debounceEnabled) { SaveSessions(); return; }
+        lock (_debounceLock)
+        {
+            if (_pendingSaveTimer is not null) return;
+            Timer? timer = null;
+            timer = new Timer(_ =>
+            {
+                // Гасим поле только если оно указывает на ЭТОТ таймер. В окне между
+                // срабатыванием и взятием замка FlushPendingSave мог уже снять этот таймер
+                // (и новый MarkRead завёл свежий): безусловная очистка затёрла бы чужой.
+                lock (_debounceLock)
+                    if (ReferenceEquals(_pendingSaveTimer, timer)) _pendingSaveTimer = null;
+                // Сработавший one-shot таймер освобождает себя: без Dispose он держал бы
+                // регистрацию в thread pool до конца процесса.
+                timer?.Dispose();
+                SaveSessions();
+            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingSaveTimer = timer;
+        }
+    }
+
+    // Синхронный сброс висящей записи (MarkRead-дебаунс) при остановке: штатный shutdown
+    // = перезапуск, и отложенная запись, если не сбросить её, потеряется (one-shot таймер
+    // Dispose'ится, не успев сработать). Вызывается из KillAllProcesses/Dispose ДО убийства
+    // процессов: SaveSessions() завершится на том же потоке, без гонки с диспозом адаптеров.
+    // Idempotent: после первого сброса _pendingSaveTimer = null, повторный вызов — no-op.
+    private void FlushPendingSave()
+    {
+        Timer? pending;
+        lock (_debounceLock)
+        {
+            pending = _pendingSaveTimer;
+            _pendingSaveTimer = null;
+            pending?.Dispose();
+        }
+        if (pending is not null) SaveSessions();
+    }
+
+    // Тестовый хук: наполнить стор сессиями без полного CreateAsync (бенчмарк MarkRead).
+    internal void AddSessionForTest(Session info) => _sessions[info.Id] = new SessionEntry { Info = info };
 
     // Публичный (волна В): TeamPlanService сохраняет каталог сессий после правки PlanCardId/
     // PlanVersion/Replanning — через тот же канал, что и TeamWaveService.
@@ -2190,14 +2305,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Отметить чат прочитанным (синк непрочитанности между устройствами).
     // UpdatedAt намеренно не трогаем (как в SetExpiry): прочтение — не активность чата.
     // false — сессии нет или она не принадлежит owner'у (контроллер отдаёт 404).
-    // Идемпотентность: LastReadAt уже >= UpdatedAt → true без перезаписи файла
-    // (SaveSessions пишет весь список — незачем гонять диск на повторных отметках).
+    // Идемпотентность: LastReadAt уже >= UpdatedAt → true без записи.
+    // Запись — дебаунсом (ScheduleDebouncedSave), а не синхронным SaveSessions: отметка
+    // прочитанности — лёгкая мутация, а SaveSessions сериализует ВЕСЬ sessions.json (на
+    // 600 сессий ~0,9с в проде) и fsync'ит файл — в запросе это незачем. In-memory
+    // состояние обновлено синхронно, поэтому ответ корректен сразу; на диск отметка
+    // уходит одним пакетом (быстрые повторные отметки сливаются) или автосейвом.
     public bool MarkRead(string sessionId, string ownerId)
     {
         if (GetOwned(sessionId, ownerId) is not { } s) return false;
         if (s.LastReadAt >= s.UpdatedAt) return true;
         s.LastReadAt = DateTime.UtcNow;
-        SaveSessions();
+        ScheduleDebouncedSave();
         return true;
     }
 
@@ -4532,7 +4651,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4663,7 +4782,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause, agentDepth: agentDepth);
         return SendUserOutcome.Started;
     }
 
@@ -4686,7 +4805,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
-        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
+        int agentDepth = 0)
     {
         // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
         if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
@@ -4713,7 +4833,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
                 Guid.NewGuid().ToString("N"), text,
                 fromQueue && !auto ? DeviceWaitMessage.RouteUser : DeviceWaitMessage.RouteAuto,
-                DateTime.UtcNow, senderPersonaId, senderOrigin,
+                DateTime.UtcNow, senderPersonaId, senderOrigin, agentDepth,
                 SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
                 AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode));
             return;
@@ -4724,6 +4844,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         _log.LogInformation("Доставка хода {Session}: src={Src} cause={Cause} origin={Origin} mode={Mode} text=\"{Text}\"",
             sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
             (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
+
+        // Ход РЕАЛЬНО стартует по сообщению человека (hub или из очереди) — обнуляем счётчик
+        // auto-resume: один раз продолженный и снова оборванный чат иначе навсегда терял бы
+        // авто-продолжение, даже если следующий ход запустил человек (инцидент 20.10, чат df485156).
+        // Точка — после гейтов отказа/парковки (выше), т.е. ход действительно пошёл, а не встал
+        // в очередь. Авто-причины (ServerRestartResume/WorkLoop/Direct/подталкивания/Unknown)
+        // счётчик не трогают: защита от crash-loop цела, человекское сообщение не повторяется
+        // автоматически, поэтому зациклиться обнуление не может.
+        if (effectiveCause is DeliveryCause.User or DeliveryCause.QueueUser)
+            entry.Info.RestartResumeAttempts = 0;
 
         if (TurnStarting is { } onTurnStarting)
         {
@@ -4831,7 +4961,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, viaAgent: agentDepth >= 1, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
         // Сообщение пользователя = начало нового хода в основном дереве (зеркало
         // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
         entry.TurnInWorktree = false;
@@ -4910,7 +5040,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 voiceModel = null;
             }
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text, auto, systemDirective, senderPersonaId), attachedPaths,
-                suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
+                agentDepth, suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
         }
     }
 
@@ -5603,6 +5733,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // застряло бы навсегда и блокировало остальные.
     private async Task DrainNextPendingAsync(string sessionId)
     {
+        // Окно штатной остановки: очередь осталась в памяти и новый ход не запускает
+        if (_stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.QueueFrozen) return;
 
@@ -5785,7 +5917,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
-                    cause: DeliveryCause.QueueAgent);
+                    cause: DeliveryCause.QueueAgent, agentDepth: next.AgentDepth);
             return true;
         }
         catch (Exception ex)
@@ -6998,6 +7130,69 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         finally { _turnRestarts.TryRemove(sessionId, out _); }
     }
 
+    // === Авто-возобновление ходов, оборванных рестартом сервера (фича turn-auto-resume) ===
+
+    // Исход возобновления. Sent=true — resume-ход отправлен (агент продолжит с того же
+    // места); false — отказ (статус не Orphaned / битый хвост), ход не шлём, в ленте
+    // остаётся карточка-баннер. Reason — человекочитаемая причина отказа для лога/отчёта.
+    public sealed record RestartResumeResult(bool Sent, string? Reason = null);
+
+    // Шов для тестов: целостность хвоста транскрипта (true — можно возобновлять).
+    // По умолчанию — та же проверка, что RestartStuckTurnAsync: файл не найден (локальный
+    // проект) — проверку пропускаем, иначе проверяем IsTailIntact.
+    protected virtual bool IsTailIntactForResume(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return true;
+        var transcript = FindResumeTranscript(entry);
+        return transcript is null || Llm.Claude.TranscriptProbe.IsTailIntact(transcript);
+    }
+
+    // Шов для тестов: фактическая отправка resume-хода. По умолчанию — обычный путь
+    // SendMessageAsync: auto — для прохода через DeviceWaitGate, cause — атрибуция доставки.
+    protected virtual Task<SendUserOutcome> SendRestartResumeTurnAsync(string sessionId, string text)
+        => SendMessageAsync(sessionId, text, [], auto: true, cause: DeliveryCause.ServerRestartResume);
+
+    // Возобновление хода, оборванного рестартом сервера (B3). Кандидат — сессия, чей ход
+    // шёл (Working) в момент падения: LoadSessions перевёл её в Orphaned. Шаги строго по
+    // порядку, отказ любого — не шлём, в ленте остаётся карточка-баннер:
+    //   1. статус Orphaned (кандидат, а не idle/упавший);
+    //   2. хвост транскрипта цел (битый — через --resume не продолжится);
+    //   3. гидратация аккумулятора (ДО карточки — карточка пишется в историю);
+    //   4. карточка «Сервер был перезапущен — продолжаю ход с того же места»;
+    //   5. RestartResumeAttempts += 1 + SaveSessions (UpdatedAt не двигаем);
+    //   6. resume-ход обычным путём (auto, cause=ServerRestartResume).
+    public async Task<RestartResumeResult> ResumeAfterRestartAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            return new RestartResumeResult(false, "Сессия не найдена");
+
+        // 1. Кандидат: исходный Working → Orphaned при рестарте.
+        if (entry.Info.Status != SessionStatus.Orphaned)
+            return new RestartResumeResult(false,
+                $"Статус {entry.Info.Status}, ход не оборван рестартом");
+
+        // 2. Целостность хвоста: битый транскрипт через --resume не продолжится.
+        if (!IsTailIntactForResume(sessionId))
+            return new RestartResumeResult(false, "Хвост транскрипта повреждён");
+
+        // 3. Явная гидратация аккумулятора + карточка в ленту.
+        //    EnsureAccumulatorAsync создаёт аккумулятор из существующей истории, но в
+        //    сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор может
+        //    остаться null, если LoadAsync вернул пустой список и TurnAccumulator не создан.
+        //    Явная гидратация гарантирует, что карточка дописана в _history и сохранена.
+        await AppendServerRestartCardAsync(sessionId, entry);
+
+        // 5. Счётчик попыток + сохранение. UpdatedAt не двигаем: SaveSessions лишь
+        //    персистит, Touch/UpdatedAt=now здесь не вызываем (служебная операция).
+        entry.Info.RestartResumeAttempts += 1;
+        SaveSessions();
+
+        // 6. Resume-ход обычным путём: auto — для прохода через DeviceWaitGate.
+        var prompt = TurnResumePrompts.ServerRestartResume();
+        await SendRestartResumeTurnAsync(sessionId, prompt);
+        return new RestartResumeResult(true);
+    }
+
     // Рабочая папка хода для поиска транскрипта: дерево чата, иначе корень проекта.
     // Точность тут не критична — TranscriptProbe при промахе по конвенции сканирует
     // все проекты зарегистрированных корней, cwd лишь сужает первый поиск.
@@ -7130,6 +7325,32 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task AddWorkLoopStoppedNoticeAsync(string sessionId, SessionEntry entry, string reason, string text)
     {
         if (entry.Accumulator is not { } acc) return;
+        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
+        await acc.SaveSnapshotAsync(_history);
+        await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
+    }
+
+    // Явная гидратация аккумулятора + идемпотентная карточка server_restart (B-cards).
+    // В отличие от AddWorkLoopStoppedNoticeAsync (молча выходит при null), здесь аккумулятор
+    // создаётся явно: в сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор
+    // после LoadSessions может быть null, и AddWorkLoopStoppedNoticeAsync просто выходил.
+    // Идемпотентность: если карточка с reason=server_restart уже в _history (повторный вызов
+    // после рестарта), не дублируем.
+    private async Task AppendServerRestartCardAsync(string sessionId, SessionEntry entry)
+    {
+        const string reason = "server_restart";
+        const string text = "Сервер был перезапущен — продолжаю ход с того же места";
+
+        // Явная гидратация: если аккумулятор null — создаём из существующей истории.
+        if (entry.Accumulator is null)
+            await EnsureAccumulatorAsync(entry);
+
+        if (entry.Accumulator is not { } acc) return;
+
+        // Идемпотентность: карточка с таким reason уже есть — не дублируем.
+        if (acc.GetAll().Any(m => m is StoredWorkLoopStoppedMessage w && w.Reason == reason))
+            return;
+
         acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
         await acc.SaveSnapshotAsync(_history);
         await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
@@ -8751,6 +8972,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task NudgeTruncatedSubagentAsync(string sessionId,
         Llm.SubagentRunPassport run, int attempt)
     {
+        // Окно штатной остановки: директива ушла бы в умирающий адаптер
+        if (_stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
         // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта
         // после перепроверки): последний паспорт агента уже штатный — директиву не шлём.
@@ -8776,6 +8999,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // либо уход в фазу waiting, если у чата есть живые делегированные задачи.
     private async Task ContinueWorkLoopAsync(string sessionId)
     {
+        // Окно штатной остановки: новый ход цикла поднял бы процесс, который тут же убьют
+        if (_stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.WorkLoop is not { } loop) return;
 
@@ -9361,7 +9586,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // runId — прогон адаптера, чей read-loop прислал сообщение (0 у внутренних вызовов без
     // прогона): по нему отличаем exited ЭТОГО прогона от позднего exited доживающего
-    private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
+    // internal (InternalsVisibleTo): тесты гоняют сообщения (в т.ч. ResultMessage) через
+    // обработчик, чтобы проверить побочные эффекты (сброс RestartResumeAttempts, статус).
+    internal async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
     {
         _sessions.TryGetValue(sessionId, out var entry);
         // Волна 6: живая трансляция хода штаба фильтрует маркеры протокола (см. кейс ниже) —
@@ -9746,9 +9973,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.PendingInteraction = msg;
             }
             else if (msg is ResultMessage rm)
+            {
                 // Active (не Finished): клиент по active перезагружает историю хода;
                 // финальный Finished выставится по ExitedMessage ниже
                 newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;
+                // Result хода: сбрасываем счётчик auto-resume (B2). Поле служебное — UpdatedAt
+                // не двигаем сами (сдвинет ApplyStatusAsync ниже, как при любой смене статуса).
+                // Персистится тем же SaveSessions внутри ApplyStatusAsync.
+                entry.Info.RestartResumeAttempts = 0;
+            }
             else if (msg is ErrorMessage)
                 newStatus = SessionStatus.Error;
             else if (msg is ExitedMessage)
@@ -9760,6 +9993,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     SessionStatus.Active => SessionStatus.Finished,
                     _ => null,
                 };
+
+            // Штатная остановка (ADR-033): обрывы (error/exited умирающего процесса) статус не
+            // меняют — sessions.json сохранит Working, и LoadSessions отберёт сессию в кандидаты
+            // на auto-resume. Working живёт на диске только до следующего старта — там LoadSessions
+            // сразу переводит его в Orphaned. result хода пишется как обычно: ход честно
+            // завершился, и «продолжать» его после рестарта нельзя.
+            if (_stopping && msg is ErrorMessage or ExitedMessage)
+                newStatus = null;
 
             // Конец хода/обрыв — ожидающей карточки больше нет
             if (msg is ResultMessage or ErrorMessage or ExitedMessage)
@@ -9820,7 +10061,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
             }
 
-            if (msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
+            // При поднятом _stopping план штабу не кладём: разбор хода (HandleTeamTurnEndAsync)
+            // планирует новую работу, а процессы уже гасятся. Подписчик turn/completed без плана
+            // только пишет предупреждение; состояние штаба остаётся на диске как есть.
+            if (!_stopping && msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
             {
                 // Этап 4 / шаг 1в: кладём план вызова HandleTeamTurnEndAsync в LastTeamTurnEnds.
                 // Подписчик turn/completed изымает план и асинхронно зовёт HandleTeamTurnEndAsync
@@ -10225,13 +10469,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
     public void KillAllProcesses()
     {
+        // Первая строка — ДО гашения адаптеров: умирающий процесс присылает ErrorMessage/
+        // ExitedMessage, и OnMessageAsync при поднятом признаке гасит их (newStatus = null),
+        // не перетирая Working в Error/Active (ADR-033). Новый SaveSessions() здесь НЕ
+        // добавляем: его убрали (5c6606282) как источник зависаний остановки (ожидание _saveLock).
+        _stopping = true;
         // Таймер не должен пытаться писать одновременно с убийством процессов:
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
         // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же
         // сценарий — для тика ожидания: в окне shutdown он бы мог послать директиву
-        // в умирающий адаптер, и SendMessageAsync не нашёл бы Process.
+        // в умирающий адаптер, и SendMessageAsync не нашёл бы Process. Дебаунс-таймер
+        // MarkRead сбрасываем синхронно (FlushPendingSave) ДО убийства: отложенная запись
+        // не теряется, а SaveSessions() завершается на этом же потоке, без гонки с диспозом.
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
+        FlushPendingSave();
 
         var tasks = _sessions.Values
             .Select(e => e.Process)
@@ -10248,10 +10500,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // IDisposable — для фоновых таймеров. Адаптеры (процессы claude) убивает
     // KillAllProcesses() из ApplicationStopping. Не дублируем — иначе два cleanup-пути.
+    // FlushPendingSave — idempotent: если KillAllProcesses уже сбросил запись, здесь no-op.
     public void Dispose()
     {
         _autoSaveTimer?.Dispose();
         _waitingTickTimer?.Dispose();
+        FlushPendingSave();
         GC.SuppressFinalize(this);
     }
 

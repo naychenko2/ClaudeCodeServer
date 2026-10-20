@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Telemetry (шаг 3.14, пачка G, последний). По образцу
+         Deploy.Tests (шаг 3.11) / LocalStats.Tests (шаг 3.10): SDK=Web ради FrameworkReference
+         Microsoft.AspNetCore.App (Microsoft.Extensions.Configuration/Logging/Options/Hosting и
+         OpenTelemetry-типы — Sampler/TracerProvider/Meter — на которые ссылаются using'и
+         перенесённых тестов), OutputType=Library ради отсутствия Main.
+         Telemetry — папка Main (backend/ClaudeHomeServer/Telemetry/), НЕ отдельная сборка:
+         её типы (ObservabilityExtensions/TelemetryUiOptions/PiiSanitizingProcessor/PiiRules/
+         GaugesRegistrarService/Alerts/Incidents) приходят явной ссылкой на Main, а общие
+         Telemetry-типы (ServerMetrics/TurnTelemetry/DifyErrorCategorizer/MetricTagGuard/
+         IDifyMetrics) — ссылкой на Core (namespace ClaudeHomeServer.Core.Telemetry).
+         OpenTelemetry SDK-сборки (OpenTelemetry/Api/Trace/Logs) приходят транзитно через
+         Main (PackageReference OpenTelemetry.* в ClaudeHomeServer.csproj). -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Монолит (ClaudeHomeServer.Tests) в переходный период (до финальной чистки)
+         держит временную ссылку на эту сборку (ClaudeHomeServer.Tests.csproj):
+         допуск internals Telemetry.Tests монолиту, как у LocalStats.Tests/TestRuns.Tests. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core — спинка: Models (Session) + Telemetry (ServerMetrics/TurnTelemetry/
+         DifyErrorCategorizer/MetricTagGuard/IDifyMetrics/LogText/ServerActivitySource),
+         на которые ссылаются using'и перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Main: Telemetry — папка Main (backend/ClaudeHomeServer/Telemetry/):
+         ObservabilityExtensions/TelemetryUiOptions/PiiSanitizingProcessor/PiiRules/
+         GaugesRegistrarService/Alerts (SignozAlertsClient/AlertStateStore/AlertDigest/
+         AlertsOptions) + Incidents (IncidentQueries/IncidentDossierService) +
+         Services.* (Knowledge/Mcp/Memory/Http), на которые ссылаются тесты.
+         Internal-члены (ObservabilityExtensions.ResolveSampler/ParseEndpoint,
+         GaugesRegistrarService.CountLive/ErrorDocuments, IncidentQueries.Expression)
+         доступны через InternalsVisibleTo в ClaudeHomeServer.csproj (добавлен в этом шаге). -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- TestKit — Core-only хелперы (страховка: перенесённые тесты хелперы не используют,
+         ссылка держит состав на уровне остальных вертикальных тестов). -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host — Main-зависимые хелперы: TestWebApplicationFactory (namespace
+         ClaudeHomeServer.Tests.Helpers), которым поднимает ASP.NET-хост
+         TelemetryIncidentsControllerTests. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <!-- Moq: DifyIndexErrorMetricTests/SignozAlertsClientTests мокают IHttpClientFactory/
+         IOptions-зависимости. -->
+    <PackageReference Include="Moq" Version="4.20.72" />
+  </ItemGroup>
+
+</Project>

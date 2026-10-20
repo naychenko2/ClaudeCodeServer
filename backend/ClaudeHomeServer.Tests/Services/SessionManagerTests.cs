@@ -404,6 +404,102 @@ public class SessionManagerTests : IDisposable
         session.LastReadAt.Should().BeAfter(first!.Value);
     }
 
+    // B10: штатная остановка (выкатка = перезапуск) не теряет отложенную запись MarkRead.
+    // Дебаунс-таймер (0,2с) ещё не сработал, а KillAllProcesses сбрасывает запись синхронно:
+    // sessions.json получает отметку, UpdatedAt при этом не сдвигается (служебная отметка).
+    [Fact]
+    public void MarkRead_ОтложеннаяЗапись_СбрасываетсяСинхронно_ПриОстановке()
+    {
+        var sut = BuildDebounceManager();
+        var updatedBefore = DateTime.UtcNow.AddMinutes(-1);
+        var session = new Session { ProjectId = null, OwnerId = TestUserId, UpdatedAt = updatedBefore };
+        sut.AddSessionForTest(session);
+
+        // MarkRead: in-memory + one-shot таймер, на диск запись ещё не ушла
+        sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+
+        // Немедленная штатная остановка: висящий таймер обязан сбросить запись синхронно
+        sut.KillAllProcesses();
+
+        var path = Path.Combine(_tempDir, "sessions.json");
+        File.Exists(path).Should().BeTrue("отложенная запись MarkRead должна уехать на диск при остановке");
+        var opts = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
+        var stored = JsonSerializer.Deserialize<List<Session>>(File.ReadAllText(path), opts)!
+            .Single(s => s.Id == session.Id);
+        stored.LastReadAt.Should().Be(session.LastReadAt, "sessions.json содержит отметку прочитанности");
+        stored.UpdatedAt.Should().Be(updatedBefore, "отложенная запись MarkRead не двигает UpdatedAt");
+    }
+
+    // B10 (гонка): сброс при остановке в окне между срабатыванием one-shot таймера и взятием
+    // им замка. Без фикса колбэк таймера гасил _pendingSaveTimer безусловно, затёрв таймер
+    // НОВОЙ отметки; следующий FlushPendingSave его не находил, и вторая отметка терялась.
+    // С фиксом колбэк гасит поле только если оно указывает на ЭТОТ таймер (ReferenceEquals),
+    // и сработавший one-shot освобождает себя (Dispose) — чужой таймер переживает.
+    //
+    // Детерминированный сценарий (все шаги на main-потоке, порядок захвата замка фиксирован):
+    //   1. MarkRead1 → T1 (200мс).
+    //   2. Sleep(201) → T1 срабатывает, колбэк в thread pool (ждёт _debounceLock).
+    //   3. KillAllProcesses → FlushPendingSave: main-поток забирает _debounceLock ПЕРВЫМ,
+    //      Dispose T1, SaveSessions. Колбэк T1 (thread pool) ждёт освобождения замка.
+    //   4. MarkRead2 → T2: main-поток снова забирает _debounceLock (колбэк T1 всё ещё ждёт),
+    //      создаёт T2, _pendingSaveTimer = T2.
+    //   5. Sleep: колбэк T1 (thread pool) забирает _debounceLock. Без фикса гасит поле
+    //      (затёрв T2); с фиксом ReferenceEquals(T2, T1) = false → не трогает.
+    //   6. KillAllProcesses → FlushPendingSave: с фиксом T2 жив → Dispose + SaveSessions
+    //      (вторая отметка на диске). Без фикса T2 затёрт → no-op, на диске первая отметка.
+    [Fact]
+    public void MarkRead_ГонкаСбросаПриОстановке_ВтораяОтметкаНеТеряется()
+    {
+        var sut = BuildDebounceManager();
+        var updatedBefore = DateTime.UtcNow.AddMinutes(-1);
+        var session = new Session { ProjectId = null, OwnerId = TestUserId, UpdatedAt = updatedBefore };
+        sut.AddSessionForTest(session);
+
+        // 1. Первая отметка: one-shot таймер T1 (200мс)
+        sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+
+        // 2. T1 срабатывает; колбэк в thread pool, ждёт _debounceLock
+        System.Threading.Thread.Sleep(210);
+
+        // 3. Подготовка: обнуляем LastReadAt ДО сброса, чтобы шаг 4 был минимальным
+        session.LastReadAt = DateTime.MinValue;
+
+        // 4. Сброс: main-поток забирает _debounceLock, Dispose T1, SaveSessions
+        sut.KillAllProcesses();
+
+        // 5. Новая отметка: main-поток сразу забирает _debounceLock (колбэк T1 ждёт),
+        //    создаёт T2. _pendingSaveTimer = T2.
+        sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+        var secondRead = session.LastReadAt;
+        secondRead.Should().NotBe(session.UpdatedAt, "вторая отметка имеет новое время");
+
+        // 6. Колбэк T1 (thread pool) забирает _debounceLock.
+        //    Без фикса: _pendingSaveTimer = null (затёрв T2). С фиксом: ReferenceEquals → no-op.
+        System.Threading.Thread.Sleep(100);
+
+        // 7. Финальный сброс: FlushPendingSave. С фиксом T2 жив → Dispose + SaveSessions.
+        sut.KillAllProcesses();
+
+        // 7. Вторая отметка на диске
+        var path = Path.Combine(_tempDir, "sessions.json");
+        var stored = JsonSerializer.Deserialize<List<Session>>(File.ReadAllText(path),
+            new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } })!
+            .Single(s => s.Id == session.Id);
+        stored.LastReadAt.Should().Be(secondRead, "вторая отметка прочитанности дописана, а не потеряна");
+    }
+
+    // Ожидание условия с дедлайном (таймеры гоняют колбэки на thread pool).
+    private static void WaitUntil(Func<bool> condition, string what, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"условие не выполнилось за {timeout?.TotalSeconds ?? 10}с: {what}");
+            System.Threading.Thread.Sleep(5);
+        }
+    }
+
     // --- CommittedFilePaths: пометки «правки чата уже зафиксированы в git» ---
 
     [Fact]
@@ -591,6 +687,105 @@ public class SessionManagerTests : IDisposable
         _sut.MarkRead(session.Id, "another-user").Should().BeFalse();
         session.LastReadAt.Should().BeNull("чужая отметка не должна применяться");
         _sut.MarkRead("does-not-exist", TestUserId).Should().BeFalse();
+    }
+
+    // Перф-3 B10 п.6: PUT /api/chats/{id}/read ~0,9с в среднем (15 вызовов, замер прода
+    // download5). Причина: MarkRead звал SaveSessions() синхронно — сериализация ВСЕГО
+    // sessions.json (600 сессий) + fsync (flushToDisk) + sweep-terminus в каждом запросе.
+    // Фикс: отметка пишет in-memory и ставит one-shot таймер (дебаунс) — запись одним пакетом,
+    // вне запроса. Бенчмарк: «до» = синхронный SaveSessions на 600 сессиях (что делал старый
+    // MarkRead), «после» = MarkRead с дебаунсом (in-memory, без полной записи).
+    [Fact]
+    public void MarkRead_Бенчмарк_ЗаписьНеСинхроннаВЗапросе()
+    {
+        var sut = BuildDebounceManager();
+        try
+        {
+            // 600 project-less сессий одного владельца — как в проде (download5).
+            for (var i = 0; i < 600; i++)
+                sut.AddSessionForTest(new Session { ProjectId = null, OwnerId = TestUserId });
+
+            // «До»: синхронный SaveSessions — то, что старый MarkRead делал в каждом запросе.
+            var before = TimeMs(() => sut.SaveSessions());
+
+            // «После»: MarkRead с дебаунсом — in-memory + one-shot таймер, без полной записи.
+            var target = sut.GetAllOwnedBy(TestUserId).First();
+            var after = TimeMs(() => sut.MarkRead(target.Id, TestUserId));
+
+            Console.WriteLine(
+                $"[MarkRead-бенчмарк] до (синхронный SaveSessions, 600 сессий): {before:F1} мс; " +
+                $"после (MarkRead с дебаунсом): {after:F3} мс");
+            after.Should().BeLessThan(before,
+                "отметка прочитанности не должна писать весь sessions.json синхронно в запросе");
+        }
+        finally
+        {
+            // Снять one-shot таймер дебаунса, чтобы он не гонял SaveSessions после теста
+            // (иначе запись ушла бы в уже удалённый temp-каталог).
+            sut.Dispose();
+        }
+    }
+
+    private static double TimeMs(Action action)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        action();
+        sw.Stop();
+        return sw.Elapsed.TotalMilliseconds;
+    }
+
+    // Менеджер с включённым автосейвом (Session:AutoSaveSeconds=1) — дебаунс MarkRead активен.
+    // Копия BuildSecondManager с тем же конфигом, кроме автосейва (1с) и задержки дебаунса (0,2с).
+    private SessionManager BuildDebounceManager()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                ["Session:AutoSaveSeconds"] = "1",
+                ["Session:MarkReadDebounceSeconds"] = "0.2",
+                ["DefaultProjectsPath"] = Path.Combine(_tempDir, "homes"),
+                ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile"),
+            })
+            .Build();
+        var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var appSettings = new AppSettingsService(config);
+        var projectManager = new ProjectManager(config, userStore, appSettings);
+        var historyService = new ChatHistoryService(config);
+
+        var clients = new Mock<IHubClients>();
+        var clientProxy = new Mock<IClientProxy>();
+        clientProxy
+            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
+
+        var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
+        var subPool = new ClaudeSubscriptionPool(config);
+        var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
+            config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
+        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+        var usage = new UsageService(config);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
+        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var flags = new FeatureFlagService(userStore);
+        var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        var personas = new PersonaManager(config);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
+        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+
+        return new SessionManager(projectManager, historyService, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox, broadcaster: new TestSessionBroadcaster());
     }
 
     [Fact]
@@ -2886,6 +3081,43 @@ public class SessionManagerTests : IDisposable
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
         pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
             0, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent));
+    }
+
+    // Дыра в очереди (решение владельца 17.10): chats_send в ЗАНЯТЫЙ чат кладёт QueuedMessage
+    // с правильной AgentDepth, но DeliverPendingAsync для агентского сообщения звал
+    // SendMessageAsync(…, auto: true, …) БЕЗ глубины — ход стартует с глубиной 0, и потолок
+    // глубины запуска (allowedDepth = 1) становится фиктивным: глубина 1, доставленная из
+    // очереди, проходила гейт как 0 (живой инцидент 17.10: второе сообщение Александра
+    // Софье пришло через очередь, и запуск прошёл, хотя первое, прямое, получило отказ).
+    // Регрессия: агентское сообщение глубины 1, доставленное из очереди, даёт ход с глубиной 1.
+    [Fact]
+    public async Task Очередь_ДоставкаАгентскогоГлубины1_ХодСГлубиной1()
+    {
+        var session = await MkBusySessionAsync("queue-depth", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+
+        // Мок-адаптер, фиксирующий глубину, которую ход реально получил (аргумент SendMessageAsync)
+        var adapter = new Mock<ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.Info).Returns(session);
+        int? capturedDepth = null;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()))
+            .Callback<string, IReadOnlyList<string>?, int, bool, string?>(
+                (_, _, depth, _, _) => capturedDepth = depth)
+            .Returns(Task.CompletedTask);
+        SetProcess(entry, adapter.Object);
+
+        // Агентское сообщение глубины 1 — как chats_send из другого чата
+        var next = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "сообщение глубины 1",
+            null, null, 1, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent);
+
+        var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task)method.Invoke(_sut, [session.Id, entry, next])!;
+        await task;
+
+        capturedDepth.Should().Be(1,
+            "доставка из очереди донесла глубину хода — потолок глубины запуска не фиктивный");
     }
 
     [Fact]
@@ -6241,14 +6473,16 @@ public class SessionManagerTests : IDisposable
         context.Result.Should().BeNull("ход-реакция на доклад запуск задачи больше не запрещает");
     }
 
-    // Регресс: делегированный ход в чате с циклом — запрет как раньше.
+    // Регресс: ход ГЛУБЖЕ допустимой глубины запуска (2) в чате с циклом — запрет.
+    // Цикл «до готово» разрешает реакционный ход на доклад, но не ход, ушедший за потолок
+    // глубины: иначе автономный цикл бы запускал исполнителей по цепочке делегирования.
     [Fact]
     public async Task ГейтЗапуска_ДелегированныйХодВЧатеСЦиклом_ОтказКакРаньше()
     {
         var session = await MakeWorkLoopChatAsync("delegated");
         var entry = GetEntry(session.Id);
         var adapter = StubAdapter(entry);
-        adapter.SetupGet(a => a.CurrentTurnAgentDepth).Returns(1);
+        adapter.SetupGet(a => a.CurrentTurnAgentDepth).Returns(2);
         SetProcess(entry, adapter.Object);
         var context = MakeMcpCallContext(session.Id);
 
@@ -6501,6 +6735,16 @@ public class SessionManagerTests : IDisposable
 
         var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
         result.StatusCode.Should().Be(403);
+    }
+
+    // REST-путь запуска (атрибут [DenyOnDelegatedTurn] на TasksController.Execute) обязан
+    // держать ту же допустимую глубину, что http-тулсет: один литерал, иначе пути разъедутся
+    // (REST разрешил бы запуск на глубине, где http-тулсет ещё держит запрет, и наоборот).
+    [Fact]
+    public void ГейтЗапуска_Атрибут_ДопустимаяГлубина_СовпадаетСКонстантой()
+    {
+        ExecuteFilter().AllowedDepth.Should().Be(McpEndpoints.RunExecutorAllowedDepth,
+            "REST-путь и http-тулсет запуска читают одну и ту же допустимую глубину");
     }
 
     [Fact]

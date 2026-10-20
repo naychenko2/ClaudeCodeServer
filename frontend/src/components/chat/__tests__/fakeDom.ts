@@ -20,21 +20,30 @@ class FNode {
   parentElement: FNode | null = null;
   parentNode: FNode | null = null;
   childNodes: FNode[] = [];
+  // children — только элементы (Array.from(probe.children) в WorkspacePage); childNodes — все
+  get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
   firstChild: FNode | null = null;
   lastChild: FNode | null = null;
   nextSibling: FNode | null = null;
   previousSibling: FNode | null = null;
   ownerDocument: FDoc;
-  style: Record<string, string> = {};
+  // style — как в реальном DOM: объект с setProperty/removeProperty (chatGutter и др.
+  // пишут CSS-переменные через них); plain-объект без методов роняет useLayoutEffect.
+  style: Record<string, string> & { setProperty: (k: string, v: string) => void; removeProperty: (k: string) => void } = {
+    setProperty: (k: string, v: string) => { (this.style as Record<string, string>)[k] = v; },
+    removeProperty: (k: string) => { delete (this.style as Record<string, string>)[k]; },
+  } as any;
   attributes: Record<string, string> = {};
   listeners: Record<string, Set<unknown>> = {};
-
-  constructor(doc: FDoc) {
-    this.ownerDocument = doc;
-    // React setValueForStyle зовёт style.setProperty для CSS-кастом-пропсов (--x);
-    // в фейке — no-op, чтобы такие стили не роняли монтирование
-    (this.style as Record<string, unknown>).setProperty = () => {};
+  // :focus-visible (M1'): управляемое тестом — true = фокус пришёл с клавиатуры (Tab).
+  // matches(':focus-visible') читает его; прочие селекторы — false (как в реальном DOM
+  // для простого div: :focus-visible не совпадает без фокуса с клавиатуры).
+  focusVisible = false;
+  matches(selector: string): boolean {
+    return selector === ':focus-visible' ? this.focusVisible : false;
   }
+
+  constructor(doc: FDoc) { this.ownerDocument = doc; }
 
   appendChild(child: FNode): FNode { this._link(child, this.childNodes.length); return child; }
   insertBefore(child: FNode, ref: FNode | null): FNode {
@@ -65,7 +74,34 @@ class FNode {
   getAttribute(n: string) { return this.attributes[n] ?? null; }
   focus() {}
   blur() {}
-  querySelector(): null { return null; }
+  scrollIntoView() {}
+  // querySelector: поддерживает атрибутный селектор [attr="value"] (PipelineFlow ищет строку
+  // шага data-step-ref внутри своего корня); прочие формы — null (как раньше).
+  querySelector(sel: string): FNode | null {
+    const m = sel.match(/^\[([a-zA-Z-]+)="([^"]*)"\]$/);
+    if (!m) return null;
+    const [, attr, value] = m;
+    let hit: FNode | null = null;
+    const walk = (x: FNode) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.getAttribute(attr) === value) { hit = x; return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(this);
+    return hit;
+  }
+  // querySelectorAll: тег-селекторы (через запятую: 'h1,h2,...') — useHeadings/FileViewer.
+  // Прочие формы (атрибуты, классы) — пусто, как в реальном DOM для простого div.
+  querySelectorAll(sel: string): FNode[] {
+    const tags = sel.split(',').map(s => s.trim()).filter(Boolean);
+    const out: FNode[] = [];
+    const walk = (x: FNode) => {
+      if (x.nodeType === 1 && tags.includes(x.nodeName.toLowerCase())) out.push(x);
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(this);
+    return out;
+  }
   // Элементные потомки (как DOM-children): centerOffset и др. итерируют root.children
   get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
   getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }; }

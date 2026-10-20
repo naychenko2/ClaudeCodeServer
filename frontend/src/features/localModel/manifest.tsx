@@ -1,7 +1,7 @@
 // Манифест фичи «Локальные модели» (флаг local-model-stats). Статическая фича:
 // бэковой подсистемы с тумблером у неё нет — гейт включённости не применяется
-// (core), доступность решают вклады: флаг + admin + configured (isAvailable)
-// и сама панель (то же условие внутри — null прячет кнопку).
+// (core), доступность решает isLocalModelPanelVisible: admin — флаг + configured,
+// не-админ — только configured (isAvailable) и сама панель (то же условие внутри).
 
 import { Cpu } from 'lucide-react';
 import type {
@@ -41,7 +41,8 @@ export const manifest: SubsystemManifest = {
   noPill: true,
   core: true,
   slots: {
-    // Панель правого рельса: значок есть, только когда флаг + admin + configured
+    // Панель правого рельса: значок есть, только когда панель видима
+    // (admin — флаг + configured, не-админ — configured)
     'workspace-panel-def': [
       {
         name: LOCAL_MODEL_PANEL,

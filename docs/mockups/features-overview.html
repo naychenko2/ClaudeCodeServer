@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Фичи как сквозное измерение продукта · три варианта</title>
+<!--
+  Макет к записке features-overview-proposal.md. Код продукта не правится.
+  Привязка: эпика фичи ещё нет, шагов ещё нет. Это проработка вариантов до разреза.
+  Пометка .new (пунктир C.accentMuted) — то, чего в продукте сейчас нет.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 18px rgba(60,50,35,.06);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.new { outline:1.5px dashed var(--c-accent-muted); outline-offset:2px; }
+.nonew .new { outline:none; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { border:none; background:transparent; color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; cursor:pointer; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.mkbtn { border:1px solid var(--c-border); background:var(--c-bg-white); border-radius:8px; padding:4px 10px; font-size:12px; cursor:pointer; color:var(--c-text-primary); }
+.mkbtn:hover { background:var(--c-bg-selected); }
+.note { max-width:1200px; margin:10px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+
+/* ===== Окно продукта ===== */
+.stage { padding:14px 16px 40px; display:flex; justify-content:center; }
+.app { position:relative; width:100%; max-width:1200px; height:760px; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; display:flex; gap:8px; padding:8px; transform:translateZ(0); }
+.app.m { width:360px; height:760px; border-radius:28px; padding:0; gap:0; display:block; }
+
+/* Рельса панелей (PanelZone) */
+.rail { width:40px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:4px; padding-top:4px; }
+.rail .sep { width:20px; height:1px; background:var(--c-divider); margin:4px 0; }
+.rb { position:relative; width:34px; height:34px; border:none; border-radius:8px; background:transparent; color:var(--c-text-secondary);
+  display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.rb:hover { background:var(--c-bg-selected); }
+.rb.on { background:var(--c-bg-white); color:var(--c-accent); box-shadow:var(--shadow-thumb); }
+.rb .bdg { position:absolute; right:1px; top:1px; min-width:15px; height:15px; border-radius:999px; padding:0 4px; font-size:10px; font-weight:700;
+  background:var(--c-info); color:var(--c-on-accent); display:flex; align-items:center; justify-content:center; }
+
+/* Острова */
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+.side { width:340px; flex-shrink:0; }
+.center { flex:1; min-width:0; position:relative; }
+.app.m .isl { border-radius:0; box-shadow:none; width:auto; height:100%; }
+
+/* ===== Шапка панели ===== */
+.ph { display:flex; align-items:center; gap:6px; padding:12px 12px 8px 14px; }
+.ph .ttl { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-right:auto; }
+.ib { width:28px; height:28px; border:none; background:transparent; border-radius:8px; color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .ib { width:40px; height:40px; }
+.gbtn { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 9px; border:1px solid var(--c-border-light); border-radius:8px;
+  background:var(--c-bg-card); color:var(--c-text-primary); font-size:12px; cursor:pointer; position:relative; }
+.gbtn:hover { background:var(--c-bg-selected); }
+.app.m .gbtn { height:40px; }
+.scroll { flex:1; overflow:auto; min-height:0; padding:0 10px 14px; }
+
+/* Меню (ui/Menu) */
+.menu { position:absolute; z-index:50; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  box-shadow:var(--shadow-dropdown); padding:5px; min-width:200px; }
+.mi { display:flex; align-items:center; gap:8px; width:100%; border:none; background:transparent; padding:7px 10px; border-radius:8px; font-size:13px; cursor:pointer; text-align:left; color:var(--c-text-primary); }
+.mi:hover { background:var(--c-bg-selected); }
+.mi.on { font-weight:600; color:var(--c-text-heading); }
+.mi .ck { margin-left:auto; color:var(--c-accent); }
+.app.m .mi { min-height:40px; }
+
+/* Чипы-фильтры */
+.chips { display:flex; gap:6px; padding:0 12px 10px 14px; overflow-x:auto; scrollbar-width:none; }
+.chips::-webkit-scrollbar { display:none; }
+.fch { flex-shrink:0; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 9px; border-radius:999px; font-size:12px;
+  border:1px solid var(--c-border-light); background:var(--c-bg-card); color:var(--c-text-secondary); cursor:pointer; white-space:nowrap; }
+.fch:hover { background:var(--c-bg-selected); }
+.fch.on { background:var(--c-accent-light); border-color:var(--c-accent-muted); color:var(--c-text-heading); font-weight:600; }
+.fch .n { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.fch.zero { opacity:.55; }
+.app.m .fch { height:36px; }
+
+/* Секции списка */
+.sec { display:flex; align-items:center; gap:6px; width:100%; border:none; background:transparent; padding:10px 6px 5px; font-size:10px; font-weight:700;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); cursor:default; text-align:left; }
+.sec.tg { cursor:pointer; }
+.sec.tg:hover { color:var(--c-text-secondary); }
+.sec .n { font-family:"JetBrains Mono",monospace; letter-spacing:0; }
+.sec .hint { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:400; font-size:11px; }
+
+/* ===== Строка чата (ChatCard, упрощённо) ===== */
+.cc { position:relative; display:flex; align-items:center; gap:9px; width:100%; border:none; background:transparent; border-radius:10px; padding:7px 9px;
+  cursor:pointer; text-align:left; margin:1px 0; min-height:44px; }
+.cc:hover { background:var(--c-bg-card); }
+.cc.on { background:var(--c-bg-selected); }
+.cc .av { width:26px; height:26px; }
+.cc .w { min-width:0; flex:1; }
+.cc .t { font-size:13px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cc.on .t { font-weight:700; }
+.cc .s { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; }
+.cc .s .ft { display:inline-flex; align-items:center; gap:4px; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.cc .tm { font-size:11px; color:var(--c-text-muted); flex-shrink:0; align-self:flex-start; margin-top:2px; }
+.cc.tint-run { animation:flow 2.6s ease-in-out infinite; }
+.cc.tint-wait { background:var(--c-info-bg); }
+.cc.tint-stop { background:var(--c-danger-bg); }
+.cc.unread { animation:breathe 3.2s ease-in-out infinite; }
+@keyframes flow { 0%,100% { background:var(--c-bg-white); } 50% { background:var(--c-bg-selected); } }
+@keyframes breathe { 0%,100% { background:var(--c-bg-white); } 50% { background:var(--c-bg-card); } }
+.role { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-secondary); background:var(--c-bg-selected); border-radius:6px; padding:0 5px; flex-shrink:0; }
+.role.key { background:var(--c-accent-light); color:var(--c-accent); font-weight:700; }
+.muted .cc .t { color:var(--c-text-secondary); font-weight:500; }
+
+.av { flex-shrink:0; width:22px; height:22px; border-radius:50%; background:var(--c-bg-selected); color:var(--c-text-heading);
+  display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+.av.sm { width:18px; height:18px; font-size:10px; }
+
+/* ===== Вариант А: группа фичи в списке чатов ===== */
+.fg { margin:4px 0 2px; }
+.fgh { display:grid; grid-template-columns:14px 14px 1fr auto; grid-template-rows:auto auto; column-gap:7px; row-gap:3px; align-items:center;
+  width:100%; border:1px solid var(--c-border-light); background:var(--c-bg-card); border-radius:10px; padding:8px 10px; cursor:pointer; text-align:left; }
+.fgh:hover { border-color:var(--c-border); }
+.fgh .chev { color:var(--c-text-muted); display:flex; transition:transform .15s; }
+.fg.open .fgh .chev { transform:rotate(90deg); }
+.fgh .nm { font-size:13px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fgh .cnt { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+.fgh .l2 { grid-column:3 / 5; display:flex; align-items:center; gap:7px; min-width:0; }
+.fgh .st { font-size:11.5px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fgh.att-wait { border-left:3px solid var(--c-info); }
+.fgh.att-stop { border-left:3px solid var(--c-danger); }
+.kids { margin:2px 0 6px 13px; padding-left:9px; border-left:1px solid var(--c-divider); }
+.closed .fgh { background:transparent; border-color:transparent; padding-top:5px; padding-bottom:5px; }
+.closed .fgh .nm { color:var(--c-text-secondary); font-weight:600; }
+.closed .fgh:hover { background:var(--c-bg-card); }
+
+/* ===== Мини-рельса этапов ===== */
+.mr { display:inline-flex; align-items:center; gap:2px; flex-shrink:0; }
+.mr i { display:block; width:8px; height:5px; border-radius:999px; background:var(--c-progress-track); }
+.mr i.d { background:var(--c-success); }
+.mr i.x { background:transparent; box-shadow:inset 0 0 0 1px var(--c-dashed); }
+.mr i.a { width:15px; }
+.mr i.a.run { background:var(--c-text-heading); }
+.mr i.a.wait { background:var(--c-info); }
+.mr i.a.stop { background:var(--c-danger); }
+.mr i.a.loop { background:var(--c-warning); }
+.mr.gone i, .mr.gone i.d { background:var(--c-text-muted); opacity:.5; }
+.mr.gone i.x { background:transparent; }
+
+/* Текст статуса по тону */
+.tn-wait { color:var(--c-info) !important; font-weight:600; }
+.tn-stop { color:var(--c-danger-text) !important; font-weight:600; }
+.tn-loop { color:var(--c-warning-text) !important; font-weight:600; }
+.tn-run { color:var(--c-text-heading) !important; }
+.hot { color:var(--c-warning-text); font-weight:700; }
+
+/* ===== Плашка фичи (общая для всех вариантов) ===== */
+.fs { flex-shrink:0; display:flex; align-items:center; gap:9px; min-height:36px; padding:5px 10px 5px 12px; margin:0 14px; border-radius:10px;
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.fs.t-wait { background:var(--c-info-bg); border-color:transparent; }
+.fs.t-stop { background:var(--c-danger-bg); border-color:transparent; }
+.fs.gone { background:var(--c-bg-inset); border-color:transparent; }
+.fs .body { display:flex; align-items:center; gap:9px; min-width:0; flex:1; border:none; background:transparent; padding:0; cursor:pointer; text-align:left; min-height:26px; }
+.fs .nm { font-size:12.5px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:40px; }
+.fs .sg { font-size:12px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.fs .cnt { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.fs .me { font-size:11px; color:var(--c-text-secondary); white-space:nowrap; flex-shrink:0; }
+.fs .go { flex-shrink:0; display:inline-flex; align-items:center; gap:4px; border:none; background:transparent; color:var(--c-accent); font-weight:600; font-size:12px;
+  padding:4px 8px; border-radius:8px; cursor:pointer; white-space:nowrap; }
+.fs .go:hover { background:var(--c-accent-light); }
+.fs .back { flex-shrink:0; display:inline-flex; align-items:center; gap:4px; border:none; background:transparent; color:var(--c-text-secondary); font-size:12px; padding:4px 6px; border-radius:8px; cursor:pointer; white-space:nowrap; max-width:170px; overflow:hidden; text-overflow:ellipsis; }
+.fs .back:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .fs { margin:0 8px; min-height:44px; padding:4px 4px 4px 10px; }
+.app.m .fs .go { width:40px; height:40px; justify-content:center; padding:0; }
+.fsx { margin:6px 14px 0; border:1px solid var(--c-border-light); border-radius:12px; background:var(--c-bg-white); box-shadow:var(--shadow-card); padding:10px 12px 12px; max-height:430px; overflow:auto; }
+
+/* ===== Конвейер (PipelineFlow, сокращённо) ===== */
+.pf { list-style:none; margin:6px 0 0; padding:0; position:relative; }
+.pf li { display:grid; grid-template-columns:18px 1fr auto; column-gap:9px; align-items:center; padding:5px 0; position:relative; }
+.pf li:not(:last-child)::before { content:""; position:absolute; left:8px; top:21px; bottom:-7px; width:2px; background:var(--c-progress-track); }
+.pf li.p::before, .pf li.x::before { background:none; border-left:2px dashed var(--c-dashed); width:0; }
+.pf .n { font-size:13px; color:var(--c-text-primary); }
+.pf li.p .n, .pf li.x .n { color:var(--c-text-muted); }
+.pf li.a .n { font-weight:700; color:var(--c-text-heading); }
+.pf .m { font-size:11px; color:var(--c-text-muted); white-space:nowrap; display:flex; align-items:center; gap:6px; }
+.pf .sub { grid-column:2 / 4; font-size:11.5px; color:var(--c-text-secondary); }
+.tag { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:6px; padding:1px 7px; white-space:nowrap; }
+.tag.run { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.tag.wait { background:var(--c-info-bg); color:var(--c-info); }
+.tag.stop { background:var(--c-danger-bg); color:var(--c-danger-text); box-shadow:inset 0 0 0 1px var(--c-danger); }
+.tag.loop { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.src { background:var(--c-bg-selected); color:var(--c-text-secondary); font-weight:700; font-size:10.5px; }
+.coil { display:inline-flex; align-items:center; gap:4px; font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.pulse { animation:pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+@media (prefers-reduced-motion: reduce) { .pulse, .cc.tint-run, .cc.unread { animation:none; } }
+
+/* Тревога, «Сейчас», итог */
+.alert { border-radius:10px; padding:9px 11px; margin-top:8px; font-size:12.5px; }
+.alert.wait { background:var(--c-info-bg); color:var(--c-text-primary); }
+.alert.stop { background:var(--c-danger-bg); color:var(--c-text-primary); }
+.alert .r { display:flex; gap:8px; align-items:flex-start; }
+.alert .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; margin-left:22px; }
+.now { display:flex; align-items:center; gap:8px; margin-top:8px; font-size:12.5px; color:var(--c-text-secondary); }
+.now b { color:var(--c-text-heading); }
+.fin { display:flex; align-items:center; gap:10px; margin-top:8px; padding:9px 11px; border-radius:10px; background:var(--c-success-bg); }
+.fin.gone { background:var(--c-bg-selected); }
+.fin .a { font-weight:700; color:var(--c-success-text); font-size:13px; }
+.fin.gone .a { color:var(--c-text-heading); }
+.fin .b { font-size:11px; color:var(--c-text-secondary); }
+.btn { display:inline-flex; align-items:center; gap:5px; border-radius:10px; padding:5px 11px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); }
+.btn:hover { background:var(--c-bg-selected); }
+.btn.pri { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(.96); }
+.btn.gh { border-color:transparent; background:transparent; color:var(--c-text-secondary); }
+.app.m .btn { min-height:40px; }
+
+/* ===== Вариант Б: карточки фич ===== */
+.fc { border:1px solid var(--c-border-light); background:var(--c-bg-card); border-radius:12px; padding:10px 12px; margin:0 0 8px; cursor:pointer; }
+.fc:hover { border-color:var(--c-border); box-shadow:var(--shadow-card); }
+.fc.att-wait { border-left:3px solid var(--c-info); }
+.fc.att-stop { border-left:3px solid var(--c-danger); }
+.fc .h { display:flex; align-items:center; gap:7px; }
+.fc .nm { font-size:13.5px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fc .br { font-size:11px; color:var(--c-text-muted); margin:1px 0 0 21px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fc .ft { display:flex; align-items:center; gap:6px; margin-top:9px; font-size:11.5px; color:var(--c-text-muted); }
+.fc .ft .go { margin-left:auto; color:var(--c-accent); font-weight:600; border:none; background:transparent; cursor:pointer; padding:2px 4px; border-radius:6px; }
+.fc .ft .go:hover { background:var(--c-accent-light); }
+.fc.gone { background:transparent; border-color:transparent; padding:6px 10px; margin:0; }
+.fc.gone:hover { background:var(--c-bg-card); box-shadow:none; }
+.fc.gone .nm { color:var(--c-text-secondary); font-weight:600; font-size:13px; }
+/* Подписанная рельса карточки */
+.lr { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; margin:9px 0 0; }
+.lr .sgm { height:6px; border-radius:999px; background:var(--c-progress-track); }
+.lr .sgm.d { background:var(--c-success); }
+.lr .sgm.x { background:transparent; box-shadow:inset 0 0 0 1px var(--c-dashed); }
+.lr .sgm.a.run { background:var(--c-text-heading); } .lr .sgm.a.wait { background:var(--c-info); }
+.lr .sgm.a.stop { background:var(--c-danger); } .lr .sgm.a.loop { background:var(--c-warning); }
+.lr .lb { font-size:10px; color:var(--c-text-muted); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lr .lb.a { color:var(--c-text-heading); font-weight:700; overflow:visible; }
+.dhd { display:flex; align-items:center; gap:6px; padding:10px 10px 6px 6px; }
+.dhd .ttl { font-family:"PT Serif",Georgia,serif; font-size:15px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.blk { margin:12px 0 0; }
+.blk .cap { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); margin:0 0 4px; }
+
+/* ===== Шапка чата и лента ===== */
+.chd { flex-shrink:0; display:flex; align-items:center; gap:9px; padding:12px 14px 10px 18px; }
+.chd .t { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.chd .sp { flex:1; }
+.app.m .chd { padding:8px 6px 8px 4px; }
+.app.m .chd .t { font-size:15px; }
+.fbtn { position:relative; display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 10px; border-radius:8px; border:1px solid var(--c-border-light);
+  background:var(--c-bg-card); font-size:12px; cursor:pointer; color:var(--c-text-primary); flex-shrink:0; }
+.fbtn:hover { background:var(--c-bg-selected); }
+.fbtn .bdg { min-width:16px; height:16px; border-radius:999px; padding:0 4px; font-size:10px; font-weight:700; background:var(--c-info); color:var(--c-on-accent); display:inline-flex; align-items:center; justify-content:center; }
+.app.m .fbtn { height:40px; width:auto; padding:0 9px; }
+.feed { flex:1; overflow:auto; padding:14px 22px 12px; display:flex; flex-direction:column; gap:12px; min-height:0; }
+.feed > * { flex-shrink:0; max-width:720px; }
+.app.m .feed { padding:12px 12px; }
+.msg-u { align-self:flex-end; max-width:78%; background:var(--c-bg-selected); border-radius:14px; padding:8px 12px; }
+.msg-a { line-height:1.55; }
+.msg-a b { color:var(--c-text-heading); }
+.sysl { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--c-danger-text); background:var(--c-danger-bg); border-radius:10px; padding:7px 10px; }
+.tcard { border:1px solid var(--c-border-light); border-left:3px solid var(--c-accent); border-radius:12px; overflow:hidden; background:var(--c-bg-white); box-shadow:var(--shadow-card); }
+.tcard .th { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--c-accent-light); font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--c-accent); }
+.tcard .tb { padding:10px 13px 11px; }
+.tcard .tt { font-size:14.5px; font-weight:700; color:var(--c-text-heading); }
+.tcard .chipf { margin-top:8px; display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--c-text-secondary); background:var(--c-bg-card);
+  border:1px solid var(--c-border-light); border-radius:8px; padding:3px 9px; }
+.tpp { align-self:flex-end; font-size:11px; color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; background:var(--c-bg-selected);
+  border-radius:8px; padding:4px 11px; display:inline-flex; align-items:center; gap:7px; max-width:320px; white-space:nowrap; overflow:hidden; }
+.tpp .t { overflow:hidden; text-overflow:ellipsis; }
+.comp { flex-shrink:0; margin:0 14px 14px; border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-card); padding:12px 14px; color:var(--c-text-muted); font-size:13.5px; }
+.app.m .comp { margin:0 8px 10px; }
+
+/* Пустые состояния (EmptyState) */
+.empty { text-align:center; padding:28px 18px; color:var(--c-text-secondary); }
+.empty .ic { width:44px; height:44px; border-radius:50%; background:var(--c-bg-selected); color:var(--c-text-muted); display:inline-flex; align-items:center; justify-content:center; margin-bottom:10px; }
+.empty .h { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-bottom:4px; }
+.empty .d { font-size:12.5px; max-width:290px; margin:0 auto; }
+.empty.sm { padding:12px 10px 4px; }
+.empty.sm .h { font-size:14px; }
+.calm { display:flex; align-items:center; gap:8px; margin:4px 0 8px; padding:8px 10px; border-radius:10px; background:var(--c-success-bg); color:var(--c-success-text); font-size:12px; }
+
+/* Мобила: экраны и шторка */
+.mhd { display:flex; align-items:center; gap:4px; padding:8px 6px 6px 4px; }
+.mhd .ttl { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; padding-left:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mtabs { display:flex; gap:2px; padding:2px; margin:0 10px 8px; background:var(--c-bg-selected); border-radius:9px; }
+.mtabs button { flex:1; border:none; background:transparent; border-radius:7px; height:36px; font-size:13px; color:var(--c-text-secondary); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.mtabs button.on { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-thumb); }
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:60; }
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:61; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet);
+  max-height:82%; display:flex; flex-direction:column; }
+.sheet .grab { width:36px; height:4px; border-radius:999px; background:var(--c-dashed); margin:8px auto 4px; }
+.sheet .in { overflow:auto; padding:4px 14px 18px; }
+.toast { position:absolute; left:50%; bottom:84px; transform:translateX(-50%); z-index:70; background:var(--c-text-heading); color:var(--c-bg-white); border-radius:10px;
+  padding:8px 12px; font-size:12px; box-shadow:var(--shadow-dropdown); max-width:90%; text-align:center; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11px; color:var(--c-text-muted); margin-top:10px; padding-top:8px; border-top:1px solid var(--c-divider); }
+.legend span { display:inline-flex; align-items:center; gap:5px; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Фичи в продукте</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" id="pv"></div></div>
+  <div class="grp"><span class="lbl">Данные</span><div class="pills" id="pd"></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" id="pt"></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" id="pw"></div></div>
+  <div class="grp"><span class="lbl">Сценарий</span><button class="mkbtn" id="scn">Зайти в чат исполнителя</button>
+    <label style="font-size:12px;color:var(--c-text-secondary);display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="shownew" checked>новое пунктиром</label></div>
+</div>
+<div class="note" id="note"></div>
+<div class="stage"><div class="app" id="app"></div></div>
+
+<script>
+'use strict';
+/* ---------- Состояние макета ---------- */
+const S = { v:'a', data:'normal', theme:'light', m:false, chat:'c17', prev:null, group:'features', filt:'open', closedOpen:false,
+  open:{ stats:true }, menu:null, panel:'chats', fsel:null, fxOpen:false, sheet:null, mscreen:'chat', toast:null, bfilt:'open', bClosedOpen:false };
+
+const P = { alex:'Александр', mayya:'Майя', sofya:'Софья', denis:'Денис', kira:'Кира', gleb:'Глеб', vera:'Вера', mark:'Марк', egor:'Егор', me:'Андрей' };
+const STG = ['Разрез','План','Производство','Ревью','Проверка','Финальное ревью','Мерж'];
+const STG_S = ['Разрез','План','Произв.','Ревью','Пров.','Финал','Мерж'];
+
+/* ---------- Фичи: поля повторяют FeatureRun (Stages/Now/Attention/StepsAccepted/StepsTotal/Summary/Closed/Ready).
+   stages: d — done, a — active, p — pending, x — absent. tone — Stage.Tone активной. ---------- */
+const FEATS = [
+  { id:'exp', name:'Опыт исполнителя и версии памяти', br:'feat/executor-experience', stages:'apppppp', tone:'wait',
+    acc:0, tot:0, ret:0, att:{ k:'wait', why:'выбор варианта разреза', since:130 }, now:null, key:'c1', lastAct:130,
+    lanes:[], retSrc:{} },
+  { id:'fmd', name:'Режим фичи: правки дизайн-ревью', br:'fix/feature-mode-design', stages:'xddddda', tone:'wait',
+    acc:3, tot:3, ret:2, att:{ k:'merge', why:'мерж', since:40 }, now:null, key:'c3', lastAct:40, ready:true,
+    lanes:[['Фронт','kira',3,3]], retSrc:{ review:1, qa:1 } },
+  { id:'proxy', name:'Сжатие через облако', br:'feat/proxy-compaction', stages:'ddapppp', tone:'stop',
+    acc:1, tot:3, ret:1, att:{ k:'stop', why:'Денис', since:25 }, now:{ p:'denis', step:'Ш2 · маркер сжатия', min:52 }, key:'c8', lastAct:25,
+    lanes:[['Бэк','denis',1,3]], retSrc:{ review:1 } },
+  { id:'stats', name:'Медиа-история v2', br:'feat/local-media-history-v2', stages:'ddapppp', tone:'loop',
+    acc:4, tot:6, ret:3, att:null, now:{ p:'kira', step:'Ш3 · панель истории, доработка', min:8 }, key:'c15', lastAct:8,
+    lanes:[['Бэк','denis',3,3],['Фронт','kira',1,3]], retSrc:{ review:3 } },
+  { id:'ov', name:'Обзор фич в продукте', br:'feat/features-overview', stages:'ddapppp', tone:'run',
+    acc:0, tot:3, ret:0, att:null, now:{ p:'mayya', step:'Ш1 · три макета', min:34 }, key:'c13', lastAct:34,
+    lanes:[['Макет','mayya',0,1],['Фронт','kira',0,2]], retSrc:{} },
+  { id:'tpfm', name:'Режим «Исполнение фичи»', br:'feat/turn-plan-feature-mode', stages:'ddddddd', closed:true, merged:'17.10',
+    acc:9, tot:9, ret:5, key:'c23', lastAct:1500, sum:{ dur:'2 дн 4 ч', tasks:31, steps:9 } },
+  { id:'hands', name:'Руки: ввод v2', br:'feat/hands-input-v2', stages:'ddddddd', closed:true, merged:'16.10',
+    acc:24, tot:24, ret:19, key:'c20', lastAct:2900, sum:{ dur:'3 дн 6 ч', tasks:84, steps:24 } },
+  { id:'hist', name:'История медиа (ADR-030)', br:'feat/local-media-history', stages:'ddddddd', closed:true, merged:'14.10',
+    acc:6, tot:6, ret:6, key:'c22', lastAct:5800, sum:{ dur:'1 дн 2 ч', tasks:23, steps:6 } },
+  { id:'vdi', name:'Спайк: OCR на VDI', br:'spike/vdi-ocr', stages:'ddddxxx', closed:true, merged:null,
+    acc:3, tot:3, ret:3, key:'c25', lastAct:8600, sum:{ dur:'9 ч', tasks:14, steps:3 } },
+];
+
+/* ---------- Чаты проекта. r — роль чата в фиче (источник: эпик.sourceSessionId → key,
+   Session.TaskId → задача → роль/stepRef). st — что видно в списке сейчас. ---------- */
+const CHATS = [
+  { id:'c1',  t:'Опыт исполнителя: разрез', p:'sofya', f:'exp', r:'key', st:'wait', ago:'2 ч', day:0 },
+  { id:'c2',  t:'Разрез ADR-032', p:'alex', f:'exp', r:'cut', st:'idle', ago:'2 ч', day:0 },
+  { id:'c3',  t:'Режим фичи: правки ревью', p:'sofya', f:'fmd', r:'key', st:'wait', ago:'40 мин', day:0 },
+  { id:'c4',  t:'Чипы и меню на мобиле', p:'kira', f:'fmd', r:'step', ref:'Ш1 · фронт', st:'idle', ago:'3 ч', day:0 },
+  { id:'c5',  t:'Ревью Ш1', p:'gleb', f:'fmd', r:'review', ref:'ревью', st:'idle', ago:'2 ч', day:0 },
+  { id:'c6',  t:'Проверка 360 px', p:'vera', f:'fmd', r:'qa', ref:'проверка', st:'idle', ago:'1 ч', day:0, unread:true },
+  { id:'c7',  t:'Финальное ревью', p:'alex', f:'fmd', r:'final', ref:'финал', st:'idle', ago:'42 мин', day:0 },
+  { id:'c8',  t:'Прокси: сжатие в облако', p:'sofya', f:'proxy', r:'key', st:'idle', ago:'25 мин', day:0 },
+  { id:'c9',  t:'Маркер x-ccs-compaction', p:'denis', f:'proxy', r:'step', ref:'Ш2 · бэк', st:'stop', ago:'25 мин', day:0 },
+  { id:'c10', t:'Нормализация usage', p:'denis', f:'proxy', r:'step', ref:'Ш1 · бэк', st:'idle', ago:'вчера', day:1 },
+  { id:'c11', t:'Ревью Ш1', p:'gleb', f:'proxy', r:'review', ref:'ревью', st:'idle', ago:'вчера', day:1 },
+  { id:'c13', t:'Обзор фич: варианты', p:'sofya', f:'ov', r:'key', st:'idle', ago:'34 мин', day:0 },
+  { id:'c14', t:'Три макета обзора фич', p:'mayya', f:'ov', r:'step', ref:'Ш1 · макет', st:'run', ago:'сейчас', day:0 },
+  { id:'c15', t:'Медиа-история v2', p:'sofya', f:'stats', r:'key', st:'idle', ago:'8 мин', day:0, unread:true },
+  { id:'c16', t:'Журнал медиа на диске', p:'denis', f:'stats', r:'step', ref:'Ш1 · бэк', st:'idle', ago:'вчера', day:1 },
+  { id:'c17', t:'Панель истории', p:'kira', f:'stats', r:'step', ref:'Ш3 · фронт', st:'run', ago:'сейчас', day:0 },
+  { id:'c18', t:'Ревью Ш3, круг 3', p:'gleb', f:'stats', r:'review', ref:'ревью', st:'idle', ago:'12 мин', day:0 },
+  { id:'c20', t:'Руки: ввод v2', p:'sofya', f:'hands', r:'key', st:'idle', ago:'16 окт', day:2 },
+  { id:'c21', t:'Склейка D2f', p:'denis', f:'hands', r:'step', ref:'D2f · ввод', st:'idle', ago:'16 окт', day:2 },
+  { id:'c22', t:'История медиа', p:'sofya', f:'hist', r:'key', st:'idle', ago:'14 окт', day:2 },
+  { id:'c23', t:'Режим «Исполнение фичи»', p:'sofya', f:'tpfm', r:'key', st:'idle', ago:'вчера', day:1 },
+  { id:'c24', t:'Пилюля и меню режима', p:'kira', f:'tpfm', r:'step', ref:'Ш4 · фронт', st:'idle', ago:'вчера', day:1 },
+  { id:'c25', t:'Спайк OCR на VDI', p:'sofya', f:'vdi', r:'key', st:'idle', ago:'12 окт', day:2 },
+  { id:'c30', t:'Разбор логов прокси', p:'me', f:null, st:'idle', ago:'1 ч', day:0 },
+  { id:'c31', t:'Новые фичи Claude Code', p:'alex', f:null, st:'idle', ago:'вчера', day:1, unread:true },
+  { id:'c32', t:'Голосовой ввод: псевдо-стриминг', p:'artem', f:null, st:'idle', ago:'16 окт', day:2 },
+];
+P.artem = 'Артём';
+const ROLE_ORDER = { key:0, cut:1, plan:2, step:3, review:4, qa:5, final:6, merge:7 };
+const ROLE_TXT = { key:'ключевой', cut:'разрез', plan:'план' };
+
+/* ---------- Данные с учётом переключателя «Данные» ---------- */
+function feats(){
+  if (S.data==='none') return [];
+  if (S.data==='closed') return FEATS.filter(f => f.closed);
+  return FEATS;
+}
+function chats(){
+  const fs = new Set(feats().map(f => f.id));
+  return CHATS.filter(c => !c.f || fs.has(c.f));
+}
+const F = id => feats().find(f => f.id===id) || null;
+const C = id => chats().find(c => c.id===id) || null;
+
+/* Состояние фичи для фильтров и глифа */
+function fst(f){
+  if (f.closed) return f.merged ? 'merged' : 'closed';
+  if (f.att?.k==='stop') return 'stop';
+  if (f.att?.k==='merge') return 'merge';
+  if (f.att?.k==='wait') return 'wait';
+  return f.tone==='loop' ? 'loop' : 'run';
+}
+/* Порядок фич — правило v2 (FeatureProjector): тревога по since ↓ давности, идущие по старту, прочие и закрытые по активности */
+function ordered(list){
+  const g = f => f.closed ? 3 : f.att ? 0 : f.now ? 1 : 2;
+  return [...list].sort((a,b) => g(a)-g(b) || (g(a)===0 ? b.att.since-a.att.since : g(a)===1 ? a.now.min-b.now.min : a.lastAct-b.lastAct));
+}
+function mins(m){ if (m<60) return `${m} мин`; const h=Math.floor(m/60), r=m%60; return r ? `${h} ч ${r} мин` : `${h} ч`; }
+function plural(n,a,b,c){ const m10=n%10, m100=n%100; return m10===1&&m100!==11?a:m10>=2&&m10<=4&&(m100<10||m100>=20)?b:c; }
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const av = (k, sm) => `<span class="av${sm?' sm':''}" title="${esc(P[k])}">${esc((P[k]||'?').slice(0,1))}</span>`;
+
+/* Текст статуса фичи — тот же словарь, что у пилюли v2 */
+function stText(f){
+  const s = fst(f), ai = f.stages.indexOf('a');
+  switch(s){
+    case 'wait': return { t:`ждёт вас · ${f.att.why} · ${mins(f.att.since)}`, c:'tn-wait' };
+    case 'merge': return { t:`ждёт вас · мерж · ${mins(f.att.since)}`, c:'tn-wait' };
+    case 'stop': return { t:`стоит · ${P[f.now.p]} · ${mins(f.att.since)}`, c:'tn-stop' };
+    case 'loop': return { t:`${STG[ai]} · доработка · ${P[f.now.p]}`, c:'tn-loop' };
+    case 'run': return { t:`${STG[ai]} · ${P[f.now.p]} · идёт ${mins(f.now.min)}`, c:'tn-run' };
+    case 'merged': return { t:`смержена ${f.merged} · ${f.sum.dur}`, c:'' };
+    default: return { t:'закрыта без мержа', c:'' };
+  }
+}
+const cnt = f => `${f.tot ? `${f.acc}/${f.tot}` : '—'}${f.ret ? ` <span class="${f.ret>=3&&!f.closed?'hot':''}">↺${f.ret}</span>` : ''}`;
+
+/* ---------- Глифы: FeatureGlyphs / PipelineFlow ---------- */
+function glyph(k, s=12){
+  const v = `width="${s}" height="${s}" viewBox="0 0 16 16" aria-hidden="true" style="flex-shrink:0"`;
+  switch(k){
+    case 'stop':  return `<svg ${v}><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" style="fill:var(--c-danger)"/></svg>`;
+    case 'wait': case 'merge': return `<svg ${v}><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" style="fill:var(--c-info)"/></svg>`;
+    case 'loop':  return `<svg ${v}><path d="M12.6 9.2A4.8 4.8 0 1 1 11.3 4.4" style="fill:none;stroke:var(--c-warning);stroke-width:2.2;stroke-linecap:round"/><path d="M9.2 2.6 12.6 3.4 11.8 6.8" style="fill:none;stroke:var(--c-warning);stroke-width:2;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'run':   return `<svg ${v}><circle cx="8" cy="8" r="6.5" class="pulse" style="fill:none;stroke:var(--c-accent);stroke-width:1.6"/><circle cx="8" cy="8" r="3.4" style="fill:var(--c-accent)"/></svg>`;
+    case 'merged':return `<svg ${v}><circle cx="8" cy="8" r="6.5" style="fill:var(--c-bg-selected);stroke:var(--c-text-muted);stroke-width:1"/><path d="M5.3 8.1 7.1 9.9l3.6-3.8" style="fill:none;stroke:var(--c-text-muted);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'closed':return `<svg ${v}><circle cx="8" cy="8" r="6.5" style="fill:var(--c-bg-selected);stroke:var(--c-text-muted);stroke-width:1"/><path d="M5 8h6" style="stroke:var(--c-text-muted);stroke-width:1.6;stroke-linecap:round"/></svg>`;
+    case 'done':  return `<svg ${v}><circle cx="8" cy="8" r="7" style="fill:var(--c-success)"/><path d="M4.8 8.2 7 10.3l4.3-4.6" style="fill:none;stroke:var(--c-on-accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'past':  return `<svg ${v}><circle cx="8" cy="8" r="6.5" style="fill:var(--c-bg-selected);stroke:var(--c-text-muted);stroke-width:1"/><path d="M5.3 8.1 7.1 9.9l3.6-3.8" style="fill:none;stroke:var(--c-text-muted);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'arun':  return `<svg ${v}><circle cx="8" cy="8" r="6.5" class="pulse" style="fill:none;stroke:var(--c-text-heading);stroke-width:1.5"/><circle cx="8" cy="8" r="3.5" style="fill:var(--c-text-heading)"/></svg>`;
+    case 'absent':return `<svg ${v}><circle cx="8" cy="8" r="6" style="fill:none;stroke:var(--c-dashed);stroke-width:1.5"/><path d="M5 11 11 5" style="stroke:var(--c-text-muted);stroke-width:1.5"/></svg>`;
+    default:      return `<svg ${v}><circle cx="8" cy="8" r="6" style="fill:none;stroke:var(--c-dashed);stroke-width:1.5;stroke-dasharray:2.5 2"/></svg>`;
+  }
+}
+const ICON = {
+  route:(s=14,c='currentColor')=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>`,
+  msg:`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+  files:`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>`,
+  tasks:`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 12 2 2 4-4"/></svg>`,
+  notes:`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/></svg>`,
+  chev:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>`,
+  down:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>`,
+  backSm:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
+  back:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
+  arrow:`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
+  ret:`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>`,
+  filter:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>`,
+  archive:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/></svg>`,
+  plus:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  layers:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 10 5-10 5L2 7l10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>`,
+  cal:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`,
+  tag:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.41 0l8.59-8.59a1 1 0 0 0 0-1.41z"/><circle cx="7" cy="7" r="1.5"/></svg>`,
+  list:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>`,
+  dots:`<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
+};
+
+/* Мини-рельса: 7 сегментов, активный длиннее и в цвет тона */
+function mrail(f){
+  const segs = [...f.stages].map((s,i) => `<i class="${s==='d'?'d':s==='x'?'x':s==='a'?'a '+(f.tone==='stop'?'stop':f.tone):''}" title="${STG[i]} — ${s==='d'?'пройден':s==='x'?'нет в трекере':s==='a'?'сейчас':'впереди'}"></i>`).join('');
+  return `<span class="mr${f.closed?' gone':''}" aria-label="Этап: ${f.closed?'закрыта':STG[f.stages.indexOf('a')]}">${segs}</span>`;
+}
+/* Подписанная рельса карточки (вариант Б) */
+function lrail(f){
+  const ai = f.stages.indexOf('a');
+  return `<div class="lr">${[...f.stages].map((s,i) => `<div class="sgm ${s==='d'?'d':s==='x'?'x':s==='a'?'a '+(f.tone==='stop'?'stop':f.tone):''}" title="${STG[i]}"></div>`).join('')}
+    ${[...f.stages].map((s,i) => `<div class="lb${i===ai?' a':''}">${i===ai || !S.m ? STG_S[i] : ''}</div>`).join('')}</div>`;
+}
+
+/* Конвейер фичи — сокращённый PipelineFlow v2: 7 этапов, тон активного, ↺ по источникам */
+function pipeline(f){
+  const rows = STG.map((n,i) => {
+    const s = f.stages[i];
+    const tone = f.tone==='stop' ? 'stop' : f.tone;
+    const g = s==='d' ? glyph('past',16) : s==='x' ? glyph('absent',16) : s==='p' ? glyph('pend',16) : glyph(tone==='run'?'arun':tone,16);
+    let m = '';
+    if (s==='a') m = `<span class="tag ${tone}">${tone==='wait'?(f.att?.k==='merge'?'ждёт вас · мерж':'ждёт вас'):tone==='stop'?'стоит':tone==='loop'?'доработка':'идёт'}</span>`;
+    else if (s==='x') m = 'нет в трекере';
+    else if (s==='d' && i===2 && f.ret) m = `${1+f.ret} ${plural(1+f.ret,'проход','прохода','проходов')}`;
+    let sub = '';
+    if (i===2 && f.lanes?.length) sub = f.lanes.map(l => `${l[0]} · ${P[l[1]]} · ${l[2]} из ${l[3]}`).join(' &nbsp;·&nbsp; ');
+    if (i===2 && f.retSrc) { const b = Object.entries(f.retSrc).map(([k,v]) => `<span class="tag src">↺${v} ${k==='review'?'с ревью':k==='qa'?'с проверки':'с финала'}</span>`).join(' '); if (b) sub += (sub?'<br>':'') + b; }
+    return `<li class="${s}">${g}<span class="n">${n}</span><span class="m">${m}</span>${sub?`<div class="sub">${sub}</div>`:''}</li>`;
+  }).join('');
+  return `<ol class="pf">${rows}</ol>`;
+}
+function featureBody(f, opts={}){
+  let h = '';
+  const s = fst(f);
+  if (s==='merge') h += `<div class="alert wait"><div class="r">${glyph('wait',14)}<span><b>Ждёт вас ${mins(f.att.since)}.</b> Финал принят, мержа ещё нет. Отдать фичу Марку на мерж?</span></div><div class="acts"><button class="btn">Попросить Марка</button><button class="btn gh">Итог финала</button></div></div>`;
+  if (s==='wait') h += `<div class="alert wait"><div class="r">${glyph('wait',14)}<span><b>Ждёт вас ${mins(f.att.since)}.</b> Александр предложил три варианта разреза — нужен выбор.</span></div><div class="acts"><button class="btn" data-a="go:${f.key}">Ответить в ключевом чате</button></div></div>`;
+  if (s==='stop') h += `<div class="alert stop"><div class="r">${glyph('stop',14)}<span><b>Денис стоит ${mins(f.att.since)}.</b> Ход оборвался на шаге Ш2, задача в работе.</span></div><div class="acts"><button class="btn">Перезапустить исполнителя</button><button class="btn gh" data-a="chat:c9">Чат Дениса</button></div></div>`;
+  if (f.now && s!=='stop') h += `<div class="now">${glyph(s==='loop'?'loop':'arun',14)}<span><b>Сейчас:</b> ${P[f.now.p]} · ${esc(f.now.step)} · идёт ${mins(f.now.min)}</span></div>`;
+  if (f.closed) h += `<div class="fin${f.merged?'':' gone'}">${glyph(f.merged?'done':'closed',18)}<div><div class="a">${f.merged?`Фича смержена ${f.merged}`:'Спайк закрыт, в master не идёт'}</div><div class="b mono">${f.sum.dur} · ${f.sum.tasks} задач · ${f.sum.steps} ${plural(f.sum.steps,'шаг','шага','шагов')} · ↺${f.ret}</div></div></div>`;
+  h += pipeline(f);
+  return h;
+}
+
+/* ---------- Плашка фичи (FeatureStrip) — общая для всех вариантов ---------- */
+function strip(c){
+  const f = c && c.f ? F(c.f) : null;
+  if (!f) return '';
+  const s = fst(f), t = stText(f), isKey = c.id===f.key;
+  const cls = s==='wait'||s==='merge' ? 't-wait' : s==='stop' ? 't-stop' : f.closed ? 'gone' : '';
+  const g = glyph(s==='run'?'run':s, 13);
+  const roleTxt = isKey ? 'ключевой чат' : (c.ref || ROLE_TXT[c.r] || c.r);
+  const back = isKey && S.prev && C(S.prev)?.f===f.id && S.prev!==c.id ? `<button class="back" data-a="chat:${S.prev}" title="Вернуться в чат, из которого пришли">${ICON.backSm}${S.m?'':esc(C(S.prev).ref||C(S.prev).t)}</button>` : '';
+  let right;
+  if (S.m) right = isKey ? `<button class="go" data-a="fx" aria-label="Конвейер фичи">${ICON.down}</button>` : `<button class="go" data-a="go:${f.key}" aria-label="В ключевой чат фичи">${ICON.arrow}</button>`;
+  else right = isKey ? `<button class="go" data-a="fx" aria-expanded="${S.fxOpen}">Конвейер ${ICON.down}</button>` : `<button class="go" data-a="go:${f.key}">Ключевой чат ${ICON.arrow}</button>`;
+  return `<div class="fs ${cls} new" role="region" aria-label="Фича этого чата">
+    ${back}
+    <button class="body" data-a="${S.m?'sheet:strip':(isKey?'fx':'go:'+f.key)}" title="${isKey?'Показать конвейер':'Перейти в ключевой чат фичи'}">
+      ${g}<span class="nm">${esc(f.name)}</span>${mrail(f)}${S.m?'':`<span class="sg ${t.c}">${esc(t.t)}</span>`}<span class="cnt">${cnt(f)}</span>
+      ${S.m?'':isKey?`<span class="role key">ключевой</span>`:`<span class="me">· этот чат: <span class="role">${esc(roleTxt)}</span></span>`}
+    </button>${right}</div>
+    ${isKey && S.fxOpen && !S.m ? `<div class="fsx">${featureBody(f)}${legend()}</div>` : ''}`;
+}
+function legend(){
+  return `<div class="legend"><span><span class="mr"><i class="d"></i></span>пройден</span><span><span class="mr"><i class="a run"></i></span>идёт</span><span><span class="mr"><i class="a wait"></i></span>ждёт вас</span><span><span class="mr"><i class="a stop"></i></span>стоит</span><span><span class="mr"><i class="a loop"></i></span>доработка</span><span><span class="mr"><i></i></span>впереди</span><span><span class="mr"><i class="x"></i></span>нет в трекере</span></div>`;
+}
+
+/* ---------- Строка чата ---------- */
+function chatRow(c, opts={}){
+  const f = c.f ? F(c.f) : null;
+  const tint = c.st==='run' ? ' tint-run' : c.st==='wait' ? ' tint-wait' : c.st==='stop' ? ' tint-stop' : c.unread ? ' unread' : '';
+  let sub;
+  if (opts.inGroup) sub = `<span class="role${c.r==='key'?' key':''}">${esc(c.r==='key'?'ключевой':(c.ref||ROLE_TXT[c.r]))}</span><span>${esc(P[c.p])}</span>`;
+  else if (f && opts.featTag) { const s=fst(f); sub = `<span class="ft new">${glyph(s==='run'?'run':s,10)}<span>${esc(f.name)}</span></span>`; }
+  else sub = `<span>${esc(P[c.p])}</span>`;
+  const st = c.st==='stop' ? `<span class="tn-stop">· стоит</span>` : c.st==='wait' ? `<span class="tn-wait">· ждёт вас</span>` : '';
+  return `<button class="cc${S.chat===c.id&&!S.m?' on':''}${tint}" data-a="chat:${c.id}">${av(c.p)}<span class="w"><div class="t">${esc(c.t)}</div><div class="s">${sub}${st}</div></span><span class="tm">${esc(c.ago)}</span></button>`;
+}
+
+/* ---------- Вариант А: панель «Чаты» с группировкой «Фичи» ---------- */
+const GROUPS = [['days','Дни',ICON.cal],['tags','Теги',ICON.tag],['subjects','Темы',ICON.layers],['features','Фичи',ICON.route(14)],['none','Без',ICON.list]];
+function filterChips(fl, cur, act){
+  const open = fl.filter(f => !f.closed);
+  const defs = [['open','Открытые',open.length],['att','Ждут вас',open.filter(f => ['wait','merge'].includes(fst(f))).length],
+    ['stop','Стоят',open.filter(f => fst(f)==='stop').length],['merge','К мержу',open.filter(f => fst(f)==='merge').length],
+    ['closed','Закрытые',fl.length-open.length]];
+  return `<div class="chips new" role="group" aria-label="Фильтр фич">${defs.map(([k,n,c]) => `<button class="fch${cur===k?' on':''}${c?'':' zero'}" aria-pressed="${cur===k}" data-a="${act}:${k}">${n}<span class="n">${c}</span></button>`).join('')}</div>`;
+}
+function passes(f, k){
+  const s = fst(f);
+  if (k==='open') return !f.closed;
+  if (k==='att') return s==='wait'||s==='merge';
+  if (k==='stop') return s==='stop';
+  if (k==='merge') return s==='merge';
+  return f.closed;
+}
+function sideA(){
+  const g = GROUPS.find(x => x[0]===S.group);
+  let h = `<div class="ph"><span class="ttl">Чаты</span>
+    <button class="gbtn${S.group==='features'?' new':''}" data-a="menu:group" aria-haspopup="menu" title="Группировка: ${g[1]} (сменить)">${g[2]}<span>${g[1]}</span>${ICON.down}</button>
+    <button class="ib" title="Фильтры и поиск">${ICON.filter}</button><button class="ib" title="Архивные">${ICON.archive}</button><button class="ib" title="Новый чат">${ICON.plus}</button></div>`;
+  if (S.menu==='group') h += `<div class="menu" style="top:46px;${S.m?'left:8px;right:8px':'left:150px'}" role="menu">${GROUPS.map(([k,n,ic]) => `<button class="mi${S.group===k?' on':''}${k==='features'?' new':''}" role="menuitemradio" aria-checked="${S.group===k}" data-a="group:${k}">${ic}<span>${k==='none'?'Без группировки':n}</span>${S.group===k?'<span class="ck">✓</span>':''}</button>`).join('')}</div>`;
+  const fl = ordered(feats());
+  if (S.group==='features'){
+    if (fl.length) h += filterChips(fl, S.filt, 'filt');
+    h += `<div class="scroll">`;
+    if (!fl.length) {
+      h += `<div class="empty sm">${'<span class="ic">'+ICON.route(20)+'</span>'}<div class="h">Фич пока нет</div><div class="d">Фича появится здесь, когда оркестратор заведёт её эпиком в трекере. Тогда её чаты соберутся в одну группу.</div></div>`;
+    }
+    const open = fl.filter(f => !f.closed);
+    if (fl.length && !open.length && S.filt!=='closed') h += `<div class="calm">${glyph('done',14)}<span>Открытых фич нет. Последняя смержена ${fl[0].merged}.</span></div>`;
+    if (S.filt!=='closed') {
+      const shown = open.filter(f => passes(f, S.filt));
+      if (open.length && !shown.length) h += `<div class="empty sm"><div class="h">Под фильтр ничего не попало</div><div class="d">Сейчас ни одна фича не ${S.filt==='stop'?'стоит':S.filt==='merge'?'ждёт мержа':'ждёт вас'}. <button class="btn gh" data-a="filt:open">Показать открытые</button></div></div>`;
+      h += shown.map(f => featGroup(f)).join('');
+    }
+    const closed = fl.filter(f => f.closed);
+    if (closed.length){
+      const op = S.closedOpen || S.filt==='closed';
+      h += `<button class="sec tg new" data-a="closedOpen" aria-expanded="${op}">${op?ICON.down:ICON.chev}<span>Закрытые</span><span class="n">${closed.length}</span><span class="hint">${op?'':'на втором плане'}</span></button>`;
+      if (op) h += `<div class="closed">${closed.map(f => featGroup(f)).join('')}</div>`;
+    }
+    const loose = chats().filter(c => !c.f);
+    if (S.filt==='open' || !fl.length) h += `<div class="sec">Без фичи <span class="n">${loose.length}</span></div>${loose.map(c => chatRow(c)).join('')}`;
+    h += `</div>`;
+  } else {
+    // Дни (как сейчас) + метка фичи на строке чата — фича видна и в хронологии
+    const days = ['Сегодня','Вчера (пт)','16 октября (чт)'];
+    h += `<div class="scroll">${days.map((d,i) => { const cs = chats().filter(c => c.day===i); return cs.length ? `<div class="sec">${d}</div>${cs.map(c => chatRow(c, { featTag:true })).join('')}` : ''; }).join('')}</div>`;
+  }
+  return h;
+}
+function featGroup(f){
+  const s = fst(f), t = stText(f), op = !!S.open[f.id];
+  const cs = chats().filter(c => c.f===f.id).sort((a,b) => ROLE_ORDER[a.r]-ROLE_ORDER[b.r]);
+  const att = s==='wait'||s==='merge' ? ' att-wait' : s==='stop' ? ' att-stop' : '';
+  return `<div class="fg${op?' open':''}"><button class="fgh${att} new" data-a="fg:${f.id}" aria-expanded="${op}">
+    <span class="chev">${ICON.chev}</span>${glyph(s==='run'?'run':s,13)}<span class="nm">${esc(f.name)}</span><span class="cnt">${cnt(f)}</span>
+    <span class="l2">${mrail(f)}<span class="st ${t.c}">${esc(t.t)}</span></span></button>
+    ${op ? `<div class="kids">${cs.map(c => chatRow(c,{ inGroup:true })).join('')}</div>` : ''}</div>`;
+}
+
+/* ---------- Вариант Б: панель «Фичи» ---------- */
+function sideB(){
+  if (S.fsel && F(S.fsel)) return detailB(F(S.fsel));
+  const fl = ordered(feats());
+  let h = `<div class="ph"><span class="ttl">Фичи</span><button class="ib" title="Задачи фич в трекере">${ICON.tasks}</button></div>`;
+  if (fl.length) h += filterChips(fl, S.bfilt, 'bfilt');
+  h += `<div class="scroll">`;
+  if (!fl.length) h += `<div class="empty"><span class="ic">${ICON.route(20)}</span><div class="h">Фич пока нет</div><div class="d">Фича — это эпик в трекере с шагами, ревью и мержем. Заведите её в чате с оркестратором: «веди фичу…» — и она появится здесь со своим конвейером.</div><div style="margin-top:12px"><button class="btn pri">Новая фича в чате с Софьей</button></div></div>`;
+  const open = fl.filter(f => !f.closed);
+  if (fl.length && !open.length && S.bfilt!=='closed') h += `<div class="calm">${glyph('done',14)}<span>Все фичи закрыты. Последняя смержена ${fl[0].merged}.</span></div>`;
+  if (S.bfilt!=='closed') {
+    const shown = open.filter(f => passes(f, S.bfilt));
+    if (open.length && !shown.length) h += `<div class="empty sm"><div class="h">Под фильтр ничего не попало</div><div class="d"><button class="btn gh" data-a="bfilt:open">Показать открытые</button></div></div>`;
+    h += shown.map(f => cardB(f)).join('');
+  }
+  const closed = fl.filter(f => f.closed);
+  if (closed.length){
+    const op = S.bClosedOpen || S.bfilt==='closed';
+    h += `<button class="sec tg" data-a="bClosedOpen" aria-expanded="${op}">${op?ICON.down:ICON.chev}<span>Закрытые</span><span class="n">${closed.length}</span><span class="hint">${op?'':'на втором плане'}</span></button>`;
+    if (op) h += closed.map(f => cardB(f)).join('');
+  }
+  return h + `</div>`;
+}
+function cardB(f){
+  const s = fst(f), t = stText(f);
+  if (f.closed) return `<div class="fc gone" data-a="fsel:${f.id}" role="button" tabindex="0"><div class="h">${glyph(s,13)}<span class="nm">${esc(f.name)}</span>${mrail(f)}</div><div class="br" style="margin-left:20px">${esc(t.t)} · ${f.sum.steps} ${plural(f.sum.steps,'шаг','шага','шагов')} · ↺${f.ret}</div></div>`;
+  const att = s==='wait'||s==='merge' ? ' att-wait' : s==='stop' ? ' att-stop' : '';
+  const people = [...new Set((f.lanes||[]).map(l => l[1]))];
+  let mid = '';
+  if (s==='wait'||s==='merge') mid = `<div class="alert wait" style="padding:7px 9px"><div class="r">${glyph('wait',13)}<span class="tn-wait">${esc(t.t)}</span></div></div>`;
+  else if (s==='stop') mid = `<div class="alert stop" style="padding:7px 9px"><div class="r">${glyph('stop',13)}<span class="tn-stop">${esc(t.t)}</span></div></div>`;
+  else if (f.now) mid = `<div class="now" style="font-size:12px">${glyph(s==='loop'?'loop':'arun',13)}<span><b>Сейчас:</b> ${P[f.now.p]} · ${esc(f.now.step)} · ${mins(f.now.min)}</span></div>`;
+  const nch = chats().filter(c => c.f===f.id).length;
+  return `<div class="fc${att}" data-a="fsel:${f.id}" role="button" tabindex="0">
+    <div class="h">${glyph(s==='run'?'run':s,14)}<span class="nm">${esc(f.name)}</span><span class="mono" style="font-size:11px;color:var(--c-text-muted)">${cnt(f)}</span></div>
+    <div class="br mono">${esc(f.br)}</div>${lrail(f)}${mid}
+    <div class="ft">${people.map(p => av(p,1)).join('')}<span>${nch} ${plural(nch,'чат','чата','чатов')}</span><button class="go" data-a="go:${f.key}">Ключевой чат →</button></div></div>`;
+}
+function detailB(f){
+  const cs = chats().filter(c => c.f===f.id).sort((a,b) => ROLE_ORDER[a.r]-ROLE_ORDER[b.r]);
+  return `<div class="dhd"><button class="ib" data-a="fsel:" aria-label="Ко всем фичам">${ICON.back}</button><span class="ttl">${esc(f.name)}</span><span class="mono" style="font-size:11px;color:var(--c-text-muted)">${cnt(f)}</span></div>
+    <div class="scroll" style="padding:0 14px 14px">
+      <div class="mono" style="font-size:11px;color:var(--c-text-muted)">${esc(f.br)}</div>
+      <div style="margin-top:10px"><button class="btn pri" data-a="go:${f.key}">${ICON.route(13)} Ключевой чат</button> <button class="btn gh">Задачи в трекере →</button></div>
+      ${featureBody(f)}
+      <div class="blk"><div class="cap">Чаты фичи · ${cs.length}</div>${cs.map(c => chatRow(c,{ inGroup:true })).join('')}</div>
+      ${legend()}
+    </div>`;
+}
+
+/* ---------- Вариант В: обзор «Все фичи» из шапки чата ---------- */
+function allFeatsMenu(){
+  const fl = ordered(feats()), open = fl.filter(f => !f.closed), closed = fl.filter(f => f.closed);
+  let h = `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px 8px;border-bottom:1px solid var(--c-divider)"><span class="serif" style="font-weight:700;color:var(--c-text-heading)">Все фичи</span><span class="mono" style="margin-left:auto;font-size:11px;color:var(--c-text-muted)">${open.length} открыто</span></div>`;
+  if (!fl.length) return h + `<div class="empty sm"><div class="h">Фич пока нет</div><div class="d">Фича появится, когда оркестратор заведёт эпик в трекере.</div></div>`;
+  if (!open.length) h += `<div class="calm" style="margin:8px 4px">${glyph('done',14)}<span>Открытых фич нет</span></div>`;
+  h += open.map(f => { const s=fst(f), t=stText(f); return `<button class="mi" data-a="go:${f.key}" style="align-items:flex-start;flex-direction:column;gap:3px">
+      <span style="display:flex;align-items:center;gap:7px;width:100%">${glyph(s==='run'?'run':s,12)}<b style="font-weight:700;color:var(--c-text-heading);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(f.name)}</b><span class="mono" style="font-size:11px;color:var(--c-text-muted)">${cnt(f)}</span></span>
+      <span style="display:flex;align-items:center;gap:7px;padding-left:19px;width:100%;min-width:0">${mrail(f)}<span class="${t.c}" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.t)}</span></span></button>`; }).join('');
+  if (closed.length) h += `<button class="sec tg" data-a="cClosed" style="padding-left:10px">${S.closedOpen?ICON.down:ICON.chev}<span>Закрытые</span><span class="n">${closed.length}</span></button>` +
+    (S.closedOpen ? closed.map(f => `<button class="mi" data-a="go:${f.key}" style="color:var(--c-text-secondary)">${glyph(fst(f),12)}<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(f.name)}</span><span style="font-size:11px;color:var(--c-text-muted)">${f.merged?'смержена '+f.merged:'без мержа'}</span></button>`).join('') : '');
+  return h;
+}
+function sideC(){
+  // Список чатов как сейчас («Дни»); в варианте В меняется только чат
+  const days = ['Сегодня','Вчера (пт)','16 октября (чт)'];
+  return `<div class="ph"><span class="ttl">Чаты</span><button class="gbtn">${ICON.cal}<span>Дни</span>${ICON.down}</button><button class="ib">${ICON.filter}</button><button class="ib">${ICON.archive}</button><button class="ib">${ICON.plus}</button></div>
+    <div class="scroll">${days.map((d,i) => { const cs = chats().filter(c => c.day===i); return cs.length ? `<div class="sec">${d}</div>${cs.map(c => chatRow(c)).join('')}` : ''; }).join('')}</div>`;
+}
+
+/* ---------- Чат (центр) ---------- */
+function attCount(){ return feats().filter(f => !f.closed && f.att).length; }
+function chatView(){
+  const c = C(S.chat) || chats()[0];
+  if (!c) return `<div class="empty"><div class="h">Нет чатов</div></div>`;
+  const f = c.f ? F(c.f) : null;
+  const n = attCount();
+  const fbtn = S.v==='c' ? `<button class="fbtn new" data-a="menu:feats" aria-haspopup="menu" title="Все фичи проекта">${ICON.route(14)}${S.m?'':'<span>Фичи</span>'}${n?`<span class="bdg" title="Ждут вас или стоят">${n}</span>`:''}</button>` : '';
+  let h = `<div class="chd">${S.m?`<button class="ib" data-a="mlist" aria-label="К списку">${ICON.back}</button>`:''}${av(c.p)}<span class="t">${esc(c.t)}</span><span class="sp"></span>${fbtn}<button class="ib">${ICON.dots}</button></div>`;
+  if (S.menu==='feats') h += `<div class="menu" style="top:${S.m?54:50}px;right:${S.m?8:14}px;${S.m?'left:8px;':''}width:${S.m?'auto':'380px'};max-height:520px;overflow:auto">${allFeatsMenu()}</div>`;
+  h += strip(c);
+  h += `<div class="feed">${feedFor(c, f)}</div><div class="comp">Сообщение…</div>`;
+  return h;
+}
+function feedFor(c, f){
+  if (!f) return `<div class="msg-u">Посмотри логи прокси за вчера</div><div class="msg-a">Нашла три всплеска 529 около 23:10. Это не фича, обычный разбор, поэтому плашки над лентой нет.</div>`;
+  const s = fst(f);
+  if (c.r==='key') {
+    const pill = f.closed ? `фича · ${f.acc}/${f.tot} ↺${f.ret} · смержена` : `фича · ${f.tot?f.acc+'/'+f.tot:'—'}${f.ret?' ↺'+f.ret:''} · ${s==='merge'?'ждёт вас · мерж':s==='wait'?'ждёт вас':s==='stop'?'стоит · Денис':STG[f.stages.indexOf('a')]+(f.now?' · '+P[f.now.p]:'')}`;
+    return `<div class="msg-u">Веди фичу «${esc(f.name)}» по конвейеру.</div>
+      <div class="msg-a">${s==='wait'?'Разрез готов: у Александра три варианта, нужен ваш выбор — без него план не начну.':s==='merge'?'Финал принят Александром с правками, правки приняты Глебом. Осталось отдать фичу на мерж.':s==='stop'?'Ш1 принят. На Ш2 Денис остановился 25 минут назад — смотрю, что случилось.':f.closed?'Фича смержена, итог записан в «Историю решений».':'Поставила следующий шаг, жду отчёта исполнителя.'}</div>
+      <div class="tpp" title="Пилюля плана хода в режиме фичи (как сейчас)">${ICON.route(12, s==='wait'||s==='merge'?'var(--c-info)':'var(--c-accent)')}<span class="t ${s==='wait'||s==='merge'?'tn-wait':s==='stop'?'tn-stop':''}">${esc(pill)}</span></div>`;
+  }
+  const ref = c.ref || ROLE_TXT[c.r];
+  let h = `<div class="tcard"><div class="th">${ICON.tasks} Задача</div><div class="tb"><div class="tt">${esc(c.t)}</div><div style="font-size:12.5px;color:var(--c-text-secondary);margin-top:4px">Поставила ${P.sofya} из чата «${esc(C(f.key)?.t||'')}».</div>
+    <div class="chipf">${ICON.route(12)}${c.r==='step'?`Шаг ${esc(ref.split(' ·')[0])} фичи · Производство, ${esc((ref.split('· ')[1]||''))}`:`${esc(ref[0].toUpperCase()+ref.slice(1))} фичи`}</div></div></div>`;
+  if (c.st==='stop') h += `<div class="msg-a">Дописываю обработку маркера в шлюзе, тесты прокси — 14 из 16 зелёных…</div><div class="sysl">${glyph('stop',13)}<span>Исполнитель остановлен 25 мин назад: ход оборвался, задача осталась «в работе».</span></div>`;
+  else if (c.st==='run') h += `<div class="msg-a">${c.r==='step'&&f.id==='stats'?'Круг 3: правлю пустое состояние и ширину на 360 по замечаниям Глеба.':'Собираю макеты: три варианта, обе темы, 360 px.'}</div>`;
+  else if (c.r==='review') h += `<div class="msg-a"><b>Вердикт: вернул.</b> 2 major: пустое состояние без действия, сырой отступ в карточке.</div>`;
+  else if (c.r==='qa') h += `<div class="msg-a"><b>Проверка:</b> 7 сценариев, на 360 px меню переносилось в три ряда — исправлено, приняла.</div>`;
+  else h += `<div class="msg-a">Готово, отчёт в задаче.</div>`;
+  return h;
+}
+
+/* ---------- Мобильные экраны и шторка ---------- */
+function mobile(){
+  let h;
+  if (S.mscreen==='list'){
+    const tabs = S.v==='b' ? `<div class="mtabs new" role="tablist"><button class="${S.panel==='chats'?'on':''}" data-a="panel:chats">${ICON.msg} Чаты</button><button class="${S.panel==='feats'?'on':''}" data-a="panel:feats">${ICON.route(15)} Фичи${attCount()?` <span class="fbtn" style="height:auto;border:none;padding:0;background:none"><span class="bdg">${attCount()}</span></span>`:''}</button></div>` : '';
+    const body = S.v==='a' ? sideA() : S.v==='b' ? (S.panel==='feats' ? sideB() : sideC()) : sideC();
+    h = `<div class="isl" style="position:relative"><div class="mhd"><span class="ttl">AI Home</span></div>${tabs}${body}</div>`;
+  } else h = `<div class="isl" style="position:relative">${chatView()}</div>`;
+  if (S.sheet==='strip') h += sheetStrip();
+  return h;
+}
+function sheetStrip(){
+  const c = C(S.chat), f = c && F(c.f); if (!f) return '';
+  const isKey = c.id===f.key, cs = chats().filter(x => x.f===f.id).sort((a,b) => ROLE_ORDER[a.r]-ROLE_ORDER[b.r]);
+  return `<div class="scrim" data-a="sheet:"></div><div class="sheet" role="dialog" aria-label="Фича"><div class="grab"></div><div class="in">
+    <div style="display:flex;align-items:center;gap:8px">${glyph(fst(f)==='run'?'run':fst(f),14)}<span class="serif" style="font-size:16px;font-weight:700;color:var(--c-text-heading);flex:1">${esc(f.name)}</span><span class="mono" style="font-size:11px;color:var(--c-text-muted)">${cnt(f)}</span></div>
+    <div style="font-size:12px;color:var(--c-text-secondary);margin-top:4px">Этот чат: <span class="role${isKey?' key':''}">${esc(isKey?'ключевой':(c.ref||ROLE_TXT[c.r]))}</span></div>
+    ${isKey?'':`<div style="margin-top:10px"><button class="btn pri" style="width:100%;justify-content:center" data-a="go:${f.key}">${ICON.route(13)} В ключевой чат фичи</button></div>`}
+    ${featureBody(f)}
+    <div class="blk"><div class="cap">Чаты фичи · ${cs.length}</div>${cs.map(x => chatRow(x,{ inGroup:true })).join('')}</div></div></div>`;
+}
+
+/* ---------- Сборка ---------- */
+const NOTES = {
+  a:'<b>А · «Группы в Чатах».</b> В меню группировки списка чатов появляется пункт «Фичи» рядом с «Днями», «Тегами» и «Темами». Фича — заголовок группы с мини-рельсой и статусом, внутри её чаты по ролям. Закрытые свёрнуты в «Закрытые». В «Днях» у строки чата есть метка фичи. Попробуйте: группа «Сжатие через облако» → чат Дениса → плашка → «Ключевой чат».',
+  b:'<b>Б · Панель «Фичи».</b> Новая панель рельсы рядом с «Чатами». Карточки фич с подписанной рельсой, «Сейчас» и тревогой; фильтры по состоянию, закрытые свёрнуты. Клик по карточке открывает конвейер и чаты фичи в той же панели. Плашка над лентой — общая. На 360 px «Чаты · Фичи» — вкладками.',
+  c:'<b>В · Сквозная плашка.</b> Список чатов не меняется. Каждый чат фичи несёт плашку над лентой: где фича, ждёт ли вас, ↺ и роль этого чата. Клик ведёт в ключевой чат, там плашка раскрывает конвейер. Кнопка «Фичи» в шапке — выпадающий обзор всех фич. На 360 px тап по плашке открывает шторку.',
+};
+function render(){
+  document.documentElement.dataset.theme = S.theme;
+  document.body.classList.toggle('nonew', !document.getElementById('shownew').checked);
+  const pills = (id, opts, key) => { document.getElementById(id).innerHTML = opts.map(([v,n]) => `<button class="${S[key]===v?'on':''}" data-mk="${key}:${v}">${n}</button>`).join(''); };
+  pills('pv', [['a','А · Группы в Чатах'],['b','Б · Панель «Фичи»'],['c','В · Сквозная плашка']], 'v');
+  pills('pd', [['normal','Обычно'],['closed','Все закрыты'],['none','Нет фич']], 'data');
+  pills('pt', [['light','Светлая'],['dark','Тёмная']], 'theme');
+  document.getElementById('pw').innerHTML = [[false,'Десктоп'],[true,'360 px']].map(([v,n]) => `<button class="${S.m===v?'on':''}" data-mk="m:${v}">${n}</button>`).join('');
+  document.getElementById('note').innerHTML = NOTES[S.v];
+  if (!C(S.chat)) S.chat = (chats().find(c => c.f) || chats()[0] || {}).id;
+  const app = document.getElementById('app');
+  app.className = 'app' + (S.m ? ' m' : '');
+  let h;
+  if (S.m) h = mobile();
+  else {
+    const rail = `<nav class="rail" aria-label="Панели"><button class="rb${S.v!=='b'||S.panel==='chats'?' on':''}" data-a="panel:chats" title="Чаты">${ICON.msg}</button>${S.v==='b'?`<button class="rb new${S.panel==='feats'?' on':''}" data-a="panel:feats" title="Фичи">${ICON.route(17)}${attCount()?`<span class="bdg">${attCount()}</span>`:''}</button>`:''}<span class="sep"></span><button class="rb" title="Файлы">${ICON.files}</button><button class="rb" title="Задачи">${ICON.tasks}</button><button class="rb" title="Заметки">${ICON.notes}</button></nav>`;
+    const side = S.v==='a' ? sideA() : S.v==='b' ? (S.panel==='feats' ? sideB() : sideC()) : sideC();
+    h = `${rail}<section class="isl side" style="position:relative">${side}</section><section class="isl center">${chatView()}</section>`;
+  }
+  if (S.toast) h += `<div class="toast" role="status">${S.toast}</div>`;
+  app.innerHTML = h;
+}
+
+/* Переход в ключевой чат: запоминаем, откуда пришли — плашка ключевого чата покажет «← назад» */
+function goKey(id){
+  const from = S.chat;
+  S.prev = from !== id ? from : S.prev; S.chat = id; S.fxOpen = false; S.menu = null; S.sheet = null; S.mscreen = 'chat';
+  const c = C(id), f = c && F(c.f);
+  S.toast = f ? `Ключевой чат фичи «${esc(f.name)}»` : null;
+  setTimeout(() => { S.toast = null; render(); }, 1800);
+}
+document.addEventListener('click', e => {
+  const mk = e.target.closest('[data-mk]');
+  if (mk){ const [k,v] = mk.dataset.mk.split(':'); S[k] = v==='true' ? true : v==='false' ? false : v; S.menu = null; S.sheet = null; S.fsel = null;
+    if (k==='m') S.mscreen = 'chat';
+    if (k==='v'){ S.panel = v==='b' ? 'feats' : 'chats'; }
+    render(); return; }
+  const el = e.target.closest('[data-a]');
+  if (!el){ if (S.menu){ S.menu = null; render(); } return; }
+  e.stopPropagation();
+  const [a, ...rest] = el.dataset.a.split(':'); const v = rest.join(':');
+  switch(a){
+    case 'chat': S.prev = null; S.chat = v; S.fxOpen = false; S.menu = null; S.sheet = null; S.mscreen = 'chat'; break;
+    case 'go': goKey(v); break;
+    case 'menu': S.menu = S.menu===v ? null : v; break;
+    case 'group': S.group = v; S.menu = null; break;
+    case 'filt': S.filt = v; break;
+    case 'bfilt': S.bfilt = v; break;
+    case 'closedOpen': S.closedOpen = !S.closedOpen; break;
+    case 'bClosedOpen': S.bClosedOpen = !S.bClosedOpen; break;
+    case 'cClosed': S.closedOpen = !S.closedOpen; break;
+    case 'fg': S.open[v] = !S.open[v]; break;
+    case 'fx': S.fxOpen = !S.fxOpen; if (S.m) S.sheet = 'strip'; break;
+    case 'fsel': S.fsel = v || null; break;
+    case 'panel': S.panel = v; S.fsel = null; if (S.m) S.mscreen = 'list'; break;
+    case 'sheet': S.sheet = v || null; break;
+    case 'mlist': S.mscreen = 'list'; S.menu = null; break;
+  }
+  render();
+});
+document.getElementById('scn').addEventListener('click', () => {
+  S.chat = 'c9'; S.prev = null; S.fxOpen = false; S.menu = null; S.sheet = null; S.mscreen = 'chat'; S.data = 'normal';
+  if (S.v==='a'){ S.group = 'features'; S.filt = 'open'; S.open.proxy = true; }
+  if (S.v==='b'){ S.panel = 'feats'; S.fsel = null; }
+  render();
+});
+document.getElementById('shownew').addEventListener('change', render);
+document.addEventListener('keydown', e => { if (e.key==='Escape'){ S.menu = null; S.sheet = null; render(); } });
+/* Диплинк: #a, #b, #c и параметры для скриншотов (#b&m&dark) */
+(function(){ const h = location.hash.slice(1).split('&'); if (['a','b','c'].includes(h[0])) { S.v = h[0]; S.panel = S.v==='b' ? 'feats' : 'chats'; }
+  if (h.includes('m')) S.m = true; if (h.includes('dark')) S.theme = 'dark'; if (h.includes('none')) S.data = 'none'; if (h.includes('closed')) S.data = 'closed';
+  const ch = h.find(x => x.startsWith('chat=')); if (ch) S.chat = ch.slice(5);
+  const op = h.find(x => x.startsWith('open=')); if (op) op.slice(5).split(',').forEach(id => S.open[id] = true);
+  if (h.includes('list')) S.mscreen = 'list'; if (h.includes('fx')) S.fxOpen = true; if (h.includes('sheet')) S.sheet = 'strip';
+  const fs = h.find(x => x.startsWith('fsel=')); if (fs) S.fsel = fs.slice(5);
+  const mn = h.find(x => x.startsWith('menu=')); if (mn) S.menu = mn.slice(5);
+  const pr = h.find(x => x.startsWith('prev=')); if (pr) S.prev = pr.slice(5);
+  if (h.includes('closedopen')) { S.closedOpen = true; S.bClosedOpen = true; }
+  if (h.includes('days')) S.group = 'days';
+})();
+render();
+</script>
+</body>
+</html>

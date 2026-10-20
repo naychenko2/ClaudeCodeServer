@@ -8,7 +8,16 @@
 //        (дебаунс ~500 мс), чужие не трогает; фича выключена — событие проигнорировано.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test } from './featureRuns';
+import {
+  __test,
+  setTurnPlanMode,
+  getTurnPlanMode,
+  setSelectedFeatureId,
+  getSelectedFeatureId,
+  focusFeatureStep,
+  setHasPlanCard,
+  openPillMenu,
+} from './featureRuns';
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
 import { setAllFlags } from './featureFlags';
@@ -152,5 +161,228 @@ describe('M2: live-режим — перезапрос по task_changed', () =>
     __test.handleTaskChanged(msg);
     // один таймер на сессию (дебаунс), не два
     expect([...__test.pending()].filter(s => s === 'F')).toHaveLength(1);
+  });
+});
+
+describe('Перф-2 B2: троттлинг и дедуп запросов агрегата', () => {
+  let getFeaturesSpy: ReturnType<typeof vi.spyOn>;
+  const msg = () => ({
+    type: 'task_changed' as const, action: 'updated' as const,
+    task: task({ id: 'epic-t', role: 'feature', sourceSessionId: 'T' }),
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __test.reset();
+    setAllFlags({ [FLAG]: true });
+    getFeaturesSpy = vi.spyOn(api.tasks, 'getFeatures').mockResolvedValue([]);
+    upsertTaskLocal(task({ id: 'epic-t', role: 'feature', sourceSessionId: 'T' }));
+    __test.setActive('T');
+  });
+  afterEach(() => {
+    getFeaturesSpy.mockRestore();
+    __test.reset();
+    vi.useRealTimers();
+  });
+
+  it('второй всплеск событий вскоре после запроса откладывается до конца окна, не уходит сразу', async () => {
+    __test.handleTaskChanged(msg());
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+
+    // новый всплеск через 1 с после запроса: запрос не чаще окна в 4 с
+    await vi.advanceTimersByTimeAsync(500);
+    __test.handleTaskChanged(msg());
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('серия событий в окне даёт один запрос', async () => {
+    for (let i = 0; i < 20; i++) {
+      __test.handleTaskChanged(msg());
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    await vi.advanceTimersByTimeAsync(10000);
+    // 4 с окна → за ~14 с не больше 4 запросов, а не 20
+    expect(getFeaturesSpy.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(getFeaturesSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('параллельные запросы одной сессии делят один fetch', async () => {
+    const a = __test.fetchRuns('T');
+    const b = __test.fetchRuns('T');
+    expect(a).toBe(b);
+    await a;
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── F1: режим, выбор фичи, фокус шага — в памяти вкладки, per-session ─────────
+
+describe('F1: режим «План/Фича» на чат (в памяти вкладки)', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  it('умолчание: есть хотя бы одна фича → feature, нет фич → plan', () => {
+    __test.setRuns('A', [run('A')]);
+    expect(getTurnPlanMode('A')).toBe('feature');
+    // у B фич нет → plan
+    expect(getTurnPlanMode('B')).toBe('plan');
+  });
+
+  it('режим одного чата не влияет на другой (изоляция по sessionId)', () => {
+    __test.setRuns('A', [run('A')]);
+    __test.setRuns('B', [run('B')]);
+    // явный выбор «план» для A; B — своё умолчание (есть фича → feature)
+    setTurnPlanMode('A', 'plan');
+    expect(getTurnPlanMode('A')).toBe('plan');
+    expect(getTurnPlanMode('B')).toBe('feature');
+  });
+
+  it('явный выбор режима перебивает умолчание', () => {
+    __test.setRuns('A', [run('A')]);
+    setTurnPlanMode('A', 'plan');
+    expect(getTurnPlanMode('A')).toBe('plan');
+    // и обратно: явный feature, даже если фичи исчезли
+    setTurnPlanMode('A', 'feature');
+    expect(getTurnPlanMode('A')).toBe('feature');
+  });
+
+  it('умолчание пересчитывается, когда фичи появляются/исчезают (явного выбора нет)', () => {
+    // сначала фич нет → plan
+    expect(getTurnPlanMode('A')).toBe('plan');
+    // фича появилась → feature (явного выбора не было)
+    __test.setRuns('A', [run('A')]);
+    expect(getTurnPlanMode('A')).toBe('feature');
+    // фичи исчезли → plan
+    __test.setRuns('A', []);
+    expect(getTurnPlanMode('A')).toBe('plan');
+  });
+});
+
+describe('F1: выбор фичи (id эпика) на чат', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  it('выбор фичи сбрасывается при смене чата (изоляция по sessionId)', () => {
+    setSelectedFeatureId('A', 'feat-1');
+    expect(getSelectedFeatureId('A')).toBe('feat-1');
+    // B не наследует выбор A
+    expect(getSelectedFeatureId('B')).toBeUndefined();
+  });
+
+  it('смена выбора внутри чата', () => {
+    setSelectedFeatureId('A', 'feat-1');
+    setSelectedFeatureId('A', 'feat-2');
+    expect(getSelectedFeatureId('A')).toBe('feat-2');
+  });
+
+  it('без сессии — выбор не ставится', () => {
+    // null/пустая сессия: set игнорирует, get — undefined
+    expect(getSelectedFeatureId(null)).toBeUndefined();
+  });
+});
+
+describe('F1: сигнал фокуса шага (featureId + taskId) на чат', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  it('фокус доходит до подписчика (focusFor возвращает сигнал)', () => {
+    focusFeatureStep('A', 'feat-1', 'task-1');
+    const focus = __test.focusFor('A');
+    expect(focus).not.toBeNull();
+    expect(focus!.featureId).toBe('feat-1');
+    expect(focus!.taskId).toBe('task-1');
+  });
+
+  it('фокус не течёт между чатами (изоляция по sessionId)', () => {
+    focusFeatureStep('A', 'feat-1', 'task-1');
+    expect(__test.focusFor('A')).not.toBeNull();
+    // B: фокуса нет
+    expect(__test.focusFor('B')).toBeNull();
+  });
+
+  it('повторный фокус на тот же (featureId, taskId) даёт новый сигнал (seq растёт)', () => {
+    focusFeatureStep('A', 'feat-1', 'task-1');
+    const first = __test.focusFor('A')!;
+    focusFeatureStep('A', 'feat-1', 'task-1');
+    const second = __test.focusFor('A')!;
+    expect(second.seq).toBeGreaterThan(first.seq);
+    // ссылки разные → useSyncExternalStore увидит смену
+    expect(second).not.toBe(first);
+  });
+});
+
+describe('F1: useFeatureRunsSnapshot — только читает стор, без сетевых вызовов', () => {
+  let getFeaturesSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __test.reset();
+    // Шпион на REST-запрос: доказываем, что читальный путь его не трогает.
+    getFeaturesSpy = vi.spyOn(api.tasks, 'getFeatures').mockResolvedValue([]);
+  });
+  afterEach(() => {
+    getFeaturesSpy.mockRestore();
+    __test.reset();
+  });
+
+  it('срез по sessionId читается без fetch (snapshotFor — чистое чтение Map)', () => {
+    const a = [run('A')];
+    __test.setRuns('A', a);
+    // useFeatureRunsSnapshot(sessionId) → getSnapshot = snapshotFor(sessionId)
+    expect(__test.snapshotFor('A')).toBe(a);
+    // сетевой запрос не уходил
+    expect(getFeaturesSpy).not.toHaveBeenCalled();
+  });
+
+  it('срез несуществующей сессии — EMPTY, без fetch', () => {
+    expect(__test.snapshotFor('nope').length).toBe(0);
+    expect(getFeaturesSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── F9: срез «живая карточка плана» + сигнал «открыть меню пилюли» (per chat) ──
+describe('F9: hasPlanCard (per chat) и openPillMenu (одноразовый сигнал)', () => {
+  beforeEach(() => __test.reset());
+  afterEach(() => __test.reset());
+
+  it('hasPlanCard: по умолчанию false, setHasPlanCard пишет per-session', () => {
+    expect(__test.planCardFor('A'), 'по умолчанию нет').toBe(false);
+    setHasPlanCard('A', true);
+    expect(__test.planCardFor('A'), 'после записи true').toBe(true);
+    expect(__test.planCardFor('B'), 'чужая сессия не затронута').toBe(false);
+    setHasPlanCard('A', false);
+    expect(__test.planCardFor('A'), 'сброс на false').toBe(false);
+  });
+
+  it('hasPlanCard: null/пустой sessionId — false (нет чата)', () => {
+    expect(__test.planCardFor(null)).toBe(false);
+    setHasPlanCard('', true);
+    expect(__test.planCardFor(null), 'запись в пустой id не видна через null').toBe(false);
+  });
+
+  it('openPillMenu: null до сигнала, после — объект с seq', () => {
+    expect(__test.pillMenuFor('A'), 'до сигнала null').toBeNull();
+    openPillMenu('A');
+    const first = __test.pillMenuFor('A');
+    expect(first, 'после сигнала объект').not.toBeNull();
+    expect(first!.seq).toBeGreaterThan(0);
+  });
+
+  it('openPillMenu: повторный сигнал — seq растёт, новая ссылка (подписчик сработает заново)', () => {
+    openPillMenu('A');
+    const first = __test.pillMenuFor('A')!;
+    openPillMenu('A');
+    const second = __test.pillMenuFor('A')!;
+    expect(second.seq).toBeGreaterThan(first.seq);
+    expect(second).not.toBe(first);
+  });
+
+  it('openPillMenu: изоляция по sessionId (сигнал чата A не доходит в B)', () => {
+    openPillMenu('A');
+    expect(__test.pillMenuFor('A')).not.toBeNull();
+    expect(__test.pillMenuFor('B'), 'чужая сессия сигнала не получила').toBeNull();
   });
 });

@@ -66,6 +66,13 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // коэффициентом. null — поллер выключен или движок не отдал обе метрики.
     private double? _tokensPerStep;
 
+    // Опубликованная база шага декода (мс) — 10-й перцентиль времени шага по кольцу за час
+    // (ADR-029, v2.5). Пересчитывается при добавлении точки кольца, публикуется с гистерезисом
+    // (не меняется, пока новое значение отличается меньше чем на 10 %): база не зависит от
+    // окна запроса и не дёргается между опросами. null — данных нет.
+    // Читается и пишется под _gate: Nullable<double> не атомарна, а читает другой поток.
+    private double? _cleanStepMs;
+
     // Ожидаемый интервал: по умолчанию Task.Delay; тест подменяет, чтобы гонять цикл
     // на фейковых часах (без реального Task.Delay).
     internal Func<TimeSpan, CancellationToken, Task>? WaitFunc { get; set; }
@@ -310,6 +317,11 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                     _history.RemoveAt(0);
             }
 
+            // База шага декода (ADR-029, v2.5): пересчёт по кольцу (1 ч) + гистерезис.
+            // Считается здесь (раз в 5 с, при добавлении точки), а не по окну запроса —
+            // поэтому база одна и та же для окон 1 мин / 5 мин / 15 мин / 1 ч.
+            UpdateCleanStep(snap);
+
             _lastPointTime = now;
             _lastPointSnap = snap;
             _kvUsageMaxSincePoint = null; // максимум «с прошлой точки» собран: сбрасываем
@@ -318,6 +330,34 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         // Живое «сейчас» — каждый опрос (не только на точке): ThroughputOf отдаёт свежую дельту
         _last = snap;
         _lastTime = now;
+    }
+
+    // База шага декода (ADR-029, v2.5): пересчёт по кольцу за час + гистерезис.
+    // Вызывается при добавлении точки кольца (раз в 5 с), а НЕ по окну запроса — поэтому
+    // база одна и та же для окон 1 мин / 5 мин / 15 мин / 1 ч (раньше базу выбирал фронт
+    // из интервалов самого окна, и полоса прыгала: 58 мс на 1 мин, 455 мс на 5 мин).
+    private void UpdateCleanStep(EngineSnapshot snap)
+    {
+        List<(double? Seconds, long? Count)> steps;
+        lock (_gate)
+            steps = _history.Select(p => (p.ItlSeconds, p.ItlCount)).ToList();
+
+        // Накопленные счётчики движка (Σitl за его жизнь) — последний fallback, когда валидных
+        // точек кольца меньше десяти (перцентиль по такой выборке слишком шумный) и по кольцу
+        // нечего суммировать.
+        var candidate = LocalModelStatsCleanStep.ComputeBase(
+            steps, snap.InterTokenLatencySum, snap.InterTokenLatencyCount);
+
+        // Гистерезис: база не дёргается между опросами (новое значение отличается < 10 %).
+        lock (_gate)
+            _cleanStepMs = LocalModelStatsCleanStep.ApplyHysteresis(_cleanStepMs, candidate);
+    }
+
+    // Опубликованная база шага декода (мс): null — данных ещё нет.
+    private double? CleanStepOf()
+    {
+        lock (_gate)
+            return _cleanStepMs;
     }
 
     // Точка накопленных счётчиков для оконных расчётов (hit-доли, скорость, preemptions).
@@ -532,6 +572,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             Waiting = snap.Waiting,
             Speed = ThroughputOf(),
             SpeculativeSpeedup = speculativeSpeedup,
+            CleanStepMs = CleanStepOf(),
             Kv = kv,
             Unsupported = snap.Unsupported,
             Engine = engine,

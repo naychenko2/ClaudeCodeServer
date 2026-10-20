@@ -33,6 +33,8 @@ public class KeepMcpToolsConfigTests
         ["codegraph"] = Names(CodeGraphToolset.AllTools),
         ["websearch"] = Names(WebSearchToolset.Tools),
         ["watch"] = Names(WatchToolset.Tools),
+        ["tests"] = Names(TestsToolset.Tools),
+        ["dev"] = Names(DevToolset.Tools),
     };
 
     private static HashSet<string> Names(params IReadOnlyList<McpToolSchema>[] sets) =>
@@ -77,7 +79,9 @@ public class KeepMcpToolsConfigTests
         keep.GetSection("memory").Get<string[]>().Should().BeEquivalentTo(
             "memory_recall", "memory_search", "memory_remember", "team_memory_search");
         keep.GetSection("codegraph").Get<string[]>().Should().BeEquivalentTo("codegraph_find");
-        keep.GetChildren().Select(c => c.Key).Should().BeEquivalentTo(["tasks", "memory", "codegraph"],
+        keep.GetSection("tests").Get<string[]>().Should().BeEquivalentTo("run_tests");
+        keep.GetSection("dev").Get<string[]>().Should().BeEquivalentTo("build");
+        keep.GetChildren().Select(c => c.Key).Should().BeEquivalentTo(["tasks", "memory", "codegraph", "tests", "dev"],
             "websearch и watch остаются целиком");
     }
 }

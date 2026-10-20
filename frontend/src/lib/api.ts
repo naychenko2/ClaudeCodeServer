@@ -580,9 +580,18 @@ export interface PluginInfo {
   secrets: PluginSecretView[];
   // Вклады пакета (contributes из манифеста): нужны, чтобы слот панели выбирал
   // плагин, у которого панель объявлена, а не просто первый включённый.
-  // Бэковая зависимость: PluginResponse (список) пока не отдаёт contributes —
-  // см. отчёт по задаче (шаг 3).
-  contributes?: { panels?: unknown[] };
+  // panels — {id, title, entry}; entry — путь панели относительно корня пакета
+  // (контракт GET /api/plugins/{id}/{ver}/assets/{entry}, ADR-031 §3.1).
+  contributes?: { panels?: PluginPanelView[] };
+}
+// Панель пакета (contributes.panels из манифеста, ADR-031 §2.1): id + title + entry.
+// entry — путь относительно **корня пакета** (например panel/index.html), тот же
+// контракт пути, что у GET /api/plugins/{id}/{ver}/assets/{entry} (catch-all {**path}).
+// slot в ответ списка не отдаётся (UI не использует) — см. CLAUDE.md вертикали, REST.
+export interface PluginPanelView {
+  id: string;
+  title: string;
+  entry: string;
 }
 // Тело POST /api/plugins/{id}/grant: выданные права (подмножество requested) + значения секретов
 export interface PluginGrantSecret {
@@ -1047,14 +1056,16 @@ export const api = {
         `/plugins/${pluginUrlId(id)}/call`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
-    // Сырой panel/index.html пакета (ADR-031 §3.1): хост забирает его по REST с
-    // user JWT (навигация iframe не несёт Authorization) и сам строит srcdoc.
+    // HTML панели пакета (ADR-031 §3.1): хост забирает его по REST с user JWT
+    // (навигация iframe не несёт Authorization) и сам строит srcdoc. entry — путь
+    // панели из манифеста (contributes.panels[].entry, например panel/index.html);
+    // маршрут {**path} — catch-all, слэши entry остаются литеральными.
     // Прямой fetch (не request()): ответ — текст, а не JSON, и request() упёрся бы
     // в JSON.parse. 404 — у плагина нет панели (макет 3, «пусто»).
-    panelHtml: async (id: string, version: string): Promise<string> => {
+    panelHtml: async (id: string, version: string, entry: string): Promise<string> => {
       const token = readStoredToken();
       const res = await fetch(
-        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/panel/index.html`,
+        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/${entry}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
       );
       if (!res.ok) {

@@ -8,7 +8,7 @@ import { useIsMobile } from '../../lib/breakpoints';
 import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
 import { useProjectFeature } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project } from '../../types';
-import { api, type PluginInfo } from '../../lib/api';
+import { api, type PluginInfo, type PluginPanelView } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
@@ -60,12 +60,11 @@ function toConsentData(info: PluginInfo): PluginConsentData {
   };
 }
 
-// У плагина панель объявлена (contributes.panels непусто). Пока бэк не отдаёт
-// contributes в данных списка, это false — слот деградирует к «панелей нет»
-// (бэковая зависимость, см. отчёт по задаче, шаг 3).
-function hasDeclaredPanel(p: PluginInfo): boolean {
-  return (p.contributes?.panels?.length ?? 0) > 0;
-}
+// Панель, которую показывает слот: плагин + конкретная панель (её entry). У плагина
+// может быть несколько панелей — переключатель выбирает панель, а не только плагин.
+type PanelTarget = { plugin: PluginInfo; panel: PluginPanelView };
+// Ключ панели: id плагина + id панели (id панели уникален в пределах пакета)
+const targetKey = (t: PanelTarget) => `${t.plugin.id}::${t.panel.id}`;
 
 // Мини-плитка 20×20 с инициалами (шапка острова, макет экран 3).
 function MiniTile({ name }: { name: string }) {
@@ -137,20 +136,29 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   const [consent, setConsent] = useState<PluginConsentData | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // Панель — у плагина, у которого панель ОБЪЯВЛЕНА (contributes.panels), а не просто
-  // у первого включённого: включённый без панели показывал бы «панелей нет», хотя у
-  // другого включённого панель есть. Выключенный не монтирует панели (бэк — 409).
-  const panelPlugins = useMemo(
-    () => plugins.filter(p => p.enabled && hasDeclaredPanel(p)),
-    [plugins],
-  );
-  // Выбранный плагин (переключатель, когда панелей несколько); null → первый
-  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
+  // Панели — у включённых плагинов, у которых панель ОБЪЯВЛЕНА (contributes.panels):
+  // включённый без панели не даёт «панелей нет», если у другого включённого панель есть.
+  // Выключенный не монтирует панели (бэк — 409). Плоский список (плагин, панель):
+  // у плагина может быть несколько панелей — переключатель выбирает панель, не плагин.
+  const panelTargets = useMemo<PanelTarget[]>(() => {
+    const out: PanelTarget[] = [];
+    for (const p of plugins) {
+      if (!p.enabled) continue;
+      for (const panel of p.contributes?.panels ?? []) out.push({ plugin: p, panel });
+    }
+    return out;
+  }, [plugins]);
+  // Выбранная панель (переключатель, когда панелей несколько); null → первая
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const panelPlugin = useMemo(
-    () => panelPlugins.find(p => p.id === selectedPanelId) ?? panelPlugins[0] ?? null,
-    [panelPlugins, selectedPanelId],
+  const activeTarget = useMemo<PanelTarget | null>(
+    () => panelTargets.find(t => targetKey(t) === selectedKey) ?? panelTargets[0] ?? null,
+    [panelTargets, selectedKey],
   );
+  // Плагин активной панели (id/version/granted) и сама панель (entry для panelHtml)
+  const panelPlugin = activeTarget?.plugin ?? null;
+  const activePanel = activeTarget?.panel ?? null;
+  const activeKey = activeTarget ? targetKey(activeTarget) : null;
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // init отправлен в текущем монтировании (повторный ready игнорируется, ADR §3.3)
@@ -176,7 +184,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     logEvent(`→ ${msg.type}${'id' in msg ? ` ${msg.id}` : ''}`);
   }, [logEvent]);
 
-  // === Забор panel/index.html (REST, user JWT) + сброс состояния моста ===
+  // === Забор HTML панели (REST, user JWT) + сброс состояния моста ===
+  // entry — из манифеста выбранной панели (contributes.panels[].entry); маршрут
+  // {**path} — catch-all, слэши entry остаются литеральными.
   useEffect(() => {
     let cancelled = false;
     initedRef.current = false;
@@ -185,16 +195,16 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     setHeight(null);
     setDeniedKey(null);
     setLog([]);
-    if (!panelPlugin) {
+    if (!activeTarget || !activePanel) {
       setFetch({ kind: 'absent' });
       return;
     }
     setFetch({ kind: 'fetching' });
-    api.plugins.panelHtml(panelPlugin.id, panelPlugin.version)
+    api.plugins.panelHtml(activeTarget.plugin.id, activeTarget.plugin.version, activePanel.entry)
       .then(html => {
         if (cancelled) return;
         setFetch({ kind: 'html', html });
-        logEvent('← panel/index.html загружен');
+        logEvent(`← ${activePanel.entry} загружен`);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -208,7 +218,11 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
         }
       });
     return () => { cancelled = true; };
-  }, [panelPlugin?.id, panelPlugin?.version, reloadKey, logEvent]);
+    // deps — примитивы (id/version/entry), а не объект activeTarget: useMemo не
+    // кэширует в мини-раннере тестов, и объект был бы новой ссылкой каждый render →
+    // эффект зря сбрасывал fetch. В реальном React useMemo стабильна, но строки
+    // корректны и там (перезапуск только при смене панели/версии/entry).
+  }, [activeTarget?.plugin.id, activeTarget?.plugin.version, activeTarget?.panel.entry, reloadKey, logEvent]);
 
   // srcdoc: CSP + шим plugin-kit + тема + html панели. Пересобирается при
   // смене темы (атрибут data-cc-theme), но без перемонтирования iframe —
@@ -219,8 +233,8 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   }, [fetch, theme]);
 
   // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
-  // «Перезагрузить» и смена плагина — да (reloadKey / id+version).
-  const frameKey = `${panelPlugin ? panelPlugin.id + panelPlugin.version : 'none'}#${reloadKey}`;
+  // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
+  const frameKey = `${activeTarget ? targetKey(activeTarget) : 'none'}#${reloadKey}`;
 
   // === Таймаут ready: 3 с после монтирования iframe → bridge_timeout ===
   useEffect(() => {
@@ -339,20 +353,21 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
 
   const headerActions = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      {/* Переключатель плагина: когда панелей несколько — выбор, чью показывать */}
-      {panelPlugins.length > 1 && (
+      {/* Переключатель панели: когда панелей несколько (в т.ч. у одного плагина) —
+          выбор, какую показывать; label — название панели, hint — плагин для различения */}
+      {panelTargets.length > 1 && (
         <div style={{ position: 'relative' }}>
-          <IconButton size="xs" tone="muted" ariaLabel="Выбрать плагин" onClick={() => setSwitcherOpen(o => !o)}>
+          <IconButton size="xs" tone="muted" ariaLabel="Выбрать панель" onClick={() => setSwitcherOpen(o => !o)}>
             <Plug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
           {switcherOpen && (
             <Menu onClose={() => setSwitcherOpen(false)} align="right" top={-2}>
-              {panelPlugins.map(p => (
+              {panelTargets.map(t => (
                 <MenuItem
-                  key={p.id}
-                  label={humanizeId(p.id)}
-                  hint={p.id === panelPlugin?.id ? 'показывается' : undefined}
-                  onClick={() => { setSelectedPanelId(p.id); setSwitcherOpen(false); }}
+                  key={targetKey(t)}
+                  label={t.panel.title || humanizeId(t.plugin.id)}
+                  hint={activeKey === targetKey(t) ? `показывается · ${humanizeId(t.plugin.id)}` : humanizeId(t.plugin.id)}
+                  onClick={() => { setSelectedKey(targetKey(t)); setSwitcherOpen(false); }}
                 />
               ))}
             </Menu>

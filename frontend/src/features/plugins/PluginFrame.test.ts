@@ -77,12 +77,18 @@ const P_NO_PANEL: PluginInfo = {
 const P_WITH_PANEL: PluginInfo = {
   id: 'local-1/with-panel', version: '1.0.0', sha256: 'b',
   requested: [], granted: [], enabled: true, source: 'upload:with-panel', secrets: [],
-  contributes: { panels: [{ id: 'p1', slot: 'sidebar', title: 'Panel' }] },
+  contributes: { panels: [{ id: 'p1', title: 'Panel', entry: 'panel/index.html' }] },
 };
 const P_WITH_PANEL_2: PluginInfo = {
   id: 'local-1/with-panel-2', version: '1.0.0', sha256: 'c',
   requested: [], granted: [], enabled: true, source: 'upload:with-panel-2', secrets: [],
-  contributes: { panels: [{ id: 'p2', slot: 'sidebar', title: 'Panel 2' }] },
+  contributes: { panels: [{ id: 'p2', title: 'Panel 2', entry: 'panel/index.html' }] },
+};
+// Панель с НЕ-стандартным entry: panelHtml обязан запросить именно assets/panel/main.html
+const P_WITH_PANEL_MAIN: PluginInfo = {
+  id: 'local-1/with-panel-main', version: '1.0.0', sha256: 'd',
+  requested: [], granted: [], enabled: true, source: 'upload:with-panel-main', secrets: [],
+  contributes: { panels: [{ id: 'p3', title: 'Main', entry: 'panel/main.html' }] },
 };
 
 // === Хелперы (типы нод fakeDom не экспортируются — через сигнатуру textNodes) ===
@@ -161,7 +167,21 @@ describe('PluginFrame: выбор плагина с панелью', () => {
 
     const { container } = await renderFrame();
     // триггер переключателя (aria-label) на месте
-    expect(findByAriaLabel(container, 'Выбрать плагин'), 'переключатель не найден').not.toBeNull();
+    expect(findByAriaLabel(container, 'Выбрать панель'), 'переключатель не найден').not.toBeNull();
+  });
+
+  // entry из манифеста (не panel/index.html) → panelHtml получает именно её (3-й аргумент).
+  // Мутация «вернуть хардкод panel/index.html» → 3-й аргумент снова panel/index.html → красный.
+  it('entry=panel/main.html → panelHtml вызывается с entry=panel/main.html', async () => {
+    vi.mocked(api.plugins.list).mockResolvedValue([P_WITH_PANEL_MAIN]);
+
+    await renderFrame();
+    const call = vi.mocked(api.plugins.panelHtml).mock.calls[0];
+    expect(call, 'panelHtml не вызван').toBeDefined();
+    // [id, version, entry]
+    expect(call?.[0]).toBe('local-1/with-panel-main');
+    expect(call?.[1]).toBe('1.0.0');
+    expect(call?.[2]).toBe('panel/main.html');
   });
 
   it('ни одного включённого с панелью → «пусто» (панелей нет)', async () => {

@@ -420,6 +420,157 @@ public class PluginsControllerTests : IDisposable
         JsonSerializer.Serialize(bad.Value).Should().Contain("LINEAR_TOKEN");
     }
 
+    // --- QA-фикс P: семантика secrets в Grant — «изменить», не «заменить» ---
+    //
+    // Диалог согласия при обновлении (теперь открывается при каждом обновлении с выданными
+    // правами) шлёт в secrets только значения, введённые в ЭТОЙ сессии. Раньше Grant
+    // трактовал тело как ПОЛНУЮ замену: ранее заданный секрет стёрся из plugin-secrets.json,
+    // а при required-секрете — 400 и диалог не закрывался. Теперь: присланное — установить,
+    // value=null — явно удалить, не присланный — оставить как есть.
+
+    // (а) обновление плагина с заданным секретом → Grant без секретов в теле → секрет на
+    // месте, значение в plugin-secrets.json не тронуто.
+    [Fact]
+    public void Grant_ОбновлениеБезСекретовВТеле_РанееЗаданныйСекретНаМесте()
+    {
+        var source1 = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source1 }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Обновление (v2, тот же id) → Grant без секретов в теле (диалог без повторного ввода).
+        var source2 = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        ctl.Install(new PluginInstallRequest { Source = source2 }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [],
+        }).Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Version.Should().Be("2.0.0", "пакет обновлён");
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
+            "ранее заданный секрет не стёрт Grant'ом без секретов в теле");
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("tok",
+            "значение в plugin-secrets.json не тронуто");
+    }
+
+    // (б) то же, но секрет required: Grant без секретов в теле → 200 (обязательный уже задан,
+    // повторного ввода не нужно). Мутация «проверять только присланные» → 400 (красный).
+    [Fact]
+    public void Grant_Обновление_ОбязательныйСекретУжеЗадан_200БезПовторногоВвода()
+    {
+        var source1 = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", true)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source1 }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        var source2 = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", true)]);
+        ctl.Install(new PluginInstallRequest { Source = source2 }).Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [],
+        });
+        res.Should().BeOfType<OkObjectResult>(
+            "обязательный секрет уже задан на сервере → 200, без повторного ввода");
+    }
+
+    // (в) явное удаление секрета: value=null → значение уходит из plugin-secrets.json, set=false.
+    [Fact]
+    public void Grant_ЯвноеУдалениеСекрета_ValueNull_УбираетЗначение()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Явное удаление: value = null.
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = null }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().BeNull(
+            "значение убрано из plugin-secrets.json");
+        _store.LoadInstalled(OwnerA).Single()
+            .Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && !s.Set,
+            "в записи set=false (как DELETE /secrets/{name})");
+    }
+
+    // (г) присланное значение перезаписывает ранее заданное.
+    [Fact]
+    public void Grant_ПрисланноеЗначение_ПерезаписываетРанееЗаданное()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "old-value" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Повторный grant с новым значением → перезапись.
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "new-value" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("new-value",
+            "присланное значение перезаписывает ранее заданное");
+    }
+
+    // (д) no-op accept (тот же sha) → Grant без секретов в теле → секреты целы.
+    [Fact]
+    public void Grant_NoOpAccept_СекретыЦелы()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Повторная установка того же пакета (sha не изменился) — no-op.
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        // Grant без секретов в теле (no-op accept → диалог → «Сохранить»).
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [],
+        }).Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
+            "no-op accept не сбрасывает секреты");
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("tok");
+    }
+
     // --- Grant: не включает выключенный плагин (minor) ---
 
     [Fact]

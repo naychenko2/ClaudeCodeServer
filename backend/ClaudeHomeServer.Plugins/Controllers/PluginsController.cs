@@ -147,32 +147,54 @@ public class PluginsController(
                 return GrantOutcome.BadRequest("Секрет не покрыт запрошенным правом secret:{name}", secretNotRequested);
 
             // Обязательные секреты манифеста (requires.secrets[].required=true) обязаны быть заданы.
+            // QA-фикс P: «задан» = уже Set в записи (значение в plugin-secrets.json) ИЛИ прислан
+            // в этом теле (value != null). Раньше проверяли только присланные — подтверждение
+            // согласия по обновлению (secrets: []) давало 400, хотя секрет давно задан.
+            var existingSet = record.Secrets
+                .Where(s => s.Set).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+            var bodySet = req.Secrets
+                .Where(s => s.Value is not null).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+            var bodyCleared = req.Secrets
+                .Where(s => s.Value is null).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+            var effectiveSet = existingSet.Except(bodyCleared).Union(bodySet).ToHashSet(StringComparer.Ordinal);
             var requiredSecrets = manifest?.Validate().RequiredSecrets ?? [];
-            var provided = req.Secrets.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
-            var missingRequired = requiredSecrets.Where(n => !provided.Contains(n)).ToList();
+            var missingRequired = requiredSecrets.Where(n => !effectiveSet.Contains(n)).ToList();
             if (missingRequired.Count > 0)
                 return GrantOutcome.BadRequest("Не заданы обязательные секреты", missingRequired);
 
-            // Выдать: granted = одобренные права, секреты — в запись. grant НЕ включает
+            // Выдать: granted = одобренные права (ПОЛНАЯ замена — это сужение прав, оно нужно),
+            // секреты — «изменить» (QA-фикс P): присланное значение — установить/обновить,
+            // value == null — явно удалить, НЕ присланный — оставить как есть (раньше «полная
+            // замена» стирала все, что не прислали — диалог согласия по обновлению шлёт только
+            // введённые в этой сессии, и ранее заданный секрет терялся). grant НЕ включает
             // выключенный плагин (minor): Enabled не трогаем.
-            var oldSecretNames = record.Secrets.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
-            record.Granted = req.Permissions;
             // M7: значения секретов — в per-owner архиве plugin-secrets.json, в installed.json
             // остаётся только имя + признак «заполнен» (Set) + время изменения (UpdatedAt, шаг 3.3),
             // без значения.
+            record.Granted = req.Permissions;
             var now = DateTime.UtcNow;
-            record.Secrets = req.Secrets
-                .Select(s => new PluginInstallSecret { Name = s.Name, Set = true, UpdatedAt = now })
-                .ToList();
-
-            // minor 5: секреты, выданные ранее, но НЕ в этом grant — убрать их значения из
-            // plugin-secrets.json (иначе они «выживают» после перезаписи record.Secrets).
-            var newSecretNames = record.Secrets.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
-            foreach (var oldName in oldSecretNames.Where(n => !newSecretNames.Contains(n)))
-                secrets!.RemoveSecret(UserId, pluginId, oldName);
-
             foreach (var s in req.Secrets)
-                secrets!.Set(UserId, pluginId, s.Name, s.Value);
+            {
+                var entry = record.Secrets.FirstOrDefault(x => x.Name == s.Name);
+                if (entry is null)
+                {
+                    entry = new PluginInstallSecret { Name = s.Name };
+                    record.Secrets.Add(entry);
+                }
+                if (s.Value is null)
+                {
+                    // Явное удаление: значение уходит из архива, set=false (как DELETE /secrets/{name}).
+                    entry.Set = false;
+                    entry.UpdatedAt = now;
+                    secrets!.RemoveSecret(UserId, pluginId, s.Name);
+                }
+                else
+                {
+                    entry.Set = true;
+                    entry.UpdatedAt = now;
+                    secrets!.Set(UserId, pluginId, s.Name, s.Value);
+                }
+            }
 
             return GrantOutcome.Ok(record);
         });

@@ -87,8 +87,9 @@ public class PluginPackageValidator
     /// </summary>
     // <paramref name="slug"/> — slug КАТАЛОГА (черновик _drafts/{slug} / источник draft:{slug}):
     // сверка name==slug (CheckNameEqualsSlug) идёт по нему, а не по slug из id манифеста
-    // (шаблон id не пишет → проверка по id мертва, QA-фикс O минор 1).
-    public PluginPackageValidationResult Validate(string packageRoot, string slug = "pkg")
+    // (шаблон id не пишет → проверка по id мертва, QA-фикс O минор 1). Без значения по
+    // умолчанию (QA-фикс P): вызов, забывший slug, давал бы ложный deny по сверке с «pkg».
+    public PluginPackageValidationResult Validate(string packageRoot, string slug)
     {
         // Файловые проверки (allow/deny, symlink, лимиты, нативный манифест, name==slug, content).
         var (problems, files, limitHit) = ValidateFiles(packageRoot, slug);

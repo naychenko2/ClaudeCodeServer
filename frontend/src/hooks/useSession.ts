@@ -29,7 +29,13 @@ const _joining = new Map<string, Promise<void>>();
 const _lastSeen = new Map<string, number>(); // LRU: sid → ts последней мутации состояния
 
 // Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
-const MAX_CACHED_SESSIONS = 20;
+const MAX_CACHED_SESSIONS = 8;
+
+// Потолок курсоров докачки (B5) для холодных чатов: сырая история (raw) — вторая копия
+// ленты, поэтому держать её стоит только для открытых/видимых + не более MAX_TAIL_CURSORS
+// самых свежих по LRU. У остальных курсор выбрасывается — при возврате чат грузится
+// полностью (after=-1), как до B5.
+const MAX_TAIL_CURSORS = 5;
 
 // Курсоры докачки истории (перф-2 B5): sid → сырая история прошлой загрузки + якорь сервера.
 // Со вторым открытием чата просим у сервера только хвост после якоря, а не всю историю
@@ -166,14 +172,27 @@ function evictColdSessions() {
     if (watched || s.isWaiting || s.isJoined) continue;
     cold.push([sid, _lastSeen.get(sid) ?? 0]);
   }
-  if (cold.length <= MAX_CACHED_SESSIONS) return;
+  if (cold.length === 0) return;
   cold.sort((a, b) => a[1] - b[1]); // старые первыми
-  for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
-    _store.delete(sid);
-    _lastSeen.delete(sid);
-    _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
-    // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
-    _warmed.delete(sid);
+
+  // 1. Выселение сессий: держим не более MAX_CACHED_SESSIONS холодных лент в сторе
+  if (cold.length > MAX_CACHED_SESSIONS) {
+    for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
+      _store.delete(sid);
+      _lastSeen.delete(sid);
+      _cursors.delete(sid); // сырая история курсора — второй экземпляр ленты, держать её без ленты незачем
+      // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
+      _warmed.delete(sid);
+    }
+  }
+
+  // 2. Выселение курсоров: даже если сессия осталась в сторе, сырая история (raw)
+  //    — дорогая вторая копия. Держим курсоры только для MAX_TAIL_CURSORS самых свежих
+  //    холодных чатов; у остальных — при возврате полная загрузка (after=-1).
+  if (cold.length > MAX_TAIL_CURSORS) {
+    for (const [sid] of cold.slice(0, cold.length - MAX_TAIL_CURSORS)) {
+      _cursors.delete(sid);
+    }
   }
 }
 
@@ -881,3 +900,6 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
   return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, teamPlanning: state.teamPlanning, teamWavePulse: state.teamWavePulse, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending, preemptForPending };
 }
+
+// Экспорт для тестов: доступ к модульному стору и константам
+export const __test = { _store, _cursors, _lastSeen, MAX_CACHED_SESSIONS, MAX_TAIL_CURSORS };

@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Controllers;
+using PluginBridge = ClaudeHomeServer.Services.Plugins.PluginBridge;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -32,6 +33,7 @@ public class PluginsControllerTests : IDisposable
     private readonly PluginInstaller _installer;
     private readonly StubCascade _cascade;
     private readonly PluginUninstall _uninstall;
+    private readonly PluginBridge _bridge;
 
     public PluginsControllerTests()
     {
@@ -42,6 +44,7 @@ public class PluginsControllerTests : IDisposable
         _installer = new PluginInstaller(_store, new PluginPackageValidator());
         _cascade = new StubCascade();
         _uninstall = new PluginUninstall(_store, _secrets, _cascade);
+        _bridge = new PluginBridge([]);
     }
 
     public void Dispose()
@@ -129,6 +132,74 @@ public class PluginsControllerTests : IDisposable
         var ctl = NewController(ownerId);
         ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
         return _store.LoadInstalled(ownerId).Single(r => r.Id == id);
+    }
+
+    // Пакет с панелью (QA-C): draft + panel/index.html + манифест c contributes.panels
+    // (entry = panel/index.html, как в контракте assets). Возвращает метку источника (draft:<slug>).
+    private string CreatePanelPackage(string ownerId, string id, string version, List<string> requested,
+        string panelId = "main", string title = "Test",
+        List<(string Name, bool Required)>? secrets = null)
+    {
+        var slug = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
+        var root = _store.DraftDir(ownerId, slug);
+        Directory.CreateDirectory(Path.Combine(root, "panel"));
+        File.WriteAllText(Path.Combine(root, "panel", "index.html"),
+            "<html><body><h1>Panel</h1></body></html>");
+
+        var manifest = new
+        {
+            id,
+            name = slug,
+            version,
+            contributes = new
+            {
+                panels = new[]
+                {
+                    new { id = panelId, slot = "sidebar", entry = "panel/index.html", title },
+                },
+                // PluginSecret читает name/required в нижнем регистре — сериализуем явно.
+                requires = secrets is null
+                    ? null
+                    : new { secrets = secrets.Select(s => new { name = s.Item1, required = s.Item2 }) },
+            },
+            permissions = new { requested },
+        };
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        // R10-1: нативный манифест обязателен; name = slug.
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = slug, version }, new JsonSerializerOptions { WriteIndented = true }));
+        return "draft:" + slug;
+    }
+
+    // Установить панель-пакет (user-токен) и вернуть запись из стора.
+    private PluginInstall InstallPanel(string ownerId, string id, string version, List<string> requested,
+        string panelId = "main", string title = "Test",
+        List<(string Name, bool Required)>? secrets = null)
+    {
+        var source = CreatePanelPackage(ownerId, id, version, requested, panelId, title, secrets);
+        var ctl = NewController(ownerId);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        return _store.LoadInstalled(ownerId).Single(r => r.Id == id);
+    }
+
+    // Контроллер моста (для сквозной проверки assets по entry из списка).
+    private PluginBridgeController NewBridgeController(string userId, bool serviceToken = false)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["Subsystems:plugins:Enabled"] = "true",
+            })
+            .Build();
+        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = true }, _store, _bridge, null);
+        ctl.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },
+        };
+        return ctl;
     }
 
     // --- Гейты: 503 (подсистема) и 403 (флаг) ---
@@ -633,6 +704,98 @@ public class PluginsControllerTests : IDisposable
         var res = ctl.DeleteSecret("local-a~pkg", "LINEAR_TOKEN");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(403);
+    }
+
+    // --- QA-C: список (GET /api/plugins) отдаёт contributes.panels из манифеста установленной версии ---
+
+    // Установленный плагин с панелью → в списке contributes.panels с верным entry/id/title.
+    [Fact]
+    public void List_ПлагинСПанелью_ОтдаётContributesPanelsСEntry()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"], panelId: "main", title: "My Panel");
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.List();
+        var resp = ((IEnumerable<PluginResponse>)ok.Value!).Single();
+
+        resp.Contributes.Panels.Should().ContainSingle();
+        resp.Contributes.Panels[0].Id.Should().Be("main");
+        resp.Contributes.Panels[0].Title.Should().Be("My Panel");
+        resp.Contributes.Panels[0].Entry.Should().Be("panel/index.html",
+            "entry — путь относительно корня пакета, как в contributes.panels[].entry манифеста");
+    }
+
+    // Пакет без панели (только навык) → contributes.panels = пустой массив.
+    [Fact]
+    public void List_БезПанели_ОтдаётПустойМассив()
+    {
+        Install(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.List();
+        var resp = ((IEnumerable<PluginResponse>)ok.Value!).Single();
+
+        resp.Contributes.Panels.Should().BeEmpty("пакет без панели → пустой массив, не null");
+    }
+
+    // Два плагина → у каждого свои панели (id различаются, не перепутаны).
+    [Fact]
+    public void List_ДваПлагина_УКаждогоСвоиПанели()
+    {
+        InstallPanel(OwnerA, "local-a/alpha", "1.0.0", ["notes:read"], panelId: "a", title: "Alpha");
+        InstallPanel(OwnerA, "local-a/beta", "1.0.0", ["notes:read"], panelId: "b", title: "Beta");
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.List();
+        var list = ((IEnumerable<PluginResponse>)ok.Value!).ToList();
+
+        var alpha = list.Single(r => r.Id == "local-a/alpha");
+        var beta = list.Single(r => r.Id == "local-a/beta");
+        alpha.Contributes.Panels.Should().ContainSingle().Which.Id.Should().Be("a");
+        beta.Contributes.Panels.Should().ContainSingle().Which.Id.Should().Be("b");
+    }
+
+    // Ответ не содержит значений секретов и хостовых путей (data/plugins/…): только id/title/entry.
+    [Fact]
+    public void List_ОтветНеНесётЗначенийСекретовИХостовыхПутей()
+    {
+        // Панель + выданный секрет с значением: значение и путь хоста наружу не едут.
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
+            panelId: "main", title: "My Panel", secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Grant("local-a~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "super-secret-value" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        var ok = (OkObjectResult)ctl.List();
+        var json = JsonSerializer.Serialize(ok.Value);
+
+        json.Should().Contain("panel/index.html", "entry панели в ответе");
+        json.Should().NotContain("super-secret-value", "значение секрета наружу не уходит");
+        json.Should().NotContain("data/plugins", "хостовый путь пакета наружу не уходит");
+    }
+
+    // Сквозной контракт путей: GET /api/plugins отдаёт entry = panel/index.html, и
+    // GET /api/plugins/{id}/{ver}/assets/{entry} по этому же entry возвращает 200.
+    [Fact]
+    public void List_ИAssets_КонтрактEntryСходитсяEndToEnd()
+    {
+        var record = InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"],
+            panelId: "main", title: "My Panel");
+        var listCtl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)listCtl.List();
+        var resp = ((IEnumerable<PluginResponse>)ok.Value!).Single();
+        var entry = resp.Contributes.Panels[0].Entry;
+        entry.Should().Be("panel/index.html");
+
+        // Тот же entry — в assets-эндпоинт: файл существует (panel/index.html) → 200.
+        var bridgeCtl = NewBridgeController(OwnerA);
+        var assetRes = bridgeCtl.Assets("local-a~pkg", record.Version, entry);
+        assetRes.Should().BeOfType<FileContentResult>("assets по entry из списка → 200");
+        _ = record;
     }
 
     // --- Тестовые заглушки ---

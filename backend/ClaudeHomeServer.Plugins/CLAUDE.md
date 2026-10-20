@@ -287,6 +287,14 @@ CSP заголовка — `PanelCsp` (см. `PluginBridgeController`).
     плагин → 409; убирает значение, `set=false`.
   - `GET /api/plugins` — по каждому секрету только `{name, set, updatedAt}`; **значение с
     сервера не уходит никогда**.
+  - `GET /api/plugins` — поле `contributes` (QA-C): вклады пакета, нужные UI, **только**
+    `panels: [{id, title, entry}]` из манифеста установленной версии (`ccs-plugin.json` →
+    `.claude-plugin/plugin.json`, `contributes.panels`). `entry` — путь относительно **корня
+    пакета** (как в `contributes.panels[].entry`, например `panel/index.html`) — тот же контракт
+    пути, что у `GET /api/plugins/{id}/{ver}/assets/{entry}` (ADR-031 §3.1): фронт по `entry`
+    забирает статику панели. Без панели → `panels: []` (пустой массив, не null). Значения
+    секретов и хостовые пути (`data/plugins/…`) в `contributes` не попадают; `slot` не отдаётся
+    (UI не использует).
 - **`updatedAt`** живёт в `PluginInstall.Secrets` (`installed.json`) — не секрет, поэтому в
   облачный архив едет; значение — в `plugin-secrets.json` (зашифрованный архив).
 

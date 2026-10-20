@@ -62,13 +62,20 @@ public class PluginsController(
     private static string NormalizeId(string id) =>
         PluginId.TryNormalize(id, out var norm) ? norm.Value : id;
 
+    // Манифест установленной версии пакета (ccs-plugin.json → .claude-plugin/plugin.json) —
+    // источник contributes (panels) для DTO. Пакет неизменяем, id/version валидны (M3) —
+    // PackageDir безопасен. Манифест исчез после установки → (null, null): панели деградируют
+    // в пустой список (фронт покажет «панелей нет»), не 500.
+    private PluginManifest? ManifestFor(PluginInstall record) =>
+        PluginInstaller.ReadManifest(store!.PackageDir(UserId, record.Id, record.Version)).Manifest;
+
     // --- GET /api/plugins — список установленных (DTO без значений секретов, C5) ---
 
     [HttpGet]
     public IActionResult List()
     {
         var gate = Gate(); if (gate is not null) return gate;
-        return Ok(store!.LoadInstalled(UserId).Select(PluginResponse.From));
+        return Ok(store!.LoadInstalled(UserId).Select(r => PluginResponse.From(r, ManifestFor(r))));
     }
 
     // --- POST /api/plugins/install — принять пакет по метке источника (C1/C2) ---
@@ -88,8 +95,8 @@ public class PluginsController(
         var result = installer!.Install(UserId, req.Source);
         return result.Status switch
         {
-            InstallStatus.Ok => Ok(PluginResponse.From(result.Record!)),
-            InstallStatus.NoOp => Ok(PluginResponse.From(result.Record!)),
+            InstallStatus.Ok => Ok(PluginResponse.From(result.Record!, ManifestFor(result.Record!))),
+            InstallStatus.NoOp => Ok(PluginResponse.From(result.Record!, ManifestFor(result.Record!))),
             InstallStatus.Conflict => Conflict(new { error = result.Error }),
             _ => BadRequest(new { error = result.Error, problems = result.Problems }),
         };

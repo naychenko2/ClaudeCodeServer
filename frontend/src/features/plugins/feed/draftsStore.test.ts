@@ -139,3 +139,45 @@ describe('draftsStore: preview отклонённого черновика (ша
     expect(vi.mocked(api.plugins.draftPreview)).toHaveBeenCalledTimes(1);
   });
 });
+
+// === Минор 5: refreshDraft во время идущей loadList дожидается СВЕЖЕГО списка ===
+// Первый refreshDraft стартует loadList (в полёте). Второй refreshDraft (во время полёта)
+// раньше получал из loadList() сразу разрешённый промис (guard) и решал про preview по
+// УСТАРЕВШЕЙ сводке → preview отклонённого всё же ушёл (404 в консоли). Теперь refreshDraft
+// дожидается свежего списка (поколение): когда идущая загрузка завершится и (по _listDirty)
+// перечитается, сводка свежая (черновик отклонён) → preview не запрашивается.
+// Мутация «убрать waitListSettled» (решать сразу после loadList) красит тест.
+describe('draftsStore: refreshDraft во время идущей loadList (минор 5)', () => {
+  const SUMMARY_REJECTED: PluginDraftSummary = { ...SUMMARY, rejected: true };
+
+  it('refresh во время загрузки списка, отклонённый черновик → preview НЕ запрашивается', async () => {
+    // load #1 (в полёте) вернёт черновик АКТИВНЫМ (на момент запроса ещё не отклонён)
+    const d1 = deferred<PluginDraftSummary[]>();
+    vi.mocked(api.plugins.draftsList).mockReturnValueOnce(d1.promise as never);
+
+    // 1) первый refreshDraft стартует load #1 (в полёте, d1 ещё не разрешён)
+    const first = refreshDraft(SLUG);
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1);
+
+    // 2) второй refreshDraft во время полёта: _listDirty=true; должен дождаться СВЕЖЕГО списка
+    const second = refreshDraft(SLUG);
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(1); // guard: ре-чит не сразу
+
+    // 3) load #1 завершается (черновик ещё активен) → _listDirty → ре-чит (load #2)
+    d1.resolve([SUMMARY]);
+    const d2 = deferred<PluginDraftSummary[]>();
+    vi.mocked(api.plugins.draftsList).mockReturnValueOnce(d2.promise as never);
+    await tick();
+    expect(vi.mocked(api.plugins.draftsList)).toHaveBeenCalledTimes(2); // ре-чит по _listDirty
+
+    // 4) load #2 (ре-чит) вернёт черновик ОТКЛОНЁННЫМ — свежее состояние после отклонения
+    d2.resolve([SUMMARY_REJECTED]);
+    await first;
+    await second;
+    await tick();
+
+    // preview НЕ запрашен: refreshDraft #2 дождался ре-чита (load #2) и увидел отклонённого.
+    // Без waitListSettled он бы решил по сводке load #1 (активен) → preview ушёл (404).
+    expect(vi.mocked(api.plugins.draftPreview)).not.toHaveBeenCalled();
+  });
+});

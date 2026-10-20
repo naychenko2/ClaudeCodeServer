@@ -10,7 +10,9 @@
   Привязка: featureId 9919bd75-0b1c-4fda-8196-72354cbcba29 (эпик «Обзор фич, волна 3»),
   stepRef М1 (lane front) — финальный макет; им пользуются шаги реализации первой очереди
   (разрез Егора после утверждения).
-  В макете только то, что строится на текущих данных и проекции (без нового хранилища и API).
+  Задача правки 1bedcd7b: вернуть график времени («Статистика» + мини-сводка на «Хронологии») и навигацию
+  «чат · задача» в один клик везде. Режим «сейчас» — текущие данные и проекция без хранилища; режим
+  «с журналом» — как станет после «да» Андрея на журнал событий и учёт расхода (значки «журнал», «расход»).
   Пометка .be.p «проекция» (переключатель «Пометки бэка») — аддитивное поле ответа GET features/{id}.
   Пунктир .new (C.accentMuted) — элемента в продукте сейчас нет.
 -->
@@ -400,6 +402,123 @@ svg { flex-shrink:0; }
 .code-v { flex:1; overflow:auto; padding:12px 16px; font:12px/1.6 "JetBrains Mono",monospace; color:var(--c-text-primary); white-space:pre; }
 .compose { border-top:1px solid var(--c-border-light); padding:10px 12px; }
 .compose div { border:1px solid var(--c-border); border-radius:12px; padding:9px 12px; color:var(--c-text-muted); font-size:13px; background:var(--c-bg-white); }
+
+/* ===== Навигация в один клик: пара целей «чат · задача» ===== */
+.gos { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; }
+.go { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 7px; border-radius:6px; font-size:11px; font-weight:600; white-space:nowrap;
+  color:var(--c-accent); border:1px solid var(--c-border-light); background:var(--c-bg-white); flex-shrink:0; }
+.go:hover { background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.go.t { color:var(--c-text-secondary); }
+.go.t:hover { color:var(--c-text-heading); background:var(--c-bg-selected); border-color:var(--c-border); }
+.go.arch, .go.closed { border-style:dashed; }
+.go .mk2 { font-weight:400; color:var(--c-text-muted); }
+.go.none { color:var(--c-text-muted); border-color:transparent; background:transparent; cursor:default; font-weight:400; }
+.app.m .go { min-height:40px; min-width:40px; justify-content:center; padding:0 9px; }
+.app.m .gos.dense .go > span { display:none; }
+.app.m .gos.dense .go.none { display:none; }
+.whonav { display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.navnote { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--c-text-muted); margin-top:10px; }
+.banner { display:flex; gap:8px; align-items:center; padding:8px 12px; font-size:12px; background:var(--c-bg-selected); color:var(--c-text-secondary); border-bottom:1px solid var(--c-border-light); }
+.banner b { color:var(--c-text-heading); }
+.tcard { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:12px 14px; margin-bottom:14px; }
+.tcard h3 { margin:0 0 6px; font:700 16px "PT Serif",Georgia,serif; color:var(--c-text-heading); }
+.tcard .r { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; font-size:12px; color:var(--c-text-secondary); }
+.rowb.sel { background:var(--c-accent-light); }
+.flash { animation:fl 1.6s ease-out 1; }
+@keyframes fl { 0%{ box-shadow:0 0 0 3px var(--c-accent-muted); } 100%{ box-shadow:0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .flash { animation:none; box-shadow:0 0 0 2px var(--c-accent-muted); } }
+/* Строка шага / задачи: контейнер из соседних контролов */
+.srow { display:flex; align-items:center; gap:4px; margin:0 -8px; padding-right:4px; border-radius:8px; }
+.srow:hover { background:var(--c-bg-selected); }
+.tln.cur .srow:hover { background:var(--c-bg-white); }
+.srow > .rowb { margin:0; width:auto; flex:1; min-width:0; }
+.srow > .rowb:hover { background:transparent; }
+.tour .gos { justify-self:end; }
+.tour { grid-template-columns:54px minmax(0,1fr) auto auto; }
+.app.m .tour { grid-template-columns:44px minmax(0,1fr) auto; }
+.app.m .tour .sev { grid-column:2; justify-self:start; }
+.app.m .tour .gos { grid-column:3; grid-row:1 / span 2; }
+
+/* ===== Точность цифр ===== */
+.acc { display:inline-flex; align-items:center; font:700 10px/15px "JetBrains Mono",monospace; padding:0 5px; border-radius:6px; white-space:nowrap; flex-shrink:0; vertical-align:middle; }
+.acc.ex { background:var(--c-success-bg); color:var(--c-success-text); }
+.acc.ap { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.acc.jr { background:var(--c-info-bg); color:var(--c-text-primary); box-shadow:inset 0 0 0 1px var(--c-info); }
+.acc.sp { background:var(--c-plan-light); color:var(--c-plan-text); }
+.mc .l { display:flex; align-items:center; gap:6px; justify-content:space-between; }
+.mc .v.e { color:var(--c-danger-text); }
+.mc .v.na { font:600 12px/1.6 "Hanken Grotesk",sans-serif; color:var(--c-text-muted); }
+.mc.na { border-style:dashed; background:var(--c-bg-white); }
+
+/* ===== Лента времени фичи (календарь; длинная пауза сжата разрывом) ===== */
+.mkonly { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 10px; border-radius:10px; border:1.5px dashed var(--c-accent-muted); margin-bottom:12px; font-size:12px; color:var(--c-text-secondary); }
+.mkonly b { color:var(--c-text-heading); }
+.seg { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; flex-wrap:wrap; }
+.seg button { padding:2px 9px; border-radius:7px; font-size:11px; color:var(--c-text-secondary); }
+.seg button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.seg button[disabled] { opacity:.5; cursor:default; }
+.app.m .seg button { min-height:40px; padding:0 12px; }
+.chart { margin-top:4px; }
+.ruler, .fband, .rvrow { display:flex; gap:2px; }
+.ruler > * { min-width:0; display:flex; flex-direction:column; justify-content:flex-end; padding:0 4px 3px; font-size:10px; font-weight:700; color:var(--c-text-secondary);
+  border-left:1px solid var(--c-divider); overflow:hidden; white-space:nowrap; text-align:left; border-radius:0; }
+.ruler > * span { font:400 10px "JetBrains Mono",monospace; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; }
+.ruler > button:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.ruler .brkl { border-left-color:transparent; color:var(--c-text-muted); font-weight:400; }
+.fband { height:26px; border-radius:6px; overflow:hidden; }
+.fband > * { min-width:2px; display:flex; align-items:center; justify-content:center; font:700 10px "JetBrains Mono",monospace; overflow:hidden; white-space:nowrap; }
+.fband > button:hover { filter:brightness(.92); }
+.k-work { background:var(--c-accent); color:var(--c-on-accent); }
+.k-wait { background:var(--c-info); color:var(--c-on-accent); }
+.k-idle { background:var(--c-progress-track); color:var(--c-text-primary); }
+.k-err { background:var(--c-danger); color:var(--c-on-accent); }
+.k-unk { background:repeating-linear-gradient(135deg,var(--c-bg-selected) 0 5px,var(--c-bg-inset) 5px 10px); color:var(--c-text-secondary); }
+.k-brk { background:repeating-linear-gradient(90deg,var(--c-bg-selected) 0 3px,transparent 3px 6px); color:var(--c-text-muted); font-weight:400; }
+.k-todo { background:var(--c-bg-card); box-shadow:inset 0 0 0 1px var(--c-border-light); color:var(--c-text-muted); font-weight:400; }
+.rvrow { height:8px; margin-top:3px; }
+.rvrow i { display:block; border-radius:999px; }
+.rvrow .rv { background:var(--c-warning); }
+.rvl { display:flex; align-items:center; gap:6px; font-size:10px; color:var(--c-text-muted); margin-top:2px; }
+.rvl i { display:inline-block; width:14px; height:4px; border-radius:999px; background:var(--c-warning); }
+.axis { display:flex; justify-content:space-between; font:10px "JetBrains Mono",monospace; color:var(--c-text-muted); margin-top:4px; }
+.blg { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-secondary); margin-top:8px; align-items:center; }
+.blg i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:4px; vertical-align:-1px; }
+.app.m .fband { height:30px; }
+.app.m .ruler { min-height:30px; }
+/* Разрезы: столбцы */
+.bars { display:flex; flex-direction:column; gap:2px; }
+.barb { display:grid; grid-template-columns:150px minmax(0,1fr) 92px 14px; gap:8px; align-items:center; font-size:12px; color:var(--c-text-primary); padding:5px 6px; margin:0 -6px; border-radius:8px; min-height:32px; width:calc(100% + 12px); }
+.barb:hover { background:var(--c-bg-selected); }
+.barb .tr { height:8px; background:var(--c-bg-selected); border-radius:999px; overflow:hidden; }
+.barb .fl { display:block; height:100%; background:var(--c-accent); border-radius:999px; }
+.barb .fl.sp { background:var(--c-plan); }
+.barb .vv { font:11px "JetBrains Mono",monospace; color:var(--c-text-secondary); text-align:right; white-space:nowrap; }
+.barb .lb { display:inline-flex; align-items:center; gap:6px; min-width:0; overflow:hidden; white-space:nowrap; }
+.app.m .barb .vv { white-space:normal; line-height:1.25; }
+.app.m .barb { grid-template-columns:92px minmax(0,1fr) 84px 12px; min-height:44px; margin:0; width:100%; }
+.blist { margin:2px 0 8px 10px; padding-left:10px; border-left:1px solid var(--c-divider); }
+.blist .hint { padding:4px 0; }
+.cline { display:flex; align-items:center; gap:8px; padding:4px 0; font-size:12px; min-height:32px; }
+.cline .tx { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 12px; border-radius:10px; background:var(--c-warning-bg); font-size:12px; color:var(--c-text-primary); margin:12px 0 4px; }
+.hot b { color:var(--c-text-heading); }
+.hot > div { flex:1; min-width:200px; }
+.sumc { border-radius:10px; border:1px solid var(--c-border-light); background:var(--c-success-bg); padding:10px 12px; font-size:13px; margin:12px 0 4px; }
+.sumc b { color:var(--c-text-heading); }
+.tbl tr.lnk { cursor:pointer; }
+.tbl tr.lnk:hover td { background:var(--c-bg-selected); }
+.stb { display:flex; align-items:center; gap:6px; width:100%; min-height:28px; color:var(--c-text-primary); border-radius:6px; }
+.app.m .stb { min-height:44px; }
+/* Сжатая сводка на «Хронологии» */
+.mini { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; margin-bottom:14px; }
+.mini .fband { height:8px; border-radius:999px; }
+.mini .row { display:flex; align-items:center; gap:4px 12px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); margin-top:7px; }
+.mini .row b { font:700 12px "JetBrains Mono",monospace; color:var(--c-text-heading); }
+.mini .row .btn { margin-left:auto; }
+.mini .nt { font-size:11px; color:var(--c-text-muted); margin-top:4px; }
+.mini .fband > * { font-size:0; }
+.app.m .tbl td.wh { display:none; }
+.app.m .tbl td.n { width:auto; }
 </style>
 </head>
 <body>
@@ -527,77 +646,111 @@ function stepView(s) {
   return s;
 }
 
+/* Чаты фичи: task — задача, к которой ведёт «в задачу» (последняя задача, привязанная к чату через LinkedSessionId). */
 const CHATS_BASE = [
-  {id:'cur', who:'sofya', n:'Шаблоны чатов — куратор', role:'оркестратор', key:true, t:'5 мин'},
-  {id:'k3', who:'kira', n:'Ш3 · Галерея шаблонов', role:'Ш3 · фронт', t:'2 мин'},
-  {id:'g3', who:'gleb', n:'Ревью Ш3 · виток 2', role:'ревью', t:'25 мин'},
-  {id:'d2', who:'denis', n:'Ш2 · Применение шаблона', role:'Ш2 · бэк', t:'3 ч'},
-  {id:'eg', who:'egor', n:'План · Шаблоны чатов', role:'план', t:'вчера'},
-  {id:'ax', who:'alex', n:'Разрез · Шаблоны чатов', role:'архитектор', t:'вчера'},
-  {id:'d1', who:'denis', n:'Ш1 · Модель шаблона', role:'Ш1 · бэк', arch:true, t:'20.10'},
-  {id:'g1', who:'gleb', n:'Ревью Ш1', role:'ревью', arch:true, t:'20.10'},
-  {id:'g2', who:'gleb', n:'Ревью Ш2 · виток 1', role:'ревью', arch:true, t:'20.10'},
+  {id:'cur', who:'sofya', n:'Шаблоны чатов — куратор', role:'оркестратор', key:true, t:'5 мин', task:'t-epic'},
+  {id:'k3', who:'kira', n:'Ш3 · Галерея шаблонов', role:'Ш3 · фронт', t:'2 мин', task:'t-s3'},
+  {id:'g3', who:'gleb', n:'Ревью Ш3 · виток 2', role:'ревью', t:'25 мин', task:'t-r3b'},
+  {id:'d2', who:'denis', n:'Ш2 · Применение шаблона', role:'Ш2 · бэк', t:'3 ч', task:'t-s2b'},
+  {id:'eg', who:'egor', n:'План · Шаблоны чатов', role:'план', t:'вчера', task:'t-plan'},
+  {id:'ax', who:'alex', n:'Разрез · Шаблоны чатов', role:'архитектор', t:'вчера', task:'t-cut'},
+  {id:'d1', who:'denis', n:'Ш1 · Модель шаблона', role:'Ш1 · бэк', arch:true, t:'20.10', task:'t-s1'},
+  {id:'g1', who:'gleb', n:'Ревью Ш1', role:'ревью', arch:true, t:'20.10', task:'t-r1'},
+  {id:'g2', who:'gleb', n:'Ревью Ш2', role:'ревью', arch:true, t:'20.10', task:'t-r2b'},
+];
+const CHATS_LATE = [
+  {id:'k4', who:'kira', n:'Ш4 · Кнопка «Из шаблона»', role:'Ш4 · фронт', t:'2 ч', task:'t-s4'},
+  {id:'vq', who:'vera', n:'Проверка · Шаблоны чатов', role:'проверка', t:'1 ч', task:'t-qa'},
+  {id:'af', who:'alex', n:'Финал · Шаблоны чатов', role:'финал', t:'40 мин', task:'t-fin'},
+  {id:'mk', who:'mark', n:'Мерж · Шаблоны чатов', role:'мерж', t:'3 мин', task:'t-merge'},
 ];
 function chatsFor() {
   if (S.fs === 'empty') return [CHATS_BASE[0]];
   let c = CHATS_BASE.slice();
-  if (isDone()) c.splice(3, 0, {id:'k4', who:'kira', n:'Ш4 · Кнопка «Из шаблона»', role:'Ш4 · фронт', t:'2 ч'}, {id:'vq', who:'vera', n:'Проверка · Шаблоны чатов', role:'проверка', t:'1 ч'}, {id:'af', who:'alex', n:'Финал · Шаблоны чатов', role:'финал', t:'40 мин'});
-  if (['merging','merged'].includes(S.fs)) c.splice(1, 0, {id:'mk', who:'mark', n:'Мерж · Шаблоны чатов', role:'мерж', t: S.fs === 'merging' ? 'сейчас' : '3 мин'});
+  if (isDone()) c.splice(3, 0, ...CHATS_LATE.slice(0, S.fs === 'closed' ? 1 : 3));
+  if (['merging','merged'].includes(S.fs)) c.splice(1, 0, { ...CHATS_LATE[3], t: S.fs === 'merging' ? 'сейчас' : '3 мин' });
   return c;
 }
-const findChat = id => chatsFor().concat(CHATS_BASE).find(c => c.id === id) || CHATS_BASE[0];
+const findChat = id => chatsFor().concat(CHATS_BASE, CHATS_LATE).find(c => c.id === id) || CHATS_BASE[0];
 
+/* Задачи фичи: chat — чат исполнителя (у задачи «впереди» его ещё нет). */
 function tasksFor() {
   if (S.fs === 'empty') return [];
   const base = [
-    {n:'Разрез «Шаблоны чатов»', who:'alex', st:'d', role:'архитектор'}, {n:'План по шагам', who:'egor', st:'d', role:'план'},
-    {n:'Ш1 · Модель шаблона и API', who:'denis', st:'d', role:'бэк'}, {n:'Ревью Ш1', who:'gleb', st:'d', role:'ревью'},
-    {n:'Ш2 · Применение шаблона · виток 1', who:'denis', st:'d', role:'бэк'}, {n:'Ревью Ш2 · виток 1', who:'gleb', st:'d', role:'ревью'},
-    {n:'Ш2 · Применение шаблона · виток 2', who:'denis', st:'d', role:'бэк'}, {n:'Ревью Ш2 · виток 2', who:'gleb', st:'d', role:'ревью'},
-    {n:'Ш3 · Галерея шаблонов · виток 3', who:'kira', st: S.fs === 'wait' ? 'w' : S.fs === 'stop' ? 'x' : 'r', role:'фронт'},
-    {n:'Ревью Ш3 · виток 2', who:'gleb', st:'d', role:'ревью'},
-    {n:'Ш4 · Кнопка «Из шаблона»', who:'kira', st:'t', role:'фронт'},
+    {id:'t-cut', n:'Разрез «Шаблоны чатов»', who:'alex', st:'d', role:'архитектор', chat:'ax'}, {id:'t-plan', n:'План по шагам', who:'egor', st:'d', role:'план', chat:'eg'},
+    {id:'t-s1', n:'Ш1 · Модель шаблона и API', who:'denis', st:'d', role:'бэк', chat:'d1'}, {id:'t-r1', n:'Ревью Ш1', who:'gleb', st:'d', role:'ревью', chat:'g1'},
+    {id:'t-s2a', n:'Ш2 · Применение шаблона · виток 1', who:'denis', st:'d', role:'бэк', chat:'d2'}, {id:'t-r2a', n:'Ревью Ш2 · виток 1', who:'gleb', st:'d', role:'ревью', chat:'g2'},
+    {id:'t-s2b', n:'Ш2 · Применение шаблона · виток 2', who:'denis', st:'d', role:'бэк', chat:'d2'}, {id:'t-r2b', n:'Ревью Ш2 · виток 2', who:'gleb', st:'d', role:'ревью', chat:'g2'},
+    {id:'t-s3', n:'Ш3 · Галерея шаблонов · виток 3', who:'kira', st: S.fs === 'wait' ? 'w' : S.fs === 'stop' ? 'x' : 'r', role:'фронт', chat:'k3'},
+    {id:'t-r3a', n:'Ревью Ш3 · виток 1', who:'gleb', st:'d', role:'ревью', chat:'g3'}, {id:'t-r3b', n:'Ревью Ш3 · виток 2', who:'gleb', st:'d', role:'ревью', chat:'g3'},
+    {id:'t-s4', n:'Ш4 · Кнопка «Из шаблона»', who:'kira', st:'t', role:'фронт', chat:null},
   ];
   if (!isDone()) return base;
-  const all = base.map(t => ({ ...t, st:'d' })).concat([{n:'Ревью Ш3 · виток 3', who:'gleb', st:'d', role:'ревью'}, {n:'Ревью Ш4', who:'gleb', st:'d', role:'ревью'}]);
+  const all = base.map(t => ({ ...t, st:'d', chat: t.id === 't-s4' ? 'k4' : t.chat }))
+    .concat([{id:'t-r3c', n:'Ревью Ш3 · виток 3', who:'gleb', st:'d', role:'ревью', chat:'g3'}, {id:'t-r4', n:'Ревью Ш4', who:'gleb', st:'d', role:'ревью', chat:'g3'}]);
   if (S.fs === 'closed') return all;
-  all.push({n:'Проверка фичи', who:'vera', st:'d', role:'проверка'}, {n:'Финал', who:'alex', st:'d', role:'финал'});
-  if (S.fs === 'merging') all.push({n:'Мерж · Шаблоны чатов', who:'mark', st:'r', role:'мерж'});
-  if (S.fs === 'merged') all.push({n:'Мерж · Шаблоны чатов', who:'mark', st:'d', role:'мерж'});
+  all.push({id:'t-qa', n:'Проверка фичи', who:'vera', st:'d', role:'проверка', chat:'vq'}, {id:'t-fin', n:'Финал', who:'alex', st:'d', role:'финал', chat:'af'});
+  if (S.fs === 'merging') all.push({id:'t-merge', n:'Мерж · Шаблоны чатов', who:'mark', st:'r', role:'мерж', chat:'mk'});
+  if (S.fs === 'merged') all.push({id:'t-merge', n:'Мерж · Шаблоны чатов', who:'mark', st:'d', role:'мерж', chat:'mk'});
   return all;
 }
+const EPIC = () => ({id:'t-epic', n:'Эпик «' + TITLE_SHORT + '»', who:'sofya', st: S.fs === 'merged' || S.fs === 'closed' ? 'd' : 'r', role:'фича', chat:'cur', epic:true});
+const findTask = id => id === 't-epic' ? EPIC() : tasksFor().find(t => t.id === id);
 
 function eventsFor() {
-  if (S.fs === 'empty') return [{d:'20.10', t:'09:40', who:'sofya', tx:'создала фичу'}];
+  if (S.fs === 'empty') return [{d:'20.10', t:'09:40', who:'sofya', tx:'создала фичу', chat:'cur', task:'t-epic'}];
   const ev = [
-    {d:'20.10', t:'16:44', who:'kira', tx:'начала виток 3 по Ш3', chat:'k3'},
-    {d:'20.10', t:'16:30', who:'gleb', tx:'вернул Ш3: <span class="sev maj">major 1</span>', chat:'g3'},
-    {d:'20.10', t:'15:40', who:'kira', tx:'сдала Ш3, виток 2', chat:'k3'},
-    {d:'20.10', t:'14:58', who:'gleb', tx:'принял Ш2', chat:'g2'},
-    {d:'20.10', t:'14:20', who:'denis', tx:'сдал Ш2, виток 2', chat:'d2'},
-    {d:'20.10', t:'13:10', who:'gleb', tx:'вернул Ш2: <span class="sev maj">major 1</span>', chat:'g2'},
-    {d:'20.10', t:'12:40', who:'gleb', tx:'принял Ш1', chat:'g1'},
-    {d:'20.10', t:'11:20', who:'denis', tx:'сдал Ш1', chat:'d1'},
-    {d:'20.10', t:'10:05', who:'denis', tx:'начал Ш1', chat:'d1'},
-    {d:'19.10', t:'18:30', who:'egor', tx:'план принят, 4 шага', chat:'eg'},
-    {d:'19.10', t:'17:55', who:'alex', tx:'разрез принят', chat:'ax'},
-    {d:'19.10', t:'17:20', who:'sofya', tx:'создала фичу', chat:'cur'},
+    {d:'20.10', t:'16:44', who:'kira', tx:'начала виток 3 по Ш3', chat:'k3', task:'t-s3'},
+    {d:'20.10', t:'16:30', who:'gleb', tx:'вернул Ш3: <span class="sev maj">major 1</span>', chat:'g3', task:'t-r3b'},
+    {d:'20.10', t:'15:40', who:'kira', tx:'сдала Ш3, виток 2', chat:'k3', task:'t-s3'},
+    {d:'20.10', t:'14:58', who:'gleb', tx:'принял Ш2', chat:'g2', task:'t-r2b'},
+    {d:'20.10', t:'14:20', who:'denis', tx:'сдал Ш2, виток 2', chat:'d2', task:'t-s2b'},
+    {d:'20.10', t:'13:10', who:'gleb', tx:'вернул Ш2: <span class="sev maj">major 1</span>', chat:'g2', task:'t-r2a'},
+    {d:'20.10', t:'12:40', who:'gleb', tx:'принял Ш1', chat:'g1', task:'t-r1'},
+    {d:'20.10', t:'11:20', who:'denis', tx:'сдал Ш1', chat:'d1', task:'t-s1'},
+    {d:'20.10', t:'10:05', who:'denis', tx:'начал Ш1', chat:'d1', task:'t-s1'},
+    {d:'19.10', t:'18:30', who:'egor', tx:'план принят, 4 шага', chat:'eg', task:'t-plan'},
+    {d:'19.10', t:'17:55', who:'alex', tx:'разрез принят', chat:'ax', task:'t-cut'},
+    {d:'19.10', t:'17:20', who:'sofya', tx:'создала фичу', chat:'cur', task:'t-epic'},
   ];
-  if (S.fs === 'wait') ev.unshift({d:'20.10', t:'16:12', who:'kira', tx:'ждёт вашего ответа по Ш3', chat:'k3'});
-  if (S.fs === 'stop') ev.unshift({d:'20.10', t:'16:27', who:'kira', tx:'исполнитель остановился с ошибкой', chat:'k3'});
+  if (S.fs === 'wait') ev.unshift({d:'20.10', t:'16:12', who:'kira', tx:'ждёт вашего ответа по Ш3', chat:'k3', task:'t-s3'});
+  if (S.fs === 'stop') ev.unshift({d:'20.10', t:'16:27', who:'kira', tx:'исполнитель остановился с ошибкой', chat:'k3', task:'t-s3'});
   if (isDone()) {
-    ev.unshift({d:'20.10', t:'15:58', who:'gleb', tx:'принял Ш4', chat:'g3'}, {d:'20.10', t:'15:20', who:'gleb', tx:'принял Ш3 с 3-го витка', chat:'g3'});
-    if (S.fs !== 'closed') ev.unshift({d:'20.10', t:'16:55', who:'alex', tx:'принял финал — мерж ждёт вашего согласия', chat:'af'}, {d:'20.10', t:'16:25', who:'vera', tx:'проверка: принято с замечаниями', chat:'vq'});
-    else ev.unshift({d:'20.10', t:'15:30', who:'me', tx:'<b class="n">закрыл фичу без мержа</b>', hm:1});
+    ev.unshift({d:'20.10', t:'15:58', who:'gleb', tx:'принял Ш4', chat:'g3', task:'t-r4'}, {d:'20.10', t:'15:20', who:'gleb', tx:'принял Ш3 с 3-го витка', chat:'g3', task:'t-r3c'});
+    if (S.fs !== 'closed') ev.unshift({d:'20.10', t:'16:55', who:'alex', tx:'принял финал — мерж ждёт вашего согласия', chat:'af', task:'t-fin'}, {d:'20.10', t:'16:25', who:'vera', tx:'проверка: принято с замечаниями', chat:'vq', task:'t-qa'});
+    else ev.unshift({d:'20.10', t:'15:30', who:'me', tx:'<b class="n">закрыл фичу без мержа</b>', hm:1, task:'t-epic'});
   }
-  if (S.fs === 'merging') ev.unshift({d:'20.10', t:'17:35', who:'mark', tx:'начал мерж в master', chat:'mk'}, {d:'20.10', t:'17:35', who:'me', tx:'<b class="n">согласовал мерж</b>', hm:1});
-  if (S.fs === 'merged') ev.unshift({d:'20.10', t:'17:38', who:'mark', tx:'смержил в master', chat:'mk'}, {d:'20.10', t:'17:35', who:'mark', tx:'начал мерж в master', chat:'mk'}, {d:'20.10', t:'17:35', who:'me', tx:'<b class="n">согласовал мерж</b>', hm:1});
+  if (S.fs === 'merging') ev.unshift({d:'20.10', t:'17:35', who:'mark', tx:'начал мерж в master', chat:'mk', task:'t-merge'}, {d:'20.10', t:'17:35', who:'me', tx:'<b class="n">согласовал мерж</b>', hm:1, task:'t-merge'});
+  if (S.fs === 'merged') ev.unshift({d:'20.10', t:'17:38', who:'mark', tx:'смержил в master', chat:'mk', task:'t-merge'}, {d:'20.10', t:'17:35', who:'mark', tx:'начал мерж в master', chat:'mk', task:'t-merge'}, {d:'20.10', t:'17:35', who:'me', tx:'<b class="n">согласовал мерж</b>', hm:1, task:'t-merge'});
   return ev;
+}
+
+/* ============ Навигация в один клик ============
+   Правило: строка-чат ведёт в чат, рядом «задача»; строка-задача ведёт в задачу, рядом «чат»;
+   участник (этап, шаг, событие, тревога) — пара «чат · задача». Переход скрывает страницу. */
+function goChat(id, dense) {
+  if (!id) return '';
+  const c = findChat(id);
+  const tip = c.arch ? `Чат «${c.n}» в архиве — откроется для чтения. Страница фичи скроется, вернётся по плашке.` : `Открыть чат «${c.n}». Страница фичи скроется, вернётся по плашке.`;
+  return `<button class="go ${c.arch ? 'arch' : ''}" data-act="chat" data-id="${id}" data-tip="${esc(tip)}" aria-label="${esc(tip)}">${ic('msg', 12)}<span>чат${c.arch ? ' <i class="mk2">· архив</i>' : ''}</span></button>`;
+}
+function goTask(id, dense) {
+  if (!id) return '';
+  const t = findTask(id);
+  if (!t) return '';
+  const cl = t.st === 'd';
+  const tip = `Открыть задачу «${t.n}»${cl ? ' (закрыта — откроется для просмотра)' : ''}. Страница фичи скроется, вернётся по плашке.`;
+  return `<button class="go t ${cl ? 'closed' : ''}" data-act="task" data-id="${id}" data-tip="${esc(tip)}" aria-label="${esc(tip)}">${ic('tasks', 12)}<span>задача</span></button>`;
+}
+function gos(chatId, taskId, dense = true) {
+  const none = !chatId && taskId ? `<span class="go none" title="Чата ещё нет: исполнитель не запускался">${ic('msg', 12)}<span>чата нет</span></span>` : '';
+  return `<span class="gos ${dense ? 'dense' : ''}">${chatId ? goChat(chatId) : none}${goTask(taskId)}</span>`;
 }
 
 /* ============ Состояние макета ============ */
 const S = { theme:'light', dev:'d', fs:'run', marks:true, longT:false, mergeResp:'ok',
-  win:'feature', rail:'chats', chatId:null,
+  win:'feature', rail:'chats', chatId:null, taskId:null, flash:null,
+  data:'now', cut:'who', unit:'time', openBar:null,
   tab:'tl', openSteps:{'Ш3':true}, archOpen:false, evAll:false, taskF:'all',
   modal:null, merging:false, menu:false, toast:null };
 const FS_LIST = [['empty','не начата'],['run','идёт'],['wait','ждёт вас'],['stop','стоит'],['merge','ждёт согласия на мерж'],['merging','мерж идёт'],
@@ -639,15 +792,15 @@ function alertBlock() {
   const P = primaryAction();
   // На 1280 главное действие стоит в шапке и в блоке не повторяется; на 360 шапка узкая — оно здесь.
   const prim = isM() && P ? [P] : [];
-  const acts = list => `<div class="acts">${list.filter(Boolean).map(a => btn(a, 'xs')).join('')}</div>`;
+  const acts = (list, extra = '') => `<div class="acts">${list.filter(Boolean).map(a => btn(a, 'xs')).join('')}${extra}</div>`;
   switch (S.fs) {
-    case 'run': return `<div class="alert al-run" data-t="alert"><span class="gl">${fg('run')}</span><div><b>Сейчас:</b> Кира делает Ш3 «Галерея шаблонов», виток 3 · 8 мин. Глеб ждёт сдачи на ревью.</div></div>`;
-    case 'wait': return `<div class="alert al-wait" data-t="alert"><span class="gl">${fg('wait')}</span><div><b>Кира ждёт вашего ответа 40 мин</b> в Ш3: «Показывать в галерее шаблоны других участников проекта или только мои?»${acts(prim)}</div></div>`;
-    case 'stop': return `<div class="alert al-stop" data-t="alert"><span class="gl">${fg('stop')}</span><div><b>Стоит 25 мин:</b> исполнитель Киры остановился на Ш3 с ошибкой 529 (перегрузка модели), три попытки не помогли. Причина и повтор — в её чате.${acts(prim.concat([['openTasks','Задача Ш3 в «Задачах»','gh','tasks']]))}</div></div>`;
-    case 'merge': return `<div class="alert al-merge new" data-t="alert"><span class="gl">${fg('merge')}</span><div><b>Мерж в master ждёт вашего согласия.</b> Финал принят Александром 40 мин назад. Мерж сделает Марк отдельной задачей; её ход появится здесь же. ${be()}${acts(prim)}</div></div>`;
-    case 'merging': return `<div class="alert al-run" data-t="alert"><span class="gl">${fg('run')}</span><div><b>Мерж идёт.</b> Марк сливает ветку в master — задача «Мерж · ${TITLE_SHORT}». Если будет конфликт, мерж остановится и фича вернётся к вам.${acts([['chat','Открыть чат Марка','gh','msg','mk']])}</div></div>`;
-    case 'merged': return `<div class="alert al-merged" data-t="alert"><span class="gl">${fg('merged')}</span><div><b>Смержена в master</b> 20.10 в 17:38 · шла 1 дн 0 ч · 16 задач · 4 шага · 3 возврата.</div></div>`;
-    case 'closed': return `<div class="alert al-closed" data-t="alert"><span class="gl">${fg('closed')}</span><div><b>Закрыта без мержа</b> 20.10 в 15:30 · ветка сохранена. Вернуть в работу можно в «Задачах».${acts([['openTasks','Эпик в «Задачах»','gh','tasks']])}</div></div>`;
+    case 'run': return `<div class="alert al-run" data-t="alert"><span class="gl">${fg('run')}</span><div><b>Сейчас:</b> Кира делает Ш3 «Галерея шаблонов», виток 3 · 8 мин. Глеб ждёт сдачи на ревью.${acts([], gos('k3', 't-s3', false))}</div></div>`;
+    case 'wait': return `<div class="alert al-wait" data-t="alert"><span class="gl">${fg('wait')}</span><div><b>Кира ждёт вашего ответа 40 мин</b> в Ш3: «Показывать в галерее шаблоны других участников проекта или только мои?»${acts(prim, goTask('t-s3'))}</div></div>`;
+    case 'stop': return `<div class="alert al-stop" data-t="alert"><span class="gl">${fg('stop')}</span><div><b>Стоит 25 мин:</b> исполнитель Киры остановился на Ш3 с ошибкой 529 (перегрузка модели), три попытки не помогли. Причина и повтор — в её чате.${acts(prim, goTask('t-s3'))}</div></div>`;
+    case 'merge': return `<div class="alert al-merge new" data-t="alert"><span class="gl">${fg('merge')}</span><div><b>Мерж в master ждёт вашего согласия.</b> Финал принят Александром 40 мин назад. Мерж сделает Марк отдельной задачей; её ход появится здесь же. ${be()}${acts(prim, gos('af', 't-fin', false))}</div></div>`;
+    case 'merging': return `<div class="alert al-run" data-t="alert"><span class="gl">${fg('run')}</span><div><b>Мерж идёт.</b> Марк сливает ветку в master — задача «Мерж · ${TITLE_SHORT}». Если будет конфликт, мерж остановится и фича вернётся к вам.${acts([], gos('mk', 't-merge', false))}</div></div>`;
+    case 'merged': return `<div class="alert al-merged" data-t="alert"><span class="gl">${fg('merged')}</span><div><b>Смержена в master</b> 20.10 в 17:38 · шла 1 дн 0 ч · 16 задач · 4 шага · 3 возврата.${acts([], gos('mk', 't-merge', false))}</div></div>`;
+    case 'closed': return `<div class="alert al-closed" data-t="alert"><span class="gl">${fg('closed')}</span><div><b>Закрыта без мержа</b> 20.10 в 15:30 · ветка сохранена. Вернуть в работу можно в «Задачах».${acts([['task','Эпик в «Задачах»','gh','tasks','t-epic']])}</div></div>`;
     case 'empty': return `<div class="alert al-closed" data-t="alert"><span class="gl">${fg('empty')}</span><div><b>Фича ещё не начата:</b> задач нет. Запустить её можно из ключевого чата — куратор начнёт с разреза.${acts(prim)}</div></div>`;
   }
   return '';
@@ -674,7 +827,7 @@ function tabsDef() {
     {k:'chats', t:'Чаты', c: live, wd: S.fs === 'wait'},
     {k:'tasks', t:'Задачи', c: tasksFor().length || null},
     {k:'ev', t:'События', c: ev},
-    {k:'met', t:'Метрики'},
+    {k:'met', t:'Статистика'},
   ];
 }
 function tabsBar() {
@@ -693,12 +846,13 @@ function timeline() {
     const body = [];
     const known = s !== 'todo' && s !== 'skip';
     // Кто работал: персона и роль; у будущего этапа исполнителя ещё нет — не выдумываем
-    if (known) body.push(`<div class="line">${g.who.filter(w => !(g.k === 'prod' && false)).map(w => who(w)).join('')}${g.k === 'prod' ? '' : ''}</div>`);
+    const nav = stageNav(g.k, s);
+    if (known && nav.length) body.push(nav.map(([w, c, t]) => `<div class="line whonav" data-t="who-${g.k}-${w}">${who(w)}${gos(c, t)}</div>`).join(''));
     if (g.k === 'cut' && known) body.push(`<div class="line">Разрез принят: 4 шага, бэк и фронт.</div>`);
     if (g.k === 'plan' && known) body.push(`<div class="line">План принят: Ш1–Ш4, сначала бэк, потом фронт.</div>`);
     if (g.k === 'prod') {
-      if (s === 'wait') body.push(`<div class="mark w" data-t="wait-mark">${fg('wait', 12)}<span><b>Кира ждёт вашего ответа · 40 мин</b> · с 16:12</span><button class="btn xs gh" data-act="chat" data-id="k3">${ic('msg', 12)}Ответить</button></div>`);
-      if (s === 'stop') body.push(`<div class="mark e">${fg('stop', 12)}<span><b>Остановилась 25 мин назад</b> · Ш3 · ошибка 529</span><button class="btn xs gh" data-act="chat" data-id="k3">${ic('msg', 12)}Чат Киры</button></div>`);
+      if (s === 'wait') body.push(`<div class="mark w" data-t="wait-mark">${fg('wait', 12)}<span><b>Кира ждёт вашего ответа · 40 мин</b> · с 16:12</span><span class="gos" style="margin-left:auto"><button class="btn xs gh" data-act="chat" data-id="k3">${ic('msg', 12)}Ответить</button>${goTask('t-s3')}</span></div>`);
+      if (s === 'stop') body.push(`<div class="mark e">${fg('stop', 12)}<span><b>Остановилась 25 мин назад</b> · Ш3 · ошибка 529</span><span class="gos" style="margin-left:auto"><button class="btn xs gh" data-act="chat" data-id="k3">${ic('msg', 12)}Чат Киры</button>${goTask('t-s3')}</span></div>`);
       if (!known) body.push(`<div class="empty sm" data-t="no-steps"><h3>Шагов пока нет</h3><p>Появятся, когда Егор составит план.</p></div>`);
       else body.push(STEPS.map(stepView).map(stepRow).join(''));
     }
@@ -706,38 +860,54 @@ function timeline() {
       const rows = isDone()
         ? [['Ш1','принят с первого раза'],['Ш2','принят со 2-го витка','1'],['Ш3','принят с 3-го витка','2'],['Ш4','принят с первого раза']]
         : [['Ш1','принят с первого раза'],['Ш2','принят со 2-го витка','1'],['Ш3','вернул 2 раза · виток 3 ждёт сдачи','2'],['Ш4','ещё не сдан']];
-      body.push(rows.map(([c, t, r]) => `<div class="line"><span class="code">${c}</span><span>${t}</span>${r ? `<span class="ret">${ic('ret', 12)}возвратов ${r}</span>` : ''}</div>`).join(''));
+      const rv = { 'Ш1':['g1','t-r1'], 'Ш2':['g2','t-r2b'], 'Ш3':['g3', isDone() ? 't-r3c' : 't-r3b'], 'Ш4':[isDone() ? 'g3' : null, isDone() ? 't-r4' : null] };
+      body.push(rows.map(([c, t, r]) => `<div class="line"><span class="code">${c}</span><span style="flex:1;min-width:0">${t}</span>${r ? `<span class="ret">${ic('ret', 12)}возвратов ${r}</span>` : ''}${gos(rv[c][0], rv[c][1])}</div>`).join(''));
     }
     if (g.k === 'qa' && known) body.push(`<div class="line">Проверила фичу целиком: принято с замечаниями <span class="sev min">minor 2</span></div>`);
     if (g.k === 'final' && known) body.push(`<div class="line">Принял финал в 16:55.</div>`);
     if (g.k === 'merge') {
       if (s === 'wait') body.push(`<div class="mark w new" data-t="merge-wait">${fg('merge', 12)}<span><b>Ждёт вашего согласия · 40 мин</b> · с 16:55 ${be()}</span></div><div class="line">Мерж сделает ${who('mark')} отдельной задачей.</div>`);
-      else if (s === 'active') body.push(`<div class="line">Сливает ветку в master · задача «Мерж · ${TITLE_SHORT}» <button class="btn xs gh" data-act="chat" data-id="mk">${ic('msg', 12)}Чат Марка</button></div>`);
+      else if (s === 'active') body.push(`<div class="line">Сливает ветку в master · задача «Мерж · ${TITLE_SHORT}»</div>`);
       else if (s === 'done') body.push(`<div class="line">Смержил в master в 17:38.</div>`);
     }
     // Пустые: этап ещё не начат / пропущен
     if (s === 'todo' && g.k !== 'prod') body.push(`<div class="line" style="color:var(--c-text-muted)">${{cut:'Начнётся с запуска фичи.', plan:'Начнётся после разреза.', review:'Начнётся, когда сдадут первый шаг.', qa:'Начнётся после ревью всех шагов.', final:'Начнётся после проверки.', merge:'Начнётся с вашего согласия после финала.'}[g.k]}</div>`);
     if (s === 'skip') body.push(`<div class="line" style="color:var(--c-text-muted)">Пропущен: фича закрыта без мержа.</div>`);
     const durHtml = dur ? `<span class="dur q" tabindex="0" data-tip="Приблизительно: сумма работы задач этапа — от старта исполнителя до сдачи. Ожидание и простой внутри не вычитаются, параллельные задачи складываются." aria-label="Длительность ${dur}, приблизительно">${dur}</span>` : '';
-    return `<div class="tln ${s} ${cur ? 'cur' : ''}" id="n-${g.k}" data-t="stage-${g.k}"><span class="dotx"></span><div class="card">
+    return `<div class="tln ${s} ${cur ? 'cur' : ''} ${S.flash === g.k ? 'flash' : ''}" id="n-${g.k}" data-t="stage-${g.k}"><span class="dotx"></span><div class="card">
       <div class="tlh"><span class="nm">${g.n}</span><span class="st" style="color:var(--c-text-muted)">${s === 'done' ? '' : stTxt}</span>${durHtml}</div>
       ${when ? `<div class="tlw">${when}</div>` : ''}
       <div class="tlb">${body.join('')}</div></div></div>`;
   };
   return `<div data-t="timeline">
-    <div class="tlnote">${ic('info', 13)}<span>Порядок этапов, их состояние и кто работал — точные. Длительность со знаком «≈» — по задачам этапа. Ревью идёт по шагам, поэтому пересекается с производством.</span></div>
+    ${miniStats()}
     <div class="tl">${STAGES.map(node).join('')}</div></div>`;
 }
+/* Исполнители этапа: [персона, чат, задача]. У мержа до согласия задачи ещё нет. */
+function stageNav(k, s) {
+  const done = isDone();
+  return ({
+    cut:[['alex','ax','t-cut']], plan:[['egor','eg','t-plan']],
+    prod:[['denis','d2','t-s2b'], ['kira', done ? 'k4' : 'k3', done ? 't-s4' : 't-s3']],
+    review:[['gleb','g3', done ? 't-r4' : 't-r3b']], qa:[['vera','vq','t-qa']], final:[['alex','af','t-fin']],
+    merge: ['active','done'].includes(s) ? [['mark','mk','t-merge']] : [],
+  })[k] || [];
+}
+/* Шаг → задача шага (последний виток) и витки → чат и задача ревью этого витка */
+const STEP_TASK = { 'Ш1':'t-s1', 'Ш2':'t-s2b', 'Ш3':'t-s3', 'Ш4':'t-s4' };
+const TOUR_NAV = { 'Ш1':[['g1','t-r1']], 'Ш2':[['g2','t-r2a'],['g2','t-r2b']], 'Ш3':[['g3','t-r3a'],['g3','t-r3b'],['k3','t-s3']], 'Ш4':[['g3','t-r4']] };
 function stepRow(s) {
   const o = !!S.openSteps[s.c];
-  return `<button class="rowb" data-act="step" data-id="${s.c}" aria-expanded="${o}" data-t="step-${s.c}">
+  const tn = TOUR_NAV[s.c] || [];
+  const tourNav = (i) => { const n = s.c === 'Ш3' && i === 2 && isDone() ? ['g3','t-r3c'] : tn[i]; return n ? gos(n[0], n[1]) : '<span></span>'; };
+  return `<div class="srow" data-t="step-${s.c}"><button class="rowb" data-act="step" data-id="${s.c}" aria-expanded="${o}" aria-label="${s.c} ${esc(s.n)}: ${o ? 'свернуть' : 'раскрыть'} витки">
       <span class="chv ${o ? 'o' : ''}">${ic('chevR', 12)}</span><span class="code">${s.c}</span><span class="tx">${s.n}</span>
       <span class="rx">${av(s.who)}${roleChip(PER[s.who].role)}${s.tours.length > 1 ? `<span title="витков">↺${s.tours.length}</span>` : ''}<span class="tst ${s.st}">${TST[s.st]}</span></span></button>
+      ${gos(s.chat, STEP_TASK[s.c])}</div>
     ${o ? `<div class="tours" data-t="tours-${s.c}">${s.tours.length
-      ? s.tours.map(t => `<div class="tour"><span class="k">${t.w}</span><span class="r">${t.r}</span><span class="sev ${t.sev[0]}">${t.sev[1]}</span></div>`).join('') +
-        `<div class="tour"><span class="k">итого</span><span class="r">${PER[s.who].n} · ${s.dur || '—'}</span><span></span></div>` +
-        (s.chat ? `<button class="btn xs gh" data-act="chat" data-id="${s.chat}">${ic('msg', 12)}Чат шага</button>` : '')
-      : '<div class="tour"><span class="k">—</span><span class="r">Шаг не начат: Кира возьмёт его после Ш3.</span><span></span></div>'}</div>` : ''}`;
+      ? s.tours.map((t, i) => `<div class="tour"><span class="k">${t.w}</span><span class="r">${t.r}</span><span class="sev ${t.sev[0]}">${t.sev[1]}</span>${tourNav(i)}</div>`).join('') +
+        `<div class="tour"><span class="k">итого</span><span class="r">${PER[s.who].n} · ${s.dur || '—'}</span><span></span><span></span></div>`
+      : '<div class="tour"><span class="k">—</span><span class="r">Шаг не начат: Кира возьмёт его после Ш3. Задача уже есть, чата ещё нет.</span><span></span><span></span></div>'}</div>` : ''}`;
 }
 
 /* ============ Вкладка «Чаты» ============ */
@@ -748,9 +918,10 @@ function chatRow(c) {
   const wd = S.fs === 'wait' && c.id === 'k3';
   return `<div class="chrow ${c.key ? 'key' : ''} ${c.arch ? 'arch' : ''}" data-t="chat-${c.id}">
     <button class="avb" data-tip="${esc(avTip)}" aria-label="${esc(p.n + '. ' + avTip)}" data-t="model-${c.id}">${avChip(c.who)}</button>
-    <button class="open" data-act="chat" data-id="${c.id}"><span class="tx"><b>${c.n}</b><span>${p.n} · ${c.t}${wd ? ' · ждёт вашего ответа' : ''}</span></span>${roleChip(c.role)}</button>
+    <button class="open" data-act="chat" data-id="${c.id}" data-tip="${esc((c.arch ? 'Чат в архиве — откроется для чтения. ' : 'Открыть чат. ') + 'Страница фичи скроется, вернётся по плашке.')}" aria-label="Открыть чат «${esc(c.n)}»${c.arch ? ', в архиве' : ''}"><span class="tx"><b>${c.n}</b><span>${p.n} · ${c.t}${wd ? ' · ждёт вашего ответа' : ''}${c.arch ? ' · архив' : ''}</span></span>${roleChip(c.role)}</button>
     ${wd ? '<span class="wd" aria-hidden="true"></span>' : ''}
     ${c.key ? `<button class="keyl" data-tip="${esc(keyTip)}" aria-label="Ключевой чат. ${esc(keyTip)}" data-t="key-label">ключевой</button>` : ''}
+    <span class="gos dense">${goTask(c.task)}</span>
   </div>`;
 }
 function chatsTab() {
@@ -771,8 +942,8 @@ function tasksTab() {
   const f = chips.some(c => c[0] === S.taskF) ? S.taskF : 'all';
   const shown = all.filter(t => f === 'all' || t.st === f);
   return `<div data-t="tasks"><div class="cnts" role="group" aria-label="Фильтр задач">${chips.map(([k, t, n]) => `<button class="cnt" aria-pressed="${f === k}" data-act="taskF" data-id="${k}">${t} ${n}</button>`).join('')}</div>
-    ${shown.map(t => `<button class="rowb" data-act="openTasks">${av(t.who)}<span class="tx">${t.n}</span><span class="rx">${roleChip(t.role)}<span class="tst ${t.st}">${TST[t.st]}</span></span></button>`).join('')}
-    <div class="hint" style="margin-top:8px">Клик открывает задачу в «Задачах» — страница фичи скроется и вернётся по плашке.</div></div>`;
+    ${shown.map(t => `<div class="srow" data-t="task-${t.id}"><button class="rowb" data-act="task" data-id="${t.id}" data-tip="${esc('Открыть задачу' + (t.st === 'd' ? ' (закрыта — для просмотра)' : '') + '. Страница фичи скроется, вернётся по плашке.')}" aria-label="Открыть задачу «${esc(t.n)}»">${av(t.who)}<span class="tx">${t.n}</span><span class="rx">${roleChip(t.role)}<span class="tst ${t.st}">${TST[t.st]}</span></span></button>${gos(t.chat, null)}${t.chat ? '' : `<span class="gos dense"><span class="go none" title="Чата ещё нет: исполнитель не запускался">${ic('msg', 12)}<span>чата нет</span></span></span>`}</div>`).join('')}
+    <div class="navnote">${ic('info', 12)}<span>Строка ведёт в задачу, кнопка «чат» — в чат исполнителя. Страница фичи скроется и вернётся по плашке на этой же вкладке.</span></div></div>`;
 }
 
 /* ============ Вкладка «События» ============ */
@@ -783,43 +954,178 @@ function eventsTab() {
   let day = '', out = '';
   shown.forEach(e => {
     if (e.d !== day) { day = e.d; out += `<div class="evday">${e.d === '20.10' ? 'Сегодня, 20.10' : 'Вчера, 19.10'}</div>`; }
-    out += `<div class="ev ${e.hm ? 'hm' : ''}"><span class="t">${e.t}</span>${av(e.who, 16)}<span><b class="n">${PER[e.who].n}</b> ${e.tx}${e.chat ? ` · <button class="lk" data-act="chat" data-id="${e.chat}">чат</button>` : ''}</span></div>`;
+    const lk = [e.chat ? `<button class="lk" data-act="chat" data-id="${e.chat}" data-tip="${esc('Открыть чат «' + findChat(e.chat).n + '»' + (findChat(e.chat).arch ? ' — в архиве' : ''))}">чат</button>` : '',
+      e.task && findTask(e.task) ? `<button class="lk" data-act="task" data-id="${e.task}" data-tip="${esc('Открыть задачу «' + findTask(e.task).n + '»')}">задача</button>` : ''].filter(Boolean).join(' · ');
+    out += `<div class="ev ${e.hm ? 'hm' : ''}"><span class="t">${e.t}</span>${av(e.who, 16)}<span><b class="n">${PER[e.who].n}</b> ${e.tx}${lk ? ' · ' + lk : ''}</span></div>`;
   });
   return `<div data-t="events">${out}${ev.length > LIM ? `<button class="btn xs gh" data-act="evAll" style="margin-top:8px" data-t="ev-all">${S.evAll ? 'Свернуть' : 'Показать все · ' + ev.length}</button>` : ''}</div>`;
 }
 
-/* ============ Вкладка «Метрики» (только текущие данные) ============ */
-function metricsTab() {
-  if (S.fs === 'empty') return `<div class="empty" data-t="met-empty"><span class="ci">${ic('info', 20)}</span><h3>Считать пока нечего</h3><p>Метрики появятся с первой задачей исполнителя.</p></div>`;
+/* ============ Вкладка «Статистика» ============
+   Время фичи по календарю: группы этапов, внутри сегменты работа / ждёт вас / простой / ошибка.
+   Режим «сейчас» — только текущие данные: работа «≈» по задачам (последняя пара старт → сдача),
+   прошлое ожидание и простой не разделить (штриховка «не работали»), текущее ожидание и остановка — точные.
+   Режим «с журналом» — как будет после «да» Андрея на журнал событий и учёт расхода. */
+const NIGHT = 935; // 19.10 18:30 → 20.10 10:05: длинная пауза сжимается разрывом
+const fmt = m => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h ? `${h} ч${r ? ' ' + String(r).padStart(2, '0') + ' мин' : ''}` : `${r} мин`; };
+function timeGroups() {
+  const J = S.data === 'log', fs = S.fs;
+  const g = [{k:'cut', segs:[['work',35,'19.10 · 17:20 – 17:55']]}, {k:'plan', segs:[['work',32,'19.10 · 17:58 – 18:30']]},
+    {k:'brk', segs:[[J ? 'idle' : 'unk', NIGHT, J ? 'простой: ночь, никто не работал' : 'не работали: ожидание или простой']]}];
+  if (['run','wait','stop'].includes(fs)) {
+    const tail = { run:[], wait:[['wait',40,'ждёт вашего ответа сейчас · с 16:12']], stop:[['err',25,'стоит сейчас · ошибка 529 · с 16:27']] }[fs];
+    const tm = tail.reduce((a, s) => a + s[1], 0);
+    g.push({k:'prod', rv:75, segs: (J
+      ? [['work',75,'Ш1 · Денис'],['idle',15,'простой: очередь GPU'],['work',95,'Ш2 · Денис, Ш3 · Кира'],['wait',20,'Денис ждал вашего ответа · 13:30'],['work',110,'Ш2, Ш3'],['err',12,'ошибка сети · перезапуск'],['work',80 - tm,'Ш3 · виток 3']]
+      : [['work',365 - tm,'работа ≈ по задачам'],['unk',42,'не работали: ожидание или простой']]).concat(tail)});
+    return g;
+  }
+  if (fs === 'closed') {
+    g.push({k:'prod', rv:75, segs: J ? [['work',75],['idle',15,'простой: очередь GPU'],['work',95],['wait',20,'Денис ждал вашего ответа · 13:30'],['work',90],['err',10,'ошибка сети · перезапуск']]
+      : [['work',275,'работа ≈ по задачам'],['unk',30,'не работали']]});
+    g.push({k:'review', segs:[['work',10,'ревью Ш3'],[J ? 'idle' : 'unk',10,'до закрытия фичи']]});
+    return g;
+  }
+  if (!['merge','merging','merged'].includes(fs)) return [];
+  g.push({k:'prod', rv:75, segs: J ? [['work',75],['idle',15,'простой: очередь GPU'],['work',95],['wait',20,'Денис ждал вашего ответа · 13:30'],['work',110],['err',12,'ошибка сети · перезапуск'],['work',8]]
+    : [['work',300,'работа ≈ по задачам'],['unk',35,'не работали']]});
+  g.push({k:'review', segs:[['work',18,'ревью Ш4']]}, {k:'qa', segs:[['work',27,'проверка Веры']]}, {k:'final', segs:[['work',27,'финал Александра']]});
+  const mw = fs === 'merge' ? [['wait',40,'ждёт вашего согласия сейчас · с 16:55']] : [[J ? 'wait' : 'unk',40, J ? 'ждала вашего согласия' : 'ожидание согласия: прошлое без журнала не видно']];
+  g.push({k:'merge', segs: mw.concat(fs === 'merge' ? [] : [['work', fs === 'merging' ? 1 : 3, 'мерж Марка']])});
+  return g;
+}
+function timeTotals() {
+  const t = { work:0, wait:0, idle:0, err:0, unk:0, waits:0, all:0 };
+  timeGroups().forEach(g => g.segs.forEach(([k, m]) => { t[k] += m; t.all += m; if (k === 'wait') t.waits++; }));
+  return t;
+}
+const KIND = { work:'работа', wait:'ждёт вас', idle:'простой', err:'ошибка / стоит', unk:'не работали (ожидание или простой)' };
+const accB = k => ({ ex:'<span class="acc ex" title="Точно: из текущих данных">точно</span>', ap:'<span class="acc ap" title="Приближённо: по задачам этапа и сессиям чатов">≈</span>',
+  jr:'<span class="acc jr" title="Нужен журнал событий — новое хранилище, ваше «да»">журнал</span>', sp:'<span class="acc sp" title="Нужен учёт расхода с ключом фичи — новое хранилище, ваше «да»">расход</span>' })[k];
+/* Лента: на 1280 сегменты и подписи этапов — кнопки (переход к этапу в «Хронологии»); на 360 — картинка, переход — строками таблицы этапов. */
+function bandHtml(mini = false) {
+  const G = timeGroups(); if (!G.length) return '';
+  const live = !mini && !isM();
+  const el = live ? 'button' : 'span';
+  const w = g => g.k === 'brk' ? 60 : g.segs.reduce((a, s) => a + s[1], 0);
+  const name = k => k === 'brk' ? '' : STAGES.find(x => x.k === k).n;
+  const segs = G.map(g => g.segs.map(([k, m, n]) => {
+    const fl = g.k === 'brk' ? 60 : m;
+    const tip = `${g.k === 'brk' ? 'Пауза' : name(g.k)} · ${KIND[k]} · ${S.data === 'now' && k === 'work' ? '≈ ' : ''}${fmt(m)}${n ? ' · ' + n : ''}`;
+    const lab = g.k === 'brk' ? (isM() ? '⫽' : `⫽ ${fmt(m)}`) : fl >= 70 && !mini ? (S.data === 'now' && k === 'work' ? '≈' : '') + fmt(m).replace(' мин', 'м').replace(' ч', 'ч').replace(' ', '') : '';
+    const act = live && g.k !== 'brk' ? ` data-act="toStage" data-id="${g.k}"` : '';
+    return `<${g.k === 'brk' ? 'span' : el} class="k-${k}" style="flex:${fl}"${act} data-tip="${esc(tip)}" ${live ? `aria-label="${esc(tip)}"` : ''}>${lab}</${g.k === 'brk' ? 'span' : el}>`;
+  }).join('')).join('');
+  if (mini) return `<div class="fband" role="img" aria-label="Время фичи по этапам">${segs}</div>`;
+  const ruler = G.map(g => {
+    const fl = w(g), n = name(g.k), short = fl < 60 ? n.slice(0, 1) : n;
+    const sub = g.k === 'brk' ? '' : `<span>${stageTime(g.k)[0].replace(/^(с )?\d\d\.\d\d · /, '$1')}</span>`;
+    if (g.k === 'brk') return `<span class="brkl" style="flex:${fl}">${S.data === 'log' ? 'простой' : 'пауза'}<span>ночь</span></span>`;
+    return live ? `<button style="flex:${fl}" data-act="toStage" data-id="${g.k}" data-tip="${esc(n + ' — открыть этап в «Хронологии»')}" aria-label="${esc(n + ': открыть этап в «Хронологии»')}">${short}${fl >= 60 ? sub : ''}</button>`
+      : `<span style="flex:${fl}">${short}</span>`;
+  }).join('');
+  // Ревью параллельно производству: вторая тонкая дорожка
+  let before = 0, rv = '';
+  for (const g of G) {
+    if (g.k === 'prod') { const rest = w(g) - g.rv + G.slice(G.indexOf(g) + 1).filter(x => x.k === 'review').reduce((a, x) => a + w(x), 0);
+      rv = `<div class="rvrow" aria-hidden="true"><i style="flex:${before + g.rv}"></i><i class="rv" style="flex:${rest}"></i><i style="flex:${G.slice(G.indexOf(g) + 1).filter(x => x.k !== 'review').reduce((a, x) => a + w(x), 0) || 0.001}"></i></div>`; break; }
+    before += w(g);
+  }
+  const end = ['run','wait','stop'].includes(S.fs) ? 'сейчас · 20.10 16:52' : S.fs === 'merge' ? 'сейчас · 20.10 17:35' : S.fs === 'merging' ? 'сейчас · 20.10 17:36' : S.fs === 'closed' ? 'закрыта · 20.10 15:30' : 'смержена · 20.10 17:38';
+  const kinds = [...new Set(G.flatMap(g => g.segs.map(s => s[0])))];
+  return `<div class="chart" data-t="band">
+    <div class="ruler" data-t="ruler">${ruler}</div>
+    <div class="fband" role="${live ? 'group' : 'img'}" aria-label="Время фичи: работа, ожидание, простой по этапам">${segs}</div>
+    ${rv}<div class="rvl"><i></i>ревью идёт по шагам вместе с производством</div>
+    <div class="axis"><span>19.10 17:20 · создана</span><span>${end}</span></div>
+    <div class="blg">${kinds.map(k => `<span><i class="k-${k}"></i>${KIND[k]}${S.data === 'now' && k === 'work' ? ' ≈' : ''}</span>`).join('')}<span>⫽ — длинная пауза сжата, ширина не в масштабе</span></div></div>`;
+}
+/* Сжатая сводка на «Хронологии»: мини-лента + три числа + переход в «Статистику». */
+function miniStats() {
+  const note = `<div class="nt">Порядок этапов, их состояние и кто работал — точные; «≈» — по задачам этапа. Ревью идёт по шагам вместе с производством.</div>`;
+  if (S.fs === 'empty') return `<div class="mini" data-t="mini">${note}</div>`;
+  const t = timeTotals(), J = S.data === 'log';
+  const waitNow = S.fs === 'wait' || S.fs === 'merge';
+  return `<div class="mini" data-t="mini">${bandHtml(true)}
+    <div class="row"><span>${['merged','closed'].includes(S.fs) ? 'шла' : 'идёт'} <b>${fmt(t.all)}</b></span><span>работа <b>${J ? '' : '≈ '}${fmt(t.work)}</b></span>
+      <span>${J ? `ждала вас <b>${fmt(t.wait)}</b>` : waitNow ? 'ждёт вас <b>40 мин</b>' : `не работали <b>≈ ${fmt(t.unk)}</b>`}</span>
+      <button class="btn xs lnk" data-act="tab" data-id="met" data-t="mini-go">Статистика ${ic('chevR', 12)}</button></div>${note}</div>`;
+}
+/* Разрезы: персона → минуты работы (≈ по задачам) и токены (М, только учёт расхода) */
+function cutData() {
   const done = isDone();
-  const cell = (l, v, h, cls = '') => `<div class="mc"><div class="l">${l}</div><div class="v ${cls}">${v}</div>${h ? `<div class="h">${h}</div>` : ''}</div>`;
-  const waitNow = S.fs === 'wait' ? '40 мин' : S.fs === 'merge' ? '40 мин' : '—';
+  const time = done ? { kira:200, denis:125, gleb:100, alex:60, egor:30, vera: S.fs === 'closed' ? 0 : 25, mark: S.fs === 'merged' ? 3 : S.fs === 'merging' ? 1 : 0 }
+    : { kira:165, denis:125, gleb:75, alex:35, egor:30 };
+  const tok = done ? { kira:1.2, denis:0.6, gleb:0.45, sofya:0.3, alex:0.1, egor:0.05, vera: S.fs === 'closed' ? 0 : 0.1, mark: S.fs === 'merged' ? 0.02 : 0 }
+    : { kira:0.9, denis:0.6, gleb:0.3, sofya:0.2, alex:0.05, egor:0.05 };
+  const src = S.unit === 'tok' && S.data === 'log' ? tok : time;
+  const keyOf = k => S.cut === 'who' ? PER[k].n : S.cut === 'model' ? (PER[k].m === 'Авто' ? 'Авто → ' + PER[k].full.split('сейчас ')[1].split(' ')[0] : PER[k].m === 'Qwen' ? 'Qwen · локально' : PER[k].m + ' 5.5') : PER[k].role;
+  const agg = {};
+  Object.entries(src).filter(([, v]) => v > 0).forEach(([k, v]) => { const key = keyOf(k); agg[key] = agg[key] || { v:0, who:[] }; agg[key].v += v; agg[key].who.push(k); });
+  return Object.entries(agg).sort((a, b) => b[1].v - a[1].v);
+}
+function cutsBlock() {
+  const J = S.data === 'log', tok = S.unit === 'tok' && J;
+  const rows = cutData(), max = rows[0] ? rows[0][1].v : 1, sum = rows.reduce((a, r) => a + r[1].v, 0);
+  const fv = v => tok ? String(Math.round(v * 100) / 100).replace('.', ',') + 'М' : (J ? '' : '≈ ') + fmt(v);
+  const acc = tok ? accB('sp') : J ? accB('jr') : accB('ap');
+  return `<div class="stl">Кто и на чём работал ${acc}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <span class="seg" role="group" aria-label="Разрез">${[['who','персоны'],['model','модели'],['role','роли']].map(([k, t]) => `<button class="${S.cut === k ? 'on' : ''}" aria-pressed="${S.cut === k}" data-act="cut" data-id="${k}">${t}</button>`).join('')}</span>
+      <span class="seg" role="group" aria-label="Что считать">${[['time','время'],['tok','токены']].map(([k, t]) => `<button class="${S.unit === k && (k === 'time' || J) ? 'on' : ''}" aria-pressed="${S.unit === k && (k === 'time' || J)}" data-act="unit" data-id="${k}" ${k === 'tok' && !J ? `disabled data-tip="Токены и стоимость — нужен учёт расхода с ключом фичи (ваше «да»). Посмотреть, как будет: режим «С журналом»."` : ''}>${t}</button>`).join('')}</span></div>
+    <div class="bars" data-t="cuts">${rows.map(([l, d]) => {
+      const id = S.cut + ':' + l, o = S.openBar === id;
+      const chats = chatsFor().filter(c => d.who.includes(c.who));
+      return `<button class="barb" data-act="bar" data-id="${esc(id)}" aria-expanded="${o}" data-tip="${esc('Показать чаты, которые это посчитали: ' + chats.length)}"><span class="lb">${S.cut === 'who' ? av(d.who[0]) : ''}${l}</span><span class="tr"><span class="fl ${tok ? 'sp' : ''}" style="width:${d.v / max * 100}%"></span></span><span class="vv">${fv(d.v)} · ${Math.round(d.v / sum * 100)}%</span><span class="chv ${o ? 'o' : ''}">${ic('chevR', 12)}</span></button>
+        ${o ? `<div class="blist" data-t="bar-chats">${chats.map(c => `<div class="cline">${av(c.who)}<span class="tx">${c.n}${c.arch ? ' · <span class="hint">архив</span>' : ''}</span>${gos(c.id, c.task)}</div>`).join('') || '<div class="hint">Чатов нет.</div>'}
+          <div class="hint">${tok ? 'Сумма расхода ходов этих чатов с ключом фичи.' : J ? 'Сумма интервалов работы по журналу.' : 'Модель сессии чата × время задач этого чата (старт → сдача) — приближённо.'}</div></div>` : ''}`;
+    }).join('')}</div>`;
+}
+function metricsTab() {
+  if (S.fs === 'empty') return `<div class="empty" data-t="met-empty"><span class="ci">${ic('info', 20)}</span><h3>Считать пока нечего</h3><p>Статистика появится с первой задачей исполнителя.</p></div>`;
+  const done = isDone(), J = S.data === 'log', t = timeTotals();
+  const cell = (l, a, v, h, cls = '') => `<div class="mc ${cls.includes('na') ? 'na' : ''}"><div class="l"><span>${l}</span>${a ? accB(a) : ''}</div><div class="v ${cls}">${v}</div>${h ? `<div class="h">${h}</div>` : ''}</div>`;
+  const agents = { run:520, wait:520, stop:520, closed:540 }[S.fs] || 640;
+  const waitNow = S.fs === 'wait' || S.fs === 'merge';
+  const cards = [
+    cell(['merged','closed'].includes(S.fs) ? 'Шла' : 'Идёт', 'ex', fmt(t.all), 'от создания эпика'),
+    cell('Работа', J ? 'jr' : 'ap', (J ? '' : '≈ ') + fmt(t.work), `по часам стены · агенты в сумме ≈ ${fmt(agents)}`),
+    J ? cell('Ждала вас', 'jr', fmt(t.wait), `${t.waits} ${plural(t.waits, 'раз', 'раза', 'раз')} · самое долгое 40 мин`, 'w')
+      : waitNow ? cell('Ждёт вас сейчас', 'ex', '40 мин', 'прошлые ожидания — нужен журнал', 'w') : cell('Ждала вас', 'jr', 'нужен журнал', 'прошлые ожидания не хранятся', 'na'),
+    J ? cell('Простой', 'jr', fmt(t.idle), `из них ночь ${fmt(NIGHT)}`) : cell('Не работали', 'ap', '≈ ' + fmt(t.unk), 'ожидание и простой без журнала не разделить'),
+    J ? cell('Ошибки', 'jr', S.fs === 'stop' ? '2' : '1', `${S.fs === 'stop' ? '529 · сеть' : 'сеть'} · стояла ${fmt(t.err)}`, 'e')
+      : S.fs === 'stop' ? cell('Стоит сейчас', 'ex', '25 мин', 'ошибка 529 · прошлые — нужен журнал', 'e') : cell('Ошибки', 'jr', 'нужен журнал', 'видна только текущая остановка', 'na'),
+    cell('Возвраты', 'ex', '3', `ревью 3 · проверка 0 · финал 0 · витков ${done ? 8 : 6}`),
+    cell('С первого раза', 'ex', done ? '2 из 4' : '1 из 3', 'шагов без возврата'),
+    J ? cell('Токены', 'sp', done ? '2,8М' : '2,1М', `≈ $${done ? '15,60' : '11,80'} по ценам API · Qwen локально — 0`) : cell('Токены и деньги', 'sp', 'нужен учёт расхода', 'расход не привязан к фиче', 'na'),
+  ].join('');
+  const hot = !done && S.fs !== 'merge' ? `<div class="hot" data-t="hot">${ic('alert', 15)}<div>${J
+      ? `<b>Сейчас дороже всего:</b> Кира · Qwen (локально) · Ш3, виток 3 — 640 тыс. токенов за последний час, 31 % фичи. Третий виток подряд на одном шаге. ${accB('sp')}`
+      : `<b>Дольше всех сейчас:</b> Ш3 «Галерея шаблонов» · Кира · Qwen — ≈ 1 ч 10 мин, третий виток подряд. ${accB('ap')}`}</div>${gos('k3', 't-s3', false)}</div>`
+    : S.fs === 'merge' ? `<div class="hot" data-t="hot">${ic('alert', 15)}<div><b>Сейчас дольше всего:</b> мерж ждёт вашего согласия · 40 мин. ${accB('ex')}</div>${gos('af', 't-fin', false)}</div>`
+    : `<div class="sumc" data-t="summary"><b>${S.fs === 'closed' ? 'Закрыта без мержа' : S.fs === 'merging' ? 'Мерж идёт' : 'Смержена'}</b> · ${S.fs === 'merging' ? 'идёт' : 'шла'} ${fmt(t.all)}: работа ${J ? '' : '≈ '}${fmt(t.work)}, ${J ? `ждала вас ${fmt(t.wait)}, простой ${fmt(t.idle)}, ${done ? '2,8М' : '2,1М'} токенов` : 'ожидание и простой — нужен журнал'}, 3 возврата.</div>`;
   const st = stageStatus(S.fs);
-  const durRows = STAGES.map((g, i) => { const [, d] = stageTime(g.k); return `<tr><td>${g.n}${st[i] === 'par' ? '<span class="sub">идёт вместе с производством</span>' : ''}</td><td class="${d ? 'n' : 'n m'}">${d || (st[i] === 'skip' ? 'пропущен' : st[i] === 'todo' ? 'впереди' : st[i] === 'wait' ? 'ждёт вас' : '—')}</td></tr>`; }).join('');
+  const rows = STAGES.map((g, i) => { const [when, d] = stageTime(g.k), s = st[i];
+    const nd = d || (s === 'skip' ? 'пропущен' : s === 'todo' ? 'впереди' : s === 'wait' ? 'ждёт вас' : '—');
+    return `<tr><td><button class="stb" data-act="toStage" data-id="${g.k}" aria-label="${esc(g.n + ': открыть этап в «Хронологии»')}"><span>${g.n}</span>${s === 'par' ? '<span class="hint">· вместе с производством</span>' : ''}${ic('chevR', 12)}</button></td>
+      <td class="n m wh">${when || ''}</td><td class="${d ? 'n' : 'n m'}">${nd}</td></tr>`; }).join('');
+  const rets = [['Ш2','g2','t-r2a','major 1'],['Ш3','g3','t-r3a','major 2 · minor 3'],['Ш3','g3','t-r3b','major 1']];
   return `<div data-t="metrics">
-    <div class="mgrid">
-      ${cell(S.fs === 'merged' ? 'Шла' : 'Идёт', S.fs === 'merged' ? '1 дн 0 ч' : S.fs === 'closed' ? '22 ч' : '23 ч', 'от создания эпика')}
-      ${cell('Ждёт вас сейчас', waitNow, waitNow === '—' ? 'никто не ждёт' : S.fs === 'merge' ? 'согласие на мерж' : 'вопрос Киры', waitNow === '—' ? '' : 'w')}
-      ${cell('Шаги', done ? '4 из 4' : '2 из 4', 'приняты ревью')}
-      ${cell('С первого раза', done ? '2 из 4' : '1 из 3', 'шагов без возврата')}
-      ${cell('Возвраты', '3', 'ревью 3 · проверка 0 · финал 0')}
-      ${cell('Задач', String(tasksFor().length), done ? 'все закрыты' : `в работе ${tasksFor().filter(t => ['r','w','x'].includes(t.st)).length}`)}
-    </div>
-    <div class="stl">Длительность этапов · ≈ по задачам</div>
-    <table class="tbl" data-t="met-stages">${durRows}</table>
-    <div class="stl">Самый долгий шаг</div>
-    <table class="tbl"><tr><td><span class="code">Ш3</span> Галерея шаблонов<span class="sub">Кира · фронт · ${done ? '3 витка, принят с 3-го' : '3-й виток идёт'}</span></td><td class="n">${done ? '≈ 1 ч 30 мин' : '≈ 1 ч 10 мин'}</td></tr></table>
-    <div class="stl">Состав ${be('роль: проекция')}</div>
-    <table class="tbl" data-t="met-team">
-      <tr><td>${who('denis')}</td><td class="n">2 шага · принято 2 · возвратов 1</td></tr>
-      <tr><td>${who('kira')}</td><td class="n">2 шага · принято ${done ? 2 : 0} · возвратов 2</td></tr>
-      <tr><td>${who('gleb')}</td><td class="n">${done ? 7 : 5} витков ревью</td></tr>
-      ${done && S.fs !== 'closed' ? `<tr><td>${who('vera')}</td><td class="n">1 проверка</td></tr>` : ''}
-      <tr><td>${who('egor')}</td><td class="n">план, 4 шага</td></tr>
-      <tr><td>${who('alex')}</td><td class="n">${done && S.fs !== 'closed' ? 'разрез и финал' : 'разрез'}</td></tr>
-      ${['merging','merged'].includes(S.fs) ? `<tr><td>${who('mark')}</td><td class="n">мерж</td></tr>` : ''}
-      <tr><td>${who('sofya')}</td><td class="n">ведёт фичу</td></tr>
-    </table></div>`;
+    <div class="mkonly" data-t="mode">
+      <b>Макет · данные:</b>
+      <span class="seg" role="group" aria-label="Режим данных">${(isM() ? [['now','Сейчас'],['log','С журналом']] : [['now','Сейчас — без хранилища'],['log','С журналом — нужно ваше «да»']]).map(([k, tx]) => `<button class="${S.data === k ? 'on' : ''}" aria-pressed="${S.data === k}" data-act="data" data-id="${k}">${tx}</button>`).join('')}</span>
+      <span style="flex-basis:100%">${J ? 'Так станет после журнала событий и учёта расхода: работа, ожидание, простой и ошибки точны по времени, появятся токены и деньги.' : 'Так будет в первой очереди: календарь и текущее ожидание точны, работа «≈» по задачам, прошлые ожидания и простой не разделить.'} В продукте переключателя нет.</span></div>
+    <div class="blg" style="margin:0 0 10px">${accB('ex')} из текущих данных ${accB('ap')} по задачам и сессиям ${accB('jr')} нужен журнал ${accB('sp')} нужен учёт расхода</div>
+    <div class="stl">Время фичи ${J ? accB('jr') : accB('ap')}</div>
+    ${bandHtml()}
+    <div class="mgrid" style="margin-top:14px" data-t="kpis">${cards}</div>
+    ${hot}
+    ${cutsBlock()}
+    <div class="stl">Этапы ${accB('ex')} границы · ${accB('ap')} работа</div>
+    <table class="tbl" data-t="met-stages">${rows}</table>
+    <div class="stl">Возвраты ${accB('ex')}</div>
+    ${rets.map(r => `<div class="cline"><span class="code">${r[0]}</span><span class="tx">${who('gleb', false)}</span><span class="sev maj">${r[3]}</span>${gos(r[1], r[2])}</div>`).join('')}
+  </div>`;
 }
 
 /* ============ Страница ============ */
@@ -843,7 +1149,7 @@ function menuHtml() {
   if (!S.menu) return '';
   return `<div class="menu" style="right:16px;top:48px" data-t="menu" role="menu">
     <button data-act="copyBranch" role="menuitem">${ic('copy')}Скопировать ветку</button>
-    <button data-act="openTasks" role="menuitem">${ic('tasks')}Открыть эпик в «Задачах»</button>
+    <button data-act="task" data-id="t-epic" role="menuitem">${ic('tasks')}Открыть эпик в «Задачах»</button>
     <button data-act="chat" data-id="cur" role="menuitem">${ic('msg')}Открыть ключевой чат</button></div>`;
 }
 
@@ -851,13 +1157,20 @@ function menuHtml() {
 function chatPane() {
   const c = findChat(S.chatId);
   const close = isM() ? `<button class="back" data-act="toList" aria-label="К списку чатов">${ic('chevL', 18)}<span style="font-size:13px">Чаты</span></button>` : '';
-  return `<div class="isl center" data-t="chat">
+  return `<div class="isl center" data-t="chat" data-id="${c.id}">
     <div class="tb">${close}${av(c.who, 18)}<span class="fname" style="font-family:'Hanken Grotesk',sans-serif">${c.n}</span>
-      <button class="fchip" data-act="openFeature" aria-label="Открыть страницу фичи">${fg(glyphOf(S.fs), 12)}${isM() ? 'Фича' : TITLE_SHORT}</button></div>
+      ${backChip()}</div>
+    ${c.arch ? `<div class="banner" data-t="arch-banner">${ic('inbox', 13)}<span><b>Чат в архиве.</b> Открыт для чтения; новое сообщение вернёт его из архива.</span></div>` : ''}
+    ${c.task && findTask(c.task) ? `<div class="banner" style="background:var(--c-bg-card)">${ic('tasks', 13)}<span style="flex:1;min-width:0">Задача чата: «${findTask(c.task).n}»</span>${goTask(c.task)}</div>` : ''}
     <div class="msgs"><div class="msg">${PER[c.who].n}: ${c.id === 'k3' ? 'Показывать в галерее шаблоны других участников проекта или только мои?' : 'Сводка по шагу готова, итог в задаче.'}</div>
       <div class="msg me">Смотрю.</div>
       <div style="font-size:11px;color:var(--c-text-muted);text-align:center;margin-top:auto">Заглушка чата. Страница фичи скрылась, а не закрылась: вернётся с той же вкладкой по плашке или чипу фичи.</div></div>
     <div class="compose"><div>Сообщение…</div></div></div>`;
+}
+const TAB_NAME = () => ({ tl:'Хронология', chats:'Чаты', tasks:'Задачи', ev:'События', met:'Статистика' })[S.tab];
+function backChip() {
+  const tip = `Вернуться на страницу фичи — вкладка «${TAB_NAME()}»`;
+  return `<button class="fchip" data-act="openFeature" data-t="back-chip" data-tip="${esc(tip)}" aria-label="${esc(tip)}">${fg(glyphOf(S.fs), 12)}${isM() ? 'Фича' : TITLE_SHORT + ' · ' + TAB_NAME()}</button>`;
 }
 function filePane() {
   return `<div class="isl center" data-t="file"><div class="tb">${isM() ? `<button class="back" data-act="toList">${ic('chevL', 18)}<span style="font-size:13px">Файлы</span></button>` : `<button class="tib" data-act="closeFile" aria-label="Закрыть">${ic('x', 16)}</button>`}${ic('file')}<span class="fname">TemplatesGallery.tsx</span></div>
@@ -868,8 +1181,12 @@ export function TemplatesGallery() {
 }</div></div>`;
 }
 function tasksPane() {
-  return `<div class="isl center" data-t="tasks-win"><div class="tb">${isM() ? `<button class="back" data-act="toList">${ic('chevL', 18)}<span style="font-size:13px">Назад</span></button>` : `<button class="tib" data-act="closeFile" aria-label="Закрыть">${ic('x', 16)}</button>`}${ic('tasks')}<span class="fname" style="font-family:'PT Serif',serif;font-size:16px">Задачи · эпик «${TITLE_SHORT}»</span></div>
-    <div class="pbody">${tasksFor().map(t => `<div class="rowb" style="width:100%;margin:0">${av(t.who)}<span class="tx">${t.n}</span><span class="tst ${t.st}">${TST[t.st]}</span></div>`).join('') || '<div class="hint">Задач нет.</div>'}</div></div>`;
+  const t = S.taskId ? findTask(S.taskId) : null;
+  const card = t ? `<div class="tcard" data-t="task-card" data-id="${t.id}"><h3>${t.n}</h3>
+      <div class="r"><span class="tst ${t.st}">${t.epic ? (t.st === 'd' ? 'закрыт' : 'идёт') : TST[t.st]}</span>${who(t.who, false)}${roleChip(t.role)}${t.chat ? goChat(t.chat) : '<span class="hint">чата ещё нет</span>'}</div>
+      ${t.st === 'd' ? `<div class="notice in" style="margin-top:10px" data-t="closed-banner">${ic('check', 14)}<div><b>Задача закрыта.</b>Открыта для просмотра: итог, файлы и ход исполнителя на месте.</div></div>` : ''}</div>` : '';
+  return `<div class="isl center" data-t="tasks-win"><div class="tb">${isM() ? `<button class="back" data-act="toList">${ic('chevL', 18)}<span style="font-size:13px">Назад</span></button>` : `<button class="tib" data-act="closeFile" aria-label="Закрыть">${ic('x', 16)}</button>`}${ic('tasks')}<span class="fname" style="font-family:'PT Serif',serif;font-size:16px">Задачи · эпик «${TITLE_SHORT}»</span>${S.taskId ? backChip() : ''}</div>
+    <div class="pbody">${card}${tasksFor().map(x => `<div class="rowb ${x.id === S.taskId ? 'sel' : ''}" style="width:100%;margin:0">${av(x.who)}<span class="tx">${x.n}</span><span class="tst ${x.st}">${TST[x.st]}</span></div>`).join('') || '<div class="hint">Задач нет.</div>'}</div></div>`;
 }
 function notesPane() {
   return `<div class="isl center" data-t="notes"><div class="tb"><button class="tib" data-act="closeFile" aria-label="Закрыть">${ic('x', 16)}</button>${ic('notes')}<span class="fname" style="font-family:'PT Serif',serif;font-size:16px">Заметки</span></div>
@@ -908,7 +1225,7 @@ function modalHtml() {
       <div class="ft"><button class="btn sm gh" data-act="modalX">Отмена</button><button class="btn sm pri" data-act="mergeOk" ${S.merging ? 'disabled' : ''}>${ic('merge', 13)}${S.merging ? 'Запускаю…' : 'Мерж'}</button></div>`,
     mergeDone:`<h3>Мерж запущен</h3>
       <div class="res" data-t="merge-result">${avChip('mark')}<div><b>Задача «Мерж · ${TITLE_SHORT}»</b>Исполнитель — Марк · мерж · начал сейчас</div></div>
-      <div class="ft"><button class="btn sm gh" data-act="chat" data-id="mk">${ic('msg', 13)}Открыть чат Марка</button><button class="btn sm pri" data-act="modalX">Готово</button></div>`,
+      <div class="ft"><button class="btn sm gh" data-act="task" data-id="t-merge">${ic('tasks', 13)}Задача мержа</button><button class="btn sm gh" data-act="chat" data-id="mk">${ic('msg', 13)}Чат Марка</button><button class="btn sm pri" data-act="modalX">Готово</button></div>`,
     mergeFail:`<h3>Мерж не запущен</h3>
       <div class="notice dn" data-t="merge-409">${ic('alert', 16)}<div><b>Worktree фичи не найден на диске.</b>Фича осталась в состоянии «ждёт согласия на мерж»; ничего не изменилось.</div></div>
       <div class="ft"><button class="btn sm gh" data-act="chat" data-id="cur">${ic('msg', 13)}Ключевой чат</button><button class="btn sm pri" data-act="modalX">Понятно</button></div>`,
@@ -927,10 +1244,11 @@ function render() {
     <span class="grp"><span class="lbl">Тема</span>${pill('theme', [['light','светлая'],['dark','тёмная']])}</span>
     <span class="grp"><span class="lbl">Ширина</span>${pill('dev', [['d','1280'],['m','360']])}</span>
     <span class="grp"><span class="lbl">Название</span>${pill('longT', [[false,'короткое'],[true,'длинное']])}</span>
+    <span class="grp"><span class="lbl">Данные статистики</span>${pill('data', [['now','сейчас'],['log','с журналом']])}</span>
     <span class="grp"><span class="lbl">Ответ мержа</span>${pill('mergeResp', [['ok','200'],['409','409']])}</span>
     <span class="grp"><span class="lbl">Пометки бэка</span>${pill('marks', [[true,'вкл'],[false,'выкл']])}</span>
     <span class="grp"><button class="btn xs gh" data-act="resetWin">Вернуть страницу</button></span>`;
-  document.getElementById('note').innerHTML = '<b>Один макет на утверждение.</b> Над вкладками — шапка как у файла, мета и блок «ждёт вас». Вкладки: «Хронология» (по умолчанию: этапы, шаги, витки, кто работал) · «Чаты» · «Задачи» · «События» · «Метрики» (только текущие данные). ' +
+  document.getElementById('note').innerHTML = '<b>Один макет на утверждение.</b> Над вкладками — шапка как у файла, мета и блок «ждёт вас». Вкладки: «Хронология» (по умолчанию: мини-сводка времени, этапы, шаги, витки, кто работал) · «Чаты» · «Задачи» · «События» · «Статистика» (лента времени, числа с пометкой точности, разрезы). Везде, где назван чат или задача, — две цели: «чат» и «задача». ' +
     'Пунктир — элемента сейчас нет; ' + be() + ' — новое поле ответа без хранилища. Клик по чату или кнопке рельсы скрывает страницу; плашка возвращает её с той же вкладкой. Esc закрывает.';
   let html;
   if (!isM()) {
@@ -976,7 +1294,8 @@ document.addEventListener('focusout', e => { if (e.target.closest('[data-tip]') 
 document.addEventListener('click', e => {
   const set = e.target.closest('[data-set]');
   if (set) { const k = set.dataset.set; let v = set.dataset.v; if (k === 'marks' || k === 'longT') v = v === 'true';
-    S[k] = v; if (k === 'fs' || k === 'dev') { S.win = 'feature'; S.menu = false; S.modal = null; S.rail = 'chats'; }
+    S[k] = v; if (k === 'data' && v === 'now') S.unit = 'time';
+    if (k === 'fs' || k === 'dev') { S.win = 'feature'; S.menu = false; S.modal = null; S.rail = 'chats'; }
     if (k === 'fs') { S.taskF = 'all'; S.evAll = false; }
     render(); return; }
   // Тап по элементу с подсказкой без действия (метка «ключевой», аватар с чипом, «≈») — показать/спрятать подсказку
@@ -995,12 +1314,18 @@ document.addEventListener('click', e => {
     case 'openFeature': S.win = 'feature'; S.rail = 'chats'; break;
     case 'resetWin': S.win = 'feature'; S.rail = 'chats'; S.modal = null; break;
     case 'chat': S.modal = null; S.win = 'chat'; S.chatId = id; S.rail = 'chats'; break;
-    case 'rail': if (id === 'chats') { S.rail = 'chats'; if (isM()) S.win = 'list'; }
+    case 'rail': S.taskId = null; if (id === 'chats') { S.rail = 'chats'; if (isM()) S.win = 'list'; }
       else if (id === 'files') { S.rail = 'files'; if (isM()) S.win = 'file'; }
       else S.win = id; break;
     case 'openFile': S.win = 'file'; break;
     case 'closeFile': S.win = isM() ? 'list' : 'none'; break;
-    case 'openTasks': S.win = 'tasks'; break;
+    case 'openTasks': S.win = 'tasks'; S.taskId = null; break;
+    case 'task': S.modal = null; S.win = 'tasks'; S.taskId = id; break;
+    case 'toStage': S.tab = 'tl'; S.flash = id; break;
+    case 'data': S.data = id; if (id === 'now') S.unit = 'time'; break;
+    case 'cut': S.cut = id; S.openBar = null; break;
+    case 'unit': S.unit = id; S.openBar = null; break;
+    case 'bar': S.openBar = S.openBar === id ? null : id; break;
     case 'tab': S.tab = id; break;
     case 'step': S.openSteps[id] = !S.openSteps[id]; break;
     case 'arch': S.archOpen = !S.archOpen; break;
@@ -1023,6 +1348,7 @@ document.addEventListener('click', e => {
   }
   render();
   if (act === 'tab') document.getElementById('tab-' + id)?.focus({ preventScroll:true });
+  if (act === 'toStage') { document.getElementById('n-' + id)?.scrollIntoView({ block:'center' }); S.flash = null; }
 });
 document.addEventListener('keydown', e => {
   const tab = e.target.closest?.('.tab');

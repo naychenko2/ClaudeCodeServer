@@ -2040,4 +2040,82 @@ public class FeatureProjectorTests
         json.Should().Contain("\"chatArchived\":false", "архивность чата исполнителя в JSON");
         json.Should().Contain("\"reviewChatId\":\"chat-review\"", "чат витка в JSON после SlimRun (camelCase)");
     }
+
+    // ─── Б4: модель чата (modelLabel/modelFull) и chats[] ─────────────────────────────────
+
+    // «Авто» (Session.Model=null) → modelFull = резолв слота (тестовый резолвер), НЕ сырое «Авто».
+    // Мутация: резолвер отдаёт сырое «Авто» в modelFull → тест краснеет.
+    [Fact]
+    public void Build_МодельЧата_Авто_РезолвСлота()
+    {
+        var epic = new TaskItem { Id = "epic-b4a", Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s-b4a", FeatureId = "epic-b4a", Role = TaskRoles.Step, LinkedSessionId = "chat-b4a" };
+        // Сессия: Model=null (Авто). Тестовый резолвер: «Авто» → резолв слота (не сырое «Авто»).
+        var sessions = new[] { new FeatureIndexSession("chat-b4a", "s-b4a", null, false, Model: null) };
+        Func<FeatureIndexSession, (string?, string?)> resolver = s =>
+            s.Model is null
+                ? ("Авто", "Авто → Claude Opus 5.5 (слот «сильная»)")
+                : (s.Model, s.Model);
+        var run = FeatureProjector.Build(epic, [epic, step], null, sessions, resolver);
+        var exec = run.Stages.Single(s => s.Key == "prod").Executors.Single(e => e.TaskId == "s-b4a");
+        exec.ModelLabel.Should().Be("Авто");
+        exec.ModelFull.Should().Be("Авто → Claude Opus 5.5 (слот «сильная»)", "«Авто» → резолв слота, не сырое «Авто»");
+    }
+
+    // Явная модель (Session.Model задана) → её имя (label + full), не «Авто».
+    [Fact]
+    public void Build_МодельЧата_Явная_Имя()
+    {
+        var epic = new TaskItem { Id = "epic-b4b", Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s-b4b", FeatureId = "epic-b4b", Role = TaskRoles.Step, LinkedSessionId = "chat-b4b" };
+        var sessions = new[] { new FeatureIndexSession("chat-b4b", "s-b4b", null, false, Model: "opus") };
+        Func<FeatureIndexSession, (string?, string?)> resolver = s =>
+            s.Model is null ? ("Авто", "Авто → ...") : ("Opus", "Claude Opus");
+        var run = FeatureProjector.Build(epic, [epic, step], null, sessions, resolver);
+        var exec = run.Stages.Single(s => s.Key == "prod").Executors.Single(e => e.TaskId == "s-b4b");
+        exec.ModelLabel.Should().Be("Opus");
+        exec.ModelFull.Should().Be("Claude Opus");
+    }
+
+    // chats[]: чужой чат (TaskId не задача фичи) не попадает; чат задачи — executor;
+    // чат эпика (SourceSessionId) — curator. Мутация: убрать фильтр по снимку владельца →
+    // чужой чат попадает → тест краснеет.
+    [Fact]
+    public void BuildFeatureChats_ЧужойЧат_НеПопадает()
+    {
+        var epic = new TaskItem { Id = "epic-b4c", Role = TaskRoles.Feature, SourceSessionId = "curator-b4c" };
+        var step = new TaskItem { Id = "s-b4c", FeatureId = "epic-b4c", Role = TaskRoles.Step };
+        var sessions = new[]
+        {
+            new FeatureIndexSession("chat-exec-b4c", "s-b4c", null, false),
+            new FeatureIndexSession("curator-b4c", "epic-b4c", null, false),
+            new FeatureIndexSession("foreign-b4c", "other-task", null, false),
+        };
+        var chats = FeatureProjector.BuildFeatureChats(epic, [epic, step], sessions, null);
+        chats.Should().NotContain(c => c.Id == "foreign-b4c", "чужой чат (не задача фичи) не в chats[]");
+        chats.Should().Contain(c => c.Id == "chat-exec-b4c" && c.Kind == "executor");
+        chats.Should().Contain(c => c.Id == "curator-b4c" && c.Kind == "curator", "чат эпика (SourceSessionId) — curator");
+    }
+
+    // chats[]: архивный чат → archived=true.
+    [Fact]
+    public void BuildFeatureChats_Архивный_Чат()
+    {
+        var epic = new TaskItem { Id = "epic-b4d", Role = TaskRoles.Feature };
+        var step = new TaskItem { Id = "s-b4d", FeatureId = "epic-b4d", Role = TaskRoles.Step };
+        var sessions = new[] { new FeatureIndexSession("chat-arch-b4d", "s-b4d", null, true) };
+        var chats = FeatureProjector.BuildFeatureChats(epic, [epic, step], sessions, null);
+        chats.Should().ContainSingle(c => c.Id == "chat-arch-b4d").Which.Archived.Should().BeTrue();
+    }
+
+    // chats[]: чат эпика без признака curator/orchestrator → key.
+    [Fact]
+    public void BuildFeatureChats_Эпик_БезПризнака_Key()
+    {
+        var epic = new TaskItem { Id = "epic-b4e", Role = TaskRoles.Feature }; // нет SourceSessionId/ExecutorLaunchedBySessionId
+        var step = new TaskItem { Id = "s-b4e", FeatureId = "epic-b4e", Role = TaskRoles.Step };
+        var sessions = new[] { new FeatureIndexSession("chat-epic-b4e", "epic-b4e", null, false) };
+        var chats = FeatureProjector.BuildFeatureChats(epic, [epic, step], sessions, null);
+        chats.Should().ContainSingle(c => c.Id == "chat-epic-b4e").Which.Kind.Should().Be("key");
+    }
 }

@@ -21,11 +21,13 @@ public sealed class FeatureProjector(TaskManager tasks)
     // sessions — снимок сессий владельца (Б7): LinkedSessionId наружу (chatId/reviewChatId)
     // только если в нём (fail-closed); null — снимка нет, все чаты null (как в BuildIndexCore).
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
-        => SlimRun(BuildCore(epic, featureTasks, now, sessions));
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver));
 
     internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -317,6 +319,12 @@ public sealed class FeatureProjector(TaskManager tasks)
             var executors = tasks.Select(t =>
             {
                 var chat = LiveSession(t.LinkedSessionId); // Б7: чат исполнителя (fail-closed)
+                // Б4: модель чата (label/full) — готовая функция от контроллера: резолв слота
+                // «Авто» — только UserModelTierResolver (инвариант CLAUDE.md), проектор в Main не
+                // лезет. chat null (чужой/удалённый) или modelResolver null (тесты) → null.
+                (string? label, string? full) = (null, null);
+                if (chat is not null && modelResolver is not null)
+                    (label, full) = modelResolver(chat);
                 return new FeatureStageExecutor
                 {
                     PersonaId = t.PersonaId,
@@ -327,8 +335,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                     Status = ExecutorStatus(t),
                     ChatId = chat?.Id,               // Б7: LinkedSessionId, только если в снимке владельца (иначе null)
                     ChatArchived = chat?.Archived ?? false, // Б7: чат исполнителя в архиве
-                    ModelLabel = null,    // Б4
-                    ModelFull = null,    // Б4
+                    ModelLabel = label,    // Б4
+                    ModelFull = full,    // Б4
                 };
             }).ToList();
 
@@ -1094,24 +1102,29 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Лента событий (BuildEvents) считается по полным задачам (reason вердикта =
     // Verification.Notes, который Slim обнуляет для списков/ответа); run для ответа
     // облегчается отдельно (SlimRun, контракт master). null — эпика нет (как у Project).
+    // modelResolver (Б4) — готовая функция модели чата от контроллера: исполнители получают
+    // modelLabel/modelFull (оба маршрута GetFeatures/GetFeature — одна и та же функция).
     public FeatureRun? ProjectFull(string featureId, string ownerId,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner), null, sessions);
+        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
     // sessions (Б7) — снимок сессий владельца: исполнители (chatId/chatArchived) fail-closed,
     // как в ProjectForSession/ProjectFull — все ветвления GetFeatures дают одинаковых исполнителей.
+    // modelResolver (Б4) — как в ProjectFull: одинаковые modelLabel/modelFull во всех ветвлениях.
     public IReadOnlyList<FeatureRun> ProjectAll(string ownerId,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         return owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
     }
 
@@ -1122,13 +1135,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // по LastActivityAt descending; 4) закрытые — по LastActivityAt descending.
     // Пилюля показывает runs[0], поэтому порядок определяет бэк, фронт его не пересортирует.
     public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature
                 && (t.SourceSessionId == sessionId || t.ExecutorLaunchedBySessionId == sessionId))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
         return OrderRuns(runs);
     }
@@ -1329,6 +1343,44 @@ public sealed class FeatureProjector(TaskManager tasks)
         }
 
         return new FeatureIndex { Chats = chats, Features = rows };
+    }
+
+    // Чаты фичи (GET /api/tasks/features/{id}, chats[]; Б4): все чаты фичи из снимка владельца.
+    // Чат задачи фичи (Session.TaskId = задача) → executor; чат эпика (Session.TaskId = эпик) →
+    // curator (создал эпик, SourceSessionId) → orchestrator (запустил исполнителя эпика,
+    // ExecutorLaunchedBySessionId) → key (без признака). Чужой/удалённый чат не в снимке
+    // (fail-closed, как исполнители). modelLabel/modelFull — из modelResolver (как у исполнителей).
+    // Только для features/{id}: в SlimRun/индекс chats не входит.
+    internal static List<FeatureChat> BuildFeatureChats(
+        TaskItem epic,
+        IReadOnlyList<TaskItem> allFeatureTasks,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+    {
+        // taskId → задача фичи (эпик + дочерние). Чужая задача (не в списке) → чат не в фиче.
+        var byTaskId = new Dictionary<string, TaskItem> { [epic.Id] = epic };
+        foreach (var t in allFeatureTasks)
+            if (!ReferenceEquals(t, epic))
+                byTaskId[t.Id] = t;
+
+        var chats = new List<FeatureChat>();
+        foreach (var s in sessions)
+        {
+            if (s.TaskId is null || !byTaskId.TryGetValue(s.TaskId, out var task)) continue;
+            // kind: чат эпика — по признакам (curator/orchestrator), иначе key; чат задачи — executor.
+            var kind = ReferenceEquals(task, epic)
+                ? (epic.SourceSessionId == s.Id ? "curator"
+                    : epic.ExecutorLaunchedBySessionId == s.Id ? "orchestrator"
+                    : "key")
+                : "executor";
+            (string? label, string? full) = (null, null);
+            if (modelResolver is not null) (label, full) = modelResolver(s);
+            chats.Add(new FeatureChat(
+                s.Id, kind, s.TaskId, s.Archived,
+                task.PersonaId, task.Role, task.StepRef, task.Lane,
+                label, full));
+        }
+        return chats;
     }
 
     // Сила связи вида: key(0) > curator(1) > orchestrator(2) > executor(3).

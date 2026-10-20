@@ -4,8 +4,26 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Вертикаль Tasks SessionManager не видит (шов решён в С0): контроллер (Main) сам берёт
 // сессии владельца (SessionManager.GetAllOwnedBy) и маппит в эту запись. Id — id чата;
 // TaskId — Session.TaskId (задача-владелец чата-исполнителя); ProjectId — проект чата
-// (null — чат вне проектов); Archived — чат в архиве (Session.IsArchived).
-public sealed record FeatureIndexSession(string Id, string? TaskId, string? ProjectId, bool Archived);
+// (null — чат вне проектов); Archived — чат в архиве (Session.IsArchived); Model — модель
+// чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4).
+public sealed record FeatureIndexSession(string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null);
+
+// Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4): один чат из снимка владельца,
+// привязанный к фиче. kind: key | curator | orchestrator | executor (те же виды, что в
+// FeatureIndexChatEntry; «key» — чат эпика/оркестратора без признака curator/orchestrator).
+// modelLabel/modelFull — как у исполнителя (FeatureStageExecutor): «Авто»/короткая метка и
+// полное имя (для «Авто» — «Авто → {модель} (слот «{тир}»)»).
+public sealed record FeatureChat(
+    string Id,
+    string Kind,
+    string? TaskId,
+    bool Archived,
+    string? PersonaId,
+    string? TaskRole,
+    string? StepRef,
+    string? Lane,
+    string? ModelLabel,
+    string? ModelFull);
 
 // Индекс «чат → фичи» (GET /api/tasks/features/index, контракт С0 §1).
 // Б1 строит карту членства (Chats) и строки-заготовки фич (Features); Б2 дополнит строки

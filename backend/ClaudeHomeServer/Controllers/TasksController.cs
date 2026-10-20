@@ -9,6 +9,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
@@ -114,7 +115,11 @@ public class TasksController(
     // Git-вертикаль (опционально, как в SessionManager): гард мержа проверяет, что worktree
     // фичи числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
     // null — подсистема Git выключена → мерж fail-closed (иначе исполнитель стартует в корне).
-    GitService? git = null) : ControllerBase
+    GitService? git = null,
+    // Б4: резолв модели чата (слой Llm, Main его видит): слот «Авто» → модель (UserModelTierResolver,
+    // единственная точка разворачивания, инвариант CLAUDE.md). null — подсистема Llm выключена
+    // → «Авто» без разворота (честный null, не 500).
+    UserModelTierResolver? tiers = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -460,9 +465,13 @@ public class TasksController(
         // «фича переезжает за оркестратором»). sessionId — id сессии (GUID-строка).
         // Б7: снимок сессий владельца в оба ветвления — исполнители (chatId/chatArchived)
         // одинаковы для features?sessionId= и features/{id} (ProjectFull); fail-closed.
+        // Б4: одна и та же функция модели чата (ChatModelResolver) в оба ветвления —
+        // modelLabel/modelFull исполнителей одинаковы, что в списке, что на странице.
+        var snapshot = SessionSnapshot();
+        var resolver = ChatModelResolver();
         var runs = sessionId is null
-            ? features.ProjectAll(UserId, SessionSnapshot())
-            : features.ProjectForSession(sessionId, UserId, SessionSnapshot());
+            ? features.ProjectAll(UserId, snapshot, resolver)
+            : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
         return Ok(runs);
     }
 
@@ -482,13 +491,61 @@ public class TasksController(
         return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
     }
 
-    // Узкий снимок сессий владельца (id, taskId, projectId, archived) — единый источник для
-    // индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
-    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца).
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model) — единый источник
+    // для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
+    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
+    // Session.Model (null/пусто — «Авто», слот; Б4).
     private List<FeatureIndexSession> SessionSnapshot() =>
         sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model))
             .ToList();
+
+    // Б4: готовая функция модели чата (label/full) для проекции фичи. Резолв «Авто» — ТОЛЬКО
+    // UserModelTierResolver.ModelFor (инвариант CLAUDE.md, единственная точка); слот задачи —
+    // TaskItem.ModelTier → слот персоны (как TaskExecutionService.ResolveExecutorModel) → Medium.
+    // Явная модель (Session.Model) — её имя/метка. tiers null (Llm выключена) → null (без разворота).
+    // Функцию передаём в проектор: он в Main не лезет (инвариант изоляции вертикалей).
+    private Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
+    {
+        if (tiers is null) return null;
+        return s =>
+        {
+            // Явная модель чата: имя + короткая метка.
+            if (!string.IsNullOrWhiteSpace(s.Model))
+                return (ModelShortLabel(s.Model), ModelDisplayName(s.Model));
+            // «Авто»: слот задачи (task.ModelTier → persona.ModelTier → Medium) → ModelFor.
+            var task = s.TaskId is not null ? tasks.GetById(s.TaskId) : null;
+            var persona = task?.PersonaId is not null ? personas.Get(task.PersonaId, UserId) : null;
+            var tier = task?.ModelTier ?? persona?.ModelTier ?? ModelTier.Medium;
+            var model = tiers.ModelFor(tier, UserId);
+            var tierLabel = tier switch
+            {
+                ModelTier.Strong => "сильная",
+                ModelTier.Weak => "слабая",
+                _ => "средняя",
+            };
+            var full = model is null ? "Авто" : $"Авто → {ModelDisplayName(model)} (слот «{tierLabel}»)";
+            return ("Авто", full);
+        };
+    }
+
+    // Полное имя модели для чипа: Claude → «Claude {Семейство}», иначе id модели как есть.
+    private static string? ModelDisplayName(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (ClaudeModelFamily.Resolve(model) is { } family)
+            return $"Claude {family.DisplayName}";
+        return model;
+    }
+
+    // Короткая метка модели: Claude → семейство («Opus»), иначе первое слово id («Qwen»).
+    private static string? ModelShortLabel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (ClaudeModelFamily.Resolve(model) is { } family)
+            return family.DisplayName;
+        return model.Split(' ')[0];
+    }
 
     // Одна фича по id эпика (волна 2 «Обзор фич», GET /api/tasks/features/{featureId}):
     // обёртка { run, events, eventsTotal } — агрегат (Project, без новой арифметики) + лента
@@ -517,16 +574,32 @@ public class TasksController(
         // (фронт читает error).
         // Б7: снимок сессий владельца → исполнители/шаги/витки (chatId/reviewChatId) fail-closed,
         // как sessionId события ниже; одинаковые исполнители, что в features?sessionId= (ProjectForSession).
-        var run = features.ProjectFull(featureId, UserId, SessionSnapshot());
+        // Б4: chats[] — все чаты фичи из снимка владельца (fail-closed); modelLabel/modelFull — та же
+        // функция (ChatModelResolver), что у исполнителей: список и страница дают одинаковые.
+        var snapshot = SessionSnapshot();
+        var resolver = ChatModelResolver();
+        var run = features.ProjectFull(featureId, UserId, snapshot, resolver);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
         // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
         // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
-        var all = FeatureProjector.BuildEvents(run, SessionSnapshot());
+        var all = FeatureProjector.BuildEvents(run, snapshot);
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal });
+        // Б4: chats[] — все чаты фичи (эпик + дочерние) из снимка владельца; только features/{id}
+        // (в SlimRun/индекс chats не входит). kind: executor — чат задачи, curator/orchestrator/key
+        // — чат эпика по признакам (BuildFeatureChats).
+        var allFeatureTasks = new List<TaskItem> { run.Epic };
+        allFeatureTasks.AddRange(run.Steps);
+        allFeatureTasks.AddRange(run.Reviews);
+        allFeatureTasks.AddRange(run.Qa);
+        if (run.Final is not null) allFeatureTasks.Add(run.Final);
+        if (run.Merge is not null) allFeatureTasks.Add(run.Merge);
+        allFeatureTasks.AddRange(run.Cut);
+        allFeatureTasks.AddRange(run.Plan);
+        var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats });
     }
 
     // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»

@@ -472,6 +472,139 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             listExec.GetProperty("chatId").GetString(), "оба маршрута дают одинаковых исполнителей");
     }
 
+    // ─── Б4: модель чата (modelLabel/modelFull) и chats[] ─────────────────────────────────
+
+    // «Авто» (Session.Model=null) → modelFull = резолв слота (UserModelTierResolver), не сырое «Авто».
+    // Слот strong владельца → известная модель (SetModelTiers); задача modelTier=strong.
+    // Мутация: резолв отдаёт сырое «Авто» в modelFull → тест краснеет.
+    [Fact]
+    public async Task GetFeature_МодельЧата_Авто_РезолвСлота()
+    {
+        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        Users.SetModelTiers(user.Id, strong: "test-opus", medium: null, weak: null);
+
+        var epic = await CreateTaskAsync(new { title = "эпик-авто", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-авто", featureId = epicId, role = "step", modelTier = "strong" });
+        var stepId = step.GetProperty("id").GetString();
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        // «Авто»: CreateChatAsync сам резолвит модель из тира задачи (strong → test-opus),
+        // поэтому принудительно обнуляем Session.Model — чат без закреплённой модели (слот).
+        Sessions.GetById(chatId)!.Model = null;
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var exec = page.GetProperty("run").GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+        exec.GetProperty("modelLabel").GetString().Should().Be("Авто");
+        exec.GetProperty("modelFull").GetString().Should().Contain("test-opus", "«Авто» → резолв слота, не сырое «Авто»");
+    }
+
+    // Явная модель (Session.Model задана) → её имя (label + full), не «Авто».
+    [Fact]
+    public async Task GetFeature_МодельЧата_Явная_Имя()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-явная", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-явная", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString();
+        // Чат с явной моделью (Session.Model = "opus").
+        var chatId = (await Sessions.CreateChatAsync(OwnerId, ClaudeMode.AcceptEdits, name: "chat", model: "opus", taskId: stepId)).Id;
+        // Явная модель — напрямую в Session.Model (не через цепочку CreateChatAsync/CanonicalizeModel,
+        // которую дёргают другие тесты общего fixture): тест не зависит от состояния реестра.
+        Sessions.GetById(chatId)!.Model = "opus";
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var exec = page.GetProperty("run").GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+        exec.GetProperty("modelLabel").GetString().Should().Be("Opus");
+        exec.GetProperty("modelFull").GetString().Should().Be("Claude Opus");
+    }
+
+    // Список (features?sessionId=) и страница (features/{id}) дают одинаковые modelLabel/modelFull.
+    [Fact]
+    public async Task GetFeatures_ИСтраница_ОдинаковыеМодели()
+    {
+        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        Users.SetModelTiers(user.Id, strong: "test-opus", medium: null, weak: null);
+
+        var epic = await CreateTaskAsync(new { title = "эпик-мод", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-мод", featureId = epicId, role = "step", modelTier = "strong" });
+        var stepId = step.GetProperty("id").GetString();
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+        // UpdateTaskRequest не имеет SourceSessionId — связываем эпик с чатом через
+        // ExecutorLaunchedBySessionId (тот же признак, что читает ProjectForSession, §2).
+        await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { executorLaunchedBySessionId = chatId });
+
+        var list = await (await _client.GetAsync($"/api/tasks/features?sessionId={chatId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var listExec = list.EnumerateArray().Single(f => f.GetProperty("featureId").GetString() == epicId)
+            .GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var pageExec = page.GetProperty("run").GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+
+        listExec.GetProperty("modelLabel").GetString().Should().Be(pageExec.GetProperty("modelLabel").GetString());
+        listExec.GetProperty("modelFull").GetString().Should().Be(pageExec.GetProperty("modelFull").GetString());
+        listExec.GetProperty("modelFull").GetString().Should().Contain("test-opus");
+    }
+
+    // chats[]: чат задачи фичи — executor; чужой чат (TaskId не задача фичи) — не в списке.
+    // Мутация: убрать фильтр по снимку владельца в BuildFeatureChats → чужой чат попадает → краснеет.
+    [Fact]
+    public async Task GetFeature_Chats_ЧужойЧат_НеПопадает()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-chats", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-chats", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString();
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var foreignChatId = await CreatePersonalChatAsync(OwnerId, "foreign-task-not-in-feature");
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var chats = page.GetProperty("chats");
+        chats.EnumerateArray().Should().Contain(c => c.GetProperty("id").GetString() == chatId, "чат задачи фичи в chats[]");
+        chats.EnumerateArray().Should().NotContain(c => c.GetProperty("id").GetString() == foreignChatId, "чужой чат не в chats[]");
+    }
+
+    // chats[]: архивный чат → archived=true.
+    [Fact]
+    public async Task GetFeature_Chats_Архивный_Чат()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-arch", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-arch", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString();
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+        // Архивируем чат (SetArchived: ArchivedAt=now → IsArchived=true).
+        Sessions.SetArchived(chatId, true, "test");
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        page.GetProperty("chats").EnumerateArray()
+            .Single(c => c.GetProperty("id").GetString() == chatId)
+            .GetProperty("archived").GetBoolean().Should().BeTrue();
+    }
+
     // Подсистема Tasks выключена (FeatureProjector не зарегистрирован) → честный 503, а не 500.
     // Прямая сборка контроллера: GetFeatures проверяет features==null ДО обращения к задачам.
     [Fact]

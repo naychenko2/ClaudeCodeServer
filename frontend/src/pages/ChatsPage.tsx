@@ -45,6 +45,12 @@ import { useWatchdogPresence } from '../lib/watchdogPresence';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
+// Условие приёма cc-draft-reply в чате вне проекта: project — undefined (не проектный
+// чат) и reply непустой. Экспортировано для теста (мутация условия → красный тест).
+export function shouldAcceptDraftReply(project: unknown, reply: string | undefined): boolean {
+  return project == null && !!reply;
+}
+
 interface Props {
   auth: AuthState;
   onLogout: () => void;
@@ -215,8 +221,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => {
     const onDraftReply = (e: Event) => {
       const { project: p, reply } = (e as CustomEvent<{ project?: unknown; reply?: string }>).detail ?? {};
-      if (p != null || !reply) return;
-      sessionStorage.setItem('cc_pending_chat_prompt', reply);
+      if (!shouldAcceptDraftReply(p, reply)) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply!);
       window.dispatchEvent(new Event('cc-compose-prefill'));
     };
     window.addEventListener('cc-draft-reply', onDraftReply);

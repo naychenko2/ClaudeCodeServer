@@ -802,10 +802,12 @@ const windowWidth = useWindowWidth();
     videoCenter: videoCenter != null,
   };
   const otherCenterOpen = centerOccupiedByOther(centerOccupancy);
-  // Показ страницы гейтится по флагу (openFeatureId ставится из хэша/снимка без гейта —
-  // инициализатор выше) и по «центр не занят другим окном»: при открытом другом окне
-  // страница уступает ему (автоскрытие).
-  const featurePageOpen = openFeatureId != null && featuresOn && !otherCenterOpen;
+  // Показ страницы гейтится ТОЛЬКО по флагу (openFeatureId ставится из хэша/снимка без
+  // гейта — инициализатор выше). Гейта «центр не занят» НЕТ (M1/M2): побеждает ПОСЛЕДНЕЕ
+  // открытое. Открытие окна центра забирает страницу через переходный эффект (ниже,
+  // настоящее закрытие), а явное открытие страницы рисует её ПОВЕРХ любого окна (центр
+  // display:none, чат в DOM); Esc/«Закрыть» возвращают к тому, что было под ней.
+  const featurePageOpen = openFeatureId != null && featuresOn;
 
   // Единая точка закрытия страницы фичи: сбрасываем openFeatureId и указатель возврата
   // (featureBackNav), чтобы «назад» не вёл на невидимую страницу. Вызывается при ЯВНОМ
@@ -815,33 +817,41 @@ const windowWidth = useWindowWidth();
     setOpenFeatureId(null);
     clearBackNav();
   }, []);
-  // Автоскрытие (otherCenterOpen): страница скрыта, но openFeatureId ещё задан — указатель
-  // возврата (chat → фича) не должен вести на невидимую страницу: сбрасываем. Явное
-  // закрытие (closeFeaturePage/«Закрыть») уже чистит его, там openFeatureId=null.
+  // Страница не показана (флаг выключен), но openFeatureId ещё задан — указатель возврата
+  // (chat → фича) не должен вести на невидимую страницу: сбрасываем. Явное закрытие
+  // (closeFeaturePage/«Закрыть») и автоскрытие (переходный эффект ниже) уже чистят его.
   useEffect(() => {
     if (openFeatureId != null && !featurePageOpen) clearBackNav();
   }, [openFeatureId, featurePageOpen]);
 
-  // Автоскрытие = настоящее закрытие (MINOR-5): страница скрыта, но openFeatureId ещё
-  // задан — иначе после закрытия окна-победителя (otherCenterOpen → false) страница
-  // «воскресала» сама, а в адресе /feature/ уже не было (navPush окна переписал адрес).
-  // Сбрасываем openFeatureId и синхронизируем адрес (navReplace без feature), как у
-  // явного «Закрыть»: экран и адрес показывают одно, перезагрузка даёт то же.
-  // Гейт flagsLoaded && featuresOn: пока флаги НЕ пришли (featuresOn=false) страница
-  // ещё не открылась — чистить openFeatureId рано (M1(а): диплинк ждёт ответа /me).
+  // Автоскрытие = настоящее закрытие (M1/M2): побеждает ПОСЛЕДНЕЕ открытое. Переход
+  // otherCenterOpen false→true (открылось окно центра) — окно забирает центр: если страница
+  // фичи открыта (openFeatureId задан) — настоящее закрытие: сброс openFeatureId, адрес
+  // без /feature/ (navReplace), featureBackNav сброшен. Явное открытие страницы (badge/
+  // «Фича →»/диплинк) рисует её ПОВЕРХ любого окна (центр display:none, чат в DOM) —
+  // Esc/«Закрыть» возвращают к тому, что было под ней.
+  // Гейт flagsLoaded && featuresOn: пока флаги НЕ пришли (featuresOn=false) страница ещё
+  // не открылась — чистить openFeatureId рано (M1(а): диплинк ждёт ответа /me).
   // Выключенный флаг ведёт отдельный эффект (нормализация адреса, mobileView=sidebar).
+  const prevOtherCenterOpenRef = useRef(otherCenterOpen);
   useEffect(() => {
-    if (openFeatureId == null || featurePageOpen || !flagsLoaded || !featuresOn) return;
+    const prev = prevOtherCenterOpenRef.current;
+    prevOtherCenterOpenRef.current = otherCenterOpen;
+    // Не переход «открылось окно» (false→true) — не чиним.
+    if (!otherCenterOpen || prev) return;
+    // Страница не открыта или флаги ещё не пришли — не чиним.
+    if (openFeatureId == null || !flagsLoaded || !featuresOn) return;
     setOpenFeatureId(null);
+    clearBackNav();
     const view = isMobile ? 'chat' : 'sidebar';
     navReplace({
       screen: 'project', project, view, file: null, task: null,
       chatId: activeSessionId ?? undefined, feature: null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на
-    // переход «открыто → скрыто» (автоскрытие); project/mobileView/activeSessionId в
-    // замыкании — текущие, deps плодили бы лишние записи истории
-  }, [openFeatureId, featurePageOpen, flagsLoaded, featuresOn]);
+    // переход «открылось окно центра»; project/mobileView/activeSessionId в замыкании —
+    // текущие, deps плодили бы лишние записи истории
+  }, [otherCenterOpen, openFeatureId, flagsLoaded, featuresOn]);
 
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);

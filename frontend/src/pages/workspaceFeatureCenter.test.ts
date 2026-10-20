@@ -827,8 +827,24 @@ describe('WorkspacePage: центр — страница фичи соседом
     void container;
   };
 
-  it('автоскрытие: файл в центре (мобила) — страница фичи скрыта, чат в DOM, адрес без /feature/', async () => {
-    // Файл открыт на маунте (cc-pending-file) — центр занят, страница фичи уступает.
+  // История, которая реально записывает hash (navPush/navReplace пишут toHash): в beforeEach
+  // pushState/replaceState — no-op, и window.location.hash не отражает снимок. Для проверок
+  // «адрес /feature/» (M2) и «адрес без /feature/» (M1) подменяем history на запись hash.
+  const recordHistory = () => {
+    const win = globalThis as any;
+    win.window.history = {
+      state: null,
+      pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      back: () => {}, go: () => {}, forward: () => {}, length: 1,
+    };
+    win.window.location.hash = '';
+  };
+
+  // M2 (мобила): файл открыт, явное открытие страницы (badge) рисует её ПОВЕРХ файла
+  // (центр display:none, файл в DOM); «Закрыть»/Esc возвращают к файлу под ней.
+  it('M2: файл в центре (мобила) → страница ПОВЕРХ (адрес /feature/), «Закрыть» → файл виден', async () => {
+    recordHistory();
     (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
     (globalThis as any).window.location.hash = '';
     (globalThis as any).window.history.state = null;
@@ -840,15 +856,24 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
     await openFeature(container);
 
-    // Страница фичи скрыта (файл в центре): «Закрыть» нет.
+    // Страница ПОВЕРХ открытого файла (M2): «Закрыть» есть, адрес /feature/.
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
-      'страница фичи не скрыта при открытом файле (мобила)').toBeNull();
-    // Чат в DOM (не размонтирован).
-    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
-      'чат не в DOM при автоскрытии (мобила)').not.toBeNull();
+      'страница фичи не ПОВЕРХ открытого файла (M2, мобила)').not.toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес без /feature/ (M2, мобила)')
+      .toContain('/feature/');
+    // «Закрыть»/Esc → файл под ней снова виден (центр не display:none).
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close')!;
+    act(() => { (reactProps(back.childNodes[0]) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница не закрылась по «Закрыть» (M2, мобила)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'file-name'),
+      'файл не вернулся под страницу (M2, мобила)').not.toBeNull();
   });
 
-  it('автоскрытие: файл в центре (десктоп) — страница фичи скрыта, чат в DOM', async () => {
+  // M2 (десктоп): файл открыт, явное открытие страницы рисует её ПОВЕРХ; «Закрыть» → файл.
+  it('M2: файл в центре (десктоп) → страница ПОВЕРХ (адрес /feature/), «Закрыть» → файл виден', async () => {
+    recordHistory();
     (globalThis as any).window.innerWidth = 1280;
     (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
     (globalThis as any).window.location.hash = '';
@@ -862,9 +887,16 @@ describe('WorkspacePage: центр — страница фичи соседом
     await openFeature(container);
 
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
-      'страница фичи не скрыта при открытом файле (десктоп)').toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
-      'чат не в DOM при автоскрытии (десктоп)').not.toBeNull();
+      'страница фичи не ПОВЕРХ открытого файла (M2, десктоп)').not.toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес без /feature/ (M2, десктоп)')
+      .toContain('/feature/');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close')!;
+    act(() => { (reactProps(back.childNodes[0]) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница не закрылась по «Закрыть» (M2, десктоп)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'file-name'),
+      'файл не вернулся под страницу (M2, десктоп)').not.toBeNull();
   });
 
   it('автоскрытие: выбор другого чата (мобила) — страница фичи скрыта, адрес без /feature/', async () => {
@@ -932,8 +964,9 @@ describe('WorkspacePage: центр — страница фичи соседом
       .not.toContain('/feature/');
   });
 
-  it('автоскрытие: задача в центре (мобила) — страница фичи скрыта', async () => {
-    // Задача открыта на маунте (cc-pending-task) — центр занят, страница фичи уступает.
+  // M2 (мобила): задача открыта, явное открытие страницы рисует её ПОВЕРХ; «Закрыть» → задача.
+  it('M2: задача в центре (мобила) → страница ПОВЕРХ (адрес /feature/), «Закрыть» → задача видна', async () => {
+    recordHistory();
     (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
     (globalThis as any).window.location.hash = '';
     (globalThis as any).window.history.state = null;
@@ -945,13 +978,19 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
     await openFeature(container);
 
+    // Страница ПОВЕРХ открытой задачи (M2): «Закрыть» есть, адрес /feature/.
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
-      'страница фичи не скрыта при открытой задаче (мобила)').toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
-      'чат не в DOM при автоскрытии задачей (мобила)').not.toBeNull();
-    // Адрес не содержит /feature/ (cc-pending-task → navPush записал task).
-    expect((globalThis as any).window.location.hash, 'адрес содержит /feature/ после открытия задачи')
-      .not.toContain('/feature/');
+      'страница фичи не ПОВЕРХ открытой задачи (M2, мобила)').not.toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес без /feature/ (M2, мобила)')
+      .toContain('/feature/');
+    // «Закрыть»/Esc → страница закрывается, задача под ней снова в центре.
+    // (Возврат из чата идёт через history.back() — no-op в fake-DOM, поэтому hash здесь
+    //  не проверяем; в браузере back() снимает запись страницы и адрес без /feature/.)
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close')!;
+    act(() => { (reactProps(back.childNodes[0]) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница не закрылась по «Закрыть» (M2, мобила)').toBeNull();
   });
 
   // (6) Единый источник «центр занят»: centerOccupiedByOther — чистая функция. Предшественник
@@ -1048,17 +1087,21 @@ describe('WorkspacePage: центр — страница фичи соседом
       'соседний чат не в DOM после выбора (MAJOR-3)').not.toBeNull();
   });
 
-  // (7) Параметризованный: каждое окно центра скрывает страницу фичи. Список окон
-  // сверяется с полями CenterOccupancy — пропущенное окно (в предикате, но не в тесте)
-  // красит проверку полноты. beforeMount — до mount (file/task потребляются на mount),
-  // afterMount — после (videoCenter: store-подписка триггерит re-render).
-  const centerWindows: { key: keyof CenterOccupancy; beforeMount: () => void; afterMount: () => void }[] = [
-    { key: 'file', beforeMount: () => { (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts'); }, afterMount: () => {} },
-    { key: 'task', beforeMount: () => { (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1'); }, afterMount: () => {} },
-    { key: 'videoCenter', beforeMount: () => {}, afterMount: () => { videoStageMock.center = 'player'; } },
+  // (7) Параметризованный: каждое окно центра — одно «верхнее» (единый источник otherCenterOpen).
+  // Побеждает ПОСЛЕДНЕЕ открытое:
+  //   · окно ДО страницы (file/task, beforeMount) → явное открытие страницы рисует её ПОВЕРХ (M2);
+  //   · страница ДО окна (videoCenter, afterMount) → переход otherCenterOpen false→true закрывает
+  //     страницу (M1, настоящее закрытие).
+  // beforeMount/afterMount — когда окно открывается (file/task потребляются на mount, videoCenter
+  // по стору). Список окон сверяется с полями CenterOccupancy — пропуск красит проверку полноты.
+  const centerWindows: { key: keyof CenterOccupancy; mode: 'onTop' | 'closed'; beforeMount: () => void; afterMount: () => void }[] = [
+    { key: 'file', mode: 'onTop', beforeMount: () => { (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts'); }, afterMount: () => {} },
+    { key: 'task', mode: 'onTop', beforeMount: () => { (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1'); }, afterMount: () => {} },
+    { key: 'videoCenter', mode: 'closed', beforeMount: () => {}, afterMount: () => { videoStageMock.center = 'player'; } },
   ];
   for (const w of centerWindows) {
-    it(`окно центра «${w.key}» — страница фичи скрыта (параметризовано)`, async () => {
+    it(`окно центра «${w.key}» — ${w.mode === 'onTop' ? 'страница ПОВЕРХ (M2)' : 'страница закрыта (M1, переход)'} (параметризовано)`, async () => {
+      recordHistory();
       (globalThis as any).window.location.hash = '';
       (globalThis as any).window.history.state = null;
       w.beforeMount();
@@ -1071,8 +1114,16 @@ describe('WorkspacePage: центр — страница фичи соседом
       await openFeature(container);
       w.afterMount();
       await act(async () => { vi.advanceTimersByTime(100); });
-      expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
-        `страница фичи не скрыта при окне «${w.key}»`).toBeNull();
+      const close = findNodeByAttr(container, 'data-testid', 'feature-page-close');
+      if (w.mode === 'onTop') {
+        // M2: окно открыто ДО страницы → явное открытие рисует страницу ПОВЕРХ.
+        expect(close, `страница фичи не ПОВЕРХ окна «${w.key}» (M2)`).not.toBeNull();
+        expect((globalThis as any).window.location.hash, `адрес без /feature/ (M2, «${w.key}»)`).toContain('/feature/');
+      } else {
+        // M1: страница открыта, потом окно (переход otherCenterOpen false→true) → настоящее закрытие.
+        expect(close, `страница фичи не закрыта при окне «${w.key}» (M1, переход)`).toBeNull();
+        expect((globalThis as any).window.location.hash, `адрес содержит /feature/ (M1, «${w.key}»)`).not.toContain('/feature/');
+      }
       expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
         `чат не в DOM при окне «${w.key}»`).not.toBeNull();
     });
@@ -1115,6 +1166,45 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(backNavTest.getBackNav(), 'указатель возврата не сброшен при автоскрытии').toBeNull();
     void container;
+  });
+
+  // M1 (полный цикл): страница открыта → открывается окно (переход otherCenterOpen false→true)
+  // → НАСТОЯЩЕЕ закрытие (openFeatureId сброшен, адрес без /feature/). Закрыли окно → страница
+  // НЕ «воскресает» (в старом гейте openFeatureId оставался и страница возвращалась сама).
+  // Окно — задача (cc_pending_task + событие: слушатель есть, файл потребляется только на mount).
+  it('M1: страница → задача (переход) → закрытие задачи → страница НЕ возвращается, адрес без /feature/', async () => {
+    recordHistory();
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница открыта (адрес /feature/).
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не открыта (M1)').not.toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес без /feature/ до окна (M1)').toContain('/feature/');
+
+    // Задача открывается ПОСЛЕ страницы → переход otherCenterOpen false→true → настоящее закрытие.
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница закрыта (openFeatureId сброшен), адрес без /feature/.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница не закрыта при открытии задачи (M1, переход)').toBeNull();
+    expect((globalThis as any).window.location.hash, 'адрес содержит /feature/ после перехода (M1)')
+      .not.toContain('/feature/');
+
+    // Закрытие задачи: выбор чата (cc-pending-project-chat → handleSelectSession →
+    // setSelectedTaskId(null)) — тот же механизм, что в тестах «выбор чата».
+    (globalThis as any).sessionStorage.setItem('cc_pending_project_chat', 'p1|chatA');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Закрыли задачу → страница НЕ возвращается (openFeatureId=null, а не «скрыта гейтом»).
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница «воскресла» после закрытия задачи (M1: openFeatureId не сброшен)').toBeNull();
   });
 });
 

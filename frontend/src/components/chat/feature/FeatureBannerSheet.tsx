@@ -4,6 +4,7 @@ import { C, FONT, FS } from '../../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 import { Button, Modal } from '../../ui';
 import { api } from '../../../lib/api';
+import { roleLabel } from '../../../lib/roleLabel';
 import { listProjectSessions } from '../../../lib/sessionsList';
 import { FeatureGlyph } from './FeatureGlyphs';
 import { FeatureRunView } from './FeatureRunView';
@@ -63,10 +64,12 @@ export function featureChatLinks(index: FeaturesIndex, featureId: string): { id:
   return out;
 }
 
-// Подпись роли строки чата: stepRef · lane (исполнитель с шагом), иначе — вид связи.
+// Подпись роли строки чата: ОДНА функция roleLabel (сырые taskRole/stepRef/lane);
+// у step — «{stepRef} · {бэк|фронт}», у прочих ролей — слово роли. Без роли (null/
+// неизвестно) — фолбэк на вид связи (куратор/оркестратор/исполнитель), как раньше.
 export function chatRoleLabel(link: FeatureChatLink): string {
-  const parts = [link.stepRef, link.lane].filter(Boolean) as string[];
-  if (parts.length) return parts.join(' · ');
+  const byRole = roleLabel(link.taskRole, link.stepRef, link.lane);
+  if (byRole) return byRole;
   switch (link.kind) {
     case 'curator': return 'куратор';
     case 'orchestrator': return 'оркестратор';

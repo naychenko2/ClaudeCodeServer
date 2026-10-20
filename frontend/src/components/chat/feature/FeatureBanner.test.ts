@@ -117,6 +117,11 @@ describe('featureBannerModel: тон, статус, счётчик, роль, к
     expect(m.button).toEqual({ label: 'Ключевой чат', kind: 'key' });
   });
 
+  it('нормализация линии (roleLabel): lane «back» (англ.) → «Ш2 · бэк», а не «Ш2 · back»', () => {
+    const m = featureBannerModel(feat(), link({ lane: 'back' }), 'chat-exec');
+    expect(m.role).toBe('Ш2 · бэк');
+  });
+
   it('ждёт вас (wait): тон wait, статус «ждёт вас»', () => {
     const m = featureBannerModel(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec');
     expect(m.tone).toBe('wait');

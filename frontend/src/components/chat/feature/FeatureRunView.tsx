@@ -299,7 +299,7 @@ function EmptyState({ run }: { run: FeatureRun }) {
 // Легенда (когда шаги есть): кольца исходов витков (Rounds без подписи) + глиф «нет в трекере».
 function Legend() {
   const sample = (verdict: 'returned' | 'accepted_with_remarks' | 'accepted') => (
-    <Rounds caption={false} rounds={[{ n: 1, verdict }]} />
+    <Rounds caption={false} rounds={[{ n: 1, verdict, reviewChatId: null }]} />
   );
   const item = (node: React.ReactNode, label: string) => (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>

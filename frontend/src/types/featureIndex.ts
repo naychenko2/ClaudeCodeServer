@@ -9,7 +9,12 @@
 // Все поля аддитивны и nullable-терпимы: UI обязан пережить отсутствие любого
 // (старые ответы не несут новых полей).
 
-import type { FeatureRun } from './featureRun';
+import type { FeatureRun, FeatureState } from './featureRun';
+import type { FeatureStats } from './featureStats';
+import type { FeaturePlan, FeatureMockup } from './featurePlans';
+// Чат фичи (GET features/{id}, chats[]) — из featureChats; алиас, чтобы не путать с
+// FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
+import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
 
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
@@ -51,6 +56,8 @@ export interface FeatureAttention {
   personaId: string | null;
   // Связанный чат исполнителя (LinkedSessionId задачи, прошёл фильтр владельца).
   sessionId: string | null;
+  // Id задачи тревоги (Б7: FeatureAttention.TaskId); null — нет.
+  taskId: string | null;
 }
 
 // «Сейчас» фичи: одна InProgress-задача (контракт: в now0 добавлен stepRef —
@@ -76,6 +83,9 @@ export interface FeatureIndexFeature {
   // Проект ЭПИКА; null — эпик вне проектов.
   projectId: string | null;
   bucket: FeatureBucket;
+  // Состояние фичи (FeatureRun.State, 9 значений; всегда отдаётся). Единая точка
+  // правды: bucket и state не расходятся (бэк выводит bucket из State).
+  state: FeatureState;
   // null — тревоги нет.
   attention: FeatureAttention | null;
   // Ровно 7 стадий в порядке жизненного цикла.
@@ -174,8 +184,20 @@ export interface FeatureEvent {
 //   run        — полный агрегат (Project, без новой арифметики);
 //   events     — лента событий, обрезанная по `eventsLimit` (по умолчанию 100);
 //   eventsTotal — общее число событий ДО обрезки (лента может быть короче).
+// Новые поля (волна 3) ОПЦИОНАЛЬНЫ: бэк подтягивается позже, старые ответы их не
+// несут — UI обязан пережить отсутствие (tsc не ломается на моках).
 export interface FeaturePage {
   run: FeatureRun;
   events: FeatureEvent[];
   eventsTotal: number;
+  // Чаты фичи (Б4): id/вид/задача/архив/исполнитель/модель; null — бэк ещё не отдаёт.
+  chats?: FeaturePageChatLink[];
+  // Статистика (таймлайн/разбивка/«дольше всех»/расход); null — не считалась.
+  stats?: FeatureStats;
+  // Планы (role=plan/cut/consult); null — нет.
+  plans?: FeaturePlan[];
+  // Макеты; null — нет.
+  mockups?: FeatureMockup[];
+  // 'device' — макеты недоступны (нет устройства); null — доступны.
+  mockupsUnavailable?: 'device';
 }

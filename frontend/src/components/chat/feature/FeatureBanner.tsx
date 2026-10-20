@@ -10,6 +10,7 @@ import { openChatById } from '../../../lib/openChat';
 import { openTaskInSection } from '../../../lib/tasks';
 import { featureDisplayState } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
+import { roleLabel } from '../../../lib/roleLabel';
 import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureRail } from './FeatureRail';
 import { FeatureModeBody } from './FeatureModeBody';
@@ -113,14 +114,15 @@ export function featureBannerModel(
     ? `${feature.stepsAccepted}/${feature.stepsTotal} ↺${feature.loops}`
     : `${feature.stepsAccepted}/${feature.stepsTotal}`;
 
-  // Роль этого чата: ключевой — «ключевой», иначе «этот чат: Ш2 · бэк»
-  // (stepRef · lane из связи; у curator/orchestrator без шага — роль по виду).
+  // Роль этого чата: ключевой — «ключевой», иначе — ОДНА функция roleLabel (сырые
+  // taskRole/stepRef/lane): у step — «{stepRef} · {бэк|фронт}», у прочих ролей — слово;
+  // без роли (null/неизвестно) — фолбэк на вид связи (куратор/оркестратор/исполнитель).
   let role: string;
   if (isKey) {
     role = 'ключевой';
   } else {
-    const parts = [link.stepRef, link.lane].filter(Boolean) as string[];
-    role = parts.length ? parts.join(' · ') : (CHAT_ROLE_LABEL[link.kind] ?? 'участник');
+    const byRole = roleLabel(link.taskRole, link.stepRef, link.lane);
+    role = byRole || (CHAT_ROLE_LABEL[link.kind] ?? 'участник');
   }
 
   // Кнопка: в КЛЮЧЕВОМ чате — «Конвейер ▾» (раскрывает тело фичи); в другом
@@ -145,13 +147,13 @@ export function featureBannerModel(
   return { tone, glyph: st.kind, status, statusTone, counter, role, isKey, button };
 }
 
-// «← назад»: роль исходного чата в ЭТОЙ фиче (stepRef · lane; без шага — роль по виду).
-// Пусто — исходный чат не принадлежит этой фиче (переход не из её плашки).
+// «← назад»: роль исходного чата в ЭТОЙ фиче — roleLabel (сырые taskRole/stepRef/lane);
+// без роли — вид связи. Пусто — исходный чат не принадлежит этой фиче (переход не из её плашки).
 export function backRoleLabel(sourceChatId: string, featureId: string): string {
   const entry = featureOf(sourceChatId).find(e => e.feature.featureId === featureId);
   if (!entry) return '';
-  const parts = [entry.link.stepRef, entry.link.lane].filter(Boolean) as string[];
-  return parts.length ? parts.join(' · ') : (CHAT_ROLE_LABEL[entry.link.kind] ?? 'участник');
+  const byRole = roleLabel(entry.link.taskRole, entry.link.stepRef, entry.link.lane);
+  return byRole || (CHAT_ROLE_LABEL[entry.link.kind] ?? 'участник');
 }
 
 // Мультифича: число ДРУГИХ фич (entries.length − 1). Фронт не сортирует и не

@@ -381,6 +381,30 @@ public class PluginBridgeControllerTests : IDisposable
         obj.StatusCode.Should().Be(409);
     }
 
+    // --- Assets: bump версии — запрос СТАРОЙ версии → 404, НОВОЙ → 200 (QA-фикс K, minor 5) ---
+    // Каталоги прошлых версий остаются на диске после bump; без сверки версии из URL с
+    // record.Version Assets читал бы файлы неустановленной (старой) версии. Мутация: убрать
+    // проверку record.Version != ver → запрос старой версии отдаёт 200 → тест красный.
+
+    [Fact]
+    public void Assets_Bump_СтараяВерсия_404_Новая_200()
+    {
+        // v1: установка 1.0.0.
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        // v2: bump на 2.0.0 (тот же id, новая версия → другой sha; каталог 1.0.0 остаётся).
+        InstallPanel(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+
+        var ctl = NewBridgeController(OwnerA);
+
+        // Запрос старой версии (1.0.0, каталог ещё на диске) → 404 (не установленная версия).
+        var resOld = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        resOld.Should().BeOfType<NotFoundResult>("старая версия после bump → 404");
+
+        // Запрос установленной версии (2.0.0) → 200.
+        var resNew = ctl.Assets("local-a~pkg", "2.0.0", "panel/index.html");
+        resNew.Should().BeOfType<FileContentResult>("установленная версия → 200");
+    }
+
     // --- Assets: 503 (подсистема выключена) ---
 
     [Fact]

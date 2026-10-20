@@ -90,6 +90,12 @@ public class PluginBridgeController(
         if (!record.Enabled)
             return StatusCode(409, new { error = "Плагин выключен" });
 
+        // QA-фикс K (minor 5): версия из URL = версия установленной записи. Каталоги прошлых
+        // версий остаются на диске после bump, поэтому без сверки Assets читал бы файлы
+        // неустановленной версии. Несовпадение → 404 (включённость уже проверена выше).
+        if (record.Version != ver)
+            return NotFound();
+
         var packageRoot = store.PackageDir(UserId, pluginId, ver);
 
         // SafePath.Join: «../» вывел за корень пакета → UnauthorizedAccessException → 404.

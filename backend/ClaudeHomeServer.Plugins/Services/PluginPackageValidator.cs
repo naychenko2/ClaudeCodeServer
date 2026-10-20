@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -106,13 +107,29 @@ public class PluginPackageValidator
         var (problems, files, limitHit) = ValidateFiles(packageRoot);
 
         // Манифестная валидация — та же, что в установщике: ccs-plugin.json → модель →
-        // PluginManifest.Validate (no-contribution / unknown-permission / required secrets).
+        // PluginManifest.Validate (no-contribution / unknown-permission / required secrets,
+        // bad-panel-entry по ФОРМЕ entry).
         if (problems.Count == 0)
         {
             var (manifest, _) = PluginInstaller.ReadManifest(packageRoot);
             if (manifest is not null)
+            {
                 foreach (var p in manifest.Validate().Problems)
                     problems.Add(new PluginPackageProblem(p.Code, p.Message));
+
+                // bad-panel-entry (существование): файл по entry обязан быть в пакете. Форма
+                // уже проверена в PluginManifest.Validate (IsValidPanelEntry) — сюда доходят
+                // только well-formed entry; битая форма уже дала bad-panel-entry, не дублируем.
+                foreach (var panel in manifest.Contributes?.Panels ?? [])
+                {
+                    var entry = panel.Entry;
+                    if (string.IsNullOrEmpty(entry) || !PluginManifestValidation.IsValidPanelEntry(entry))
+                        continue;
+                    if (!File.Exists(Path.Combine(packageRoot, entry)))
+                        problems.Add(new PluginPackageProblem("bad-panel-entry",
+                            $"Файл панели по entry не найден в пакете: {entry}"));
+                }
+            }
         }
 
         var sha256 = limitHit || problems.Count > 0 ? null : ComputeSha256(files);

@@ -107,6 +107,7 @@ public sealed class PluginManifestValidation
         _manifest = manifest;
         ValidateContributes();
         ValidatePermissions();
+        ValidatePanelEntries();
         CollectRequiredSecrets();
     }
 
@@ -129,6 +130,40 @@ public sealed class PluginManifestValidation
         foreach (var p in _manifest.Permissions?.Requested ?? [])
             if (!PluginPermission.IsKnown(p))
                 _problems.Add(new PluginManifestProblem("unknown-permission", $"Неизвестное право: {p}"));
+    }
+
+    // Форма entry панели (Глеб MAJOR 2, серверная половина): entry из манифеста идёт на фронт
+    // и подставляется в URL запроса панели, поэтому мусорные значения (схема, «..», «?», «#»,
+    // управляющие) должны отбиваться ДО фронта. Чистая проверка формы (существование файла
+    // в пакете — отдельно, в PluginPackageValidator.ValidateFull). Код проблемы: bad-panel-entry.
+    private void ValidatePanelEntries()
+    {
+        foreach (var panel in _manifest.Contributes?.Panels ?? [])
+        {
+            var entry = panel.Entry;
+            if (string.IsNullOrEmpty(entry)) continue; // панели без entry — нет файла, форма не проверяется
+            if (!IsValidPanelEntry(entry))
+                _problems.Add(new PluginManifestProblem("bad-panel-entry",
+                    $"entry панели «{panel.Id}» не по форме (ожидается panel/…): {entry}"));
+        }
+    }
+
+    // entry панели — относительный путь panel/…: начинается с «panel/», без сегментов «..» и «.»,
+    // без «\», «?», «#», «%», без управляющих символов, без начального «/» и схемы («http:»),
+    // длина ≤ 200. Чистая проверка формы (без обращения к файловой системе).
+    public static bool IsValidPanelEntry(string entry)
+    {
+        const int MaxLength = 200;
+        if (entry.Length > MaxLength) return false;
+        if (!entry.StartsWith("panel/", StringComparison.Ordinal)) return false; // и не начальный «/», и не схема
+        if (entry.Contains('\\')) return false;
+        if (entry.Contains('?') || entry.Contains('#') || entry.Contains('%')) return false;
+        if (entry.Contains("http:", StringComparison.Ordinal)) return false; // схема
+        foreach (var seg in entry.Split('/'))
+            if (seg == ".." || seg == ".") return false;
+        foreach (var c in entry)
+            if (c < 0x20 || c == 0x7F) return false; // управляющие (C0 + DEL)
+        return true;
     }
 
     private void CollectRequiredSecrets()

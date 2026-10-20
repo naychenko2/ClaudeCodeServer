@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Plugins;
 using FluentAssertions;
 
@@ -57,6 +58,11 @@ public class PluginPackageValidatorTests
 
     private static PluginPackageValidationResult Validate(string root) =>
         new PluginPackageValidator().Validate(root);
+
+    // Полная валидация (файлы + манифест, включая bad-panel-entry): установка и черновик
+    // идут через ValidateFull (единый арбитр), поэтому тесты entry используют её.
+    private static PluginPackageValidationResult ValidateFullPkg(string root) =>
+        new PluginPackageValidator().ValidateFull(root);
 
     private static bool Has(PluginPackageValidationResult r, string code) =>
         r.Problems.Any(p => p.Code == code);
@@ -684,5 +690,105 @@ public class PluginPackageValidatorTests
             Directory.CreateDirectory(Path.Combine(root, $"panel/d{i}"));
 
         Validate(root).Problems.Should().Contain(p => p.Code == "dir-count-limit");
+    }
+
+    // ── bad-panel-entry (Глеб MAJOR 2, серверная половина) ─────────────────────────
+    // entry панели из манифеста идёт на фронт и подставляется в URL; сервер отбивает
+    // мусорные формы (форма — в PluginManifest.Validate, существование файла — здесь).
+
+    // Манифест с панелью (in-memory) — для проверки ФОРМЫ entry (без файловой системы):
+    // форма живёт в PluginManifest.Validate, и тест её изолирует от проверки существования.
+    private static PluginManifest ManifestWithPanel(string entry) => new()
+    {
+        Id = "local-x/pkg",
+        Name = "pkg",
+        Version = "0.1.0",
+        Contributes = new PluginContributes
+        {
+            Skills = ["skills/a"],
+            Panels = [new PluginPanel { Id = "main", Slot = "sidebar", Entry = entry, Title = "T" }],
+        },
+    };
+
+    // Каждая запрещённая форма entry → bad-panel-entry (форма, валидатор манифеста).
+    [Theory]
+    [InlineData("../x")]                  // сегмент «..»
+    [InlineData("panel/../x")]           // «..» внутри
+    [InlineData("panel/./x")]           // сегмент «.»
+    [InlineData("panel\\index.html")]   // обратный слеш
+    [InlineData("panel/index.html?x")] // «?»
+    [InlineData("panel/index.html#f")] // «#»
+    [InlineData("panel/index.html%20x")] // «%»
+    [InlineData("/panel/index.html")]    // начальный «/» (абсолютный)
+    [InlineData("http://panel/index.html")] // схема
+    [InlineData("index.html")]           // не начинается с panel/
+    public void Entry_ЗапрещённаяФорма_ОтдаётBadPanelEntry(string entry)
+    {
+        ManifestWithPanel(entry).Validate().Problems.Should()
+            .Contain(p => p.Code == "bad-panel-entry", $"entry «{entry}»");
+    }
+
+    // Управляющий символ в entry → bad-panel-entry.
+    [Fact]
+    public void Entry_УправляющийСимвол_ОтдаётBadPanelEntry()
+    {
+        ManifestWithPanel("panel/index.html\x01").Validate().Problems
+            .Should().Contain(p => p.Code == "bad-panel-entry");
+    }
+
+    // Длина entry > 200 → bad-panel-entry.
+    [Fact]
+    public void Entry_Длиннее200_ОтдаётBadPanelEntry()
+    {
+        var entry = "panel/" + new string('a', 200) + ".html"; // 208 символов
+        ManifestWithPanel(entry).Validate().Problems
+            .Should().Contain(p => p.Code == "bad-panel-entry");
+    }
+
+    // Нормальные формы: panel/index.html, panel/sub/main.html — проходят (нет bad-panel-entry).
+    [Theory]
+    [InlineData("panel/index.html")]
+    [InlineData("panel/sub/main.html")]
+    public void Entry_НормальнаяФорма_Проходит(string entry)
+    {
+        ManifestWithPanel(entry).Validate().Problems
+            .Should().NotContain(p => p.Code == "bad-panel-entry", $"entry «{entry}» — валидная форма");
+    }
+
+    // Пакет с панелью (для проверки существования файла по entry): ccs-plugin.json
+    // (contributes.panels[0].entry) + нативный манифест (name = slug) + навык.
+    private static string NewPackageWithPanel(string entry, bool fileExists)
+    {
+        var root = CreateTempDir();
+        Directory.CreateDirectory(root);
+        var manifest = new
+        {
+            id = "local-x/pkg",
+            name = "pkg",
+            version = "0.1.0",
+            contributes = new
+            {
+                skills = new[] { "skills/a" },
+                panels = new[] { new { id = "main", slot = "sidebar", entry, title = "T" } },
+            },
+        };
+        WriteFile(root, "ccs-plugin.json",
+            System.Text.Json.JsonSerializer.Serialize(manifest, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        WriteFile(root, ".claude-plugin/plugin.json", """{"name":"pkg","version":"0.1.0"}""");
+        WriteFile(root, "skills/a/SKILL.md", "# A\n");
+        if (fileExists && entry is not null && entry.StartsWith("panel/", StringComparison.Ordinal))
+            WriteFile(root, entry, "x");
+        return root;
+    }
+
+    // Проверка существования (ValidateFull, единый арбитр установки/черновика): well-formed
+    // entry, но файла в пакете нет → bad-panel-entry.
+    [Fact]
+    public void Entry_ФайлаВПакетеНет_ОтдаётBadPanelEntry()
+    {
+        // entry по форме корректен (panel/index.html), но файла panel/index.html в пакете нет.
+        var root = NewPackageWithPanel("panel/index.html", fileExists: false);
+        ValidateFullPkg(root).Problems.Should().Contain(p => p.Code == "bad-panel-entry",
+            "файл по entry не найден в пакете");
     }
 }

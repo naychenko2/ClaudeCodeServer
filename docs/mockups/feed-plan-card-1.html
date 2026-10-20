@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Home · короткая карточка плана в ленте чата · три варианта</title>
+<title>AI Home · карточка плана хода в ленте чата · решение 20.10</title>
 <!--
   Задача 349541c8 (stepRef M-plans-card, lane front), эпик 9919bd75-0b1c-4fda-8196-72354cbcba29 «Обзор фич, волна 3».
   Записка — feed-plan-card-1.md, токены — feed-plan-card-1-tokens.md. Код продукта не правится.
-  Замена живой карточки TodoPlanView (ChatItemView.tsx) с телом FeatureModeBody на короткую строку.
+  Решение Андрея 20.10: в чате с фичами живая карточка — короткая строка плана хода + «Подробнее» (без состояния фичи:
+  оно в панели А и в попапе); в чате без фич — полный чек-лист, как сейчас; прошлые карточки в обоих — строка-снимок.
   Попап «Исполнение фичи» остаётся по макету turn-plan-feature-popup-1.html — здесь он заглушка.
   Пунктир .new (C.accentMuted) — элемента сейчас в продукте нет.
 -->
@@ -121,6 +122,7 @@ svg { flex-shrink:0; }
 .h-kira{background:var(--c-accent-light);color:var(--c-accent)} .h-denis{background:var(--c-info-bg);color:var(--c-info)}
 .h-mark{background:var(--c-bg-inset);color:var(--c-text-secondary)} .h-me{background:var(--c-nav-ink);color:var(--c-on-nav-ink)}
 .h-alex{background:var(--c-plan-light);color:var(--c-plan-text)} .h-sofya{background:var(--c-bg-selected);color:var(--c-text-heading)}
+.h-me2{background:var(--c-bg-selected);color:var(--c-text-secondary)}
 
 /* ===== Карточка в ленте: общие части ===== */
 .fc { display:flex; align-items:center; gap:8px; min-height:36px; padding:4px 6px 4px 10px; border-radius:10px; font-size:12.5px; border:1px solid var(--c-border-light); background:var(--c-bg-card); }
@@ -157,23 +159,11 @@ svg { flex-shrink:0; }
 .ptk { font:11px "JetBrains Mono",monospace; color:var(--c-text-secondary); white-space:nowrap; flex-shrink:0; }
 .pbar { width:44px; height:4px; border-radius:999px; background:var(--c-progress-track); overflow:hidden; flex-shrink:0; }
 .pbar i { display:block; height:100%; background:var(--c-accent); }
-/* Б: две строки */
-.fc2 { border-radius:10px; border:1px solid var(--c-border-light); background:var(--c-bg-card); padding:6px 6px 6px 10px; display:flex; flex-direction:column; gap:3px; }
-.fc2 .l1, .fc2 .l2 { display:flex; align-items:center; gap:8px; min-width:0; min-height:24px; }
-.fc2 .l1 b.fn { font-size:12.5px; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
-.fc2 .l1 .stx { font-size:12px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 1 auto; }
-.fc2 .l2 { font-size:11.5px; color:var(--c-text-secondary); flex-wrap:wrap; row-gap:4px; }
-.fc2.t-danger .l1 .stx { color:var(--c-danger-text); font-weight:600; }
-.fc2.t-info .l1 .stx { color:var(--c-text-primary); font-weight:600; }
-.fc2.t-success .l1 .stx { color:var(--c-success-text); font-weight:600; }
-.app.m .fc2 .l2 { min-height:40px; }
-/* В: чип в строке итога хода */
-.rchip { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 10px 0 8px; border-radius:8px; background:var(--c-bg-selected); color:var(--c-text-secondary); font:11px "JetBrains Mono",monospace; max-width:100%; min-width:0; overflow:hidden; }
-.rchip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-.rchip b { font-weight:700; color:var(--c-text-heading); }
-.rchip.t-info { background:var(--c-info-bg); box-shadow:none; } .rchip.t-danger { background:var(--c-danger-bg); box-shadow:none; } .rchip.t-danger b { color:var(--c-danger-text); }
-.rchip.t-success { background:var(--c-success-bg); } .rchip.t-success b { color:var(--c-success-text); }
-.app.m .rchip { height:40px; }
+/* Чат без фич: полный чек-лист плана хода — нынешний вид TodoPlanView, без изменений */
+.fl { border:1px solid var(--c-border-light); background:var(--c-bg-card); border-radius:10px; padding:8px 12px 10px; }
+.fl .hd { display:flex; align-items:center; gap:8px; min-height:24px; margin-bottom:4px; }
+.fl .hd b { font:700 14px "PT Serif",Georgia,serif; color:var(--c-text-heading); }
+.fl .hd .sp { flex:1; }
 /* Снимок прошлого хода */
 .snap { display:flex; align-items:center; gap:7px; width:100%; min-height:28px; padding:2px 8px; border-radius:8px; font-size:11.5px; color:var(--c-text-muted); }
 .snap:hover { background:var(--c-bg-selected); color:var(--c-text-secondary); }
@@ -237,7 +227,7 @@ function fg(kind, s = 14) {
   }[kind];
   return `<svg width="${s}" height="${s}" viewBox="0 0 14 14" aria-hidden="true">${inner}</svg>`;
 }
-const PER = { kira:['Кира','К'], denis:['Денис','Д'], mark:['Марк','М'], me:['Вы','А'], alex:['Александр','А'], sofya:['Софья','С'] };
+const PER = { kira:['Кира','К'], denis:['Денис','Д'], mark:['Марк','М'], me:['Вы','А'], alex:['Александр','А'], sofya:['Софья','С'], me2:['Майя','М'] };
 const av = k => `<span class="av h-${k}" aria-hidden="true">${PER[k][1]}</span>`;
 const STAGES = ['Разрез','План','Производство','Ревью','Проверка','Финал','Мерж'];
 /* run.state → строка карточки. k — номер этапа (1…7), cur — тон точки, who — один чип [персона, роль, куда ведёт]. */
@@ -251,47 +241,28 @@ const ST = {
   merged:{ t:'смержена', g:'merged', tone:'success', k:8, b:'Смержена', tx:'20.10 · 21:09', who:null, none:'' },
   closed:{ t:'закрыта без мержа', g:'closed', tone:'neu', k:-1, b:'Закрыта без мержа', tx:'20.10 · 15:30', who:null, none:'' },
   idle:{ t:'простаивает', g:'idle', tone:'neu', k:3, b:'Производство', tx:'простаивает', tm:'1 ч', who:null, none:'никто не работает', isNew:true },
-  plan:{ t:'план хода без фичи', plan:true },
 };
 const TODOS = [['Прочитать отчёт Глеба по Ш3','d'],['Запустить виток 3 Киры','d'],['Ответить Андрею в ключевом чате','a'],['Обновить план в эпике','t'],['Проверить ветку фичи','t']];
-const S = { v:'A', st:'waiting', turns:1, theme:'light', dev:'d', pop:false, toast:null, snapOpen:{}, marks:true };
+const S = { chat:'feat', st:'waiting', turns:1, theme:'light', dev:'d', pop:false, toast:null, snapOpen:{}, marks:true };
 const isM = () => S.dev === 'm';
 const tdone = () => TODOS.filter(t => t[1] === 'd').length;
 const curTodo = () => (TODOS.find(t => t[1] === 'a') || [''])[0];
-const toneCls = st => ({ info:'t-info', danger:'t-danger', success:'t-success', neu:'t-neu' })[st.tone] || '';
-function stageWord(st) {
-  if (st.k === 8) return '7 из 7';
-  if (st.k <= 0) return st.k === 0 ? '0 из 7' : '';
-  return `этап ${st.k} из 7`;
-}
 function dots(st) {
   return `<span class="dots" aria-hidden="true">${STAGES.map((_, i) => { const n = i + 1;
     const cls = st.k === 8 || (st.k === -1 && n <= 4) || n < st.k ? 'd' : n === st.k ? 'c ' + (st.tone === 'info' ? 'info' : st.tone === 'danger' ? 'danger' : st.tone === 'neu' ? 'neu' : '') : '';
     return `<i class="${cls}"></i>`; }).join('')}</span>`;
 }
-const chip = st => st.who
-  ? `<button class="chip" data-act="who" data-tip="${st.who[2]}" aria-label="${PER[st.who[0]][0]}, ${st.who[1]}: ${st.who[2]}">${av(st.who[0])}${PER[st.who[0]][0]} <span class="r">· ${st.who[1]}</span></button>`
-  : (st.none ? `<span class="chip none">${st.none}</span>` : '');
-const more = (lab = 'Подробнее') => `<button class="more" data-act="pop" aria-haspopup="dialog" aria-label="${lab}: попап «Исполнение фичи»">${lab}${ic('chevR', 13)}</button>`;
-const stx = st => `<span class="stx">${fg(st.g)}<b>${st.b}</b>${st.tx ? `<span>· ${st.tx}</span>` : ''}${st.tm ? `<span class="tm">· ${st.tm}</span>` : ''}</span>`;
+const more = (lab = 'Подробнее') => `<button class="more" data-act="pop" data-t="more" aria-haspopup="dialog" aria-label="${lab}: попап «Исполнение фичи»">${lab}${ic('chevR', 13)}</button>`;
 
-/* ===== Вариант А: одна строка ===== */
-function cardA(st) {
-  if (st.plan) return `<div class="fc fcp" data-t="card" role="group" aria-label="План хода">${ic('sq', 14)}<span class="stx"><b>План хода</b></span><span class="now">· сейчас: ${curTodo()}</span>
+/* ===== Чат с фичами: строка плана хода + «Подробнее». Состояния фичи в карточке нет — оно в панели А и в попапе. ===== */
+function cardFeat() {
+  return `<div class="fc fcp" data-t="card" role="group" aria-label="План хода">${ic('sq', 14)}<span class="stx"><b>План хода</b></span><span class="now">· сейчас: ${curTodo()}</span>
     <span class="sp"></span><span class="pbar" aria-hidden="true"><i style="width:${tdone() / TODOS.length * 100}%"></i></span><span class="ptk">${tdone()} из ${TODOS.length}</span><span class="brk"></span>${more()}</div>`;
-  return `<div class="fc ${toneCls(st)} ${st.isNew ? 'new' : ''}" data-t="card" role="group" aria-label="Фича: ${st.b} ${st.tx || ''}">${stx(st)}${stageWord(st) ? `<span class="wh">${stageWord(st)}</span>` : ''}<span class="sp"></span>${chip(st)}${more()}</div>`;
 }
-/* ===== Вариант Б: две строки (фича сверху, план хода снизу) ===== */
-function cardB(st) {
-  if (st.plan) return cardA(st);
-  return `<div class="fc2 ${toneCls(st)} ${st.isNew ? 'new' : ''}" data-t="card" role="group" aria-label="Фича: ${st.b}">
-    <div class="l1">${fg(st.g)}<b class="fn">Шаблоны чатов</b>${dots(st)}<span class="stx">${st.b}${st.tx ? ' · ' + st.tx : ''}${st.tm ? ' · ' + st.tm : ''}</span></div>
-    <div class="l2">${chip(st)}<span class="ptk">${ic('sq', 12)} план хода ${tdone()}/${TODOS.length}</span><span class="sp" style="flex:1"></span>${more()}</div></div>`;
-}
-/* ===== Вариант В: карточки нет, чип в строке итога хода ===== */
-function chipC(st) {
-  if (st.plan) return `<button class="rchip" data-act="pop" data-t="card" aria-label="План хода ${tdone()} из ${TODOS.length}: открыть">${ic('list', 12)}<span><b>${tdone()}/${TODOS.length}</b> · ${curTodo()}</span></button>`;
-  return `<button class="rchip ${toneCls(st)} ${st.isNew ? 'new' : ''}" data-act="pop" data-t="card" aria-label="Фича: ${st.b} ${st.tx || ''}. Открыть попап">${fg(st.g, 12)}<span><b>${st.b}</b>${st.tx ? ' · ' + st.tx : ''}${st.tm ? ' · ' + st.tm : ''}${st.who ? ' · ' + PER[st.who[0]][0] : ''}</span></button>`;
+/* ===== Чат без фич: полный чек-лист — как сейчас (TodoPlanView без фичи) ===== */
+function cardPlain() {
+  return `<div class="fl" data-t="card" role="group" aria-label="План хода, ${tdone()} из ${TODOS.length}"><div class="hd">${ic('sq', 14)}<b>План хода</b><span class="sp"></span><span class="pbar" aria-hidden="true"><i style="width:${tdone() / TODOS.length * 100}%"></i></span><span class="ptk">${tdone()} из ${TODOS.length}</span></div>
+    ${TODOS.map(([n, s]) => `<div class="todo ${s}" data-t="todo"><i></i>${n}</div>`).join('')}</div>`;
 }
 /* Снимок прошлого хода: одна строка без тона и без фичи — что было в плане хода к его концу. */
 function snap(i, t) {
@@ -305,59 +276,58 @@ const PAST = [
   { when:'16:30', done:2, all:2, items:[['Прочитать возврат Глеба','d'],['Вернуть Ш3 Кире','d']] },
 ];
 const TURN_TX = ['Глеб вернул Ш3: пустое состояние без текста. Запускаю виток 3 Киры и обновляю план.', 'Ш2 принят, Ш3 в работе. Кира спросила про чужие шаблоны — переслала вам.', 'Виток 3 запущен, жду сдачи.', 'Кира ждёт вашего ответа: показывать ли в галерее шаблоны других участников. Пока ответа нет, Ш4 не начинаем.'];
+const FEAT = () => S.chat === 'feat';
 function turn(i, last) {
-  const st = ST[S.st];
-  const live = last;
-  let card = '';
-  if (S.v !== 'C') card = live ? (S.v === 'A' ? cardA(st) : cardB(st)) : snap(i, PAST[i % PAST.length]);
-  const resChip = S.v === 'C' && live ? chipC(st) : '';
+  const card = last ? (FEAT() ? cardFeat() : cardPlain()) : snap(i, PAST[i % PAST.length]);
+  const TX = FEAT() ? TURN_TX : ['Собрала список правок по ревью.', 'Поправила тексты пустых состояний.', 'Перепроверила тёмную тему.', 'Осталось обновить записку и прогнать проверку — делаю по плану ниже.'];
   return `${i ? `<div class="turnsep">ход ${i + 1}</div>` : ''}
-    <div class="msg me">${i ? 'Дальше' : 'Как там шаблоны?'}</div>
-    <div class="msg">${TURN_TX[(i + (last ? 3 : 0)) % TURN_TX.length]}</div>
+    <div class="msg me">${i ? 'Дальше' : FEAT() ? 'Как там шаблоны?' : 'Причеши макет'}</div>
+    <div class="msg">${TX[(i + (last ? 3 : 0)) % TX.length]}</div>
     ${card}
-    <div class="res" data-t="res">${ic('sq', 12)}<span>ход завершён · ${['2 мин','1 мин','40 с','3 мин'][i % 4]}</span>${resChip}</div>`;
+    <div class="res" data-t="res">${ic('sq', 12)}<span>ход завершён · ${['2 мин','1 мин','40 с','3 мин'][i % 4]}</span></div>`;
 }
 function chat() {
   const st = ST[S.st];
   const N = +S.turns;
-  const pa = st.plan ? '' : `<div class="pa ${st.tone === 'info' ? 'info' : st.tone === 'danger' ? 'danger' : ''}" data-t="panelA">${dots(st)}<b>Шаблоны чатов</b><span class="st">${st.b}${st.tx ? ' · ' + st.tx : ''}${st.tm ? ' · ' + st.tm : ''}</span>${isM() ? '' : '<span class="lab">панель А · утверждена</span>'}</div>`;
-  const vn = { A:'<b>А · строка.</b> Одна строка на месте нынешней карточки: тон и этап, один чип, «Подробнее». Прошлые ходы — строка-снимок.',
-    B:'<b>Б · две строки.</b> Сверху фича с точками этапов, снизу чип, план хода и «Подробнее». Прошлые ходы — строка-снимок.',
-    C:'<b>В · в строке итога.</b> Карточки в ленте нет: чип в строке «ход завершён» последнего хода. Прошлые ходы — без следа.' }[S.v];
+  const pa = FEAT() ? `<div class="pa ${st.tone === 'info' ? 'info' : st.tone === 'danger' ? 'danger' : ''}" data-t="panelA">${dots(st)}<b>Шаблоны чатов</b><span class="st">${st.b}${st.tx ? ' · ' + st.tx : ''}${st.tm ? ' · ' + st.tm : ''}</span>${isM() ? '' : '<span class="lab">панель А · утверждена</span>'}</div>` : '';
+  const vn = FEAT()
+    ? '<b>Чат с фичами.</b> Живая карточка — только план хода и «Подробнее» (попап «Исполнение фичи»). Состояние фичи — в панели А сверху и в попапе. Прошлые ходы — строка-снимок.'
+    : '<b>Чат без фич.</b> Живая карточка — полный чек-лист плана хода, как сейчас. Прошлые ходы — строка-снимок.';
   return `<div class="isl center" data-t="chat">
-    <div class="tb">${isM() ? `<span style="display:inline-flex;align-items:center;color:var(--c-text-secondary);min-height:40px">${ic('chevL', 18)}</span>` : ''}<span class="nm">Шаблоны чатов — куратор</span><span class="keyl">ключевой</span></div>
+    <div class="tb">${isM() ? `<span style="display:inline-flex;align-items:center;color:var(--c-text-secondary);min-height:40px">${ic('chevL', 18)}</span>` : ''}<span class="nm">${FEAT() ? 'Шаблоны чатов — куратор' : 'Причесать макет галереи'}</span>${FEAT() ? '<span class="keyl">ключевой</span>' : ''}</div>
     ${pa}
     <div class="feed" id="feed"><div class="col">
       <div class="vnote" data-t="vnote">${vn}</div>
       ${Array.from({ length:N }, (_, i) => turn(i, i === N - 1)).join('')}
     </div></div>
     <div class="compose"><div>Сообщение…</div></div>
-    ${S.pop ? popHtml(st) : ''}
+    ${S.pop && FEAT() ? popHtml(st) : ''}
     ${S.toast ? `<div class="toast" role="status" data-t="toast">${S.toast}</div>` : ''}</div>`;
 }
 function popHtml(st) {
   const r = document.querySelector('[data-t="card"]')?.getBoundingClientRect(), a = document.getElementById('frame')?.getBoundingClientRect();
   const top = r && a ? Math.max(8, Math.min(r.bottom - a.top + 6, a.height - 330)) : 120, left = r && a ? Math.max(8, Math.min(r.right - a.left - 380, a.width - 388)) : 400;
-  return `<div class="ovl" data-act="ovl" data-t="pop"><div class="pop" role="dialog" aria-label="${st.plan ? 'План хода' : 'Исполнение фичи'}" style="top:${top}px;left:${left}px">
-    <h3>${st.plan ? 'План хода' : 'Исполнение фичи · Шаблоны чатов'}</h3>
-    ${st.plan ? '' : `<div class="stub">Тело попапа — по макету turn-plan-feature-popup-1.html: тег статуса, строка состояния, 7 этапов с исполнителями.</div>`}
+  return `<div class="ovl" data-act="ovl" data-t="pop"><div class="pop" role="dialog" aria-label="Исполнение фичи" style="top:${top}px;left:${left}px">
+    <h3>Исполнение фичи · Шаблоны чатов</h3>
+    <div class="stub" data-t="pop-state">${fg(st.g, 12)} ${st.b}${st.tx ? ' · ' + st.tx : ''} — состояние фичи живёт здесь и в панели А. Тело попапа — по макету turn-plan-feature-popup-1.html: тег статуса, строка состояния, 7 этапов с исполнителями.</div>
     <div>${TODOS.map(([n, s]) => `<div class="todo ${s}"><i></i>${n}</div>`).join('')}</div>
-    <div class="ft"><button class="btn gh" data-act="close">Закрыть</button>${st.plan ? '' : `<button class="btn pri" data-act="page">Страница фичи${ic('chevR', 13)}</button>`}</div></div></div>`;
+    <div class="ft"><button class="btn gh" data-act="close">Закрыть</button><button class="btn pri" data-act="page">Страница фичи${ic('chevR', 13)}</button></div></div></div>`;
 }
 function render() {
   document.documentElement.dataset.theme = S.theme;
   document.body.classList.toggle('nomarks', !S.marks);
   const pill = (k, list) => `<div class="pills">${list.map(([v, t]) => `<button class="${String(S[k]) === String(v) ? 'on' : ''}" data-set="${k}" data-v="${v}">${t}</button>`).join('')}</div>`;
-  document.getElementById('mk').innerHTML = `<h1>AI Home · карточка плана в ленте</h1>
-    <span class="grp"><span class="lbl">Вариант</span>${pill('v', [['A','А · строка'],['B','Б · две строки'],['C','В · в итоге хода']])}</span>
-    <span class="grp"><span class="lbl">run.state</span>${pill('st', Object.entries(ST).map(([k, v]) => [k, v.t]))}</span>
+  document.getElementById('mk').innerHTML = `<h1>AI Home · карточка плана хода в ленте</h1>
+    <span class="grp"><span class="lbl">Чат</span>${pill('chat', [['feat','с фичами'],['plain','без фич']])}</span>
+    ${FEAT() ? `<span class="grp"><span class="lbl">run.state (панель А и попап)</span>${pill('st', Object.entries(ST).map(([k, v]) => [k, v.t]))}</span>` : ''}
     <span class="grp"><span class="lbl">Ходов подряд</span>${pill('turns', [[1,'1'],[4,'4']])}</span>
     <span class="grp"><span class="lbl">Тема</span>${pill('theme', [['light','светлая'],['dark','тёмная']])}</span>
     <span class="grp"><span class="lbl">Ширина</span>${pill('dev', [['d','1280'],['m','360']])}</span>
     <span class="grp"><span class="lbl">Пометки</span>${pill('marks', [[true,'вкл'],[false,'выкл']])}</span>`;
-  document.getElementById('note').innerHTML = '<b>Рекомендую А.</b> Сейчас на месте плана хода в ленте ключевого чата — карточка с переключателем «План хода | Исполнение фичи», выбором фичи, полным конвейером и подвалом «Задачи фичи в трекере». Здесь вместо неё одна строка: тон и этап как у панели А, один чип «кто сейчас», «Подробнее» — попап. Пунктир — нового состояния «простаивает» в продукте ещё нет.';
+  /* Пометки .new были у состояния idle в карточке; состояния фичи в карточке больше нет — пометки остались для панели А. */
+  document.getElementById('note').innerHTML = '<b>Решение Андрея 20.10.</b> В чате с фичами живая карточка плана хода — короткая строка «План хода · сейчас: … · прогресс · Подробнее»; состояние фичи в карточке не дублируется: оно в панели А сверху и в попапе «Исполнение фичи». В чате без фич живая карточка остаётся как сейчас — полный чек-лист. Прошлые карточки в обоих чатах — строка-снимок, раскрывается по тапу.';
   const html = isM() ? `<div class="app m" id="frame">${chat()}</div>`
-    : `<div class="app" id="frame"><div class="isl side"><div class="ttl">Чаты</div><div class="row on">${av('sofya')}Шаблоны чатов — куратор</div><div class="row">${av('kira')}Ш3 · Галерея шаблонов</div><div class="row">${av('denis')}Ш2 · Применение шаблона</div></div>${chat()}</div>`;
+    : `<div class="app" id="frame"><div class="isl side"><div class="ttl">Чаты</div><div class="row ${FEAT() ? 'on' : ''}">${av('sofya')}Шаблоны чатов — куратор</div><div class="row ${FEAT() ? '' : 'on'}">${av('me2')}Причесать макет галереи</div><div class="row">${av('kira')}Ш3 · Галерея шаблонов</div><div class="row">${av('denis')}Ш2 · Применение шаблона</div></div>${chat()}</div>`;
   document.getElementById('app').innerHTML = html;
   const f = document.getElementById('feed'); if (f) f.scrollTop = f.scrollHeight;
 }
@@ -365,14 +335,13 @@ let toastT;
 function toast(t) { S.toast = t; clearTimeout(toastT); toastT = setTimeout(() => { S.toast = null; render(); }, 2400); }
 document.addEventListener('click', e => {
   const s = e.target.closest('[data-set]');
-  if (s) { let v = s.dataset.v; if (s.dataset.set === 'marks') v = v === 'true'; S[s.dataset.set] = v; S.pop = false; render(); return; }
+  if (s) { let v = s.dataset.v; if (s.dataset.set === 'marks') v = v === 'true'; S[s.dataset.set] = v; S.pop = false; S.toast = null; render(); return; }
   const a = e.target.closest('[data-act]'); if (!a) return;
   const act = a.dataset.act;
   if (act === 'ovl' && e.target !== a) return;
   if (act === 'pop') { S.pop = true; render(); render(); document.querySelector('.pop .btn')?.focus(); return; }
   if (act === 'close' || act === 'ovl') S.pop = false;
   if (act === 'page') { S.pop = false; toast('Открыта страница фичи · «Хронология»'); }
-  if (act === 'who') toast(a.dataset.tip);
   if (act === 'snap') S.snapOpen[a.dataset.id] = !S.snapOpen[a.dataset.id];
   render();
 });

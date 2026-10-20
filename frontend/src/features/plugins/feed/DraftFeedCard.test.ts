@@ -39,7 +39,7 @@ const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
   '../../../components/chat/__tests__/fakeDom'
 );
 const { DraftAnchor } = await import('./records');
-const { __resetDraftsStore } = await import('./draftsStore');
+const { __resetDraftsStore, getDraftSnapshot } = await import('./draftsStore');
 
 // === Фиксированные данные ===
 // Запись plugin_draft несёт ГОЛЫЙ slug (без publisher): isDraftSlug принимает
@@ -82,11 +82,30 @@ function ctxFor(item: ChatItem): ChatItemToolCtx {
   return { item, online: true, projectId: 'proj-1', sessionId: 'chat-1', persona: null };
 }
 
+// Дожидаемся, пока все отложенные обновления (эффект + промисы loadList/loadPreview)
+// улягутся. Один setTimeout(0) НЕ гарантирует этого: React-эффект шедюлится через
+// setImmediate (check-фаза event-loop), а setTimeout(0) — timers-фаза, которая идёт
+// РАНЬШЕ check-фазы; поэтому act закрывался до того, как эффект сработал, и setEntry
+// (setState) попадал вне act → «not wrapped in act». Фикс: (1) дать эффекту
+// (setImmediate, в очереди раньше нашего) сработать; (2) повторять flush микро/
+// макротасков, пока снимок стора перестанет меняться (все .then-ы промисов отработали).
+async function flushDrafts(slug: string) {
+  await new Promise<void>(r => setImmediate(r));
+  let prev = JSON.stringify(getDraftSnapshot(slug));
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 0));
+    const cur = JSON.stringify(getDraftSnapshot(slug));
+    if (cur === prev) return;
+    prev = cur;
+  }
+}
+
 // Монтирует якорь и даёт асинхронным загрузкам (список + предпросмотр) дойти
 async function renderAnchor(item: ChatItem) {
   installFakeDom();
   const { container } = mount(createElement(DraftAnchor, { ctx: ctxFor(item) }));
-  await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+  const slug = String((item as { data?: { slug?: unknown } }).data?.slug ?? '');
+  await act(async () => { await flushDrafts(slug); });
   return { container, text: () => textNodes(container).join(' ') };
 }
 
@@ -175,7 +194,7 @@ describe('DraftAnchor: событие plugin_draft_changed', () => {
     // «сдвигаем» событие: все подписчики получают plugin_draft_changed по нашему slug
     await act(async () => {
       for (const h of handlers) h({ type: 'plugin_draft_changed', slug: SLUG, revision: 2 } as ServerMessage);
-      await new Promise(r => setTimeout(r, 0));
+      await flushDrafts(SLUG);
     });
 
     expect(text()).toContain('Черновик обновлён агентом');
@@ -234,7 +253,7 @@ describe('DraftAnchor: событие по новому slug при уже за�
     // 3) событие по draft-2 → bump → перечитать список
     await act(async () => {
       for (const h of handlers) h({ type: 'plugin_draft_changed', slug: SLUG2, revision: 2 } as ServerMessage);
-      await new Promise(r => setTimeout(r, 0));
+      await flushDrafts(SLUG2);
     });
 
     // draftsList вызван повторно (2-й раз) — иначе обновление по событию потеряно
@@ -368,7 +387,7 @@ describe('DraftFeedCard: «Принять…» (диалог согласия)',
 
     const accept = findButton(container, 'Принять…');
     expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
-    await act(async () => { accept!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    await act(async () => { accept!.onClick(); await flushDrafts(SLUG); });
 
     // диалог не открыт: кнопки «Установить» согласия нет в body
     expect(findButton(body, 'Установить'), 'диалог согласия открылся без consentRequired').toBeNull();
@@ -403,7 +422,7 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
     const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
     const accept = findButton(container, 'Принять…');
     expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
-    await act(async () => { accept!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    await act(async () => { accept!.onClick(); await flushDrafts(SLUG); });
 
     // текст 409 на карточке (не только в консоли)
     expect(text()).toContain('Черновик уже существует');
@@ -418,7 +437,7 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
     const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
     const accept = findButton(container, 'Принять…');
     expect(accept, 'кнопка «Принять…» не найдена').not.toBeNull();
-    await act(async () => { accept!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    await act(async () => { accept!.onClick(); await flushDrafts(SLUG); });
 
     expect(text()).toContain('Действие недоступно офлайн');
   });
@@ -432,7 +451,7 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
     const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
     const restore = findButton(container, 'Вернуть');
     expect(restore, 'кнопка «Вернуть» не найдена').not.toBeNull();
-    await act(async () => { restore!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    await act(async () => { restore!.onClick(); await flushDrafts(SLUG); });
 
     expect(text()).toContain('Черновик уже существует');
   });
@@ -446,7 +465,7 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
     const { container, text } = await renderAnchor(recordItem({ slug: SLUG }));
     const restore = findButton(container, 'Вернуть');
     expect(restore, 'кнопка «Вернуть» не найдена').not.toBeNull();
-    await act(async () => { restore!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    await act(async () => { restore!.onClick(); await flushDrafts(SLUG); });
 
     expect(text()).toContain('Действие недоступно офлайн');
   });

@@ -37,8 +37,11 @@ export function Tooltip({ content, align = 'start', disabled, focused, id, child
   // Задержка как у нативной подсказки: курсор, проходящий мимо, плашку не дёргает
   const show = () => { if (!canHover) return; stop(); timer.current = window.setTimeout(() => setHovered(true), 350); };
   const hide = () => { stop(); setHovered(false); };
-  // Фокус (клавиатура): без задержки — фокус здесь deliberate, не «проход мимо»
-  const focusIn = () => setKb(true);
+  // Фокус (клавиатура): без задержки — фокус здесь deliberate, не «проход мимо».
+  // П.48: на тач (canHover=false) focusin — от тапа, а до контракта по фокусу плашка
+  // на тач не поднималась вовсе (только hover, а его на тач нет) — не плодим нового
+  // поведения: kb-состояние ставим только когда наведение в принципе возможно.
+  const focusIn = () => { if (canHover) setKb(true); };
   const focusOut = () => setKb(false);
 
   const open = (hovered || kb || (focused ?? false)) && !disabled;

@@ -68,6 +68,46 @@ function renderItem(item: ChatItem, availableChatIds?: Set<string>): string {
   return renderToStaticMarkup(tree);
 }
 
+// П.31: десктоп (project задан) — href «Ветка от …» project-scoped: #/project/{pid}/chat/{id},
+// не глобальный #/chats/{id}. availableChatIds наполнен → плашка кликабельна.
+function renderItemDesktop(item: ChatItem, availableChatIds: Set<string>, projectId: string): string {
+  const noop = () => {};
+  const tree: ReactElement = createElement(
+    ChatProjectContext.Provider, { value: { id: projectId, rootPath: `/tmp/${projectId}` } },
+    createElement(
+      ChatTreePathContext.Provider, { value: null },
+      createElement(
+        ChatSessionContext.Provider, { value: null },
+        createElement(
+          PersonaContext.Provider, { value: null },
+          createElement(
+            SpeakingItemContext.Provider, { value: null },
+            createElement(
+              AssistantNameContext.Provider, { value: 'Ассистент' },
+              createElement(ChatItemView, {
+                item,
+                index: 0,
+                online: true,
+                onToggleThinking: noop,
+                onAllowPermission: noop,
+                onDenyPermission: noop,
+                onAllowAlways: noop,
+                onAnswerQuestion: noop,
+                onRespondPlan: noop,
+                onSwitchMode: noop,
+                onRetry: noop,
+                onInterrupt: noop,
+                availableChatIds,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return renderToStaticMarkup(tree);
+}
+
 describe('ChatItemView — плашка «Ветка от …»', () => {
   // Регрессия кейса: id оригинала есть в availableChatIds — кликабельная ссылка
   it('оригинал жив: рендерит ссылку с href на чат оригинала', () => {
@@ -107,6 +147,22 @@ describe('ChatItemView — плашка «Ветка от …»', () => {
     const html = renderItem(branchedFrom('src-1'), new Set());
     expect(html).not.toContain('href="#/chats/src-1"');
     expect(html).toContain('Оригинал удалён');
+  });
+
+  // П.31: десктоп (project задан) — «Ветка от …» кликабельна, когда availableChatIds
+  // наполнен: href project-scoped (#/project/{pid}/chat/{id}), не глобальный #/chats/{id}.
+  it('десктоп (project задан): оригинал жив — кликабельная ссылка с project-scoped href', () => {
+    const html = renderItemDesktop(branchedFrom('src-1'), new Set(['src-1']), 'p1');
+    expect(html).toContain('Ветка от Старый чат');
+    expect(html).toMatch(/<a[^>]*href="#\/project\/p1\/chat\/src-1"/);
+  });
+
+  // П.31 (грань): десктоп, но оригинал удалён (id не в availableChatIds) — даже в
+  // project-контексте плашка деградирует в текст, project-scoped ссылки нет.
+  it('десктоп (project задан): оригинал удалён — текст, без project-scoped href', () => {
+    const html = renderItemDesktop(branchedFrom('src-1'), new Set(['другой']), 'p1');
+    expect(html).toContain('Ветка от Старый чат');
+    expect(html).not.toContain('href="#/project/p1/chat/src-1"');
   });
 });
 

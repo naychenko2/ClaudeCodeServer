@@ -233,8 +233,9 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     }));
     return container;
   };
-  const allText = (c: Parameters<typeof findNodeByAttr>[0]) => textNodes(c).join('');
-  const KEY = 'Здесь управляют фичей: запускают шаги и принимают результат';
+  // п.59: текст подсказки живёт и в СКРЫТОМ span (aria-describedby), поэтому «есть ли
+  // плашка» детектируем по элементу role="tooltip", а не по тексту (текст всегда в DOM).
+  const hasTip = (c: Parameters<typeof findNodeByAttr>[0]) => findNodeByAttr(c, 'role', 'tooltip') !== null;
 
   it('по наведению: плашка появляется (задержка 350 мс) и исчезает по уходу', async () => {
     const c = renderCard();
@@ -243,11 +244,11 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     const chip = findNodeByAttr(c, 'data-testid', 'chat-feature-role')!;
     const wrapper = (chip as unknown as { parentNode: Parameters<typeof findNodeByAttr>[0] }).parentNode;
     const wp = reactProps(wrapper)!;
-    expect(allText(c), 'до наведения — плашки нет').not.toContain(KEY);
+    expect(hasTip(c), 'до наведения — плашки нет').toBe(false);
     await act(async () => { (wp.onMouseEnter as () => void)(); await vi.advanceTimersByTimeAsync(350); });
-    expect(allText(c), 'наведение → плашка в DOM').toContain(KEY);
+    expect(hasTip(c), 'наведение → плашка в DOM').toBe(true);
     await act(async () => { (wp.onMouseLeave as () => void)(); });
-    expect(allText(c), 'уход → плашка исчезла').not.toContain(KEY);
+    expect(hasTip(c), 'уход → плашка исчезла').toBe(false);
   });
 
   it('по фокусу на карточке (клавиатура): плашка появляется и исчезает по blur', async () => {
@@ -256,11 +257,24 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     // Карточка-строка — внешний div (tabIndex 0); его onFocus/onBlur — источник состояния.
     const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
     const cp = reactProps(card)!;
-    expect(allText(c), 'до фокуса — плашки нет').not.toContain(KEY);
-    await act(async () => { (cp.onFocus as () => void)(); });
-    expect(allText(c), 'фокус на карточке → плашка в DOM').toContain(KEY);
-    await act(async () => { (cp.onBlur as () => void)(); });
-    expect(allText(c), 'blur → плашка исчезла').not.toContain(KEY);
+    expect(hasTip(c), 'до фокуса — плашки нет').toBe(false);
+    // п.51: фокус САМОЙ карточки (target === currentTarget) → плашка.
+    await act(async () => { (cp.onFocus as (e: unknown) => void)({ target: card, currentTarget: card }); });
+    expect(hasTip(c), 'фокус на карточке → плашка в DOM').toBe(true);
+    await act(async () => { (cp.onBlur as (e: unknown) => void)({ target: card, currentTarget: card }); });
+    expect(hasTip(c), 'blur → плашка исчезла').toBe(false);
+  });
+
+  // п.51: фокус на ВЛОЖЕННОМ элементе (target ≠ currentTarget) — плашка НЕ поднимается
+  // (иначе любое действие внутри карточки поднимало бы подсказку «ключевой»).
+  it('п.51: фокус на вложенном элементе (target ≠ currentTarget) — плашки нет', async () => {
+    const c = renderCard();
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const cp = reactProps(card)!;
+    // target — вложенный элемент ({}), currentTarget — сама карточка → не совпадают.
+    await act(async () => { (cp.onFocus as (e: unknown) => void)({ target: {}, currentTarget: card }); });
+    expect(hasTip(c), 'фокус на вложенном элементе поднял плашку (п.51: target ≠ currentTarget)').toBe(false);
   });
 });
 
@@ -321,6 +335,17 @@ describe('M4: карточка — role="button" + клавиатурная ак
     const e = { key: ' ', target: card, currentTarget: card, preventDefault: () => {} } as unknown as Parameters<typeof p.onKeyDown>[0];
     act(() => { (p.onKeyDown as (e: unknown) => void)(e); });
     expect(onSelect, 'Space на карточке не вызвал onSelect (M4)').toHaveBeenCalledTimes(1);
+  });
+
+  // п.62: клик мышью по карточке открывает чат. onClick и onKeyDown идут через ОДИН
+  // обработчик (openChat, п.61) — мутация «onClick не зовёт openChat» красит этот тест.
+  it('п.62: клик мышью по карточке открывает чат (onSelect вызывается)', () => {
+    const onSelect = vi.fn();
+    const c = renderCard(onSelect);
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const p = reactProps(card)!;
+    act(() => { (p.onClick as () => void)(); });
+    expect(onSelect, 'клик мышью не открыл чат (п.62)').toHaveBeenCalledTimes(1);
   });
 
   it('Enter на вложенной кнопке НЕ открывает чат (target ≠ currentTarget)', () => {

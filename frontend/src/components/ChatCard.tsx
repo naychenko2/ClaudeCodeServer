@@ -789,19 +789,22 @@ function ChatCardView({
   // M4 (минор 47): скрытое описание подсказки «ключевой» — aria-describedby корня
   // ведёт на постоянный id (не на Tooltip, который в DOM только когда открыт).
   const isKeyRole = featureRole !== undefined && featureRole.startsWith('ключевой');
+  // Общий обработчик открытия чата (п.61): мышиный onClick и клавиатурный onKeyDown
+  // (Enter/Space) идут теми же гардами — свайп/long-press/раскрытие/подсистема.
+  const openChat = () => {
+    // Свайп-жест прошёл (даже без открытия) — клик не открывает чат
+    if (swipeMoved.current) { swipeMoved.current = false; return; }
+    if (lpFired.current) { lpFired.current = false; return; }
+    // Раскрытая свайпом карточка: тап закрывает раскрытие, а не открывает чат
+    if (swipeOpen) { onSwipeToggle?.(false); return; }
+    // Подсистема может открыть чат по-своему (чат картинки — в редакторе)
+    if (badges.some(b => b.action?.open?.(s))) return;
+    onSelect();
+  };
 
   return (
     <div
-      onClick={() => {
-        // Свайп-жест прошёл (даже без открытия) — клик не открывает чат
-        if (swipeMoved.current) { swipeMoved.current = false; return; }
-        if (lpFired.current) { lpFired.current = false; return; }
-        // Раскрытая свайпом карточка: тап закрывает раскрытие, а не открывает чат
-        if (swipeOpen) { onSwipeToggle?.(false); return; }
-        // Подсистема может открыть чат по-своему (чат картинки — в редакторе)
-        if (badges.some(b => b.action?.open?.(s))) return;
-        onSelect();
-      }}
+      onClick={openChat}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
       // M1: карточка — фокус-стоп (tabIndex 0), чтобы подсказка «ключевой» поднималась
@@ -810,10 +813,12 @@ function ChatCardView({
       // e.target === e.currentTarget защищает от перехвата Enter на вложенных кнопках.
       role="button"
       tabIndex={0}
-      onKeyDown={e => handlePressableKey(e, () => onSelect())}
+      onKeyDown={e => handlePressableKey(e, openChat)}
       aria-describedby={isKeyRole ? `key-desc-${s.id}` : undefined}
-      onFocus={() => setCardFocused(true)}
-      onBlur={() => setCardFocused(false)}
+      // п.51: «ключевой» поднимается ТОЛЬКО при фокусе самой карточки, не от вложенных
+      // действий (фокус на вложенной кнопке — e.target ≠ e.currentTarget).
+      onFocus={e => { if (e.target === e.currentTarget) setCardFocused(true); }}
+      onBlur={e => { if (e.target === e.currentTarget) setCardFocused(false); }}
       // Правый клик — меню действий прямо у курсора (desktop): тот же состав, что у
       // «⋮» и long-press, без прицеливания в мелкую кнопку. Якорь — точка курсора
       // (zero-size rect), ui/Menu в anchor-режиме раскроется под ней
@@ -842,8 +847,9 @@ function ChatCardView({
       {/* M4 (минор 47): скрытое описание подсказки «ключевой» — aria-describedby
           корня ведёт сюда (постоянный id), а не на плашку Tooltip (её id живёт
           только пока плашка открыта). На тач-устройствах Tooltip не поднимается,
-          но скринридер всё равно прочитает описание. */}
-      {isKeyRole && <span id={'key-desc-' + s.id} aria-label={KEY_SESSION_TOOLTIP} style={{ display: 'none' }} />}
+          но скринридер всё равно прочитает описание. Описание — ТЕКСТОМ внутри
+          скрытого span (п.59), не aria-label: aria-describedby читает содержимое. */}
+      {isKeyRole && <span id={'key-desc-' + s.id} style={{ display: 'none' }}>{KEY_SESSION_TOOLTIP}</span>}
       {/* Кнопки свайпа (мобила): под карточкой у правого края, видны, когда карточка
           уехала. Высота — вся карточка, ширина — вылет раскрытия.
           Слой висит постоянно, а прячет его непрозрачный фон карточки — поэтому фон

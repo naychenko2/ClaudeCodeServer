@@ -606,9 +606,10 @@ describe('FeaturePage: пять состояний + шапка + тревога
     });
     const c = render({});
     await settle();
-    // Ссылка на чат — нет (sessionId = null).
-    const link = findNodeByAttr(c, 'data-testid', 'feature-event-chat-link-null');
-    expect(link).toBeNull();
+    // p.19: проверка по отсутствию ТЕКСТА «открыть чат», а не по testid с хвостом null
+    // (testid = feature-event-chat-link-${sessionId} — хрупко: зависит от формата id).
+    // Событие без sessionId → ссылки на чат нет вообще (fail-closed).
+    expect(textNodes(c).join(''), 'ссылка «открыть чат» у события без sessionId').not.toContain('открыть чат');
   });
 
   // === Ф2.5: событие С sessionId даёт ссылку ===
@@ -860,11 +861,13 @@ describe('FeaturePage: пять состояний + шапка + тревога
     const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
     // Минор 46: aria-describedby → скрытый span с постоянным id (не на Tooltip,
     // который в DOM только когда открыт; на тач Tooltip не поднимается).
-    expect(row.getAttribute('aria-describedby'), 'кнопка-строка ссылается на скрытое описание').toBe('key-desc-chat-key');
-    // Скрытый span с описанием существует в DOM (aria-label — текст для скринридера).
-    const desc = findNodeByAttr(row, 'id', 'key-desc-chat-key');
+    // Префикс id — по МЕСТУ (п.58): feat-key-desc- (строка страницы фичи), не key-desc- (карточка
+    // списка): оба места могут быть в DOM одновременно, id не коллидируют.
+    expect(row.getAttribute('aria-describedby'), 'кнопка-строка ссылается на скрытое описание').toBe('feat-key-desc-chat-key');
+    // Скрытый span с описанием существует в DOM; описание — ТЕКСТОМ (п.59), не aria-label.
+    const desc = findNodeByAttr(row, 'id', 'feat-key-desc-chat-key');
     expect(desc, 'скрытый span с описанием подсказки (минор 46)').not.toBeNull();
-    expect((desc! as unknown as { attributes: Record<string, string> }).attributes['aria-label']).toBe(KEY_SESSION_TOOLTIP);
+    expect(textNodes(desc as never).join(''), 'текст описания в скрытом span (п.59)').toBe(KEY_SESSION_TOOLTIP);
     const chip = findNodeByAttr(row, 'data-testid', 'feature-role-key');
     expect(chip, 'метка «ключевой» (data-testid) есть').not.toBeNull();
   });
@@ -1154,29 +1157,31 @@ describe('FeaturePage: M2 подсказка «ключевой» (наведе�
     const chip = findNodeByAttr(c as never, 'data-testid', 'feature-role-key')!;
     return (chip as unknown as { parentNode: FNodeLike }).parentNode;
   };
-  const allText = (c: FNodeLike) => textNodes(c as never).join('');
+  // Плашка = элемент role="tooltip" (не по тексту: скрытый span-описание всегда
+  // содержит текст подсказки — aria-describedby, минор 59).
+  const hasTip = (c: FNodeLike) => findNodeByAttr(c as never, 'role', 'tooltip') !== null;
 
   it('по наведению: плашка появляется (задержка 350 мс) и исчезает по уходу', async () => {
     const c = render({});
     withWindowTimers();
     await settle();
     const wp = reactProps(keyWrapper(c))!;
-    expect(allText(c), 'до наведения — плашки нет').not.toContain(KEY_SESSION_TOOLTIP);
+    expect(hasTip(c), 'до наведения — плашки нет').toBe(false);
     await act(async () => { (wp.onMouseEnter as () => void)(); await vi.advanceTimersByTimeAsync(350); });
-    expect(allText(c), 'наведение → плашка в DOM').toContain(KEY_SESSION_TOOLTIP);
+    expect(hasTip(c), 'наведение → плашка в DOM').toBe(true);
     await act(async () => { (wp.onMouseLeave as () => void)(); });
-    expect(allText(c), 'уход → плашка исчезла').not.toContain(KEY_SESSION_TOOLTIP);
+    expect(hasTip(c), 'уход → плашка исчезла').toBe(false);
   });
 
   it('по фокусу на кнопке-строке (клавиатура): плашка появляется и исчезает по blur', async () => {
     const c = render({});
     await settle();
     const button = findNodeByAttr(c as never, 'data-testid', 'feature-chat-chat-key')!;
-    expect(allText(c), 'до фокуса — плашки нет').not.toContain(KEY_SESSION_TOOLTIP);
+    expect(hasTip(c), 'до фокуса — плашки нет').toBe(false);
     await act(async () => { (reactProps(button)!.onFocus as () => void)(); });
-    expect(allText(c), 'фокус на кнопке-строке → плашка в DOM').toContain(KEY_SESSION_TOOLTIP);
+    expect(hasTip(c), 'фокус на кнопке-строке → плашка в DOM').toBe(true);
     await act(async () => { (reactProps(button)!.onBlur as () => void)(); });
-    expect(allText(c), 'blur → плашка исчезла').not.toContain(KEY_SESSION_TOOLTIP);
+    expect(hasTip(c), 'blur → плашка исчезла').toBe(false);
   });
 });
 

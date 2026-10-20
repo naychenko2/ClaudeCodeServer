@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -119,6 +119,8 @@ const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
   skills: <Puzzle size={18} strokeWidth={2} />,
   tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
+  // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
+  plugins: <Plug size={18} strokeWidth={2} />,
 };
 
 function useWindowWidth() {
@@ -896,6 +898,8 @@ const windowWidth = useWindowWidth();
     // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
     // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
     { value: 'tools', label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
+    // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
+    ...(hasPlugins ? [{ value: 'plugins' as const, label: 'Плагины', icon: LEFT_TAB_ICONS.plugins }] : []),
   ];
 
   // Если текущий таб внезапно пропал (capabilities обновились) — откатываемся на «Чаты»,
@@ -1932,6 +1936,8 @@ const windowWidth = useWindowWidth();
                   onRefreshServices={refreshServices} onStartService={startService}
                   onStopService={stopService} onSelectPreview={handleSelectPreview}
                   terminalBusy={terminalBusy} />
+              : leftTab === 'plugins'
+              ? <PluginFrame project={project} onOpenPlugins={() => setEditProjectOpen(true)} onClose={() => setLeftTab('sessions')} />
               : leftTab === 'knowledge'
               ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (

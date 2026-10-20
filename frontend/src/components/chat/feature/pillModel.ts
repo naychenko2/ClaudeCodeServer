@@ -99,8 +99,23 @@ function stoppedName(run: FeatureRun): string {
 }
 
 // Состояние: stopped → wait → closed → run (макет v1/v2, «Стоит» только для упавшего).
-// wait — по attention (новое) ИЛИ по awaitingHumanSince (старый сигнал, переходный период).
+// Источник правды — run.state (бэк Б1a/Б1b): merge_pending → wait («ждёт вас»),
+// merging → run (нейтрально, «мерж идёт»), waiting → wait, merged/closed → closed.
+// Без state (старые данные/кеш/моки) — запасной путь по прежнему признаку
+// (attention.kind / awaitingHumanSince), чтобы существующие тесты не упали.
 function stateFor(run: FeatureRun): PillState {
+  if (run.state) {
+    switch (run.state) {
+      case 'stopped': return 'stopped';
+      case 'waiting':
+      case 'merge_pending': return 'wait';
+      case 'merged':
+      case 'closed': return 'closed';
+      // not_started, running, merging, idle → run.
+      default: return 'run';
+    }
+  }
+  // Запасной путь: state в данных нет (кеш/моки) — прежний признак.
   const att = run.attention;
   if (att && att.kind === 'stopped') return 'stopped';
   if ((att && att.kind === 'wait') || run.awaitingHumanSince) return 'wait';
@@ -123,14 +138,20 @@ export function buildPillModel(runs: FeatureRun[]): PillModel | null {
   // Текст состояния.
   let text: string;
   if (allClosed) text = `${runs.length} · все закрыты`;
-  else if (state === 'wait') text = `ждёт вас · ${waitReason(run)}`;
-  else if (state === 'stopped') {
+  else if (state === 'wait') {
+    // merge_pending → «Мерж ждёт согласия»; прочий wait → «ждёт вас · {reason}».
+    text = run.state === 'merge_pending' ? 'Мерж ждёт согласия' : `ждёт вас · ${waitReason(run)}`;
+  } else if (state === 'stopped') {
     const name = stoppedName(run);
     text = name ? `стоит · ${name}` : 'стоит';
   } else if (state === 'closed') text = 'Фича смержена';
   else {
-    const names = namesFor(run);
-    text = names ? `${stageFor(run)} · ${names}` : stageFor(run);
+    // merging → «Мерж идёт» (нейтрально, не «ждёт вас»); иначе стадия · исполнители.
+    if (run.state === 'merging') text = 'Мерж идёт';
+    else {
+      const names = namesFor(run);
+      text = names ? `${stageFor(run)} · ${names}` : stageFor(run);
+    }
   }
 
   // Значок и его цвет.

@@ -159,6 +159,65 @@ describe('buildPillModel: ждёт вас (wait)', () => {
   });
 });
 
+// ── state (бэк Б1a/Б1b): merge_pending → «ждёт вас», merging → «идёт» ──────────
+// Источник правды — run.state (не reason/attention.kind). Мутации, которые эти
+// тесты ловят: (1) вернуть детекцию мержа на reason==='мерж' → первый тест краснеет
+// (attention с не-мерж reason, но state=merge_pending); (2) убрать ветку merging →
+// второй тест краснеет (текст станет стадией, не «Мерж идёт»).
+
+describe('buildPillModel: state (merge_pending / merging)', () => {
+  it('merge_pending → wait, «Мерж ждёт согласия», ромб, C.info 600, aria «фича ждёт вас»', () => {
+    const m = buildPillModel([run({
+      state: 'merge_pending',
+      stepsAccepted: 9, stepsTotal: 9,
+      // attention намеренно с НЕ-мерж reason: детекция по reason==='мерж' здесь не сработает.
+      attention: { kind: 'wait', reason: 'нужен выбор линии' },
+    })])!;
+    expect(m.state).toBe('wait');
+    expect(m.icon).toBe('diamond');
+    expect(m.iconColor).toBe(C.info);
+    expect(m.text).toBe('Мерж ждёт согласия');
+    expect(m.textColor).toBe(C.info);
+    expect(m.textWeight).toBe(600);
+    expect(m.ariaExtra).toBe('фича ждёт вас');
+  });
+
+  it('merging → run (нейтрально, НЕ «ждёт вас»), «Мерж идёт», route, C.accent 400, без aria', () => {
+    const m = buildPillModel([run({
+      state: 'merging',
+      stepsAccepted: 9, stepsTotal: 9,
+      // У идущего мержа тревоги нет (бэк: attention=null).
+      attention: null,
+    })])!;
+    expect(m.state).toBe('run');
+    expect(m.icon).toBe('route');
+    expect(m.iconColor).toBe(C.accent);
+    expect(m.text).toBe('Мерж идёт');
+    expect(m.textColor).toBeNull();
+    expect(m.textWeight).toBe(400);
+    expect(m.ariaExtra).toBeNull();
+  });
+
+  it('waiting (не мерж) → wait, «ждёт вас · {reason}» (как прежде)', () => {
+    const m = buildPillModel([run({
+      state: 'waiting',
+      stepsAccepted: 9, stepsTotal: 9,
+      attention: { kind: 'wait', reason: 'нужен выбор линии' },
+    })])!;
+    expect(m.state).toBe('wait');
+    expect(m.text).toBe('ждёт вас · нужен выбор линии');
+  });
+
+  it('запасной путь: state нет, attention.kind=wait reason=мерж → «ждёт вас · мерж» (старый признак)', () => {
+    const m = buildPillModel([run({
+      stepsAccepted: 9, stepsTotal: 9,
+      attention: { kind: 'wait', reason: 'мерж' },
+    })])!;
+    expect(m.state).toBe('wait');
+    expect(m.text).toBe('ждёт вас · мерж');
+  });
+});
+
 // ── stopped: исполнитель упал ─────────────────────────────────────────────────
 
 describe('buildPillModel: исполнитель упал (stopped)', () => {

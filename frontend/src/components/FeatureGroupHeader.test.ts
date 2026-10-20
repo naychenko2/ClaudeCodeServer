@@ -12,7 +12,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { FeatureGroupHeader, featureGroupChevronClick } from './FeatureGroupHeader';
-import { featureDisplayState, featureGroupChats, featureGroupByOptions, featureQuickAction, featureAvatarPersonaIds } from '../lib/chatGroups';
+import { featureDisplayState, featureGroupChats, featureGroupByOptions, featureQuickAction, featureAvatarPersonaIds, featureStatusTag } from '../lib/chatGroups';
 import type { FeatureAttention, FeatureIndexFeature, FeatureRailSegment, FeatureRailKey } from '../types/featureIndex';
 import type { Session, Persona } from '../types';
 
@@ -172,6 +172,45 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.alarm).toBeNull();
     expect(st.status).toBe('смержена');
     expect(renderHeader(f).includes('data-feature-state="done"')).toBe(true);
+  });
+});
+
+// === state (бэк Б1a/Б1b): источник правды — f.state, не attention ===
+// Мутация «тон по attention.kind вместо state» красит: f без attention, но с state=merge_pending.
+
+describe('FeatureGroupHeader: state (merge_pending / merging)', () => {
+  it('merge_pending → wait, кромка info, статус «ждёт вас»; тег «К мержу»', () => {
+    const f = feat({ bucket: 'attention', state: 'merge_pending', attention: null });
+    const st = featureDisplayState(f);
+    expect(st.kind).toBe('wait');
+    expect(st.alarm).toBe('wait');
+    expect(st.status).toBe('ждёт вас');
+    expect(featureStatusTag(f)).toEqual({ label: 'К мержу', tone: 'merge' });
+    expect(featureQuickAction(f)).toBe('К мержу');
+  });
+
+  it('merging → run (нейтрально, НЕ «ждёт вас»), статус «Мерж идёт»; тег «Идёт»', () => {
+    const f = feat({ bucket: 'running', state: 'merging', attention: null });
+    const st = featureDisplayState(f);
+    expect(st.kind).toBe('run');
+    expect(st.alarm).toBeNull();
+    expect(st.status).toBe('Мерж идёт');
+    expect(featureStatusTag(f)).toEqual({ label: 'Идёт', tone: 'run' });
+  });
+
+  it('waiting (не мерж) → wait, «ждёт вас»; тег «Ждёт вас», быстрое «Ответить»', () => {
+    const f = feat({ bucket: 'attention', state: 'waiting', attention: null });
+    const st = featureDisplayState(f);
+    expect(st.kind).toBe('wait');
+    expect(st.status).toBe('ждёт вас');
+    expect(featureStatusTag(f)).toEqual({ label: 'Ждёт вас', tone: 'wait' });
+    expect(featureQuickAction(f)).toBe('Ответить');
+  });
+
+  it('запасной путь: state нет, attention.kind=merge → «ждёт вас · мерж» (старый признак)', () => {
+    const f = feat({ bucket: 'attention', attention: attention('merge') });
+    const st = featureDisplayState(f);
+    expect(st.status).toBe('ждёт вас · мерж');
   });
 });
 

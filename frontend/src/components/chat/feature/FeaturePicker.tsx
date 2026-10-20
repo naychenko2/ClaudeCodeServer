@@ -11,9 +11,24 @@ import { FeatureGlyph, type FeatureGlyph as FeatureGlyphKind } from './FeatureGl
 //
 // Роль: role="radiogroup" (группа) + role="radio" (чип), aria-checked — выбранный.
 
-// Состояние фичи для глифа: из полей бэкового агрегата. Приоритет:
-// wait (ждёт) → stopped (упал) → closed (закрыта) → done (пройдено) → run (идёт).
+// Состояние фичи для глифа. Источник правды — run.state (бэк Б1a/Б1b):
+// merge_pending/waiting → wait (ромб), stopped → stopped (квадрат), merged → done (галочка),
+// closed → closed, merging/running/not_started/idle → run (кольцо).
+// Без state (старые данные/кеш/моки) — запасной путь по прежнему признаку
+// (attention.kind / closed / ready), чтобы существующие тесты не упали.
 function pickerGlyph(run: FeatureRun): FeatureGlyphKind {
+  if (run.state) {
+    switch (run.state) {
+      case 'stopped': return 'stopped';
+      case 'waiting':
+      case 'merge_pending': return 'wait';
+      case 'merged': return 'done';
+      case 'closed': return 'closed';
+      // not_started, running, merging, idle → run.
+      default: return 'run';
+    }
+  }
+  // Запасной путь: state в данных нет (кеш/моки) — прежний признак.
   const att = run.attention;
   if (att && att.kind === 'wait') return 'wait';
   if (att && att.kind === 'stopped') return 'stopped';

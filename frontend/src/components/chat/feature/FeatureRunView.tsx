@@ -185,9 +185,11 @@ function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: F
   const btnStyle = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   const mins = minutesSince(att.since, now);
 
-  if (att.kind === 'wait') {
-    // Мерж: все шаги приняты, мержа нет — «Отдать фичу Марку на мерж?». Явное: причина ожидания.
-    const isMerge = att.reason === 'мерж';
+  // Мерж: att.kind='merge' (новое, бэк Б1b — тревога есть только пока merge-задачи нет,
+  // т.е. state=merge_pending) ИЛИ att.kind='wait' && reason='мерж' (старый признак, запасной
+  // путь для данных без kind='merge'). У идущего мержа (state=merging) тревоги нет.
+  const isMerge = att.kind === 'merge' || (att.kind === 'wait' && att.reason === 'мерж');
+  if (att.kind === 'wait' || att.kind === 'merge') {
     return (
       <div role="status" style={{ background: C.infoBg, color: C.info, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>

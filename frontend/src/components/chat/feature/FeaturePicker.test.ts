@@ -98,4 +98,21 @@ describe('FeaturePicker', () => {
     // Круг с чертой (closed): circle + path d="M5 8h6".
     expect(html).toContain('M5 8h6');
   });
+
+  // state (бэк Б1a/Б1b) — источник правды глифа: merge_pending → ромб (wait),
+  // merging → кольцо (run), merged → галочка (done). Мутация «глиф по attention.kind
+  // вместо state» краснит: runs без attention, но с state=merge_pending.
+  it('глиф по state: merge_pending → ромб, merging → кольцо, merged → галочка', () => {
+    const html = render([
+      run('a', 'Фича A', { state: 'merge_pending' }),
+      run('b', 'Фича B', { state: 'merging' }),
+      run('c', 'Фича C', { state: 'merged' }),
+    ], 0);
+    // Ромб (wait, merge_pending): path d="M8 1.5 14.5 8 8 14.5 1.5 8Z".
+    expect(html).toContain('M8 1.5 14.5 8 8 14.5 1.5 8Z');
+    // Кольцо (run, merging): два circle (r 6.5 stroke + r 3.5 fill).
+    expect(html).toContain('r="3.5"');
+    // Галочка (done, merged): path d="M4.8 8.2 7 10.3l4.3-4.6".
+    expect(html).toContain('M4.8 8.2 7 10.3l4.3-4.6');
+  });
 });

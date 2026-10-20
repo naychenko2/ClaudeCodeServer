@@ -128,6 +128,25 @@ describe('FeatureRunView — плашка «ждёт вас»', () => {
     expect(html).toContain('нужно решение о мерже');
     expect(html).not.toContain('Отдать фичу Марку на мерж?');
   });
+
+  // Новое (бэк Б1b): тревога «мерж» — att.kind='merge' (не 'wait'+reason='мерж').
+  // Мутация «плашка только по att.kind=wait» красит: att.kind='merge' не попадёт в ветку wait.
+  it('новое: att.kind=merge (state=merge_pending) → плашка мержа [Попросить Марка] [Итог финала]', () => {
+    const att: FeatureAttention = { kind: 'merge', reason: null, since: '2026-10-17T10:00:00Z', taskId: 'f1' };
+    const html = render(run({ ready: false, state: 'merge_pending', attention: att }));
+    expect(html).toContain('Ждёт вас');
+    expect(html).toContain('Все шаги приняты, мержа ещё нет');
+    expect(html).toContain('Отдать фичу Марку на мерж?');
+    expect(html).toContain('Попросить Марка');
+    expect(html).toContain('Итог финала');
+  });
+
+  it('идущий мерж (state=merging, attention=null) → плашки нет', () => {
+    const html = render(run({ ready: false, state: 'merging', attention: null }));
+    // У merging тревоги нет → ни «Ждёт вас», ни «Исполнитель упал».
+    expect(html).not.toContain('Ждёт вас');
+    expect(html).not.toContain('Исполнитель упал');
+  });
 });
 
 describe('FeatureRunView — плашка «исполнитель упал»', () => {

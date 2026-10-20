@@ -8,6 +8,7 @@ import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { useSphereOf } from '../lib/useSphereOf';
 import { isZoneRefusal } from '../lib/personaZone';
+import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { isArchivedChat } from '../lib/chatFilters';
@@ -2055,41 +2056,25 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
-  // Адрес якорного user_message для кнопки «Ветвление» (фича chat-branch). У ленты
-  // элементы не имеют стабильного id, а индексы items и messages расходятся штатно
-  // (normalizeHistory вливает workflow_progress в tool_use и группирует ошибки), поэтому
-  // сервер и фронт считают одно и то же множество — порядковый номер user_message.
-  // Для user_message: его собственный индекс. Для ответа ассистента: индекс ПОСЛЕДНЕГО
-  // user_message выше (то же значение, что у user_message). Нет user_message выше →
-  // кнопки нет. anchorText — первые ~120 символов текста этого сообщения: сервер
-  // сверяет его с найденным по индексу сообщением, на расхождении отвечает 409.
-  // useMemo от items — пересчёт только при изменении ленты, иначе renderItem пересоздавался
-  // бы на каждую стрим-дельту и ронял мемоизацию ChatItemView.
-  const branchAnchors = useMemo(() => {
-    const arr: ({ userMessageIdx: number; anchorText: string; include: 'turn' | 'beforePrompt' } | null)[] = [];
-    let count = 0;
-    let lastText = '';
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it.kind === 'user_message') {
-        count++;
-        lastText = it.text.slice(0, 120);
-        arr[i] = { userMessageIdx: count - 1, anchorText: lastText, include: 'beforePrompt' };
-      } else {
-        arr[i] = count > 0 ? { userMessageIdx: count - 1, anchorText: lastText, include: 'turn' } : null;
-      }
-    }
-    return arr;
-  }, [items]);
+  // Адрес якорного user_message для кнопки «Ветвление» — см. lib/branchAnchors: якоря
+  // лежат в двух типизированных массивах (без текстовых срезов), anchorText берётся из
+  // ленты в момент клика.
+  const branchAnchors = useMemo(() => buildBranchAnchors(items), [items]);
+  const branchAnchorText = useCallback(
+    (userMessageIdx: number) => branchAnchorTextOf(itemsRef.current, userMessageIdx), []);
 
   const renderItem = useCallback((item: ChatItem, i: number,
     extras?: {
       agentActivity?: ActivityEntry[];
       agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
     }) => {
-    const anchor = branchAnchors[i];
-    const onBranchForItem = anchor && branchAvailable
-      ? () => handleBranch({ userMessageIndex: anchor.userMessageIdx, anchorText: anchor.anchorText, include: anchor.include })
+    const anchorIdx = branchAnchors.userIdx[i];
+    const onBranchForItem = anchorIdx >= 0 && branchAvailable
+      ? () => handleBranch({
+          userMessageIndex: anchorIdx,
+          anchorText: branchAnchorText(anchorIdx),
+          include: branchAnchors.include[i] === BRANCH_BEFORE_PROMPT ? 'beforePrompt' : 'turn',
+        })
       : undefined;
     return (
     <ChatItemView
@@ -2165,7 +2150,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, batchByIndex, lastPlanIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, branchAnchorText, batchByIndex, lastPlanIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,

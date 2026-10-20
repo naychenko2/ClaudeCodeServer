@@ -44,11 +44,26 @@ function openDb(): Promise<IDBDatabase> {
   return _dbPromise;
 }
 
+// Итог транзакции, а не запроса. Успех запроса (req.onsuccess) НЕ означает, что
+// запись состоялась: commit случается позже, и на большом значении он может упасть
+// — квота IndexedDB при переполнении, прерывание при смене версии БД, onblocked
+// при чужой вкладке. Прежде резолв шёл по req.onsuccess, обработчиков на самой
+// транзакции не было, и такой обрыв оставлял промис навсегда нерешённым: он
+// висел в памяти вместе с замыканием на db/транзакцию и данными записи, а вызовы
+// глотали это .catch'ем. При потоке ответов, пишущихся в кэш, такие висящие
+// записи копились и удерживали кучу.
 function tx<T>(store: StoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return openDb().then(db => new Promise<T>((resolve, reject) => {
     const t = db.transaction(store, mode);
+    let result: T;
+    t.oncomplete = () => resolve(result);
+    // Прерывание и ошибка транзакции реджектят промис: иначе он остался бы
+    // нерешённым навсегда. Оба события по спеке означают откат, так что результат
+    // и не может оказаться применённым — реджект тут единственно честный исход.
+    t.onabort = () => reject(t.error ?? new DOMException('IDB: транзакция прервана', 'AbortError'));
+    t.onerror = () => reject(t.error ?? new Error('IDB: ошибка транзакции'));
     const req = fn(t.objectStore(store));
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => { result = req.result; };
     req.onerror = () => reject(req.error);
   }));
 }

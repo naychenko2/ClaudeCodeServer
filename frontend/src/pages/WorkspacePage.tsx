@@ -46,7 +46,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
-import { centerOccupiedByOther, type CenterOccupancy } from '../lib/centerOccupancy';
+import type { CenterOccupancy } from '../lib/centerOccupancy';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
@@ -801,7 +801,6 @@ const windowWidth = useWindowWidth();
     // Видео-центр (MAJOR-1): кадр/каталог в центральном острове — окно центра.
     videoCenter: videoCenter != null,
   };
-  const otherCenterOpen = centerOccupiedByOther(centerOccupancy);
   // Показ страницы гейтится ТОЛЬКО по флагу (openFeatureId ставится из хэша/снимка без
   // гейта — инициализатор выше). Гейта «центр не занят» НЕТ (M1/M2): побеждает ПОСЛЕДНЕЕ
   // открытое. Открытие окна центра забирает страницу через переходный эффект (ниже,
@@ -824,23 +823,49 @@ const windowWidth = useWindowWidth();
     if (openFeatureId != null && !featurePageOpen) clearBackNav();
   }, [openFeatureId, featurePageOpen]);
 
-  // Автоскрытие = настоящее закрытие (M1/M2): побеждает ПОСЛЕДНЕЕ открытое. Переход
-  // otherCenterOpen false→true (открылось окно центра) — окно забирает центр: если страница
-  // фичи открыта (openFeatureId задан) — настоящее закрытие: сброс openFeatureId, адрес
-  // без /feature/ (navReplace), featureBackNav сброшен. Явное открытие страницы (badge/
-  // «Фича →»/диплинк) рисует её ПОВЕРХ любого окна (центр display:none, чат в DOM) —
-  // Esc/«Закрыть» возвращают к тому, что было под ней.
+  // Автоскрытие = настоящее закрытие (M1/M2): побеждает ПОСЛЕДНЕЕ открытое. Ребра булева
+  // otherCenterOpen (false→true) не хватает: центр, занятый ДО явного открытия страницы,
+  // при СМЕНЕ окна (файл уступил задаче) флаг не меняет → страница оставалась (проба Глеба,
+  // M1). Поэтому детект САМОГО факта открытия/смены окна — монотонные штампы: общий счётчик,
+  // каждое открытие/смена окна центра И каждое явное открытие страницы получают возрастающий
+  // штамп. Сравнивая их, решаем, кто «позже»: окно позже страницы → настоящее закрытие
+  // (сброс openFeatureId, адрес без /feature/ (navReplace), featureBackNav сброшен); страница
+  // позже окна → остаётся ПОВЕРХ (M2, центр display:none, чат в DOM); Esc/«Закрыть»
+  // возвращают к тому, что было под ней.
+  const stampCounterRef = useRef(0);
+  const windowStampRef = useRef(0); // штамп последнего открытия/смены окна центра
+  const pageStampRef = useRef(0);   // штамп последнего явного открытия страницы
+  // Отпечаток занятости центра: меняется при каждом открытии/смене окна (не ребро булева).
+  const centerFingerprint = (Object.keys(centerOccupancy) as (keyof CenterOccupancy)[])
+    .filter(k => centerOccupancy[k]).join(',');
+  const prevFingerprintRef = useRef(centerFingerprint);
+  const prevOpenFeatureIdRef = useRef(openFeatureId);
+  // Окно открылось/сменилось (отпечаток изменился и теперь не пуст) → штамп окна.
+  useEffect(() => {
+    const prev = prevFingerprintRef.current;
+    prevFingerprintRef.current = centerFingerprint;
+    if (centerFingerprint !== prev && centerFingerprint !== '') {
+      stampCounterRef.current += 1;
+      windowStampRef.current = stampCounterRef.current;
+    }
+  }, [centerFingerprint]);
+  // Страница открылась/сменилась (openFeatureId null→id или id→другой id) → штамп страницы.
+  useEffect(() => {
+    const prev = prevOpenFeatureIdRef.current;
+    prevOpenFeatureIdRef.current = openFeatureId;
+    if (openFeatureId != null && openFeatureId !== prev) {
+      stampCounterRef.current += 1;
+      pageStampRef.current = stampCounterRef.current;
+    }
+  }, [openFeatureId]);
   // Гейт flagsLoaded && featuresOn: пока флаги НЕ пришли (featuresOn=false) страница ещё
   // не открылась — чистить openFeatureId рано (M1(а): диплинк ждёт ответа /me).
   // Выключенный флаг ведёт отдельный эффект (нормализация адреса, mobileView=sidebar).
-  const prevOtherCenterOpenRef = useRef(otherCenterOpen);
   useEffect(() => {
-    const prev = prevOtherCenterOpenRef.current;
-    prevOtherCenterOpenRef.current = otherCenterOpen;
-    // Не переход «открылось окно» (false→true) — не чиним.
-    if (!otherCenterOpen || prev) return;
     // Страница не открыта или флаги ещё не пришли — не чиним.
     if (openFeatureId == null || !flagsLoaded || !featuresOn) return;
+    // Окно НЕ позже страницы (штамп окна ≤ штампа страницы) → страница ПОВЕРХ (M2), не чиним.
+    if (windowStampRef.current <= pageStampRef.current) return;
     setOpenFeatureId(null);
     clearBackNav();
     const view = isMobile ? 'chat' : 'sidebar';
@@ -849,9 +874,26 @@ const windowWidth = useWindowWidth();
       chatId: activeSessionId ?? undefined, feature: null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на
-    // переход «открылось окно центра»; project/mobileView/activeSessionId в замыкании —
-    // текущие, deps плодили бы лишние записи истории
-  }, [otherCenterOpen, openFeatureId, flagsLoaded, featuresOn]);
+    // «окно позже страницы»; project/mobileView/activeSessionId в замыкании — текущие,
+    // deps плодили бы лишние записи истории
+  }, [openFeatureId, flagsLoaded, featuresOn, centerFingerprint]);
+
+  // Мобила (MAJOR-2): уход в список/сайдбар (mobileView='sidebar') при открытой странице
+  // закрывает её ПО-НАСТОЯЩЕМУ (сброс openFeatureId, адрес без /feature/), а не гасит
+  // молча: на мобиле страница живёт в центре (chat), а sidebar = список — «висящая в
+  // воздухе» невидимая страница (адрес /feature/) противоречила бы «закрывается настоящим
+  // закрытием». Гейт flagsLoaded && featuresOn: пока флаги не пришли, страницу ещё нет.
+  useEffect(() => {
+    if (!isMobile || mobileView !== 'sidebar' || openFeatureId == null || !flagsLoaded || !featuresOn) return;
+    setOpenFeatureId(null);
+    clearBackNav();
+    navReplace({
+      screen: 'project', project, view: 'sidebar', file: null, task: null,
+      chatId: activeSessionId ?? undefined, feature: null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на уход
+    // в список при открытой странице; project/activeSessionId в замыкании — текущие
+  }, [mobileView, openFeatureId, flagsLoaded, featuresOn]);
 
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);
@@ -2156,7 +2198,11 @@ const windowWidth = useWindowWidth();
         )}
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM; ридер,
             как и файл, вытесняет его из контентной зоны */}
-        <div data-testid="workspace-center-container" style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Видимость контейнера — по featurePageOpen (MAJOR-2): когда открыта страница, центр
+            виден (FeatureCenter внутри прячет сам центр display:none и рисует страницу); при
+            openFile/readerOpenMobile/mobileView='sidebar' контейнер был display:none → страница
+            в DOM, но невидима (проба 360px: страница над файлом). Без страницы — прежние правила. */}
+        <div data-testid="workspace-center-container" style={{ flex: 1, display: featurePageOpen || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн

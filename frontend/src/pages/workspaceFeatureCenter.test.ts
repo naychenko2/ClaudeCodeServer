@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
-import { centerOccupiedByOther, type CenterOccupancy } from '../lib/centerOccupancy';
+import { centerOccupiedByOther, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import type { Project, Session } from '../types';
@@ -198,6 +198,29 @@ vi.mock('../components/SessionList', async () => {
   };
 });
 
+// ── TaskBoard: тяжёлая доска (select/options) не живёт в fake-DOM — заглушка. Для проверки
+//     «доска занимает центр» хватает самого факта режима «Задачи» + включённой доски. ──
+vi.mock('../features/tasks/board/TaskBoard', async () => {
+  const { createElement } = await import('react');
+  return { TaskBoard: () => createElement('div', { 'data-testid': 'task-board-stub' }) };
+});
+
+// ── ProjectPersonasPanel (сайдбар): onShowTeam → handleShowTeam (setTeamCenterOpen(true),
+//     minor-4: командный центр — окно центра). Ловим onShowTeam, чтобы триггернуть командный
+//     центр в тесте (в fake-DOM на кнопках нет __reactFiber$; проп — доступен). ──
+const personasPanelMock = vi.hoisted(() => ({ onShowTeam: null as (() => void) | null }));
+vi.mock('../features/personas/ProjectPersonasPanel', async (importOriginal) => {
+  const { createElement } = await import('react');
+  const orig = await importOriginal<typeof import('../features/personas/ProjectPersonasPanel')>();
+  return {
+    ...orig,
+    ProjectPersonasPanel: ({ onShowTeam }: { onShowTeam?: () => void }) => {
+      personasPanelMock.onShowTeam = onShowTeam ?? null;
+      return createElement('div', { 'data-testid': 'personas-panel-stub' });
+    },
+  };
+});
+
 // ── useFeaturePage: состояние страницы (run.epic.title) — no-op api отдаёт null ──
 vi.mock('../lib/featurePage', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/featurePage')>();
@@ -359,6 +382,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     videoStageMock.center = null;
     sessionListMock.onSessionUpdated = null;
     sessionListMock.onSelect = null;
+    personasPanelMock.onShowTeam = null;
     setAllFlags({ 'features-overview': true });
     const idx = { features: [feat()], chats: {} } as FeaturesIndex;
     indexTest.setIndex('p1', idx);
@@ -1128,20 +1152,104 @@ describe('WorkspacePage: центр — страница фичи соседом
         `чат не в DOM при окне «${w.key}»`).not.toBeNull();
     });
   }
-  // Полнота: каждое поле CenterOccupancy покрыто хотя бы одним тестом (тут —
-  // unit-тестом предиката выше) или поведенческим; пропуск нового окна красит.
-  it('полнота: все поля CenterOccupancy покрыты (unit-предикат + поведенческие)', () => {
-    const covered = new Set<keyof CenterOccupancy>([...centerWindows.map(w => w.key)]);
-    // Остальные поля (commit/graph/reader/persona/teamCenter/board/preview/terminalMobile)
-    // покрыты unit-тестом centerOccupiedByOther выше (каждое поле по отдельности).
-    for (const key of Object.keys({} as CenterOccupancy) as (keyof CenterOccupancy)[]) {
-      void covered; void key;
+  // Полнота: ключи берутся из единого источника (CENTER_OCCUPANCY_KEYS, tsc требует каждое
+  // поле интерфейса). Каждое поле обязано быть отнесено либо к поведенческим тестам этого
+  // файла, либо к «только предикат»; новое окно без классификации красит тест.
+  it('полнота: каждое поле CenterOccupancy классифицировано и занимает центр в предикате', () => {
+    const behavioral = ['file', 'task', 'videoCenter', 'board', 'teamCenter'];
+    const predicateOnly = ['commit', 'graph', 'reader', 'persona', 'preview', 'terminalMobile'];
+    expect(CENTER_OCCUPANCY_KEYS.length, 'список полей пуст').toBeGreaterThan(0);
+    expect([...behavioral, ...predicateOnly].sort(), 'поле CenterOccupancy не классифицировано в тестах')
+      .toEqual([...CENTER_OCCUPANCY_KEYS].sort());
+    const empty = Object.fromEntries(CENTER_OCCUPANCY_KEYS.map(k => [k, false])) as unknown as CenterOccupancy;
+    expect(centerOccupiedByOther(empty)).toBe(false);
+    for (const key of CENTER_OCCUPANCY_KEYS) {
+      expect(centerOccupiedByOther({ ...empty, [key]: true }), `поле «${key}» не занимает центр`).toBe(true);
     }
-    expect(centerOccupiedByOther({
-      file: false, commit: false, task: false, graph: false, reader: false,
-      persona: false, teamCenter: false, board: false, preview: false,
-      terminalMobile: false, videoCenter: false,
-    })).toBe(false);
+  });
+
+  // (MAJOR-2, поведение) Доска на мобиле: включена (persist), но не в режиме «Задачи» — центр
+  // НЕ занят: окно (штамп) не возникает, страница открывается и остаётся. В режиме «Задачи»
+  // доска занимает центр — открытая ДО неё страница закрывается (окно позже страницы).
+  // Фиксирует поведение (доска вне «Задачи» страницу не трогает). Мутация board: showProjectBoard →
+  // projectBoard при модели штампов ЭКВИВАЛЕНТНА (отпечаток меняется только вместе с реальным окном),
+  // поэтому этот тест её не краснит — честно отмечено в отчёте.
+  it('MAJOR-2 (поведение): доска включена без режима «Задачи» — страница остаётся; в «Задачи» доска закрывает страницу', async () => {
+    recordHistory();
+    (globalThis as any).localStorage.setItem('cc_proj_board_p1', '1');
+    wsState.leftTab = 'sessions';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'доска вне режима «Задачи» закрыла страницу').not.toBeNull();
+    // Режим «Задачи»: доска занимает центр (cc-pending-task без id задачи в сторе → leftTab tasks)
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|nonexistent');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'доска в режиме «Задачи» не закрыла страницу').toBeNull();
+  });
+
+  // (minor-4) Мобильный командный центр: onShowTeam → handleShowTeam → setTeamCenterOpen(true).
+  // Удаление строки красит тест: центр не занят, страница остаётся.
+  it('minor-4: командный центр (мобила) закрывает открытую страницу', async () => {
+    recordHistory();
+    wsState.leftTab = 'personas';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не открыта').not.toBeNull();
+    expect(personasPanelMock.onShowTeam, 'onShowTeam не пойман').toBeTruthy();
+    act(() => { personasPanelMock.onShowTeam!(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'командный центр не закрыл страницу (minor-4)').toBeNull();
+  });
+
+  // (M1, смена окна) Центр занят ДО открытия страницы; страницу открыли поверх; затем окно
+  // СМЕНИЛОСЬ (файл уступил задаче) — флаг занятости не меняется, но окно позже страницы →
+  // страница закрыта (штамп, а не ребро булева).
+  it('M1: файл → страница поверх → окно сменилось на задачу — страница закрыта', async () => {
+    recordHistory();
+    (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не поверх файла').not.toBeNull();
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'смена окна файл→задача не закрыла страницу (M1)').toBeNull();
+    expect((globalThis as any).window.location.hash).not.toContain('/feature/');
+  });
+
+  // (M2, мобила) Страница поверх файла видима: контейнер центра display:flex.
+  it('M2 (мобила): страница поверх файла — контейнер центра виден (flex)', async () => {
+    recordHistory();
+    (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    const center = findNodeByAttr(container, 'data-testid', 'workspace-center-container');
+    expect((center as any).style?.display, 'контейнер центра скрыт при странице над файлом').toBe('flex');
   });
 
   // Тест на сброс featureBackNav при автоскрытии: страница скрыта (другое окно открыто),

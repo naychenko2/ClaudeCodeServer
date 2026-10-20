@@ -47,3 +47,12 @@ export function centerOccupiedByOther(o: CenterOccupancy): boolean {
     || o.terminalMobile || o.videoCenter
   );
 }
+
+// Перечень полей CenterOccupancy как данные (для теста полноты). `satisfies Record<…, true>`
+// заставляет компилятор требовать КАЖДОЕ поле интерфейса: добавил окно в CenterOccupancy,
+// забыл здесь — tsc краснеет; тест полноты берёт ключи отсюда и проверяет покрытие.
+export const CENTER_OCCUPANCY_KEYS = Object.keys({
+  file: true, commit: true, task: true, graph: true, reader: true,
+  persona: true, teamCenter: true, board: true, preview: true,
+  terminalMobile: true, videoCenter: true,
+} satisfies Record<keyof CenterOccupancy, true>) as (keyof CenterOccupancy)[];

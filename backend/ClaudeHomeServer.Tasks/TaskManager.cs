@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks.Journal;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
@@ -66,17 +68,28 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // проактивного уведомления о спавне следующего экземпляра регулярной задачи.
     // Полный PersonaManager ради одного `GetByIdInternal` — overkill.
     private readonly IPersonaLookup? _personas;
+    // Журнал событий фичи (волна 3, Б8b): append-only JSONL. Запись переходов задач
+    // фичи (старт/остановка/ожидание/статус/вердикт/снятие) — см. WriteJournalTransitions.
+    // Опциональный: тесты без журнала (null) пишут в воздух. Та же вертикаль (Tasks.Journal),
+    // новых швов на другие вертикали нет.
+    private readonly FeatureJournalStore? _journal;
+    // Логгер для страховки записи журнала: хранилище глотает свои ошибки, но сбой
+    // не должен ронять мутацию задачи — логируем и идём дальше.
+    private readonly ILogger<TaskManager>? _log;
 
     // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
 
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
-        ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null)
+        ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null,
+        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null)
     {
         _events = events;
         _notif = notif;
         _personas = personas;
+        _journal = journal;
+        _log = log;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
@@ -88,6 +101,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (_saveDebounce > TimeSpan.Zero)
             _saveTimer = new Timer(_ => OnSaveTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         Load();
+        SweepOrphanJournals();
         // Раньше здесь конструктор ставил СТАТИЧЕСКИЕ резолверы Session (ParentSessionId/TaskDone).
         // Снят: вычисляемые «связи» сессии теперь считает SessionTaskLinks (Core) поверх
         // ITaskLookup (адаптер в Program.cs), и спин-модель Session больше не зависит от
@@ -98,6 +112,182 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Actor — персона-исполнитель (по id, фронт резолвит в подпись) либо «user»/«system».
     private void LogTask(TaskItem task, string type, string summary) =>
         _events?.Append(task.ProjectId ?? "", task.OwnerId ?? "", type, task.PersonaId ?? "user", summary, task.Id);
+
+    // ─── Журнал событий фичи (волна 3, Б8b) ─────────────────────────────────────
+    // Снимок 6 полей задачи, которые пишут события в журнал фичи. Сравнивается ДО/ПОСЛЕ
+    // мутации: событие пишется ТОЛЬКО при смене значения (идемпотентность).
+    private struct TaskTransition
+    {
+        public DateTime? ClaudeStartedAt;
+        public DateTime? ExecutorStoppedAt;
+        public string? ExecutorStopReason;
+        public DateTime? AwaitingHumanSince;
+        public string? AwaitingHumanReason;
+        public TaskItemStatus Status;
+        public string? Verdict;
+        public DateTime? DroppedByHumanAt;
+    }
+
+    // Снимок текущего состояния 6 полей задачи.
+    private static TaskTransition Capture(TaskItem t) => new()
+    {
+        ClaudeStartedAt = t.ClaudeStartedAt,
+        ExecutorStoppedAt = t.ExecutorStoppedAt,
+        ExecutorStopReason = t.ExecutorStopReason,
+        AwaitingHumanSince = t.AwaitingHumanSince,
+        AwaitingHumanReason = t.AwaitingHumanReason,
+        Status = t.Status,
+        Verdict = t.Verification?.Verdict,
+        DroppedByHumanAt = t.DroppedByHumanAt,
+    };
+
+    // Сравнивает 6 полей задачи ДО (before) и ПОСЛЕ (текущее состояние task) мутации и
+    // пишет в журнал фичи события для каждого изменившегося поля. Время события — значение
+    // самого поля (started/stopped/waiting/dropped); у снятий (stop_cleared/waiting_cleared)
+    // и у status/verdict — момент мутации (DateTime.UtcNow). Задача без фичи не пишется.
+    // Сбой записи не роняет мутацию (AppendJournal).
+    private void WriteJournalTransitions(TaskItem task, TaskTransition before)
+    {
+        // featureId: у эпика (Role=feature) — его собственный id, у дочерней — FeatureId.
+        var featureId = task.Role == TaskRoles.Feature ? task.Id : task.FeatureId;
+        if (featureId is null) return;
+        var ownerId = task.OwnerId ?? "";
+        var now = DateTime.UtcNow;
+
+        // started: ClaudeStartedAt задан (смена значения).
+        if (before.ClaudeStartedAt != task.ClaudeStartedAt && task.ClaudeStartedAt is not null)
+            AppendJournal(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = task.ClaudeStartedAt.Value,
+                Kind = "started",
+                TaskId = task.Id,
+                StartedAt = task.ClaudeStartedAt,
+            });
+
+        // stopped / stop_cleared: ExecutorStoppedAt задан или снят.
+        if (before.ExecutorStoppedAt != task.ExecutorStoppedAt)
+        {
+            if (task.ExecutorStoppedAt is not null)
+                AppendJournal(ownerId, featureId, new FeatureJournalEntry
+                {
+                    At = task.ExecutorStoppedAt.Value,
+                    Kind = "stopped",
+                    TaskId = task.Id,
+                    Reason = task.ExecutorStopReason,
+                });
+            else
+                AppendJournal(ownerId, featureId, new FeatureJournalEntry
+                {
+                    At = now,
+                    Kind = "stop_cleared",
+                    TaskId = task.Id,
+                });
+        }
+
+        // waiting / waiting_cleared: AwaitingHumanSince задан или снят.
+        if (before.AwaitingHumanSince != task.AwaitingHumanSince)
+        {
+            if (task.AwaitingHumanSince is not null)
+                AppendJournal(ownerId, featureId, new FeatureJournalEntry
+                {
+                    At = task.AwaitingHumanSince.Value,
+                    Kind = "waiting",
+                    TaskId = task.Id,
+                    Reason = task.AwaitingHumanReason,
+                });
+            else
+                AppendJournal(ownerId, featureId, new FeatureJournalEntry
+                {
+                    At = now,
+                    Kind = "waiting_cleared",
+                    TaskId = task.Id,
+                });
+        }
+
+        // status: смена статуса (from/to).
+        if (before.Status != task.Status)
+            AppendJournal(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = now,
+                Kind = "status",
+                TaskId = task.Id,
+                From = before.Status.ToString(),
+                To = task.Status.ToString(),
+            });
+
+        // verdict: смена вердикта.
+        if (before.Verdict != task.Verification?.Verdict)
+            AppendJournal(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = now,
+                Kind = "verdict",
+                TaskId = task.Id,
+                Verdict = task.Verification?.Verdict,
+            });
+
+        // dropped: DroppedByHumanAt задан (снятие человеком).
+        if (before.DroppedByHumanAt != task.DroppedByHumanAt && task.DroppedByHumanAt is not null)
+            AppendJournal(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = task.DroppedByHumanAt.Value,
+                Kind = "dropped",
+                TaskId = task.Id,
+            });
+    }
+
+    // Запись в журнал фичи со страховкой: хранилище глотает свои ошибки, но сбой не
+    // должен ронять мутацию задачи — логируем и идём дальше.
+    private void AppendJournal(string ownerId, string featureId, FeatureJournalEntry entry)
+    {
+        if (_journal is null) return;
+        try
+        {
+            _journal.Append(ownerId, featureId, entry);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Журнал фичи: не удалось записать {Kind} для {Feature}", entry.Kind, featureId);
+        }
+    }
+
+    // Каскад: файл журнала фичи удаляется вместе с её эпиком.
+    private void DeleteJournalFor(TaskItem task)
+    {
+        if (_journal is null) return;
+        var featureId = task.Role == TaskRoles.Feature ? task.Id : task.FeatureId;
+        if (featureId is null) return;
+        try
+        {
+            _journal.Delete(task.OwnerId ?? "", featureId);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Журнал фичи: не удалось удалить {Feature}", featureId);
+        }
+    }
+
+    // Сироты при старте: файл журнала, у которого эпик уже удалён, подметается.
+    // Для каждого владельца — проверка, жив ли эпик с данным id.
+    private void SweepOrphanJournals()
+    {
+        if (_journal is null) return;
+        var owners = _tasks.Values
+            .Where(t => t.OwnerId is not null)
+            .Select(t => t.OwnerId!)
+            .Distinct(StringComparer.Ordinal);
+        foreach (var ownerId in owners)
+        {
+            try
+            {
+                _journal.SweepOrphans(ownerId, featureId =>
+                    _tasks.TryGetValue(featureId, out var epic) && epic.Role == TaskRoles.Feature);
+            }
+            catch (Exception ex)
+            {
+                _log?.LogWarning(ex, "Журнал фичи: SweepOrphans для {Owner}", ownerId);
+            }
+        }
+    }
 
     public TaskItem? GetById(string id) => _tasks.GetValueOrDefault(id);
 
@@ -235,6 +425,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
             task.ReviewOf, task.PersonaId, ownerId);
         _tasks[task.Id] = task;
+        // created: эпик фичи — первая запись её журнала (журнал точный, только если
+        // начинается с created; дочерние задачи фичи created не пишут).
+        if (task.Role == TaskRoles.Feature)
+            AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+            {
+                At = task.CreatedAt,
+                Kind = "created",
+                TaskId = task.Id,
+            });
+        // Переходы: начальные значения полей (свежая задача → before = дефолт Todo).
+        WriteJournalTransitions(task, new TaskTransition { Status = TaskItemStatus.Todo });
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
@@ -374,6 +575,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
         var statusBefore = task.Status;
+        // Снимок 6 полей ДО мутации — для журнала фичи (WriteJournalTransitions перед ScheduleSave).
+        var before = Capture(task);
 
         // Запоминаем статус до правки — для фиксации момента завершения (CompletedAt)
         var wasDone = task.Status == TaskItemStatus.Done;
@@ -549,6 +752,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // Инвариант «worktree только у проектной задачи» — после смены проекта выше
         NormalizeWorktree(task);
         task.UpdatedAt = DateTime.UtcNow;
+        // Журнал фичи: переходы 6 полей (сравниваем ДО/ПОСЛЕ, не на тике SaveNow — см. Б8b).
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         // Завершение задачи фиксируем в логе (переход в Done — заметное командное событие)
         // и поднимаем сигнал D для join-а с сигналом R (конец хода) — ровно один раз на переход
@@ -604,6 +809,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             Repro = completed.Repro,
         };
         _tasks[task.Id] = task;
+        // Журнал фичи: новый экземпляр — свежая задача (before = дефолт); переходы пишутся,
+        // если экземплеру перенесена фича (сегодня FeatureId не копируется → no-op).
+        WriteJournalTransitions(task, new TaskTransition { Status = TaskItemStatus.Todo });
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskSpawned, $"Создан следующий экземпляр: «{task.Title}»");
         // proactive-уведомление через единый NotificationService (②-2.1) — персистится в центре уведомлений
@@ -624,7 +832,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.ReminderSentAt = atUtc;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -634,6 +844,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.LinkedSessionId = sessionId;
         task.ClaudeStartedAt = atUtc;
         task.ClaudeResult = null;
@@ -651,6 +862,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         task.DeviceWaitReason = null;
         if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
         task.UpdatedAt = DateTime.UtcNow;
+        // Журнал фичи: started (ClaudeStartedAt) + stop_cleared (ExecutorStoppedAt снят) + status.
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -664,8 +877,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.ExecutorLaunchedBySessionId = Trimmed(sessionId ?? "");
         task.ExecutorLaunchedByPersonaId = Trimmed(personaId ?? "");
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -674,9 +889,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.DeviceWaitSince ??= atUtc;
         task.DeviceWaitReason = reason;
         task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -686,9 +903,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.DeviceWaitSince = null;
         task.DeviceWaitReason = null;
         task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -702,8 +921,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.ClaudeResult = result;
         task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -719,9 +940,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || !ExecutorStopClassifier.IsTerminal(reason)) return task;
+        var before = Capture(task);
         task.ExecutorStoppedAt = atUtc;
         task.ExecutorStopReason = reason;
         task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -733,9 +956,27 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.ExecutorStoppedAt is null || task.ExecutorStopReason != reason) return null;
+        var before = Capture(task);
         task.ExecutorStoppedAt = null;
         task.ExecutorStopReason = null;
         task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
+        ScheduleSave();
+        return task;
+    }
+
+    // Снятие ожидания человека (аналог ClearExecutorStopped): в Update AwaitingHumanSince/
+    // Reason — null = «без изменения», явного пути клира там нет; здесь — отдельный сброс.
+    // Журнал: waiting_cleared (момент мутации, не значение снятого поля).
+    public TaskItem? ClearAwaitingHuman(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.AwaitingHumanSince is null) return null;
+        var before = Capture(task);
+        task.AwaitingHumanSince = null;
+        task.AwaitingHumanReason = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -750,8 +991,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return task;
+        var before = Capture(task);
         task.DroppedByHumanAt = atUtc;
         task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -764,7 +1007,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.ExecutorNudgedAt = atUtc;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -773,7 +1018,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var before = Capture(task);
         task.ExecutorStaleAlertedAt = atUtc;
+        WriteJournalTransitions(task, before);
         ScheduleSave();
         return task;
     }
@@ -787,13 +1034,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     public bool TryMarkCompletionDelivered(string id)
     {
         bool claimed;
+        var before = default(TaskTransition);
+        TaskItem? task = null;
         lock (_saveLock)
         {
-            var task = _tasks.GetValueOrDefault(id);
+            task = _tasks.GetValueOrDefault(id);
             if (task is null || task.CompletionDelivered) return false;
+            before = Capture(task);
             task.CompletionDelivered = true;
             claimed = true;
         }
+        if (task is not null) WriteJournalTransitions(task, before);
         ScheduleSave();
         return claimed;
     }
@@ -801,6 +1052,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     public bool Delete(string id)
     {
         if (!_tasks.TryRemove(id, out var task)) return false;
+        // Каскад: эпик фичи, удалённый по id, уносит файл её журнала.
+        DeleteJournalFor(task);
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskDeleted, $"Удалена задача «{task.Title}»");
         return true;
@@ -809,11 +1062,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Зачистка при удалении проекта
     public IReadOnlyCollection<string> DeleteByProject(string projectId)
     {
-        var ids = _tasks.Values.Where(t => t.ProjectId == projectId).Select(t => t.Id).ToList();
-        foreach (var id in ids)
-            _tasks.TryRemove(id, out _);
-        if (ids.Count > 0) ScheduleSave();
-        return ids;
+        var removed = _tasks.Values.Where(t => t.ProjectId == projectId).ToList();
+        foreach (var t in removed)
+        {
+            _tasks.TryRemove(t.Id, out _);
+            // Каскад: эпик фичи, удалённый вместе с проектом, уносит файл её журнала.
+            DeleteJournalFor(t);
+        }
+        if (removed.Count > 0) ScheduleSave();
+        return removed.Select(t => t.Id).ToList();
     }
 
     private void Load()
@@ -842,8 +1099,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
             if (unset.Count == 0) continue;
             var baseOrder = group.Select(t => t.Order).Where(o => o != 0).DefaultIfEmpty(0).Max();
+            // Снимки 6 полей ДО мутации — для журнала фичи (Order не отслеживается → no-op).
+            var befores = unset.Select(Capture).ToList();
             for (var i = 0; i < unset.Count; i++)
+            {
                 unset[i].Order = baseOrder + (i + 1) * 1000;
+                WriteJournalTransitions(unset[i], befores[i]);
+            }
             changed = true;
         }
         if (changed) ScheduleSave();

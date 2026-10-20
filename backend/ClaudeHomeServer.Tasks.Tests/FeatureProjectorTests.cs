@@ -284,7 +284,7 @@ public class FeatureProjectorTests
     }
 
     // MAJOR-1: финал принят (accepted), merge-задачи нет → активная стадия merge с tone = wait.
-    // Тон стадии — производное от Attention (wait/«мерж»), а не отдельный расчёт.
+    // Тон стадии — производное от Attention (merge), а не отдельный расчёт.
     [Fact]
     public void Build_ФиналAcceptedБезМержа_MergeToneWait()
     {
@@ -304,9 +304,10 @@ public class FeatureProjectorTests
         mergeStage.State.Should().Be("active",
             "финал принят, merge-задачи нет — мерж активен");
         mergeStage.Tone.Should().Be("wait",
-            "тон активной стадии — производное от Attention (wait/«мерж»), а не run");
-        run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = wait/мерж");
-        run.Attention!.Reason.Should().Be("мерж");
+            "тон активной стадии — производное от Attention (merge), а не run");
+        run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = merge");
+        run.Attention!.Kind.Should().Be("merge", "merge_pending — kind=merge (не wait)");
+        run.Attention.Reason.Should().Be("мерж");
     }
 
     // MAJOR-1: stopped с устаревшей пометкой (ExecutorStoppedAt раньше ClaudeStartedAt) →
@@ -599,9 +600,9 @@ public class FeatureProjectorTests
         run.Now[0].Stage.Should().Be("prod");
     }
 
-    // Финал accepted, merge-задачи нет → Attention = wait / "мерж", since = CompletedAt финала.
+    // Финал accepted, merge-задачи нет → Attention = merge, since = CompletedAt финала.
     [Fact]
-    public void Build_ФиналAcceptedБезМержа_AttentionWaitМерж()
+    public void Build_ФиналAcceptedБезМержа_AttentionMerge()
     {
         const string epicId = "epic-merge-wait";
         var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
@@ -617,10 +618,38 @@ public class FeatureProjectorTests
         var run = FeatureProjector.Build(epic, [epic, final]);
 
         run.Attention.Should().NotBeNull("финал принят, мержа нет — ждём мержа");
-        run.Attention!.Kind.Should().Be("wait");
+        run.Attention!.Kind.Should().Be("merge", "merge_pending — kind=merge (не wait)");
         run.Attention.Reason.Should().Be("мерж");
         run.Attention.Since.Should().Be(new DateTime(2026, 10, 17, 12, 0, 0));
         run.Attention.TaskId.Should().Be("f1");
+    }
+
+    // Идущий мерж: финал принят (Done + accepted), merge-задача ЕСТЬ и не Done →
+    // тревоги НЕТ (не «ждёт вас»), state = merging. Мутация: вернуть старое условие
+    // «merge не Done» (mergeNotDone) → attention = merge → тест краснеет.
+    [Fact]
+    public void Build_МержИдёт_НетТревоги_StateMerging()
+    {
+        const string epicId = "epic-merging-no-attention";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 13, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final, merge]);
+
+        run.State.Should().Be(FeatureStates.Merging, "merge-задача есть и не Done → merging");
+        run.Attention.Should().BeNull("идущий мерж — не «ждёт вас»: тревоги нет");
     }
 
     // Остановленный исполнитель И явный wait у той же фичи → Attention.kind = stopped (приоритет).
@@ -1018,8 +1047,9 @@ public class FeatureProjectorTests
         var run = FeatureProjector.Build(epic, [epic, final]);
 
         // Мутация: если вычисление «мерж» убрано → Attention=null → краснеет.
-        run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = wait/мерж");
-        run.Attention!.Reason.Should().Be("мерж");
+        run.Attention.Should().NotBeNull("финал accepted, мержа нет — Attention = merge");
+        run.Attention!.Kind.Should().Be("merge", "merge_pending — kind=merge (не wait)");
+        run.Attention.Reason.Should().Be("мерж");
     }
 
     // ─── Б5: исполнители, число задач и исход у каждой стадии ────────────────────────────────

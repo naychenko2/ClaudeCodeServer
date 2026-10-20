@@ -57,7 +57,7 @@ public sealed class FeatureRun
     // совпавшее побеждает): merged → closed → stopped → waiting → merging → merge_pending →
     // running → not_started → idle. Значения — константы FeatureStates (camelCase, как в JSON).
     public string State { get; init; } = FeatureStates.Idle;
-    // Тревога: stopped → wait явный → wait «мерж»; один элемент либо null.
+    // Тревога: stopped → wait явный → merge; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
     // Счётчик шагов: принятые (Done) / все (из StepChains).
     public int StepsAccepted { get; init; }
@@ -89,10 +89,10 @@ public sealed class FeatureNow
     public string? LinkedSessionId { get; init; }
 }
 
-// Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → wait «мерж».
+// Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → merge.
 public sealed class FeatureAttention
 {
-    // wait | stopped.
+    // wait | stopped | merge.
     public string Kind { get; init; } = "";
     // Id задачи, к которой относится тревога (у «мерж» — финал).
     public string? TaskId { get; init; }

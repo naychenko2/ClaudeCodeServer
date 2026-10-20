@@ -82,9 +82,9 @@ public sealed record FeatureIndexRow(
     // пустой список — фича не идёт.
     List<string> NowPersonaIds);
 
-// Тревога фичи (контракт §1): kind расширен значением merge (маппинг сырой строки «мерж»
-// — на бэке, на фронт уходит только kind); sessionId — чат исполнителя (без taskId, в отличие
-// от feature-mode FeatureAttention).
+// Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
+// нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя
+// (без taskId, в отличие от feature-mode FeatureAttention).
 public sealed record FeatureIndexAttention(
     string Kind,        // stopped | wait | merge
     DateTime? Since,

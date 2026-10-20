@@ -86,12 +86,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Attention вычисляется ДО цикла стадий: тон активной стадии — производное от него
         // (MAJOR-1 финального ревью: тон и Attention не должны расхождаться).
 
-        // Тревога: приоритет stopped → wait явный → wait «мерж».
+        // Тревога: приоритет stopped → wait явный → merge.
         FeatureAttention? attention = null;
 
-        // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted/mergeNotDone —
-        // для «мерж» (attention) и для state (merge_pending). Вынесены в scope метода: используются
-        // и в attention, и в расчёте state.
+        // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted —
+        // для merge (attention) и для state (merge_pending). Вынесены в scope метода:
+        // используются и в attention, и в расчёте state.
         var waitTask = featureTasks
             .Where(t => t.AwaitingHumanSince is not null)
             .OrderBy(t => t.AwaitingHumanSince)
@@ -99,7 +99,6 @@ public sealed class FeatureProjector(TaskManager tasks)
         bool finalAccepted = final is not null
             && final.Status == TaskItemStatus.Done
             && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
-        bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
 
         // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
         //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
@@ -138,13 +137,14 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
-        // 3. wait «мерж» — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
-        //    а merge-задачи нет или она не Done. since = CompletedAt финала.
-        if (attention is null && finalAccepted && mergeNotDone)
+        // 3. merge — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
+        //    а merge-задачи НЕТ (merge_pending). since = CompletedAt финала.
+        //    У идущего мержа (merge-задача есть и не Done) тревоги нет: state = merging.
+        if (attention is null && finalAccepted && merge is null)
         {
             attention = new FeatureAttention
             {
-                Kind = "wait",
+                Kind = "merge",
                 TaskId = final!.Id,
                 Since = final.CompletedAt,
                 Reason = "мерж",
@@ -234,7 +234,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                         || qa.Any(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks));
 
                 if (attention is not null && attention.Kind == "stopped") tone = "stopped";
-                else if (attention is not null && attention.Kind == "wait") tone = "wait";
+                else if (attention is not null && attention.Kind is "wait" or "merge") tone = "wait";
                 else if (isLoop) tone = "loop";
                 else tone = "run";
             }
@@ -1321,7 +1321,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     };
 
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
-    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting;
+    // у тревоги — чип по attention: stopped → stopped, merge → merge, wait (явный) → waiting;
     // bucket = running (идёт, без тревоги) → чип «running».
     // (Чип «waiting» ≠ attention.kind «wait»: словарь чипов и словарь kind различаются.)
     internal static List<string> ChipsOf(FeatureRun run)
@@ -1339,8 +1339,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                 string chip = run.Attention.Kind switch
                 {
                     "stopped" => "stopped",
-                    // wait: «мерж» → merge, явный wait → waiting.
-                    _ => run.Attention.Reason == "мерж" ? "merge" : "waiting",
+                    "merge" => "merge",
+                    _ => "waiting",
                 };
                 chips.Add(chip);
             }
@@ -1365,14 +1365,14 @@ public sealed class FeatureProjector(TaskManager tasks)
         return ids;
     }
 
-    // Тревога строки: из FeatureRun.Attention; kind «wait»+«мерж» → merge; reason у merge — null;
+    // Тревога строки: из FeatureRun.Attention; kind=merge → merge (reason у merge — null);
     // sessionId — LinkedSessionId, прошедший по снимку живых сессий владельца (иначе null,
     // как в KeySession: мёртвый/чужой чат наружу не уходит).
     internal static FeatureIndexAttention? AttentionOf(FeatureRun run, IReadOnlyCollection<FeatureIndexSession> sessions)
     {
         var a = run.Attention;
         if (a is null) return null;
-        bool isMerge = a.Kind == "wait" && a.Reason == "мерж";
+        bool isMerge = a.Kind == "merge";
         var live = new HashSet<string>(sessions.Select(s => s.Id));
         string? sessionId = a.LinkedSessionId is not null && live.Contains(a.LinkedSessionId)
             ? a.LinkedSessionId : null;

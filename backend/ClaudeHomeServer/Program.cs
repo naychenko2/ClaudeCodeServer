@@ -478,7 +478,7 @@ builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredServic
 // ссылаясь на Main напрямую (ADR-014). Регистрация неусловная: шов нужен, только когда
 // подсистема Plugins включена, но адаптер stateless и дёшево живёт всегда (как IPersonaServerToolGate).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Plugins.IPersonaPluginBindingPurger,
-    ClaudeHomeServer.Services.PluginBindingPurgerAdapter>();
+    ClaudeHomeServer.Services.Composition.PluginBindingPurgerAdapter>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();

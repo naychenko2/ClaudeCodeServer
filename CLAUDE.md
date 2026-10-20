@@ -446,7 +446,7 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 ## Фич-флаги (feature toggles)
 
 Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All` ([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
-Перечня флагов карта не держит: он протухает быстрее всего остального. Активные — `workspace-destructive`, `spheres`, `change-dossiers-recall`; снятые (15): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
+Перечня флагов карта не держит: он протухает быстрее всего остального. Активные — `workspace-destructive`, `spheres`, `change-dossiers-recall`, `plugins-mvp`, `plugins-build-yourself`; снятые (15): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
 **Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода (ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 
 Флаги, снятые после dark launch, работают у всех безусловно: ассистент по умолчанию и

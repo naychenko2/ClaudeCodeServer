@@ -117,12 +117,23 @@ public class PluginsController(
 
         var pluginId = NormalizeId(id);
 
+        // Явный `"permissions": null` — 400, а не NRE → 500. `"secrets": null` трактуем как
+        // «секреты не присланы» (пустой список): так же, как пропущенное поле.
+        if (req.Permissions is null)
+            return BadRequest(new { error = "Не задан список прав (permissions)" });
+        var bodySecrets = req.Secrets ?? [];
+
         // minor 1: load → check → save под одной блокировкой (PluginStore.Update<T>), не два
         // отдельных вызова (гонка: между LoadInstalled и SaveInstalled запись могли поменять).
         var outcome = store!.Update<GrantOutcome>(UserId, records =>
         {
             var record = records.FirstOrDefault(r => r.Id == pluginId);
             if (record is null) return GrantOutcome.NotFound;
+
+            // Единое правило записи секрета с PUT /secrets/{name} (minor 3): выключенному
+            // плагину секрет не пишем — 409 (как у PutSecret и остальных ручек).
+            if (!record.Enabled && bodySecrets.Count > 0)
+                return GrantOutcome.Conflict("Плагин выключен: секреты выключенному плагину не записываются");
 
             // permissions ⊆ requested: выдать право, которого нет в requested, — 400.
             var notInRequested = req.Permissions
@@ -134,23 +145,26 @@ public class PluginsController(
             var (manifest, _) = PluginInstaller.ReadManifest(store.PackageDir(UserId, pluginId, record.Version));
             var declaredSecrets = manifest?.Contributes?.Requires?.Secrets
                 ?.Select(s => s.Name).ToHashSet(StringComparer.Ordinal) ?? [];
-            var unknownSecrets = req.Secrets.Select(s => s.Name)
+            var unknownSecrets = bodySecrets.Select(s => s.Name)
                 .Where(n => !declaredSecrets.Contains(n)).ToList();
             if (unknownSecrets.Count > 0)
                 return GrantOutcome.BadRequest("Секрет не заявлен в манифесте (requires.secrets)", unknownSecrets);
 
-            // minor 4: выданный секрет сверяется с правом secret:{name} из requested:
-            // выдать значение секрета, на который нет запрошенного права, — 400.
-            var secretNotRequested = req.Secrets.Select(s => s.Name)
-                .Where(n => !record.Requested.Contains($"secret:{n}", StringComparer.Ordinal)).ToList();
-            if (secretNotRequested.Count > 0)
-                return GrantOutcome.BadRequest("Секрет не покрыт запрошенным правом secret:{name}", secretNotRequested);
+            // Единое правило записи секрета (minor 3, то же, что в PutSecret): значение пишется
+            // только под ВЫДАННЫМ правом secret:{name}. В Grant «выданные» — это права из этого
+            // тела (req.Permissions, они уже ⊆ requested), поэтому диалог согласия, выдающий право
+            // и значение одним запросом, работает. Явное удаление (value == null) права не требует.
+            var secretNotGranted = bodySecrets.Where(s => s.Value is not null)
+                .Select(s => s.Name)
+                .Where(n => !req.Permissions.Contains($"secret:{n}", StringComparer.Ordinal)).ToList();
+            if (secretNotGranted.Count > 0)
+                return GrantOutcome.BadRequest("Секрет не покрыт выдаваемым правом secret:{name}", secretNotGranted);
 
             // QA-фикс Q: пустое/пробельное значение → 400 (как PutSecret: пустой секрет
             // неинформативен). Такие имена НЕ попадают в bodySet (ниже) — иначе required-секрет
             // проходил бы проверку с пустым значением. Значение на диске не меняется (400
             // возвращается до применения).
-            var emptyValues = req.Secrets
+            var emptyValues = bodySecrets
                 .Where(s => s.Value is not null && string.IsNullOrWhiteSpace(s.Value))
                 .Select(s => s.Name).ToList();
             if (emptyValues.Count > 0)
@@ -159,7 +173,7 @@ public class PluginsController(
             // QA-фикс Q: дубликаты имён в теле → 400 (проще и безопаснее, чем фолд «последний
             // побеждает», обходивший проверку required: union считал имя заданным, а последний
             // элемент значение удалял).
-            var duplicateNames = req.Secrets
+            var duplicateNames = bodySecrets
                 .GroupBy(s => s.Name, StringComparer.Ordinal)
                 .Where(g => g.Count() > 1)
                 .Select(g => g.Key).ToList();
@@ -174,10 +188,10 @@ public class PluginsController(
             // считает то же эффективное состояние, что и применение.
             var existingSet = record.Secrets
                 .Where(s => s.Set).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
-            var bodySet = req.Secrets
+            var bodySet = bodySecrets
                 .Where(s => s.Value is not null && !string.IsNullOrWhiteSpace(s.Value))
                 .Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
-            var bodyCleared = req.Secrets
+            var bodyCleared = bodySecrets
                 .Where(s => s.Value is null).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
             var effectiveSet = existingSet.Except(bodyCleared).Union(bodySet).ToHashSet(StringComparer.Ordinal);
             var requiredSecrets = manifest?.Validate().RequiredSecrets ?? [];
@@ -196,7 +210,7 @@ public class PluginsController(
             // без значения.
             record.Granted = req.Permissions;
             var now = DateTime.UtcNow;
-            foreach (var s in req.Secrets)
+            foreach (var s in bodySecrets)
             {
                 var entry = record.Secrets.FirstOrDefault(x => x.Name == s.Name);
                 if (entry is null)
@@ -225,6 +239,7 @@ public class PluginsController(
         return outcome switch
         {
             GrantOutcome o when o.Kind == GrantKind.NotFound => NotFound(),
+            GrantOutcome o when o.Kind == GrantKind.Conflict => Conflict(new { error = o.Error }),
             GrantOutcome o when o.Kind == GrantKind.BadRequest =>
                 BadRequest(new { error = o.Error, details = o.Details }),
             _ => Ok(new { requested = outcome!.Record!.Requested, granted = outcome.Record.Granted }),
@@ -409,6 +424,7 @@ internal sealed class GrantOutcome
     public static GrantOutcome NotFound => new(GrantKind.NotFound, null, null, null);
     public static GrantOutcome BadRequest(string error, List<string> details) =>
         new(GrantKind.BadRequest, error, details, null);
+    public static GrantOutcome Conflict(string error) => new(GrantKind.Conflict, error, null, null);
     public static GrantOutcome Ok(PluginInstall record) => new(GrantKind.Ok, null, null, record);
 }
 
@@ -417,4 +433,5 @@ internal enum GrantKind
     Ok,
     NotFound,
     BadRequest,
+    Conflict,
 }

@@ -237,7 +237,7 @@ public class PluginsControllerTests : IDisposable
         var ctl = NewController(OwnerA);
         ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
         {
-            Permissions = ["notes:read"],
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
             Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "super-secret-value" }],
         }).Should().BeOfType<OkObjectResult>();
 
@@ -324,7 +324,7 @@ public class PluginsControllerTests : IDisposable
         ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
         ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
         {
-            Permissions = ["notes:read"],
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
             Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
         }).Should().BeOfType<OkObjectResult>();
 
@@ -333,7 +333,7 @@ public class PluginsControllerTests : IDisposable
         second.Should().BeOfType<OkObjectResult>();
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
-        record.Granted.Should().Equal(new[] { "notes:read" }, "granted не сброшен повторной установкой");
+        record.Granted.Should().Equal(new[] { "notes:read", "secret:LINEAR_TOKEN" }, "granted не сброшен повторной установкой");
         record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "секреты не сброшены повторной установкой");
     }
@@ -702,12 +702,12 @@ public class PluginsControllerTests : IDisposable
 
         ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
         {
-            Permissions = ["notes:read"],
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
             Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" }],
         }).Should().BeOfType<OkObjectResult>();
 
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
-        record.Granted.Should().Equal("notes:read");
+        record.Granted.Should().Equal("notes:read", "secret:LINEAR_TOKEN");
         record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set);
         record.Enabled.Should().BeTrue();
     }
@@ -1014,7 +1014,7 @@ public class PluginsControllerTests : IDisposable
         var ctl = NewController(OwnerA);
         ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
         {
-            Permissions = ["notes:read"],
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
             Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "super-secret-value" }],
         }).Should().BeOfType<OkObjectResult>();
 
@@ -1048,6 +1048,75 @@ public class PluginsControllerTests : IDisposable
     }
 
     // --- Тестовые заглушки ---
+
+    // --- QA-фикс S: null в теле Grant, единое правило записи секрета ---
+
+    // minor 4: явный `"permissions": null` — 400 (раньше NRE → 500).
+    [Fact]
+    public void Grant_PermissionsNull_Отдаёт400_НеБросает()
+    {
+        Install(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var res = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest { Permissions = null! });
+
+        res.Should().BeOfType<BadRequestObjectResult>();
+        _store.LoadInstalled(OwnerA).Single().Granted.Should().BeEmpty("400 до применения: права не тронуты");
+    }
+
+    // minor 4: явный `"secrets": null` — как пустой список (200), не NRE.
+    [Fact]
+    public void Grant_SecretsNull_ТрактуетсяКакПустойСписок()
+    {
+        Install(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var res = ctl.Grant("local-952568751510~pkg",
+            new PluginGrantRequest { Permissions = ["notes:read"], Secrets = null! });
+
+        res.Should().BeOfType<OkObjectResult>();
+        _store.LoadInstalled(OwnerA).Single().Granted.Should().Equal("notes:read");
+    }
+
+    // minor 3: значение секрета пишется только под правом secret:{name}, выдаваемым в этом же теле.
+    [Fact]
+    public void Grant_ЗначениеСекретаБезВыдаваемогоПрава_Отдаёт400_ЗначениеНеЗаписано()
+    {
+        Install(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+
+        var res = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read"], // secret:LINEAR_TOKEN в requested есть, но человек его не выдал
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "v" }],
+        });
+
+        res.Should().BeOfType<BadRequestObjectResult>();
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().BeNull();
+    }
+
+    // minor 3: выключенному плагину Grant не пишет секреты — 409, как PUT /secrets/{name};
+    // Grant без секретов выключенному плагину допустим (права можно сузить).
+    [Fact]
+    public void Grant_ВыключенныйПлагин_Секрет_409_БезСекретовOk()
+    {
+        Install(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Disable("local-952568751510~pkg").Should().BeOfType<OkObjectResult>();
+
+        var withSecret = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "v" }],
+        });
+        withSecret.Should().BeOfType<ConflictObjectResult>();
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().BeNull();
+
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest { Permissions = ["notes:read"] })
+            .Should().BeOfType<OkObjectResult>();
+    }
 
     // IFeatureFlagGate: единственный интересующий флаг — plugins-mvp.
     private sealed class StubFlagGate : IFeatureFlagGate

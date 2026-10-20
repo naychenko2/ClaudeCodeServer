@@ -45,6 +45,7 @@ public class PluginsSubsystemDisabledTests
         services.AddSubsystems(config, new PluginsSubsystem());
         services.AddTransient<PluginsController>();
         services.AddTransient<PluginDraftsController>();
+        services.AddTransient<PluginBridgeController>();
         return services.BuildServiceProvider();
     }
 
@@ -75,6 +76,13 @@ public class PluginsSubsystemDisabledTests
         SetUser(draftsCtl, Owner);
         var draftsList = (ObjectResult)draftsCtl.List()!;
         draftsList.StatusCode.Should().Be(503, "GET /api/plugins/drafts — тот же честный 503");
+
+        // Мост: обязательный параметр от отключаемой вертикали (PluginStore/PluginBridge) уронил бы
+        // активацию (500). Регрессию ловит именно активация контроллера из контейнера.
+        var bridgeCtl = sp.GetRequiredService<PluginBridgeController>();
+        SetUser(bridgeCtl, Owner);
+        var bridgeAssets = (ObjectResult)bridgeCtl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        bridgeAssets.StatusCode.Should().Be(503, "мост плагинов при выключенной подсистеме — честный 503");
     }
 
     // Контроль: включённая подсистема — тот же контроллер активируется и 503 НЕ отдаёт

@@ -367,10 +367,11 @@ symlink/ReparsePoint → 404.
     в store + `set=true`/`updatedAt` в запись установки.
   - `DELETE /api/plugins/{id}/secrets/{name}` — user JWT (сервисный → 403); выключенный
     плагин → 409; убирает значение, `set=false`.
-  - `POST /api/plugins/{id}/grant` — тело `{permissions, secrets: [{name, value}]}`;
+  - `POST /api/plugins/{id}/grant` — явный `"permissions": null` → 400; `"secrets": null` = пустой список. Тело `{permissions, secrets: [{name, value}]}`;
     **user JWT** (сервисный → 403). `permissions` — подмножество `requested` (заменяются
     ПОЛНОСТЬЮ — сужение прав). `secrets` — «изменить, не заменить» (QA-фикс P):
-    **непустое значение** — установить/обновить; **явное `value: null`** — удалить
+    **непустое значение** — установить/обновить (только под правом `secret:{name}` из `permissions`
+    ЭТОГО тела, иначе 400; выключенному плагину — 409, как PUT; единое правило, ADR-031 §4); **явное `value: null`** — удалить
     (значение уходит из plugin-secrets.json, set=false); **секрет, которого в теле НЕТ** —
     не трогается. QA-фикс Q: **пустое/пробельное значение → 400** «Значение секрета не
     задано» (как PUT); **ключ `value` обязателен** (`[JsonRequired]`: отсутствующий ключ →

@@ -926,6 +926,52 @@ public class PluginDraftsControllerTests : IDisposable
         ctl.Restore("pkg").Should().BeOfType<NotFoundObjectResult>();
     }
 
+    // --- QA-фикс L4 (минор Глеба): installed.json пишется ОДИН раз за accept ---
+    // До фикса: Install (PluginInstaller) писал record, а контроллер Accept переписывал ту же
+    // запись вторым store.Update → 2 записи. Теперь: одна (Install). Счётчик записей на
+    // фейковом сторе фиксирует ровно 1 (мутация: вернуть store.Update в контроллер → 2 → красный).
+
+    [Fact]
+    public void Accept_ЗаписьInstalledJson_ОдинРаз()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+
+        var counting = new CountingPluginStore(BuildConfig(_dir));
+        var drafts = new PluginDraftService(counting, new PluginPackageValidator());
+        var installer = new PluginInstaller(counting, new PluginPackageValidator());
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["Subsystems:plugins:Enabled"] = "true",
+            })
+            .Build();
+        var gate = new StubFlagGate { PluginsMvp = true, PluginsBuildYourself = true };
+        var ctl = new PluginDraftsController(config, gate, counting, drafts, installer, new PluginDraftDiff(counting));
+        ctl.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = Principal(OwnerA, false) },
+        };
+
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        counting.UpdateCalls.Should().Be(1,
+            "installed.json пишется один раз за accept (дубль store.Update в контроллере убран)");
+    }
+
+    // Счётчик записей installed.json: подменяет PluginStore.Update (единственная запись в
+    // accept-потоке), считает вызовы, делегирует в base.
+    private sealed class CountingPluginStore : PluginStore
+    {
+        public int UpdateCalls;
+        public CountingPluginStore(IConfiguration config) : base(config) { }
+        public override List<PluginInstall> Update(string ownerId, Func<List<PluginInstall>, List<PluginInstall>> mutate)
+        {
+            UpdateCalls++;
+            return base.Update(ownerId, mutate);
+        }
+    }
+
     // --- Тестовая заглушка флага ---
 
     // IFeatureFlagGate: интересующие флаги — plugins-mvp и plugins-build-yourself.

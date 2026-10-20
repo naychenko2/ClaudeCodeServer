@@ -97,7 +97,9 @@ public class PluginStore
     // Load → modify → save под одной блокировкой: атомарное изменение записей владельца.
     // <paramref name="mutate"/> получает текущий список (мутабельный) и возвращает новый;
     // результат пишется в installed.json. Возвращает итоговый список.
-    public List<PluginInstall> Update(string ownerId, Func<List<PluginInstall>, List<PluginInstall>> mutate)
+    // virtual: тесты (QA-фикс L4) подменяют, чтобы посчитать число записей installed.json
+    // за accept (один раз, не два).
+    public virtual List<PluginInstall> Update(string ownerId, Func<List<PluginInstall>, List<PluginInstall>> mutate)
     {
         lock (_lock)
         {

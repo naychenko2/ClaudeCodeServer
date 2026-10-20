@@ -241,14 +241,11 @@ public class PluginDraftsController(
         // для install и accept). Значения секретов — в plugin-secrets.json, в record — только
         // имена + set + updatedAt; чистка по новому списку (secret:{name} в requested) — в инсталлере.
 
-        // load → mutate → save под одной блокировкой (PluginStore.Update): два параллельных
-        // accept одного slug не портят installed.json (запись атомарно перезаписывается).
-        store.Update(UserId, recs =>
-        {
-            recs.RemoveAll(r => r.Id == record.Id);
-            recs.Add(record);
-            return recs;
-        });
+        // Запись в installed.json — ОДИН раз за accept (QA-фикс L4, минор Глеба): её пишет сам
+        // Install (PluginInstaller: store.Update) — для Ok новая запись, для NoOp запись уже
+        // в сторе (Install вернул существующую, не дописывая). Между Install и ответом record
+        // не меняется (считаются только локальные consentRequired/newPermissions), поэтому
+        // вторая store.Update здесь — чистый дубль: убран.
 
         // isUpdate: есть ли уже запись этого id (обновление/повторный accept), а не первая
         // установка. Фронт открывает диалог согласия в режиме modify (новые права НЕ отмечены),

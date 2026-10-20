@@ -169,6 +169,50 @@ public sealed class FeatureStage
     // вердикта (у стадий без вердиктов cut/plan/merge/prod — null, кроме случая, когда у задачи
     // есть Verification.Verdict — тогда он же). Значения строго из пяти, как у rounds[].verdict.
     public string? Verdict { get; init; }
+    // Начало стадии (Б2): минимальный ClaudeStartedAt задач стадии; null — ни одна не стартовала.
+    public DateTime? FirstStartedAt { get; init; }
+    // Конец стадии (Б2): максимальный CompletedAt — ТОЛЬКО если все задачи стадии закрыты (Done),
+    // иначе null (стадия ещё не завершилась).
+    public DateTime? LastCompletedAt { get; init; }
+    // Длительность по часам стены (Б2, минуты): ОБЪЕДИНЕНИЕ интервалов [ClaudeStartedAt,
+    // CompletedAt ?? now] задач стадии — параллельные задачи не складываются; округление вверх
+    // до минуты. Пустая стадия (ни одна задача не стартовала) → 0.
+    public int ApproxMinutes { get; init; }
+    // Пересечение с идущим (Б2): интервалы стадии пересекаются с интервалами задач ДРУГОЙ стадии,
+    // которая ещё идёт (имеет ≥1 задачу, не все Done). Стадия без интервалов — false.
+    public bool OverlapsActive { get; init; }
+    // Исполнители стадии (Б2): по одному на задачу стадии, в порядке, в котором задачи дал
+    // вызывающий. Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) —
+    // подпись роли (roleLabel) строит фронт.
+    public List<FeatureStageExecutor> Executors { get; init; } = [];
+}
+
+// Исполнитель стадии (Б2): одна запись на задачу стадии. Сырые данные для подписи:
+// роль/код шага/линия как есть (подпись строит фронт), статус выведен из полей задачи:
+// running — идёт (ClaudeStartedAt, без завершения, не остановлена, не ждёт); waiting — ждёт
+// человека (AwaitingHumanSince); stopped — исполнитель встал (ExecutorStoppedAt); done — закрыта;
+// pending — не стартовала (остальное).
+public sealed class FeatureStageExecutor
+{
+    // Исполнитель (PersonaId задачи).
+    public string? PersonaId { get; init; }
+    // Id задачи.
+    public string TaskId { get; init; } = "";
+    // Роль задачи как есть (step/rework/review/qa/final/merge/cut/plan/consult).
+    public string? TaskRole { get; init; }
+    // Код шага (у step/rework).
+    public string? StepRef { get; init; }
+    // Линия как есть (back/front/…).
+    public string? Lane { get; init; }
+    // Статус: running | waiting | stopped | done | pending.
+    public string Status { get; init; } = "pending";
+    // Чат исполнителя (Б7: LinkedSessionId, fail-closed, как остальной агрегат); пока null.
+    public string? ChatId { get; init; }
+    // Чат исполнителя архивирован (Б7); пока false.
+    public bool ChatArchived { get; init; }
+    // Модель исполнителя (Б4: короткая подпись и полное имя); пока null.
+    public string? ModelLabel { get; init; }
+    public string? ModelFull { get; init; }
 }
 
 // Виток: один круг ревью/проверки/финала. Живёт в цепочке шагов (FeatureStepChain.Rounds)

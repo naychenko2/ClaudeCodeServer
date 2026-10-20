@@ -295,6 +295,25 @@ public sealed class FeatureProjector(TaskManager tasks)
                 : [];
             string? longestStepRef = key == "review" ? LongestStepRef(stepChains) : null;
 
+            // Б2: границы, длительность, пересечение с идущим, исполнители.
+            var firstStartedAt = StageFirstStartedAt(tasks);
+            var lastCompletedAt = StageLastCompletedAt(tasks);
+            var approxMinutes = StageApproxMinutes(tasks, nowUtc);
+            var overlapsActive = StageOverlapsActive(i, stageDefs, nowUtc);
+            var executors = tasks.Select(t => new FeatureStageExecutor
+            {
+                PersonaId = t.PersonaId,
+                TaskId = t.Id,
+                TaskRole = t.Role,
+                StepRef = t.StepRef,
+                Lane = t.Lane,
+                Status = ExecutorStatus(t),
+                ChatId = null,        // Б7: LinkedSessionId (fail-closed, как остальной агрегат)
+                ChatArchived = false, // Б7
+                ModelLabel = null,    // Б4
+                ModelFull = null,    // Б4
+            }).ToList();
+
             stages.Add(new FeatureStage
             {
                 Key = key,
@@ -309,6 +328,12 @@ public sealed class FeatureProjector(TaskManager tasks)
                 PersonaIds = StagePersonaIds(tasks),
                 TaskCount = tasks.Count,
                 Verdict = StageVerdict(tasks),
+                // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
+                FirstStartedAt = firstStartedAt,
+                LastCompletedAt = lastCompletedAt,
+                ApproxMinutes = approxMinutes,
+                OverlapsActive = overlapsActive,
+                Executors = executors,
             });
         }
 
@@ -922,6 +947,110 @@ public sealed class FeatureProjector(TaskManager tasks)
             or TaskVerdicts.Accepted or TaskVerdicts.Withdrawn
             ? v
             : null;
+    }
+
+    // ─── Б2: границы, длительность, пересечение, исполнители стадий ───────────────────────────
+
+    // Б2: начало стадии — минимальный ClaudeStartedAt задач стадии; null — ни одна не стартовала.
+    private static DateTime? StageFirstStartedAt(List<TaskItem> tasks)
+        => tasks.Where(t => t.ClaudeStartedAt is not null).Min(t => t.ClaudeStartedAt);
+
+    // Б2: конец стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии закрыты (Done),
+    // иначе null. Done-задача без CompletedAt (аномалия данных) учитывается по CreatedAt
+    // (тот же fallback, что порядок в StageVerdict).
+    private static DateTime? StageLastCompletedAt(List<TaskItem> tasks)
+    {
+        if (tasks.Count == 0 || !tasks.All(t => t.Status == TaskItemStatus.Done))
+            return null;
+        return tasks.Max(t => t.CompletedAt ?? t.CreatedAt);
+    }
+
+    // Б2: интервал задачи: [ClaudeStartedAt, CompletedAt ?? now]. Не стартовала (нет
+    // ClaudeStartedAt) → интервала нет. Конец раньше начала (аномалия) → нулевая длительность.
+    private static (DateTime start, DateTime end)? IntervalOf(TaskItem t, DateTime now)
+    {
+        if (t.ClaudeStartedAt is null) return null;
+        var end = t.CompletedAt ?? now;
+        return (t.ClaudeStartedAt.Value, end < t.ClaudeStartedAt.Value ? t.ClaudeStartedAt.Value : end);
+    }
+
+    // Б2: длительность по часам стены (минуты): ОБЪЕДИНЕНИЕ интервалов задач стадии —
+    // параллельные задачи не складываются (объединение, не сумма). Округление вверх до минуты;
+    // стадия без интервалов → 0.
+    private static int StageApproxMinutes(List<TaskItem> tasks, DateTime now)
+    {
+        var intervals = tasks
+            .Select(t => IntervalOf(t, now))
+            .Where(iv => iv is not null)
+            .Select(iv => iv!.Value)
+            .OrderBy(iv => iv.start)
+            .ToList();
+        if (intervals.Count == 0)
+            return 0;
+
+        var total = TimeSpan.Zero;
+        var (curStart, curEnd) = intervals[0];
+        foreach (var (start, end) in intervals.Skip(1))
+        {
+            if (start <= curEnd)
+            {
+                if (end > curEnd) curEnd = end;
+            }
+            else
+            {
+                total += curEnd - curStart;
+                (curStart, curEnd) = (start, end);
+            }
+        }
+        total += curEnd - curStart;
+        return (int)Math.Ceiling(total.TotalMinutes);
+    }
+
+    // Б2: пересечение с идущим — интервалы стадии пересекаются с интервалами задач ДРУГОЙ стадии,
+    // которая ещё идёт (имеет ≥1 задачу, не все Done). Стадия без интервалов → false.
+    private static bool StageOverlapsActive(
+        int index, (string key, List<TaskItem> tasks)[] stageDefs, DateTime now)
+    {
+        var selfIntervals = stageDefs[index].tasks
+            .Select(t => IntervalOf(t, now))
+            .Where(iv => iv is not null)
+            .Select(iv => iv!.Value)
+            .ToList();
+        if (selfIntervals.Count == 0)
+            return false;
+
+        for (int j = 0; j < stageDefs.Length; j++)
+        {
+            if (j == index) continue;
+            var other = stageDefs[j].tasks;
+            // «Ещё идёт»: задачи есть и хотя бы одна не закрыта (Done).
+            if (other.Count == 0 || other.All(t => t.Status == TaskItemStatus.Done))
+                continue;
+            if (other.Any(t =>
+                    IntervalOf(t, now) is { } o
+                    && selfIntervals.Any(iv => iv.start <= o.end && o.start <= iv.end)))
+                return true;
+        }
+        return false;
+    }
+
+    // Б2: статус исполнителя из полей задачи. Приоритет: running (идёт: ClaudeStartedAt,
+    // без завершения, не остановлена, не ждёт) → waiting (AwaitingHumanSince) → stopped
+    // (ExecutorStoppedAt) → done (Done) → pending (остальное, в том числе не стартовала).
+    private static string ExecutorStatus(TaskItem t)
+    {
+        if (t.ClaudeStartedAt is not null
+            && t.CompletedAt is null
+            && t.ExecutorStoppedAt is null
+            && t.AwaitingHumanSince is null)
+            return "running";
+        if (t.AwaitingHumanSince is not null)
+            return "waiting";
+        if (t.ExecutorStoppedAt is not null)
+            return "stopped";
+        if (t.Status == TaskItemStatus.Done)
+            return "done";
+        return "pending";
     }
 
     // Одна фича по id эпика (владельца ownerId). null — эпика нет.

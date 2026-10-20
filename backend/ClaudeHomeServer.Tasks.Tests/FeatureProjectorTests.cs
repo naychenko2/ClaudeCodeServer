@@ -1672,4 +1672,246 @@ public class FeatureProjectorTests
         runNotStarted.State.Should().Be(FeatureStates.NotStarted);
         FeatureProjector.Bucket(runNotStarted).Should().Be("idle", "not_started → idle");
     }
+
+    // ─── Б2: поля этапа — границы, длительность, пересечение, исполнители ─────────────────────
+
+    // Пересечение интервалов двух задач стадии: длительность = ОБЪЕДИНЕНИЕ, не сумма.
+    // s1 [10:00–11:00] + s2 [10:30–11:30] → объединение [10:00–11:30] = 90 минут,
+    // а не 120 (сумма). Мутация: сложить интервалы без объединения → 120 → тест краснеет.
+    [Fact]
+    public void Build_Stage_ПересечениеДвухЗадач_ОбъединениеНеСумма()
+    {
+        const string epicId = "epic-b2-overlap";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 30, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 11, 30, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, s2]);
+
+        var prod = Stage(run, "prod");
+        prod.ApproxMinutes.Should().Be(90,
+            "объединение [10:00–11:30] = 90 минут, а не сумма 120");
+        prod.FirstStartedAt.Should().Be(new DateTime(2026, 10, 17, 10, 0, 0),
+            "начало = минимальный ClaudeStartedAt");
+        prod.LastCompletedAt.Should().Be(new DateTime(2026, 10, 17, 11, 30, 0),
+            "конец = максимальный CompletedAt (все задачи Done)");
+    }
+
+    // Пустая стадия (задач нет): все границы null, длительность 0, пересечения нет, исполнителей нет.
+    [Fact]
+    public void Build_Stage_Пустая_ВсеNullИНоль()
+    {
+        const string epicId = "epic-b2-empty";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        foreach (var key in new[] { "cut", "plan", "qa", "final", "merge" })
+        {
+            var st = Stage(run, key);
+            st.FirstStartedAt.Should().BeNull($"{key}: задач нет — старта нет");
+            st.LastCompletedAt.Should().BeNull($"{key}: задач нет — конца нет");
+            st.ApproxMinutes.Should().Be(0, $"{key}: задач нет — длительность 0");
+            st.OverlapsActive.Should().BeFalse($"{key}: без интервалов пересечения нет");
+            st.Executors.Should().BeEmpty($"{key}: задач нет — исполнителей нет");
+        }
+    }
+
+    // Идущая задача: LastCompletedAt = null (стадия не завершена), ApproxMinutes растёт
+    // до now (now — параметром Build, как часы в существующих тестах): 10:00 → 10:30 = 30,
+    // 10:00 → 11:00 = 60.
+    [Fact]
+    public void Build_Stage_ИдущаяЗадача_КонецNull_ДлительностьРастётДоNow()
+    {
+        const string epicId = "epic-b2-running";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+
+        var at30 = FeatureProjector.Build(epic, [epic, s1], new DateTime(2026, 10, 17, 10, 30, 0));
+        var prod30 = Stage(at30, "prod");
+        prod30.FirstStartedAt.Should().Be(new DateTime(2026, 10, 17, 10, 0, 0));
+        prod30.LastCompletedAt.Should().BeNull("идущая задача — стадия не завершена");
+        prod30.ApproxMinutes.Should().Be(30, "now 10:30: 30 минут от старта");
+
+        var at60 = FeatureProjector.Build(epic, [epic, s1], new DateTime(2026, 10, 17, 11, 0, 0));
+        Stage(at60, "prod").ApproxMinutes.Should().Be(60, "now 11:00: 60 минут от старта");
+    }
+
+    // Этап из одной задачи: границы = старт/конец задачи, длительность = её интервал.
+    [Fact]
+    public void Build_Stage_ОднаЗадача_ГраницыИДлительность()
+    {
+        const string epicId = "epic-b2-single";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1]);
+
+        var prod = Stage(run, "prod");
+        prod.FirstStartedAt.Should().Be(new DateTime(2026, 10, 17, 10, 0, 0));
+        prod.LastCompletedAt.Should().Be(new DateTime(2026, 10, 17, 11, 0, 0));
+        prod.ApproxMinutes.Should().Be(60, "одна задача: 60 минут");
+    }
+
+    // OverlapsActive: prod (идёт 10:00→now) и qa (идёт 11:45→now) пересекаются → true;
+    // review (Done, интервал 09:00–09:30) с идущими не пересекается → false.
+    [Fact]
+    public void Build_Stage_OverlapsActive_ПересечениеСИдущим()
+    {
+        const string epicId = "epic-b2-overlaps";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 9, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 9, 30, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var q1 = new TaskItem
+        {
+            Id = "q1", FeatureId = epicId, Role = TaskRoles.Qa,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 45, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1, q1], new DateTime(2026, 10, 17, 12, 0, 0));
+
+        Stage(run, "prod").OverlapsActive.Should().BeTrue(
+            "prod (10:00→12:00) пересекается с идущим qa (11:45→12:00)");
+        Stage(run, "qa").OverlapsActive.Should().BeTrue(
+            "qa (11:45→12:00) пересекается с идущим prod (10:00→12:00)");
+        Stage(run, "review").OverlapsActive.Should().BeFalse(
+            "review (09:00–09:30, Done) с идущими не пересекается");
+    }
+
+    // Статусы исполнителей: по одному на задачу стадии, статус выводится из полей задачи:
+    // running (идёт) / waiting (AwaitingHumanSince) / stopped (ExecutorStoppedAt) /
+    // done (Done) / pending (не стартовала). Сырые данные: TaskRole/StepRef/Lane как есть.
+    [Fact]
+    public void Build_Stage_СтатусыИсполнителей()
+    {
+        const string epicId = "epic-b2-exec-status";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1", Lane = "back",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2", Lane = "front",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 9, 0, 0),
+            AwaitingHumanSince = new DateTime(2026, 10, 17, 10, 30, 0),
+        };
+        var s3 = new TaskItem
+        {
+            Id = "s3", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш3",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 9, 0, 0),
+        };
+        var s4 = new TaskItem
+        {
+            Id = "s4", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш4",
+            Status = TaskItemStatus.Done, PersonaId = "Кира",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 7, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 8, 0, 0),
+        };
+        var s5 = new TaskItem
+        {
+            Id = "s5", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш5",
+            Status = TaskItemStatus.Todo, PersonaId = "Глеб",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, s2, s3, s4, s5]);
+
+        var prod = Stage(run, "prod");
+        prod.Executors.Should().HaveCount(5, "по одному исполнителю на задачу стадии");
+        prod.Executors[0].Status.Should().Be("running", "s1: идёт (старт, без завершения/стопа/ожидания)");
+        prod.Executors[1].Status.Should().Be("waiting", "s2: ждёт человека (AwaitingHumanSince)");
+        prod.Executors[2].Status.Should().Be("stopped", "s3: исполнитель встал (ExecutorStoppedAt)");
+        prod.Executors[3].Status.Should().Be("done", "s4: закрыта");
+        prod.Executors[4].Status.Should().Be("pending", "s5: не стартовала");
+        // Сырые данные для подписи (бэк не строит roleLabel — строит фронт).
+        prod.Executors[0].TaskRole.Should().Be(TaskRoles.Step);
+        prod.Executors[0].StepRef.Should().Be("Ш1");
+        prod.Executors[0].Lane.Should().Be("back");
+        prod.Executors[0].PersonaId.Should().Be("Денис");
+        prod.Executors[0].TaskId.Should().Be("s1");
+        // Пока null/false (заполнят Б4/Б7).
+        prod.Executors[0].ChatId.Should().BeNull();
+        prod.Executors[0].ChatArchived.Should().BeFalse();
+        prod.Executors[0].ModelLabel.Should().BeNull();
+        prod.Executors[0].ModelFull.Should().BeNull();
+    }
+
+    // SlimRun (контракт ответа GET features/{id}): исполнители стадии обязаны пережить
+    // облегчение и попасть в сериализованный JSON (camelCase, как остальной агрегат).
+    // Мутация: не копировать Executors/стадии в SlimRun (Stages = []) → «executors» в JSON нет
+    // → тест краснеет.
+    [Fact]
+    public void Build_SlimRun_ExecutorsВСериализованномОтвете()
+    {
+        const string epicId = "epic-b2-slim-exec";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+
+        // Build = SlimRun(BuildCore) — ровно то, что сериализует GetFeature.
+        var run = FeatureProjector.Build(epic, [epic, s1], new DateTime(2026, 10, 17, 10, 30, 0));
+
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var json = System.Text.Json.JsonSerializer.Serialize(run, options);
+
+        json.Should().Contain("\"executors\"", "исполнители стадии в JSON ответа (camelCase)");
+        json.Should().Contain("\"taskId\":\"s1\"", "сырой id задачи исполнителя");
+        json.Should().Contain("\"status\":\"running\"", "статус исполнителя");
+        json.Should().Contain("\"firstStartedAt\"", "границы стадии в JSON (camelCase)");
+        json.Should().Contain("\"lastCompletedAt\"", "границы стадии в JSON (camelCase)");
+        json.Should().Contain("\"approxMinutes\"", "длительность стадии в JSON (camelCase)");
+        json.Should().Contain("\"overlapsActive\"", "пересечение в JSON (camelCase)");
+    }
 }

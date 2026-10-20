@@ -1229,6 +1229,55 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
+    // п.42: гейт снимается по экземпляру, не по ключу. Сценарий: A получает гейт X,
+    // параллельно словарь подменяют на Y; A в finally снимает «свой» X — TryRemove(KeyValuePair)
+    // не трогает Y (экземпляры различаются), TryRemove(key) сносит Y. После A: словарь держит Y
+    // (фикс) или пуст (мутация) → следующий запрос либо получает Y (сериализуется с B),
+    // либо создаёт свежий гейт (параллельная критическая секция → дубль merge-задачи).
+    // Мутация: TryRemove(KeyValuePair) → TryRemove(key) → словарь пуст → тест краснеет.
+    [Fact]
+    public async Task MergeFeature_ГейтСнимаетсяПоЭкземпляру()
+    {
+        var (epicId, wt, branch, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-gate-instance");
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+
+        try
+        {
+            // Гейт X заранее удержан (count=0): MergeFeature заблокируется на WaitAsync.
+            var gateX = new SemaphoreSlim(0, 1);
+            MergeGatesDict()[epicId] = gateX;
+
+            // Фоновая задача: после 50 мс подменяет X на Y в словаре и отпускает X.
+            // К моменту подмены A уже выполнил GetOrAdd (держит ссылку на X),
+            // но ещё не дошёл до finally.
+            var gateY = new SemaphoreSlim(1, 1);
+            var swap = Task.Run(async () =>
+            {
+                await Task.Delay(50);
+                MergeGatesDict()[epicId] = gateY;
+                gateX.Release();
+            });
+
+            var result = await BuildController(RealGit()).MergeFeature(epicId);
+            await swap;
+
+            // A завершён: в finally TryRemove «своего» X.
+            // Фикс: TryRemove(KeyValuePair(fid, X)) → словарь имеет Y ≠ X → НЕ снят.
+            // Мутация: TryRemove(key) → снимает Y по ключу → словарь пуст.
+            var dict = MergeGatesDict();
+            dict.TryGetValue(epicId, out var remaining);
+            remaining.Should().BeSameAs(gateY,
+                "гейт в словаре — Y (подменённый), а не X: TryRemove по экземпляру не снёс чужую запись");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+            MergeGatesDict().TryRemove(epicId, out _);
+        }
+    }
+
     // M7: 404 мержа (чужой/удалённый эпик) и 404 GET features/{id} несут одинаковое тело
     // { error: "Фича не найдена" } — код и тело не различаются (фронт читает error).
     [Fact]

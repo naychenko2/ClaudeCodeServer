@@ -328,9 +328,12 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 1,
   });
   // projectId: 'p1' — как в реальном списке проекта: карточка читает индекс того же
-  // проекта, что и SessionList (useFeaturesIndex), а не области '' (вне проектов)
+  // проекта, что и SessionList (useFeaturesIndex), а не области '' (вне проектов).
+  // p.1: status 'waiting' (живой) — карточка монтируется и тест реально ловит второй
+  // запрос индекса (было 'finished' → видимый список пуст, ChatCard не монтировался,
+  // и тест проходил тривиально, не доказывая фикс).
   const s = (id: string): Session => ({
-    id, projectId: 'p1', mode: 'auto', status: 'finished', messageCount: 0,
+    id, projectId: 'p1', mode: 'auto', status: 'waiting', messageCount: 0,
     createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
     origin: 'manual',
   } as Session);
@@ -423,6 +426,10 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     // Все потребители (SessionList + карточки) читают индекс того же проекта 'p1'
     // (projectId в фикстуре), поэтому первичная загрузка — ровно один fetch (0→1).
     // Если бы карточка читала область '' (вне проектов) — был бы второй fetch.
+    // p.1: фикстура — ЖИВОЙ статус (waiting): карточка монтируется и её
+    // useFeaturesIndex реально исполняется. Мутация «ChatCard читает scope null»
+    // (вне проектов) красит: indexCalls=2. С 'finished' карточка бы не смонтировалась
+    // и тест проходил тривиально, не доказывая фикс.
     await renderFeatures({ featureChips: ['waiting'] });
     expect(indexCalls).toBe(1);
   });
@@ -554,9 +561,9 @@ describe('SessionList: F3.3 строка «+N чат в группе …» (ре
     const onSelect = vi.fn();
     const { container, root } = await renderAndExpandA(1, onSelect);
     const link = findAttr(container, 'data-testid', 'other-group-link-fb');
-    expect(link, 'строка «+1 чат в группе «Фича B»» есть').not.toBeNull();
-    expect(link!._attrs['aria-label']).toBe('+1 чат в группе «Фича B»');
-    expect(textOf(link!)).toContain('+1 чат в группе «Фича B»');
+    expect(link, 'строка «+1 чат — в группе «Фича B»» есть').not.toBeNull();
+    expect(link!._attrs['aria-label']).toBe('+1 чат — в группе «Фича B»');
+    expect(textOf(link!)).toContain('+1 чат — в группе «Фича B»');
     // Клик → onSelect(мультифичевый чат). Точное число вызовов не валидируем: клик может
     // булькнуть на предка (не валидируем здесь) — важно, что onSelect получил chat-m1.
     await act(async () => { container.fireClick(link!); });

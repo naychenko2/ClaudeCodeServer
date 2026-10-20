@@ -534,11 +534,14 @@ export interface OtherGroupLink {
   firstChatId: string;
 }
 
-export function otherGroupLinks(
+// Чаты «чужой» группы по id (F3.3, п.49): chatIds, связанные с текущей фичей в
+// индексе и нарисованные в группе другой фичи. Список (не счётчик) — чтобы
+// потребитель (OtherGroupLinks) пересчитал «+N чат» по ЖИВЫМ сессиям, а не по индексу.
+export function otherGroupChatIds(
   currentFeatureId: string,
   index: FeaturesIndex,
   currentGroupSessions: Session[],
-): OtherGroupLink[] {
+): { featureId: string; featureTitle: string; chatIds: string[] }[] {
   const currentIds = new Set(currentGroupSessions.map(s => s.id));
   const featureById = new Map(index.features.map(f => [f.featureId, f]));
   // Все чаты, связанные с текущей фичей в индексе
@@ -550,7 +553,7 @@ export function otherGroupLinks(
   }
   // Для каждого такого чата: если он НЕ в текущей группе — он нарисован в другой.
   // Группируем по фиче, в которой он нарисован (первая в chats[id] = группа).
-  const byOther = new Map<string, { count: number; firstChatId: string }>();
+  const byOther = new Map<string, string[]>();
   for (const chatId of linkedToCurrent) {
     if (currentIds.has(chatId)) continue;
     const links = index.chats[chatId];
@@ -558,16 +561,27 @@ export function otherGroupLinks(
     const drawnIn = links[0].featureId;
     if (drawnIn === currentFeatureId) continue;
     if (!featureById.has(drawnIn)) continue;
-    const entry = byOther.get(drawnIn) ?? { count: 0, firstChatId: chatId };
-    entry.count++;
-    byOther.set(drawnIn, entry);
+    const list = byOther.get(drawnIn) ?? [];
+    list.push(chatId);
+    byOther.set(drawnIn, list);
   }
-  const result: OtherGroupLink[] = [];
-  for (const [fid, { count, firstChatId }] of byOther) {
+  const result: { featureId: string; featureTitle: string; chatIds: string[] }[] = [];
+  for (const [fid, chatIds] of byOther) {
     const f = featureById.get(fid)!;
-    result.push({ featureId: fid, featureTitle: f.title, count, firstChatId });
+    result.push({ featureId: fid, featureTitle: f.title, chatIds });
   }
   return result;
+}
+
+export function otherGroupLinks(
+  currentFeatureId: string,
+  index: FeaturesIndex,
+  currentGroupSessions: Session[],
+): OtherGroupLink[] {
+  return otherGroupChatIds(currentFeatureId, index, currentGroupSessions)
+    .map(({ featureId, featureTitle, chatIds }) => ({
+      featureId, featureTitle, count: chatIds.length, firstChatId: chatIds[0],
+    }));
 }
 
 // Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»

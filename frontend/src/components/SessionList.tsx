@@ -43,7 +43,7 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupLinks, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupChatIds, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { plural } from '../lib/plural';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
@@ -73,10 +73,17 @@ function OtherGroupLinks({ featureId, featuresIndex, groupSessions, sessions, is
   isMobile: boolean;
   onSelect: (s: Session) => void;
 }) {
+  const liveIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const links = useMemo(() => {
-    const all = otherGroupLinks(featureId, featuresIndex, groupSessions);
-    return all.filter(l => sessions.some(s => s.id === l.firstChatId));
-  }, [featureId, featuresIndex, groupSessions, sessions]);
+    // п.49: «+N чат» — по ЖИВЫМ сессиям, не по индексу (индекс может держать
+    // удалённые/чужие чаты). Ссылка видна, только если хотя бы один её чат жив.
+    return otherGroupChatIds(featureId, featuresIndex, groupSessions)
+      .map(g => {
+        const live = g.chatIds.filter(id => liveIds.has(id));
+        return { featureId: g.featureId, featureTitle: g.featureTitle, count: live.length, firstChatId: live[0] };
+      })
+      .filter(l => l.count > 0);
+  }, [featureId, featuresIndex, groupSessions, liveIds]);
   if (links.length === 0) return null;
   return (
     <div>
@@ -85,7 +92,8 @@ function OtherGroupLinks({ featureId, featuresIndex, groupSessions, sessions, is
           key={link.featureId}
           type="button"
           data-testid={`other-group-link-${link.featureId}`}
-          aria-label={`+${link.count} ${plural(link.count, 'чат', 'чата', 'чатов')} в группе «${link.featureTitle}»`}
+          // п.39: подпись яснее, что клик открывает чат: «+N чат — в группе «A»».
+          aria-label={`+${link.count} ${plural(link.count, 'чат', 'чата', 'чатов')} — в группе «${link.featureTitle}»`}
           className={FOCUS_CLASS}
           onClick={() => {
             const target = sessions.find(s => s.id === link.firstChatId);
@@ -99,7 +107,7 @@ function OtherGroupLinks({ featureId, featuresIndex, groupSessions, sessions, is
             ...(isMobile ? { minHeight: 40 } : null),
           }}
         >
-          +{link.count} {plural(link.count, 'чат', 'чата', 'чатов')} в группе «{link.featureTitle}»
+          +{link.count} {plural(link.count, 'чат', 'чата', 'чатов')} — в группе «{link.featureTitle}»
         </button>
       ))}
     </div>

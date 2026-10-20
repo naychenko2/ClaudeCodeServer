@@ -1669,10 +1669,13 @@ const windowWidth = useWindowWidth();
   useEffect(() => {
     if (!flagsLoaded || featuresOn || !openFeatureId) return;
     // m7: на мобиле вид sidebar = список — адрес не должен обещать /chat/{id} (экран — список).
-    // chatId кладём, только когда чат реально показан: на мобиле — mobileView==='chat',
-    // на десктопе чат в центре всегда, поэтому chatId согласован с экраном.
-    const view = isMobile ? mobileView : 'sidebar';
-    const chatShown = isMobile ? mobileView === 'chat' : true;
+    // m7b: нормализация (флаг выключен, feature в адресе) → экран = список: mobileView
+    // сбрасываем в 'sidebar', иначе адрес #/project/{pid} (список) остаётся в виде chat
+    // (mobileView инициализирован 'chat' из feature-сегмента адреса). view/chatId — по
+    // РЕЗУЛЬТИРУЮЩЕМУ виду (sidebar), не по устаревшему mobileView.
+    const view = 'sidebar';
+    const chatShown = !isMobile; // на десктопе чат в центре всегда; на мобиле — список
+    if (isMobile && mobileView === 'chat') setMobileView('sidebar');
     navReplace({ screen: 'project', project, view, file: null, task: null, chatId: chatShown ? (activeSessionId ?? undefined) : undefined, feature: null });
     setOpenFeatureId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
@@ -2074,7 +2077,7 @@ const windowWidth = useWindowWidth();
         )}
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM; ридер,
             как и файл, вытесняет его из контентной зоны */}
-        <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <div data-testid="workspace-center-container" style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн

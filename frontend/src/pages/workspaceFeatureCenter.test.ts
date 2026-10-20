@@ -729,6 +729,44 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(win.window.location.hash, 'адрес обещает /chat/{id}, а на экране список (m7)').toBe('#/project/p1');
     void container;
   });
+
+  // === m7b: 360, ХОЛОДНЫЙ браузер (feature в адресе → mobileView='chat'), флаг выключен →
+  // mobileView сбрасывается в 'sidebar' (адрес #/project/p1 = список, центр скрыт) ===
+  it('m7b: 360, холодный браузер (feature в адресе), флаг выключен → mobileView=sidebar (центр скрыт)', async () => {
+    const win = globalThis as any;
+    // Фейк-история: navReplace пишет hash (toHash), чтобы проверить, что /chat/{id} не появился.
+    win.window.history = {
+      state: null,
+      pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
+      back: () => {}, go: () => {}, forward: () => {}, length: 1,
+    };
+    // Холодный браузер: feature В АДРЕСЕ → mobileView инициализирован 'chat' (линия 613-615).
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = null;
+    // Флаги ещё НЕ загружены (до ответа /me)
+    flagsTest.reset();
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Флаги «пришли» выключенными → эффект «один раз» приводит адрес к проекту
+    act(() => { setAllFlags({ 'features-overview': false }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // m7b: mobileView сброслен в 'sidebar' → центр (страница/чат) скрыт (display:none),
+    // на экране список. Мутация «не сбрасывать mobileView» красит: центр display:flex,
+    // хотя адрес #/project/p1 (список).
+    const center = findNodeByAttr(container, 'data-testid', 'workspace-center-container');
+    expect(center, 'контейнер центра не найден (m7b)').not.toBeNull();
+    expect((center as any).style?.display, 'центр виден (display:flex), а mobileView должен быть sidebar (m7b)').toBe('none');
+    // Адрес — проект (без feature, без chat): список.
+    expect(win.window.location.hash, 'адрес не #/project/p1 (m7b)').toBe('#/project/p1');
+    void container;
+  });
 });
 
 // Вспомогательный: toHash для фейк-истории (m5) — упрощённый, только project/feature/chat

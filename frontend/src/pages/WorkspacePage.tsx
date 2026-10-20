@@ -368,12 +368,16 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   // «Попросить агента исправить» из настроек проекта (PluginsProjectSection → EditDialog):
-  // готовая реплика кладётся в композер активного чата этого проекта.
+  // готовая реплика кладётся в ПОЛЕ ВВОДА активного чата (префилл), а не отправляется
+  // (документация: «кладёт готовую просьбу в поле ввода, но не отправляет её за вас»).
+  // Префилл — тем же механизмом, что ChatsPage: cc_pending_chat_prompt + cc-compose-prefill
+  // (Composer.setText), а не setPendingMessage → ChatPanel.send (автосабмит).
   useEffect(() => {
     const onDraftReply = (e: Event) => {
       const { project: p, reply } = (e as CustomEvent<{ project: Project; reply: string }>).detail ?? {};
       if (p?.id !== project.id || !reply) return;
-      setPendingMessage(reply);
+      sessionStorage.setItem('cc_pending_chat_prompt', reply);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
     };
     window.addEventListener('cc-draft-reply', onDraftReply);
     return () => window.removeEventListener('cc-draft-reply', onDraftReply);

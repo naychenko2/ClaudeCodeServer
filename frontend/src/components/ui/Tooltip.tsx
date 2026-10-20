@@ -1,4 +1,4 @@
-import { useLayoutEffect, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { useCanHover } from '../../lib/pointer';
@@ -26,32 +26,50 @@ import { useCanHover } from '../../lib/pointer';
 const EDGE_PAD = 8;
 // Минимальная ширина плашки (px): не сжимается до нуля, когда якорь у самой кромки.
 const MIN_W = 120;
+// m-c: потолок ширины плашки (px): у правого края сдвигаем влево на фактическую ширину
+// (не шире MAX_W), а не сжимаем до MIN_W — иначе столбик 120 px на 6 строк.
+const MAX_W = 260;
 
-// Чистая функция: позиция плашки (position: fixed) по rect якоря и ширине окна.
-//   top    — под якорем (anchor.bottom + gap);
-//   left   — по align (start — левый край якоря, end — правый), ЗАЖАТА в окно:
-//            правый край (left + MIN_W) не за правую кромку, левый не за левую;
-//   maxWidth — до правого края окна (с полем): перенос строк влезает в окно.
-// Мутация «убрать зажим по краю» (Math.max(pad, …) / правый сдвиг) красит тест.
+// Чистая функция: позиция плашки (position: fixed) по rect якоря, окну и размеру плашки.
+//   left   — по align: start — левый край якоря; end — ПРАВЫЙ край плашки к правому краю
+//            якоря (m-d: не «вправо от якоря»); ЗАЖАТА в окно: правый край (left + width)
+//            не за правую кромку (сдвиг влево на фактическую ширину, m-c), левый не за
+//            левую;
+//   top    — под якорем (anchor.bottom + gap); у нижней кромки окна — переворот вверх
+//            (m-a: anchor.bottom - gap - height), не срез;
+//   maxWidth — до правого края окна (с полем), но не шире MAX_W (m-c): перенос строк
+//            влезает в окно, но плашка не сжимается в столбик.
+// size — фактический размер плашки (замер после рендера, два прохода); width/height
+// используются для зажима по краям, не для отрисовки.
+// Мутации: «align=end → left = anchor.right» / «без переворота вверх» / «сдвиг на MIN_W»
+// красят тесты.
 export function tooltipPlacement(
   anchor: { left: number; right: number; bottom: number },
-  viewportWidth: number,
+  viewport: { width: number; height: number },
   align: 'start' | 'end',
   gap: number,
   pad: number,
+  size: { width: number; height: number },
 ): { left: number; top: number; maxWidth: number } {
-  const desired = align === 'end' ? anchor.right : anchor.left;
-  // Правый край плашки (left + MIN_W) не за правую кромку окна: сдвигаем влево.
+  // m-d: align=end — правый край плашки к правому краю якоря (left = anchor.right - width).
+  const desired = align === 'end' ? anchor.right - size.width : anchor.left;
+  // m-c: у правого края — сдвиг влево на фактическую ширину (не сжатие до MIN_W).
   let left = desired;
-  if (left + MIN_W > viewportWidth - pad) left = viewportWidth - pad - MIN_W;
+  if (left + size.width > viewport.width - pad) left = viewport.width - pad - size.width;
   // Левый край не за левую кромку окна.
   left = Math.max(pad, left);
-  // Потолок ширины — до правого края окна (с полем): перенос строк влезает в окно.
-  const maxWidth = Math.max(MIN_W, viewportWidth - pad - left);
-  return { left, top: anchor.bottom + gap, maxWidth };
+  // m-a: у нижней кромки — переворот вверх (top = anchor.bottom - gap - height), не срез.
+  let top = anchor.bottom + gap;
+  if (anchor.bottom + gap + size.height > viewport.height - pad) {
+    top = anchor.bottom - gap - size.height;
+  }
+  top = Math.max(pad, top);
+  // m-c: maxWidth — до правого края окна (с полем), но не шире MAX_W и не уже MIN_W.
+  const maxWidth = Math.min(MAX_W, Math.max(MIN_W, viewport.width - pad - left));
+  return { left, top, maxWidth };
 }
 
-export function Tooltip({ content, align = 'start', disabled, focused, id, children }: {
+export function Tooltip({ content, align = 'start', disabled, focused, id, style, children }: {
   content: ReactNode;
   align?: 'start' | 'end';
   // Погасить, не трогая наведения: например, пока у якоря открыт собственный поповер
@@ -62,6 +80,9 @@ export function Tooltip({ content, align = 'start', disabled, focused, id, child
   // id плашки: якорь-кнопка-строка ссылается на неё через aria-describedby (M1, минор) —
   // описание подсказки живёт на интерактивном якоре, а не на неинтерактивном span метки.
   id?: string;
+  // Стили обёртки-якоря (m-b): например, zIndex, чтобы метка не тонула под hover-кнопками
+  // карточки и оставалась наводимой (плашка поднимается от метки, а не от центра).
+  style?: CSSProperties;
   children: ReactNode;
 }) {
   const canHover = useCanHover();
@@ -84,26 +105,43 @@ export function Tooltip({ content, align = 'start', disabled, focused, id, child
 
   const open = (hovered || kb || (focused ?? false)) && !disabled;
 
-  // Позиция плашки: по rect якоря (getBoundingClientRect) + ширина окна. useLayoutEffect —
-  // замер ПОСЛЕ вставки якоря в DOM, до отрисовки (иначе плашка мигнула бы в неверной
-  // позиции). window.innerWidth — ширина viewport; в тестах fake-DOM задаёт её явно.
+  // Позиция плашки: по rect якоря + фактическому размеру плашки (два прохода). useLayoutEffect —
+  // замер ПОСЛЕ вставки, до отрисовки (иначе плашка мигнула бы в неверной позиции).
+  // Проход 1: позиция по rect якоря и текущему размеру (size — замер предыдущего прохода,
+  // иначе оценка MAX_W×30). Проход 2: замер фактической плашки (width/height); если размер
+  // отличается от зажатого — пересчёт позиции (сдвиг влево / переворот по реальному размеру).
+  const tipRef = useRef<HTMLSpanElement | null>(null);
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const [placement, setPlacement] = useState<{ left: number; top: number; maxWidth: number } | null>(null);
   useLayoutEffect(() => {
-    if (!open) { setPlacement(null); return; }
+    if (!open) { setPlacement(null); setSize(null); return; }
     const el = anchorRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const vw = typeof window !== 'undefined' && window.innerWidth > 0 ? window.innerWidth : 1024;
-    setPlacement(tooltipPlacement({ left: rect.left, right: rect.right, bottom: rect.bottom }, vw, align, SP.sm - 1, EDGE_PAD));
-  }, [open, align]);
+    const vh = typeof window !== 'undefined' && window.innerHeight > 0 ? window.innerHeight : 768;
+    const s = size ?? { width: MAX_W, height: 30 };
+    setPlacement(tooltipPlacement({ left: rect.left, right: rect.right, bottom: rect.bottom }, { width: vw, height: vh }, align, SP.sm - 1, EDGE_PAD, s));
+  }, [open, align, size]);
+  useLayoutEffect(() => {
+    if (!open || !placement) return;
+    const tip = tipRef.current;
+    if (!tip) return;
+    const r = tip.getBoundingClientRect();
+    const w = Math.round(r.width);
+    const h = Math.round(r.height);
+    const cur = size;
+    // Только если размер реально изменился (иначе зацикливание на суб-пиксельном дрожании).
+    if (!cur || cur.width !== w || cur.height !== h) setSize({ width: w, height: h });
+  }, [open, placement]);
 
   return (
     <span ref={anchorRef} onMouseEnter={show} onMouseLeave={hide} onMouseDown={hide}
       onFocus={focusIn} onBlur={focusOut}
-      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0, ...style }}>
       {children}
       {open && placement && createPortal(
-        <span role="tooltip" id={id} style={{
+        <span ref={tipRef} role="tooltip" id={id} style={{
           position: 'fixed', left: placement.left, top: placement.top, maxWidth: placement.maxWidth,
           zIndex: Z.dropdown,
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md,

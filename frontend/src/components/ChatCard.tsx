@@ -836,11 +836,18 @@ function ChatCardView({
       className={FOCUS_CLASS}
       role="button"
       tabIndex={0}
-      onKeyDown={e => handlePressableKey(e, openChatByKeyboard)}
+      onKeyDown={e => {
+        // M1': Escape гасит плашку «ключевой» (фокус с клавиатуры), не открывая чат.
+        if (e.key === 'Escape' && e.target === e.currentTarget) { setCardFocused(false); return; }
+        handlePressableKey(e, openChatByKeyboard);
+      }}
       aria-describedby={isKeyRole ? `key-desc-${s.id}` : undefined}
       // п.51: «ключевой» поднимается ТОЛЬКО при фокусе самой карточки, не от вложенных
       // действий (фокус на вложенной кнопке — e.target ≠ e.currentTarget).
-      onFocus={e => { if (e.target === e.currentTarget) setCardFocused(true); }}
+      // M1': гейт по :focus-visible (клавиатура), НЕ по canHover: клик мышью/тап дают
+      // фокус без :focus-visible → плашка не поднимается и не залипает; Tab (в т.ч. на
+      // планшете с внешней клавиатурой) — :focus-visible → поднимается.
+      onFocus={e => { if (e.target === e.currentTarget && e.currentTarget.matches(':focus-visible')) setCardFocused(true); }}
       onBlur={e => { if (e.target === e.currentTarget) setCardFocused(false); }}
       // Правый клик — меню действий прямо у курсора (desktop): тот же состав, что у
       // «⋮» и long-press, без прицеливания в мелкую кнопку. Якорь — точка курсора
@@ -1112,7 +1119,9 @@ function ChatCardView({
                 {featureRole}
               </span>
             );
-            return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP} focused={cardFocused}>{chip}</Tooltip> : chip;
+            // m-b: якорь метки — zIndex 3 (над hover-кнопками, zIndex 2): метка остаётся
+            // наводимой, и плашка поднимается от неё, а не от центра карточки.
+            return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP} focused={cardFocused} style={{ zIndex: 3 }}>{chip}</Tooltip> : chip;
           })()}
           {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
           {(s.continuedFromSessionId || s.continuedInSessionId) && (

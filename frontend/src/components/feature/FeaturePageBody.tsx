@@ -154,7 +154,12 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
       className={FOCUS_CLASS}
       aria-describedby={descId}
       onClick={() => onOpenChat(entry.sessionId)}
-      onFocus={() => setFocused(true)}
+      // M1': гейт по :focus-visible (клавиатура), НЕ по canHover: клик мышью/тап дают
+      // фокус без :focus-visible → плашка не поднимается и не залипает; Tab (в т.ч. на
+      // планшете с внешней клавиатурой) — :focus-visible → поднимается.
+      onFocus={e => { if (e.currentTarget.matches(':focus-visible')) setFocused(true); }}
+      // M1': Escape гасит плашку (фокус с клавиатуры), не открывая чат.
+      onKeyDown={e => { if (e.key === 'Escape') setFocused(false); }}
       onBlur={() => setFocused(false)}
       style={rowBase(isMobile, entry.isKey ? { background: C.accentLight } : undefined)}
     >

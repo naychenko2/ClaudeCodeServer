@@ -1204,15 +1204,40 @@ describe('FeaturePage: M2 подсказка «ключевой» (наведе�
     expect(hasTip(c), 'уход → плашка исчезла').toBe(false);
   });
 
-  it('по фокусу на кнопке-строке (клавиатура): плашка появляется и исчезает по blur', async () => {
+  it('по фокусу на кнопке-строке (клавиатура, :focus-visible): плашка появляется и исчезает по blur', async () => {
     const c = render({});
     await settle();
     const button = findNodeByAttr(c as never, 'data-testid', 'feature-chat-chat-key')!;
     expect(hasTip(c), 'до фокуса — плашки нет').toBe(false);
-    await act(async () => { (reactProps(button)!.onFocus as () => void)(); });
-    expect(hasTip(c), 'фокус на кнопке-строке → плашка в DOM').toBe(true);
+    // M1': фокус с КЛАВИАТУРЫ (Tab) — :focus-visible = true → плашка.
+    (button as unknown as { focusVisible: boolean }).focusVisible = true;
+    await act(async () => { (reactProps(button)!.onFocus as (e: unknown) => void)({ currentTarget: button }); });
+    expect(hasTip(c), 'фокус с клавиатуры на кнопке-строке → плашка в DOM').toBe(true);
     await act(async () => { (reactProps(button)!.onBlur as () => void)(); });
     expect(hasTip(c), 'blur → плашка исчезла').toBe(false);
+  });
+
+  // M1': клик мышью/тап — фокус БЕЗ :focus-visible → плашка НЕ поднимается (не залипает).
+  // Мутация «убрать проверку :focus-visible» красит: плашка поднимется и от мыши.
+  it('M1: клик мышью (фокус без :focus-visible) — плашка НЕ поднимается', async () => {
+    const c = render({});
+    await settle();
+    const button = findNodeByAttr(c as never, 'data-testid', 'feature-chat-chat-key')!;
+    (button as unknown as { focusVisible: boolean }).focusVisible = false; // мышь: не :focus-visible
+    await act(async () => { (reactProps(button)!.onFocus as (e: unknown) => void)({ currentTarget: button }); });
+    expect(hasTip(c), 'клик мышью поднял плашку (M1: гейт по :focus-visible)').toBe(false);
+  });
+
+  // M1': Escape гасит плашку (фокус с клавиатуры), не открывая чат.
+  it('M1: Escape гасит плашку (фокус с клавиатуры)', async () => {
+    const c = render({});
+    await settle();
+    const button = findNodeByAttr(c as never, 'data-testid', 'feature-chat-chat-key')!;
+    (button as unknown as { focusVisible: boolean }).focusVisible = true;
+    await act(async () => { (reactProps(button)!.onFocus as (e: unknown) => void)({ currentTarget: button }); });
+    expect(hasTip(c), 'фокус с клавиатуры → плашка').toBe(true);
+    await act(async () => { (reactProps(button)!.onKeyDown as (e: unknown) => void)({ key: 'Escape', currentTarget: button, preventDefault: () => {} }); });
+    expect(hasTip(c), 'Escape не погасил плашку (M1: Escape)').toBe(false);
   });
 });
 

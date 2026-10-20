@@ -257,18 +257,47 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     expect(hasTip(c), 'уход → плашка исчезла').toBe(false);
   });
 
-  it('по фокусу на карточке (клавиатура): плашка появляется и исчезает по blur', async () => {
+  it('по фокусу на карточке (клавиатура, :focus-visible): плашка появляется и исчезает по blur', async () => {
     const c = renderCard();
     await act(async () => { await vi.advanceTimersByTimeAsync(50); });
     // Карточка-строка — внешний div (tabIndex 0); его onFocus/onBlur — источник состояния.
     const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
     const cp = reactProps(card)!;
     expect(hasTip(c), 'до фокуса — плашки нет').toBe(false);
+    // M1': фокус с КЛАВИАТУРЫ (Tab) — :focus-visible = true → плашка.
+    (card as unknown as { focusVisible: boolean }).focusVisible = true;
     // п.51: фокус САМОЙ карточки (target === currentTarget) → плашка.
     await act(async () => { (cp.onFocus as (e: unknown) => void)({ target: card, currentTarget: card }); });
-    expect(hasTip(c), 'фокус на карточке → плашка в DOM').toBe(true);
+    expect(hasTip(c), 'фокус с клавиатуры на карточке → плашка в DOM').toBe(true);
     await act(async () => { (cp.onBlur as (e: unknown) => void)({ target: card, currentTarget: card }); });
     expect(hasTip(c), 'blur → плашка исчезла').toBe(false);
+  });
+
+  // M1': клик мышью/тап — фокус БЕЗ :focus-visible → плашка НЕ поднимается (не залипает).
+  // Мутация «убрать проверку :focus-visible» красит: плашка поднимется и от мыши.
+  it('M1: клик мышью (фокус без :focus-visible) — плашка НЕ поднимается', async () => {
+    const c = renderCard();
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const cp = reactProps(card)!;
+    // Мышь: :focus-visible = false (default fakeDom).
+    (card as unknown as { focusVisible: boolean }).focusVisible = false;
+    await act(async () => { (cp.onFocus as (e: unknown) => void)({ target: card, currentTarget: card }); });
+    expect(hasTip(c), 'клик мышью поднял плашку (M1: гейт по :focus-visible)').toBe(false);
+  });
+
+  // M1': Escape гасит плашку (фокус с клавиатуры), не открывая чат.
+  it('M1: Escape гасит плашку (фокус с клавиатуры)', async () => {
+    const c = renderCard();
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const card = (c as unknown as { childNodes: Parameters<typeof findNodeByAttr>[0][] }).childNodes[0];
+    const cp = reactProps(card)!;
+    (card as unknown as { focusVisible: boolean }).focusVisible = true;
+    await act(async () => { (cp.onFocus as (e: unknown) => void)({ target: card, currentTarget: card }); });
+    expect(hasTip(c), 'фокус с клавиатуры → плашка').toBe(true);
+    // Escape на карточке (target === currentTarget) → плашка гаснет.
+    await act(async () => { (cp.onKeyDown as (e: unknown) => void)({ key: 'Escape', target: card, currentTarget: card, preventDefault: () => {} }); });
+    expect(hasTip(c), 'Escape не погасил плашку (M1: Escape)').toBe(false);
   });
 
   // п.51: фокус на ВЛОЖЕННОМ элементе (target ≠ currentTarget) — плашка НЕ поднимается

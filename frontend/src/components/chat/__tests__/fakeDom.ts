@@ -35,6 +35,13 @@ class FNode {
   } as any;
   attributes: Record<string, string> = {};
   listeners: Record<string, Set<unknown>> = {};
+  // :focus-visible (M1'): управляемое тестом — true = фокус пришёл с клавиатуры (Tab).
+  // matches(':focus-visible') читает его; прочие селекторы — false (как в реальном DOM
+  // для простого div: :focus-visible не совпадает без фокуса с клавиатуры).
+  focusVisible = false;
+  matches(selector: string): boolean {
+    return selector === ':focus-visible' ? this.focusVisible : false;
+  }
 
   constructor(doc: FDoc) { this.ownerDocument = doc; }
 

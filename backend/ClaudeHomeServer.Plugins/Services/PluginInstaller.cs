@@ -146,6 +146,13 @@ public class PluginInstaller
         //   - обновление (existing, другая версия) → granted = старые ∩ новые запрошенные
         //     (defect 8565ccff: запись пишется ТОЛЬКО после Directory.Move, пакет на диске).
         // no-op (совпал sha) возвращён выше, до записи.
+        // Пользовательские поля (не определяются пакетом) — при обновлении (existing != null)
+        // переносятся из старой записи, при первой установке — значения по умолчанию (minor 3):
+        //   Enabled  — выключенный плагин не включается обновлением (Enabled = existing.Enabled);
+        //   Secrets   — заданные секреты прошлой версии сохраняются; чистка по новому списку:
+        //                имя, чьё secret:{name} исчезло из новых requested, не остаётся висеть.
+        // Путь accept (PluginDraftsController) получает то же поведение: он вызывает этот Install
+        // и больше не фильтрует секреты сам (дублирование убрано).
         var requested = manifest!.Permissions?.Requested ?? [];
         var granted = existing is null
             ? []
@@ -157,8 +164,13 @@ public class PluginInstaller
             Sha256 = sha256!,
             Requested = requested,
             Granted = granted,
-            Enabled = true,
+            Enabled = existing is null ? true : existing.Enabled,
             Source = sourceLabel,
+            Secrets = existing is null
+                ? []
+                : existing.Secrets
+                    .Where(s => requested.Contains($"secret:{s.Name}", StringComparer.Ordinal))
+                    .ToList(),
         };
         // minor 1: load→save под одной блокировкой (PluginStore.Update), не два отдельных вызова.
         _store.Update(ownerId, records =>
@@ -169,8 +181,8 @@ public class PluginInstaller
         });
 
         // Кэш манифестов (rework 12, minor 4): запись установлена/обновлена (новый sha) —
-        // освободить старые (version, sha) этого id из кэша.
-        PluginManifestCache.Invalidate(id);
+        // освободить старые (version, sha) этого id из кэша (по (owner, id), QA-фикс K).
+        PluginManifestCache.Invalidate(ownerId, id);
 
         return InstallResult.Ok(record);
     }

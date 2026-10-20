@@ -236,12 +236,10 @@ public class PluginDraftsController(
             newPermissions = newRequested;
         }
 
-        // Секреты: заданные в прошлой версии сохраняются (значения — в plugin-secrets.json,
-        // здесь — только имена + set + updatedAt). Новая версия без секрета — имя не расширяет.
-        if (oldById is not null)
-            record.Secrets = oldById.Secrets
-                .Where(s => record.Requested.Contains($"secret:{s.Name}", StringComparer.Ordinal))
-                .ToList();
+        // Секреты и включённость (minor 3): PluginInstaller.Install уже перенёс их из старой
+        // записи (existing) в record — здесь дублирование не повторяем (одна точка поведения
+        // для install и accept). Значения секретов — в plugin-secrets.json, в record — только
+        // имена + set + updatedAt; чистка по новому списку (secret:{name} в requested) — в инсталлере.
 
         // load → mutate → save под одной блокировкой (PluginStore.Update): два параллельных
         // accept одного slug не портят installed.json (запись атомарно перезаписывается).

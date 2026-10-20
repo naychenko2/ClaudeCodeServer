@@ -748,6 +748,56 @@ public class PluginDraftsControllerTests : IDisposable
         _secrets.Get(OwnerA, "local-a/pkg", "LINEAR_TOKEN").Should().Be("tok", "значение секрета пережило обновление");
     }
 
+    // --- Accept: обновление сохраняет включённость (minor 3: выключенный не включается) ---
+    // Мутация: accept-обновление сбрасывает Enabled=true (старое поведение) → тест красный.
+
+    [Fact]
+    public void Accept_Обновление_СохраняетВключённость()
+    {
+        // v1: secret + выдать + выключить плагин.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", true)]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+        GrantDirectly(OwnerA, "local-a/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
+        _store.Update(OwnerA, records =>
+        {
+            var r = records.Single(x => x.Id == "local-a/pkg");
+            r.Enabled = false;
+            return records;
+        });
+
+        // v2: bump версии, тот же secret в requested.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", true)]);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Version.Should().Be("2.0.0");
+        record.Enabled.Should().BeFalse("выключенный плагин не включается accept-обновлением");
+    }
+
+    // --- Accept: чистка секретов по новому списку (minor 3: имя исчезло → не висит) ---
+
+    [Fact]
+    public void Accept_Обновление_СекретИсчезИзМанифеста_Чистится()
+    {
+        // v1: secret LINEAR_TOKEN (в requested) задан.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+            secrets: [("LINEAR_TOKEN", true)]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+        GrantDirectly(OwnerA, "local-a/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
+
+        // v2: bump версии, но secret:LINEAR_TOKEN НЕ в requested (имя исчезло из нового манифеста).
+        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        record.Secrets.Should().NotContain(s => s.Name == "LINEAR_TOKEN",
+            "секрет, чьё имя исчезло из нового манифеста, не остаётся висеть");
+    }
+
     // --- Accept: черновик после успеха НЕ удаляется ---
 
     [Fact]

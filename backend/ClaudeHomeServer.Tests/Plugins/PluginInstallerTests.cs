@@ -66,6 +66,23 @@ public class PluginInstallerTests : IDisposable
         return "draft:" + slug;
     }
 
+    // Пакет в каталоге черновика с заданным списком requested (minor 3: тесты переноса
+    // секретов/включённости — requested может включать secret:{name}, которого нет в CreateDraft).
+    private string CreateDraftWithRequested(string id, string version, List<string> requested)
+    {
+        var slug = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
+        var root = _store.DraftDir(Owner, slug);
+        Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+        File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+        var manifest = new { id, name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested } };
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = slug, version }, new JsonSerializerOptions { WriteIndented = true }));
+        return "draft:" + slug;
+    }
+
     // --- M5: атомарность — копирование во временный .staging-{guid}, затем move ---
 
     [Fact]
@@ -275,7 +292,64 @@ public class PluginInstallerTests : IDisposable
         var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
         record.Granted.Should().BeEmpty("granted при установке пуст (C2)");
         record.Requested.Should().Equal("notes:read");
-        record.Enabled.Should().BeTrue();
+        record.Enabled.Should().BeTrue("первая установка по умолчанию Enabled=true");
+    }
+
+    // --- minor 3: обновление (bump) сохраняет пользовательские поля — секреты и включённость ---
+    // До фикса: новая запись при обновлении обнуляла Secrets (список «заданных» секретов) и
+    // сбрасывала Enabled=true (выключенный плагин включался обновлением). Мутация: вернуть
+    // Enabled=true / Secrets=[] (старое поведение) → тест красный.
+
+    [Fact]
+    public void Install_Обновление_СохраняетСекретыИВключённость()
+    {
+        // v1: установка + выдать секрет (secret:LINEAR_TOKEN в requested) + выключить плагин.
+        var source1 = CreateDraftWithRequested("local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"]);
+        _sut.Install(Owner, source1).Status.Should().Be(InstallStatus.Ok);
+        _store.Update(Owner, records =>
+        {
+            var r = records.Single(x => x.Id == "local-a/pkg");
+            r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }];
+            r.Enabled = false;
+            return records;
+        });
+
+        // v2: bump версии (тот же id, другая версия → другой sha), тот же secret в requested.
+        var source2 = CreateDraftWithRequested("local-a/pkg", "2.0.0", ["notes:read", "secret:LINEAR_TOKEN"]);
+        var result = _sut.Install(Owner, source2);
+        result.Status.Should().Be(InstallStatus.Ok);
+
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        record.Version.Should().Be("2.0.0");
+        record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
+            "секреты прошлой версии сохранены при обновлении");
+        record.Enabled.Should().BeFalse("выключенный плагин не включается обновлением");
+    }
+
+    // --- minor 3: чистка секретов по новому списку — имя, исчезнувшее из нового манифеста,
+    // не остаётся висеть (secret:{name} не в новых requested → секрет убран). ---
+
+    [Fact]
+    public void Install_Обновление_СекретИсчезИзМанифеста_Чистится()
+    {
+        // v1: secret LINEAR_TOKEN (в requested) задан.
+        var source1 = CreateDraftWithRequested("local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"]);
+        _sut.Install(Owner, source1).Status.Should().Be(InstallStatus.Ok);
+        _store.Update(Owner, records =>
+        {
+            var r = records.Single(x => x.Id == "local-a/pkg");
+            r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }];
+            return records;
+        });
+
+        // v2: bump версии, но secret:LINEAR_TOKEN НЕ в requested (имя исчезло из нового манифеста).
+        var source2 = CreateDraftWithRequested("local-a/pkg", "2.0.0", ["notes:read"]);
+        var result = _sut.Install(Owner, source2);
+        result.Status.Should().Be(InstallStatus.Ok);
+
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        record.Secrets.Should().NotContain(s => s.Name == "LINEAR_TOKEN",
+            "секрет, чьё имя исчезло из нового манифеста, не остаётся висеть");
     }
 
     // --- M5: symlink в пакете — CopyDirectoryNoSymlinks сохраняет ссылку, валидация КОПИИ

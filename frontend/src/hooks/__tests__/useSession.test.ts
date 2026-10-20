@@ -100,7 +100,7 @@ vi.mock('../../lib/signalr', () => ({
   setMode: vi.fn(async () => { }),
 }));
 
-const { useSession, waitDiag } = await import('../useSession');
+const { useSession, waitDiag, __test } = await import('../useSession');
 const { toolLiveness } = await import('../../lib/toolTiming');
 
 // Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
@@ -908,5 +908,115 @@ describe('useSession: реконнект и повторная загрузка 
     expect(queriesFor(sid).at(-1)).toMatchObject({ after: 2 }); // хвост, а не after=-1
 
     chat.unmount();
+  });
+});
+
+describe('useSession: потолок памяти (OOM fix)', () => {
+  const { MAX_CACHED_SESSIONS, MAX_TAIL_CURSORS, _store, _cursors, _lastSeen } = __test;
+
+  // Модульный стор переживает тесты: чистим перед каждым, чтобы предыдущие
+  // describe-блоки не нафláсили холодные сессии в кэши
+  beforeEach(() => {
+    _store.clear();
+    _cursors.clear();
+    _lastSeen.clear();
+  });
+
+  // Сервер: after=-1 → полная выдача + якорь; иначе → хвост (пустой, история не менялась)
+  const serverHistory = [...DONE_TURN];
+  const mockTail = () =>
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+      if (q.after < 0) return { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' };
+      return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+  it('30 чатов подряд → курсоры и ленты ограничены', async () => {
+    mockTail();
+    let prev: { unmount: () => void } | null = null;
+
+    for (let i = 0; i < 30; i++) {
+      const sid = nextSid();
+      const chat = openChat(sid);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Ленты в сторе: не более MAX_CACHED_SESSIONS холодных + 1 открытая
+    expect(_store.size).toBeLessThanOrEqual(MAX_CACHED_SESSIONS + 1);
+    // Курсоры: не более MAX_TAIL_CURSORS холодных + 1 открытая
+    expect(_cursors.size).toBeLessThanOrEqual(MAX_TAIL_CURSORS + 1);
+
+    prev!.unmount();
+  });
+
+  it('возврат в чат с выброшенным курсором → after=-1', async () => {
+    mockTail();
+    // Открываем MAX_TAIL_CURSORS + 2 чата: первый потеряет курсор
+    const firstSid = nextSid();
+    const sids: string[] = [firstSid];
+    let prev: { unmount: () => void } | null = null;
+
+    for (let i = 0; i <= MAX_TAIL_CURSORS + 1; i++) {
+      if (i > 0) sids.push(nextSid());
+      const chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Курсор первого чата выброшен (он самый старый)
+    expect(_cursors.has(firstSid)).toBe(false);
+
+    // Возвращаемся: запрос должен быть after=-1 (полная загрузка)
+    const queries: Array<{ after: number; fp?: string }> = [];
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+      queries.push(q);
+      if (q.after < 0) return { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' };
+      return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+    prev!.unmount();
+    const back = openChat(firstSid);
+    await flush();
+
+    expect(queries.at(-1)!.after).toBe(-1);
+    expect(back.render().items).toHaveLength(3);
+    back.unmount();
+  });
+
+  it('возврат в один из последних MAX_TAIL_CURSORS → докачка хвоста', async () => {
+    mockTail();
+    // Открываем MAX_TAIL_CURSORS + 1 чат; последний (свежий) сохраняет курсор
+    const sids: string[] = [];
+    let prev: { unmount: () => void } | null = null;
+
+    for (let i = 0; i <= MAX_TAIL_CURSORS; i++) {
+      sids.push(nextSid());
+      const chat = openChat(sids[i]);
+      await flush();
+      prev?.unmount();
+      prev = chat;
+    }
+
+    // Последний открытый чат — его курсор сохранён
+    const recentSid = sids[MAX_TAIL_CURSORS];
+    expect(_cursors.has(recentSid)).toBe(true);
+
+    // Возвращаемся: запрос хвоста (after >= 0)
+    const queries: Array<{ after: number; fp?: string }> = [];
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+      queries.push(q);
+      if (q.after < 0) return { reset: true, messages: serverHistory, anchorIndex: 2, anchorFp: 'fp' };
+      return { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp' };
+    });
+
+    prev!.unmount();
+    const back = openChat(recentSid);
+    await flush();
+
+    expect(queries.at(-1)!.after).toBeGreaterThanOrEqual(0);
+    expect(back.render().items).toHaveLength(3);
+    back.unmount();
   });
 });

@@ -209,6 +209,20 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     return () => window.removeEventListener('cc-open-chat', open);
   }, []);
 
+  // «Править»/«Попросить агента исправить» из карточки черновика в ленте (вне проекта):
+  // готовая реплика → поле ввода активного чата (cc-compose-prefill), не отправляется сама.
+  // detail.project — undefined (чат вне проекта); в проектных чатах слушает WorkspacePage.
+  useEffect(() => {
+    const onDraftReply = (e: Event) => {
+      const { project: p, reply } = (e as CustomEvent<{ project?: unknown; reply?: string }>).detail ?? {};
+      if (p != null || !reply) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
+  }, []);
+
   const selectChat = (chat: Session) => {
     // Эфир трогать не надо: развёрнутый кадр занимает центр вместо ленты, но
     // выбор чата его не гасит — кадр сворачивают сами, кнопкой или крестиком,

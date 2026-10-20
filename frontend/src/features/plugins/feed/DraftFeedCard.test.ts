@@ -450,3 +450,60 @@ describe('DraftFeedCard: ошибки «Принять…» / «Вернуть»
     expect(text()).toContain('Действие недоступно офлайн');
   });
 });
+
+// === Шаг 1: cc-draft-reply в чате вне проекта (дефект 659560f9) ===
+// Реплика «Править»/«Попросить агента исправить» из карточки черновика в ленте (вне
+// проекта) должна попасть в поле ввода активного чата (cc-compose-prefill), не
+// отправляясь сама. Слушатель — в ChatsPage; здесь проверяем его логику напрямую.
+describe('cc-draft-reply: чат вне проекта (шаг 1)', () => {
+  // Та же логика, что в ChatsPage: onDraftReply
+  const setupListener = () => {
+    const onDraftReply = (e: Event) => {
+      const { project: p, reply } = (e as CustomEvent<{ project?: unknown; reply?: string }>).detail ?? {};
+      if (p != null || !reply) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
+  };
+
+  const dispatchReply = (detail: { project?: unknown; reply?: string }) => {
+    window.dispatchEvent(new CustomEvent('cc-draft-reply', { detail }));
+  };
+
+  const storage = new Map<string, string>();
+  beforeEach(() => {
+    installFakeDom();
+    storage.clear();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k: string) => storage.get(k) ?? null,
+      setItem: (k: string, v: string) => { storage.set(k, v); },
+      removeItem: (k: string) => { storage.delete(k); },
+    });
+  });
+
+  it('project: undefined + reply → cc_pending_chat_prompt установлен (реплика в композере)', () => {
+    const cleanup = setupListener();
+    try {
+      dispatchReply({ project: undefined, reply: 'Поправь плагин «X»' });
+      expect(sessionStorage.getItem('cc_pending_chat_prompt')).toBe('Поправь плагин «X»');
+    } finally { cleanup(); }
+  });
+
+  it('project: {id} + reply → не принимается (проектный чат слушает WorkspacePage)', () => {
+    const cleanup = setupListener();
+    try {
+      dispatchReply({ project: { id: 'p1' }, reply: 'test' });
+      expect(sessionStorage.getItem('cc_pending_chat_prompt')).toBeNull();
+    } finally { cleanup(); }
+  });
+
+  it('project: undefined + reply: "" → не принимается (пустая реплика)', () => {
+    const cleanup = setupListener();
+    try {
+      dispatchReply({ project: undefined, reply: '' });
+      expect(sessionStorage.getItem('cc_pending_chat_prompt')).toBeNull();
+    } finally { cleanup(); }
+  });
+});

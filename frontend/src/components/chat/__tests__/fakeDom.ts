@@ -141,19 +141,25 @@ export function installFakeDom() {
   if (installed) return;
   installed = true;
   const fdoc = new FDoc();
+  // Простая система событий window: addEventListener/removeEventListener/dispatchEvent
+  // работают как в реальном DOM (раньше были no-op — достаточно, чтобы не падало).
+  const winListeners: Record<string, Set<Function>> = {};
   const fwindow = {
     // window.event — react-dom читает его в отложенном колбэке scheduler; undefined не бросает
     event: undefined,
-    dispatchEvent: () => true,
+    dispatchEvent: (e: { type: string }) => {
+      winListeners[e.type]?.forEach(fn => fn(e));
+      return true;
+    },
     matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
     HTMLIFrameElement: class {},
     // WaitingIndicator и др. таймеры зовут window.setTimeout/clearTimeout — глобалы node
     setTimeout,
     clearTimeout,
-    // PluginFrame и др. слушают window 'message' (postMessage моста); в тесте события не
-    // генерируем — достаточно, чтобы вешать/снимать слушатели не падало
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    // PluginFrame и др. слушают window 'message' (postMessage моста); cc-draft-reply и
+    // другие CustomEvent-подписки тоже вешаются сюда.
+    addEventListener: (type: string, fn: Function) => { (winListeners[type] ??= new Set()).add(fn); },
+    removeEventListener: (type: string, fn: Function) => { winListeners[type]?.delete(fn); },
   };
   (globalThis as { window?: unknown }).window = fwindow;
   (globalThis as { document?: unknown }).document = fdoc;
